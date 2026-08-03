@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
-from mmaudit.models.schemas import ContextExcerpt
+from mmaudit.models.schemas import ContextExcerpt, Location
 
 
 @dataclass(frozen=True)
@@ -21,6 +21,25 @@ def line_range_hash(content: str, start_line: int, end_line: int) -> str:
     lines = content.splitlines(keepends=True)
     selected = "".join(lines[start_line - 1 : end_line])
     return hashlib.sha256(selected.encode()).hexdigest()
+
+
+def excerpt_proves_location(excerpt: ContextExcerpt, location: Location) -> bool:
+    """Return whether exact provider-visible excerpt bytes prove one line-range hash."""
+
+    if (
+        excerpt.path != location.path
+        or excerpt.start_line > location.start_line
+        or location.end_line > excerpt.end_line
+        or hashlib.sha256(excerpt.content.encode()).hexdigest() != excerpt.content_hash
+    ):
+        return False
+    relative_start = location.start_line - excerpt.start_line
+    relative_end = location.end_line - excerpt.start_line + 1
+    lines = excerpt.content.splitlines(keepends=True)
+    if relative_end > len(lines):
+        return False
+    observed_hash = hashlib.sha256("".join(lines[relative_start:relative_end]).encode()).hexdigest()
+    return observed_hash == location.content_hash
 
 
 def _make_excerpt(
@@ -133,7 +152,21 @@ def chunk_text(
 
     lines = content.splitlines(keepends=True)
     if not lines:
-        return ChunkingResult(excerpts=(), omissions=())
+        return ChunkingResult(
+            excerpts=(
+                ContextExcerpt(
+                    path=path,
+                    start_line=1,
+                    end_line=1,
+                    content_hash=hashlib.sha256(b"").hexdigest(),
+                    content="",
+                    categories=categories,
+                    omitted_before=False,
+                    omitted_after=False,
+                ),
+            ),
+            omissions=(),
+        )
     if len(content.encode()) <= max_chunk_bytes:
         return ChunkingResult(
             excerpts=(_make_excerpt(path, lines, 1, len(lines), categories, len(lines)),),

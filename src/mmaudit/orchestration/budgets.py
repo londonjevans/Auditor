@@ -7,8 +7,10 @@ import hashlib
 import json
 import math
 import re
-from collections.abc import Mapping
-from dataclasses import dataclass, replace
+import threading
+import weakref
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
 from decimal import ROUND_CEILING, Decimal, InvalidOperation, localcontext
 from typing import Any, Final, Literal, Self, cast
 
@@ -21,6 +23,7 @@ from mmaudit.orchestration.cost_ledger import (
     CostReservation,
     CostReservationOverrunError,
     ReleaseReason,
+    cost_entry_sha256,
 )
 
 
@@ -44,6 +47,7 @@ _MODEL_ID_PATTERN: Final = re.compile(
     r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z"
 )
 _ROLE_ID_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+_REQUEST_LIMIT_SCOPE_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _ENDPOINT_ID_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,255}\Z")
 _PRICING_FIELD_PATTERN: Final = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 _SHA256_PATTERN: Final = re.compile(r"[0-9a-f]{64}\Z")
@@ -51,6 +55,289 @@ _USD_QUANTUM: Final = Decimal("1e-18")
 _MAX_PRICE_DECIMAL_PLACES: Final = 36
 _MAX_PRICE_INTEGER_DIGITS: Final = 12
 _MAX_METERED_UNITS: Final = 2**63 - 1
+_REQUEST_LIMIT_SCOPE_AUTHORITY: Final = object()
+
+
+@dataclass(frozen=True, slots=True)
+class _TrustedRequestLimitScope:
+    """Capability proving a scheduler-bound request-count scope was issued locally."""
+
+    identifier: str
+    _authority: object = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._authority is not _REQUEST_LIMIT_SCOPE_AUTHORITY:
+            raise BudgetReservationStateError("request-limit scope authority is invalid")
+        if (
+            not isinstance(self.identifier, str)
+            or _REQUEST_LIMIT_SCOPE_PATTERN.fullmatch(self.identifier) is None
+        ):
+            raise BudgetReservationStateError(
+                "request-limit scope must use restricted non-secret identifier characters"
+            )
+
+
+def _issue_trusted_request_limit_scope(identifier: str) -> _TrustedRequestLimitScope:
+    """Issue a count-scope capability for the trusted provider scheduler boundary."""
+
+    return _TrustedRequestLimitScope(
+        identifier=identifier,
+        _authority=_REQUEST_LIMIT_SCOPE_AUTHORITY,
+    )
+
+
+class _TrustedBudgetRecoveryScope:
+    """Opaque one-shot authority for exact journal-recovered usage."""
+
+    __slots__ = ("__weakref__",)
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveredSchedulerCostAttempt:
+    """Exact non-output provider attempt authorized by scheduler journal ordering."""
+
+    request_id: str
+    logical_request_id: str
+    task_id: str
+    requested_model: str
+    role: str
+    status: Literal[
+        "adopted_proven_pre_send",
+        "uncertain_accounted_after_dispatch",
+    ]
+    reserved_cost_usd_exact: Decimal
+    accounted_cost_usd_exact: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveredCostLedgerBaseline:
+    """Exact pre-campaign ledger head authorized by an immutable scheduler manifest."""
+
+    cap_usd_exact: Decimal
+    spent_usd_exact: Decimal
+    ledger_snapshot_sha256: str
+    baseline_sha256: str
+    entry_sha256s: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _BudgetRecoveryClaims:
+    attempts: tuple[RecoveredSchedulerCostAttempt, ...]
+    baseline: RecoveredCostLedgerBaseline | None
+
+
+def _normalize_recovered_cost_baseline(value: Any | None) -> RecoveredCostLedgerBaseline | None:
+    if value is None:
+        return None
+    try:
+        baseline = RecoveredCostLedgerBaseline(
+            cap_usd_exact=Decimal(value.cap_usd_exact),
+            spent_usd_exact=Decimal(value.spent_usd_exact),
+            ledger_snapshot_sha256=value.ledger_snapshot_sha256,
+            baseline_sha256=value.baseline_sha256,
+            entry_sha256s=tuple(
+                (entry.request_id, entry.ledger_entry_sha256) for entry in value.entries
+            ),
+        )
+    except (AttributeError, InvalidOperation, TypeError, ValueError):
+        raise BudgetReservationStateError("cost-ledger recovery baseline is invalid") from None
+    if (
+        baseline.cap_usd_exact <= 0
+        or baseline.spent_usd_exact < 0
+        or baseline.spent_usd_exact > baseline.cap_usd_exact
+        or _SHA256_PATTERN.fullmatch(baseline.ledger_snapshot_sha256) is None
+        or _SHA256_PATTERN.fullmatch(baseline.baseline_sha256) is None
+        or baseline.entry_sha256s
+        != tuple(sorted(set(baseline.entry_sha256s), key=lambda item: item[0]))
+        or len({request_id for request_id, _entry_sha256 in baseline.entry_sha256s})
+        != len(baseline.entry_sha256s)
+        or any(
+            _REQUEST_LIMIT_SCOPE_PATTERN.fullmatch(request_id) is None
+            or _SHA256_PATTERN.fullmatch(entry_sha256) is None
+            for request_id, entry_sha256 in baseline.entry_sha256s
+        )
+    ):
+        raise BudgetReservationStateError("cost-ledger recovery baseline is invalid")
+    return baseline
+
+
+def _normalize_recovered_scheduler_attempt(value: Any) -> RecoveredSchedulerCostAttempt:
+    try:
+        attempt = RecoveredSchedulerCostAttempt(
+            request_id=value.request_id,
+            logical_request_id=value.logical_request_id,
+            task_id=value.task_id,
+            requested_model=value.requested_model,
+            role=value.role,
+            status=value.status.value,
+            reserved_cost_usd_exact=Decimal(value.reserved_cost_usd_exact),
+            accounted_cost_usd_exact=Decimal(value.accounted_cost_usd_exact),
+        )
+    except (AttributeError, InvalidOperation, TypeError, ValueError):
+        raise BudgetReservationStateError("scheduler cost-recovery attempt is invalid") from None
+    if (
+        _REQUEST_LIMIT_SCOPE_PATTERN.fullmatch(attempt.request_id) is None
+        or _REQUEST_LIMIT_SCOPE_PATTERN.fullmatch(attempt.logical_request_id) is None
+        or _REQUEST_LIMIT_SCOPE_PATTERN.fullmatch(attempt.task_id) is None
+        or _MODEL_ID_PATTERN.fullmatch(attempt.requested_model) is None
+        or _ROLE_ID_PATTERN.fullmatch(attempt.role) is None
+        or attempt.reserved_cost_usd_exact <= 0
+        or attempt.accounted_cost_usd_exact < 0
+    ):
+        raise BudgetReservationStateError("scheduler cost-recovery attempt is invalid")
+    return attempt
+
+
+def _recovered_attempt_hash(attempt: RecoveredSchedulerCostAttempt) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "request_id": attempt.request_id,
+                "logical_request_id": attempt.logical_request_id,
+                "task_id": attempt.task_id,
+                "requested_model": attempt.requested_model,
+                "role": attempt.role,
+                "status": attempt.status,
+                "reserved_cost_usd_exact": format(
+                    attempt.reserved_cost_usd_exact,
+                    "f",
+                ),
+                "accounted_cost_usd_exact": format(
+                    attempt.accounted_cost_usd_exact,
+                    "f",
+                ),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _usage_recovery_hash(record: Any) -> str:
+    try:
+        payload = record.model_dump(mode="json")
+    except AttributeError:
+        raise BudgetReservationStateError("budget recovery usage is invalid") from None
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _build_budget_recovery_authority() -> tuple[
+    Callable[..., _TrustedBudgetRecoveryScope],
+    Callable[
+        [tuple[Any, ...], _TrustedBudgetRecoveryScope],
+        _BudgetRecoveryClaims,
+    ],
+    Callable[
+        [tuple[Any, ...], _TrustedBudgetRecoveryScope],
+        _BudgetRecoveryClaims,
+    ],
+]:
+    registry: dict[
+        int,
+        tuple[
+            weakref.ReferenceType[_TrustedBudgetRecoveryScope],
+            tuple[str, ...],
+            tuple[str, ...],
+            tuple[RecoveredSchedulerCostAttempt, ...],
+            RecoveredCostLedgerBaseline | None,
+        ],
+    ] = {}
+    lock = threading.RLock()
+
+    def issue(
+        records: tuple[Any, ...],
+        *,
+        non_usage_attempts: tuple[Any, ...] = (),
+        cost_ledger_baseline: Any | None = None,
+    ) -> _TrustedBudgetRecoveryScope:
+        hashes = tuple(_usage_recovery_hash(record) for record in records)
+        raw_request_ids = tuple(getattr(record, "request_id", None) for record in records)
+        if any(not isinstance(request_id, str) or not request_id for request_id in raw_request_ids):
+            raise BudgetReservationStateError(
+                "budget recovery usage identities must be unique and sorted"
+            )
+        request_ids = cast(tuple[str, ...], raw_request_ids)
+        if request_ids != tuple(sorted(set(request_ids))):
+            raise BudgetReservationStateError(
+                "budget recovery usage identities must be unique and sorted"
+            )
+        recovered_attempts = tuple(
+            sorted(
+                (_normalize_recovered_scheduler_attempt(item) for item in non_usage_attempts),
+                key=lambda item: item.request_id,
+            )
+        )
+        recovered_ids = tuple(item.request_id for item in recovered_attempts)
+        if recovered_ids != tuple(sorted(set(recovered_ids))) or set(recovered_ids).intersection(
+            request_ids
+        ):
+            raise BudgetReservationStateError("budget recovery provider-attempt identities repeat")
+        recovered_hashes = tuple(_recovered_attempt_hash(item) for item in recovered_attempts)
+        recovered_baseline = _normalize_recovered_cost_baseline(cost_ledger_baseline)
+        scope = object.__new__(_TrustedBudgetRecoveryScope)
+        key = id(scope)
+
+        def discard(reference: weakref.ReferenceType[_TrustedBudgetRecoveryScope]) -> None:
+            with lock:
+                current = registry.get(key)
+                if current is not None and current[0] is reference:
+                    registry.pop(key, None)
+
+        reference = weakref.ref(scope, discard)
+        with lock:
+            registry[key] = (
+                reference,
+                hashes,
+                recovered_hashes,
+                recovered_attempts,
+                recovered_baseline,
+            )
+        return scope
+
+    def preview(
+        records: tuple[Any, ...],
+        scope: _TrustedBudgetRecoveryScope,
+    ) -> _BudgetRecoveryClaims:
+        hashes = tuple(_usage_recovery_hash(record) for record in records)
+        with lock:
+            registered = registry.get(id(scope))
+        if (
+            type(scope) is not _TrustedBudgetRecoveryScope
+            or registered is None
+            or registered[0]() is not scope
+            or registered[1] != hashes
+        ):
+            raise BudgetReservationStateError(
+                "budget recovery capability is invalid, mismatched, or consumed"
+            )
+        return _BudgetRecoveryClaims(attempts=registered[3], baseline=registered[4])
+
+    def consume(
+        records: tuple[Any, ...],
+        scope: _TrustedBudgetRecoveryScope,
+    ) -> _BudgetRecoveryClaims:
+        claims = preview(records, scope)
+        with lock:
+            registry.pop(id(scope), None)
+        return claims
+
+    return issue, preview, consume
+
+
+(
+    _issue_trusted_budget_recovery_scope,
+    _preview_trusted_budget_recovery_scope,
+    _consume_trusted_budget_recovery_scope,
+) = _build_budget_recovery_authority()
 
 
 class _FrozenBudgetEvidence(BaseModel):
@@ -207,6 +494,68 @@ class AtomicTokenReservationEvidence(_FrozenBudgetEvidence):
         return self
 
 
+class AtomicRequestLimitReservationEvidence(_FrozenBudgetEvidence):
+    """Self-hashed request-count reservation for one stable scheduled task."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    request_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+    exact_model_id: str
+    role: str
+    request_token_plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    request_limit_scope: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+    request_limit_count_before: int = Field(ge=0, le=_MAX_METERED_UNITS)
+    request_limit_count_after: int = Field(ge=1, le=_MAX_METERED_UNITS)
+    request_limit_maximum: int = Field(ge=1, le=_MAX_METERED_UNITS)
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        request_id: str,
+        exact_model_id: str,
+        role: str,
+        request_token_plan_sha256: str,
+        request_limit_scope: str,
+        request_limit_count_before: int,
+        request_limit_maximum: int,
+    ) -> Self:
+        payload: dict[str, Any] = {
+            "schema_version": "1.0",
+            "request_id": request_id,
+            "exact_model_id": exact_model_id,
+            "role": role,
+            "request_token_plan_sha256": request_token_plan_sha256,
+            "request_limit_scope": request_limit_scope,
+            "request_limit_count_before": request_limit_count_before,
+            "request_limit_count_after": request_limit_count_before + 1,
+            "request_limit_maximum": request_limit_maximum,
+        }
+        return cls(
+            **payload,
+            evidence_sha256=_canonical_evidence_sha256(payload),
+        )
+
+    @model_validator(mode="after")
+    def count_is_bound_consecutive_and_self_hashed(
+        self,
+    ) -> AtomicRequestLimitReservationEvidence:
+        if _MODEL_ID_PATTERN.fullmatch(self.exact_model_id) is None:
+            raise ValueError("request-limit reservation requires an exact author/model ID")
+        if _ROLE_ID_PATTERN.fullmatch(self.role) is None:
+            raise ValueError("request-limit reservation role is invalid")
+        if self.request_limit_count_after != self.request_limit_count_before + 1:
+            raise ValueError("request-limit reservation count is not consecutive")
+        if self.request_limit_count_after > self.request_limit_maximum:
+            raise ValueError("request-limit reservation exceeds its configured maximum")
+        expected_hash = _canonical_evidence_sha256(
+            self.model_dump(mode="json", exclude={"evidence_sha256"})
+        )
+        if self.evidence_sha256 != expected_hash:
+            raise ValueError("request-limit reservation evidence self-hash does not match")
+        return self
+
+
 @dataclass(frozen=True)
 class EndpointPriceComponent:
     """One complete endpoint pricing field and its request-specific unit ceiling."""
@@ -356,6 +705,8 @@ class Reservation:
     planned_completion_tokens: int | None = None
     request_token_plan_sha256: str | None = None
     token_reservation_evidence: AtomicTokenReservationEvidence | None = None
+    request_limit_scope: str | None = None
+    request_limit_reservation_evidence: AtomicRequestLimitReservationEvidence | None = None
 
     def __post_init__(self) -> None:
         evidence = self.token_reservation_evidence
@@ -377,6 +728,11 @@ class Reservation:
         if self.request_token_plan_sha256 is None:
             if evidence is not None:
                 raise ValueError("legacy reservation cannot carry plan-bound token evidence")
+            if (
+                self.request_limit_scope is not None
+                or self.request_limit_reservation_evidence is not None
+            ):
+                raise ValueError("request-limit scope requires plan-bound token evidence")
             return
         if _SHA256_PATTERN.fullmatch(self.request_token_plan_sha256) is None:
             raise ValueError("request token plan hash is invalid")
@@ -402,6 +758,19 @@ class Reservation:
             or evidence.planned_completion_tokens != self.planned_completion_tokens
         ):
             raise ValueError("reservation fields differ from its atomic token evidence")
+        request_limit_evidence = self.request_limit_reservation_evidence
+        if self.request_limit_scope is None:
+            if request_limit_evidence is not None:
+                raise ValueError("unscheduled reservation cannot carry request-limit evidence")
+        elif (
+            request_limit_evidence is None
+            or request_limit_evidence.request_id != self.identifier
+            or request_limit_evidence.exact_model_id != self.exact_model_id
+            or request_limit_evidence.role != self.role
+            or request_limit_evidence.request_token_plan_sha256 != self.request_token_plan_sha256
+            or request_limit_evidence.request_limit_scope != self.request_limit_scope
+        ):
+            raise ValueError("reservation request-limit scope differs from its atomic evidence")
 
 
 @dataclass(frozen=True)
@@ -411,6 +780,7 @@ class _Reconciliation:
     actual_completion_tokens: int | None
     actual_reasoning_tokens: int | None
     accounted_cost_usd: float
+    accounted_cost_usd_exact: Decimal
     accounted_prompt_tokens: int | None
     accounted_completion_tokens: int | None
     accounted_reasoning_tokens: int | None
@@ -465,8 +835,7 @@ class BudgetManager:
         self.require_endpoint_cost_bound = require_endpoint_cost_bound
         snapshot = atomic_ledger.snapshot() if atomic_ledger is not None else None
         if snapshot is not None and (
-            snapshot.active_reserved_usd > 0
-            or snapshot.over_cap
+            snapshot.over_cap
             or any(
                 entry.status is CostEntryStatus.RESERVATION_OVERRUN for entry in snapshot.entries
             )
@@ -475,11 +844,13 @@ class BudgetManager:
                 "persistent model-cost ledger requires explicit recovery"
             )
         self._spent = float(snapshot.spent_usd) if snapshot is not None else 0.0
+        self._spent_exact = snapshot.spent_usd if snapshot is not None else Decimal(0)
         self._reserved: dict[str, Decimal] = {}
         self._issued: dict[str, Reservation] = {}
         self._reconciled: dict[str, _Reconciliation] = {}
         self._released: set[str] = set()
-        self._role_requests: dict[str, int] = {}
+        self._pending_adoptions: dict[str, RecoveredSchedulerCostAttempt] = {}
+        self._request_limit_counts: dict[tuple[str, str], int] = {}
         # Scoped counters intentionally describe this process only. The durable
         # ledger remains the aggregate USD authority across process restarts.
         self._reserved_input_tokens = 0
@@ -490,6 +861,7 @@ class BudgetManager:
         self._spent_model_usd: dict[str, Decimal] = {}
         self._reserved_role_usd: dict[str, Decimal] = {}
         self._spent_role_usd: dict[str, Decimal] = {}
+        self._recovery_required = bool(snapshot is not None and snapshot.entries)
         self._lock = asyncio.Lock()
 
     @staticmethod
@@ -506,6 +878,12 @@ class BudgetManager:
     @property
     def spent_usd(self) -> float:
         return self._spent
+
+    @property
+    def spent_usd_exact(self) -> Decimal:
+        """Return the exact durable/reconciled USD total used for recovery joins."""
+
+        return self._spent_exact
 
     @property
     def reserved_usd(self) -> float:
@@ -567,6 +945,262 @@ class BudgetManager:
         _validate_scope_key(role, _ROLE_ID_PATTERN, scope="role")
         return self._spent_role_usd.get(role, Decimal(0))
 
+    @property
+    def recovery_required(self) -> bool:
+        """Return whether durable spend exists without restored scoped counters."""
+
+        return self._recovery_required
+
+    async def restore_recovered_usage(
+        self,
+        records: tuple[Any, ...],
+        *,
+        recovery_scope: _TrustedBudgetRecoveryScope,
+    ) -> None:
+        """Restore exact scoped counters once without changing durable USD spend."""
+
+        from mmaudit.models.usage import (
+            atomic_request_limit_reservations_from_usage,
+            atomic_token_reservations_from_usage,
+            is_accountable_usage_record,
+            is_creditable_usage_record,
+            request_token_plan_from_usage,
+        )
+
+        if self.atomic_ledger is None:
+            raise BudgetReservationStateError(
+                "budget recovery requires the exact persistent model-cost ledger"
+            )
+        normalized_records = tuple(records)
+        async with self._lock:
+            if not self._recovery_required:
+                raise BudgetReservationStateError("budget recovery is not required or already ran")
+            if self._issued or self._reserved or self._reconciled or self._released:
+                raise BudgetReservationStateError(
+                    "budget recovery requires a fresh manager before any request"
+                )
+
+            snapshot = self.atomic_ledger.snapshot()
+            entries_by_id = {entry.request_id: entry for entry in snapshot.entries}
+            expected_entry_ids: set[str] = set()
+            spent_input_tokens = 0
+            spent_output_tokens = 0
+            spent_model_usd: dict[str, Decimal] = {}
+            spent_role_usd: dict[str, Decimal] = {}
+            request_limit_counts: dict[tuple[str, str], int] = {}
+            expected_spent_usd = Decimal(0)
+            recovery_claims = _preview_trusted_budget_recovery_scope(
+                normalized_records,
+                recovery_scope,
+            )
+            recovered_attempts = recovery_claims.attempts
+            uncertain_dispatched_attempt = False
+            recovered_uncertain_scopes: set[tuple[str, str]] = set()
+            pending_adoptions: dict[str, RecoveredSchedulerCostAttempt] = {}
+            baseline = recovery_claims.baseline
+            if baseline is not None:
+                if snapshot.cap_usd != baseline.cap_usd_exact:
+                    raise BudgetReservationStateError(
+                        "persistent model-cost ledger cap differs from campaign baseline"
+                    )
+                for request_id, entry_sha256 in baseline.entry_sha256s:
+                    entry = entries_by_id.get(request_id)
+                    if entry is None or cost_entry_sha256(entry) != entry_sha256:
+                        raise BudgetReservationStateError(
+                            "persistent model-cost ledger differs from campaign baseline"
+                        )
+                    expected_entry_ids.add(request_id)
+                expected_spent_usd = baseline.spent_usd_exact
+
+            for record in normalized_records:
+                creditable = is_creditable_usage_record(record, require_real=True)
+                if not is_accountable_usage_record(record, require_real=False):
+                    raise BudgetReservationStateError(
+                        "budget recovery requires exact runtime-accountable usage"
+                    )
+                plan = request_token_plan_from_usage(record)
+                if plan is None:
+                    raise BudgetReservationStateError(
+                        "budget recovery usage lacks an exact request token plan"
+                    )
+                token_evidence = atomic_token_reservations_from_usage(record, plan)
+                request_evidence = atomic_request_limit_reservations_from_usage(record, plan)
+                if (
+                    len(token_evidence) != record.attempts
+                    or len(request_evidence) != record.attempts
+                    or not request_evidence
+                ):
+                    raise BudgetReservationStateError(
+                        "budget recovery usage lacks complete scheduled attempt evidence"
+                    )
+                attempt_ids = tuple(item.request_id for item in token_evidence)
+                if attempt_ids != tuple(item.request_id for item in request_evidence):
+                    raise BudgetReservationStateError(
+                        "budget recovery token and request attempts differ"
+                    )
+                if expected_entry_ids.intersection(attempt_ids):
+                    raise BudgetReservationStateError("budget recovery repeats a provider attempt")
+                expected_entry_ids.update(attempt_ids)
+                attempt_entries = tuple(entries_by_id.get(item) for item in attempt_ids)
+                if any(entry is None for entry in attempt_entries):
+                    raise BudgetReservationStateError(
+                        "persistent model-cost ledger omits a recovered provider attempt"
+                    )
+                exact_entries = tuple(entry for entry in attempt_entries if entry is not None)
+                if any(
+                    entry.status
+                    not in {
+                        CostEntryStatus.RECONCILED,
+                        CostEntryStatus.UNCERTAIN_ACCOUNTED,
+                    }
+                    for entry in exact_entries
+                ) or (creditable and exact_entries[-1].status is not CostEntryStatus.RECONCILED):
+                    raise BudgetReservationStateError(
+                        "persistent model-cost ledger has an invalid attempt state"
+                    )
+                if record.accounted_cost_usd_exact is None or (
+                    creditable and record.reported_cost_usd_exact is None
+                ):
+                    raise BudgetReservationStateError(
+                        "budget recovery usage lacks exact decimal cost evidence"
+                    )
+                record_cost = Decimal(record.accounted_cost_usd_exact)
+                if (
+                    sum(
+                        (entry.accounted_cost_usd for entry in exact_entries),
+                        start=Decimal(0),
+                    )
+                    != record_cost
+                    or (
+                        record.reported_cost_usd_exact is None
+                        and exact_entries[-1].actual_cost_usd is not None
+                    )
+                    or (
+                        record.reported_cost_usd_exact is not None
+                        and exact_entries[-1].actual_cost_usd
+                        != Decimal(record.reported_cost_usd_exact)
+                    )
+                ):
+                    raise BudgetReservationStateError(
+                        "persistent model-cost ledger differs from recovered usage cost"
+                    )
+                expected_spent_usd += record_cost
+                spent_input_tokens += sum(
+                    item.planned_prompt_tokens for item in token_evidence[:-1]
+                ) + (
+                    record.prompt_tokens
+                    if creditable or record.prompt_tokens > 0
+                    else token_evidence[-1].planned_prompt_tokens
+                )
+                spent_output_tokens += sum(
+                    item.planned_completion_tokens for item in token_evidence[:-1]
+                ) + (
+                    record.completion_tokens
+                    if creditable or record.completion_tokens > 0
+                    else token_evidence[-1].planned_completion_tokens
+                )
+                _increment_decimal(spent_model_usd, record.requested_model, record_cost)
+                _increment_decimal(spent_role_usd, record.role, record_cost)
+                scope_values = {item.request_limit_scope for item in request_evidence}
+                if len(scope_values) != 1:
+                    raise BudgetReservationStateError(
+                        "budget recovery request-limit scope is ambiguous"
+                    )
+                request_scope = next(iter(scope_values))
+                request_key = ("scheduled_task", request_scope)
+                if request_key in request_limit_counts:
+                    raise BudgetReservationStateError(
+                        "budget recovery repeats a scheduled request-limit scope"
+                    )
+                request_limit_counts[request_key] = request_evidence[-1].request_limit_count_after
+
+            for attempt in recovered_attempts:
+                if attempt.request_id in expected_entry_ids:
+                    raise BudgetReservationStateError("budget recovery repeats a provider attempt")
+                entry = entries_by_id.get(attempt.request_id)
+                if entry is None:
+                    raise BudgetReservationStateError(
+                        "persistent model-cost ledger omits a recovered provider attempt"
+                    )
+                expected_entry_ids.add(attempt.request_id)
+                if attempt.status == "adopted_proven_pre_send":
+                    if (
+                        entry.status is not CostEntryStatus.RESERVED
+                        or entry.release_reason is not None
+                        or entry.accounted_cost_usd != 0
+                        or entry.reserved_usd != attempt.reserved_cost_usd_exact
+                        or attempt.accounted_cost_usd_exact != 0
+                    ):
+                        raise BudgetReservationStateError(
+                            "adopted pre-send recovery differs from the persistent ledger"
+                        )
+                    pending_adoptions[attempt.request_id] = attempt
+                    continue
+                request_key = ("scheduled_task", attempt.logical_request_id)
+                if (
+                    request_key in request_limit_counts
+                    and request_key not in recovered_uncertain_scopes
+                ):
+                    raise BudgetReservationStateError(
+                        "budget recovery repeats a scheduled request-limit scope"
+                    )
+                if request_key not in recovered_uncertain_scopes:
+                    request_limit_counts[request_key] = 1
+                    recovered_uncertain_scopes.add(request_key)
+                if (
+                    entry.status is not CostEntryStatus.UNCERTAIN_ACCOUNTED
+                    or entry.actual_cost_usd is not None
+                    or entry.reserved_usd != attempt.reserved_cost_usd_exact
+                    or entry.accounted_cost_usd != attempt.accounted_cost_usd_exact
+                ):
+                    raise BudgetReservationStateError(
+                        "uncertain dispatched recovery differs from the persistent ledger"
+                    )
+                uncertain_dispatched_attempt = True
+                expected_spent_usd += attempt.accounted_cost_usd_exact
+                _increment_decimal(
+                    spent_model_usd,
+                    attempt.requested_model,
+                    attempt.accounted_cost_usd_exact,
+                )
+                _increment_decimal(
+                    spent_role_usd,
+                    attempt.role,
+                    attempt.accounted_cost_usd_exact,
+                )
+
+            if uncertain_dispatched_attempt:
+                if self.global_input_token_budget is not None:
+                    spent_input_tokens = self.global_input_token_budget
+                if self.global_output_token_budget is not None:
+                    spent_output_tokens = self.global_output_token_budget
+
+            if set(entries_by_id) != expected_entry_ids or snapshot.spent_usd != expected_spent_usd:
+                raise BudgetReservationStateError(
+                    "persistent model-cost ledger contains unbound recovery entries"
+                )
+            if (
+                self.global_input_token_budget is not None
+                and spent_input_tokens > self.global_input_token_budget
+            ) or (
+                self.global_output_token_budget is not None
+                and spent_output_tokens > self.global_output_token_budget
+            ):
+                raise BudgetReservationStateError(
+                    "recovered token usage exceeds the configured global budget"
+                )
+
+            _consume_trusted_budget_recovery_scope(normalized_records, recovery_scope)
+            self._spent_input_tokens = spent_input_tokens
+            self._spent_output_tokens = spent_output_tokens
+            self._spent_model_usd = spent_model_usd
+            self._spent_role_usd = spent_role_usd
+            self._request_limit_counts = request_limit_counts
+            self._pending_adoptions = pending_adoptions
+            self._spent_exact = snapshot.spent_usd
+            self._spent = float(snapshot.spent_usd)
+            self._recovery_required = False
+
     async def reserve(
         self,
         identifier: str,
@@ -580,9 +1214,14 @@ class BudgetManager:
         planned_reasoning_tokens: int | None = None,
         planned_completion_tokens: int | None = None,
         request_token_plan_sha256: str | None = None,
+        request_limit_scope: _TrustedRequestLimitScope | None = None,
     ) -> Reservation:
         """Reserve before send, requiring exact endpoint pricing in certification mode."""
 
+        if self._recovery_required:
+            raise BudgetReservationStateError(
+                "persistent budget counters require exact usage recovery before dispatch"
+            )
         maximum_cost = self._maximum_request_cost(prompt, endpoint_cost_bound)
         estimated = float(maximum_cost)
         (
@@ -602,15 +1241,55 @@ class BudgetManager:
             request_token_plan_sha256=request_token_plan_sha256,
             endpoint_cost_bound=endpoint_cost_bound,
         )
+        if request_limit_scope is not None and not isinstance(
+            request_limit_scope,
+            _TrustedRequestLimitScope,
+        ):
+            raise BudgetReservationStateError("request-limit scope capability is invalid")
+        if request_limit_scope is not None and resolved_plan_sha256 is None:
+            raise BudgetReservationStateError(
+                "request-limit scope requires a plan-bound reservation"
+            )
+        request_limit_key = (
+            ("role", role)
+            if request_limit_scope is None
+            else ("scheduled_task", request_limit_scope.identifier)
+        )
         async with self._lock:
+            if self._recovery_required:
+                raise BudgetReservationStateError(
+                    "persistent budget counters require exact usage recovery before dispatch"
+                )
             if identifier in self._issued:
                 raise BudgetReservationStateError(
                     "request reservation identifier was already issued"
                 )
-            count = self._role_requests.get(role, 0)
+            pending_adoption = self._pending_adoptions.get(identifier)
+            if self._pending_adoptions and pending_adoption is None:
+                raise BudgetReservationStateError(
+                    "a proven pre-send reservation must be adopted before other dispatch"
+                )
+            if pending_adoption is not None and (
+                pending_adoption.role != role
+                or pending_adoption.requested_model != resolved_model_id
+                or pending_adoption.reserved_cost_usd_exact != maximum_cost
+            ):
+                raise BudgetReservationStateError(
+                    "resumed request differs from its durable pre-send reservation"
+                )
+            count = self._request_limit_counts.get(request_limit_key, 0)
             if count >= self.max_requests_per_agent:
-                raise BudgetExhaustedError(f"request limit reached for role {role}")
-            if estimated > self.total_usd - self._spent - self.reserved_usd + 1e-12:
+                scope_label = (
+                    f"role {role}"
+                    if request_limit_scope is None
+                    else f"scheduled task {request_limit_key[1]}"
+                )
+                raise BudgetExhaustedError(f"request limit reached for {scope_label}")
+            if maximum_cost > (
+                Decimal(str(self.total_usd))
+                - self._spent_exact
+                - sum(self._reserved.values(), start=Decimal(0))
+            ):
                 raise BudgetExhaustedError(
                     f"request for {role} could cost ${estimated:.4f}, "
                     f"but only ${self.remaining_usd:.4f} remains"
@@ -649,6 +1328,19 @@ class BudgetManager:
                 )
                 else None
             )
+            request_limit_evidence: AtomicRequestLimitReservationEvidence | None = None
+            if request_limit_scope is not None:
+                assert resolved_model_id is not None
+                assert resolved_plan_sha256 is not None
+                request_limit_evidence = AtomicRequestLimitReservationEvidence.build(
+                    request_id=identifier,
+                    exact_model_id=resolved_model_id,
+                    role=role,
+                    request_token_plan_sha256=resolved_plan_sha256,
+                    request_limit_scope=request_limit_scope.identifier,
+                    request_limit_count_before=count,
+                    request_limit_maximum=self.max_requests_per_agent,
+                )
             reservation_without_persistence = Reservation(
                 identifier=identifier,
                 estimated_cost_usd=estimated,
@@ -661,22 +1353,42 @@ class BudgetManager:
                 planned_completion_tokens=resolved_completion_tokens,
                 request_token_plan_sha256=resolved_plan_sha256,
                 token_reservation_evidence=token_evidence,
+                request_limit_scope=(
+                    request_limit_scope.identifier if request_limit_scope is not None else None
+                ),
+                request_limit_reservation_evidence=request_limit_evidence,
             )
             try:
-                persistent = (
-                    self.atomic_ledger.reserve(identifier, maximum_cost)
-                    if self.atomic_ledger is not None
-                    else None
-                )
+                if pending_adoption is not None:
+                    if self.atomic_ledger is None:
+                        raise BudgetReservationStateError(
+                            "pre-send reservation adoption requires its persistent ledger"
+                        )
+                    persistent = self.atomic_ledger.active_reservation(identifier)
+                    if (
+                        persistent is None
+                        or persistent.reserved_usd != pending_adoption.reserved_cost_usd_exact
+                    ):
+                        raise BudgetReservationStateError(
+                            "durable pre-send reservation is no longer active"
+                        )
+                else:
+                    persistent = (
+                        self.atomic_ledger.reserve(identifier, maximum_cost)
+                        if self.atomic_ledger is not None
+                        else None
+                    )
             except CostBudgetExceededError:
                 raise BudgetExhaustedError(
                     f"request for {role} exceeds the persistent model-cost budget"
                 ) from None
             self._reserved[identifier] = maximum_cost
-            self._role_requests[role] = count + 1
+            self._request_limit_counts[request_limit_key] = count + 1
             reservation = replace(reservation_without_persistence, persistent=persistent)
             self._issued[identifier] = reservation
             self._reserve_scoped(reservation, maximum_cost)
+            if pending_adoption is not None:
+                self._pending_adoptions.pop(identifier)
             return reservation
 
     def _validate_request_scope(
@@ -1074,12 +1786,14 @@ class BudgetManager:
                 accounted_completion_tokens=accounted_completion_tokens,
             )
             self._spent += accounted
+            self._spent_exact += accounted_decimal
             self._reconciled[reservation.identifier] = _Reconciliation(
                 actual_cost_usd=normalized_actual,
                 actual_prompt_tokens=normalized_prompt_tokens,
                 actual_completion_tokens=normalized_completion_tokens,
                 actual_reasoning_tokens=normalized_reasoning_tokens,
                 accounted_cost_usd=accounted,
+                accounted_cost_usd_exact=accounted_decimal,
                 accounted_prompt_tokens=accounted_prompt_tokens,
                 accounted_completion_tokens=accounted_completion_tokens,
                 accounted_reasoning_tokens=accounted_reasoning_tokens,
@@ -1095,6 +1809,19 @@ class BudgetManager:
                     "actual token usage exceeded or did not prove its planned reservation"
                 )
             return accounted
+
+    async def reconciled_cost_usd_exact(self, reservation: Reservation) -> Decimal:
+        """Return the exact cost retained for one already reconciled reservation."""
+
+        async with self._lock:
+            if self._issued.get(reservation.identifier) != reservation:
+                raise BudgetReservationStateError(
+                    "request reservation handle is unknown or inconsistent"
+                )
+            reconciliation = self._reconciled.get(reservation.identifier)
+            if reconciliation is None:
+                raise BudgetReservationStateError("request reservation is not reconciled")
+            return reconciliation.accounted_cost_usd_exact
 
     async def release(self, reservation: Reservation) -> None:
         async with self._lock:

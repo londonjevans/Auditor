@@ -6,14 +6,16 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import Any
 
 from mmaudit.constants import SPECIALIST_INVESTIGATOR_ROLES
 from mmaudit.models.openrouter import StructuredCompletion, strict_json_schema
 from mmaudit.models.schemas import (
     CandidateReviewBatch,
-    ContextExcerpt,
     ContextPackage,
+    EconomicSimulationKind,
+    InvariantTemplate,
     Location,
     ModelReviewSurfaceKind,
     ModelSurfaceReviewArtifact,
@@ -29,10 +31,20 @@ from mmaudit.models.schemas import (
     SoliditySymbolIndex,
 )
 from mmaudit.models.usage import is_creditable_usage_record
+from mmaudit.repository.chunking import excerpt_proves_location
 
 _BASE_REVIEW_ROLES = frozenset({"source_audit", "business_logic", "configuration"})
 _SPECIALIST_REVIEW_ROLES = frozenset(f"specialist:{role}" for role in SPECIALIST_INVESTIGATOR_ROLES)
+_WHOLE_PROTOCOL_CONTEXT_ROLE = "whole_protocol_review"
+_WHOLE_PROTOCOL_REQUEST_ROLE = re.compile(r"^whole_protocol_review:(?:0|[1-9][0-9]{0,3})$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_CANONICAL_INVARIANT_ID = re.compile(r"^inv-[0-9a-f]{20}$")
+_CANONICAL_TEMPLATE_SUBJECT_IDS = frozenset(
+    {
+        *(f"invariant-template:{template.value}" for template in InvariantTemplate),
+        *(f"economic-template:{template.value}" for template in EconomicSimulationKind),
+    }
+)
 _WORD = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 _DIRECT_ENTRY_SURFACES = frozenset(
     {
@@ -118,6 +130,10 @@ _ANCHOR_STOPWORDS = frozenset(
         "uint256",
     }
 )
+_SOURCE_FILE_INVARIANT = (
+    "The exact delivered source file must be substantively reviewed for unsafe "
+    "security-relevant behavior."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +152,23 @@ class _DeterministicReviewGraph:
 
 class ModelReviewEvidenceError(ValueError):
     """Raised when model-authored review evidence cannot be safely credited."""
+
+
+def _is_investigator_review_role(role: str) -> bool:
+    return bool(
+        role in _BASE_REVIEW_ROLES | _SPECIALIST_REVIEW_ROLES
+        or _WHOLE_PROTOCOL_REQUEST_ROLE.fullmatch(role)
+    )
+
+
+def _review_role_matches_context(*, request_role: str, context_role: str) -> bool:
+    return bool(
+        request_role == context_role
+        or (
+            context_role == _WHOLE_PROTOCOL_CONTEXT_ROLE
+            and _WHOLE_PROTOCOL_REQUEST_ROLE.fullmatch(request_role)
+        )
+    )
 
 
 def seal_model_surface_review_artifact(
@@ -158,7 +191,9 @@ def seal_model_surface_review_artifact(
         raise ModelReviewEvidenceError(
             "model surface evidence context failed exact boundary validation"
         ) from exc
-    if context.role not in _BASE_REVIEW_ROLES | _SPECIALIST_REVIEW_ROLES:
+    if not (
+        _is_investigator_review_role(context.role) or context.role == _WHOLE_PROTOCOL_CONTEXT_ROLE
+    ):
         raise ModelReviewEvidenceError(
             "model surface evidence was produced by a non-investigator role"
         )
@@ -168,7 +203,7 @@ def seal_model_surface_review_artifact(
         )
 
     usage = completion.usage_record
-    if usage.role != context.role:
+    if not _review_role_matches_context(request_role=usage.role, context_role=context.role):
         raise ModelReviewEvidenceError(
             "model surface evidence usage role differs from the request context"
         )
@@ -218,7 +253,7 @@ def seal_model_surface_review_artifact(
         validate_model_surface_review_record(
             request,
             record,
-            expected_role=context.role,
+            expected_role=usage.role,
             index=context.solidity_index,
             graphs=context.solidity_graphs,
         )
@@ -239,7 +274,7 @@ def seal_model_surface_review_artifact(
     payload: dict[str, Any] = {
         "schema_version": "1.0",
         "request_id": usage.request_id,
-        "review_role": context.role,
+        "review_role": usage.role,
         "requested_surface_ids": list(requested_ids),
         "requested_surface_ids_sha256": _canonical_sha256(list(requested_ids)),
         "requested_surface_manifest_sha256": (
@@ -295,6 +330,69 @@ def validate_model_surface_review_record(
         raise ModelReviewEvidenceError(failures[0])
 
 
+def build_source_file_review_request(
+    *,
+    path: str,
+    size: int,
+    lines: int,
+    sha256: str,
+) -> ModelSurfaceReviewRequest:
+    """Build one exact file-level review contract without inventing AST evidence."""
+
+    normalized_path = PurePosixPath(path).as_posix()
+    if (
+        not path
+        or len(path) > 500
+        or normalized_path != path
+        or PurePosixPath(path).is_absolute()
+        or any(part in {"", ".", ".."} for part in PurePosixPath(path).parts)
+        or any(ord(character) < 32 or ord(character) == 127 for character in path)
+    ):
+        raise ValueError("source-file review path must be normalized, relative, and bounded")
+    if (
+        isinstance(size, bool)
+        or not isinstance(size, int)
+        or size < 0
+        or isinstance(lines, bool)
+        or not isinstance(lines, int)
+        or lines < 0
+        or (size == 0) != (lines == 0)
+    ):
+        raise ValueError("source-file review size and line count are inconsistent")
+    if re.fullmatch(_SHA256, sha256) is None:
+        raise ValueError("source-file review requires a lowercase SHA-256")
+    if size == 0 and sha256 != hashlib.sha256(b"").hexdigest():
+        raise ValueError("empty source-file review hash is inconsistent")
+    subject_id = "source-file:" + _canonical_sha256(
+        {
+            "path": path,
+            "sha256": sha256,
+            "size": size,
+            "lines": lines,
+        }
+    )
+    location = Location(
+        path=path,
+        start_line=1,
+        end_line=max(1, lines),
+        content_hash=sha256,
+    )
+    return ModelSurfaceReviewRequest(
+        surface_id=ModelSurfaceReviewRequest.calculate_surface_id(
+            ModelReviewSurfaceKind.SOURCE_FILE,
+            subject_id,
+        ),
+        kind=ModelReviewSurfaceKind.SOURCE_FILE,
+        subject_id=subject_id,
+        contract=path,
+        function_or_state_surface="whole source file",
+        critical=False,
+        allowed_locations=(location,),
+        allowed_symbols=(),
+        invariant_considered=_SOURCE_FILE_INVARIANT,
+    )
+
+
 def model_surface_review_record_validation_failures(
     request: ModelSurfaceReviewRequest,
     record: ModelSurfaceReviewRecord,
@@ -306,7 +404,7 @@ def model_surface_review_record_validation_failures(
     """Return deterministic no-credit reasons for one provider-authored record."""
 
     failures: list[str] = []
-    if expected_role not in _BASE_REVIEW_ROLES | _SPECIALIST_REVIEW_ROLES:
+    if not _is_investigator_review_role(expected_role):
         failures.append("model surface evidence was produced by a non-investigator role")
         return tuple(failures)
     try:
@@ -330,6 +428,9 @@ def model_surface_review_record_validation_failures(
         ModelSurfaceReviewStatus.CANDIDATE,
         ModelSurfaceReviewStatus.REVIEWED_NO_ISSUE,
     }:
+        return tuple(dict.fromkeys(failures))
+    if request.kind is ModelReviewSurfaceKind.SOURCE_FILE:
+        failures.extend(_source_file_record_failures(request=request, record=record))
         return tuple(dict.fromkeys(failures))
     if index is None:
         failures.append(
@@ -402,7 +503,7 @@ def _validate_location_source(
     request: ModelSurfaceReviewRequest,
     location: Location,
 ) -> None:
-    if not any(_excerpt_proves_location(excerpt, location) for excerpt in context.excerpts):
+    if not any(excerpt_proves_location(excerpt, location) for excerpt in context.excerpts):
         raise ModelReviewEvidenceError(
             f"model surface {request.surface_id} source location hash was not proven by context"
         )
@@ -421,6 +522,8 @@ def model_surface_review_excerpt_validation_failures(
         ModelSurfaceReviewStatus.REVIEWED_NO_ISSUE,
     }:
         return ()
+    if request.kind is ModelReviewSurfaceKind.SOURCE_FILE:
+        return _source_file_excerpt_failures(context=context, request=request)
     if context.solidity_index is None:
         return (f"model surface {request.surface_id} lacks a deterministic Solidity symbol index",)
     if not context.excerpts:
@@ -453,7 +556,7 @@ def model_surface_review_excerpt_validation_failures(
                 "one exact deterministic source range"
             )
             continue
-        if not any(_excerpt_proves_location(excerpt, locations[0]) for excerpt in context.excerpts):
+        if not any(excerpt_proves_location(excerpt, locations[0]) for excerpt in context.excerpts):
             failures.append(
                 f"model surface {request.surface_id} {label} source range hash "
                 "was not proven by supplied context bytes"
@@ -461,21 +564,111 @@ def model_surface_review_excerpt_validation_failures(
     return tuple(dict.fromkeys(failures))
 
 
-def _excerpt_proves_location(excerpt: ContextExcerpt, location: Location) -> bool:
+def _source_file_record_failures(
+    *,
+    request: ModelSurfaceReviewRequest,
+    record: ModelSurfaceReviewRecord,
+) -> tuple[str, ...]:
+    """Validate substantive file review without claiming AST reachability."""
+
+    failures: list[str] = []
     if (
-        excerpt.path != location.path
-        or excerpt.start_line > location.start_line
-        or location.end_line > excerpt.end_line
-        or hashlib.sha256(excerpt.content.encode()).hexdigest() != excerpt.content_hash
+        len(request.allowed_locations) != 1
+        or request.allowed_symbols
+        or request.contract != request.allowed_locations[0].path
+        or request.invariant_considered != _SOURCE_FILE_INVARIANT
     ):
-        return False
-    relative_start = location.start_line - excerpt.start_line
-    relative_end = location.end_line - excerpt.start_line + 1
-    lines = excerpt.content.splitlines(keepends=True)
-    if relative_end > len(lines):
-        return False
-    observed_hash = hashlib.sha256("".join(lines[relative_start:relative_end]).encode()).hexdigest()
-    return observed_hash == location.content_hash
+        failures.append(f"model surface {request.surface_id} file contract is inconsistent")
+        return tuple(failures)
+    citation = ModelSurfaceReviewCitation(location=request.allowed_locations[0])
+    if record.citation != citation:
+        failures.append(f"model surface {request.surface_id} did not cite the exact whole file")
+    request_texts = {
+        _normalized_text(request.contract),
+        _normalized_text(request.function_or_state_surface),
+        _normalized_text(request.invariant_considered),
+    }
+    invariant_tokens = _meaningful_tokens(request.invariant_considered)
+    for index, observation in enumerate(record.evidence_observations):
+        observed = _normalized_text(observation.observed_behavior)
+        relevance = _normalized_text(observation.security_relevance)
+        if (
+            observed in request_texts
+            or relevance in request_texts
+            or _is_near_copy(observation.observed_behavior, request.invariant_considered)
+            or _is_near_copy(observation.security_relevance, request.invariant_considered)
+        ):
+            failures.append(
+                f"model surface {request.surface_id} observation {index} copied request text"
+            )
+        if observed == relevance or any(
+            phrase in f"{observed} {relevance}" for phrase in _GENERIC_OBSERVATION_PHRASES
+        ):
+            failures.append(
+                f"model surface {request.surface_id} observation {index} used generic boilerplate"
+            )
+        observed_tokens = _meaningful_tokens(observation.observed_behavior)
+        relevance_tokens = _meaningful_tokens(observation.security_relevance)
+        if not _contains_term_family(observed_tokens, _BEHAVIOR_TERMS):
+            failures.append(
+                f"model surface {request.surface_id} observation {index} "
+                "did not state a concrete source behavior"
+            )
+        if not relevance_tokens & invariant_tokens or not _contains_term_family(
+            relevance_tokens,
+            _SECURITY_TERMS,
+        ):
+            failures.append(
+                f"model surface {request.surface_id} observation {index} "
+                "did not state a concrete security consequence"
+            )
+    reachability = record.reachability
+    if (
+        reachability is None
+        or reachability.entry_point != citation
+        or reachability.path != (citation,)
+    ):
+        failures.append(f"model surface {request.surface_id} file review path is not exact")
+    return tuple(dict.fromkeys(failures))
+
+
+def _source_file_excerpt_failures(
+    *,
+    context: ContextPackage,
+    request: ModelSurfaceReviewRequest,
+) -> tuple[str, ...]:
+    """Require exact provider-visible whole-file bytes for file review credit."""
+
+    if len(request.allowed_locations) != 1:
+        return (f"model surface {request.surface_id} lacks one whole-file location",)
+    location = request.allowed_locations[0]
+    repository_files = tuple(
+        item for item in context.repository_map.files if item.path == location.path
+    )
+    if len(repository_files) != 1:
+        return (f"model surface {request.surface_id} lacks repository source identity",)
+    repository_file = repository_files[0]
+    expected_end_line = max(1, repository_file.lines)
+    if (
+        location.start_line != 1
+        or location.end_line != expected_end_line
+        or location.content_hash != repository_file.sha256
+    ):
+        return (f"model surface {request.surface_id} whole-file location is inconsistent",)
+    for excerpt in context.excerpts:
+        encoded = excerpt.content.encode("utf-8")
+        if (
+            excerpt.path == repository_file.path
+            and excerpt.start_line == 1
+            and excerpt.end_line == expected_end_line
+            and not excerpt.omitted_before
+            and not excerpt.omitted_after
+            and len(encoded) == repository_file.size
+            and excerpt.content_hash == repository_file.sha256
+            and hashlib.sha256(encoded).hexdigest() == repository_file.sha256
+        ):
+            return ()
+    return (f"model surface {request.surface_id} whole-file bytes were not supplied",)
 
 
 def _build_deterministic_review_graph(
@@ -710,7 +903,6 @@ def _reachability_failures(
         ]
     terminal_tokens = _expected_surface_tokens(
         request,
-        record=record,
         graph=graph,
     )
     if not terminal_tokens or not (resolved_path[-1] & terminal_tokens):
@@ -749,6 +941,11 @@ def _reachability_failures(
                 "was not adjacent in the deterministic graph"
             ]
         frontier = next_frontier
+    if not (frontier & terminal_tokens):
+        return [
+            f"model surface {request.surface_id} reachability path did not terminate "
+            "at the exact deterministic surface"
+        ]
     return []
 
 
@@ -795,7 +992,6 @@ def _resolved_citation_locations(
 def _expected_surface_tokens(
     request: ModelSurfaceReviewRequest,
     *,
-    record: ModelSurfaceReviewRecord,
     graph: _DeterministicReviewGraph,
 ) -> frozenset[str]:
     entity = graph.entities_by_id.get(request.subject_id)
@@ -804,18 +1000,22 @@ def _expected_surface_tokens(
     edge_token = graph.edge_tokens_by_subject.get(request.subject_id)
     if edge_token is not None:
         return frozenset({edge_token})
-    if (
-        request.kind is ModelReviewSurfaceKind.INVARIANT and request.subject_id.startswith("inv:")
-    ) or (
+    is_canonical_invariant = bool(
+        request.kind is ModelReviewSurfaceKind.INVARIANT
+        and _CANONICAL_INVARIANT_ID.fullmatch(request.subject_id)
+    )
+    is_canonical_template = bool(
         request.kind is ModelReviewSurfaceKind.TEMPLATE
-        and request.subject_id.startswith(
-            (
-                "invariant-template:",
-                "economic-template:",
-            )
+        and request.subject_id in _CANONICAL_TEMPLATE_SUBJECT_IDS
+    )
+    if is_canonical_invariant or is_canonical_template:
+        allowed_location_keys = {_location_key(location) for location in request.allowed_locations}
+        return frozenset(
+            _identity_token(entity.id)
+            for entity in graph.entities_by_id.values()
+            if entity.id in request.allowed_symbols
+            or _location_key(_entity_location(entity)) in allowed_location_keys
         )
-    ):
-        return _resolve_citation(record.citation, graph=graph)
     return frozenset()
 
 

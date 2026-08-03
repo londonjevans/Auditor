@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 import pytest
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError, create_model
 
 import mmaudit.models.openrouter as openrouter_module
 from mmaudit.constants import OPENROUTER_DEFAULT_BASE_URL
@@ -4303,6 +4303,144 @@ def test_strict_schema_marks_every_property_required() -> None:
     assert schema["required"] == ["answer", "note"]
     assert "default" not in schema["properties"]["note"]
     assert schema["additionalProperties"] is False
+
+
+def test_strict_schema_cache_is_isolated_from_caller_mutation() -> None:
+    first = strict_json_schema(OptionalAnswer)
+    first["required"].append("forged")
+    first["properties"]["note"]["forged"] = True
+
+    second = strict_json_schema(OptionalAnswer)
+
+    assert first is not second
+    assert first["properties"] is not second["properties"]
+    assert second["required"] == ["answer", "note"]
+    assert "forged" not in second["properties"]["note"]
+
+
+def test_strict_schema_cache_tracks_forced_model_rebuild_generation() -> None:
+    class RebuiltAnswer(BaseModel):
+        answer: str
+
+    before = strict_json_schema(RebuiltAnswer)
+    RebuiltAnswer.model_fields["answer"].annotation = int
+    assert RebuiltAnswer.model_rebuild(force=True) is True
+    after = strict_json_schema(RebuiltAnswer)
+
+    assert before["properties"]["answer"]["type"] == "string"
+    assert after["properties"]["answer"]["type"] == "integer"
+    assert RebuiltAnswer.model_validate({"answer": 7}).answer == 7
+
+
+def test_strict_schema_generation_cache_is_bounded_for_dynamic_models() -> None:
+    caches = (
+        openrouter_module._strict_json_schema_json_for_generation,
+        openrouter_module._strict_json_schema_sha256_for_generation,
+    )
+
+    for index in range(openrouter_module._STRICT_JSON_SCHEMA_CACHE_MAXSIZE + 32):
+        response_model = create_model(f"DynamicResponse{index}", value=(int, ...))
+        assert strict_json_schema(response_model)["properties"]["value"]["type"] == "integer"
+        assert len(openrouter_module.strict_json_schema_sha256(response_model)) == 64
+
+    for cache in caches:
+        cache_info = cache.cache_info()
+        assert cache_info.maxsize == openrouter_module._STRICT_JSON_SCHEMA_CACHE_MAXSIZE
+        assert cache_info.currsize <= openrouter_module._STRICT_JSON_SCHEMA_CACHE_MAXSIZE
+
+
+def test_strict_schema_cache_rejects_rebuild_during_schema_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RacingAnswer(BaseModel):
+        answer: str
+
+    original_model_json_schema = RacingAnswer.model_json_schema
+
+    def rebuild_during_schema_generation(
+        cls: type[RacingAnswer],
+        *args: Any,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        del cls
+        schema = original_model_json_schema(*args, **kwargs)
+        RacingAnswer.model_fields["answer"].annotation = int
+        assert RacingAnswer.model_rebuild(force=True) is True
+        return schema
+
+    monkeypatch.setattr(
+        RacingAnswer,
+        "model_json_schema",
+        classmethod(rebuild_during_schema_generation),
+    )
+
+    with pytest.raises(OpenRouterSchemaError, match="changed during strict schema generation"):
+        strict_json_schema(RacingAnswer)
+
+
+def test_strict_schema_cache_rejects_rebuild_during_cached_schema_decode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RacingAnswer(BaseModel):
+        answer: str
+
+    original_json_loads = openrouter_module.json.loads
+    rebuild_state = {"complete": False}
+
+    def rebuild_during_schema_decode(value: Any, *args: Any, **kwargs: Any) -> Any:
+        decoded = original_json_loads(value, *args, **kwargs)
+        if not rebuild_state["complete"]:
+            rebuild_state["complete"] = True
+            RacingAnswer.model_fields["answer"].annotation = int
+            assert RacingAnswer.model_rebuild(force=True) is True
+        return decoded
+
+    monkeypatch.setattr(openrouter_module.json, "loads", rebuild_during_schema_decode)
+
+    with pytest.raises(OpenRouterSchemaError, match="changed during strict schema decoding"):
+        strict_json_schema(RacingAnswer)
+
+
+@pytest.mark.asyncio
+async def test_request_rejects_schema_rebuild_after_token_plan_before_transport(
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RacingRequestAnswer(BaseModel):
+        answer: str
+
+    transport_calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal transport_calls
+        transport_calls += 1
+        return _completion_response('{"answer":"must not execute"}')
+
+    client, http_client, usage = _client(config_factory(), handler)
+    original_request_token_plan = client._request_token_plan
+
+    def rebuild_after_token_plan(*args: Any, **kwargs: Any) -> Any:
+        result = original_request_token_plan(*args, **kwargs)
+        RacingRequestAnswer.model_fields["answer"].annotation = int
+        assert RacingRequestAnswer.model_rebuild(force=True) is True
+        return result
+
+    monkeypatch.setattr(client, "_request_token_plan", rebuild_after_token_plan)
+    try:
+        with pytest.raises(OpenRouterSchemaError, match="changed during token planning"):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="synthetic system",
+                user_prompt="synthetic user",
+                response_model=RacingRequestAnswer,
+                schema_name="racing_request_answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert transport_calls == 0
+    assert usage.records == []
 
 
 @pytest.mark.asyncio

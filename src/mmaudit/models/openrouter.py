@@ -16,12 +16,15 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
+from threading import Lock
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, cast
 from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel, ValidationError
+from pydantic_core import SchemaValidator
 
 from mmaudit.config import ExecutionConfig, PrivacyConfig, TokenBudgetConfig, model_family
 from mmaudit.constants import OPENROUTER_DEFAULT_BASE_URL, VERSION
@@ -116,7 +119,7 @@ from mmaudit.models.structured_output import (
     StructuredOutputDecodeResult,
     StructuredOutputFailureCode,
     StructuredOutputRepairEvidence,
-    decode_structured_output,
+    _decode_structured_output_with_schema_generation,
 )
 from mmaudit.models.token_planning import (
     PROMPT_ALLOCATION_CATEGORIES,
@@ -142,9 +145,11 @@ from mmaudit.models.usage import (
 from mmaudit.orchestration.budgets import (
     BudgetExhaustedError,
     BudgetManager,
+    BudgetReservationStateError,
     EndpointRequestCostBound,
     Reservation,
     UnprovenCostBoundError,
+    _TrustedRequestLimitScope,
 )
 from mmaudit.orchestration.context_manifest import (
     ContextPlanningSnapshot,
@@ -166,6 +171,7 @@ ResponseT = TypeVar("ResponseT", bound=BaseModel)
 
 _NORMALIZED_OPENROUTER_BASE_URL = OPENROUTER_DEFAULT_BASE_URL.rstrip("/") + "/"
 _PROVIDER_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,127}$")
+_LOGICAL_REQUEST_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _QUALIFICATION_PROVIDER_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/()&+-]{0,199}$")
 _NON_DIRECT_ROUTING_STRATEGIES = {
     "alias",
@@ -323,6 +329,21 @@ def _canonical_effective_privacy_policy(
         )
     except (AttributeError, ValidationError):
         raise OpenRouterPrivacyError("effective privacy evidence is invalid") from None
+
+
+def _model_request_privacy_binding(
+    evidence: EffectivePrivacyPolicyEvidence | None,
+) -> ModelRequestPrivacyBinding | None:
+    """Project one canonical in-memory privacy policy for lifecycle comparison."""
+
+    if evidence is None:
+        return None
+    policy = _canonical_effective_privacy_policy(evidence)
+    return ModelRequestPrivacyBinding(
+        source_sha256=policy.source_sha256,
+        effective_policy_sha256=policy.evidence_sha256,
+        source_provenance_sha256=policy.source_provenance_sha256,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -928,6 +949,7 @@ class _StructuredOutputRequestPlan:
     require_parameters: bool
     reasoning_request_sha256: str | None
     strict_protocol_sha256: str | None
+    schema_sha256: str
     request_shape_sha256: str
 
 
@@ -1139,6 +1161,62 @@ class OpenRouterCostControlError(OpenRouterError):
     pass
 
 
+def _attempt_request_id(request_id: str, attempt: int) -> str:
+    """Return one cost-ledger-safe identity for a bounded provider attempt."""
+
+    if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
+        raise OpenRouterRequestLimitError("provider attempt number is invalid")
+    identifier = request_id if attempt == 1 else f"{request_id}:attempt:{attempt}"
+    if _LOGICAL_REQUEST_ID_PATTERN.fullmatch(identifier) is None:
+        raise OpenRouterRequestLimitError(
+            "logical request ID cannot produce bounded 1-128 character attempt identities"
+        )
+    return identifier
+
+
+def _request_ids_for_routes(
+    logical_request_id: str | None,
+    *,
+    route_count: int,
+    maximum_attempts: int,
+) -> tuple[str, ...]:
+    """Resolve scheduler identity into distinct route and retry-safe request IDs."""
+
+    if (
+        isinstance(route_count, bool)
+        or not isinstance(route_count, int)
+        or route_count < 1
+        or isinstance(maximum_attempts, bool)
+        or not isinstance(maximum_attempts, int)
+        or maximum_attempts < 1
+    ):
+        raise OpenRouterRequestLimitError("request identity bounds are invalid")
+    if logical_request_id is not None and (
+        not isinstance(logical_request_id, str)
+        or _LOGICAL_REQUEST_ID_PATTERN.fullmatch(logical_request_id) is None
+    ):
+        raise OpenRouterRequestLimitError(
+            "logical request ID must use 1-128 restricted non-secret identifier characters"
+        )
+    identifiers = tuple(
+        (
+            str(uuid.uuid4())
+            if logical_request_id is None
+            else (
+                logical_request_id
+                if route_index == 1
+                else f"{logical_request_id}:route:{route_index}"
+            )
+        )
+        for route_index in range(1, route_count + 1)
+    )
+    for identifier in identifiers:
+        _attempt_request_id(identifier, maximum_attempts)
+    if len(set(identifiers)) != len(identifiers):
+        raise OpenRouterRequestLimitError("request route identities must be unique")
+    return identifiers
+
+
 def is_retryable_status(status_code: int) -> bool:
     return status_code in {408, 409, 425, 429} or 500 <= status_code <= 599
 
@@ -1156,10 +1234,60 @@ def safe_headers(headers: dict[str, str]) -> dict[str, str]:
     }
 
 
-def strict_json_schema(response_model: type[BaseModel]) -> dict[str, Any]:
-    """Normalize Pydantic JSON Schema for strict structured-output providers."""
+_STRICT_JSON_SCHEMA_CACHE_MAXSIZE = 128
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class _PydanticSchemaGeneration:
+    """Identity-only token for one live Pydantic validator/core-schema pair."""
+
+    validator: SchemaValidator
+    core_schema: object
+
+    def __hash__(self) -> int:
+        return hash((id(self.validator), id(self.core_schema)))
+
+    def __eq__(self, other: object) -> bool:
+        return (
+            isinstance(other, _PydanticSchemaGeneration)
+            and self.validator is other.validator
+            and self.core_schema is other.core_schema
+        )
+
+    def is_current(self, response_model: type[BaseModel]) -> bool:
+        return (
+            getattr(response_model, "__pydantic_validator__", None) is self.validator
+            and getattr(response_model, "__pydantic_core_schema__", None) is self.core_schema
+        )
+
+    def require_current(self, response_model: type[BaseModel], *, phase: str) -> None:
+        if not self.is_current(response_model):
+            raise OpenRouterSchemaError(f"response model changed {phase}")
+
+
+def _pydantic_schema_generation(
+    response_model: type[BaseModel],
+) -> _PydanticSchemaGeneration:
+    validator = getattr(response_model, "__pydantic_validator__", None)
+    core_schema = getattr(response_model, "__pydantic_core_schema__", None)
+    if not isinstance(validator, SchemaValidator) or core_schema is None:
+        raise TypeError("structured-output response model lacks a live Pydantic schema")
+    return _PydanticSchemaGeneration(validator=validator, core_schema=core_schema)
+
+
+@lru_cache(maxsize=_STRICT_JSON_SCHEMA_CACHE_MAXSIZE)
+def _strict_json_schema_json_for_generation(
+    response_model: type[BaseModel],
+    generation: _PydanticSchemaGeneration,
+) -> str:
+    """Cache one schema for an exact live Pydantic validator/schema generation."""
+
+    if not generation.is_current(response_model):
+        raise OpenRouterSchemaError("response model changed before strict schema generation")
 
     schema = copy.deepcopy(response_model.model_json_schema())
+    if not generation.is_current(response_model):
+        raise OpenRouterSchemaError("response model changed during strict schema generation")
 
     def normalize(node: Any) -> None:
         if isinstance(node, dict):
@@ -1175,7 +1303,61 @@ def strict_json_schema(response_model: type[BaseModel]) -> dict[str, Any]:
                 normalize(value)
 
     normalize(schema)
+    serialized = json.dumps(
+        schema,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    if not generation.is_current(response_model):
+        raise OpenRouterSchemaError("response model changed during strict schema normalization")
+    return serialized
+
+
+@lru_cache(maxsize=_STRICT_JSON_SCHEMA_CACHE_MAXSIZE)
+def _strict_json_schema_sha256_for_generation(
+    response_model: type[BaseModel],
+    generation: _PydanticSchemaGeneration,
+) -> str:
+    serialized = _strict_json_schema_json_for_generation(response_model, generation)
+    if not generation.is_current(response_model):
+        raise OpenRouterSchemaError("response model changed during strict schema hashing")
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _strict_json_schema_for_generation(
+    response_model: type[BaseModel],
+    generation: _PydanticSchemaGeneration,
+) -> dict[str, Any]:
+    """Decode only the canonical schema bound to one still-live model generation."""
+
+    serialized = _strict_json_schema_json_for_generation(response_model, generation)
+    if not generation.is_current(response_model):
+        raise OpenRouterSchemaError("response model changed before strict schema decoding")
+    schema = json.loads(serialized)
+    if not generation.is_current(response_model):
+        raise OpenRouterSchemaError("response model changed during strict schema decoding")
+    if not isinstance(schema, dict):  # pragma: no cover - Pydantic guarantees an object schema.
+        raise TypeError("strict structured-output schema must be a JSON object")
     return schema
+
+
+def strict_json_schema(response_model: type[BaseModel]) -> dict[str, Any]:
+    """Return a mutation-isolated strict schema backed by an immutable cache."""
+
+    generation = _pydantic_schema_generation(response_model)
+    return _strict_json_schema_for_generation(response_model, generation)
+
+
+def strict_json_schema_sha256(response_model: type[BaseModel]) -> str:
+    """Hash the exact strict schema for the current live validator generation."""
+
+    generation = _pydantic_schema_generation(response_model)
+    schema_sha256 = _strict_json_schema_sha256_for_generation(response_model, generation)
+    if not generation.is_current(response_model):
+        raise OpenRouterSchemaError("response model changed after strict schema hashing")
+    return schema_sha256
 
 
 def _strict_output_protocol(
@@ -1210,10 +1392,12 @@ def _structured_output_request_plan(
     response_model: type[BaseModel],
     schema_name: str,
     reasoning: OpenRouterReasoning | None = None,
+    schema_generation: _PydanticSchemaGeneration | None = None,
 ) -> _StructuredOutputRequestPlan:
     """Build one deterministic request protocol without model-authored repair."""
 
-    schema = strict_json_schema(response_model)
+    generation = schema_generation or _pydantic_schema_generation(response_model)
+    schema = _strict_json_schema_for_generation(response_model, generation)
     schema_sha256 = _canonical_sha256(schema)
     response_format: dict[str, Any] | None
     strict_protocol_sha256: str | None = None
@@ -1272,6 +1456,7 @@ def _structured_output_request_plan(
         require_parameters=require_parameters,
         reasoning_request_sha256=reasoning_request_sha256,
         strict_protocol_sha256=strict_protocol_sha256,
+        schema_sha256=schema_sha256,
         request_shape_sha256=request_shape_sha256,
     )
 
@@ -1296,6 +1481,26 @@ def structured_output_prompt_sha256(
     return _structured_output_prompt_sha256_from_plan(plan)
 
 
+def structured_output_system_prompt_sha256(
+    *,
+    mode: StructuredOutputMode,
+    system_prompt: str,
+    user_prompt: str,
+    response_model: type[BaseModel],
+    schema_name: str,
+) -> str:
+    """Hash the exact effective system message after output-protocol composition."""
+
+    plan = _structured_output_request_plan(
+        mode=mode,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        response_model=response_model,
+        schema_name=schema_name,
+    )
+    return hashlib.sha256(plan.system_prompt.encode("utf-8")).hexdigest()
+
+
 def _structured_output_prompt_sha256_from_plan(
     plan: _StructuredOutputRequestPlan,
 ) -> str:
@@ -1305,6 +1510,111 @@ def _structured_output_prompt_sha256_from_plan(
             {"role": "user", "content": plan.user_prompt},
         ]
     )
+
+
+@dataclass(frozen=True, slots=True)
+class StructuredRequestHashes:
+    """Exact pre-transport prompt and schema commitments for one model route."""
+
+    prompt_sha256: str
+    system_prompt_sha256: str
+    user_prompt_sha256: str
+    schema_sha256: str
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class DeliveredSourceDescriptor:
+    """Exact provider-visible whole-file identity presented to the lifecycle observer."""
+
+    path: str
+    sha256: str
+    size: int
+
+
+@dataclass(frozen=True, slots=True)
+class ModelRequestPrivacyBinding:
+    """Non-secret exact privacy authority supplied to a pre-dispatch observer."""
+
+    source_sha256: str
+    effective_policy_sha256: str
+    source_provenance_sha256: str
+
+    def __post_init__(self) -> None:
+        if any(
+            _SHA256_PATTERN.fullmatch(value) is None
+            for value in (
+                self.source_sha256,
+                self.effective_policy_sha256,
+                self.source_provenance_sha256,
+            )
+        ):
+            raise ValueError("model-request privacy binding requires exact SHA-256 values")
+
+
+class ModelRequestLifecycleObserver(Protocol):
+    """Durably bind one scheduled request before any provider-side effect."""
+
+    def request_ready(
+        self,
+        *,
+        logical_request_id: str,
+        role: str,
+        requested_model: str,
+        prompt_sha256: str,
+        system_prompt_sha256: str,
+        user_prompt_sha256: str,
+        schema_sha256: str,
+        delivered_sources: tuple[DeliveredSourceDescriptor, ...],
+        privacy_binding: ModelRequestPrivacyBinding | None,
+    ) -> _TrustedRequestLimitScope | None:
+        """Persist exact activation and optionally authorize task-scoped request counting."""
+
+        ...
+
+    def request_dispatched(self, *, logical_request_id: str) -> None: ...
+
+
+def _fully_delivered_source_descriptors(
+    context_package: ContextPackage | None,
+) -> tuple[DeliveredSourceDescriptor, ...]:
+    """Return exact identities carried as whole-file context excerpts.
+
+    Repository-map metadata is not source delivery evidence. A path is credited
+    only when one provider-visible excerpt contains the complete bytes committed
+    by the corresponding repository-map entry, with no omitted prefix or suffix.
+    Partial or reconstructed multi-excerpt files intentionally fail closed.
+    """
+
+    if context_package is None:
+        return ()
+    repository_files: dict[str, list[Any]] = {}
+    for item in context_package.repository_map.files:
+        repository_files.setdefault(item.path, []).append(item)
+    delivered: set[DeliveredSourceDescriptor] = set()
+    for excerpt in context_package.excerpts:
+        matching_files = repository_files.get(excerpt.path, [])
+        if len(matching_files) != 1:
+            continue
+        repository_file = matching_files[0]
+        encoded = excerpt.content.encode("utf-8")
+        expected_end_line = max(1, repository_file.lines)
+        if (
+            excerpt.start_line == 1
+            and excerpt.end_line == expected_end_line
+            and not excerpt.omitted_before
+            and not excerpt.omitted_after
+            and len(encoded) == repository_file.size
+            and excerpt.content_hash == repository_file.sha256
+            and hashlib.sha256(encoded).hexdigest() == repository_file.sha256
+        ):
+            delivered.add(
+                DeliveredSourceDescriptor(
+                    path=excerpt.path,
+                    sha256=hashlib.sha256(encoded).hexdigest(),
+                    size=len(encoded),
+                )
+            )
+    return tuple(sorted(delivered))
 
 
 def _compact_json(value: Any) -> str:
@@ -1435,6 +1745,8 @@ def _prompt_token_allocations(
     )
 
     schema = strict_json_schema(response_model)
+    if _canonical_sha256(schema) != plan.schema_sha256:
+        raise OpenRouterSchemaError("structured response schema changed during token planning")
     schema_material, protocol_material = _schema_and_protocol_material(
         plan=plan,
         schema=schema,
@@ -1500,9 +1812,12 @@ def _context_request_evidence(
     """Bind one request to the exact context bytes checked before transport."""
 
     # Local import avoids the context -> review-evidence -> OpenRouter import cycle.
-    from mmaudit.orchestration.context import render_context, revalidate_context_package
+    from mmaudit.orchestration.context import (
+        render_context,
+        revalidate_model_surface_context_package,
+    )
 
-    sealed = revalidate_context_package(context_package)
+    sealed = revalidate_model_surface_context_package(context_package)
     rendered = render_context(sealed).encode("utf-8")
     return ContextRequestEvidence.build(
         request_id=request_id,
@@ -1774,6 +2089,9 @@ class OpenRouterClient:
         )
         self._metadata_observations: dict[str, str] = {}
         self._unbound_completions: dict[str, StructuredCompletion[Any]] = {}
+        self._claimed_request_ids: set[str] = set()
+        self._request_identity_lock = Lock()
+        self._request_lifecycle_observer: ModelRequestLifecycleObserver | None = None
         self._authentication_validated = False
         if (effective_privacy_policy is None) != (privacy_authorization is None) and (
             not self.privacy.require_zdr
@@ -2052,6 +2370,28 @@ class OpenRouterClient:
             self.effective_privacy_policy = None
             self._privacy_authorization = None
             raise
+
+    def bind_request_lifecycle_observer(
+        self,
+        observer: ModelRequestLifecycleObserver,
+    ) -> None:
+        """Attach one run-local scheduler observer without replacing live custody."""
+
+        if self._request_lifecycle_observer is not None:
+            raise OpenRouterRequestLimitError(
+                "provider request lifecycle observer is already bound"
+            )
+        self._request_lifecycle_observer = observer
+
+    def unbind_request_lifecycle_observer(
+        self,
+        observer: ModelRequestLifecycleObserver,
+    ) -> None:
+        """Detach only the exact observer installed by the active pipeline run."""
+
+        if self._request_lifecycle_observer is not observer:
+            raise OpenRouterRequestLimitError("provider request lifecycle observer differs")
+        self._request_lifecycle_observer = None
 
     def clear_credentials(self) -> None:
         """Drop retained authorization values without serializing them."""
@@ -3640,11 +3980,11 @@ class OpenRouterClient:
         if context_package is not None:
             from mmaudit.orchestration.context import (
                 ContextBoundaryError,
-                revalidate_context_package,
+                revalidate_model_surface_context_package,
             )
 
             try:
-                context_package = revalidate_context_package(context_package)
+                context_package = revalidate_model_surface_context_package(context_package)
             except ContextBoundaryError:
                 raise _OpenRouterContextPlanError(
                     "provider request cannot satisfy the bounded context plan"
@@ -3960,6 +4300,7 @@ class OpenRouterClient:
         structured_output_mode: StructuredOutputMode | None = None,
         request_token_plan: RequestTokenPlan | None = None,
         request_role: str | None = None,
+        response_schema_generation: _PydanticSchemaGeneration | None = None,
     ) -> dict[str, Any]:
         _require_exact_model_id(model)
         effective_provider_policy = provider_policy or self.provider_policy
@@ -3995,6 +4336,7 @@ class OpenRouterClient:
             response_model=response_model,
             schema_name=schema_name,
             reasoning=self._reasoning_for_role(effective_request_role),
+            schema_generation=response_schema_generation,
         )
         sealed_reasoning_plan = (
             request_token_plan.reasoning_plan if request_token_plan is not None else None
@@ -4116,6 +4458,40 @@ class OpenRouterClient:
                 raise OpenRouterRequestLimitError("request metadata is invalid")
         return body
 
+    def preview_structured_request_hashes(
+        self,
+        *,
+        role: str,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        response_model: type[BaseModel],
+        schema_name: str,
+    ) -> StructuredRequestHashes:
+        """Commit the exact primary-route messages and schema before transport."""
+
+        _require_exact_model_id(model)
+        endpoint_policy = self._endpoint_pricing.get(model)
+        mode = (
+            endpoint_policy.structured_output_mode
+            if endpoint_policy is not None
+            else StructuredOutputMode.NATIVE_JSON_SCHEMA
+        )
+        plan = _structured_output_request_plan(
+            mode=mode,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_model=response_model,
+            schema_name=schema_name,
+            reasoning=self._reasoning_for_role(role),
+        )
+        return StructuredRequestHashes(
+            prompt_sha256=_structured_output_prompt_sha256_from_plan(plan),
+            system_prompt_sha256=hashlib.sha256(plan.system_prompt.encode("utf-8")).hexdigest(),
+            user_prompt_sha256=hashlib.sha256(user_prompt.encode("utf-8")).hexdigest(),
+            schema_sha256=plan.schema_sha256,
+        )
+
     async def complete(
         self,
         *,
@@ -4126,6 +4502,7 @@ class OpenRouterClient:
         context_package: ContextPackage | None = None,
         response_model: type[ResponseT],
         schema_name: str,
+        logical_request_id: str | None = None,
     ) -> ResponseT:
         """Compatibility wrapper returning only the validated structured value."""
 
@@ -4137,6 +4514,7 @@ class OpenRouterClient:
             context_package=context_package,
             response_model=response_model,
             schema_name=schema_name,
+            logical_request_id=logical_request_id,
         )
         if _is_concluded_unbound_completion(completion):
             raise OpenRouterUnboundIdentityError(completion)
@@ -4145,6 +4523,18 @@ class OpenRouterClient:
                 "syntax-repaired structured output is retained without review credit"
             )
         return completion.value
+
+    def _claim_request_ids(self, request_ids: Sequence[str]) -> None:
+        """Claim route identities once so retries and resumed work cannot alias evidence."""
+
+        with self._request_identity_lock:
+            if len(set(request_ids)) != len(request_ids) or any(
+                request_id in self._claimed_request_ids for request_id in request_ids
+            ):
+                raise OpenRouterRequestLimitError(
+                    "logical request identity was already claimed by this provider client"
+                )
+            self._claimed_request_ids.update(request_ids)
 
     async def complete_with_evidence(
         self,
@@ -4156,6 +4546,7 @@ class OpenRouterClient:
         context_package: ContextPackage | None = None,
         response_model: type[ResponseT],
         schema_name: str,
+        logical_request_id: str | None = None,
     ) -> StructuredCompletion[ResponseT]:
         """Call only the explicitly supplied models, in order."""
 
@@ -4167,6 +4558,11 @@ class OpenRouterClient:
             raise OpenRouterModelError(
                 "certification requires exactly one explicitly qualified model"
             )
+        request_ids = _request_ids_for_routes(
+            logical_request_id,
+            route_count=len(models),
+            maximum_attempts=self.execution.max_model_retries + 1,
+        )
         checked_at = datetime.now(UTC)
         qualification_bound_reasoning_plans: dict[
             str,
@@ -4271,10 +4667,12 @@ class OpenRouterClient:
                     ),
                 )
             qualification_bindings[model] = binding
+        self._claim_request_ids(request_ids)
         last_error: OpenRouterError | None = None
         for index, model in enumerate(models):
             try:
                 completion = await self._complete_one(
+                    request_id=request_ids[index],
                     role=role,
                     model=model,
                     system_prompt=system_prompt,
@@ -4337,6 +4735,7 @@ class OpenRouterClient:
         context_package: ContextPackage | None = None,
         response_model: type[ResponseT],
         schema_name: str,
+        logical_request_id: str | None = None,
     ) -> StructuredCompletion[ResponseT]:
         """Complete one owned REAL request and require fresh generation identity."""
 
@@ -4365,6 +4764,7 @@ class OpenRouterClient:
             context_package=context_package,
             response_model=response_model,
             schema_name=schema_name,
+            logical_request_id=logical_request_id,
         )
         if _is_concluded_unbound_completion(completion):
             raise OpenRouterUnboundIdentityError(completion)
@@ -4494,6 +4894,7 @@ class OpenRouterClient:
     async def _complete_one(
         self,
         *,
+        request_id: str | None = None,
         role: str,
         model: str,
         system_prompt: str,
@@ -4505,12 +4906,17 @@ class OpenRouterClient:
         qualification_binding: OpenRouterQualificationRoutingEvidence | None,
         qualification_bound_reasoning_plan: ReasoningRequestPlanEvidence | None = None,
     ) -> StructuredCompletion[ResponseT]:
-        request_id = str(uuid.uuid4())
+        request_id = _request_ids_for_routes(
+            request_id,
+            route_count=1,
+            maximum_attempts=self.execution.max_model_retries + 1,
+        )[0]
         required_output_tokens = self._required_output_tokens()
         requested_completion_tokens = required_output_tokens + self._reserved_reasoning_tokens(
             required_output_tokens,
             role=role,
         )
+        response_schema_generation = _pydantic_schema_generation(response_model)
         request_provider_policy = _canonical_provider_policy(self.provider_policy)
         structured_output_plan: _StructuredOutputRequestPlan | None = None
         reasoning_plan: ReasoningRequestPlanEvidence | None = None
@@ -4570,6 +4976,11 @@ class OpenRouterClient:
                 response_model=response_model,
                 schema_name=schema_name,
                 reasoning=self._reasoning_for_role(role),
+                schema_generation=response_schema_generation,
+            )
+            response_schema_generation.require_current(
+                response_model,
+                phase="during structured request planning",
             )
         except Exception as exc:
             reason = ContextPreflightReason.ROUTE_UNAVAILABLE
@@ -4598,6 +5009,32 @@ class OpenRouterClient:
                 error=exc,
             )
             raise
+        prompt_hash = _structured_output_prompt_sha256_from_plan(structured_output_plan)
+        system_prompt_hash = hashlib.sha256(
+            structured_output_plan.system_prompt.encode("utf-8")
+        ).hexdigest()
+        user_prompt_hash = hashlib.sha256(user_prompt.encode("utf-8")).hexdigest()
+        schema_hash = structured_output_plan.schema_sha256
+        delivered_sources = _fully_delivered_source_descriptors(context_package)
+        observer = self._request_lifecycle_observer
+        request_limit_scope = None
+        accepted_privacy_binding = _model_request_privacy_binding(self.effective_privacy_policy)
+        if observer is not None:
+            request_limit_scope = observer.request_ready(
+                logical_request_id=request_id,
+                role=role,
+                requested_model=model,
+                prompt_sha256=prompt_hash,
+                system_prompt_sha256=system_prompt_hash,
+                user_prompt_sha256=user_prompt_hash,
+                schema_sha256=schema_hash,
+                delivered_sources=delivered_sources,
+                privacy_binding=accepted_privacy_binding,
+            )
+        response_schema_generation.require_current(
+            response_model,
+            phase="after request evidence activation",
+        )
         try:
             request_token_plan, context_request_evidence = self._request_token_plan(
                 request_id=request_id,
@@ -4610,6 +5047,10 @@ class OpenRouterClient:
                 schema_name=schema_name,
                 reasoning_plan=reasoning_plan,
                 context_package=context_package,
+            )
+            response_schema_generation.require_current(
+                response_model,
+                phase="during token planning",
             )
         except Exception as exc:
             if isinstance(exc, _OpenRouterGlobalTokenBudgetError):
@@ -4645,10 +5086,6 @@ class OpenRouterClient:
                 error=exc,
             )
             raise
-        prompt_hash = _structured_output_prompt_sha256_from_plan(structured_output_plan)
-        user_prompt_hash = hashlib.sha256(user_prompt.encode()).hexdigest()
-        schema = strict_json_schema(response_model)
-        schema_hash = _canonical_sha256(schema)
         request_metadata = {
             "mmaudit_request_id": request_id,
             "mmaudit_role": role,
@@ -4719,9 +5156,14 @@ class OpenRouterClient:
                 structured_output_mode=structured_output_mode,
                 request_token_plan=request_token_plan,
                 request_role=role,
+                response_schema_generation=response_schema_generation,
             )
             self._ensure_request_size(body)
             request_body_hash = _canonical_sha256(body)
+            response_schema_generation.require_current(
+                response_model,
+                phase="during request body hashing",
+            )
             request_material = json.dumps(
                 body,
                 sort_keys=True,
@@ -4755,6 +5197,7 @@ class OpenRouterClient:
         attempts = 0
         usage_recorded = False
         accounted_cost_usd = 0.0
+        accounted_cost_usd_exact = Decimal(0)
         active_reservation: Reservation | None = None
         attempt_reservations: list[Reservation] = []
         active_network_attempted = False
@@ -4774,25 +5217,37 @@ class OpenRouterClient:
         response_headers: Mapping[str, str] = {}
 
         async def finalize_active(actual_cost: Decimal | None) -> None:
-            nonlocal accounted_cost_usd, active_reservation
+            nonlocal accounted_cost_usd, accounted_cost_usd_exact, active_reservation
             if active_reservation is None:
                 return
             reservation = active_reservation
             active_reservation = None
             try:
-                accounted_cost_usd += await self.budget.reconcile(
+                presented = await self.budget.reconcile(
                     reservation,
                     actual_cost,
                     actual_prompt_tokens=active_actual_prompt_tokens,
                     actual_completion_tokens=active_actual_completion_tokens,
                     actual_reasoning_tokens=active_actual_reasoning_tokens,
                 )
+                exact = await self.budget.reconciled_cost_usd_exact(reservation)
+                accounted_cost_usd += presented
+                accounted_cost_usd_exact += exact
             except Exception:
-                accounted_cost_usd += (
-                    reservation.estimated_cost_usd
-                    if actual_cost is None
-                    else max(0.0, float(actual_cost))
-                )
+                try:
+                    exact = await self.budget.reconciled_cost_usd_exact(reservation)
+                except BudgetReservationStateError:
+                    exact = (
+                        reservation.persistent.reserved_usd
+                        if actual_cost is None and reservation.persistent is not None
+                        else (
+                            Decimal(str(reservation.estimated_cost_usd))
+                            if actual_cost is None
+                            else max(Decimal(0), actual_cost)
+                        )
+                    )
+                accounted_cost_usd += float(exact)
+                accounted_cost_usd_exact += exact
                 raise
 
         async def release_active() -> None:
@@ -4806,9 +5261,7 @@ class OpenRouterClient:
         try:
             while True:
                 next_attempt = attempts + 1
-                reservation_id = (
-                    request_id if next_attempt == 1 else f"{request_id}:attempt:{next_attempt}"
-                )
+                reservation_id = _attempt_request_id(request_id, next_attempt)
                 try:
                     active_reservation = await self.budget.reserve(
                         reservation_id,
@@ -4821,6 +5274,7 @@ class OpenRouterClient:
                         planned_reasoning_tokens=(request_token_plan.reserved_reasoning_tokens),
                         planned_completion_tokens=(request_token_plan.requested_completion_tokens),
                         request_token_plan_sha256=request_token_plan.plan_sha256,
+                        request_limit_scope=request_limit_scope,
                     )
                 except Exception as exc:
                     self._record_context_preflight(
@@ -4882,8 +5336,22 @@ class OpenRouterClient:
                     raise
                 try:
                     assert active_reservation is not None
+                    if (
+                        observer is not None
+                        and _model_request_privacy_binding(self.effective_privacy_policy)
+                        != accepted_privacy_binding
+                    ):
+                        raise OpenRouterPrivacyError(
+                            "effective privacy authority changed before provider transport"
+                        )
+                    response_schema_generation.require_current(
+                        response_model,
+                        phase="before provider transport",
+                    )
                     attempt_reservations.append(active_reservation)
                     attempts = next_attempt
+                    if observer is not None and attempts == 1:
+                        observer.request_dispatched(logical_request_id=request_id)
                     active_network_attempted = True
                     response = await self._bounded_request(
                         "POST",
@@ -4987,10 +5455,20 @@ class OpenRouterClient:
                 self._store_debug(request_id, "response.json", payload)
             content = envelope.content
             try:
-                decoded_output = decode_structured_output(
+                response_schema_generation.require_current(
+                    response_model,
+                    phase="before provider response decoding",
+                )
+                decoded_output = _decode_structured_output_with_schema_generation(
                     content,
                     response_model,
+                    schema_validator=response_schema_generation.validator,
+                    core_schema=response_schema_generation.core_schema,
                     max_repair_attempts=self.execution.max_json_repair_attempts,
+                )
+                response_schema_generation.require_current(
+                    response_model,
+                    phase="during provider response decoding",
                 )
             except StructuredOutputDecodeError as output_error:
                 raise OpenRouterStructuredOutputError(
@@ -4999,6 +5477,10 @@ class OpenRouterClient:
                 ) from None
             parsed = decoded_output.value
             validated_response_hash = _canonical_sha256(parsed.model_dump(mode="json"))
+            response_schema_generation.require_current(
+                response_model,
+                phase="during validated response hashing",
+            )
             await finalize_active(active_actual_cost)
             ended_at = datetime.now(UTC)
             latency_ms = max(0, round((time.perf_counter() - started_clock) * 1_000))
@@ -5052,6 +5534,8 @@ class OpenRouterClient:
                 total_tokens=_nonnegative_int(initial_usage.get("total_tokens")),
                 reported_cost_usd=float(initial_cost),
                 accounted_cost_usd=accounted_cost_usd,
+                reported_cost_usd_exact=format(initial_cost, "f"),
+                accounted_cost_usd_exact=format(accounted_cost_usd_exact, "f"),
                 routing=routing,
                 prompt_sha256=prompt_hash,
                 user_prompt_sha256=user_prompt_hash,
@@ -5121,6 +5605,7 @@ class OpenRouterClient:
                         preserved_unbound_response = _validate_preservable_structured_response(
                             raw_payload,
                             response_model=response_model,
+                            response_schema_generation=response_schema_generation,
                         )
                     except OpenRouterSchemaError as preservation_error:
                         terminal_error = preservation_error
@@ -5135,9 +5620,15 @@ class OpenRouterClient:
                     and not isinstance(terminal_error, OpenRouterTruncatedResponseError)
                 ):
                     try:
-                        hash_only_response = decode_structured_output(
+                        response_schema_generation.require_current(
+                            response_model,
+                            phase="before failed-response evidence decoding",
+                        )
+                        hash_only_response = _decode_structured_output_with_schema_generation(
                             raw_content,
                             response_model,
+                            schema_validator=response_schema_generation.validator,
+                            core_schema=response_schema_generation.core_schema,
                         ).value
                     except StructuredOutputDecodeError:
                         pass
@@ -5180,6 +5671,10 @@ class OpenRouterClient:
                     total_tokens=_nonnegative_int(initial_usage.get("total_tokens")),
                     reported_cost_usd=(float(initial_cost) if initial_cost is not None else None),
                     accounted_cost_usd=accounted_cost_usd,
+                    reported_cost_usd_exact=(
+                        format(initial_cost, "f") if initial_cost is not None else None
+                    ),
+                    accounted_cost_usd_exact=format(accounted_cost_usd_exact, "f"),
                     routing=self._failure_routing_evidence(
                         payload=raw_payload,
                         response_headers=response_headers,
@@ -5461,6 +5956,29 @@ class OpenRouterClient:
             raise OpenRouterCostControlError(
                 "request usage has incomplete atomic token reservation attempts"
             )
+        request_limit_inventory = tuple(
+            reservation.request_limit_reservation_evidence for reservation in reservations
+        )
+        if any(item is not None for item in request_limit_inventory):
+            if any(item is None for item in request_limit_inventory):
+                raise OpenRouterCostControlError(
+                    "scheduled request-limit reservation evidence is incomplete"
+                )
+            scheduled_inventory = tuple(
+                item for item in request_limit_inventory if item is not None
+            )
+            if (
+                tuple(item.request_id for item in scheduled_inventory) != expected_ids
+                or tuple(item.request_limit_scope for item in scheduled_inventory)
+                != (request_token_plan.request_id,) * len(scheduled_inventory)
+                or tuple(item.request_limit_count_before for item in scheduled_inventory)
+                != tuple(range(len(scheduled_inventory)))
+                or tuple(item.request_limit_count_after for item in scheduled_inventory)
+                != tuple(range(1, len(scheduled_inventory) + 1))
+            ):
+                raise OpenRouterCostControlError(
+                    "scheduled request-limit reservation attempts are incomplete or unordered"
+                )
         atomic_evidence = atomic_inventory[-1]
         atomic_hashes = [item.evidence_sha256 for item in atomic_inventory]
         evidence: dict[str, Any] = {
@@ -5473,6 +5991,27 @@ class OpenRouterClient:
             "atomic_token_reservation": atomic_evidence.model_dump(mode="json"),
             "atomic_token_reservation_sha256": atomic_evidence.evidence_sha256,
         }
+        if any(item is not None for item in request_limit_inventory):
+            scheduled_inventory = tuple(
+                item for item in request_limit_inventory if item is not None
+            )
+            request_limit_evidence = scheduled_inventory[-1]
+            evidence.update(
+                {
+                    "atomic_request_limit_reservations": [
+                        item.model_dump(mode="json") for item in scheduled_inventory
+                    ],
+                    "atomic_request_limit_reservation_sha256s": [
+                        item.evidence_sha256 for item in scheduled_inventory
+                    ],
+                    "atomic_request_limit_reservation": request_limit_evidence.model_dump(
+                        mode="json"
+                    ),
+                    "atomic_request_limit_reservation_sha256": (
+                        request_limit_evidence.evidence_sha256
+                    ),
+                }
+            )
         if context_request_evidence is not None:
             evidence["context_request_evidence"] = context_request_evidence.model_dump(mode="json")
             evidence["context_request_evidence_sha256"] = context_request_evidence.evidence_sha256
@@ -6422,6 +6961,7 @@ def _validate_preservable_structured_response[ValueT: BaseModel](
     payload: dict[str, Any],
     *,
     response_model: type[ValueT],
+    response_schema_generation: _PydanticSchemaGeneration,
 ) -> ValueT:
     """Validate non-identity envelope structure before retaining an unbound value."""
 
@@ -6470,7 +7010,16 @@ def _validate_preservable_structured_response[ValueT: BaseModel](
     _validate_usage(payload.get("usage"))
     _validate_preservable_router_shape(payload.get("openrouter_metadata"))
     try:
-        return decode_structured_output(content, response_model).value
+        response_schema_generation.require_current(
+            response_model,
+            phase="before unbound-response evidence decoding",
+        )
+        return _decode_structured_output_with_schema_generation(
+            content,
+            response_model,
+            schema_validator=response_schema_generation.validator,
+            core_schema=response_schema_generation.core_schema,
+        ).value
     except StructuredOutputDecodeError as output_error:
         raise OpenRouterStructuredOutputError(
             failure_code=output_error.code,

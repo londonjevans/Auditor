@@ -3,21 +3,28 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
 import os
 import platform
+import re
 import shutil
 import time
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
-from mmaudit.agents.base import FindingReviewResult
+from mmaudit.agents.base import (
+    AgentRequestProtocol,
+    FindingReviewResult,
+    WholeProtocolReviewAgent,
+)
 from mmaudit.agents.business_logic import BusinessLogicAgent
 from mmaudit.agents.configuration import ConfigurationAgent
 from mmaudit.agents.invariant_review import InvariantReviewAgent
@@ -35,9 +42,12 @@ from mmaudit.agents.specialists import (
 from mmaudit.agents.threat_model import ThreatModelAgent
 from mmaudit.agents.verifier import (
     CandidateCrossExaminerAgent,
+    CandidateFalsifierAgent,
     PreparedCandidateCrossExaminationInput,
     VerifierAgent,
+    normalize_cross_examination_response,
     select_candidate_falsifier_models,
+    select_validation_falsifier_models,
 )
 from mmaudit.benchmark.certificate import (
     BenchmarkCertificateVerification,
@@ -50,6 +60,7 @@ from mmaudit.config import (
     AuditRunOptions,
     canonical_audit_config_json,
     configured_model_ids,
+    model_lineage_index,
     validate_model_independence,
 )
 from mmaudit.constants import (
@@ -94,6 +105,28 @@ from mmaudit.models.runtime import (
     build_openrouter_runtime_controls,
     maximum_assurance_model_certification_required,
 )
+from mmaudit.models.scheduler import (
+    SchedulerAbsenceReason,
+    SchedulerArtifact,
+    SchedulerBindings,
+    SchedulerCandidateWorkset,
+    SchedulerCostLedgerBaseline,
+    SchedulerPassKind,
+    SchedulerPassResult,
+    SchedulerPassStatus,
+    SchedulerPrivacyEvidenceCustody,
+    SchedulerRetainedJournalReference,
+    SchedulerScope,
+    SchedulerShardDescriptor,
+    SchedulerShardInventory,
+    SchedulerShardKind,
+    SchedulerTaskKind,
+    SchedulerTaskPlan,
+    SchedulerTaskResult,
+    SchedulerTerminalStatus,
+    scheduler_canonical_sha256,
+    scheduler_response_schema_sha256,
+)
 from mmaudit.models.schemas import (
     AnalysisState,
     AuditProfile,
@@ -102,9 +135,11 @@ from mmaudit.models.schemas import (
     AuditRunStatus,
     AuditScopeAssessment,
     CandidateCrossExaminationDecision,
+    CandidateCrossExaminationResponse,
     CandidateFinding,
     CandidateOriginKind,
     CandidateReproductionResolution,
+    CandidateReviewBatch,
     CompilationStatus,
     ContextPackage,
     ContextRequestEvidence,
@@ -129,11 +164,13 @@ from mmaudit.models.schemas import (
     InvariantReviewResult,
     InvariantSuite,
     JudgeDecision,
+    JudgeDecisionBatch,
     Location,
     LocationValidation,
     MaximumAssuranceAssessment,
     MinimumAnalysisFloor,
     ModelReviewCoverage,
+    ModelReviewSurfaceKind,
     ModelSurfaceReviewArtifact,
     ModelSurfaceReviewRequest,
     ModelVote,
@@ -155,6 +192,7 @@ from mmaudit.models.schemas import (
     Severity,
     SolidityCompilationResult,
     SolidityCoverage,
+    SolidityGraphEdge,
     SolidityGraphSet,
     SolidityProjectMetadata,
     SolidityProjectType,
@@ -171,6 +209,7 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.models.sharding import (
     SolidityShardInventory,
+    SolidityShardOverlapKind,
     SolidityShardPolicy,
     SolidityShardReportBinding,
     SolidityShardsArtifact,
@@ -181,6 +220,7 @@ from mmaudit.models.usage import (
     is_creditable_usage_record,
 )
 from mmaudit.orchestration.assurance import (
+    CERTIFIED_ENSEMBLE_MIN_WHOLE_PROTOCOL_LINEAGES,
     AssuranceRuntime,
     MaximumAssuranceContract,
     ProviderSessionProvenance,
@@ -231,18 +271,25 @@ from mmaudit.orchestration.execution_candidates import (
     build_invariant_execution_candidates,
 )
 from mmaudit.orchestration.manifest import (
+    SCHEDULER_RETAINED_JOURNAL_REFERENCE_FILENAME,
+    ManifestFileBinding,
     build_run_evidence_manifest,
     canonical_sha256,
+    open_manifest_bound_json_artifacts,
+    open_pre_manifest_json_artifacts,
     validate_manifest_artifacts,
     write_run_evidence_manifest,
 )
 from mmaudit.orchestration.model_coverage import (
     build_model_review_coverage,
     build_model_surface_requests,
+    build_semantic_shard_source_review_request,
     model_review_critical_surface_gate,
+    model_review_edge_subject_id,
     model_surface_assignment_feasibility_gate,
     plan_model_surface_review_assignments,
 )
+from mmaudit.orchestration.model_review_evidence import build_source_file_review_request
 from mmaudit.orchestration.prior_audit import (
     build_prior_audit_comparison,
     prior_audit_quality_gate,
@@ -252,6 +299,17 @@ from mmaudit.orchestration.run_status import (
     assess_minimum_analysis_floor,
     audit_quality_status_for_run_status,
     minimum_analysis_floor_quality_gate,
+)
+from mmaudit.orchestration.scheduler import (
+    SchedulerJournal,
+    open_scheduler_privacy_evidence_custody,
+)
+from mmaudit.orchestration.scheduler_runtime import (
+    PipelineScheduler,
+    build_scheduler_analysis_input_inventory,
+    build_scheduler_bindings,
+    build_scheduler_cost_ledger_baseline,
+    build_scheduler_shard_inventory,
 )
 from mmaudit.orchestration.scope import (
     assess_audit_scope,
@@ -267,7 +325,7 @@ from mmaudit.privacy import (
     resolve_trusted_privacy_authorization,
     validate_trusted_privacy_authorization,
 )
-from mmaudit.reporting.json_report import write_json
+from mmaudit.reporting.json_report import stable_json, write_json
 from mmaudit.reporting.markdown import render_markdown
 from mmaudit.reporting.sarif import generate_sarif
 from mmaudit.repository.discovery import (
@@ -321,6 +379,7 @@ from mmaudit.solidity.reproduction import (
 from mmaudit.solidity.reproduction_integrity import verify_reproduction_integrity
 from mmaudit.solidity.sharding import (
     build_solidity_shard_inventory,
+    solidity_graph_edge_id,
     verify_solidity_shard_inventory,
 )
 from mmaudit.traceability import (
@@ -421,10 +480,10 @@ def _validated_finding_result(
         usage_record,
         result.surface_review_context,
     )
-    if (
-        context.role != expected_role
-        or usage_record.user_prompt_sha256 != context_evidence.rendered_sha256
-    ):
+    # ContextRequestEvidence has already validated the closed request-role to
+    # context-role relationship. Indexed whole-protocol requests deliberately
+    # share the frozen ``whole_protocol_review`` context role.
+    if usage_record.user_prompt_sha256 != context_evidence.rendered_sha256:
         raise OpenRouterSchemaError(
             "candidate review completion was not bound to its exact source context"
         )
@@ -572,6 +631,851 @@ def _repository_source_scope_sha256(repository_map: RepositoryMap) -> str:
     return canonical_sha256(payload)
 
 
+def _scheduler_response_schema_sha256(response_model: type[Any]) -> str:
+    """Return the exact structured-output schema commitment used by the scheduler."""
+
+    return scheduler_response_schema_sha256(response_model)
+
+
+def _scheduler_root_lineage(config: AuditConfig, model_id: str) -> str:
+    """Resolve one exact configured model to its operator-reviewed root lineage."""
+
+    lineage = model_lineage_index(config).get(model_id.lower())
+    if lineage is None:
+        raise ValueError(f"scheduled model lacks immutable root lineage: {model_id}")
+    return lineage.root_lineage
+
+
+def _whole_protocol_review_models(
+    config: AuditConfig,
+    qualification: VerifiedProductionQualification | None,
+) -> tuple[tuple[str, str], ...]:
+    """Select four exact independently qualified whole-protocol reviewers."""
+
+    if config.profile is not AuditProfile.MAXIMUM_ASSURANCE:
+        return ()
+    if qualification is None:
+        raise ValueError("maximum assurance lacks production model qualification")
+    qualification.require_current(now=datetime.now(UTC).replace(microsecond=0))
+    configured = set(configured_model_ids(config, include_fallbacks=True))
+    selected: list[tuple[str, str]] = []
+    selected_lineages: set[str] = set()
+    for model in sorted(qualification.models, key=lambda item: item.exact_model_id):
+        if (
+            model.exact_model_id not in configured
+            or "whole_protocol_review" not in model.approved_roles
+            or model.root_lineage in selected_lineages
+        ):
+            continue
+        selected.append((model.exact_model_id, model.root_lineage))
+        selected_lineages.add(model.root_lineage)
+        if len(selected) == CERTIFIED_ENSEMBLE_MIN_WHOLE_PROTOCOL_LINEAGES:
+            break
+    if len(selected) != CERTIFIED_ENSEMBLE_MIN_WHOLE_PROTOCOL_LINEAGES:
+        raise ValueError(
+            "maximum assurance lacks four independently qualified whole-protocol reviewers"
+        )
+    return tuple(selected)
+
+
+def _scheduler_primary_only_config(config: AuditConfig) -> AuditConfig:
+    """Disable unsealed model fallback routes for scheduler-bound agent calls."""
+
+    models = config.models
+    core_roles = (
+        "threat_model",
+        "source_audit",
+        "business_logic",
+        "configuration",
+        "verifier",
+        "judge",
+    )
+    updates: dict[str, Any] = {
+        role: models.role(role).model_copy(update={"fallbacks": []}) for role in core_roles
+    }
+    updates["specialists"] = {
+        role: configured.model_copy(update={"fallbacks": []})
+        for role, configured in models.specialists.items()
+    }
+    exact_models = models.model_copy(update=updates)
+    return config.model_copy(update={"models": exact_models})
+
+
+def _candidate_source_paths(candidate: CandidateFinding) -> frozenset[str]:
+    """Return every source path explicitly cited by one typed candidate."""
+
+    paths = {location.path for location in candidate.locations}
+    if candidate.source is not None:
+        paths.add(candidate.source.path)
+    if candidate.sink is not None:
+        paths.add(candidate.sink.path)
+    return frozenset(paths)
+
+
+def _candidate_payload_sha256s(
+    candidates: list[CandidateFinding],
+) -> dict[str, str]:
+    """Hash every canonical normalized candidate payload, not only its stable ID."""
+
+    candidate_ids = [candidate.candidate_id for candidate in candidates]
+    if len(candidate_ids) != len(set(candidate_ids)):
+        raise ValueError("candidate payload hashing requires unique candidate IDs")
+    return {
+        candidate.candidate_id: scheduler_canonical_sha256(candidate.model_dump(mode="json"))
+        for candidate in sorted(candidates, key=lambda item: item.candidate_id)
+    }
+
+
+def _finding_reduction_activation_input(
+    candidates: list[CandidateFinding],
+    *,
+    blind_candidate_ids: set[str],
+    execution_candidate_ids: set[str],
+) -> dict[str, Any]:
+    """Build the exact pass-three input after all candidate evidence is finalized."""
+
+    return {
+        "blind_candidate_ids": sorted(blind_candidate_ids),
+        "execution_candidate_ids": sorted(execution_candidate_ids),
+        "candidate_payload_sha256s": _candidate_payload_sha256s(candidates),
+    }
+
+
+def _deterministic_candidate_validation(
+    root: Path,
+    candidate: CandidateFinding,
+    *,
+    context_hashes: dict[tuple[str, int, int], str],
+) -> LocationValidation:
+    """Retain validation substance without embedding wall-clock replay drift."""
+
+    validation = validate_candidate(root, candidate, context_hashes=context_hashes)
+    return validation.model_copy(update={"validated_at": None})
+
+
+def _require_candidate_workset_payloads(
+    workset: SchedulerCandidateWorkset,
+    candidates: list[CandidateFinding],
+) -> None:
+    """Reject same-ID/different-payload drift before downstream model activation."""
+
+    actual = _candidate_payload_sha256s(candidates)
+    expected = {
+        binding.candidate_id: binding.candidate_payload_sha256
+        for binding in workset.candidate_payload_bindings
+    }
+    if actual != expected:
+        raise ValueError("downstream candidate payloads differ from the pass-four workset")
+
+
+def _semantic_shard_context_paths(
+    inventory: SolidityShardInventory | None,
+    *,
+    shard_id: str,
+    primary_paths: set[str],
+) -> set[str]:
+    """Expand one blind shard context by its exact typed overlap and boundaries."""
+
+    if inventory is None:
+        return set(primary_paths)
+    shards = {item.shard_id: item for item in inventory.shards}
+    if shard_id not in shards:
+        return set(primary_paths)
+    related_ids = {shard_id}
+    for boundary in inventory.boundaries:
+        if boundary.source_shard_id == shard_id:
+            related_ids.add(boundary.target_shard_id)
+        elif boundary.target_shard_id == shard_id:
+            related_ids.add(boundary.source_shard_id)
+    for overlap in inventory.overlaps:
+        if overlap.primary_shard_id == shard_id:
+            related_ids.add(overlap.consumer_shard_id)
+        elif overlap.consumer_shard_id == shard_id:
+            related_ids.add(overlap.primary_shard_id)
+    return set(primary_paths) | {
+        shards[related_id].source_path for related_id in sorted(related_ids) if related_id in shards
+    }
+
+
+def _source_audit_shard_surface_requests(
+    *,
+    shard: SchedulerShardDescriptor,
+    discovery: DiscoveryResult,
+    solidity_index: SoliditySymbolIndex | None,
+    assigned: list[ModelSurfaceReviewRequest],
+    solidity_requests: list[ModelSurfaceReviewRequest],
+) -> list[ModelSurfaceReviewRequest]:
+    """Require one explicit substantive review surface for every scoped source file."""
+
+    scoped_paths = {source.path for source in shard.sources}
+    selected = {
+        request.surface_id: request
+        for request in assigned
+        if not request.allowed_locations
+        or {location.path for location in request.allowed_locations} <= scoped_paths
+    }
+    discovered_by_path = {item.relative_path: item for item in discovery.files}
+    for source in shard.sources:
+        item = discovered_by_path.get(source.path)
+        if item is None or item.sha256 != source.sha256 or item.size != source.size:
+            raise ValueError("source-audit shard differs from the discovered source inventory")
+        # Every blind source review carries one path-cited whole-file disposition.
+        # Symbol-only Solidity records remain useful, but cannot by themselves prove
+        # substantive review of the exact source bytes bound into this shard.
+        request = build_source_file_review_request(
+            path=item.relative_path,
+            size=item.size,
+            lines=item.lines,
+            sha256=item.sha256,
+        )
+        selected[request.surface_id] = request
+        if shard.kind is SchedulerShardKind.SOLIDITY_SEMANTIC:
+            semantic_requests = sorted(
+                (
+                    surface
+                    for surface in solidity_requests
+                    if surface.kind is not ModelReviewSurfaceKind.SOURCE_FILE
+                    and surface.allowed_locations
+                    and {location.path for location in surface.allowed_locations} <= {source.path}
+                ),
+                key=lambda surface: surface.surface_id,
+            )
+            if semantic_requests:
+                semantic_request = semantic_requests[0]
+            else:
+                if solidity_index is None:
+                    raise ValueError(
+                        "source-audit semantic shard lacks a typed Solidity source surface"
+                    )
+                semantic_request = build_semantic_shard_source_review_request(
+                    index=solidity_index,
+                    source_path=item.relative_path,
+                    source_content=item.content,
+                    source_sha256=item.sha256,
+                )
+            selected[semantic_request.surface_id] = semantic_request
+    if shard.kind is SchedulerShardKind.SOLIDITY_SEMANTIC and not any(
+        request.kind is not ModelReviewSurfaceKind.SOURCE_FILE
+        and request.allowed_locations
+        and {location.path for location in request.allowed_locations} <= scoped_paths
+        for request in selected.values()
+    ):
+        raise ValueError("source-audit semantic shard lacks a typed Solidity source surface")
+    return sorted(selected.values(), key=lambda request: request.surface_id)
+
+
+def _blind_shard_surface_requests(
+    *,
+    shard: SchedulerShardDescriptor,
+    discovery: DiscoveryResult,
+    assigned: list[ModelSurfaceReviewRequest],
+) -> list[ModelSurfaceReviewRequest]:
+    """Bind every blind task to a disposition of its declared primary shard sources.
+
+    Fine-grained assignments may legitimately cite semantic neighbours included in the
+    context.  They cannot, however, replace all review custody for the shard named by the
+    scheduler task.  Add a whole-file disposition only for a primary source that has no
+    assigned location of its own.
+    """
+
+    discovered_by_path = {item.relative_path: item for item in discovery.files}
+    selected = {request.surface_id: request for request in assigned}
+    for source in shard.sources:
+        item = discovered_by_path.get(source.path)
+        if item is None or item.sha256 != source.sha256 or item.size != source.size:
+            raise ValueError("blind-review shard differs from the discovered source inventory")
+        if not any(
+            any(location.path == source.path for location in request.allowed_locations)
+            for request in selected.values()
+        ):
+            request = build_source_file_review_request(
+                path=item.relative_path,
+                size=item.size,
+                lines=item.lines,
+                sha256=item.sha256,
+            )
+            selected[request.surface_id] = request
+    if not selected:
+        raise ValueError("scheduled blind review lacks an explicit source-file surface")
+    return sorted(selected.values(), key=lambda request: request.surface_id)
+
+
+def _whole_protocol_surface_requests(
+    *,
+    discovery: DiscoveryResult,
+) -> list[ModelSurfaceReviewRequest]:
+    """Require one exact whole-file disposition for every audited source path.
+
+    Whole-protocol reviewers receive every trusted source file. Requiring the
+    full fine-grained surface catalogue again would duplicate shard-review
+    metadata and can crowd the actual source out of the bounded request.
+    """
+
+    selected: dict[str, ModelSurfaceReviewRequest] = {}
+    for item in discovery.files:
+        request = build_source_file_review_request(
+            path=item.relative_path,
+            size=item.size,
+            lines=item.lines,
+            sha256=item.sha256,
+        )
+        selected[request.surface_id] = request
+    return sorted(selected.values(), key=lambda request: request.surface_id)
+
+
+def _cross_shard_boundary_surface_requests(
+    inventory: SolidityShardInventory | None,
+    graphs: SolidityGraphSet | None,
+    index: SoliditySymbolIndex | None,
+) -> dict[str, ModelSurfaceReviewRequest]:
+    """Build one exact review surface for every typed cross-shard graph boundary."""
+
+    if inventory is None or not inventory.boundaries:
+        return {}
+    if graphs is None or index is None:
+        raise ValueError("cross-shard boundaries require typed graph and symbol evidence")
+    edges_by_id = {solidity_graph_edge_id(edge): edge for edge in graphs.edges}
+    entities_by_id = {entity.id: entity for entity in index.entities}
+    requests: dict[str, ModelSurfaceReviewRequest] = {}
+    for boundary in inventory.boundaries:
+        edge = edges_by_id.get(boundary.graph_edge_id)
+        if edge is None:
+            raise ValueError("cross-shard boundary lacks its exact normalized graph edge")
+        source = entities_by_id.get(edge.source_id)
+        subject_id = model_review_edge_subject_id(edge)
+        allowed_symbols = tuple(
+            sorted(
+                {
+                    value
+                    for value in (
+                        source.signature if source is not None else None,
+                        source.name if source is not None else None,
+                    )
+                    if value
+                }
+            )
+        )
+        request = ModelSurfaceReviewRequest(
+            surface_id=ModelSurfaceReviewRequest.calculate_surface_id(
+                ModelReviewSurfaceKind.CALL,
+                subject_id,
+            ),
+            kind=ModelReviewSurfaceKind.CALL,
+            subject_id=subject_id,
+            contract=(
+                source.contract_name if source is not None and source.contract_name else "protocol"
+            ),
+            function_or_state_surface=f"{edge.source_id} -> {edge.label}"[:500],
+            critical=True,
+            allowed_locations=(
+                Location(
+                    path=edge.path,
+                    start_line=edge.start_line,
+                    end_line=edge.end_line,
+                    symbol=None,
+                    content_hash=edge.source_hash,
+                ),
+            ),
+            allowed_symbols=allowed_symbols,
+            invariant_considered=(
+                "Cross-shard calls must preserve authorization, state, asset, and "
+                "accounting integrity across the exact graph boundary."
+            ),
+        )
+        requests[boundary.boundary_id] = request
+    return requests
+
+
+def _cross_shard_overlap_surface_requests(
+    inventory: SolidityShardInventory | None,
+    graphs: SolidityGraphSet | None,
+    index: SoliditySymbolIndex | None,
+) -> dict[str, ModelSurfaceReviewRequest]:
+    """Bind every semantic overlap to one exact reachable graph-edge review surface."""
+
+    if inventory is None or not inventory.overlaps:
+        return {}
+    if graphs is None or index is None:
+        raise ValueError("cross-shard overlaps require typed graph and symbol evidence")
+    edges_by_id = {solidity_graph_edge_id(edge): edge for edge in graphs.edges}
+    entities_by_id = {entity.id: entity for entity in index.entities}
+    paths_by_shard = {shard.shard_id: shard.source_path for shard in inventory.shards}
+    requests: dict[str, ModelSurfaceReviewRequest] = {}
+    for overlap in inventory.overlaps:
+        relevant_paths = {
+            paths_by_shard[overlap.primary_shard_id],
+            paths_by_shard[overlap.consumer_shard_id],
+        }
+        edge_candidates: tuple[SolidityGraphEdge, ...]
+        if overlap.resource_kind is SolidityShardOverlapKind.GRAPH_EDGE:
+            edge = edges_by_id.get(overlap.resource_id)
+            edge_candidates = () if edge is None else (edge,)
+        else:
+            edge_candidates = tuple(
+                edge
+                for _edge_id, edge in sorted(edges_by_id.items())
+                if overlap.resource_id in {edge.source_id, edge.target_id}
+                and edge.path in relevant_paths
+            )
+        if not edge_candidates:
+            raise ValueError("cross-shard overlap lacks an exact reachable graph edge")
+        edge = edge_candidates[0]
+        source = entities_by_id.get(edge.source_id)
+        subject_id = model_review_edge_subject_id(edge)
+        allowed_symbols = tuple(
+            sorted(
+                {
+                    value
+                    for value in (
+                        source.signature if source is not None else None,
+                        source.name if source is not None else None,
+                        edge.source_id,
+                    )
+                    if value
+                }
+            )
+        )
+        requests[overlap.overlap_id] = ModelSurfaceReviewRequest(
+            surface_id=ModelSurfaceReviewRequest.calculate_surface_id(
+                ModelReviewSurfaceKind.CALL,
+                subject_id,
+            ),
+            kind=ModelReviewSurfaceKind.CALL,
+            subject_id=subject_id,
+            contract=(
+                source.contract_name if source is not None and source.contract_name else "protocol"
+            ),
+            function_or_state_surface=(
+                f"semantic overlap {overlap.overlap_id}: {edge.source_id} -> {edge.label}"
+            )[:500],
+            critical=True,
+            allowed_locations=(
+                Location(
+                    path=edge.path,
+                    start_line=edge.start_line,
+                    end_line=edge.end_line,
+                    symbol=None,
+                    content_hash=edge.source_hash,
+                ),
+            ),
+            allowed_symbols=allowed_symbols,
+            invariant_considered=(
+                "Cross-shard semantic overlap must preserve authorization, state, asset, and "
+                "accounting integrity across both exact source scopes."
+            ),
+        )
+    return requests
+
+
+def _build_deterministic_finding_reduction(
+    candidates: list[CandidateFinding],
+    validations: dict[str, LocationValidation],
+    *,
+    blind_candidate_ids: set[str],
+    execution_candidate_ids: set[str],
+) -> dict[str, Any]:
+    """Group the exact candidate inventory without granting host-generated authority."""
+
+    candidate_ids = [candidate.candidate_id for candidate in candidates]
+    if len(candidate_ids) != len(set(candidate_ids)):
+        raise ValueError("finding reduction requires unique candidate IDs")
+    if set(candidate_ids) != blind_candidate_ids | execution_candidate_ids:
+        raise ValueError("finding reduction input differs from the frozen candidate inventory")
+    if blind_candidate_ids & execution_candidate_ids:
+        raise ValueError("blind and execution candidate inventories must be disjoint")
+    if set(validations) != set(candidate_ids):
+        raise ValueError("finding reduction requires one validation per candidate")
+
+    groups = group_candidates(candidates)
+    group_records = []
+    for group in groups:
+        member_ids = tuple(candidate.candidate_id for candidate in group.candidates)
+        group_records.append(
+            {
+                "group_id": group.group_id,
+                "candidate_ids": list(member_ids),
+                "canonical_candidate_id": member_ids[0],
+                "valid_candidate_ids": [
+                    candidate_id for candidate_id in member_ids if validations[candidate_id].valid
+                ],
+                "invalid_candidate_ids": [
+                    candidate_id
+                    for candidate_id in member_ids
+                    if not validations[candidate_id].valid
+                ],
+            }
+        )
+    body: dict[str, Any] = {
+        "schema_version": "1.0",
+        "algorithm": "mmaudit.deterministic-finding-reduction.v1",
+        "blind_candidate_ids": sorted(blind_candidate_ids),
+        "execution_candidate_ids": sorted(execution_candidate_ids),
+        "candidate_ids": sorted(candidate_ids),
+        "candidate_payload_sha256s": _candidate_payload_sha256s(candidates),
+        "candidate_records": [
+            {
+                "candidate_id": candidate.candidate_id,
+                "candidate_sha256": scheduler_canonical_sha256(candidate.model_dump(mode="json")),
+                "location_validation": {
+                    "valid": validations[candidate.candidate_id].valid,
+                    "content_hash": validations[candidate.candidate_id].content_hash,
+                    "errors": list(validations[candidate.candidate_id].errors),
+                },
+            }
+            for candidate in sorted(candidates, key=lambda item: item.candidate_id)
+        ],
+        "groups": group_records,
+        "canonical_candidate_ids": sorted(
+            record["canonical_candidate_id"] for record in group_records
+        ),
+    }
+    return {**body, "reduction_sha256": scheduler_canonical_sha256(body)}
+
+
+def _validate_deterministic_finding_reduction(
+    reduction: dict[str, Any],
+    *,
+    expected_candidate_ids: set[str],
+) -> None:
+    """Reject metadata-only or incomplete finding-reduction output."""
+
+    required = {
+        "schema_version",
+        "algorithm",
+        "blind_candidate_ids",
+        "execution_candidate_ids",
+        "candidate_ids",
+        "candidate_records",
+        "candidate_payload_sha256s",
+        "groups",
+        "canonical_candidate_ids",
+        "reduction_sha256",
+    }
+    if set(reduction) != required:
+        raise ValueError("finding reduction output is not the exact typed projection")
+    if reduction["schema_version"] != "1.0" or reduction["algorithm"] != (
+        "mmaudit.deterministic-finding-reduction.v1"
+    ):
+        raise ValueError("finding reduction output uses an unsupported contract")
+    candidate_ids = reduction["candidate_ids"]
+    if candidate_ids != sorted(expected_candidate_ids):
+        raise ValueError("finding reduction output omits or adds candidates")
+    records = reduction["candidate_records"]
+    record_ids = (
+        [
+            str(record["candidate_id"])
+            for record in records
+            if isinstance(record, dict) and isinstance(record.get("candidate_id"), str)
+        ]
+        if isinstance(records, list)
+        else []
+    )
+    if sorted(record_ids) != sorted(expected_candidate_ids) or len(record_ids) != len(
+        expected_candidate_ids
+    ):
+        raise ValueError("finding reduction output lacks exact candidate records")
+    payload_hashes = reduction["candidate_payload_sha256s"]
+    if (
+        not isinstance(payload_hashes, dict)
+        or set(payload_hashes) != expected_candidate_ids
+        or any(
+            not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None
+            for value in payload_hashes.values()
+        )
+    ):
+        raise ValueError("finding reduction output lacks exact candidate payload hashes")
+    groups = reduction["groups"]
+    if not isinstance(groups, list):
+        raise ValueError("finding reduction output lacks typed groups")
+    grouped_ids = [
+        candidate_id
+        for group in groups
+        if isinstance(group, dict)
+        for candidate_id in group.get("candidate_ids", [])
+    ]
+    if sorted(grouped_ids) != sorted(expected_candidate_ids) or len(grouped_ids) != len(
+        expected_candidate_ids
+    ):
+        raise ValueError("finding reduction groups do not partition the candidate inventory")
+    canonical_ids = [
+        value
+        for group in groups
+        if isinstance(group, dict)
+        if isinstance((value := group.get("canonical_candidate_id")), str)
+    ]
+    if len(canonical_ids) != len(groups):
+        raise ValueError("finding reduction groups lack canonical candidates")
+    if reduction["canonical_candidate_ids"] != sorted(canonical_ids):
+        raise ValueError("finding reduction canonical representatives are inconsistent")
+    body = {key: value for key, value in reduction.items() if key != "reduction_sha256"}
+    if reduction["reduction_sha256"] != scheduler_canonical_sha256(body):
+        raise ValueError("finding reduction output hash is inconsistent")
+
+
+def _cross_shard_relationship_descriptors(
+    inventory: SolidityShardInventory | None,
+) -> list[dict[str, Any]]:
+    """Return the canonical trusted semantic-relationship projection."""
+
+    if inventory is None:
+        return []
+    paths_by_shard = {shard.shard_id: shard.source_path for shard in inventory.shards}
+    relationships = [
+        {
+            "relationship_id": boundary.boundary_id,
+            "relationship_kind": "graph_boundary",
+            "source_shard_id": boundary.source_shard_id,
+            "target_shard_id": boundary.target_shard_id,
+            "source_path": paths_by_shard[boundary.source_shard_id],
+            "target_path": paths_by_shard[boundary.target_shard_id],
+            "resource_id": boundary.graph_edge_id,
+            "relationship_sha256": boundary.boundary_sha256,
+        }
+        for boundary in inventory.boundaries
+    ]
+    relationships.extend(
+        {
+            "relationship_id": overlap.overlap_id,
+            "relationship_kind": "semantic_overlap",
+            "source_shard_id": overlap.primary_shard_id,
+            "target_shard_id": overlap.consumer_shard_id,
+            "source_path": paths_by_shard[overlap.primary_shard_id],
+            "target_path": paths_by_shard[overlap.consumer_shard_id],
+            "resource_id": overlap.resource_id,
+            "relationship_sha256": overlap.overlap_sha256,
+        }
+        for overlap in inventory.overlaps
+    )
+    relationships.sort(key=lambda item: item["relationship_id"])
+    return relationships
+
+
+def _build_cross_shard_integration(
+    inventory: SolidityShardInventory | None,
+    candidates: list[CandidateFinding],
+    validations: dict[str, LocationValidation],
+    *,
+    shard_ids: tuple[str, ...],
+    invariant_review: InvariantReviewResult | None,
+    boundary_surface_requests: dict[str, ModelSurfaceReviewRequest],
+    boundary_review_artifacts: dict[str, ModelSurfaceReviewArtifact],
+    boundary_candidate_ids: dict[str, set[str]],
+    overlap_surface_requests: dict[str, ModelSurfaceReviewRequest],
+    overlap_review_artifacts: dict[str, ModelSurfaceReviewArtifact],
+    overlap_candidate_ids: dict[str, set[str]],
+) -> dict[str, Any]:
+    """Evaluate candidates against every exact semantic boundary and overlap."""
+
+    candidate_ids = [candidate.candidate_id for candidate in candidates]
+    if len(candidate_ids) != len(set(candidate_ids)) or set(validations) != set(candidate_ids):
+        raise ValueError("cross-shard integration requires an exact validated candidate inventory")
+    candidate_paths = {
+        candidate.candidate_id: _candidate_source_paths(candidate) for candidate in candidates
+    }
+    boundary_ids = (
+        {boundary.boundary_id for boundary in inventory.boundaries}
+        if inventory is not None
+        else set()
+    )
+    overlap_ids = (
+        {overlap.overlap_id for overlap in inventory.overlaps} if inventory is not None else set()
+    )
+    if (
+        set(boundary_surface_requests) != boundary_ids
+        or set(boundary_review_artifacts) != boundary_ids
+        or set(boundary_candidate_ids) != boundary_ids
+    ):
+        raise ValueError("cross-shard integration lacks exact boundary review evidence")
+    if (
+        set(overlap_surface_requests) != overlap_ids
+        or set(overlap_review_artifacts) != overlap_ids
+        or set(overlap_candidate_ids) != overlap_ids
+    ):
+        raise ValueError("cross-shard integration lacks exact overlap review evidence")
+    relationship_review_records: dict[str, Any] = {}
+    relationship_requests = {**boundary_surface_requests, **overlap_surface_requests}
+    relationship_artifacts = {**boundary_review_artifacts, **overlap_review_artifacts}
+    relationship_candidate_ids = {**boundary_candidate_ids, **overlap_candidate_ids}
+    if len(relationship_requests) != len(boundary_ids | overlap_ids):
+        raise ValueError("cross-shard relationship review identities collide")
+    for relationship_id in sorted(boundary_ids | overlap_ids):
+        request = relationship_requests[relationship_id]
+        artifact = relationship_artifacts[relationship_id]
+        artifact.require_exact_requested_surface_manifest((request,))
+        if len(artifact.records) != 1 or artifact.records[0].status.value not in {
+            "CANDIDATE",
+            "REVIEWED_NO_ISSUE",
+        }:
+            raise ValueError("cross-shard boundary review was not substantively completed")
+        if not relationship_candidate_ids[relationship_id] <= set(candidate_ids):
+            raise ValueError("cross-shard relationship review references an unknown candidate")
+        if (artifact.records[0].status.value == "CANDIDATE") != bool(
+            relationship_candidate_ids[relationship_id]
+        ):
+            raise ValueError(
+                "cross-shard relationship disposition differs from its candidate output"
+            )
+        relationship_review_records[relationship_id] = artifact.records[0]
+    relationships = _cross_shard_relationship_descriptors(inventory)
+    decisions = []
+    for relationship in relationships:
+        boundary_paths = {relationship["source_path"], relationship["target_path"]}
+        linked_ids = sorted(
+            {
+                candidate_id
+                for candidate_id, paths in candidate_paths.items()
+                if boundary_paths <= paths
+            }
+            | (relationship_candidate_ids[relationship["relationship_id"]])
+        )
+        relationship_id = relationship["relationship_id"]
+        record = relationship_review_records[relationship_id]
+        decision = {
+            "relationship_id": relationship_id,
+            "linked_candidate_ids": linked_ids,
+            "status": record.status.value,
+            "surface_id": record.surface_id,
+            "review_artifact_sha256": relationship_artifacts[relationship_id].artifact_sha256,
+        }
+        decisions.append(decision)
+    if inventory is None:
+        status = "NOT_APPLICABLE_NO_SEMANTIC_INVENTORY"
+    elif not relationships:
+        status = "REVIEWED_NO_CROSS_SHARD_RELATIONSHIPS"
+    else:
+        status = "EVALUATED"
+    body: dict[str, Any] = {
+        "schema_version": "1.0",
+        "algorithm": "mmaudit.cross-shard-integration.v1",
+        "status": status,
+        "semantic_inventory_sha256": inventory.inventory_sha256 if inventory is not None else None,
+        "candidate_ids": sorted(candidate_ids),
+        "candidate_payload_sha256s": _candidate_payload_sha256s(candidates),
+        "shard_ids": sorted(shard_ids),
+        "semantic_relationship_ids": [
+            relationship["relationship_id"] for relationship in relationships
+        ],
+        "boundary_review_artifact_sha256s": sorted(
+            artifact.artifact_sha256 for artifact in relationship_artifacts.values()
+        ),
+        "invariant_review_present": invariant_review is not None,
+        "high_critical_candidate_ids": sorted(
+            candidate.candidate_id
+            for candidate in candidates
+            if candidate.severity in {Severity.HIGH, Severity.CRITICAL}
+        ),
+        "validation_candidate_ids": sorted(
+            candidate_id for candidate_id, validation in validations.items() if validation.valid
+        ),
+        "relationships": relationships,
+        "decisions": decisions,
+        "invariant_review_decision_ids": sorted(
+            decision.invariant_id
+            for decision in (invariant_review.decisions if invariant_review is not None else [])
+        ),
+    }
+    return {**body, "integration_sha256": scheduler_canonical_sha256(body)}
+
+
+def _validate_cross_shard_integration(
+    integration: dict[str, Any],
+    *,
+    expected_candidate_ids: set[str],
+    expected_relationship_ids: set[str],
+) -> None:
+    """Reject no-op metadata echoes as cross-shard integration evidence."""
+
+    required = {
+        "schema_version",
+        "algorithm",
+        "status",
+        "semantic_inventory_sha256",
+        "candidate_ids",
+        "candidate_payload_sha256s",
+        "shard_ids",
+        "semantic_relationship_ids",
+        "boundary_review_artifact_sha256s",
+        "invariant_review_present",
+        "high_critical_candidate_ids",
+        "validation_candidate_ids",
+        "relationships",
+        "decisions",
+        "invariant_review_decision_ids",
+        "integration_sha256",
+    }
+    if set(integration) != required:
+        raise ValueError("cross-shard integration output is not the exact typed projection")
+    if integration["schema_version"] != "1.0" or integration["algorithm"] != (
+        "mmaudit.cross-shard-integration.v1"
+    ):
+        raise ValueError("cross-shard integration output uses an unsupported contract")
+    if integration["candidate_ids"] != sorted(expected_candidate_ids):
+        raise ValueError("cross-shard integration output omits or adds candidates")
+    payload_hashes = integration["candidate_payload_sha256s"]
+    if (
+        not isinstance(payload_hashes, dict)
+        or set(payload_hashes) != expected_candidate_ids
+        or any(
+            not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None
+            for value in payload_hashes.values()
+        )
+    ):
+        raise ValueError("cross-shard integration lacks exact candidate payload hashes")
+    relationships = integration["relationships"]
+    decisions = integration["decisions"]
+    if not isinstance(relationships, list) or not isinstance(decisions, list):
+        raise ValueError("cross-shard integration output lacks relationship decisions")
+    relationship_ids = [
+        str(item["relationship_id"])
+        for item in relationships
+        if isinstance(item, dict) and isinstance(item.get("relationship_id"), str)
+    ]
+    decision_ids = [
+        str(item["relationship_id"])
+        for item in decisions
+        if isinstance(item, dict) and isinstance(item.get("relationship_id"), str)
+    ]
+    if (
+        sorted(relationship_ids) != sorted(expected_relationship_ids)
+        or sorted(decision_ids) != sorted(expected_relationship_ids)
+        or len(relationship_ids) != len(expected_relationship_ids)
+        or len(decision_ids) != len(expected_relationship_ids)
+    ):
+        raise ValueError("cross-shard integration did not evaluate every exact relationship")
+    if integration["semantic_relationship_ids"] != relationship_ids:
+        raise ValueError("cross-shard integration relationship projection is inconsistent")
+    expected_artifact_sha256s = sorted(
+        str(item["review_artifact_sha256"])
+        for item in decisions
+        if isinstance(item, dict) and isinstance(item.get("review_artifact_sha256"), str)
+    )
+    if integration["boundary_review_artifact_sha256s"] != expected_artifact_sha256s:
+        raise ValueError("cross-shard integration artifact projection is inconsistent")
+    body = {key: value for key, value in integration.items() if key != "integration_sha256"}
+    if integration["integration_sha256"] != scheduler_canonical_sha256(body):
+        raise ValueError("cross-shard integration output hash is inconsistent")
+
+
+def _require_exact_model_decision_inventory(
+    *,
+    expected_ids: set[str],
+    observed_ids: list[str],
+    label: str,
+) -> None:
+    """Fail closed when a scheduled model omits, duplicates, or adds a decision."""
+
+    observed_set = set(observed_ids)
+    missing = expected_ids - observed_set
+    unknown = observed_set - expected_ids
+    duplicate_count = len(observed_ids) - len(observed_set)
+    if missing or unknown or duplicate_count:
+        raise OpenRouterSchemaError(
+            f"{label} returned an incomplete decision inventory "
+            f"(missing={len(missing)}, unknown={len(unknown)}, "
+            f"duplicates={duplicate_count})"
+        )
+
+
 class AuditPipeline:
     """Coordinates trusted scanners and constrained model roles."""
 
@@ -662,6 +1566,7 @@ class AuditPipeline:
             else repository_fork_matrix_runner
         )
         self._owns_client = False
+        self._active_scheduler: PipelineScheduler | None = None
 
     def clear_credentials(self) -> None:
         """Drop operator credentials retained by pipeline/provider objects."""
@@ -676,6 +1581,7 @@ class AuditPipeline:
     async def run(
         self,
         *,
+        resume_run_dir: Path | None = None,
         scanner_only: bool = False,
         allow_code_egress: bool = False,
         skip_codeql: bool = False,
@@ -695,6 +1601,7 @@ class AuditPipeline:
 
         try:
             return await self._run_with_provider(
+                resume_run_dir=resume_run_dir,
                 scanner_only=scanner_only,
                 allow_code_egress=allow_code_egress,
                 skip_codeql=skip_codeql,
@@ -711,6 +1618,13 @@ class AuditPipeline:
                 ci_baseline=ci_baseline,
             )
         finally:
+            scheduler = self._active_scheduler
+            if scheduler is not None:
+                if self.client is not None:
+                    with contextlib.suppress(OpenRouterError):
+                        self.client.unbind_request_lifecycle_observer(scheduler)
+                scheduler.close()
+                self._active_scheduler = None
             self.api_key = ""
             if self.client is not None:
                 if self._owns_client:
@@ -724,6 +1638,7 @@ class AuditPipeline:
     async def _run_with_provider(
         self,
         *,
+        resume_run_dir: Path | None = None,
         scanner_only: bool = False,
         allow_code_egress: bool = False,
         skip_codeql: bool = False,
@@ -765,6 +1680,13 @@ class AuditPipeline:
                 else None
             ),
         )
+        resume_scheduler_journal = (
+            _resolve_scheduler_resume_journal(self.output, resume_run_dir)
+            if resume_run_dir is not None
+            else None
+        )
+        if resume_scheduler_journal is not None and scanner_only:
+            raise ValueError("scheduler resume is unavailable for scanner-only execution")
         if ci_mode and (
             not scanner_only
             or allow_code_egress
@@ -869,9 +1791,11 @@ class AuditPipeline:
         terminal_code = ExitCode.SUCCESS
         budget_halted = False
         candidates: list[CandidateFinding] = []
+        pass_four_candidates: list[CandidateFinding] = []
         candidate_origin_packages: dict[str, ContextPackage] = {}
         pending_execution_candidates: list[CandidateFinding] = []
         execution_candidates_integrated = False
+        formal_counterexamples_attached = False
         execution_candidate_build = ExecutionCandidateBuildResult(
             candidates=(),
             dispositions=(),
@@ -926,6 +1850,14 @@ class AuditPipeline:
         quality_gates: list[QualityGateResult] = []
         maximum_assurance: MaximumAssuranceAssessment | None = None
         report_quality_review: ReportQualityReview | None = None
+        scheduler_artifact: SchedulerArtifact | None = None
+        scheduler_analysis_input_sha256: str | None = None
+        scheduler_bindings: SchedulerBindings | None = None
+        scheduler_cost_ledger_baseline: SchedulerCostLedgerBaseline | None = None
+        scheduler_privacy_evidence_custody: SchedulerPrivacyEvidenceCustody | None = None
+        scheduler_inventory: SchedulerShardInventory | None = None
+        scheduler_report_binding: dict[str, Any] | None = None
+        scheduler_halted = False
         candidate_groups_count = 0
         validations: dict[str, LocationValidation] = {}
         discovery: DiscoveryResult
@@ -1138,6 +2070,30 @@ class AuditPipeline:
                         requested_budget_usd=Decimal(str(self.config.execution.budget_usd)),
                         now=privacy_now,
                     )
+                if resume_scheduler_journal is not None:
+                    if not self.config.privacy.require_zdr:
+                        raise OpenRouterPrivacyError(
+                            "scheduler resume requires ZDR-bound retained privacy evidence"
+                        )
+                    if (
+                        self.privacy_source_provenance is None
+                        or self.effective_privacy_policy is None
+                    ):
+                        raise OpenRouterPrivacyError(
+                            "scheduler resume lacks current privacy evidence"
+                        )
+                    (
+                        self.privacy_source_provenance,
+                        self.effective_privacy_policy,
+                    ) = _load_exact_resume_privacy_evidence(
+                        resume_scheduler_journal,
+                        current_provenance=self.privacy_source_provenance,
+                        current_policy=self.effective_privacy_policy,
+                    )
+                    write_json(
+                        run_dir / "privacy-source-provenance.json",
+                        self.privacy_source_provenance,
+                    )
                 if (
                     self.client is not None
                     and self.effective_privacy_policy is not None
@@ -1158,10 +2114,24 @@ class AuditPipeline:
                     run_dir / "privacy-policy.json",
                     self.effective_privacy_policy,
                 )
+                if self.privacy_source_provenance is None or self.effective_privacy_policy is None:
+                    raise OpenRouterPrivacyError(
+                        "scheduler privacy custody lacks complete typed evidence"
+                    )
+                scheduler_privacy_evidence_custody = _build_scheduler_privacy_evidence_custody(
+                    run_dir,
+                    provenance=self.privacy_source_provenance,
+                    policy=self.effective_privacy_policy,
+                )
             except (ValueError, OpenRouterPrivacyError) as exc:
                 incomplete.append(f"privacy authorization failed: {exc}")
                 if terminal_code is ExitCode.SUCCESS:
                     terminal_code = ExitCode.PRIVACY_REFUSAL
+                if self.effective_privacy_policy is not None:
+                    write_json(
+                        run_dir / "privacy-policy.json",
+                        self.effective_privacy_policy,
+                    )
 
         try:
             solidity_projects = discover_solidity_projects(
@@ -1799,12 +2769,13 @@ class AuditPipeline:
                 self._owns_client = True
                 self.api_key = ""
             try:
-                await self._validate_models(
-                    run_dir,
-                    refresh=refresh_models,
-                    source_egress_requested=True,
-                    qualification_preflight=qualification_preflight,
-                )
+                if resume_scheduler_journal is None:
+                    await self._validate_models(
+                        run_dir,
+                        refresh=refresh_models,
+                        source_egress_requested=True,
+                        qualification_preflight=qualification_preflight,
+                    )
                 context_builder = ContextBuilder(
                     discovery=discovery,
                     repository_map=repository_map,
@@ -1831,6 +2802,105 @@ class AuditPipeline:
                 context_withheld_files = len(repository_map.files) - len(
                     context_builder.repository_map.files
                 )
+                scheduler_inventory = build_scheduler_shard_inventory(
+                    repository_map,
+                    solidity_shards,
+                )
+                scheduler_analysis_input = build_scheduler_analysis_input_inventory(
+                    run_options=run_options,
+                    discovery=discovery,
+                    repository_map=repository_map,
+                    repository_execution_sha256=repository_execution_sha256,
+                    scanner_source_sha256=scanner_source_sha256,
+                    dependency_preparation=dependency_preparation,
+                    scope_assessment=scope_assessment,
+                    projects=solidity_projects,
+                    compilations=solidity_compilations,
+                    index=solidity_index,
+                    graphs=solidity_graphs,
+                    semantic_shards=solidity_shards,
+                    invariants=solidity_invariants,
+                    invariant_harnesses=invariant_harnesses,
+                    invariant_executions=invariant_executions,
+                    property_corpus=property_corpus,
+                    economic_simulations=economic_simulations,
+                    formal_runs=formal_runs,
+                    scanner_runs=scanner_runs,
+                    repository_suite_differential=repository_suite_differential,
+                    solidity_coverage=solidity_coverage,
+                    execution_candidate_build=execution_candidate_build,
+                    model_surface_requests=model_surface_requests,
+                    model_surface_review_assignments=model_surface_review_assignments,
+                    disposable_roots=(run_dir / "private",),
+                    audited_exclusion_roots=(
+                        (scanner_source_exclusion_root,)
+                        if output_relative_to_repo is not None
+                        else ()
+                    ),
+                )
+                scheduler_analysis_input_sha256 = scheduler_analysis_input.analysis_input_sha256
+                atomic_ledger = self.client.budget.atomic_ledger
+                scheduler_cost_ledger_baseline = None
+                if resume_scheduler_journal is None and atomic_ledger is not None:
+                    scheduler_cost_ledger_baseline = build_scheduler_cost_ledger_baseline(
+                        atomic_ledger
+                    )
+                scheduler_bindings = build_scheduler_bindings(
+                    config=self.config,
+                    shard_inventory=scheduler_inventory,
+                    qualification=self.production_qualification,
+                    analysis_input_sha256=scheduler_analysis_input_sha256,
+                    cost_ledger_baseline=scheduler_cost_ledger_baseline,
+                    privacy_evidence_custody=scheduler_privacy_evidence_custody,
+                )
+                if resume_scheduler_journal is None:
+                    if scheduler_privacy_evidence_custody is None:
+                        raise ValueError(
+                            "scheduler creation requires exact pre-dispatch privacy custody"
+                        )
+                    scheduler = PipelineScheduler.create(
+                        run_dir / "private" / "scheduler-journal",
+                        bindings=scheduler_bindings,
+                        analysis_input_inventory=scheduler_analysis_input,
+                        shard_inventory=scheduler_inventory,
+                        cost_ledger_baseline=scheduler_cost_ledger_baseline,
+                        privacy_evidence_custody=scheduler_privacy_evidence_custody,
+                    )
+                    self._active_scheduler = scheduler
+                else:
+                    if atomic_ledger is None:
+                        raise ValueError(
+                            "scheduler resume requires the exact persistent cost ledger"
+                        )
+                    scheduler = PipelineScheduler.resume(
+                        resume_scheduler_journal,
+                        bindings=scheduler_bindings,
+                        analysis_input_inventory=scheduler_analysis_input,
+                        shard_inventory=scheduler_inventory,
+                        cost_ledger_baseline=None,
+                        atomic_ledger=atomic_ledger,
+                    )
+                    self._active_scheduler = scheduler
+                    await self._validate_models(
+                        run_dir,
+                        refresh=refresh_models,
+                        source_egress_requested=True,
+                        qualification_preflight=qualification_preflight,
+                    )
+                    recovered_usage, recovery_scope = (
+                        scheduler.journal.claim_restorable_usage_for_budget_recovery(
+                            atomic_ledger=atomic_ledger
+                        )
+                    )
+                    await budget.restore_recovered_usage(
+                        recovered_usage,
+                        recovery_scope=recovery_scope,
+                    )
+                    for record in recovered_usage:
+                        usage.add(record)
+                    scheduler_cost_ledger_baseline = scheduler.manifest.cost_ledger_baseline
+                    scheduler_bindings = scheduler.manifest.bindings
+                self.client.bind_request_lifecycle_observer(scheduler)
             except SecretSafetyError as exc:
                 incomplete.append(str(exc))
                 terminal_code = ExitCode.PRIVACY_REFUSAL
@@ -1844,11 +2914,22 @@ class AuditPipeline:
             except OpenRouterError as exc:
                 incomplete.append(str(exc))
                 terminal_code = ExitCode.MODEL_FAILURE
+            except (OSError, ValueError) as exc:
+                incomplete.append(
+                    f"seven-pass scheduler preflight failed: {type(exc).__name__}: {exc}"
+                )
+                terminal_code = ExitCode.INCOMPLETE
 
         packages: list[ContextPackage] = []
         accepted_specialist_outcomes: list[SpecialistAcceptedOutcome] = []
-        if context_builder is not None and self.client is not None:
+        scheduler_agent_config = _scheduler_primary_only_config(self.config)
+        if (
+            context_builder is not None
+            and self.client is not None
+            and self._active_scheduler is not None
+        ):
             client = self.client
+            scheduler = self._active_scheduler
             semaphore = asyncio.Semaphore(self.config.execution.concurrency)
 
             async def bounded_call(coroutine: Any) -> Any:
@@ -1864,7 +2945,7 @@ class AuditPipeline:
                 outcome_kind: SpecialistAcceptedOutcomeKind,
                 requested_surface_count: int = 0,
                 surface_artifact: ModelSurfaceReviewArtifact | None = None,
-            ) -> None:
+            ) -> SpecialistAcceptedOutcome:
                 """Record one role result only after all host-side validation returned."""
 
                 record = _exact_completed_usage(
@@ -1914,22 +2995,20 @@ class AuditPipeline:
                         raise OpenRouterSchemaError(
                             "accepted specialist surface artifact differs from its request"
                         )
-                accepted_specialist_outcomes.append(
-                    SpecialistAcceptedOutcome.build(
-                        request_id=record.request_id,
-                        specialist_role=specialist_role,
-                        request_role=request_role,
-                        outcome_kind=outcome_kind,
-                        validated_response_sha256=record.validated_response_sha256,
-                        context_request_evidence_sha256=context_evidence.evidence_sha256,
-                        requested_surface_count=requested_surface_count,
-                        surface_review_artifact_sha256=(
-                            surface_artifact.artifact_sha256
-                            if surface_artifact is not None
-                            else None
-                        ),
-                    )
+                accepted = SpecialistAcceptedOutcome.build(
+                    request_id=record.request_id,
+                    specialist_role=specialist_role,
+                    request_role=request_role,
+                    outcome_kind=outcome_kind,
+                    validated_response_sha256=record.validated_response_sha256,
+                    context_request_evidence_sha256=context_evidence.evidence_sha256,
+                    requested_surface_count=requested_surface_count,
+                    surface_review_artifact_sha256=(
+                        surface_artifact.artifact_sha256 if surface_artifact is not None else None
+                    ),
                 )
+                accepted_specialist_outcomes.append(accepted)
+                return accepted
 
             def register_finding_result(
                 result: FindingReviewResult,
@@ -1962,6 +3041,7 @@ class AuditPipeline:
                 role: str,
                 *,
                 preview_models: tuple[str, ...] | None = None,
+                context_role: str | None = None,
                 **kwargs: Any,
             ) -> ContextPackage | None:
                 nonlocal terminal_code, budget_halted
@@ -1997,7 +3077,7 @@ class AuditPipeline:
                             )
                         attempted_budgets.add(requested_budget)
                         package = context_builder.build(
-                            role,
+                            context_role or role,
                             requested_budget=requested_budget,
                             **kwargs,
                         )
@@ -2066,60 +3146,230 @@ class AuditPipeline:
                 budget_halted = True
                 terminal_code = ExitCode.INCOMPLETE
 
+            def scheduled_model_task(
+                *,
+                pass_kind: SchedulerPassKind,
+                scope: SchedulerScope,
+                task_key: str,
+                request_role: str,
+                request_protocol: AgentRequestProtocol,
+                configured_role: str | None = None,
+                model_id: str | None = None,
+                root_lineage: str | None = None,
+                candidate_ids: set[str] | None = None,
+            ) -> SchedulerTaskPlan:
+                selected_model = model_id
+                if selected_model is None:
+                    if configured_role is None:
+                        raise ValueError("scheduled model task lacks a configured role")
+                    selected_model = self.config.models.role(configured_role).primary
+                selected_lineage = root_lineage or _scheduler_root_lineage(
+                    self.config,
+                    selected_model,
+                )
+                request_hashes = client.preview_structured_request_hashes(
+                    role=request_role,
+                    model=selected_model,
+                    system_prompt=request_protocol.system_prompt,
+                    user_prompt="",
+                    response_model=request_protocol.response_model,
+                    schema_name=request_protocol.schema_name,
+                )
+                response_schema_sha256 = _scheduler_response_schema_sha256(
+                    request_protocol.response_model
+                )
+                if request_hashes.schema_sha256 != response_schema_sha256:
+                    raise ValueError("scheduled request protocol schema hash is inconsistent")
+                return scheduler.model_task(
+                    pass_kind=pass_kind,
+                    scope=scope,
+                    task_key=task_key,
+                    role=request_role,
+                    requested_model=selected_model,
+                    root_lineage=selected_lineage,
+                    system_prompt_sha256=request_hashes.system_prompt_sha256,
+                    response_schema_sha256=response_schema_sha256,
+                    candidate_ids=tuple(sorted(candidate_ids or ())),
+                )
+
+            def conclude_scheduler_result(result: SchedulerPassResult) -> SchedulerPassStatus:
+                nonlocal terminal_code, budget_halted, scheduler_halted
+                if result.status is not SchedulerPassStatus.COMPLETE:
+                    reason = (
+                        "seven-pass scheduler stopped after "
+                        f"{result.plan.pass_kind.value}: {result.status.value}"
+                    )
+                    if reason not in incomplete:
+                        incomplete.append(reason)
+                    scheduler_halted = True
+                    budget_halted = True
+                    if terminal_code is ExitCode.SUCCESS:
+                        terminal_code = ExitCode.MODEL_FAILURE
+                return result.status
+
+            def conclude_scheduler_pass() -> SchedulerPassStatus:
+                return conclude_scheduler_result(scheduler.seal_pass_result())
+
+            def completed_usage_for_task(task: SchedulerTaskPlan) -> UsageRecord:
+                """Recover one exact completed request without promoting serialized evidence."""
+
+                matches = tuple(
+                    record
+                    for record in usage.records
+                    if record.request_id == task.logical_request_id
+                )
+                if len(matches) != 1:
+                    raise ValueError("resumed scheduler task lacks one exact restored usage record")
+                return _exact_completed_usage(
+                    usage.records,
+                    matches[0],
+                    expected_role=task.role,
+                )
+
+            def completed_finding_review(
+                pass_result: SchedulerPassResult,
+                task: SchedulerTaskPlan,
+                agent: Any,
+                context: ContextPackage,
+            ) -> FindingReviewResult:
+                result = scheduler.completed_result_for_task(pass_result, task)
+                if result.terminal_status is not SchedulerTerminalStatus.SUCCEEDED:
+                    raise OpenRouterSchemaError(
+                        "completed candidate review lacks a successful scheduler result"
+                    )
+                raw_response = scheduler.completed_output_for_task(
+                    pass_result,
+                    task,
+                    CandidateReviewBatch,
+                )
+                return cast(
+                    FindingReviewResult,
+                    agent.bind_completed_review(
+                        context,
+                        raw_response=raw_response,
+                        completion_usage=completed_usage_for_task(task),
+                    ),
+                )
+
+            def completed_finding_review_or_terminal(
+                pass_result: SchedulerPassResult,
+                task: SchedulerTaskPlan,
+                agent: Any,
+                context: ContextPackage,
+            ) -> FindingReviewResult | SchedulerTaskResult:
+                result = scheduler.completed_result_for_task(pass_result, task)
+                if result.terminal_status is not SchedulerTerminalStatus.SUCCEEDED:
+                    return result
+                return completed_finding_review(pass_result, task, agent, context)
+
+            def require_completed_specialist_outcome(
+                task: SchedulerTaskPlan,
+                expected: SpecialistAcceptedOutcome | None,
+                *,
+                surface_requests: tuple[ModelSurfaceReviewRequest, ...] = (),
+                surface_artifact: ModelSurfaceReviewArtifact | None = None,
+            ) -> None:
+                outputs = tuple(
+                    output for output in scheduler.journal.outputs if output.task_id == task.task_id
+                )
+                if (
+                    len(outputs) != 1
+                    or outputs[0].specialist_accepted_outcome != expected
+                    or outputs[0].model_surface_review_requests != surface_requests
+                    or outputs[0].model_surface_review_artifact != surface_artifact
+                ):
+                    raise OpenRouterSchemaError(
+                        "resumed specialist outcome differs from its exact retained output"
+                    )
+
+            async def completed_value(value: Any) -> Any:
+                return value
+
+            threat_agent = ThreatModelAgent(scheduler_agent_config, self.client)
+            threat_task = scheduled_model_task(
+                pass_kind=SchedulerPassKind.ORIENTATION,
+                scope=SchedulerScope.global_scope(),
+                task_key="threat-model",
+                request_role="threat_model",
+                configured_role="threat_model",
+                request_protocol=threat_agent.request_protocol,
+            )
+            completed_orientation = scheduler.completed_pass_result(
+                SchedulerPassKind.ORIENTATION,
+                (threat_task,),
+            )
+            active_orientation_result: SchedulerTaskResult | None = None
+            if completed_orientation is None:
+                scheduler.prepare_pass(SchedulerPassKind.ORIENTATION, (threat_task,))
+                active_orientation_result = scheduler.result_for_task(threat_task)
             threat_context = build_context("threat_model")
-            if threat_context is not None:
+            retained_orientation_result = (
+                scheduler.completed_result_for_task(completed_orientation, threat_task)
+                if completed_orientation is not None
+                else active_orientation_result
+            )
+            if (
+                retained_orientation_result is not None
+                and retained_orientation_result.terminal_status
+                is not SchedulerTerminalStatus.SUCCEEDED
+            ):
+                incomplete.append(
+                    "threat_model: resumed scheduler task retained terminal status "
+                    f"{retained_orientation_result.terminal_status.value}"
+                )
+            elif threat_context is not None:
                 packages.append(threat_context)
                 try:
-                    self.logger.info("Running threat-model role", extra={"run_id": run_id})
-                    threat_model = await bounded_call(
-                        ThreatModelAgent(self.config, self.client).run(threat_context)
-                    )
+                    if completed_orientation is not None:
+                        raw_threat_model = scheduler.completed_output_for_task(
+                            completed_orientation,
+                            threat_task,
+                            ThreatModel,
+                        )
+                    elif active_orientation_result is not None:
+                        raw_threat_model = scheduler.output_for_task(
+                            threat_task,
+                            ThreatModel,
+                        )
+                    else:
+                        self.logger.info("Running threat-model role", extra={"run_id": run_id})
+                        raw_threat_model = await bounded_call(
+                            threat_agent.run(
+                                threat_context,
+                                logical_request_id=threat_task.logical_request_id,
+                            )
+                        )
                     threat_model, threat_location_rejections = _validated_threat_model(
                         discovery.root,
-                        threat_model,
+                        raw_threat_model,
                         context_hashes=context_hash_index([threat_context]),
                     )
+                    if completed_orientation is None and active_orientation_result is None:
+                        scheduler.record_model_success(
+                            threat_task,
+                            output_value=raw_threat_model,
+                            usage_records=usage.records,
+                        )
                 except BudgetExhaustedError as exc:
+                    scheduler.record_failure(threat_task, exc, usage_records=usage.records)
                     incomplete.append(f"threat_model: {exc}")
                     terminal_code = ExitCode.INCOMPLETE
                     budget_halted = True
                 except OpenRouterError as exc:
+                    scheduler.record_failure(threat_task, exc, usage_records=usage.records)
                     incomplete.append(f"threat_model: {exc}")
                     terminal_code = ExitCode.MODEL_FAILURE
+            else:
+                scheduler.record_failure(
+                    threat_task,
+                    ContextBudgetError("threat-model context was not produced"),
+                )
+            if completed_orientation is None:
+                conclude_scheduler_pass()
+            else:
+                conclude_scheduler_result(completed_orientation)
             check_accounted_budget()
 
-            agent_specs = (
-                ()
-                if budget_halted
-                else (
-                    ("source_audit", SourceAuditAgent),
-                    ("business_logic", BusinessLogicAgent),
-                    ("configuration", ConfigurationAgent),
-                )
-            )
-            tasks: list[tuple[str, asyncio.Task[Any]]] = []
-            for role, agent_type in agent_specs:
-                package = build_context(
-                    role,
-                    threat_model=threat_model,
-                    requested_model_surfaces=model_surface_review_assignments.get(
-                        role,
-                        [],
-                    ),
-                )
-                if package is None:
-                    break
-                packages.append(package)
-                agent = agent_type(self.config, self.client)
-                tasks.append(
-                    (
-                        role,
-                        asyncio.create_task(
-                            bounded_call(agent.run(package)),
-                            name=f"model:{role}",
-                        ),
-                    )
-                )
             specialist_roles = (
                 [
                     role
@@ -2129,112 +3379,833 @@ class AuditPipeline:
                 if self.config.profile in {AuditProfile.DEEP, AuditProfile.MAXIMUM_ASSURANCE}
                 else []
             )
-            blind_specialist_contexts: list[tuple[str, Any]] = []
-            if not budget_halted:
-                # Context construction is synchronous. Freeze every investigator's
-                # first-pass package before yielding to any investigator task, so
-                # no model-produced candidate can enter a peer discovery context.
-                for role in specialist_roles:
-                    package = build_specialist_context(
-                        role,
-                        threat_model=threat_model,
-                        requested_model_surfaces=model_surface_review_assignments.get(
-                            f"specialist:{role}",
-                            [],
-                        ),
-                    )
-                    if package is None:
-                        break
-                    blind_specialist_contexts.append((role, package))
-            for role, task in tasks:
-                try:
-                    batch = await task
-                    sealed_context, _completion_usage = register_finding_result(
-                        batch,
-                        expected_role=role,
-                    )
-                    candidates.extend(batch.findings)
-                    if batch.surface_review_artifact is not None:
-                        artifact = batch.surface_review_artifact
-                        model_surface_review_artifacts.append(artifact)
-                        model_surface_review_contexts.setdefault(
-                            artifact.request_id,
-                            [],
-                        ).append(sealed_context)
-                    if batch.findings and time_to_first_candidate_seconds is None:
-                        time_to_first_candidate_seconds = time.monotonic() - run_started_monotonic
-                except BudgetExhaustedError as exc:
-                    incomplete.append(f"{role}: {exc}")
-                    terminal_code = ExitCode.INCOMPLETE
-                    budget_halted = True
-                except OpenRouterError as exc:
-                    incomplete.append(f"{role}: {exc}")
-                    if terminal_code is ExitCode.SUCCESS:
-                        terminal_code = ExitCode.MODEL_FAILURE
-            check_accounted_budget()
-
-            specialist_tasks: list[tuple[str, asyncio.Task[Any]]] = []
-            if not budget_halted:
-                for role, package in blind_specialist_contexts:
-                    packages.append(package)
-                    specialist_tasks.append(
-                        (
-                            role,
-                            asyncio.create_task(
-                                bounded_call(
-                                    SpecialistFindingAgent(
-                                        self.config,
+            blind_specs: list[
+                tuple[
+                    str,
+                    str,
+                    type[Any] | None,
+                    SchedulerShardDescriptor,
+                    SchedulerTaskPlan,
+                ]
+            ] = []
+            whole_protocol_specs: list[
+                tuple[
+                    str,
+                    str,
+                    WholeProtocolReviewAgent,
+                    SchedulerTaskPlan,
+                ]
+            ] = []
+            if not scheduler_halted:
+                for shard in scheduler.manifest.shard_inventory.shards:
+                    scope = SchedulerScope.single_shard(shard.shard_id)
+                    for role, agent_class in (
+                        ("source_audit", SourceAuditAgent),
+                        ("business_logic", BusinessLogicAgent),
+                        ("configuration", ConfigurationAgent),
+                    ):
+                        blind_specs.append(
+                            (
+                                role,
+                                role,
+                                agent_class,
+                                shard,
+                                scheduled_model_task(
+                                    pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+                                    scope=scope,
+                                    task_key=f"{role}-{shard.shard_id}",
+                                    request_role=role,
+                                    configured_role=role,
+                                    request_protocol=agent_class(
+                                        scheduler_agent_config,
+                                        self.client,
+                                    ).request_protocol,
+                                ),
+                            )
+                        )
+                    for role in specialist_roles:
+                        blind_specs.append(
+                            (
+                                f"specialist:{role}",
+                                role,
+                                None,
+                                shard,
+                                scheduled_model_task(
+                                    pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+                                    scope=scope,
+                                    task_key=f"specialist-{role}-{shard.shard_id}",
+                                    request_role=f"specialist:{role}",
+                                    configured_role=role,
+                                    request_protocol=SpecialistFindingAgent(
+                                        scheduler_agent_config,
                                         self.client,
                                         role,
-                                    ).run(package)
+                                    ).request_protocol,
                                 ),
-                                name=f"model:specialist:{role}",
+                            )
+                        )
+                for review_index, (model_id, root_lineage) in enumerate(
+                    _whole_protocol_review_models(
+                        self.config,
+                        self.production_qualification,
+                    )
+                ):
+                    whole_agent = WholeProtocolReviewAgent(
+                        scheduler_agent_config,
+                        self.client,
+                        review_index=review_index,
+                        exact_model_id=model_id,
+                    )
+                    request_role = whole_agent.role
+                    whole_protocol_specs.append(
+                        (
+                            request_role,
+                            model_id,
+                            whole_agent,
+                            scheduled_model_task(
+                                pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+                                scope=SchedulerScope.global_scope(),
+                                task_key=f"whole-protocol-review-{review_index}",
+                                request_role=request_role,
+                                request_protocol=whole_agent.request_protocol,
+                                model_id=model_id,
+                                root_lineage=root_lineage,
                             ),
                         )
                     )
-            for role, task in specialist_tasks:
-                try:
-                    batch = await task
-                    sealed_context, completion_usage = register_finding_result(
-                        batch,
-                        expected_role=f"specialist:{role}",
+                blind_plan_tasks = (
+                    *(spec[4] for spec in blind_specs),
+                    *(spec[3] for spec in whole_protocol_specs),
+                )
+                completed_blind_review = scheduler.completed_pass_result(
+                    SchedulerPassKind.BLIND_SHARD_REVIEW,
+                    blind_plan_tasks,
+                )
+                if completed_blind_review is None:
+                    scheduler.prepare_pass(
+                        SchedulerPassKind.BLIND_SHARD_REVIEW,
+                        blind_plan_tasks,
                     )
-                    accept_specialist_outcome(
-                        completion_usage=completion_usage,
-                        validated_context=sealed_context,
-                        specialist_role=role,
-                        request_role=f"specialist:{role}",
-                        outcome_kind=SpecialistAcceptedOutcomeKind.CANDIDATE_REVIEW,
-                        requested_surface_count=len(
-                            batch.surface_review_context.requested_model_surfaces
+
+                blind_contexts: list[
+                    tuple[
+                        str,
+                        str,
+                        type[Any] | None,
+                        SchedulerTaskPlan,
+                        ContextPackage,
+                    ]
+                ] = []
+                whole_protocol_contexts: list[
+                    tuple[
+                        str,
+                        WholeProtocolReviewAgent,
+                        SchedulerTaskPlan,
+                        ContextPackage,
+                    ]
+                ] = []
+                for (
+                    request_role,
+                    configured_role,
+                    blind_agent_type,
+                    shard,
+                    scheduler_task,
+                ) in blind_specs:
+                    scoped_source_paths = {source.path for source in shard.sources}
+                    allowed_paths = (
+                        scoped_source_paths
+                        if request_role == "source_audit"
+                        else _semantic_shard_context_paths(
+                            solidity_shards,
+                            shard_id=shard.shard_id,
+                            primary_paths=scoped_source_paths,
+                        )
+                    )
+                    assigned_surfaces = [
+                        surface
+                        for surface in model_surface_review_assignments.get(request_role, [])
+                        if not surface.allowed_locations
+                        or {location.path for location in surface.allowed_locations}
+                        <= allowed_paths
+                    ]
+                    if request_role == "source_audit":
+                        try:
+                            assigned_surfaces = _source_audit_shard_surface_requests(
+                                shard=shard,
+                                discovery=discovery,
+                                solidity_index=solidity_index,
+                                assigned=assigned_surfaces,
+                                solidity_requests=model_surface_requests,
+                            )
+                        except ValueError as exc:
+                            incomplete.append(f"source_audit: {exc}")
+                            terminal_code = ExitCode.INCOMPLETE
+                            budget_halted = True
+                            break
+                    else:
+                        try:
+                            assigned_surfaces = _blind_shard_surface_requests(
+                                shard=shard,
+                                discovery=discovery,
+                                assigned=assigned_surfaces,
+                            )
+                        except ValueError as exc:
+                            incomplete.append(f"{request_role}: {exc}")
+                            terminal_code = ExitCode.INCOMPLETE
+                            budget_halted = True
+                            break
+                    if request_role.startswith("specialist:"):
+                        package = build_specialist_context(
+                            configured_role,
+                            threat_model=threat_model,
+                            requested_model_surfaces=assigned_surfaces,
+                            allowed_source_paths=allowed_paths,
+                        )
+                    else:
+                        package = build_context(
+                            request_role,
+                            threat_model=threat_model,
+                            requested_model_surfaces=assigned_surfaces,
+                            allowed_source_paths=allowed_paths,
+                        )
+                    if package is None:
+                        break
+                    blind_contexts.append(
+                        (
+                            request_role,
+                            configured_role,
+                            blind_agent_type,
+                            scheduler_task,
+                            package,
+                        )
+                    )
+
+                if len(blind_contexts) == len(blind_specs):
+                    whole_protocol_paths = {
+                        source.path
+                        for shard in scheduler.manifest.shard_inventory.shards
+                        for source in shard.sources
+                    }
+                    whole_protocol_surfaces = _whole_protocol_surface_requests(
+                        discovery=discovery,
+                    )
+                    for (
+                        request_role,
+                        model_id,
+                        whole_protocol_agent,
+                        scheduler_task,
+                    ) in whole_protocol_specs:
+                        package = build_context(
+                            request_role,
+                            preview_models=(model_id,),
+                            context_role="whole_protocol_review",
+                            threat_model=threat_model,
+                            requested_model_surfaces=whole_protocol_surfaces,
+                            allowed_source_paths=whole_protocol_paths,
+                        )
+                        if package is None:
+                            break
+                        whole_protocol_contexts.append(
+                            (request_role, whole_protocol_agent, scheduler_task, package)
+                        )
+
+                if len(blind_contexts) != len(blind_specs) or len(whole_protocol_contexts) != len(
+                    whole_protocol_specs
+                ):
+                    blind_failure = ContextBudgetError(
+                        "blind shard contexts were not frozen as one complete plan"
+                    )
+                    for (
+                        _request_role,
+                        _configured_role,
+                        _agent_type,
+                        _shard,
+                        task_plan,
+                    ) in blind_specs:
+                        scheduler.record_failure(task_plan, blind_failure)
+                    for _request_role, _model_id, _agent, task_plan in whole_protocol_specs:
+                        scheduler.record_failure(task_plan, blind_failure)
+                else:
+                    # The complete pass plan and every shard-scoped context are
+                    # frozen before any investigator task is allowed to run.
+                    blind_tasks: list[
+                        tuple[
+                            str,
+                            str,
+                            SchedulerTaskPlan,
+                            ContextPackage,
+                            asyncio.Task[Any],
+                        ]
+                    ] = []
+                    for (
+                        request_role,
+                        configured_role,
+                        blind_agent_type,
+                        scheduler_task,
+                        blind_package,
+                    ) in blind_contexts:
+                        packages.append(blind_package)
+                        blind_agent = (
+                            SpecialistFindingAgent(
+                                scheduler_agent_config,
+                                self.client,
+                                configured_role,
+                            )
+                            if blind_agent_type is None
+                            else blind_agent_type(scheduler_agent_config, self.client)
+                        )
+                        recovered_review = (
+                            completed_finding_review_or_terminal(
+                                completed_blind_review,
+                                scheduler_task,
+                                blind_agent,
+                                blind_package,
+                            )
+                            if completed_blind_review is not None
+                            else None
+                        )
+                        blind_tasks.append(
+                            (
+                                request_role,
+                                configured_role,
+                                scheduler_task,
+                                blind_package,
+                                asyncio.create_task(
+                                    (
+                                        completed_value(recovered_review)
+                                        if recovered_review is not None
+                                        else bounded_call(
+                                            blind_agent.run(
+                                                blind_package,
+                                                logical_request_id=(
+                                                    scheduler_task.logical_request_id
+                                                ),
+                                            )
+                                        )
+                                    ),
+                                    name=f"model:{request_role}:{scheduler_task.task_key}",
+                                ),
+                            )
+                        )
+                    for (
+                        request_role,
+                        whole_protocol_agent,
+                        scheduler_task,
+                        whole_protocol_package,
+                    ) in whole_protocol_contexts:
+                        packages.append(whole_protocol_package)
+                        recovered_review = (
+                            completed_finding_review_or_terminal(
+                                completed_blind_review,
+                                scheduler_task,
+                                whole_protocol_agent,
+                                whole_protocol_package,
+                            )
+                            if completed_blind_review is not None
+                            else None
+                        )
+                        blind_tasks.append(
+                            (
+                                request_role,
+                                "whole_protocol_review",
+                                scheduler_task,
+                                whole_protocol_package,
+                                asyncio.create_task(
+                                    (
+                                        completed_value(recovered_review)
+                                        if recovered_review is not None
+                                        else bounded_call(
+                                            whole_protocol_agent.run(
+                                                whole_protocol_package,
+                                                logical_request_id=(
+                                                    scheduler_task.logical_request_id
+                                                ),
+                                            )
+                                        )
+                                    ),
+                                    name=f"model:{request_role}:{scheduler_task.task_key}",
+                                ),
+                            )
+                        )
+                    for (
+                        request_role,
+                        configured_role,
+                        scheduler_task,
+                        _package,
+                        task,
+                    ) in blind_tasks:
+                        try:
+                            batch = await task
+                            if isinstance(batch, SchedulerTaskResult):
+                                incomplete.append(
+                                    f"{request_role}: retained scheduler terminal "
+                                    f"{batch.terminal_status.value}"
+                                )
+                                if terminal_code is ExitCode.SUCCESS:
+                                    terminal_code = ExitCode.MODEL_FAILURE
+                                budget_halted = True
+                                continue
+                            sealed_context, completion_usage = register_finding_result(
+                                batch,
+                                expected_role=request_role,
+                            )
+                            specialist_accepted_outcome: SpecialistAcceptedOutcome | None = None
+                            if request_role.startswith("specialist:"):
+                                specialist_accepted_outcome = accept_specialist_outcome(
+                                    completion_usage=completion_usage,
+                                    validated_context=sealed_context,
+                                    specialist_role=configured_role,
+                                    request_role=request_role,
+                                    outcome_kind=(SpecialistAcceptedOutcomeKind.CANDIDATE_REVIEW),
+                                    requested_surface_count=len(
+                                        batch.surface_review_context.requested_model_surfaces
+                                    ),
+                                    surface_artifact=batch.surface_review_artifact,
+                                )
+                            candidates.extend(batch.findings)
+                            if batch.surface_review_artifact is not None:
+                                artifact = batch.surface_review_artifact
+                                model_surface_review_artifacts.append(artifact)
+                                model_surface_review_contexts.setdefault(
+                                    artifact.request_id,
+                                    [],
+                                ).append(sealed_context)
+                            if completed_blind_review is None:
+                                scheduler.record_model_success(
+                                    scheduler_task,
+                                    output_value=batch.raw_response,
+                                    usage_records=usage.records,
+                                    specialist_accepted_outcome=specialist_accepted_outcome,
+                                    model_surface_review_requests=(
+                                        sealed_context.requested_model_surfaces
+                                    ),
+                                    model_surface_review_artifact=(batch.surface_review_artifact),
+                                )
+                            else:
+                                require_completed_specialist_outcome(
+                                    scheduler_task,
+                                    specialist_accepted_outcome,
+                                    surface_requests=tuple(sealed_context.requested_model_surfaces),
+                                    surface_artifact=batch.surface_review_artifact,
+                                )
+                            if batch.findings and time_to_first_candidate_seconds is None:
+                                time_to_first_candidate_seconds = (
+                                    time.monotonic() - run_started_monotonic
+                                )
+                        except BudgetExhaustedError as exc:
+                            scheduler.record_failure(
+                                scheduler_task,
+                                exc,
+                                usage_records=usage.records,
+                            )
+                            incomplete.append(f"{request_role}: {exc}")
+                            terminal_code = ExitCode.INCOMPLETE
+                            budget_halted = True
+                        except OpenRouterError as exc:
+                            scheduler.record_failure(
+                                scheduler_task,
+                                exc,
+                                usage_records=usage.records,
+                            )
+                            incomplete.append(f"{request_role}: {exc}")
+                            if terminal_code is ExitCode.SUCCESS:
+                                terminal_code = ExitCode.MODEL_FAILURE
+                if completed_blind_review is None:
+                    conclude_scheduler_pass()
+                else:
+                    conclude_scheduler_result(completed_blind_review)
+                check_accounted_budget()
+
+            blind_candidate_ids = {candidate.candidate_id for candidate in candidates}
+            if not scheduler_halted:
+                reduction_task = scheduler.host_task(
+                    pass_kind=SchedulerPassKind.FINDING_REDUCTION,
+                    scope=SchedulerScope.global_scope(),
+                    task_key="finding-reduction",
+                    role="host:finding_reducer",
+                )
+                completed_reduction = scheduler.completed_pass_result(
+                    SchedulerPassKind.FINDING_REDUCTION,
+                    (reduction_task,),
+                )
+                if completed_reduction is None:
+                    scheduler.prepare_pass(
+                        SchedulerPassKind.FINDING_REDUCTION,
+                        (reduction_task,),
+                    )
+                if pending_execution_candidates:
+                    candidates.extend(pending_execution_candidates)
+                    execution_candidates_integrated = True
+                candidates = _attach_formal_counterexamples(candidates, formal_runs)
+                formal_counterexamples_attached = True
+                execution_candidate_ids = {
+                    candidate.candidate_id for candidate in pending_execution_candidates
+                }
+                reduction_input = _finding_reduction_activation_input(
+                    candidates,
+                    blind_candidate_ids=blind_candidate_ids,
+                    execution_candidate_ids=execution_candidate_ids,
+                )
+                if completed_reduction is None:
+                    scheduler.activate_host(reduction_task, input_value=reduction_input)
+                validations = {
+                    candidate.candidate_id: _deterministic_candidate_validation(
+                        discovery.root,
+                        candidate,
+                        context_hashes=_candidate_origin_source_hashes(
+                            candidate_origin_packages,
+                            candidate,
                         ),
-                        surface_artifact=batch.surface_review_artifact,
                     )
-                    candidates.extend(batch.findings)
-                    if batch.surface_review_artifact is not None:
+                    for candidate in candidates
+                }
+                try:
+                    reduction_output = _build_deterministic_finding_reduction(
+                        candidates,
+                        validations,
+                        blind_candidate_ids=blind_candidate_ids,
+                        execution_candidate_ids=execution_candidate_ids,
+                    )
+                    _validate_deterministic_finding_reduction(
+                        reduction_output,
+                        expected_candidate_ids={candidate.candidate_id for candidate in candidates},
+                    )
+                    if completed_reduction is None:
+                        scheduler.record_host_success(
+                            reduction_task,
+                            output_value=reduction_output,
+                        )
+                    else:
+                        completed_reduction_result = scheduler.completed_result_for_task(
+                            completed_reduction,
+                            reduction_task,
+                        )
+                        if (
+                            completed_reduction_result.terminal_status
+                            is not SchedulerTerminalStatus.SUCCEEDED
+                            or scheduler.journal.load_output(reduction_task.task_id)
+                            != reduction_output
+                        ):
+                            raise ValueError(
+                                "resumed finding reduction differs from its exact retained output"
+                            )
+                except ValueError as exc:
+                    scheduler.record_failure(reduction_task, exc)
+                    incomplete.append(f"deterministic finding reduction failed: {exc}")
+                    if terminal_code is ExitCode.SUCCESS:
+                        terminal_code = ExitCode.INCOMPLETE
+                if completed_reduction is None:
+                    conclude_scheduler_pass()
+                else:
+                    conclude_scheduler_result(completed_reduction)
+
+            integration_host_task: SchedulerTaskPlan | None = None
+            integration_scheduler_result: SchedulerTaskResult | None = None
+            invariant_scheduler_task: SchedulerTaskPlan | None = None
+            invariant_scheduler_result: SchedulerTaskResult | None = None
+            boundary_review_tasks: dict[str, SchedulerTaskPlan] = {}
+            boundary_review_results: dict[str, SchedulerTaskResult] = {}
+            boundary_review_artifacts: dict[str, ModelSurfaceReviewArtifact] = {}
+            boundary_candidate_ids: dict[str, set[str]] = {}
+            overlap_review_tasks: dict[str, SchedulerTaskPlan] = {}
+            overlap_review_results: dict[str, SchedulerTaskResult] = {}
+            overlap_review_artifacts: dict[str, ModelSurfaceReviewArtifact] = {}
+            overlap_candidate_ids: dict[str, set[str]] = {}
+            boundary_setup_error: ValueError | None = None
+            try:
+                boundary_surface_requests = _cross_shard_boundary_surface_requests(
+                    solidity_shards,
+                    solidity_graphs,
+                    solidity_index,
+                )
+                overlap_surface_requests = _cross_shard_overlap_surface_requests(
+                    solidity_shards,
+                    solidity_graphs,
+                    solidity_index,
+                )
+            except ValueError as exc:
+                boundary_surface_requests = {}
+                overlap_surface_requests = {}
+                boundary_setup_error = exc
+            if not scheduler_halted:
+                integration_host_task = scheduler.host_task(
+                    pass_kind=SchedulerPassKind.CROSS_SHARD_INTEGRATION,
+                    scope=SchedulerScope.global_scope(),
+                    task_key="cross-shard-integration",
+                    role="host:cross_shard_integrator",
+                )
+                integration_tasks: list[SchedulerTaskPlan] = [integration_host_task]
+                if solidity_shards is not None:
+                    for boundary in solidity_shards.boundaries:
+                        request = boundary_surface_requests.get(boundary.boundary_id)
+                        if request is None:
+                            continue
+                        boundary_review_tasks[boundary.boundary_id] = scheduled_model_task(
+                            pass_kind=SchedulerPassKind.CROSS_SHARD_INTEGRATION,
+                            scope=SchedulerScope.shard_set(
+                                (boundary.source_shard_id, boundary.target_shard_id)
+                            ),
+                            task_key=f"boundary-review-{boundary.boundary_id}",
+                            request_role="business_logic",
+                            configured_role="business_logic",
+                            request_protocol=BusinessLogicAgent(
+                                scheduler_agent_config,
+                                self.client,
+                            ).request_protocol,
+                            candidate_ids={request.surface_id},
+                        )
+                    integration_tasks.extend(boundary_review_tasks.values())
+                    for overlap in solidity_shards.overlaps:
+                        request = overlap_surface_requests.get(overlap.overlap_id)
+                        if request is None:
+                            continue
+                        overlap_review_tasks[overlap.overlap_id] = scheduled_model_task(
+                            pass_kind=SchedulerPassKind.CROSS_SHARD_INTEGRATION,
+                            scope=SchedulerScope.shard_set(
+                                (overlap.primary_shard_id, overlap.consumer_shard_id)
+                            ),
+                            task_key=f"overlap-review-{overlap.overlap_id}",
+                            request_role="business_logic",
+                            configured_role="business_logic",
+                            request_protocol=BusinessLogicAgent(
+                                scheduler_agent_config,
+                                self.client,
+                            ).request_protocol,
+                            candidate_ids={request.surface_id},
+                        )
+                    integration_tasks.extend(overlap_review_tasks.values())
+                if (
+                    self.config.profile in {AuditProfile.DEEP, AuditProfile.MAXIMUM_ASSURANCE}
+                    and "invariant_review" in self.config.models.specialists
+                ):
+                    invariant_scheduler_task = scheduled_model_task(
+                        pass_kind=SchedulerPassKind.CROSS_SHARD_INTEGRATION,
+                        scope=SchedulerScope.global_scope(),
+                        task_key="invariant-review",
+                        request_role="specialist:invariant_review",
+                        configured_role="invariant_review",
+                        request_protocol=InvariantReviewAgent(
+                            scheduler_agent_config,
+                            self.client,
+                        ).request_protocol,
+                    )
+                    integration_tasks.append(invariant_scheduler_task)
+                completed_integration = scheduler.completed_pass_result(
+                    SchedulerPassKind.CROSS_SHARD_INTEGRATION,
+                    integration_tasks,
+                )
+                if completed_integration is None:
+                    scheduler.prepare_pass(
+                        SchedulerPassKind.CROSS_SHARD_INTEGRATION,
+                        integration_tasks,
+                    )
+
+            relationship_review_tasks = {
+                **boundary_review_tasks,
+                **overlap_review_tasks,
+            }
+            relationship_surface_requests = {
+                **boundary_surface_requests,
+                **overlap_surface_requests,
+            }
+            relationship_review_results: dict[str, SchedulerTaskResult] = {
+                **boundary_review_results,
+                **overlap_review_results,
+            }
+            relationship_review_artifacts: dict[str, ModelSurfaceReviewArtifact] = {
+                **boundary_review_artifacts,
+                **overlap_review_artifacts,
+            }
+            relationship_candidate_ids: dict[str, set[str]] = {
+                **boundary_candidate_ids,
+                **overlap_candidate_ids,
+            }
+            if not scheduler_halted and not budget_halted and relationship_review_tasks:
+                assert solidity_shards is not None
+                paths_by_shard = {
+                    shard.shard_id: shard.source_path for shard in solidity_shards.shards
+                }
+                contexts: dict[str, ContextPackage] = {}
+                relationship_scopes = {
+                    boundary.boundary_id: (
+                        boundary.source_shard_id,
+                        boundary.target_shard_id,
+                    )
+                    for boundary in solidity_shards.boundaries
+                } | {
+                    overlap.overlap_id: (
+                        overlap.primary_shard_id,
+                        overlap.consumer_shard_id,
+                    )
+                    for overlap in solidity_shards.overlaps
+                }
+                for relationship_id, shard_ids in sorted(relationship_scopes.items()):
+                    relationship_scheduler_task = relationship_review_tasks.get(relationship_id)
+                    if relationship_scheduler_task is None:
+                        continue
+                    allowed_paths = {
+                        paths_by_shard[shard_ids[0]],
+                        paths_by_shard[shard_ids[1]],
+                    }
+                    relationship_context = build_context(
+                        "business_logic",
+                        threat_model=threat_model,
+                        requested_model_surfaces=(relationship_surface_requests[relationship_id],),
+                        allowed_source_paths=allowed_paths,
+                    )
+                    if relationship_context is None:
+                        if completed_integration is None:
+                            relationship_review_results[relationship_id] = scheduler.record_failure(
+                                relationship_scheduler_task,
+                                ContextBudgetError("cross-shard boundary context was not produced"),
+                            )
+                        else:
+                            raise OpenRouterSchemaError(
+                                "resumed cross-shard boundary context was not reproduced"
+                            )
+                    else:
+                        packages.append(relationship_context)
+                        contexts[relationship_id] = relationship_context
+                for relationship_id, relationship_context in sorted(contexts.items()):
+                    scheduler_task = relationship_review_tasks[relationship_id]
+                    try:
+                        relationship_agent = BusinessLogicAgent(
+                            scheduler_agent_config,
+                            self.client,
+                        )
+                        batch = (
+                            completed_finding_review(
+                                completed_integration,
+                                scheduler_task,
+                                relationship_agent,
+                                relationship_context,
+                            )
+                            if completed_integration is not None
+                            else await bounded_call(
+                                relationship_agent.run(
+                                    relationship_context,
+                                    logical_request_id=scheduler_task.logical_request_id,
+                                )
+                            )
+                        )
+                        sealed_context, _completion_usage = _validated_finding_result(
+                            batch,
+                            expected_role="business_logic",
+                            usage_records=usage.records,
+                        )
+                        existing_candidates = {
+                            candidate.candidate_id: candidate for candidate in candidates
+                        }
+                        new_boundary_findings: list[CandidateFinding] = []
+                        for candidate_finding in batch.findings:
+                            existing = existing_candidates.get(candidate_finding.candidate_id)
+                            if existing is not None:
+                                if existing != candidate_finding:
+                                    raise OpenRouterSchemaError(
+                                        "cross-shard review reused a candidate ID for "
+                                        "different normalized evidence"
+                                    )
+                                continue
+                            new_boundary_findings.append(candidate_finding)
+                        _register_candidate_origin_packages(
+                            candidate_origin_packages,
+                            candidate_ids=[
+                                finding.candidate_id for finding in new_boundary_findings
+                            ],
+                            context=sealed_context,
+                        )
+                        candidates.extend(new_boundary_findings)
+                        relationship_candidate_ids[relationship_id] = {
+                            candidate.candidate_id for candidate in batch.findings
+                        }
                         artifact = batch.surface_review_artifact
+                        if artifact is None:
+                            raise OpenRouterSchemaError(
+                                "cross-shard boundary review omitted its surface artifact"
+                            )
+                        relationship_review_artifacts[relationship_id] = artifact
                         model_surface_review_artifacts.append(artifact)
                         model_surface_review_contexts.setdefault(
                             artifact.request_id,
                             [],
                         ).append(sealed_context)
-                    if batch.findings and time_to_first_candidate_seconds is None:
-                        time_to_first_candidate_seconds = time.monotonic() - run_started_monotonic
-                except BudgetExhaustedError as exc:
-                    incomplete.append(f"specialist:{role}: {exc}")
-                    terminal_code = ExitCode.INCOMPLETE
-                    budget_halted = True
-                except OpenRouterError as exc:
-                    incomplete.append(f"specialist:{role}: {exc}")
-                    if terminal_code is ExitCode.SUCCESS:
-                        terminal_code = ExitCode.MODEL_FAILURE
-            check_accounted_budget()
+                        relationship_review_results[relationship_id] = (
+                            scheduler.completed_result_for_task(
+                                completed_integration,
+                                scheduler_task,
+                            )
+                            if completed_integration is not None
+                            else scheduler.record_model_success(
+                                scheduler_task,
+                                output_value=batch.raw_response,
+                                usage_records=usage.records,
+                                model_surface_review_requests=(
+                                    sealed_context.requested_model_surfaces
+                                ),
+                                model_surface_review_artifact=batch.surface_review_artifact,
+                            )
+                        )
+                        if completed_integration is not None:
+                            require_completed_specialist_outcome(
+                                scheduler_task,
+                                None,
+                                surface_requests=tuple(sealed_context.requested_model_surfaces),
+                                surface_artifact=batch.surface_review_artifact,
+                            )
+                    except (BudgetExhaustedError, OpenRouterError) as exc:
+                        relationship_review_results[relationship_id] = scheduler.record_failure(
+                            scheduler_task,
+                            exc,
+                            usage_records=usage.records,
+                        )
+                        incomplete.append(
+                            f"cross-shard relationship review {relationship_id}: {exc}"
+                        )
+                        if isinstance(exc, BudgetExhaustedError):
+                            terminal_code = ExitCode.INCOMPLETE
+                            budget_halted = True
+                        elif terminal_code is ExitCode.SUCCESS:
+                            terminal_code = ExitCode.MODEL_FAILURE
+                check_accounted_budget()
+
+            boundary_review_results = {
+                relationship_id: relationship_review_results[relationship_id]
+                for relationship_id in boundary_review_tasks
+                if relationship_id in relationship_review_results
+            }
+            overlap_review_results = {
+                relationship_id: relationship_review_results[relationship_id]
+                for relationship_id in overlap_review_tasks
+                if relationship_id in relationship_review_results
+            }
+            boundary_review_artifacts = {
+                relationship_id: relationship_review_artifacts[relationship_id]
+                for relationship_id in boundary_review_tasks
+                if relationship_id in relationship_review_artifacts
+            }
+            overlap_review_artifacts = {
+                relationship_id: relationship_review_artifacts[relationship_id]
+                for relationship_id in overlap_review_tasks
+                if relationship_id in relationship_review_artifacts
+            }
+            boundary_candidate_ids = {
+                relationship_id: relationship_candidate_ids[relationship_id]
+                for relationship_id in boundary_review_tasks
+                if relationship_id in relationship_candidate_ids
+            }
+            overlap_candidate_ids = {
+                relationship_id: relationship_candidate_ids[relationship_id]
+                for relationship_id in overlap_review_tasks
+                if relationship_id in relationship_candidate_ids
+            }
 
             if (
-                not budget_halted
+                not scheduler_halted
+                and not budget_halted
                 and self.config.profile in {AuditProfile.DEEP, AuditProfile.MAXIMUM_ASSURANCE}
                 and "invariant_review" in self.config.models.specialists
             ):
+                assert invariant_scheduler_task is not None
                 invariant_context = build_specialist_context(
                     "invariant_review",
                     threat_model=threat_model,
@@ -2242,41 +4213,236 @@ class AuditPipeline:
                 if invariant_context is not None:
                     packages.append(invariant_context)
                     try:
-                        invariant_result = await bounded_call(
-                            InvariantReviewAgent(
-                                self.config,
-                                self.client,
-                            ).run_with_evidence(invariant_context)
-                        )
-                        invariant_review_batch = invariant_result.value
+                        if completed_integration is not None:
+                            completed_invariant_result = scheduler.completed_result_for_task(
+                                completed_integration,
+                                invariant_scheduler_task,
+                            )
+                            if (
+                                completed_invariant_result.terminal_status
+                                is not SchedulerTerminalStatus.SUCCEEDED
+                            ):
+                                raise OpenRouterSchemaError(
+                                    "completed invariant review lacks a successful result"
+                                )
+                            invariant_review_batch = scheduler.completed_output_for_task(
+                                completed_integration,
+                                invariant_scheduler_task,
+                                InvariantReviewBatch,
+                            )
+                            invariant_completion_usage = completed_usage_for_task(
+                                invariant_scheduler_task
+                            )
+                        else:
+                            invariant_result = await bounded_call(
+                                InvariantReviewAgent(
+                                    scheduler_agent_config,
+                                    self.client,
+                                ).run_with_evidence(
+                                    invariant_context,
+                                    logical_request_id=(
+                                        invariant_scheduler_task.logical_request_id
+                                    ),
+                                )
+                            )
+                            invariant_review_batch = invariant_result.value
+                            invariant_completion_usage = invariant_result.completion_usage
                         invariant_review = validate_invariant_review(
                             discovery.root,
                             invariant_review_batch,
                             index=solidity_index,
                             context_hashes=context_hash_index([invariant_context]),
                         )
-                        accept_specialist_outcome(
-                            completion_usage=invariant_result.completion_usage,
+                        invariant_accepted_outcome = accept_specialist_outcome(
+                            completion_usage=invariant_completion_usage,
                             validated_context=invariant_context,
                             specialist_role="invariant_review",
                             request_role="specialist:invariant_review",
                             outcome_kind=SpecialistAcceptedOutcomeKind.INVARIANT_REVIEW,
                         )
+                        if completed_integration is None:
+                            invariant_scheduler_result = scheduler.record_model_success(
+                                invariant_scheduler_task,
+                                output_value=invariant_result.raw_response,
+                                usage_records=usage.records,
+                                specialist_accepted_outcome=invariant_accepted_outcome,
+                            )
+                        else:
+                            require_completed_specialist_outcome(
+                                invariant_scheduler_task,
+                                invariant_accepted_outcome,
+                            )
+                            invariant_scheduler_result = completed_invariant_result
                     except BudgetExhaustedError as exc:
+                        invariant_scheduler_result = scheduler.record_failure(
+                            invariant_scheduler_task,
+                            exc,
+                            usage_records=usage.records,
+                        )
                         incomplete.append(f"specialist:invariant_review: {exc}")
                         terminal_code = ExitCode.INCOMPLETE
                         budget_halted = True
                     except OpenRouterError as exc:
+                        invariant_scheduler_result = scheduler.record_failure(
+                            invariant_scheduler_task,
+                            exc,
+                            usage_records=usage.records,
+                        )
                         incomplete.append(f"specialist:invariant_review: {exc}")
                         if terminal_code is ExitCode.SUCCESS:
                             terminal_code = ExitCode.MODEL_FAILURE
+                else:
+                    invariant_scheduler_result = scheduler.record_failure(
+                        invariant_scheduler_task,
+                        ContextBudgetError("invariant-review context was not produced"),
+                    )
                 check_accounted_budget()
 
-            if pending_execution_candidates:
+            if not scheduler_halted:
+                assert integration_host_task is not None
+                for boundary_id, scheduler_task in boundary_review_tasks.items():
+                    if boundary_id not in boundary_review_results:
+                        boundary_review_results[boundary_id] = scheduler.record_failure(
+                            scheduler_task,
+                            RuntimeError("scheduled cross-shard boundary review did not execute"),
+                        )
+                for overlap_id, scheduler_task in overlap_review_tasks.items():
+                    if overlap_id not in overlap_review_results:
+                        overlap_review_results[overlap_id] = scheduler.record_failure(
+                            scheduler_task,
+                            RuntimeError("scheduled cross-shard overlap review did not execute"),
+                        )
+                if invariant_scheduler_task is not None and invariant_scheduler_result is None:
+                    invariant_scheduler_result = scheduler.record_failure(
+                        invariant_scheduler_task,
+                        RuntimeError("scheduled invariant review did not execute"),
+                    )
+                upstream_integration_results = (
+                    tuple(boundary_review_results.values())
+                    + tuple(overlap_review_results.values())
+                    + (
+                        (invariant_scheduler_result,)
+                        if invariant_scheduler_result is not None
+                        else ()
+                    )
+                )
+                validations = {
+                    candidate.candidate_id: _deterministic_candidate_validation(
+                        discovery.root,
+                        candidate,
+                        context_hashes=_candidate_origin_source_hashes(
+                            candidate_origin_packages,
+                            candidate,
+                        ),
+                    )
+                    for candidate in candidates
+                }
+                expected_relationship_ids = (
+                    {boundary.boundary_id for boundary in solidity_shards.boundaries}
+                    | {overlap.overlap_id for overlap in solidity_shards.overlaps}
+                    if solidity_shards is not None
+                    else set()
+                )
+                semantic_relationships = _cross_shard_relationship_descriptors(solidity_shards)
+                integration_input = {
+                    "semantic_inventory_sha256": (
+                        solidity_shards.inventory_sha256 if solidity_shards is not None else None
+                    ),
+                    "candidate_ids": sorted(candidate.candidate_id for candidate in candidates),
+                    "candidate_payload_sha256s": _candidate_payload_sha256s(candidates),
+                    "high_critical_candidate_ids": sorted(
+                        candidate.candidate_id
+                        for candidate in candidates
+                        if candidate.severity in {Severity.HIGH, Severity.CRITICAL}
+                    ),
+                    "validation_candidate_ids": sorted(
+                        candidate_id
+                        for candidate_id, validation in validations.items()
+                        if validation.valid
+                    ),
+                    "shard_ids": list(scheduler.manifest.shard_ids),
+                    "semantic_relationship_ids": sorted(expected_relationship_ids),
+                    "semantic_relationships": semantic_relationships,
+                    "boundary_review_artifact_sha256s": sorted(
+                        artifact.artifact_sha256
+                        for artifact in (
+                            *boundary_review_artifacts.values(),
+                            *overlap_review_artifacts.values(),
+                        )
+                    ),
+                    "invariant_review_present": invariant_review is not None,
+                }
+                if completed_integration is None:
+                    scheduler.activate_host(
+                        integration_host_task,
+                        input_value=integration_input,
+                        upstream_results=upstream_integration_results,
+                    )
+                try:
+                    integration_output = _build_cross_shard_integration(
+                        solidity_shards,
+                        candidates,
+                        validations,
+                        shard_ids=scheduler.manifest.shard_ids,
+                        invariant_review=invariant_review,
+                        boundary_surface_requests=boundary_surface_requests,
+                        boundary_review_artifacts=boundary_review_artifacts,
+                        boundary_candidate_ids=boundary_candidate_ids,
+                        overlap_surface_requests=overlap_surface_requests,
+                        overlap_review_artifacts=overlap_review_artifacts,
+                        overlap_candidate_ids=overlap_candidate_ids,
+                    )
+                    _validate_cross_shard_integration(
+                        integration_output,
+                        expected_candidate_ids={candidate.candidate_id for candidate in candidates},
+                        expected_relationship_ids=expected_relationship_ids,
+                    )
+                    if completed_integration is None:
+                        integration_scheduler_result = scheduler.record_host_success(
+                            integration_host_task,
+                            output_value=integration_output,
+                        )
+                    else:
+                        integration_scheduler_result = scheduler.completed_result_for_task(
+                            completed_integration,
+                            integration_host_task,
+                        )
+                        if (
+                            integration_scheduler_result.terminal_status
+                            is not SchedulerTerminalStatus.SUCCEEDED
+                            or scheduler.journal.load_output(integration_host_task.task_id)
+                            != integration_output
+                        ):
+                            raise ValueError(
+                                "resumed cross-shard integration differs from its retained output"
+                            )
+                except ValueError as exc:
+                    integration_scheduler_result = scheduler.record_failure(
+                        integration_host_task,
+                        exc,
+                    )
+                    failure_detail = boundary_setup_error or exc
+                    incomplete.append(f"cross-shard integration failed: {failure_detail}")
+                    if terminal_code is ExitCode.SUCCESS:
+                        terminal_code = ExitCode.INCOMPLETE
+                if completed_integration is None:
+                    conclude_scheduler_pass()
+                else:
+                    conclude_scheduler_result(completed_integration)
+                if (
+                    integration_scheduler_result is not None
+                    and integration_scheduler_result.terminal_status.value == "SUCCEEDED"
+                ):
+                    pass_four_candidates = [
+                        CandidateFinding.model_validate(candidate.model_dump(mode="python"))
+                        for candidate in candidates
+                    ]
+
+            if pending_execution_candidates and not execution_candidates_integrated:
                 candidates.extend(pending_execution_candidates)
                 execution_candidates_integrated = True
             validations = {
-                candidate.candidate_id: validate_candidate(
+                candidate.candidate_id: _deterministic_candidate_validation(
                     discovery.root,
                     candidate,
                     context_hashes=_candidate_origin_source_hashes(
@@ -2289,65 +4455,9 @@ class AuditPipeline:
             preferred_paths = {
                 location.path for candidate in candidates for location in candidate.locations
             }
-            verifier_context = None
-            verifier_agent = VerifierAgent(self.config, self.client)
-            prepared_verification_input = verifier_agent.prepare_input(candidates)
-            if candidates and not budget_halted:
-                verifier_context = build_context(
-                    "verifier",
-                    workflow_byte_upper_bound_tokens=(
-                        prepared_verification_input.workflow_byte_upper_bound_tokens
-                    ),
-                    workflow_prompt=prepared_verification_input.workflow_prompt,
-                    threat_model=threat_model,
-                    preferred_paths=preferred_paths,
-                )
-                if verifier_context is not None:
-                    packages.append(verifier_context)
-            if candidates and verifier_context is not None:
-                try:
-                    self.logger.info(
-                        "Running independent verifier",
-                        extra={"run_id": run_id},
-                    )
-                    verifications = await bounded_call(
-                        verifier_agent.run(
-                            candidates,
-                            verifier_context,
-                            prepared_input=prepared_verification_input,
-                        )
-                    )
-                    omitted_verifications = [
-                        decision.candidate_id
-                        for decision in verifications.decisions
-                        if decision.rationale == "Verifier omitted this submitted candidate"
-                    ]
-                    if omitted_verifications:
-                        incomplete.append(
-                            f"verifier omitted {len(omitted_verifications)} submitted candidate(s)"
-                        )
-                        if terminal_code is ExitCode.SUCCESS:
-                            terminal_code = ExitCode.MODEL_FAILURE
-                except (BudgetExhaustedError, OpenRouterError) as exc:
-                    incomplete.append(f"verifier: {exc}")
-                    if isinstance(exc, BudgetExhaustedError):
-                        budget_halted = True
-                    terminal_code = (
-                        ExitCode.INCOMPLETE
-                        if isinstance(exc, BudgetExhaustedError)
-                        else ExitCode.MODEL_FAILURE
-                    )
-                    verifications = _insufficient_verifications(candidates)
-            elif candidates:
-                verifications = _insufficient_verifications(candidates)
-            check_accounted_budget()
-            decisions = {decision.candidate_id: decision for decision in verifications.decisions}
-            candidates = _attach_verifier_votes(
-                candidates,
-                decisions,
-                self.client,
-            )
-            candidates = _attach_formal_counterexamples(candidates, formal_runs)
+            if not formal_counterexamples_attached:
+                candidates = _attach_formal_counterexamples(candidates, formal_runs)
+                formal_counterexamples_attached = True
             cross_examination_candidates = [
                 candidate
                 for candidate in candidates
@@ -2356,19 +4466,153 @@ class AuditPipeline:
             pre_judgment_high_critical_ids = {
                 candidate.candidate_id for candidate in cross_examination_candidates
             }
-            cross_examination_required = bool(cross_examination_candidates) and (
-                "falsifier" in self.config.models.specialists
-                or self.config.profile is AuditProfile.MAXIMUM_ASSURANCE
+            cross_examination_required = bool(cross_examination_candidates)
+            reviewer_models: list[tuple[str, str]] = []
+            cross_scheduler_tasks: dict[tuple[str, int], SchedulerTaskPlan] = {}
+            completed_cross_examination: SchedulerPassResult | None = None
+            cross_candidate_workset = (
+                scheduler.candidate_workset(SchedulerPassKind.ADVERSARIAL_CROSS_EXAMINATION)
+                if not scheduler_halted
+                else None
             )
-            if cross_examination_required and not budget_halted:
+            if cross_candidate_workset is not None:
+                try:
+                    _require_candidate_workset_payloads(
+                        cross_candidate_workset,
+                        pass_four_candidates,
+                    )
+                except ValueError as exc:
+                    incomplete.append(str(exc))
+                    scheduler_halted = True
+                    budget_halted = True
+                    if terminal_code is ExitCode.SUCCESS:
+                        terminal_code = ExitCode.INCOMPLETE
+            if (
+                cross_candidate_workset is not None
+                and set(cross_candidate_workset.selected_candidate_ids)
+                != pre_judgment_high_critical_ids
+            ):
+                incomplete.append(
+                    "pass-five candidate inventory differs from the exact pass-four output"
+                )
+                scheduler_halted = True
+                budget_halted = True
+                if terminal_code is ExitCode.SUCCESS:
+                    terminal_code = ExitCode.INCOMPLETE
+            if (
+                not scheduler_halted
+                and cross_candidate_workset is not None
+                and not cross_candidate_workset.selected_candidate_ids
+            ):
+                absence = scheduler.conditional_absence(
+                    reason=SchedulerAbsenceReason.NO_HIGH_CRITICAL_CANDIDATES,
+                    candidate_workset=cross_candidate_workset,
+                )
+                empty_task = scheduler.empty_task(
+                    pass_kind=SchedulerPassKind.ADVERSARIAL_CROSS_EXAMINATION,
+                    scope=SchedulerScope.global_scope(),
+                    task_key="no-high-critical-candidates",
+                    role="host:conditional_absence",
+                    reason=absence.reason.value,
+                )
+                completed_cross_examination = scheduler.completed_pass_result(
+                    SchedulerPassKind.ADVERSARIAL_CROSS_EXAMINATION,
+                    (empty_task,),
+                    candidate_workset=cross_candidate_workset,
+                    conditional_absence=absence,
+                )
+                if completed_cross_examination is None:
+                    scheduler.prepare_pass(
+                        SchedulerPassKind.ADVERSARIAL_CROSS_EXAMINATION,
+                        (empty_task,),
+                        candidate_workset=cross_candidate_workset,
+                        conditional_absence=absence,
+                    )
+                assert integration_scheduler_result is not None
+                if completed_cross_examination is None:
+                    scheduler.activate_host(
+                        empty_task,
+                        input_value={"absence_sha256": absence.absence_sha256},
+                        upstream_results=(integration_scheduler_result,),
+                    )
+                    scheduler.record_empty(empty_task)
+                    conclude_scheduler_pass()
+                else:
+                    completed_empty = scheduler.completed_result_for_task(
+                        completed_cross_examination,
+                        empty_task,
+                    )
+                    if (
+                        completed_empty.terminal_status
+                        is not SchedulerTerminalStatus.EXPLICIT_EMPTY
+                    ):
+                        raise ValueError(
+                            "resumed cross-examination absence lacks explicit-empty evidence"
+                        )
+                    conclude_scheduler_result(completed_cross_examination)
+            elif not scheduler_halted:
+                assert cross_candidate_workset is not None
                 reviewer_models = select_candidate_falsifier_models(self.config)
                 if len(reviewer_models) != 2:
                     incomplete.append(
                         "candidate cross-examination requires two registered models "
                         "from distinct immutable root lineages"
                     )
+                    scheduler_halted = True
+                    budget_halted = True
                     if terminal_code is ExitCode.SUCCESS:
                         terminal_code = ExitCode.CONFIGURATION
+                else:
+                    for candidate in cross_examination_candidates:
+                        candidate_key = scheduler_canonical_sha256(
+                            {"candidate_id": candidate.candidate_id}
+                        )[:24]
+                        for reviewer_index, (model_id, root_lineage) in enumerate(
+                            reviewer_models,
+                            start=1,
+                        ):
+                            request_role = candidate_falsifier_role(
+                                candidate.candidate_id,
+                                reviewer_index,
+                            )
+                            cross_scheduler_tasks[(candidate.candidate_id, reviewer_index)] = (
+                                scheduled_model_task(
+                                    pass_kind=(SchedulerPassKind.ADVERSARIAL_CROSS_EXAMINATION),
+                                    scope=SchedulerScope.global_scope(),
+                                    task_key=f"cross-exam-{candidate_key}-{reviewer_index}",
+                                    request_role=request_role,
+                                    model_id=model_id,
+                                    root_lineage=root_lineage,
+                                    request_protocol=CandidateCrossExaminerAgent(
+                                        scheduler_agent_config,
+                                        self.client,
+                                        reviewer_index=reviewer_index,
+                                        model_id=model_id,
+                                        root_lineage=root_lineage,
+                                    ).request_protocol,
+                                    candidate_ids={candidate.candidate_id},
+                                )
+                            )
+                    completed_cross_examination = scheduler.completed_pass_result(
+                        SchedulerPassKind.ADVERSARIAL_CROSS_EXAMINATION,
+                        cross_scheduler_tasks.values(),
+                        candidate_workset=cross_candidate_workset,
+                    )
+                    if completed_cross_examination is None:
+                        scheduler.prepare_pass(
+                            SchedulerPassKind.ADVERSARIAL_CROSS_EXAMINATION,
+                            cross_scheduler_tasks.values(),
+                            candidate_workset=cross_candidate_workset,
+                        )
+
+            if (
+                cross_examination_required
+                and not budget_halted
+                and not scheduler_halted
+                and len(reviewer_models) == 2
+            ):
+                if len(reviewer_models) != 2:
+                    raise AssertionError("cross-examination portfolio changed after sealing")
                 else:
                     reviewer_model_ids = tuple(
                         model_id for model_id, _root_lineage in reviewer_models
@@ -2408,56 +4652,137 @@ class AuditPipeline:
                             candidate_context,
                         )
                     if len(prepared_cross_examinations) == len(cross_examination_candidates):
-                        cross_examiner_tasks = [
-                            (
-                                reviewer_index,
-                                candidate.candidate_id,
-                                root_lineage,
-                                asyncio.create_task(
-                                    bounded_call(
-                                        CandidateCrossExaminerAgent(
-                                            self.config,
-                                            self.client,
-                                            reviewer_index=reviewer_index,
-                                            model_id=model_id,
-                                            root_lineage=root_lineage,
-                                        ).run(
-                                            [candidate],
-                                            prepared_cross_examinations[candidate.candidate_id][1],
-                                            prepared_input=prepared_cross_examinations[
-                                                candidate.candidate_id
-                                            ][0],
+                        cross_examiner_tasks = []
+                        for reviewer_index, (model_id, root_lineage) in enumerate(
+                            reviewer_models,
+                            start=1,
+                        ):
+                            for candidate in cross_examination_candidates:
+                                scheduler_task = cross_scheduler_tasks[
+                                    (candidate.candidate_id, reviewer_index)
+                                ]
+                                prepared_input, restored_candidate_context = (
+                                    prepared_cross_examinations[candidate.candidate_id]
+                                )
+                                cross_agent = CandidateCrossExaminerAgent(
+                                    scheduler_agent_config,
+                                    self.client,
+                                    reviewer_index=reviewer_index,
+                                    model_id=model_id,
+                                    root_lineage=root_lineage,
+                                )
+                                if completed_cross_examination is not None:
+                                    completed_cross_result = scheduler.completed_result_for_task(
+                                        completed_cross_examination,
+                                        scheduler_task,
+                                    )
+                                    if (
+                                        completed_cross_result.terminal_status
+                                        is not SchedulerTerminalStatus.SUCCEEDED
+                                    ):
+                                        raise OpenRouterSchemaError(
+                                            "completed cross-examination lacks a successful result"
                                         )
-                                    ),
-                                    name=f"model:{
-                                        candidate_falsifier_role(
-                                            candidate.candidate_id,
-                                            reviewer_index,
+                                    raw_cross_response = scheduler.completed_output_for_task(
+                                        completed_cross_examination,
+                                        scheduler_task,
+                                        CandidateCrossExaminationResponse,
+                                    )
+                                    cross_usage = completed_usage_for_task(scheduler_task)
+                                    _bound_context_request_evidence(
+                                        cross_usage,
+                                        restored_candidate_context,
+                                    )
+                                    restored_decisions = normalize_cross_examination_response(
+                                        raw_cross_response,
+                                        candidate_ids=dict(prepared_input.candidate_ids),
+                                        request_id=cross_usage.request_id,
+                                        reviewer_index=reviewer_index,
+                                        requested_model=model_id,
+                                        returned_model=cross_usage.returned_model,
+                                        root_lineage=root_lineage,
+                                    )
+                                    pending_call = completed_value(
+                                        (restored_decisions, raw_cross_response)
+                                    )
+                                else:
+
+                                    async def run_cross_examination(
+                                        *,
+                                        agent: CandidateCrossExaminerAgent = cross_agent,
+                                        selected_candidate: CandidateFinding = candidate,
+                                        context: ContextPackage = restored_candidate_context,
+                                        workflow: PreparedCandidateCrossExaminationInput = (
+                                            prepared_input
+                                        ),
+                                        logical_request_id: str = (
+                                            scheduler_task.logical_request_id
+                                        ),
+                                    ) -> tuple[
+                                        list[CandidateCrossExaminationDecision],
+                                        CandidateCrossExaminationResponse,
+                                    ]:
+                                        observed = await bounded_call(
+                                            agent.run_with_evidence(
+                                                [selected_candidate],
+                                                context,
+                                                prepared_input=workflow,
+                                                logical_request_id=logical_request_id,
+                                            )
                                         )
-                                    }",
-                                ),
-                            )
-                            for reviewer_index, (model_id, root_lineage) in enumerate(
-                                reviewer_models,
-                                start=1,
-                            )
-                            for candidate in cross_examination_candidates
-                        ]
+                                        return observed.value, observed.raw_response
+
+                                    pending_call = run_cross_examination()
+                                cross_examiner_tasks.append(
+                                    (
+                                        reviewer_index,
+                                        candidate.candidate_id,
+                                        root_lineage,
+                                        scheduler_task,
+                                        asyncio.create_task(
+                                            pending_call,
+                                            name=f"model:{
+                                                candidate_falsifier_role(
+                                                    candidate.candidate_id,
+                                                    reviewer_index,
+                                                )
+                                            }",
+                                        ),
+                                    )
+                                )
                         for (
                             reviewer_index,
                             candidate_id,
                             _root_lineage,
+                            scheduler_task,
                             task,
                         ) in cross_examiner_tasks:
                             try:
-                                cross_examinations.extend(await task)
+                                decisions_for_candidate, raw_cross_response = await task
+                                cross_examinations.extend(decisions_for_candidate)
+                                if completed_cross_examination is None:
+                                    scheduler.record_model_success(
+                                        scheduler_task,
+                                        output_value=raw_cross_response,
+                                        usage_records=usage.records,
+                                    )
                             except BudgetExhaustedError as exc:
+                                scheduler.record_failure(
+                                    scheduler_task,
+                                    exc,
+                                    usage_records=usage.records,
+                                )
                                 incomplete.append(
                                     f"candidate_falsifier:{candidate_id}:{reviewer_index}: {exc}"
                                 )
                                 terminal_code = ExitCode.INCOMPLETE
                                 budget_halted = True
                             except OpenRouterError as exc:
+                                scheduler.record_failure(
+                                    scheduler_task,
+                                    exc,
+                                    usage_records=usage.records,
+                                )
                                 incomplete.append(
                                     f"candidate_falsifier:{candidate_id}:{reviewer_index}: {exc}"
                                 )
@@ -2489,7 +4814,588 @@ class AuditPipeline:
                             candidates,
                             cross_examinations,
                         )
+                    else:
+                        context_failure = ContextBudgetError(
+                            "cross-examination contexts were not frozen completely"
+                        )
+                        for scheduler_task in cross_scheduler_tasks.values():
+                            scheduler.record_failure(scheduler_task, context_failure)
                 check_accounted_budget()
+                if completed_cross_examination is None:
+                    conclude_scheduler_pass()
+                else:
+                    conclude_scheduler_result(completed_cross_examination)
+            # Cross-examination is intentionally completed before the independent
+            # verifier receives candidate material. This preserves the scheduler's
+            # blind adversarial pass boundary and keeps validation in pass six.
+            verifier_scheduler_task: SchedulerTaskPlan | None = None
+            candidate_falsifier_scheduler_tasks: dict[int, SchedulerTaskPlan] = {}
+            planner_scheduler_tasks: dict[str, SchedulerTaskPlan] = {}
+            falsifier_scheduler_task: SchedulerTaskPlan | None = None
+            reproduction_host_task: SchedulerTaskPlan | None = None
+            pass_six_results: list[SchedulerTaskResult] = []
+            completed_pass_six: SchedulerPassResult | None = None
+            validation_candidate_workset = (
+                scheduler.candidate_workset(
+                    SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION
+                )
+                if not scheduler_halted
+                else None
+            )
+            if validation_candidate_workset is not None:
+                try:
+                    _require_candidate_workset_payloads(
+                        validation_candidate_workset,
+                        pass_four_candidates,
+                    )
+                except ValueError as exc:
+                    incomplete.append(str(exc))
+                    scheduler_halted = True
+                    budget_halted = True
+                    if terminal_code is ExitCode.SUCCESS:
+                        terminal_code = ExitCode.INCOMPLETE
+            validation_candidate_ids = (
+                set(validation_candidate_workset.selected_candidate_ids)
+                if validation_candidate_workset is not None
+                else set()
+            )
+            validation_candidates = [
+                candidate
+                for candidate in candidates
+                if candidate.candidate_id in validation_candidate_ids
+            ]
+            if (
+                validation_candidate_workset is not None
+                and {
+                    candidate.candidate_id
+                    for candidate in candidates
+                    if validations.get(candidate.candidate_id) is not None
+                    and validations[candidate.candidate_id].valid
+                }
+                != validation_candidate_ids
+            ):
+                incomplete.append(
+                    "pass-six candidate inventory differs from the exact pass-four output"
+                )
+                scheduler_halted = True
+                budget_halted = True
+                if terminal_code is ExitCode.SUCCESS:
+                    terminal_code = ExitCode.INCOMPLETE
+            planned_reproduction_candidates = [
+                candidate
+                for candidate in validation_candidates
+                if candidate.severity in {Severity.MEDIUM, Severity.HIGH, Severity.CRITICAL}
+                and validations.get(candidate.candidate_id) is not None
+                and validations[candidate.candidate_id].valid
+                and _project_for_candidate(candidate, solidity_projects) is not None
+            ][: self.config.reproduction.max_candidates]
+            configured_planners_for_schedule = [
+                role
+                for role in ("test_generation", "exploit_reproduction_planner")
+                if role in self.config.models.specialists
+            ]
+            validation_falsifier_models = (
+                select_validation_falsifier_models(self.config)
+                if validation_candidates and not scheduler_halted
+                else []
+            )
+            if validation_candidates and len(validation_falsifier_models) != 2:
+                incomplete.append(
+                    "candidate validation requires two independent falsifier lineages "
+                    "that are also independent of verifier"
+                )
+                scheduler_halted = True
+                budget_halted = True
+                if terminal_code is ExitCode.SUCCESS:
+                    terminal_code = ExitCode.CONFIGURATION
+            if (
+                not scheduler_halted
+                and validation_candidate_workset is not None
+                and not validation_candidate_workset.selected_candidate_ids
+            ):
+                absence = scheduler.conditional_absence(
+                    reason=SchedulerAbsenceReason.NO_VALIDATION_CANDIDATES,
+                    candidate_workset=validation_candidate_workset,
+                )
+                empty_task = scheduler.empty_task(
+                    pass_kind=(SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION),
+                    scope=SchedulerScope.global_scope(),
+                    task_key="no-validation-candidates",
+                    role="host:conditional_absence",
+                    reason=absence.reason.value,
+                )
+                completed_pass_six = scheduler.completed_pass_result(
+                    SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+                    (empty_task,),
+                    candidate_workset=validation_candidate_workset,
+                    conditional_absence=absence,
+                )
+                if completed_pass_six is None:
+                    scheduler.prepare_pass(
+                        SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+                        (empty_task,),
+                        candidate_workset=validation_candidate_workset,
+                        conditional_absence=absence,
+                    )
+                assert integration_scheduler_result is not None
+                if completed_pass_six is None:
+                    scheduler.activate_host(
+                        empty_task,
+                        input_value={"absence_sha256": absence.absence_sha256},
+                        upstream_results=(integration_scheduler_result,),
+                    )
+                    scheduler.record_empty(empty_task)
+                    conclude_scheduler_pass()
+                else:
+                    completed_empty = scheduler.completed_result_for_task(
+                        completed_pass_six,
+                        empty_task,
+                    )
+                    if (
+                        completed_empty.terminal_status
+                        is not SchedulerTerminalStatus.EXPLICIT_EMPTY
+                    ):
+                        raise ValueError("resumed validation absence lacks explicit-empty evidence")
+                    conclude_scheduler_result(completed_pass_six)
+            elif not scheduler_halted:
+                assert validation_candidate_workset is not None
+                assert len(validation_falsifier_models) == 2
+                verifier_scheduler_task = scheduled_model_task(
+                    pass_kind=(SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION),
+                    scope=SchedulerScope.global_scope(),
+                    task_key="independent-verifier",
+                    request_role="verifier",
+                    configured_role="verifier",
+                    request_protocol=VerifierAgent(
+                        scheduler_agent_config,
+                        self.client,
+                    ).request_protocol,
+                    candidate_ids=validation_candidate_ids,
+                )
+                for falsifier_index, (
+                    validation_falsifier_model,
+                    validation_falsifier_lineage,
+                ) in enumerate(validation_falsifier_models, start=1):
+                    candidate_falsifier_scheduler_tasks[falsifier_index] = scheduled_model_task(
+                        pass_kind=(SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION),
+                        scope=SchedulerScope.global_scope(),
+                        task_key=f"candidate-falsifier-{falsifier_index}",
+                        request_role="candidate_falsifier",
+                        model_id=validation_falsifier_model,
+                        root_lineage=validation_falsifier_lineage,
+                        request_protocol=CandidateFalsifierAgent(
+                            scheduler_agent_config,
+                            self.client,
+                            model_id=validation_falsifier_model,
+                        ).request_protocol,
+                        candidate_ids=validation_candidate_ids,
+                    )
+                validation_tasks: list[SchedulerTaskPlan] = [
+                    verifier_scheduler_task,
+                    *candidate_falsifier_scheduler_tasks.values(),
+                ]
+                if (
+                    planned_reproduction_candidates
+                    and self.config.reproduction.enabled
+                    and fork_acknowledged
+                ):
+                    if configured_planners_for_schedule:
+                        for planner_role in configured_planners_for_schedule:
+                            request_role = f"specialist:{planner_role}:exploit_test"
+                            planner_scheduler_tasks[planner_role] = scheduled_model_task(
+                                pass_kind=(
+                                    SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION
+                                ),
+                                scope=SchedulerScope.global_scope(),
+                                task_key=f"planner-{planner_role}",
+                                request_role=request_role,
+                                configured_role=planner_role,
+                                request_protocol=ExploitTestPlannerAgent(
+                                    scheduler_agent_config,
+                                    self.client,
+                                    investigator_role="ensemble",
+                                    planner_role=planner_role,
+                                ).request_protocol,
+                                candidate_ids={
+                                    candidate.candidate_id
+                                    for candidate in planned_reproduction_candidates
+                                },
+                            )
+                    else:
+                        for candidate_role in sorted(
+                            {
+                                candidate.role or "source_audit"
+                                for candidate in planned_reproduction_candidates
+                            }
+                        ):
+                            configured_role = candidate_role.removeprefix("specialist:")
+                            planner_scheduler_tasks[candidate_role] = scheduled_model_task(
+                                pass_kind=(
+                                    SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION
+                                ),
+                                scope=SchedulerScope.global_scope(),
+                                task_key=(
+                                    "planner-"
+                                    + scheduler_canonical_sha256(
+                                        {"candidate_role": candidate_role}
+                                    )[:24]
+                                ),
+                                request_role=f"specialist:{configured_role}:exploit_test",
+                                configured_role=configured_role,
+                                request_protocol=ExploitTestPlannerAgent(
+                                    scheduler_agent_config,
+                                    self.client,
+                                    investigator_role=candidate_role,
+                                ).request_protocol,
+                                candidate_ids={
+                                    candidate.candidate_id
+                                    for candidate in planned_reproduction_candidates
+                                    if (candidate.role or "source_audit") == candidate_role
+                                },
+                            )
+                    validation_tasks.extend(planner_scheduler_tasks.values())
+                    falsifier_configured_role = (
+                        "falsifier" if "falsifier" in self.config.models.specialists else "verifier"
+                    )
+                    falsifier_scheduler_task = scheduled_model_task(
+                        pass_kind=(SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION),
+                        scope=SchedulerScope.global_scope(),
+                        task_key="independent-falsifier",
+                        request_role=(
+                            "specialist:falsifier"
+                            if falsifier_configured_role == "falsifier"
+                            else "falsifier"
+                        ),
+                        configured_role=falsifier_configured_role,
+                        request_protocol=FalsifierAgent(
+                            scheduler_agent_config,
+                            self.client,
+                        ).request_protocol,
+                        candidate_ids={
+                            candidate.candidate_id for candidate in planned_reproduction_candidates
+                        },
+                    )
+                    validation_tasks.append(falsifier_scheduler_task)
+                reproduction_host_task = scheduler.host_task(
+                    pass_kind=(SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION),
+                    scope=SchedulerScope.global_scope(),
+                    task_key="deterministic-reproduction",
+                    role="host:reproduction",
+                )
+                validation_tasks.append(reproduction_host_task)
+                completed_pass_six = scheduler.completed_pass_result(
+                    SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+                    validation_tasks,
+                    candidate_workset=validation_candidate_workset,
+                )
+                if completed_pass_six is None:
+                    scheduler.prepare_pass(
+                        SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+                        validation_tasks,
+                        candidate_workset=validation_candidate_workset,
+                    )
+            verifier_context = None
+            candidate_falsifier_contexts: dict[int, ContextPackage] = {}
+            verifier_agent = VerifierAgent(scheduler_agent_config, self.client)
+            prepared_verification_input = verifier_agent.prepare_input(validation_candidates)
+            candidate_falsifier_agents = {
+                falsifier_index: CandidateFalsifierAgent(
+                    scheduler_agent_config,
+                    self.client,
+                    model_id=model_id,
+                )
+                for falsifier_index, (model_id, _lineage) in enumerate(
+                    validation_falsifier_models,
+                    start=1,
+                )
+            }
+            prepared_candidate_falsification_input = verifier_agent.prepare_input(
+                validation_candidates
+            )
+            if validation_candidates and not budget_halted and not scheduler_halted:
+                assert verifier_scheduler_task is not None
+                assert len(candidate_falsifier_scheduler_tasks) == 2
+                assert len(candidate_falsifier_agents) == 2
+                verifier_context = build_context(
+                    "verifier",
+                    workflow_byte_upper_bound_tokens=(
+                        prepared_verification_input.workflow_byte_upper_bound_tokens
+                    ),
+                    workflow_prompt=prepared_verification_input.workflow_prompt,
+                    threat_model=threat_model,
+                    preferred_paths=preferred_paths,
+                )
+                if verifier_context is not None:
+                    packages.append(verifier_context)
+                for falsifier_index, candidate_falsifier_agent in sorted(
+                    candidate_falsifier_agents.items()
+                ):
+                    candidate_falsifier_context = build_context(
+                        "candidate_falsifier",
+                        preview_models=(candidate_falsifier_agent.model_id,),
+                        workflow_byte_upper_bound_tokens=(
+                            prepared_candidate_falsification_input.workflow_byte_upper_bound_tokens
+                        ),
+                        workflow_prompt=(prepared_candidate_falsification_input.workflow_prompt),
+                        threat_model=threat_model,
+                        preferred_paths=preferred_paths,
+                    )
+                    if candidate_falsifier_context is not None:
+                        packages.append(candidate_falsifier_context)
+                        candidate_falsifier_contexts[falsifier_index] = candidate_falsifier_context
+            if (
+                validation_candidates
+                and verifier_context is not None
+                and not budget_halted
+                and not scheduler_halted
+            ):
+                assert verifier_scheduler_task is not None
+                try:
+                    if completed_pass_six is not None:
+                        completed_verifier_result = scheduler.completed_result_for_task(
+                            completed_pass_six,
+                            verifier_scheduler_task,
+                        )
+                        if (
+                            completed_verifier_result.terminal_status
+                            is not SchedulerTerminalStatus.SUCCEEDED
+                        ):
+                            raise OpenRouterSchemaError(
+                                "completed verifier task lacks a successful result"
+                            )
+                        verifier_usage = completed_usage_for_task(verifier_scheduler_task)
+                        _bound_context_request_evidence(verifier_usage, verifier_context)
+                        verifier_result = verifier_agent.bind_completed_review(
+                            validation_candidates,
+                            verifier_context,
+                            raw_response=scheduler.completed_output_for_task(
+                                completed_pass_six,
+                                verifier_scheduler_task,
+                                VerificationBatch,
+                            ),
+                            completion_usage=verifier_usage,
+                            prepared_input=prepared_verification_input,
+                        )
+                    else:
+                        self.logger.info(
+                            "Running independent verifier",
+                            extra={"run_id": run_id},
+                        )
+                        verifier_result = await bounded_call(
+                            verifier_agent.run_with_evidence(
+                                validation_candidates,
+                                verifier_context,
+                                prepared_input=prepared_verification_input,
+                                logical_request_id=verifier_scheduler_task.logical_request_id,
+                            )
+                        )
+                    verifications = verifier_result.value
+                    omitted_verifications = [
+                        decision.candidate_id
+                        for decision in verifications.decisions
+                        if decision.rationale == "Verifier omitted this submitted candidate"
+                    ]
+                    _require_exact_model_decision_inventory(
+                        expected_ids=validation_candidate_ids,
+                        observed_ids=[
+                            decision.candidate_id
+                            for decision in verifications.decisions
+                            if decision.candidate_id not in omitted_verifications
+                        ],
+                        label="verifier",
+                    )
+                    pass_six_results.append(
+                        completed_verifier_result
+                        if completed_pass_six is not None
+                        else scheduler.record_model_success(
+                            verifier_scheduler_task,
+                            output_value=verifier_result.raw_response,
+                            usage_records=usage.records,
+                        )
+                    )
+                except (BudgetExhaustedError, OpenRouterError) as exc:
+                    pass_six_results.append(
+                        scheduler.record_failure(
+                            verifier_scheduler_task,
+                            exc,
+                            usage_records=usage.records,
+                        )
+                    )
+                    incomplete.append(f"verifier: {exc}")
+                    if isinstance(exc, BudgetExhaustedError):
+                        budget_halted = True
+                    terminal_code = (
+                        ExitCode.INCOMPLETE
+                        if isinstance(exc, BudgetExhaustedError)
+                        else ExitCode.MODEL_FAILURE
+                    )
+                    verifications = _insufficient_verifications(validation_candidates)
+            elif validation_candidates:
+                verifications = _insufficient_verifications(validation_candidates)
+                if verifier_scheduler_task is not None and not scheduler_halted:
+                    pass_six_results.append(
+                        scheduler.record_failure(
+                            verifier_scheduler_task,
+                            ContextBudgetError("verifier context was not produced"),
+                        )
+                    )
+            candidate_falsifier_vote_batches: list[tuple[VerificationBatch, UsageRecord, int]] = []
+            for falsifier_index, candidate_falsifier_agent in sorted(
+                candidate_falsifier_agents.items()
+            ):
+                scheduler_task = candidate_falsifier_scheduler_tasks[falsifier_index]
+                candidate_falsifier_context = candidate_falsifier_contexts.get(falsifier_index)
+                if (
+                    validation_candidates
+                    and candidate_falsifier_context is not None
+                    and not budget_halted
+                    and not scheduler_halted
+                ):
+                    try:
+                        if completed_pass_six is not None:
+                            completed_candidate_falsifier_result = (
+                                scheduler.completed_result_for_task(
+                                    completed_pass_six,
+                                    scheduler_task,
+                                )
+                            )
+                            if (
+                                completed_candidate_falsifier_result.terminal_status
+                                is not SchedulerTerminalStatus.SUCCEEDED
+                            ):
+                                raise OpenRouterSchemaError(
+                                    "completed candidate falsifier lacks a successful result"
+                                )
+                            candidate_falsifier_usage = completed_usage_for_task(scheduler_task)
+                            _bound_context_request_evidence(
+                                candidate_falsifier_usage,
+                                candidate_falsifier_context,
+                            )
+                            candidate_falsifier_result = (
+                                candidate_falsifier_agent.bind_completed_review(
+                                    validation_candidates,
+                                    candidate_falsifier_context,
+                                    raw_response=scheduler.completed_output_for_task(
+                                        completed_pass_six,
+                                        scheduler_task,
+                                        VerificationBatch,
+                                    ),
+                                    completion_usage=candidate_falsifier_usage,
+                                    prepared_input=prepared_candidate_falsification_input,
+                                )
+                            )
+                        else:
+                            candidate_falsifier_result = await bounded_call(
+                                candidate_falsifier_agent.run_with_evidence(
+                                    validation_candidates,
+                                    candidate_falsifier_context,
+                                    prepared_input=prepared_candidate_falsification_input,
+                                    logical_request_id=scheduler_task.logical_request_id,
+                                )
+                            )
+                        candidate_falsifier_verifications = candidate_falsifier_result.value
+                        omitted_falsifications = [
+                            decision.candidate_id
+                            for decision in candidate_falsifier_verifications.decisions
+                            if decision.rationale == "Verifier omitted this submitted candidate"
+                        ]
+                        _require_exact_model_decision_inventory(
+                            expected_ids=validation_candidate_ids,
+                            observed_ids=[
+                                decision.candidate_id
+                                for decision in candidate_falsifier_verifications.decisions
+                                if decision.candidate_id not in omitted_falsifications
+                            ],
+                            label=f"candidate falsifier {falsifier_index}",
+                        )
+                        pass_six_results.append(
+                            completed_candidate_falsifier_result
+                            if completed_pass_six is not None
+                            else scheduler.record_model_success(
+                                scheduler_task,
+                                output_value=candidate_falsifier_result.raw_response,
+                                usage_records=usage.records,
+                            )
+                        )
+                        candidate_falsifier_vote_batches.append(
+                            (
+                                candidate_falsifier_verifications,
+                                candidate_falsifier_result.completion_usage,
+                                falsifier_index,
+                            )
+                        )
+                    except (BudgetExhaustedError, OpenRouterError) as exc:
+                        pass_six_results.append(
+                            scheduler.record_failure(
+                                scheduler_task,
+                                exc,
+                                usage_records=usage.records,
+                            )
+                        )
+                        incomplete.append(f"candidate_falsifier:{falsifier_index}: {exc}")
+                        if isinstance(exc, BudgetExhaustedError):
+                            budget_halted = True
+                        if terminal_code is ExitCode.SUCCESS:
+                            terminal_code = (
+                                ExitCode.INCOMPLETE
+                                if isinstance(exc, BudgetExhaustedError)
+                                else ExitCode.MODEL_FAILURE
+                            )
+                elif validation_candidates and not scheduler_halted:
+                    pass_six_results.append(
+                        scheduler.record_failure(
+                            scheduler_task,
+                            ContextBudgetError("candidate falsifier context was not produced"),
+                        )
+                    )
+            check_accounted_budget()
+            decisions = {decision.candidate_id: decision for decision in verifications.decisions}
+            candidates = _attach_verifier_votes(
+                candidates,
+                decisions,
+                self.client,
+            )
+            for (
+                falsifier_batch,
+                falsifier_usage,
+                falsifier_index,
+            ) in candidate_falsifier_vote_batches:
+                candidates = _attach_verifier_votes(
+                    candidates,
+                    {decision.candidate_id: decision for decision in falsifier_batch.decisions},
+                    self.client,
+                    role=f"candidate_falsifier:{falsifier_index}",
+                    usage_record=falsifier_usage,
+                )
+            verifier_task_result = next(
+                (
+                    result
+                    for result in pass_six_results
+                    if verifier_scheduler_task is not None
+                    and result.task_id == verifier_scheduler_task.task_id
+                ),
+                None,
+            )
+            candidate_falsifier_task_results = tuple(
+                result
+                for task in candidate_falsifier_scheduler_tasks.values()
+                for result in pass_six_results
+                if result.task_id == task.task_id
+            )
+            validation_upstream_results = tuple(
+                result
+                for result in (
+                    verifier_task_result,
+                    *candidate_falsifier_task_results,
+                )
+                if result is not None
+            )
+            if len(validation_upstream_results) == 3:
+                for planner_task in planner_scheduler_tasks.values():
+                    scheduler.set_upstream_results(
+                        planner_task,
+                        validation_upstream_results,
+                    )
             eligible_for_reproduction = _eligible_reproduction_candidates(
                 candidates,
                 decisions,
@@ -2498,27 +5404,34 @@ class AuditPipeline:
             )
             if (
                 solidity_projects
-                and eligible_for_reproduction
+                and planned_reproduction_candidates
                 and verifier_context is not None
                 and fork_acknowledged
                 and self.config.reproduction.enabled
                 and not budget_halted
+                and not scheduler_halted
             ):
-                planner_tasks: list[tuple[str, str | None, ContextPackage, asyncio.Task[Any]]] = []
-                configured_planners = [
-                    role
-                    for role in ("test_generation", "exploit_reproduction_planner")
-                    if role in self.config.models.specialists
+                planner_tasks: list[
+                    tuple[
+                        str,
+                        str | None,
+                        SchedulerTaskPlan,
+                        ContextPackage,
+                        asyncio.Task[Any],
+                    ]
                 ]
-                if configured_planners:
-                    for planner_role in configured_planners:
+                planner_tasks = []
+                if configured_planners_for_schedule:
+                    for planner_role in configured_planners_for_schedule:
                         planner = ExploitTestPlannerAgent(
-                            self.config,
+                            scheduler_agent_config,
                             self.client,
                             investigator_role="ensemble",
                             planner_role=planner_role,
                         )
-                        prepared_planner_input = planner.prepare_input(eligible_for_reproduction)
+                        prepared_planner_input = planner.prepare_input(
+                            planned_reproduction_candidates
+                        )
                         planner_context = build_specialist_context(
                             planner_role,
                             workflow_byte_upper_bound_tokens=(
@@ -2535,13 +5448,17 @@ class AuditPipeline:
                             (
                                 planner_role,
                                 planner_role,
+                                planner_scheduler_tasks[planner_role],
                                 planner_context,
                                 asyncio.create_task(
                                     bounded_call(
                                         planner.run_with_evidence(
-                                            eligible_for_reproduction,
+                                            planned_reproduction_candidates,
                                             planner_context,
                                             prepared_input=prepared_planner_input,
+                                            logical_request_id=planner_scheduler_tasks[
+                                                planner_role
+                                            ].logical_request_id,
                                         )
                                     ),
                                     name=f"model:{planner_role}:exploit_test",
@@ -2550,7 +5467,7 @@ class AuditPipeline:
                         )
                 else:
                     by_role: dict[str, list[CandidateFinding]] = {}
-                    for candidate in eligible_for_reproduction:
+                    for candidate in planned_reproduction_candidates:
                         # Execution-origin candidates deliberately have no originating
                         # model role. A later planner may analyze them under the
                         # ordinary source-audit role without acquiring authority over
@@ -2559,7 +5476,7 @@ class AuditPipeline:
                         by_role.setdefault(planning_role, []).append(candidate)
                     for role, role_candidates in sorted(by_role.items()):
                         planner = ExploitTestPlannerAgent(
-                            self.config,
+                            scheduler_agent_config,
                             self.client,
                             investigator_role=role,
                         )
@@ -2592,6 +5509,7 @@ class AuditPipeline:
                             (
                                 role,
                                 None,
+                                planner_scheduler_tasks[role],
                                 planner_context,
                                 asyncio.create_task(
                                     bounded_call(
@@ -2599,13 +5517,34 @@ class AuditPipeline:
                                             role_candidates,
                                             planner_context,
                                             prepared_input=prepared_planner_input,
+                                            logical_request_id=planner_scheduler_tasks[
+                                                role
+                                            ].logical_request_id,
                                         )
                                     ),
                                     name=f"model:{role}:exploit_test",
                                 ),
                             )
                         )
-                for planner_label, specialist_role, planner_context, task in planner_tasks:
+                scheduled_planner_ids = {task.task_id for task in planner_scheduler_tasks.values()}
+                built_planner_ids = {item[2].task_id for item in planner_tasks}
+                for missing_task in planner_scheduler_tasks.values():
+                    if missing_task.task_id not in built_planner_ids:
+                        pass_six_results.append(
+                            scheduler.record_failure(
+                                missing_task,
+                                ContextBudgetError("planner context was not produced"),
+                            )
+                        )
+                if built_planner_ids - scheduled_planner_ids:
+                    raise ValueError("planner execution escaped its sealed scheduler plan")
+                for (
+                    planner_label,
+                    specialist_role,
+                    scheduler_task,
+                    planner_context,
+                    task,
+                ) in planner_tasks:
                     try:
                         planner_result = await task
                         if planner_result is None:
@@ -2613,8 +5552,9 @@ class AuditPipeline:
                                 "scheduled planner returned no completion evidence"
                             )
                         batch = planner_result.value
+                        planner_accepted_outcome: SpecialistAcceptedOutcome | None = None
                         if specialist_role is not None:
-                            accept_specialist_outcome(
+                            planner_accepted_outcome = accept_specialist_outcome(
                                 completion_usage=planner_result.completion_usage,
                                 validated_context=planner_context,
                                 specialist_role=specialist_role,
@@ -2622,23 +5562,62 @@ class AuditPipeline:
                                 outcome_kind=(SpecialistAcceptedOutcomeKind.TEST_GENERATION),
                             )
                         generated_tests.extend(batch.tests)
+                        pass_six_results.append(
+                            scheduler.record_model_success(
+                                scheduler_task,
+                                output_value=planner_result.raw_response,
+                                usage_records=usage.records,
+                                specialist_accepted_outcome=planner_accepted_outcome,
+                            )
+                        )
                     except BudgetExhaustedError as exc:
+                        pass_six_results.append(
+                            scheduler.record_failure(
+                                scheduler_task,
+                                exc,
+                                usage_records=usage.records,
+                            )
+                        )
                         incomplete.append(f"{planner_label}:exploit_test: {exc}")
                         terminal_code = ExitCode.INCOMPLETE
                         budget_halted = True
                     except OpenRouterError as exc:
+                        pass_six_results.append(
+                            scheduler.record_failure(
+                                scheduler_task,
+                                exc,
+                                usage_records=usage.records,
+                            )
+                        )
                         incomplete.append(f"{planner_label}:exploit_test: {exc}")
                         if terminal_code is ExitCode.SUCCESS:
                             terminal_code = ExitCode.MODEL_FAILURE
                 generated_tests = _unique_generated_tests(generated_tests)[
                     : self.config.reproduction.max_total_tests
                 ]
-                candidates_by_id = {
-                    candidate.candidate_id: candidate for candidate in eligible_for_reproduction
+                planned_candidates_by_id = {
+                    candidate.candidate_id: candidate
+                    for candidate in planned_reproduction_candidates
+                }
+                eligible_candidate_ids = {
+                    candidate.candidate_id for candidate in eligible_for_reproduction
                 }
                 for specification in generated_tests:
-                    selected_candidate = candidates_by_id.get(specification.candidate_id)
+                    selected_candidate = planned_candidates_by_id.get(specification.candidate_id)
                     if selected_candidate is None:
+                        raise ValueError(
+                            "generated reproduction specification escaped its sealed "
+                            "candidate inventory"
+                        )
+                    if specification.candidate_id not in eligible_candidate_ids:
+                        reproductions.append(
+                            _not_attempted_reproduction(
+                                selected_candidate,
+                                specification,
+                                "candidate did not remain eligible after independent "
+                                "verification; deterministic reproduction was not executed",
+                            )
+                        )
                         continue
                     project = _project_for_candidate(selected_candidate, solidity_projects)
                     if project is None:
@@ -2685,10 +5664,14 @@ class AuditPipeline:
                             expected_generated_test_sha256=expected_test_sha256,
                         )
                     )
-                if generated_tests and reproductions and not budget_halted:
-                    falsifier_agent = FalsifierAgent(self.config, self.client)
+                if falsifier_scheduler_task is not None and not budget_halted:
+                    scheduler.set_upstream_results(
+                        falsifier_scheduler_task,
+                        pass_six_results,
+                    )
+                    falsifier_agent = FalsifierAgent(scheduler_agent_config, self.client)
                     prepared_falsifier_input = falsifier_agent.prepare_input(
-                        candidates=eligible_for_reproduction,
+                        candidates=planned_reproduction_candidates,
                         tests=generated_tests,
                         results=reproductions,
                     )
@@ -2718,15 +5701,19 @@ class AuditPipeline:
                         try:
                             falsifier_result = await bounded_call(
                                 falsifier_agent.run_with_evidence(
-                                    candidates=eligible_for_reproduction,
+                                    candidates=planned_reproduction_candidates,
                                     tests=generated_tests,
                                     results=reproductions,
                                     context=falsifier_context,
                                     prepared_input=prepared_falsifier_input,
+                                    logical_request_id=(
+                                        falsifier_scheduler_task.logical_request_id
+                                    ),
                                 )
                             )
+                            falsifier_accepted_outcome: SpecialistAcceptedOutcome | None = None
                             if "falsifier" in self.config.models.specialists:
-                                accept_specialist_outcome(
+                                falsifier_accepted_outcome = accept_specialist_outcome(
                                     completion_usage=falsifier_result.completion_usage,
                                     validated_context=falsifier_context,
                                     specialist_role="falsifier",
@@ -2734,14 +5721,43 @@ class AuditPipeline:
                                     outcome_kind=(SpecialistAcceptedOutcomeKind.FALSIFICATION),
                                 )
                             falsifications = falsifier_result.value
+                            pass_six_results.append(
+                                scheduler.record_model_success(
+                                    falsifier_scheduler_task,
+                                    output_value=falsifier_result.raw_response,
+                                    usage_records=usage.records,
+                                    specialist_accepted_outcome=falsifier_accepted_outcome,
+                                )
+                            )
                         except BudgetExhaustedError as exc:
+                            pass_six_results.append(
+                                scheduler.record_failure(
+                                    falsifier_scheduler_task,
+                                    exc,
+                                    usage_records=usage.records,
+                                )
+                            )
                             incomplete.append(f"falsifier: {exc}")
                             terminal_code = ExitCode.INCOMPLETE
                             budget_halted = True
                         except OpenRouterError as exc:
+                            pass_six_results.append(
+                                scheduler.record_failure(
+                                    falsifier_scheduler_task,
+                                    exc,
+                                    usage_records=usage.records,
+                                )
+                            )
                             incomplete.append(f"falsifier: {exc}")
                             if terminal_code is ExitCode.SUCCESS:
                                 terminal_code = ExitCode.MODEL_FAILURE
+                    elif falsifier_context is None:
+                        pass_six_results.append(
+                            scheduler.record_failure(
+                                falsifier_scheduler_task,
+                                ContextBudgetError("falsifier context was not produced"),
+                            )
+                        )
                 candidates, decisions = _apply_reproduction_results(
                     candidates,
                     decisions,
@@ -2763,18 +5779,154 @@ class AuditPipeline:
                     )
                     if terminal_code is ExitCode.SUCCESS:
                         terminal_code = ExitCode.INCOMPLETE
+            if not scheduler_halted and reproduction_host_task is not None:
+                planned_model_tasks = [
+                    task
+                    for task in (
+                        verifier_scheduler_task,
+                        *candidate_falsifier_scheduler_tasks.values(),
+                        *planner_scheduler_tasks.values(),
+                        falsifier_scheduler_task,
+                    )
+                    if task is not None
+                ]
+                terminal_task_ids = {result.task_id for result in pass_six_results}
+                for planned_task in planned_model_tasks:
+                    if planned_task.task_id in terminal_task_ids:
+                        continue
+                    pass_six_results.append(
+                        scheduler.record_failure(
+                            planned_task,
+                            RuntimeError(
+                                "scheduled validation, planning, or falsification did not execute"
+                            ),
+                        )
+                    )
+                if not any(
+                    result.task_id == reproduction_host_task.task_id for result in pass_six_results
+                ):
+                    scheduled_reproduction_candidate_ids = list(
+                        _scheduled_reproduction_candidate_ids(
+                            planned_task
+                            for planned_task in (
+                                *planner_scheduler_tasks.values(),
+                                falsifier_scheduler_task,
+                            )
+                            if planned_task is not None
+                        )
+                    )
+                    reproduction_summary = {
+                        "eligible_candidate_ids": scheduled_reproduction_candidate_ids,
+                        "generated_test_ids": sorted(
+                            f"{test.candidate_id}:{test.name}" for test in generated_tests
+                        ),
+                        "reproduction_result_ids": sorted(
+                            f"{result.candidate_id}:{result.test_name}" for result in reproductions
+                        ),
+                        "falsification_decisions": len(falsifications.decisions),
+                    }
+                    if completed_pass_six is None:
+                        scheduler.activate_host(
+                            reproduction_host_task,
+                            input_value=reproduction_summary,
+                            upstream_results=pass_six_results,
+                        )
+                        try:
+                            reproduction_result = scheduler.record_host_success(
+                                reproduction_host_task,
+                                output_value=reproduction_summary,
+                            )
+                        except ValueError as exc:
+                            reproduction_result = scheduler.record_failure(
+                                reproduction_host_task,
+                                exc,
+                            )
+                            incomplete.append(
+                                "deterministic reproduction host output did not cover its "
+                                "exact scheduled candidate inventory"
+                            )
+                            if terminal_code is ExitCode.SUCCESS:
+                                terminal_code = ExitCode.INCOMPLETE
+                    else:
+                        reproduction_result = scheduler.completed_result_for_task(
+                            completed_pass_six,
+                            reproduction_host_task,
+                        )
+                        if (
+                            reproduction_result.terminal_status
+                            is not SchedulerTerminalStatus.SUCCEEDED
+                            or scheduler.journal.load_output(reproduction_host_task.task_id)
+                            != reproduction_summary
+                        ):
+                            raise ValueError(
+                                "resumed reproduction summary differs from retained output"
+                            )
+                    pass_six_results.append(reproduction_result)
+                if completed_pass_six is None:
+                    conclude_scheduler_pass()
+                else:
+                    conclude_scheduler_result(completed_pass_six)
             groups = group_candidates(candidates)
             candidate_groups_count = len(groups)
             group_payloads = [
                 _group_payload(group, decisions, validations, scanner_findings) for group in groups
             ]
+            judgment_host_task: SchedulerTaskPlan | None = None
+            judge_scheduler_task: SchedulerTaskPlan | None = None
+            report_quality_scheduler_task: SchedulerTaskPlan | None = None
+            pass_seven_results: list[SchedulerTaskResult] = []
+            completed_pass_seven: SchedulerPassResult | None = None
+            if not scheduler_halted:
+                judgment_host_task = scheduler.host_task(
+                    pass_kind=SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT,
+                    scope=SchedulerScope.global_scope(),
+                    task_key="host-evidence-cap",
+                    role="host:evidence_cap_judgment",
+                )
+                judgment_tasks: list[SchedulerTaskPlan] = [judgment_host_task]
+                if groups:
+                    judge_scheduler_task = scheduled_model_task(
+                        pass_kind=SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT,
+                        scope=SchedulerScope.global_scope(),
+                        task_key="final-judge",
+                        request_role="judge",
+                        configured_role="judge",
+                        request_protocol=JudgeAgent(
+                            scheduler_agent_config,
+                            self.client,
+                        ).request_protocol,
+                        candidate_ids={group.group_id for group in groups},
+                    )
+                    judgment_tasks.append(judge_scheduler_task)
+                if "report_quality" in self.config.models.specialists:
+                    report_quality_scheduler_task = scheduled_model_task(
+                        pass_kind=SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT,
+                        scope=SchedulerScope.global_scope(),
+                        task_key="report-quality",
+                        request_role="specialist:report_quality",
+                        configured_role="report_quality",
+                        request_protocol=ReportQualityAgent(
+                            scheduler_agent_config,
+                            self.client,
+                        ).request_protocol,
+                    )
+                    judgment_tasks.append(report_quality_scheduler_task)
+                completed_pass_seven = scheduler.completed_pass_result(
+                    SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT,
+                    judgment_tasks,
+                )
+                if completed_pass_seven is None:
+                    scheduler.prepare_pass(
+                        SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT,
+                        judgment_tasks,
+                    )
             judge_context = None
-            judge_agent = JudgeAgent(self.config, self.client)
+            judge_agent = JudgeAgent(scheduler_agent_config, self.client)
             prepared_judgment_input = judge_agent.prepare_input(
                 groups=group_payloads,
                 threat_model=threat_model,
             )
-            if groups and not budget_halted:
+            if groups and not budget_halted and not scheduler_halted:
                 judge_context = build_context(
                     "judge",
                     workflow_byte_upper_bound_tokens=(
@@ -2788,32 +5940,65 @@ class AuditPipeline:
                     packages.append(judge_context)
             judge_decisions: dict[str, JudgeDecision] = {}
             if groups and judge_context is not None:
+                assert judge_scheduler_task is not None
                 try:
-                    self.logger.info("Running final judge", extra={"run_id": run_id})
-                    judgment = await bounded_call(
-                        judge_agent.run(
-                            groups=group_payloads,
-                            context=judge_context,
-                            threat_model=threat_model,
-                            prepared_input=prepared_judgment_input,
+                    if completed_pass_seven is not None:
+                        completed_judge_result = scheduler.completed_result_for_task(
+                            completed_pass_seven,
+                            judge_scheduler_task,
                         )
-                    )
+                        if (
+                            completed_judge_result.terminal_status
+                            is not SchedulerTerminalStatus.SUCCEEDED
+                        ):
+                            raise OpenRouterSchemaError(
+                                "completed judge task lacks a successful result"
+                            )
+                        judge_usage = completed_usage_for_task(judge_scheduler_task)
+                        _bound_context_request_evidence(judge_usage, judge_context)
+                        judgment = scheduler.completed_output_for_task(
+                            completed_pass_seven,
+                            judge_scheduler_task,
+                            JudgeDecisionBatch,
+                        )
+                    else:
+                        self.logger.info("Running final judge", extra={"run_id": run_id})
+                        judgment = await bounded_call(
+                            judge_agent.run(
+                                groups=group_payloads,
+                                context=judge_context,
+                                threat_model=threat_model,
+                                prepared_input=prepared_judgment_input,
+                                logical_request_id=judge_scheduler_task.logical_request_id,
+                            )
+                        )
                     returned_group_ids = [decision.group_id for decision in judgment.decisions]
                     expected_group_ids = {group.group_id for group in groups}
-                    missing_group_ids = expected_group_ids - set(returned_group_ids)
-                    duplicate_group_count = len(returned_group_ids) - len(set(returned_group_ids))
-                    if missing_group_ids or duplicate_group_count:
-                        incomplete.append(
-                            "judge returned an incomplete group decision set "
-                            f"(missing={len(missing_group_ids)}, "
-                            f"duplicates={duplicate_group_count})"
-                        )
-                        if terminal_code is ExitCode.SUCCESS:
-                            terminal_code = ExitCode.MODEL_FAILURE
+                    _require_exact_model_decision_inventory(
+                        expected_ids=expected_group_ids,
+                        observed_ids=returned_group_ids,
+                        label="judge",
+                    )
                     judge_decisions = {
                         decision.group_id: decision for decision in judgment.decisions
                     }
+                    pass_seven_results.append(
+                        completed_judge_result
+                        if completed_pass_seven is not None
+                        else scheduler.record_model_success(
+                            judge_scheduler_task,
+                            output_value=judgment,
+                            usage_records=usage.records,
+                        )
+                    )
                 except (BudgetExhaustedError, OpenRouterError) as exc:
+                    pass_seven_results.append(
+                        scheduler.record_failure(
+                            judge_scheduler_task,
+                            exc,
+                            usage_records=usage.records,
+                        )
+                    )
                     incomplete.append(f"judge: {exc}")
                     if isinstance(exc, BudgetExhaustedError):
                         budget_halted = True
@@ -2822,11 +6007,18 @@ class AuditPipeline:
                         if isinstance(exc, BudgetExhaustedError)
                         else ExitCode.MODEL_FAILURE
                     )
+            elif groups and judge_scheduler_task is not None and not scheduler_halted:
+                pass_seven_results.append(
+                    scheduler.record_failure(
+                        judge_scheduler_task,
+                        ContextBudgetError("judge context was not produced"),
+                    )
+                )
             check_accounted_budget()
             # Revalidate after the last model call so stale line references cannot
             # survive a repository change during a long audit.
             validations = {
-                candidate.candidate_id: validate_candidate(
+                candidate.candidate_id: _deterministic_candidate_validation(
                     discovery.root,
                     candidate,
                     context_hashes=_candidate_origin_source_hashes(
@@ -2887,11 +6079,55 @@ class AuditPipeline:
                 ):
                     final_findings.append(finding)
 
+            if not scheduler_halted:
+                assert judgment_host_task is not None
+                judgment_summary = {
+                    "group_ids": sorted(group.group_id for group in groups),
+                    "judge_decision_ids": sorted(judge_decisions),
+                    "final_finding_ids": sorted(finding.id for finding in final_findings),
+                    "rejected_finding_ids": sorted(finding.id for finding in rejected_findings),
+                }
+                if completed_pass_seven is None:
+                    scheduler.activate_host(
+                        judgment_host_task,
+                        input_value=judgment_summary,
+                        upstream_results=pass_seven_results,
+                    )
+                    if any(
+                        result.terminal_status is not SchedulerTerminalStatus.SUCCEEDED
+                        for result in pass_seven_results
+                    ):
+                        judgment_result = scheduler.record_failure(
+                            judgment_host_task,
+                            RuntimeError(
+                                "evidence-cap judgment depends on an incomplete scheduled result"
+                            ),
+                        )
+                    else:
+                        judgment_result = scheduler.record_host_success(
+                            judgment_host_task,
+                            output_value=judgment_summary,
+                        )
+                else:
+                    judgment_result = scheduler.completed_result_for_task(
+                        completed_pass_seven,
+                        judgment_host_task,
+                    )
+                    if (
+                        judgment_result.terminal_status is not SchedulerTerminalStatus.SUCCEEDED
+                        or scheduler.journal.load_output(judgment_host_task.task_id)
+                        != judgment_summary
+                    ):
+                        raise ValueError(
+                            "resumed evidence-cap judgment differs from retained output"
+                        )
+                pass_seven_results.append(judgment_result)
+
         if pending_execution_candidates and not execution_candidates_integrated:
             candidates.extend(pending_execution_candidates)
             validations.update(
                 {
-                    candidate.candidate_id: validate_candidate(
+                    candidate.candidate_id: _deterministic_candidate_validation(
                         discovery.root,
                         candidate,
                         context_hashes=_candidate_origin_source_hashes(
@@ -3043,10 +6279,22 @@ class AuditPipeline:
             and self.client is not None
             and "report_quality" in self.config.models.specialists
             and not budget_halted
+            and not scheduler_halted
         ):
+            assert report_quality_scheduler_task is not None
+            evidence_cap_result = next(
+                result
+                for result in pass_seven_results
+                if judgment_host_task is not None and result.task_id == judgment_host_task.task_id
+            )
+            if completed_pass_seven is None:
+                scheduler.set_upstream_results(
+                    report_quality_scheduler_task,
+                    (evidence_cap_result,),
+                )
             try:
                 report_quality_agent = ReportQualityAgent(
-                    self.config,
+                    scheduler_agent_config,
                     self.client,
                 )
                 prepared_report_quality_input = report_quality_agent.prepare_input(
@@ -3071,44 +6319,196 @@ class AuditPipeline:
                 )
                 if report_quality_context is not None:
                     packages.append(report_quality_context)
-                    report_quality_result = await report_quality_agent.run_with_evidence(
-                        findings=final_findings,
-                        rejected_count=len(rejected_findings),
-                        coverage=solidity_coverage,
-                        quality_gates=quality_gates,
-                        incomplete_reasons=incomplete,
-                        context=report_quality_context,
-                        prepared_input=prepared_report_quality_input,
-                    )
-                    accept_specialist_outcome(
-                        completion_usage=report_quality_result.completion_usage,
+                    if completed_pass_seven is not None:
+                        completed_report_quality_result = scheduler.completed_result_for_task(
+                            completed_pass_seven,
+                            report_quality_scheduler_task,
+                        )
+                        if (
+                            completed_report_quality_result.terminal_status
+                            is not SchedulerTerminalStatus.SUCCEEDED
+                        ):
+                            raise OpenRouterSchemaError(
+                                "completed report-quality task lacks a successful result"
+                            )
+                        report_quality_usage = completed_usage_for_task(
+                            report_quality_scheduler_task
+                        )
+                        _bound_context_request_evidence(
+                            report_quality_usage,
+                            report_quality_context,
+                        )
+                        report_quality_review = scheduler.completed_output_for_task(
+                            completed_pass_seven,
+                            report_quality_scheduler_task,
+                            ReportQualityReview,
+                        )
+                    else:
+                        report_quality_result = await report_quality_agent.run_with_evidence(
+                            findings=final_findings,
+                            rejected_count=len(rejected_findings),
+                            coverage=solidity_coverage,
+                            quality_gates=quality_gates,
+                            incomplete_reasons=incomplete,
+                            context=report_quality_context,
+                            prepared_input=prepared_report_quality_input,
+                            logical_request_id=(report_quality_scheduler_task.logical_request_id),
+                        )
+                        report_quality_usage = report_quality_result.completion_usage
+                        report_quality_review = report_quality_result.value
+                    report_quality_accepted_outcome = accept_specialist_outcome(
+                        completion_usage=report_quality_usage,
                         validated_context=report_quality_context,
                         specialist_role="report_quality",
                         request_role="specialist:report_quality",
                         outcome_kind=SpecialistAcceptedOutcomeKind.REPORT_QUALITY,
                     )
-                    report_quality_review = report_quality_result.value
+                    if completed_pass_seven is None:
+                        pass_seven_results.append(
+                            scheduler.record_model_success(
+                                report_quality_scheduler_task,
+                                output_value=report_quality_result.raw_response,
+                                usage_records=usage.records,
+                                specialist_accepted_outcome=(report_quality_accepted_outcome),
+                            )
+                        )
+                    else:
+                        require_completed_specialist_outcome(
+                            report_quality_scheduler_task,
+                            report_quality_accepted_outcome,
+                        )
+                        pass_seven_results.append(completed_report_quality_result)
             except ContextBudgetError as exc:
+                pass_seven_results.append(
+                    scheduler.record_failure(
+                        report_quality_scheduler_task,
+                        exc,
+                        usage_records=usage.records,
+                    )
+                )
                 incomplete.append(f"report_quality: {exc}")
                 budget_halted = True
                 if terminal_code is ExitCode.SUCCESS:
                     terminal_code = ExitCode.INCOMPLETE
             except BudgetExhaustedError as exc:
+                pass_seven_results.append(
+                    scheduler.record_failure(
+                        report_quality_scheduler_task,
+                        exc,
+                        usage_records=usage.records,
+                    )
+                )
                 incomplete.append(f"report_quality: {exc}")
                 budget_halted = True
                 terminal_code = ExitCode.INCOMPLETE
             except OpenRouterError as exc:
+                pass_seven_results.append(
+                    scheduler.record_failure(
+                        report_quality_scheduler_task,
+                        exc,
+                        usage_records=usage.records,
+                    )
+                )
                 incomplete.append(f"report_quality: {exc}")
                 if terminal_code is ExitCode.SUCCESS:
                     terminal_code = ExitCode.MODEL_FAILURE
+        if (
+            self._active_scheduler is not None
+            and not scheduler_halted
+            and judgment_host_task is not None
+        ):
+            if report_quality_scheduler_task is not None and not any(
+                result.task_id == report_quality_scheduler_task.task_id
+                for result in pass_seven_results
+            ):
+                pass_seven_results.append(
+                    scheduler.record_failure(
+                        report_quality_scheduler_task,
+                        RuntimeError("scheduled report-quality review did not execute"),
+                    )
+                )
+            if completed_pass_seven is None:
+                conclude_scheduler_pass()
+            else:
+                conclude_scheduler_result(completed_pass_seven)
+        if self._active_scheduler is not None:
+            scheduler_artifact = scheduler.artifact()
+            scheduler_report_binding = scheduler.report_binding().model_dump(mode="json")
+            if resume_scheduler_journal is not None:
+                retained_reference = SchedulerRetainedJournalReference.from_artifact(
+                    owner_run_id=resume_scheduler_journal.parent.parent.name,
+                    consumer_run_id=run_id,
+                    artifact=scheduler_artifact,
+                )
+                write_json(
+                    run_dir / "private" / SCHEDULER_RETAINED_JOURNAL_REFERENCE_FILENAME,
+                    retained_reference,
+                )
+        retained_scheduler_usage_ids = (
+            {
+                record.request_id
+                for record in self._active_scheduler.journal.restorable_usage_records
+            }
+            if self._active_scheduler is not None
+            else set()
+        )
+        observed_usage_ids = {record.request_id for record in usage.records}
+        successful_scheduler_review_ids = (
+            {
+                record.request_id
+                for record in self._active_scheduler.journal.restorable_review_usage_records
+            }
+            if self._active_scheduler is not None
+            else observed_usage_ids
+        )
+        structurally_successful_scheduler_review_ids = (
+            {
+                record.request_id
+                for record in (
+                    self._active_scheduler.journal.structurally_successful_review_usage_records
+                )
+            }
+            if self._active_scheduler is not None
+            else observed_usage_ids
+        )
+        scheduler_usage_accounting_consistent = self._active_scheduler is None or (
+            observed_usage_ids == retained_scheduler_usage_ids
+            and successful_scheduler_review_ids <= retained_scheduler_usage_ids
+            and structurally_successful_scheduler_review_ids <= retained_scheduler_usage_ids
+        )
+        if not scheduler_usage_accounting_consistent:
+            incomplete.append(
+                "provider usage differs from exact retained scheduler accounting evidence"
+            )
+            terminal_code = ExitCode.MODEL_FAILURE
         provider_session = _provider_session_provenance(
             client=self.client,
             pipeline_owned=self._owns_client,
             usage_records=usage.records,
         )
         model_credit_usage = (
-            usage.records
-            if provider_session is None or provider_session.usage_evidence_consistent
+            [
+                record
+                for record in usage.records
+                if record.request_id in successful_scheduler_review_ids
+                and is_creditable_usage_record(record, require_real=True)
+            ]
+            if (
+                scheduler_usage_accounting_consistent
+                and (provider_session is None or provider_session.usage_evidence_consistent)
+            )
+            else []
+        )
+        model_review_accounting_usage = (
+            [
+                record
+                for record in usage.records
+                if record.request_id in structurally_successful_scheduler_review_ids
+            ]
+            if (
+                scheduler_usage_accounting_consistent
+                and (provider_session is None or provider_session.usage_evidence_consistent)
+            )
             else []
         )
         if provider_session is not None and not provider_session.usage_evidence_consistent:
@@ -3120,7 +6520,7 @@ class AuditPipeline:
             terminal_code = ExitCode.MODEL_FAILURE
         model_review_coverage = build_model_review_coverage(
             self.config,
-            usage_records=model_credit_usage,
+            usage_records=model_review_accounting_usage,
             review_artifacts=model_surface_review_artifacts,
             review_contexts_by_request=model_surface_review_contexts,
             index=solidity_index,
@@ -3139,12 +6539,23 @@ class AuditPipeline:
             )
         specialist_execution_records = build_specialist_execution_records(
             self.config,
-            usage_records=model_credit_usage,
+            usage_records=(list(usage.records) if scheduler_usage_accounting_consistent else []),
             contexts=packages,
             accepted_outcomes=tuple(
                 outcome
                 for outcome in accepted_specialist_outcomes
-                if outcome.request_id in {record.request_id for record in model_credit_usage}
+                if scheduler_usage_accounting_consistent
+                and outcome.request_id in structurally_successful_scheduler_review_ids
+            ),
+            structurally_successful_request_ids=(
+                {
+                    record.request_id
+                    for record in usage.records
+                    if record.request_id in structurally_successful_scheduler_review_ids
+                    and canonical_specialist_role(record.role) is not None
+                }
+                if scheduler_usage_accounting_consistent
+                else set()
             ),
         )
         write_json(
@@ -3294,6 +6705,7 @@ class AuditPipeline:
             "prior-audit-comparison.json",
             "maximum_assurance_traceability.json",
             "run-evidence-manifest.json",
+            *({"scheduler-state.json"} if scheduler_artifact is not None else set()),
         }
         traceability = build_traceability_matrix(repository_map.git_commit)
         maximum_assurance = assurance_contract.evaluate(
@@ -3336,6 +6748,7 @@ class AuditPipeline:
                 auxiliary_roles_completed=(
                     successful_specialist_roles & set(SPECIALIST_AUXILIARY_ROLES)
                 ),
+                specialist_execution_records=specialist_execution_records,
                 verifier_completed=("verifier" in successful_usage_roles or not candidates),
                 falsifier_completed=(
                     "falsifier" in successful_specialist_roles or not high_critical
@@ -3362,6 +6775,11 @@ class AuditPipeline:
                 scanner_only=scanner_only,
                 artifacts=artifact_names,
                 traceability=traceability,
+                scheduler_artifact=scheduler_artifact,
+                expected_scheduler_bindings=scheduler_bindings,
+                expected_scheduler_analysis_input_sha256=(scheduler_analysis_input_sha256),
+                expected_scheduler_cost_ledger_baseline=scheduler_cost_ledger_baseline,
+                expected_scheduler_shard_inventory=scheduler_inventory,
             )
         )
         if maximum_assurance.downgraded:
@@ -3554,6 +6972,7 @@ class AuditPipeline:
             report_quality_review=report_quality_review,
             context_manifest=context_manifest,
             ci_metadata=ci_metadata,
+            scheduler_report_binding=scheduler_report_binding,
         )
         ci_state: CIRunState | None = None
         if ci_mode:
@@ -3633,6 +7052,10 @@ class AuditPipeline:
             run_options=run_options,
             context_manifest=context_manifest,
             ci_state=ci_state,
+            scheduler_artifact=scheduler_artifact,
+            scheduler_runtime_journal=(
+                self._active_scheduler.journal if self._active_scheduler is not None else None
+            ),
         )
         self.logger.removeHandler(log_handler)
         log_handler.close()
@@ -4071,6 +7494,7 @@ class AuditPipeline:
         report_quality_review: ReportQualityReview | None,
         context_manifest: ContextManifest,
         ci_metadata: dict[str, Any] | None,
+        scheduler_report_binding: dict[str, Any] | None,
     ) -> AuditReport:
         fork_probing_enabled = self.config.smart_contracts.enabled and (
             self.config.smart_contracts.allow_fork_probing or allow_fork_probing
@@ -4110,7 +7534,7 @@ class AuditPipeline:
             },
             scanner_runs=scanner_runs,
             repository_suite_differential=repository_suite_differential,
-            usage=usage.records,
+            usage=sorted(usage.records, key=lambda record: record.request_id),
             budget_usd=self.config.execution.budget_usd,
             accounted_cost_usd=usage.accounted_cost_usd,
             findings=findings,
@@ -4186,6 +7610,11 @@ class AuditPipeline:
                     for request in context_manifest.requests
                     if isinstance(request, ContextPreflightRequestEvidence)
                 ],
+                **(
+                    {"scheduler": scheduler_report_binding}
+                    if scheduler_report_binding is not None
+                    else {}
+                ),
                 "raw_material_stored": (
                     self.config.privacy.store_raw_prompts or self.config.privacy.store_raw_responses
                 ),
@@ -4360,7 +7789,11 @@ class AuditPipeline:
         run_options: AuditRunOptions,
         context_manifest: ContextManifest,
         ci_state: CIRunState | None,
+        scheduler_artifact: SchedulerArtifact | None,
+        scheduler_runtime_journal: SchedulerJournal | None,
     ) -> None:
+        if scheduler_artifact is not None:
+            write_json(run_dir / "scheduler-state.json", scheduler_artifact)
         write_context_manifest(
             run_dir / "context-manifest.json",
             context_manifest,
@@ -4566,12 +7999,17 @@ class AuditPipeline:
             production_qualification=(
                 self.production_qualification if not run_options.scanner_only else None
             ),
+            scheduler_runtime_journal=scheduler_runtime_journal,
         )
         write_run_evidence_manifest(
             run_dir / "run-evidence-manifest.json",
             manifest,
         )
-        validate_manifest_artifacts(manifest, run_dir)
+        validate_manifest_artifacts(
+            manifest,
+            run_dir,
+            scheduler_runtime_journal=scheduler_runtime_journal,
+        )
         latest = _safe_output_directory(self.output, "latest")
         for filename in (
             "metadata.json",
@@ -4605,6 +8043,7 @@ class AuditPipeline:
             "model-review-coverage.json",
             "context-manifest.json",
             "model-qualification-runtime.json",
+            "scheduler-state.json",
             "scope-assessment.json",
             "prior-audit-comparison.json",
             "reproduction-results.json",
@@ -4635,6 +8074,212 @@ def _safe_output_directory(base: Path, name: str) -> Path:
     except (OSError, ValueError) as exc:
         raise ValueError("output directory escaped its configured root") from exc
     return candidate
+
+
+def _resolve_scheduler_resume_journal(output: Path, run_dir: Path) -> Path:
+    """Resolve one explicitly named prior run without consulting mutable aliases."""
+
+    if run_dir.name == "latest":
+        raise ValueError("scheduler resume refuses the mutable latest alias")
+    runs_root = output / "runs"
+    if (
+        not runs_root.exists()
+        or runs_root.is_symlink()
+        or runs_root.is_junction()
+        or not runs_root.is_dir()
+    ):
+        raise ValueError("scheduler resume requires an existing private runs directory")
+    candidate = Path(os.path.abspath(run_dir))
+    current = Path(candidate.anchor)
+    for part in candidate.parts[1:]:
+        current /= part
+        if current.is_symlink() or current.is_junction():
+            raise ValueError(f"scheduler resume refuses symlinked path component: {current}")
+    try:
+        resolved_runs = runs_root.resolve(strict=True)
+        resolved_run = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("scheduler resume run directory is unavailable") from exc
+    if resolved_run.parent != resolved_runs or not resolved_run.is_dir():
+        raise ValueError("scheduler resume requires one exact direct child of the runs directory")
+    private_dir = resolved_run / "private"
+    if private_dir.is_symlink() or private_dir.is_junction() or not private_dir.is_dir():
+        raise ValueError("scheduler resume private directory is unavailable or unsafe")
+    journal = private_dir / "scheduler-journal"
+    if journal.is_symlink() or journal.is_junction() or not journal.is_dir():
+        raise ValueError("scheduler resume journal is unavailable or unsafe")
+    try:
+        resolved_private = private_dir.resolve(strict=True)
+        resolved_journal = journal.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("scheduler resume journal is unavailable or unsafe") from exc
+    if (
+        resolved_private != resolved_run / "private"
+        or resolved_journal != resolved_private / "scheduler-journal"
+        or resolved_journal.parent != resolved_private
+    ):
+        raise ValueError("scheduler resume journal escaped its exact prior run")
+    return resolved_journal
+
+
+def _scheduler_privacy_file_bindings(
+    custody: SchedulerPrivacyEvidenceCustody,
+) -> tuple[ManifestFileBinding, ManifestFileBinding]:
+    return (
+        ManifestFileBinding(
+            path=custody.source_provenance_path,
+            sha256=custody.source_provenance_artifact_sha256,
+            size=custody.source_provenance_size,
+        ),
+        ManifestFileBinding(
+            path=custody.effective_policy_path,
+            sha256=custody.effective_policy_artifact_sha256,
+            size=custody.effective_policy_size,
+        ),
+    )
+
+
+def _build_scheduler_privacy_evidence_custody(
+    run_dir: Path,
+    *,
+    provenance: PrivacySourceProvenanceEvidence,
+    policy: EffectivePrivacyPolicyEvidence,
+) -> SchedulerPrivacyEvidenceCustody:
+    """Seal exact emitted privacy bytes before any scheduler model task exists."""
+
+    if (
+        provenance.source_sha256 != policy.source_sha256
+        or policy.source_provenance_sha256 != provenance.evidence_sha256
+    ):
+        raise OpenRouterPrivacyError("scheduler privacy evidence source binding is inconsistent")
+    provenance_bytes = stable_json(provenance).encode("utf-8")
+    policy_bytes = stable_json(policy).encode("utf-8")
+    custody = SchedulerPrivacyEvidenceCustody.build(
+        source_sha256=provenance.source_sha256,
+        source_provenance_size=len(provenance_bytes),
+        source_provenance_artifact_sha256=hashlib.sha256(provenance_bytes).hexdigest(),
+        source_provenance_evidence_sha256=provenance.evidence_sha256,
+        effective_policy_size=len(policy_bytes),
+        effective_policy_artifact_sha256=hashlib.sha256(policy_bytes).hexdigest(),
+        effective_policy_evidence_sha256=policy.evidence_sha256,
+        policy_source_provenance_sha256=policy.source_provenance_sha256,
+    )
+    names = (custody.source_provenance_path, custody.effective_policy_path)
+    with open_pre_manifest_json_artifacts(
+        run_dir,
+        names,
+        expected_bindings=_scheduler_privacy_file_bindings(custody),
+        max_bytes=1_048_576,
+    ) as payloads:
+        observed_provenance = PrivacySourceProvenanceEvidence.model_validate(
+            payloads[custody.source_provenance_path]
+        )
+        observed_policy = EffectivePrivacyPolicyEvidence.model_validate(
+            payloads[custody.effective_policy_path]
+        )
+        if observed_provenance != provenance or observed_policy != policy:
+            raise OpenRouterPrivacyError(
+                "scheduler privacy custody differs from emitted typed evidence"
+            )
+    return custody
+
+
+def _load_exact_resume_privacy_evidence(
+    scheduler_journal: Path,
+    *,
+    current_provenance: PrivacySourceProvenanceEvidence,
+    current_policy: EffectivePrivacyPolicyEvidence,
+) -> tuple[PrivacySourceProvenanceEvidence, EffectivePrivacyPolicyEvidence]:
+    """Reuse the exact prior privacy binding after semantic revalidation.
+
+    Usage records are bound to the original provenance hash.  A later observation
+    time must not invalidate an otherwise exact resume, while any security- or
+    routing-relevant privacy drift must fail before provider execution.
+    """
+
+    prior_run = scheduler_journal.parent.parent
+    try:
+        with open_scheduler_privacy_evidence_custody(scheduler_journal) as custody:
+            names = (custody.source_provenance_path, custody.effective_policy_path)
+            bindings = _scheduler_privacy_file_bindings(custody)
+            final_manifest_path = prior_run / "run-evidence-manifest.json"
+            try:
+                final_manifest_path.lstat()
+            except FileNotFoundError:
+                final_manifest_present = False
+            except OSError as exc:
+                raise ValueError("scheduler resume final-manifest state is unavailable") from exc
+            else:
+                final_manifest_present = True
+            artifacts = (
+                open_manifest_bound_json_artifacts(
+                    prior_run,
+                    names,
+                    required_bindings=bindings,
+                    max_bytes=1_048_576,
+                )
+                if final_manifest_present
+                else open_pre_manifest_json_artifacts(
+                    prior_run,
+                    names,
+                    expected_bindings=bindings,
+                    max_bytes=1_048_576,
+                )
+            )
+            with artifacts as payloads:
+                retained_provenance = PrivacySourceProvenanceEvidence.model_validate(
+                    payloads[custody.source_provenance_path]
+                )
+                retained_policy = EffectivePrivacyPolicyEvidence.model_validate(
+                    payloads[custody.effective_policy_path]
+                )
+                if (
+                    retained_provenance.source_sha256 != custody.source_sha256
+                    or retained_policy.source_sha256 != custody.source_sha256
+                    or retained_provenance.evidence_sha256
+                    != custody.source_provenance_evidence_sha256
+                    or retained_policy.evidence_sha256 != custody.effective_policy_evidence_sha256
+                    or retained_policy.source_provenance_sha256
+                    != custody.policy_source_provenance_sha256
+                ):
+                    raise OpenRouterPrivacyError(
+                        "scheduler resume privacy evidence differs from pre-dispatch custody"
+                    )
+                retained_provenance_projection = retained_provenance.model_dump(
+                    mode="json",
+                    exclude={"observed_at", "evidence_sha256"},
+                )
+                current_provenance_projection = current_provenance.model_dump(
+                    mode="json",
+                    exclude={"observed_at", "evidence_sha256"},
+                )
+                retained_policy_projection = retained_policy.model_dump(
+                    mode="json",
+                    exclude={"source_provenance_sha256", "evidence_sha256"},
+                )
+                current_policy_projection = current_policy.model_dump(
+                    mode="json",
+                    exclude={"source_provenance_sha256", "evidence_sha256"},
+                )
+                if (
+                    retained_provenance.observed_at > current_provenance.observed_at
+                    or retained_provenance_projection != current_provenance_projection
+                    or retained_policy_projection != current_policy_projection
+                    or retained_policy.source_provenance_sha256
+                    != retained_provenance.evidence_sha256
+                    or current_policy.source_provenance_sha256 != current_provenance.evidence_sha256
+                ):
+                    raise OpenRouterPrivacyError(
+                        "scheduler resume privacy evidence differs from the current source and "
+                        "routing policy"
+                    )
+                return retained_provenance, retained_policy
+    except OpenRouterPrivacyError:
+        raise
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise OpenRouterPrivacyError(
+            "scheduler resume privacy artifacts failed manifest-bound validation"
+        ) from exc
 
 
 def resolve_safe_output_root(path: Path) -> Path:
@@ -4950,12 +8595,15 @@ def _attach_verifier_votes(
     candidates: list[CandidateFinding],
     decisions: dict[str, VerificationDecision],
     client: OpenRouterClient,
+    *,
+    role: str = "verifier",
+    usage_record: UsageRecord | None = None,
 ) -> list[CandidateFinding]:
-    usage = next(
+    usage = usage_record or next(
         (
             record
             for record in reversed(client.usage.records)
-            if record.role == "verifier" and is_creditable_usage_record(record)
+            if record.role == role and is_creditable_usage_record(record)
         ),
         None,
     )
@@ -4968,7 +8616,7 @@ def _attach_verifier_votes(
             result.append(candidate)
             continue
         vote = ModelVote(
-            role="verifier",
+            role=role,
             requested_model=usage.requested_model,
             returned_model=usage.returned_model,
             family=usage.model_family,
@@ -5152,6 +8800,27 @@ def _eligible_reproduction_candidates(
     )[:limit]
 
 
+def _scheduled_reproduction_candidate_ids(
+    tasks: Iterable[SchedulerTaskPlan],
+) -> tuple[str, ...]:
+    """Return the exact candidate inventory committed by reproduction model tasks."""
+
+    return tuple(
+        sorted(
+            {
+                candidate_id
+                for task in tasks
+                if task.task_kind is SchedulerTaskKind.MODEL_REQUEST
+                and (
+                    task.role.endswith(":exploit_test")
+                    or task.role in {"falsifier", "specialist:falsifier"}
+                )
+                for candidate_id in task.candidate_ids
+            }
+        )
+    )
+
+
 def _project_for_candidate(
     candidate: CandidateFinding,
     projects: list[SolidityProjectMetadata],
@@ -5251,6 +8920,31 @@ def _unsupported_reproduction(
         candidate_id=candidate.candidate_id,
         test_name=specification.name,
         state=ReproductionState.ENVIRONMENT_BLOCKED,
+        specification_sha256=hashlib.sha256(payload.encode()).hexdigest(),
+        assumptions=specification.assumptions,
+        required_block_number=specification.required_block_number,
+        expected_chain_id=specification.expected_chain_id,
+        financial_settlement=specification.financial_settlement,
+        limitations=[limitation],
+    )
+
+
+def _not_attempted_reproduction(
+    candidate: CandidateFinding,
+    specification: GeneratedFoundryTestSpec,
+    limitation: str,
+) -> ReproductionResult:
+    """Retain exact test custody when independent verification closes execution."""
+
+    payload = json.dumps(
+        specification.model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return ReproductionResult(
+        candidate_id=candidate.candidate_id,
+        test_name=specification.name,
+        state=ReproductionState.NOT_ATTEMPTED,
         specification_sha256=hashlib.sha256(payload.encode()).hexdigest(),
         assumptions=specification.assumptions,
         required_block_number=specification.required_block_number,

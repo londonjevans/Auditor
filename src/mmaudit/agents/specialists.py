@@ -4,18 +4,25 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from mmaudit.agents.base import FindingReviewResult, ValidatedAgentResult, load_prompt
+from mmaudit.agents.base import (
+    AgentRequestProtocol,
+    FindingReviewResult,
+    ValidatedAgentResult,
+    _model_review_origin_candidate_id,
+    _require_unique_raw_candidate_ids,
+    build_agent_request_protocol,
+)
 from mmaudit.config import AuditConfig, model_family
 from mmaudit.constants import (
     ALL_SPECIALIST_ROLES,
     SPECIALIST_AUXILIARY_ROLES,
     SPECIALIST_INVESTIGATOR_ROLES,
 )
-from mmaudit.models.openrouter import OpenRouterClient, OpenRouterSchemaError
+from mmaudit.models.openrouter import OpenRouterClient, OpenRouterSchemaError, StructuredCompletion
 from mmaudit.models.schemas import (
     CandidateFinding,
     CandidateOriginKind,
@@ -24,6 +31,7 @@ from mmaudit.models.schemas import (
     ContextPackage,
     ContextRequestEvidence,
     Evidence,
+    ExecutionEvidenceKind,
     Finding,
     ModelVote,
     QualityGateResult,
@@ -529,6 +537,8 @@ def completed_specialist_roles(
             continue
         if sealed.status is not SpecialistExecutionStatus.COMPLETED:
             continue
+        if sealed.execution_evidence is not ExecutionEvidenceKind.REAL:
+            continue
         if (
             sealed.role_kind == "auxiliary"
             or sealed.derived_source_review_creditable_requests() > 0
@@ -543,6 +553,7 @@ def build_specialist_execution_records(
     usage_records: list[UsageRecord],
     contexts: list[ContextPackage],
     accepted_outcomes: Sequence[SpecialistAcceptedOutcome] = (),
+    structurally_successful_request_ids: Collection[str] | None = None,
 ) -> list[SpecialistExecutionRecord]:
     """Normalize provider attempts against host-accepted specialist workflow results."""
 
@@ -557,8 +568,17 @@ def build_specialist_execution_records(
     usage_by_id = {record.request_id: record for record in usage_records}
     if len(usage_by_id) != len(usage_records):
         raise ValueError("specialist usage request IDs are not unique")
+    structural_success_ids = (
+        frozenset(structurally_successful_request_ids)
+        if structurally_successful_request_ids is not None
+        else None
+    )
+    if structural_success_ids is not None and structural_success_ids - set(usage_by_id):
+        raise ValueError("structurally successful specialist request lacks provider usage")
     if set(accepted_ids) - set(usage_by_id):
         raise ValueError("accepted specialist outcome lacks provider usage evidence")
+    if structural_success_ids is not None and set(accepted_ids) - structural_success_ids:
+        raise ValueError("accepted specialist outcome lacks successful scheduler custody")
     records: list[SpecialistExecutionRecord] = []
     for role in ALL_SPECIALIST_ROLES:
         definition = SPECIALIST_ROLE_REGISTRY[role]
@@ -601,7 +621,8 @@ def build_specialist_execution_records(
         successful_usage = [
             record
             for record in role_usage
-            if is_creditable_usage_record(record)
+            if (structural_success_ids is None or record.request_id in structural_success_ids)
+            and is_creditable_usage_record(record)
             and (evidence := request_contexts_by_id.get(record.request_id)) is not None
             and evidence.context_binding() in retained_context_bindings
             and (outcome := outcomes_by_id.get(record.request_id)) is not None
@@ -620,6 +641,14 @@ def build_specialist_execution_records(
         )
         successful_requests = len(successful_request_ids)
         failed_requests = len(failed_request_ids)
+        role_execution_evidence = {record.execution_evidence for record in role_usage}
+        if len(role_execution_evidence) > 1:
+            raise ValueError(f"specialist {role} mixes incompatible execution evidence")
+        execution_evidence = (
+            next(iter(role_execution_evidence))
+            if role_execution_evidence
+            else ExecutionEvidenceKind.UNVERIFIED
+        )
         source_review_creditable_requests = sum(
             evidence.request_id in successful_request_id_set
             and evidence.context_binding() in retained_context_bindings
@@ -653,6 +682,7 @@ def build_specialist_execution_records(
                 response_schema=definition.response_schema,
                 schema_name=definition.effective_schema_name(),
                 configured=configured,
+                execution_evidence=execution_evidence,
                 context_limit_bytes=configured_context_limit,
                 context_budget_bytes=(
                     single_context.byte_budget if single_context is not None else None
@@ -693,27 +723,57 @@ class SpecialistFindingAgent:
         self.role = role
         self.definition = SPECIALIST_ROLE_REGISTRY[role]
 
-    async def run(self, context: ContextPackage) -> FindingReviewResult:
+    @property
+    def request_protocol(self) -> AgentRequestProtocol:
+        return build_agent_request_protocol(
+            prompt_file="specialist.md",
+            schema_name=self.definition.effective_schema_name(),
+            response_model=CandidateReviewBatch,
+            role_contract=self.definition.prompt_contract(),
+        )
+
+    async def run(
+        self,
+        context: ContextPackage,
+        *,
+        logical_request_id: str | None = None,
+    ) -> FindingReviewResult:
         configured = self.config.models.role(self.role)
         request_role = f"specialist:{self.role}"
         request_context = context.model_copy(deep=True)
         rendered_user_context = render_context(request_context)
+        protocol = self.request_protocol
         completion = await self.client.complete_with_evidence(
             role=request_role,
             models=[configured.primary, *configured.fallbacks],
-            system_prompt="\n\n".join(
-                (
-                    load_prompt("shared_security_rules.md"),
-                    load_prompt("specialist.md"),
-                    "<ROLE_CONTRACT_JSON>",
-                    self.definition.prompt_contract(),
-                    "</ROLE_CONTRACT_JSON>",
-                )
-            ),
+            system_prompt=protocol.system_prompt,
             user_prompt=rendered_user_context,
             context_package=request_context,
-            response_model=CandidateReviewBatch,
-            schema_name=self.definition.effective_schema_name(),
+            response_model=protocol.response_model,
+            schema_name=protocol.schema_name,
+            logical_request_id=logical_request_id,
+        )
+        return self.bind_completed_review(
+            request_context,
+            raw_response=completion.value,
+            completion_usage=completion.usage_record,
+        )
+
+    def bind_completed_review(
+        self,
+        context: ContextPackage,
+        *,
+        raw_response: CandidateReviewBatch,
+        completion_usage: UsageRecord,
+    ) -> FindingReviewResult:
+        """Rebuild one specialist result from exact retained completion evidence."""
+
+        request_role = f"specialist:{self.role}"
+        request_context = context.model_copy(deep=True)
+        rendered_user_context = render_context(request_context)
+        completion = StructuredCompletion(
+            value=CandidateReviewBatch.model_validate(raw_response.model_dump(mode="python")),
+            usage_record=UsageRecord.model_validate(completion_usage.model_dump(mode="python")),
         )
         result = completion.value
         usage = completion.usage_record
@@ -731,18 +791,14 @@ class SpecialistFindingAgent:
         returned = usage.returned_model
         family = model_family(requested)
         scanner_fingerprints = {finding.fingerprint for finding in request_context.scanner_findings}
+        _require_unique_raw_candidate_ids(result.findings)
         stamped = []
         for finding in result.findings:
-            stable = hashlib.sha256(
-                "\0".join(
-                    (
-                        request_role,
-                        finding.title.casefold(),
-                        finding.locations[0].path,
-                        str(finding.locations[0].start_line),
-                    )
-                ).encode()
-            ).hexdigest()[:16]
+            origin_candidate_id = _model_review_origin_candidate_id(
+                request_role=request_role,
+                request_id=usage.request_id,
+                candidate=finding,
+            )
             evidence = [
                 (
                     item
@@ -757,7 +813,7 @@ class SpecialistFindingAgent:
             ]
             stamped_candidate = finding.model_copy(
                 update={
-                    "candidate_id": f"cand-{stable}",
+                    "candidate_id": origin_candidate_id,
                     "origin_kind": CandidateOriginKind.MODEL_REVIEW,
                     "execution_provenance": None,
                     "role": request_role,
@@ -783,6 +839,7 @@ class SpecialistFindingAgent:
             surface_review_artifact=surface_review_artifact,
             surface_review_context=request_context,
             completion_usage=usage,
+            raw_response=result,
         )
 
 
@@ -833,6 +890,16 @@ class ReportQualityAgent:
         self.config = config
         self.client = client
 
+    @property
+    def request_protocol(self) -> AgentRequestProtocol:
+        definition = SPECIALIST_ROLE_REGISTRY["report_quality"]
+        return build_agent_request_protocol(
+            prompt_file="report_quality.md",
+            schema_name=definition.effective_schema_name(),
+            response_model=ReportQualityReview,
+            role_contract=definition.prompt_contract(),
+        )
+
     @staticmethod
     def prepare_input(
         *,
@@ -873,6 +940,7 @@ class ReportQualityAgent:
         incomplete_reasons: list[str],
         context: ContextPackage,
         prepared_input: PreparedReportQualityInput | None = None,
+        logical_request_id: str | None = None,
     ) -> ReportQualityReview:
         return (
             await self.run_with_evidence(
@@ -883,6 +951,7 @@ class ReportQualityAgent:
                 incomplete_reasons=incomplete_reasons,
                 context=context,
                 prepared_input=prepared_input,
+                logical_request_id=logical_request_id,
             )
         ).value
 
@@ -896,9 +965,9 @@ class ReportQualityAgent:
         incomplete_reasons: list[str],
         context: ContextPackage,
         prepared_input: PreparedReportQualityInput | None = None,
+        logical_request_id: str | None = None,
     ) -> ValidatedAgentResult[ReportQualityReview]:
         configured = self.config.models.role("report_quality")
-        definition = SPECIALIST_ROLE_REGISTRY["report_quality"]
         expected_input = self.prepare_input(
             findings=findings,
             rejected_count=rejected_count,
@@ -911,24 +980,19 @@ class ReportQualityAgent:
                 "prepared report-quality workflow differs from the reviewed evidence"
             )
         effective_input = prepared_input or expected_input
+        protocol = self.request_protocol
         completion = await self.client.complete_with_evidence(
             role="specialist:report_quality",
             models=[configured.primary, *configured.fallbacks],
-            system_prompt="\n\n".join(
-                (
-                    load_prompt("shared_security_rules.md"),
-                    load_prompt("report_quality.md"),
-                    "<ROLE_CONTRACT_JSON>",
-                    definition.prompt_contract(),
-                    "</ROLE_CONTRACT_JSON>",
-                )
-            ),
+            system_prompt=protocol.system_prompt,
             user_prompt=effective_input.workflow_prompt + render_context(context),
             context_package=context,
-            response_model=ReportQualityReview,
-            schema_name=definition.effective_schema_name(),
+            response_model=protocol.response_model,
+            schema_name=protocol.schema_name,
+            logical_request_id=logical_request_id,
         )
         return ValidatedAgentResult(
             value=completion.value,
             completion_usage=completion.usage_record,
+            raw_response=completion.value,
         )

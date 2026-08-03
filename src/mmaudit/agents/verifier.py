@@ -8,7 +8,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from mmaudit.agents.base import AgentBase, load_prompt
+from mmaudit.agents.base import (
+    AgentBase,
+    AgentRequestProtocol,
+    ValidatedAgentResult,
+    build_agent_request_protocol,
+)
 from mmaudit.config import AuditConfig, model_lineage_index
 from mmaudit.models.openrouter import OpenRouterClient, OpenRouterSchemaError
 from mmaudit.models.schemas import (
@@ -16,6 +21,7 @@ from mmaudit.models.schemas import (
     CandidateCrossExaminationResponse,
     CandidateFinding,
     ContextPackage,
+    UsageRecord,
     VerificationBatch,
     VerificationDecision,
     VerificationTest,
@@ -183,16 +189,21 @@ class PreparedVerificationInput:
 def select_candidate_falsifier_models(config: AuditConfig) -> list[tuple[str, str]]:
     """Select two exact models from distinct immutable root lineages."""
 
-    if "falsifier" not in config.models.specialists:
-        return []
-    falsifier = config.models.specialists["falsifier"]
+    falsifier = config.models.specialists.get("falsifier")
     ordered_ids = [
-        falsifier.primary,
-        *falsifier.fallbacks,
+        *(() if falsifier is None else (falsifier.primary, *falsifier.fallbacks)),
         config.models.verifier.primary,
         *config.models.verifier.fallbacks,
         config.models.judge.primary,
         *config.models.judge.fallbacks,
+        config.models.business_logic.primary,
+        *config.models.business_logic.fallbacks,
+        config.models.source_audit.primary,
+        *config.models.source_audit.fallbacks,
+        config.models.configuration.primary,
+        *config.models.configuration.fallbacks,
+        config.models.threat_model.primary,
+        *config.models.threat_model.fallbacks,
     ]
     lineage_by_id = model_lineage_index(config)
     approved_lineages = set(config.privacy.approved_model_lineages)
@@ -210,6 +221,45 @@ def select_candidate_falsifier_models(config: AuditConfig) -> list[tuple[str, st
         seen_lineages.add(lineage.root_lineage)
         if len(selected) == 2:
             break
+    return selected
+
+
+def select_validation_falsifier_models(config: AuditConfig) -> list[tuple[str, str]]:
+    """Select two falsifier models with lineages independent of each other and verifier."""
+
+    configured = config.models.specialists.get("falsifier")
+    lineage_by_id = model_lineage_index(config)
+    verifier = lineage_by_id.get(config.models.verifier.primary.lower())
+    if verifier is None:
+        return []
+    approved_lineages = set(config.privacy.approved_model_lineages)
+    selected: list[tuple[str, str]] = []
+    seen_lineages = {verifier.root_lineage}
+    ordered_ids = (
+        *(() if configured is None else (configured.primary, *configured.fallbacks)),
+        config.models.judge.primary,
+        *config.models.judge.fallbacks,
+        config.models.business_logic.primary,
+        *config.models.business_logic.fallbacks,
+        config.models.source_audit.primary,
+        *config.models.source_audit.fallbacks,
+        config.models.configuration.primary,
+        *config.models.configuration.fallbacks,
+        config.models.threat_model.primary,
+        *config.models.threat_model.fallbacks,
+        *config.models.verifier.fallbacks,
+    )
+    for model_id in ordered_ids:
+        lineage = lineage_by_id.get(model_id.lower())
+        if (
+            lineage is not None
+            and lineage.root_lineage in approved_lineages
+            and lineage.root_lineage not in seen_lineages
+        ):
+            selected.append((model_id, lineage.root_lineage))
+            seen_lineages.add(lineage.root_lineage)
+            if len(selected) == 2:
+                break
     return selected
 
 
@@ -317,6 +367,14 @@ class CandidateCrossExaminerAgent:
         self.model_id = model_id
         self.root_lineage = root_lineage
 
+    @property
+    def request_protocol(self) -> AgentRequestProtocol:
+        return build_agent_request_protocol(
+            prompt_file="cross_examination.md",
+            schema_name=f"mmaudit_candidate_cross_examination_{self.reviewer_index}",
+            response_model=CandidateCrossExaminationResponse,
+        )
+
     @staticmethod
     def prepare_input(
         candidates: list[CandidateFinding],
@@ -337,7 +395,25 @@ class CandidateCrossExaminerAgent:
         context: ContextPackage,
         *,
         prepared_input: PreparedCandidateCrossExaminationInput | None = None,
+        logical_request_id: str | None = None,
     ) -> list[CandidateCrossExaminationDecision]:
+        return (
+            await self.run_with_evidence(
+                candidates,
+                context,
+                prepared_input=prepared_input,
+                logical_request_id=logical_request_id,
+            )
+        ).value
+
+    async def run_with_evidence(
+        self,
+        candidates: list[CandidateFinding],
+        context: ContextPackage,
+        *,
+        prepared_input: PreparedCandidateCrossExaminationInput | None = None,
+        logical_request_id: str | None = None,
+    ) -> ValidatedAgentResult[list[CandidateCrossExaminationDecision]]:
         expected_input = self.prepare_input(candidates)
         if prepared_input is not None and prepared_input != expected_input:
             raise OpenRouterSchemaError(
@@ -350,19 +426,16 @@ class CandidateCrossExaminerAgent:
             self.reviewer_index,
         )
         usage_start = len(self.client.usage.records)
+        protocol = self.request_protocol
         response = await self.client.complete(
             role=request_role,
             models=[self.model_id],
-            system_prompt="\n\n".join(
-                (
-                    load_prompt("shared_security_rules.md"),
-                    load_prompt("cross_examination.md"),
-                )
-            ),
+            system_prompt=protocol.system_prompt,
             user_prompt=effective_input.workflow_prompt + render_context(context),
             context_package=context,
-            response_model=CandidateCrossExaminationResponse,
-            schema_name=(f"mmaudit_candidate_cross_examination_{self.reviewer_index}"),
+            response_model=protocol.response_model,
+            schema_name=protocol.schema_name,
+            logical_request_id=logical_request_id,
         )
         matching_usage = [
             record
@@ -374,20 +447,32 @@ class CandidateCrossExaminerAgent:
                 "candidate falsifier response lacks one exact new completed request record"
             )
         usage = matching_usage[0]
-        return normalize_cross_examination_response(
-            response,
-            candidate_ids=dict(effective_input.candidate_ids),
-            request_id=usage.request_id,
-            reviewer_index=self.reviewer_index,
-            requested_model=self.model_id,
-            returned_model=usage.returned_model,
-            root_lineage=self.root_lineage,
+        return ValidatedAgentResult(
+            value=normalize_cross_examination_response(
+                response,
+                candidate_ids=dict(effective_input.candidate_ids),
+                request_id=usage.request_id,
+                reviewer_index=self.reviewer_index,
+                requested_model=self.model_id,
+                returned_model=usage.returned_model,
+                root_lineage=self.root_lineage,
+            ),
+            completion_usage=usage,
+            raw_response=response,
         )
 
 
 class VerifierAgent(AgentBase):
     role = "verifier"
     prompt_file = "verifier.md"
+
+    @property
+    def request_protocol(self) -> AgentRequestProtocol:
+        return build_agent_request_protocol(
+            prompt_file=self.prompt_file,
+            schema_name="mmaudit_verification",
+            response_model=VerificationBatch,
+        )
 
     @staticmethod
     def prepare_input(candidates: list[CandidateFinding]) -> PreparedVerificationInput:
@@ -403,22 +488,68 @@ class VerifierAgent(AgentBase):
         context: ContextPackage,
         *,
         prepared_input: PreparedVerificationInput | None = None,
+        logical_request_id: str | None = None,
     ) -> VerificationBatch:
+        return (
+            await self.run_with_evidence(
+                candidates,
+                context,
+                prepared_input=prepared_input,
+                logical_request_id=logical_request_id,
+            )
+        ).value
+
+    async def run_with_evidence(
+        self,
+        candidates: list[CandidateFinding],
+        context: ContextPackage,
+        *,
+        prepared_input: PreparedVerificationInput | None = None,
+        logical_request_id: str | None = None,
+    ) -> ValidatedAgentResult[VerificationBatch]:
         expected_input = self.prepare_input(candidates)
         if prepared_input is not None and prepared_input != expected_input:
             raise OpenRouterSchemaError(
                 "prepared verification workflow differs from submitted verification evidence"
             )
         effective_input = prepared_input or expected_input
-        response = await self.client.complete(
+        protocol = self.request_protocol
+        completion = await self.client.complete_with_evidence(
             role=self.role,
             models=self.configured_models,
-            system_prompt=self.system_prompt,
+            system_prompt=protocol.system_prompt,
             user_prompt=effective_input.workflow_prompt + render_context(context),
             context_package=context,
-            response_model=VerificationBatch,
-            schema_name="mmaudit_verification",
+            response_model=protocol.response_model,
+            schema_name=protocol.schema_name,
+            logical_request_id=logical_request_id,
         )
+        return self.bind_completed_review(
+            candidates,
+            context,
+            raw_response=completion.value,
+            completion_usage=completion.usage_record,
+            prepared_input=effective_input,
+        )
+
+    def bind_completed_review(
+        self,
+        candidates: list[CandidateFinding],
+        context: ContextPackage,
+        *,
+        raw_response: VerificationBatch,
+        completion_usage: UsageRecord,
+        prepared_input: PreparedVerificationInput | None = None,
+    ) -> ValidatedAgentResult[VerificationBatch]:
+        """Rebuild exact host normalization for one retained verifier completion."""
+
+        del context
+        expected_input = self.prepare_input(candidates)
+        if prepared_input is not None and prepared_input != expected_input:
+            raise OpenRouterSchemaError(
+                "prepared verification workflow differs from submitted verification evidence"
+            )
+        response = VerificationBatch.model_validate(raw_response.model_dump(mode="python"))
         submitted_ids = {candidate.candidate_id for candidate in candidates}
         response_ids = [decision.candidate_id for decision in response.decisions]
         if set(response_ids) - submitted_ids or len(response_ids) != len(set(response_ids)):
@@ -450,4 +581,47 @@ class VerifierAgent(AgentBase):
                 )
             else:
                 normalized.append(decision)
-        return VerificationBatch(decisions=normalized)
+        return ValidatedAgentResult(
+            value=VerificationBatch(decisions=normalized),
+            completion_usage=UsageRecord.model_validate(completion_usage.model_dump(mode="python")),
+            raw_response=response,
+        )
+
+
+class CandidateFalsifierAgent(VerifierAgent):
+    """Challenge every validation candidate under a lineage distinct from the verifier."""
+
+    role = "candidate_falsifier"
+
+    def __init__(
+        self,
+        config: AuditConfig,
+        client: OpenRouterClient,
+        *,
+        model_id: str,
+    ) -> None:
+        super().__init__(config, client)
+        self.model_id = model_id
+
+    @property
+    def configured_models(self) -> list[str]:
+        """Return only the exact scheduler-selected falsifier model."""
+
+        return [self.model_id]
+
+    @property
+    def request_protocol(self) -> AgentRequestProtocol:
+        return build_agent_request_protocol(
+            prompt_file=self.prompt_file,
+            schema_name="mmaudit_verification",
+            response_model=VerificationBatch,
+            role_contract=json.dumps(
+                {
+                    "candidate_inventory": "return one decision for every submitted candidate",
+                    "objective": "actively seek contradictory evidence and unsupported assumptions",
+                    "role": self.role,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        )

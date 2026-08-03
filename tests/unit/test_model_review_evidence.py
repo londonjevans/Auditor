@@ -30,6 +30,7 @@ from mmaudit.models.schemas import (
     ModelSurfaceReviewRecord,
     ModelSurfaceReviewRequest,
     ModelSurfaceReviewStatus,
+    RepositoryFile,
     RepositoryMap,
     SolidityEntity,
     SolidityEntityKind,
@@ -48,6 +49,7 @@ from mmaudit.models.token_planning import (
 from mmaudit.orchestration.context import render_context
 from mmaudit.orchestration.model_review_evidence import (
     ModelReviewEvidenceError,
+    build_source_file_review_request,
     validate_model_surface_review_record,
 )
 from mmaudit.orchestration.model_review_evidence import (
@@ -248,6 +250,41 @@ def _state_record(request: ModelSurfaceReviewRequest) -> ModelSurfaceReviewRecor
         ),
         assumptions=("the compiler graph represents the local state write",),
         confidence=0.92,
+    )
+
+
+def _source_file_record(
+    request: ModelSurfaceReviewRequest,
+    *,
+    role: str = "source_audit",
+) -> ModelSurfaceReviewRecord:
+    citation = ModelSurfaceReviewCitation(location=request.allowed_locations[0])
+    return ModelSurfaceReviewRecord(
+        surface_id=request.surface_id,
+        contract=request.contract,
+        function_or_state_surface=request.function_or_state_surface,
+        review_role=role,
+        status=ModelSurfaceReviewStatus.REVIEWED_NO_ISSUE,
+        rationale="The exact file was reviewed for security-relevant state behavior.",
+        citation=citation,
+        invariant_considered=request.invariant_considered,
+        evidence_observations=(
+            ModelSurfaceReviewEvidenceObservation(
+                citation=citation,
+                observed_behavior="The local handler validates input before updating state.",
+                security_relevance=(
+                    "The delivered source file preserves input-validation and state integrity."
+                ),
+            ),
+        ),
+        reachability=ModelSurfaceReviewReachability(
+            entry_point=citation,
+            path=(citation,),
+            actor_or_caller="local repository reviewer",
+            preconditions=(),
+        ),
+        assumptions=(),
+        confidence=0.9,
     )
 
 
@@ -556,6 +593,36 @@ def test_seal_surface_review_artifact_binds_exact_request_response_and_source() 
     assert first.require_exact_requested_surface_manifest((request,)) == first
 
 
+def test_whole_protocol_context_accepts_only_its_exact_indexed_request_role() -> None:
+    request_role = "whole_protocol_review:3"
+    request = _request()
+    record = _record(request, role=request_role)
+    batch = CandidateReviewBatch(findings=[], surface_reviews=(record,))
+    context = _context((request,), role="whole_protocol_review")
+
+    artifact = seal_model_surface_review_artifact(
+        context,
+        _completion(batch, role=request_role),
+    )
+
+    assert artifact is not None
+    assert artifact.review_role == request_role
+    assert artifact.records == (record,)
+
+
+def test_whole_protocol_context_rejects_a_different_investigator_request_role() -> None:
+    request = _request()
+    record = _record(request, role="source_audit")
+    batch = CandidateReviewBatch(findings=[], surface_reviews=(record,))
+    context = _context((request,), role="whole_protocol_review")
+
+    with pytest.raises(ModelReviewEvidenceError, match="usage role differs"):
+        seal_model_surface_review_artifact(
+            context,
+            _completion(batch, role="source_audit"),
+        )
+
+
 def test_pipeline_rejects_equal_count_different_surface_artifact_splice(
     monkeypatch,
 ) -> None:
@@ -689,6 +756,353 @@ def test_seal_credits_a_state_surface_only_with_a_known_adjacent_entry_path() ->
 
     assert artifact is not None
     assert artifact.records == (record,)
+
+
+def test_canonical_invariant_reachability_uses_exact_request_bound_entities() -> None:
+    from tests.fake_openrouter import _surface_review_path
+
+    fee_path = "src/FeeVault.sol"
+    safe_path = "src/SafeVault.sol"
+    fee_entry_id = "sol-11111111111111111111"
+    fee_state_id = "sol-22222222222222222222"
+    safe_entry_id = "sol-33333333333333333333"
+    safe_state_id = "sol-44444444444444444444"
+    fee_entry_hash = hashlib.sha256(b"fee deposit").hexdigest()
+    fee_state_hash = hashlib.sha256(b"fee credit").hexdigest()
+    safe_entry_hash = hashlib.sha256(b"safe deposit").hexdigest()
+    safe_state_hash = hashlib.sha256(b"safe credit").hexdigest()
+
+    def entity(
+        *,
+        entity_id: str,
+        kind: SolidityEntityKind,
+        name: str,
+        contract: str,
+        path: str,
+        line: int,
+        source_hash: str,
+        visibility: str | None = None,
+        signature: str | None = None,
+    ) -> SolidityEntity:
+        return SolidityEntity(
+            id=entity_id,
+            kind=kind,
+            name=name,
+            contract_name=contract,
+            path=path,
+            start_line=line,
+            end_line=line,
+            byte_start=0,
+            byte_end=1,
+            source_hash=source_hash,
+            provenance=SolidityProvenance.COMPILER,
+            confidence=1,
+            transformation="synthetic_ambiguous_invariant_reachability",
+            visibility=visibility,
+            signature=signature,
+        )
+
+    fee_entry = entity(
+        entity_id=fee_entry_id,
+        kind=SolidityEntityKind.FUNCTION,
+        name="deposit",
+        contract="FeeVault",
+        path=fee_path,
+        line=2,
+        source_hash=fee_entry_hash,
+        visibility="external",
+        signature="deposit(uint256)",
+    )
+    fee_state = entity(
+        entity_id=fee_state_id,
+        kind=SolidityEntityKind.STATE_VARIABLE,
+        name="credit",
+        contract="FeeVault",
+        path=fee_path,
+        line=3,
+        source_hash=fee_state_hash,
+    )
+    safe_entry = entity(
+        entity_id=safe_entry_id,
+        kind=SolidityEntityKind.FUNCTION,
+        name="deposit",
+        contract="SafeVault",
+        path=safe_path,
+        line=2,
+        source_hash=safe_entry_hash,
+        visibility="external",
+        signature="deposit(uint256)",
+    )
+    safe_state = entity(
+        entity_id=safe_state_id,
+        kind=SolidityEntityKind.STATE_VARIABLE,
+        name="credit",
+        contract="SafeVault",
+        path=safe_path,
+        line=3,
+        source_hash=safe_state_hash,
+    )
+    index = SoliditySymbolIndex(
+        projects=[],
+        entities=[safe_entry, safe_state, fee_entry, fee_state],
+        ast_sources=[fee_path, safe_path],
+    )
+
+    def state_write(
+        entry: SolidityEntity,
+        state: SolidityEntity,
+    ) -> SolidityGraphEdge:
+        return SolidityGraphEdge(
+            graph=SolidityGraphKind.STATE_WRITE,
+            source_id=entry.id,
+            target_id=state.id,
+            label="writes credit",
+            provenance=SolidityProvenance.COMPILER,
+            path=entry.path,
+            start_line=entry.start_line,
+            end_line=entry.end_line,
+            source_hash=entry.source_hash,
+            confidence=1,
+            transformation="synthetic_ambiguous_invariant_reachability",
+        )
+
+    graphs = SolidityGraphSet(
+        edges=[
+            state_write(safe_entry, safe_state),
+            state_write(fee_entry, fee_state),
+        ]
+    )
+    allowed_locations = tuple(
+        sorted(
+            (
+                Location(
+                    path=fee_entry.path,
+                    start_line=fee_entry.start_line,
+                    end_line=fee_entry.end_line,
+                    symbol=fee_entry.signature,
+                    content_hash=fee_entry.source_hash,
+                ),
+                Location(
+                    path=fee_state.path,
+                    start_line=fee_state.start_line,
+                    end_line=fee_state.end_line,
+                    symbol=fee_state.name,
+                    content_hash=fee_state.source_hash,
+                ),
+            ),
+            key=lambda location: (
+                location.path,
+                location.start_line,
+                location.end_line,
+                location.symbol or "",
+                location.content_hash or "",
+            ),
+        )
+    )
+    subject_id = "inv-55555555555555555555"
+    request = ModelSurfaceReviewRequest(
+        surface_id=ModelSurfaceReviewRequest.calculate_surface_id(
+            ModelReviewSurfaceKind.INVARIANT,
+            subject_id,
+        ),
+        kind=ModelReviewSurfaceKind.INVARIANT,
+        subject_id=subject_id,
+        contract="FeeVault",
+        function_or_state_surface="Claims do not exceed observed assets",
+        critical=True,
+        allowed_locations=allowed_locations,
+        allowed_symbols=tuple(
+            sorted(
+                {
+                    "credit",
+                    "deposit",
+                    "deposit(uint256)",
+                    fee_entry_id,
+                    fee_state_id,
+                    subject_id,
+                }
+            )
+        ),
+        invariant_considered=(
+            "Asset-moving deposits must credit observed balances rather than assumed amounts."
+        ),
+    )
+
+    def review(
+        *,
+        entry_symbol: str,
+        terminal_symbol: str,
+    ) -> ModelSurfaceReviewRecord:
+        entry_citation = ModelSurfaceReviewCitation(symbol=entry_symbol)
+        terminal_citation = ModelSurfaceReviewCitation(symbol=terminal_symbol)
+        return ModelSurfaceReviewRecord(
+            surface_id=request.surface_id,
+            contract=request.contract,
+            function_or_state_surface=request.function_or_state_surface,
+            review_role=_ROLE,
+            status=ModelSurfaceReviewStatus.REVIEWED_NO_ISSUE,
+            rationale="The cited deposit path writes the reviewed accounting state.",
+            citation=terminal_citation,
+            invariant_considered=request.invariant_considered,
+            evidence_observations=(
+                ModelSurfaceReviewEvidenceObservation(
+                    citation=terminal_citation,
+                    observed_behavior="deposit checks the receipt and writes credit.",
+                    security_relevance=(
+                        "credit preserves the observed asset balance accounting invariant."
+                    ),
+                ),
+            ),
+            reachability=ModelSurfaceReviewReachability(
+                entry_point=entry_citation,
+                path=(entry_citation, terminal_citation),
+                actor_or_caller="external depositor",
+                preconditions=("the deposit reaches the state write",),
+            ),
+            assumptions=(),
+            confidence=0.9,
+        )
+
+    exact = review(entry_symbol=fee_entry_id, terminal_symbol=fee_state_id)
+    validate_model_surface_review_record(
+        request,
+        exact,
+        _ROLE,
+        index=index,
+        graphs=graphs,
+    )
+
+    ambiguous_unrelated = review(entry_symbol=safe_entry_id, terminal_symbol="credit")
+    with pytest.raises(ModelReviewEvidenceError, match="exact deterministic surface"):
+        validate_model_surface_review_record(
+            request,
+            ambiguous_unrelated,
+            _ROLE,
+            index=index,
+            graphs=graphs,
+        )
+
+    fake_path = _surface_review_path(
+        request.model_dump(mode="json"),
+        entities=[item.model_dump(mode="json") for item in index.entities],
+        edges=[item.model_dump(mode="json") for item in graphs.edges],
+    )
+    assert fake_path is not None
+    fake_terminal, fake_nodes = fake_path
+    assert fake_terminal == {"location": None, "symbol": fee_state_id}
+    assert fake_nodes[0] == {"location": None, "symbol": fee_entry_id}
+
+
+def test_source_file_review_requires_exact_whole_file_without_ast_claims() -> None:
+    path = "app/handler.py"
+    source = "def handle(value):\n    return validate(value)\n"
+    encoded = source.encode("utf-8")
+    source_sha256 = hashlib.sha256(encoded).hexdigest()
+    lines = len(source.splitlines(keepends=True))
+    request = build_source_file_review_request(
+        path=path,
+        size=len(encoded),
+        lines=lines,
+        sha256=source_sha256,
+    )
+    record = _source_file_record(request)
+    repository_map = _repository_map().model_copy(
+        update={
+            "files": [
+                RepositoryFile(
+                    path=path,
+                    size=len(encoded),
+                    lines=lines,
+                    sha256=source_sha256,
+                    language="Python",
+                    categories=["source"],
+                )
+            ]
+        }
+    )
+    package = ContextPackage(
+        role="source_audit",
+        byte_budget=100_000,
+        bytes_used=0,
+        configured_maximum_source_tokens_per_request=200_000,
+        effective_source_byte_ceiling=100_000,
+        repository_map=repository_map,
+        scanner_findings=[],
+        excerpts=[
+            ContextExcerpt(
+                path=path,
+                start_line=1,
+                end_line=lines,
+                content_hash=source_sha256,
+                content=source,
+            )
+        ],
+        requested_model_surfaces=[request],
+    )
+    package = _with_exact_context_bytes(package)
+    batch = CandidateReviewBatch(findings=[], surface_reviews=(record,))
+
+    artifact = seal_model_surface_review_artifact(
+        package,
+        _completion(batch, role="source_audit"),
+    )
+
+    assert artifact is not None
+    assert artifact.records == (record,)
+
+    partial = source.splitlines(keepends=True)[0]
+    partial_package = package.model_copy(
+        update={
+            "excerpts": (
+                ContextExcerpt(
+                    path=path,
+                    start_line=1,
+                    end_line=1,
+                    content_hash=hashlib.sha256(partial.encode()).hexdigest(),
+                    content=partial,
+                    omitted_after=True,
+                ),
+            )
+        }
+    )
+    partial_package = _with_exact_context_bytes(partial_package)
+    with pytest.raises(ModelReviewEvidenceError, match="whole-file bytes were not supplied"):
+        seal_model_surface_review_artifact(
+            partial_package,
+            _completion(batch, role="source_audit"),
+        )
+
+    duplicate_map = repository_map.model_copy(
+        update={"files": [*repository_map.files, repository_map.files[0]]}
+    )
+    duplicate_package = _with_exact_context_bytes(
+        package.model_copy(update={"repository_map": duplicate_map})
+    )
+    with pytest.raises(ModelReviewEvidenceError, match="repository source identity"):
+        seal_model_surface_review_artifact(
+            duplicate_package,
+            _completion(batch, role="source_audit"),
+        )
+
+
+def test_empty_source_file_review_requires_exact_empty_hash() -> None:
+    empty_sha256 = hashlib.sha256(b"").hexdigest()
+    request = build_source_file_review_request(
+        path="docs/EMPTY.md",
+        size=0,
+        lines=0,
+        sha256=empty_sha256,
+    )
+    assert request.allowed_locations[0].start_line == 1
+    assert request.allowed_locations[0].end_line == 1
+
+    with pytest.raises(ValueError, match="empty source-file review hash"):
+        build_source_file_review_request(
+            path="docs/EMPTY.md",
+            size=0,
+            lines=0,
+            sha256="a" * 64,
+        )
 
 
 def test_seal_rejects_a_state_surface_self_loop_or_non_adjacent_path() -> None:

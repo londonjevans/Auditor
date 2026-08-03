@@ -8,7 +8,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from mmaudit.agents.specialists import SPECIALIST_ROLE_REGISTRY
+import tests.scheduler_support as scheduler_support
+from mmaudit.agents.specialists import SPECIALIST_ROLE_REGISTRY, canonical_specialist_role
 from mmaudit.benchmark.certificate import (
     BenchmarkCertificateVerification,
     CertificateVerificationOrigin,
@@ -38,6 +39,22 @@ from mmaudit.models.reasoning import (
     ReasoningRequestPlanEvidence,
     resolve_reasoning_request_role,
 )
+from mmaudit.models.scheduler import (
+    SchedulerBindings,
+    SchedulerCampaignManifest,
+    SchedulerCostLedgerBaseline,
+    SchedulerPassKind,
+    SchedulerPassPlan,
+    SchedulerPrivacyEvidenceCustody,
+    SchedulerScope,
+    SchedulerShardDescriptor,
+    SchedulerShardInventory,
+    SchedulerSourceDescriptor,
+    SchedulerTaskActivation,
+    SchedulerTaskKind,
+    SchedulerTaskOutput,
+    SchedulerTaskPlan,
+)
 from mmaudit.models.schemas import (
     AnalysisState,
     AuditProfile,
@@ -47,6 +64,7 @@ from mmaudit.models.schemas import (
     AuditScopeAssessment,
     CandidateReproductionResolution,
     CompilationStatus,
+    ContextExecutionEvidence,
     ContextRequestEvidence,
     CoverageMetric,
     CoverageProvenance,
@@ -126,10 +144,18 @@ from mmaudit.models.schemas import (
     SolidityProjectType,
     SolidityProvenance,
     SoliditySymbolIndex,
+    SpecialistAcceptedOutcome,
+    SpecialistAcceptedOutcomeKind,
+    SpecialistExecutionRecord,
+    SpecialistExecutionStatus,
     TransactionOrderingCapability,
     UsageRecord,
 )
-from mmaudit.models.usage import candidate_falsifier_role, is_creditable_usage_record
+from mmaudit.models.usage import (
+    candidate_falsifier_role,
+    is_creditable_usage_record,
+    request_token_plan_from_usage,
+)
 from mmaudit.orchestration.assurance import (
     FULL_SEMANTIC_GRAPHS,
     AssuranceRuntime,
@@ -140,6 +166,7 @@ from mmaudit.orchestration.assurance import (
     is_qualifying_real_foundry_portfolio,
     is_qualifying_real_scanner_run,
 )
+from mmaudit.orchestration.budgets import AtomicRequestLimitReservationEvidence
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.orchestration.replay import (
     OfflineReplay,
@@ -148,6 +175,7 @@ from mmaudit.orchestration.replay import (
     ReplayComponentKind,
     ReplayComponentStatus,
 )
+from mmaudit.orchestration.scheduler_runtime import build_scheduler_bindings
 from mmaudit.reporting.markdown import render_markdown
 from mmaudit.reporting.sarif import generate_sarif
 from mmaudit.traceability import (
@@ -167,6 +195,12 @@ from tests.qualification_support import (
 )
 from tests.qualification_support import (
     synthetic_production_qualification as _synthetic_production_qualification,
+)
+from tests.scheduler_support import (
+    CompleteSchedulerFixture,
+    SchedulerFixtureModelTask,
+    build_complete_scheduler_artifact,
+    build_complete_scheduler_fixture,
 )
 
 
@@ -375,7 +409,13 @@ def _maximum_config(
     families: int = 8,
     reasoning: dict[str, object] | None = None,
 ):
-    models: dict[str, object] = {"specialists": _specialists(families=families)}
+    specialists = _specialists(families=families)
+    if families >= 3:
+        specialists["falsifier"]["fallbacks"] = [
+            "specialist-0/model-0",
+            "specialist-1/model-1",
+        ]
+    models: dict[str, object] = {"specialists": specialists}
     if reasoning is not None:
         models["reasoning"] = reasoning
     return config_factory(
@@ -439,7 +479,76 @@ def _model_metric(numerator: int, denominator: int, detail: str) -> CoverageMetr
 
 def _complete_model_coverage(
     usage_records: list[UsageRecord],
+    scheduler_fixture: CompleteSchedulerFixture | None = None,
 ) -> tuple[ModelReviewCoverage, list[ModelSurfaceReviewArtifact]]:
+    if scheduler_fixture is not None:
+        artifacts = list(scheduler_fixture.model_surface_review_artifacts)
+        references: list[ModelReviewEvidenceReference] = []
+        surface_id: str | None = None
+        location: Location | None = None
+        source_path: str | None = None
+        for role in ("business_logic", "configuration", "source_audit"):
+            usage = next(record for record in usage_records if record.role == role)
+            artifact = next(item for item in artifacts if item.request_id == usage.request_id)
+            assert len(artifact.records) == 1
+            review_record = artifact.records[0]
+            assert review_record.citation.location is not None
+            surface_id = surface_id or review_record.surface_id
+            location = location or review_record.citation.location
+            source_path = source_path or review_record.contract
+            assert review_record.surface_id == surface_id
+            references.append(
+                ModelReviewEvidenceReference(
+                    surface_id=review_record.surface_id,
+                    request_id=usage.request_id,
+                    artifact_sha256=artifact.artifact_sha256,
+                    requested_model=usage.requested_model,
+                    model=usage.actual_model,
+                    review_role=role,
+                    status=review_record.status,
+                    root_lineage=str(usage.routing["qualified_root_lineage"]),
+                    credited=True,
+                    reason="credited: exact scheduler-bound synthetic response evidence",
+                )
+            )
+        assert surface_id is not None and location is not None and source_path is not None
+        references.sort(
+            key=lambda item: (
+                item.request_id,
+                item.artifact_sha256,
+                item.surface_id,
+                item.review_role,
+                item.status.value,
+            )
+        )
+        surface = ModelReviewSurface(
+            surface_id=surface_id,
+            kind=ModelReviewSurfaceKind.SOURCE_FILE,
+            subject_id=f"source:{source_path}",
+            label=source_path,
+            critical=True,
+            locations=[location],
+            evidence_references=references,
+        )
+        coverage = ModelReviewCoverage(
+            applicable=True,
+            critical_classification_complete=True,
+            minimum_critical_root_lineages=3,
+            surfaces=[surface],
+            overall=_model_metric(1, 1, "synthetic scheduler-bound overall model coverage"),
+            by_kind={
+                kind: _model_metric(
+                    1 if kind is ModelReviewSurfaceKind.SOURCE_FILE else 0,
+                    1 if kind is ModelReviewSurfaceKind.SOURCE_FILE else 0,
+                    f"synthetic {kind.value} model coverage",
+                )
+                for kind in ModelReviewSurfaceKind
+            },
+            critical=_model_metric(1, 1, "synthetic scheduler-bound critical model coverage"),
+            critical_gate_passed=True,
+        )
+        return coverage, artifacts
+
     location = Location(
         path="src/Vault.sol",
         start_line=1,
@@ -564,6 +673,331 @@ def _complete_model_coverage(
         critical_gate_passed=True,
     )
     return coverage, artifacts
+
+
+def _complete_specialist_execution_records(
+    usage_records: list[UsageRecord],
+    accepted_outcomes: tuple[SpecialistAcceptedOutcome, ...] = (),
+) -> list[SpecialistExecutionRecord]:
+    accepted_by_request = {outcome.request_id: outcome for outcome in accepted_outcomes}
+    assert len(accepted_by_request) == len(accepted_outcomes)
+    records: list[SpecialistExecutionRecord] = []
+    for role in ALL_SPECIALIST_ROLES:
+        usage = next(
+            record for record in usage_records if canonical_specialist_role(record.role) == role
+        )
+        context = ContextRequestEvidence.model_validate(usage.routing["context_request_evidence"])
+        retained_context = ContextExecutionEvidence.model_validate(
+            context.model_dump(
+                mode="python",
+                include={
+                    "context_role",
+                    "byte_budget",
+                    "declared_bytes_used",
+                    "rendered_bytes",
+                    "source_bytes",
+                    "configured_maximum_source_tokens_per_request",
+                    "effective_source_byte_ceiling",
+                    "rendered_sha256",
+                },
+            )
+        )
+        outcome = accepted_by_request.get(usage.request_id)
+        if outcome is None:
+            outcome_kind = (
+                SpecialistAcceptedOutcomeKind.CANDIDATE_REVIEW
+                if role in SPECIALIST_INVESTIGATOR_ROLES
+                else {
+                    "invariant_review": SpecialistAcceptedOutcomeKind.INVARIANT_REVIEW,
+                    "test_generation": SpecialistAcceptedOutcomeKind.TEST_GENERATION,
+                    "exploit_reproduction_planner": (SpecialistAcceptedOutcomeKind.TEST_GENERATION),
+                    "falsifier": SpecialistAcceptedOutcomeKind.FALSIFICATION,
+                    "report_quality": SpecialistAcceptedOutcomeKind.REPORT_QUALITY,
+                }[role]
+            )
+            assert usage.validated_response_sha256 is not None
+            outcome = SpecialistAcceptedOutcome.build(
+                request_id=usage.request_id,
+                specialist_role=role,
+                request_role=usage.role,
+                outcome_kind=outcome_kind,
+                validated_response_sha256=usage.validated_response_sha256,
+                context_request_evidence_sha256=context.evidence_sha256,
+                requested_surface_count=(1 if role in SPECIALIST_INVESTIGATOR_ROLES else 0),
+                surface_review_artifact_sha256=(
+                    hashlib.sha256(f"specialist-surface:{role}".encode()).hexdigest()
+                    if role in SPECIALIST_INVESTIGATOR_ROLES
+                    else None
+                ),
+            )
+        definition = SPECIALIST_ROLE_REGISTRY[role]
+        records.append(
+            SpecialistExecutionRecord(
+                role=role,
+                role_kind=definition.role_kind,
+                responsibility=definition.mission,
+                response_schema=definition.response_schema,
+                schema_name=definition.effective_schema_name(),
+                configured=True,
+                execution_evidence=usage.execution_evidence,
+                context_limit_bytes=context.byte_budget,
+                context_budget_bytes=context.byte_budget,
+                context_bytes_used=context.rendered_bytes,
+                contexts=(retained_context,),
+                request_contexts=(context,),
+                accepted_outcomes=(outcome,),
+                request_roles=[usage.role],
+                successful_request_ids=(usage.request_id,),
+                successful_requests=1,
+                source_review_creditable_requests=(
+                    1 if role in SPECIALIST_INVESTIGATOR_ROLES else 0
+                ),
+                status=SpecialistExecutionStatus.COMPLETED,
+            )
+        )
+    return records
+
+
+def _complete_assurance_scheduler_fixture(
+    config: AuditConfig,
+    qualification: VerifiedProductionQualification,
+    now: datetime,
+) -> CompleteSchedulerFixture:
+    source = SchedulerSourceDescriptor.build(
+        path="src/Vault.sol",
+        sha256="a" * 64,
+        size=1,
+    )
+    shard = SchedulerShardDescriptor.semantic(
+        shard_id="shard-" + ("1" * 24),
+        semantic_shard_sha256=hashlib.sha256(b"assurance:semantic-shard").hexdigest(),
+        sources=(source,),
+    )
+    inventory = SchedulerShardInventory.build(
+        semantic_inventory_sha256=hashlib.sha256(b"assurance:semantic-shard-inventory").hexdigest(),
+        shards=(shard,),
+    )
+    cost_baseline = SchedulerCostLedgerBaseline.build(
+        cap_usd_exact="250",
+        spent_usd_exact="0",
+        active_reserved_usd_exact="0",
+        entries=(),
+        ledger_identity_sha256=hashlib.sha256(
+            b"assurance:operator-cost-ledger-identity"
+        ).hexdigest(),
+        ledger_snapshot_sha256=hashlib.sha256(b"assurance:pre-campaign-cost-ledger").hexdigest(),
+    )
+    provenance_sha256 = hashlib.sha256(b"assurance:privacy-provenance").hexdigest()
+    privacy_custody = SchedulerPrivacyEvidenceCustody.build(
+        source_sha256=inventory.source_tree_sha256,
+        source_provenance_size=128,
+        source_provenance_artifact_sha256=hashlib.sha256(
+            b"assurance:privacy-provenance-bytes"
+        ).hexdigest(),
+        source_provenance_evidence_sha256=provenance_sha256,
+        effective_policy_size=256,
+        effective_policy_artifact_sha256=hashlib.sha256(
+            b"assurance:privacy-policy-bytes"
+        ).hexdigest(),
+        effective_policy_evidence_sha256=hashlib.sha256(b"assurance:privacy-policy").hexdigest(),
+        policy_source_provenance_sha256=provenance_sha256,
+    )
+    bindings = build_scheduler_bindings(
+        config=config,
+        shard_inventory=inventory,
+        qualification=qualification,
+        analysis_input_sha256=hashlib.sha256(b"assurance:analysis-input").hexdigest(),
+        cost_ledger_baseline=cost_baseline,
+        privacy_evidence_custody=privacy_custody,
+    )
+    manifest = SchedulerCampaignManifest.build(
+        bindings=bindings,
+        shard_inventory=inventory,
+        cost_ledger_baseline=cost_baseline,
+        privacy_evidence_custody=privacy_custody,
+    )
+
+    def assignment(role: str, scope: SchedulerScope, *, task_key: str) -> SchedulerFixtureModelTask:
+        if role.startswith("whole_protocol_review:"):
+            index = int(role.rsplit(":", 1)[1])
+            model_id = f"specialist-{index}/model-{index}"
+        elif (specialist_role := canonical_specialist_role(role)) is not None:
+            model_id = config.models.role(specialist_role).primary
+        else:
+            model_id = config.models.role(role).primary
+        return SchedulerFixtureModelTask(
+            task_key=task_key,
+            role=role,
+            requested_model=model_id,
+            root_lineage=qualification.model_for(model_id, now=now).root_lineage,
+            scope=scope,
+        )
+
+    single_shard = SchedulerScope.single_shard(shard.shard_id)
+    blind_tasks = [
+        assignment("business_logic", single_shard, task_key="blind-business-logic"),
+        assignment("configuration", single_shard, task_key="blind-configuration"),
+        *[
+            assignment(
+                f"specialist:{role}",
+                single_shard,
+                task_key=f"blind-specialist-{role}",
+            )
+            for role in SPECIALIST_INVESTIGATOR_ROLES
+        ],
+        *[
+            assignment(
+                f"whole_protocol_review:{index}",
+                SchedulerScope.global_scope(),
+                task_key=f"blind-whole-protocol-{index}",
+            )
+            for index in range(4)
+        ],
+    ]
+
+    def later_assignment(
+        role: str,
+        pass_kind: SchedulerPassKind,
+        *,
+        task_key: str,
+        candidate_ids: tuple[str, ...] = (),
+    ) -> SchedulerFixtureModelTask:
+        base = assignment(role, SchedulerScope.global_scope(), task_key=task_key)
+        return SchedulerFixtureModelTask(
+            task_key=base.task_key,
+            role=base.role,
+            requested_model=base.requested_model,
+            root_lineage=base.root_lineage,
+            scope=base.scope,
+            pass_kind=pass_kind,
+            candidate_ids=candidate_ids,
+        )
+
+    candidate_ids = ("candidate-critical",)
+    model_tasks = (
+        later_assignment(
+            "specialist:invariant_review",
+            SchedulerPassKind.CROSS_SHARD_INTEGRATION,
+            task_key="integration-invariant-review",
+        ),
+        later_assignment(
+            "specialist:test_generation:exploit_test",
+            SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+            task_key="validation-test-generation",
+            candidate_ids=candidate_ids,
+        ),
+        later_assignment(
+            "specialist:exploit_reproduction_planner:exploit_test",
+            SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+            task_key="validation-reproduction-planner",
+            candidate_ids=candidate_ids,
+        ),
+        later_assignment(
+            "specialist:falsifier",
+            SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+            task_key="validation-specialist-falsifier",
+            candidate_ids=candidate_ids,
+        ),
+        later_assignment(
+            "judge",
+            SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT,
+            task_key="judgment-evidence-cap",
+            candidate_ids=candidate_ids,
+        ),
+        later_assignment(
+            "specialist:report_quality",
+            SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT,
+            task_key="judgment-report-quality",
+            candidate_ids=candidate_ids,
+        ),
+    )
+
+    def resolve_model_assignment(
+        pass_kind: SchedulerPassKind,
+        task_key: str,
+        role: str,
+    ) -> tuple[str, str]:
+        del pass_kind
+        if role.startswith("candidate_falsifier:"):
+            fallback_index = 0 if task_key.endswith(":1") else 1
+            model_id = config.models.role("falsifier").fallbacks[fallback_index]
+        elif role == "candidate_falsifier":
+            fallback_index = 0 if task_key.endswith("-1") else 1
+            model_id = config.models.role("falsifier").fallbacks[fallback_index]
+        elif role.startswith("whole_protocol_review:"):
+            index = int(role.rsplit(":", 1)[1])
+            model_id = f"specialist-{index}/model-{index}"
+        elif (specialist_role := canonical_specialist_role(role)) is not None:
+            model_id = config.models.role(specialist_role).primary
+        else:
+            model_id = config.models.role(role).primary
+        return model_id, qualification.model_for(model_id, now=now).root_lineage
+
+    def bind_usage(
+        _task: object,
+        _activation: object,
+        record: UsageRecord,
+    ) -> UsageRecord:
+        model = qualification.model_for(record.requested_model, now=now)
+        request_limit_fields = {
+            "atomic_request_limit_reservations",
+            "atomic_request_limit_reservation_sha256s",
+            "atomic_request_limit_reservation",
+            "atomic_request_limit_reservation_sha256",
+        }
+        routing = {
+            key: value for key, value in record.routing.items() if key not in request_limit_fields
+        }
+        prepared = record.model_copy(
+            update={
+                "provider": model.approved_provider_name,
+                "configured_provider_endpoints": [model.approved_provider_endpoint],
+                "actual_provider_endpoint": model.approved_provider_endpoint,
+                "routing": {
+                    **routing,
+                    "certification_request": True,
+                    "selected_provider_endpoint": model.approved_provider_endpoint,
+                    "selected_provider_name": model.approved_provider_name,
+                },
+            }
+        )
+        bound = _bind_usage_to_qualification(prepared, qualification, now)
+        token_plan = request_token_plan_from_usage(bound)
+        assert token_plan is not None
+        request_limit = AtomicRequestLimitReservationEvidence.build(
+            request_id=bound.request_id,
+            exact_model_id=bound.requested_model,
+            role=bound.role,
+            request_token_plan_sha256=token_plan.plan_sha256,
+            request_limit_scope=bound.request_id,
+            request_limit_count_before=0,
+            request_limit_maximum=100,
+        )
+        return reattest_synthetic_real_usage(
+            bound.model_copy(
+                update={
+                    "routing": {
+                        **bound.routing,
+                        "atomic_request_limit_reservations": [
+                            request_limit.model_dump(mode="json")
+                        ],
+                        "atomic_request_limit_reservation_sha256s": [request_limit.evidence_sha256],
+                        "atomic_request_limit_reservation": request_limit.model_dump(mode="json"),
+                        "atomic_request_limit_reservation_sha256": request_limit.evidence_sha256,
+                    }
+                }
+            )
+        )
+
+    return build_complete_scheduler_fixture(
+        seed="maximum-assurance-runtime",
+        manifest=manifest,
+        real_usage=True,
+        blind_model_tasks=blind_tasks,
+        model_tasks=model_tasks,
+        model_assignment_resolver=resolve_model_assignment,
+        usage_transform=bind_usage,
+    )
 
 
 def _complete_scope_assessment() -> AuditScopeAssessment:
@@ -803,11 +1237,19 @@ def _real_model_usage(now: datetime) -> list[UsageRecord]:
     ]
     source_bound_records: list[UsageRecord] = []
     for record in records:
+        if record.role.startswith("whole_protocol_review:"):
+            context_role = "whole_protocol_review"
+        elif record.role.startswith("specialist:"):
+            context_role = ":".join(record.role.split(":")[:2])
+        elif record.role == "falsifier":
+            context_role = "verifier"
+        else:
+            context_role = record.role
         try:
             context_evidence = ContextRequestEvidence.build(
                 request_id=record.request_id,
                 request_role=record.role,
-                context_role="whole_protocol_review",
+                context_role=context_role,
                 byte_budget=1_000,
                 declared_bytes_used=128,
                 rendered_bytes=128,
@@ -1370,8 +1812,21 @@ def _real_slither_scanner(now: datetime) -> ScannerRun:
 
 def _complete_runtime(config: AuditConfig | None = None) -> AssuranceRuntime:
     now = datetime.now(UTC).replace(microsecond=0)
-    model_usage = _real_model_usage(now)
-    model_review_coverage, model_surface_review_artifacts = _complete_model_coverage(model_usage)
+    qualification = _synthetic_production_qualification(config, now) if config is not None else None
+    scheduler_fixture = (
+        _complete_assurance_scheduler_fixture(config, qualification, now)
+        if config is not None and qualification is not None
+        else None
+    )
+    model_usage = (
+        list(scheduler_fixture.usage_records)
+        if scheduler_fixture is not None
+        else _real_model_usage(now)
+    )
+    model_review_coverage, model_surface_review_artifacts = _complete_model_coverage(
+        model_usage,
+        scheduler_fixture,
+    )
     project = SolidityProjectMetadata(
         project_type=SolidityProjectType.FOUNDRY,
         project_root=".",
@@ -1398,6 +1853,27 @@ def _complete_runtime(config: AuditConfig | None = None) -> AssuranceRuntime:
         evidence_hash="b" * 64,
     )
     runtime = AssuranceRuntime(
+        scheduler_artifact=(
+            scheduler_fixture.artifact
+            if scheduler_fixture is not None
+            else build_complete_scheduler_artifact()
+        ),
+        expected_scheduler_bindings=(
+            scheduler_fixture.manifest.bindings if scheduler_fixture is not None else None
+        ),
+        expected_scheduler_analysis_input_sha256=(
+            scheduler_fixture.manifest.bindings.analysis_input_sha256
+            if scheduler_fixture is not None
+            else None
+        ),
+        expected_scheduler_shard_inventory=(
+            scheduler_fixture.manifest.shard_inventory if scheduler_fixture is not None else None
+        ),
+        expected_scheduler_cost_ledger_baseline=(
+            scheduler_fixture.manifest.cost_ledger_baseline
+            if scheduler_fixture is not None
+            else None
+        ),
         repository_execution_sha256="9" * 64,
         projects=[project],
         compilations=[
@@ -1533,6 +2009,16 @@ def _complete_runtime(config: AuditConfig | None = None) -> AssuranceRuntime:
             "falsifier",
             "report_quality",
         },
+        specialist_execution_records=_complete_specialist_execution_records(
+            model_usage,
+            tuple(
+                output.specialist_accepted_outcome
+                for output in scheduler_fixture.outputs
+                if output.specialist_accepted_outcome is not None
+            )
+            if scheduler_fixture is not None
+            else (),
+        ),
         verifier_completed=True,
         falsifier_completed=True,
         judge_completed=True,
@@ -1540,6 +2026,7 @@ def _complete_runtime(config: AuditConfig | None = None) -> AssuranceRuntime:
         model_review_coverage=model_review_coverage,
         model_surface_review_artifacts=model_surface_review_artifacts,
         model_usage=model_usage,
+        production_qualification=qualification,
         provider_session=_issue_provider_session_provenance(
             execution_evidence=ExecutionEvidenceKind.REAL,
             pipeline_owned=True,
@@ -1573,6 +2060,7 @@ def _complete_runtime(config: AuditConfig | None = None) -> AssuranceRuntime:
             "offline-replay.json",
             "benchmark-certificate-verification.json",
             "scope-assessment.json",
+            "scheduler-state.json",
             "maximum_assurance_traceability.json",
         },
         traceability=_implemented_traceability(),
@@ -1586,16 +2074,20 @@ def _complete_runtime(config: AuditConfig | None = None) -> AssuranceRuntime:
             ),
         }
     )
-    if config is not None:
-        qualification = _synthetic_production_qualification(config, now)
+    if qualification is not None:
+        candidate_role_prefix = candidate_falsifier_role("candidate-critical", 1).rsplit(":", 1)[0]
         runtime = replace(
             runtime,
-            production_qualification=qualification,
             artifacts={*runtime.artifacts, "model-qualification-runtime.json"},
-            model_usage=[
-                _bind_usage_to_qualification(record, qualification, now)
-                for record in runtime.model_usage
-            ],
+            eligible_high_critical_ids={"candidate-critical"},
+            documented_infeasible_ids={"candidate-critical"},
+            candidate_falsifier_request_ids={
+                "candidate-critical": {
+                    record.request_id
+                    for record in runtime.model_usage
+                    if record.role.startswith(candidate_role_prefix + ":")
+                }
+            },
         )
     return runtime
 
@@ -1715,7 +2207,11 @@ def test_maximum_assurance_rejects_missing_model_families(config_factory) -> Non
 def test_maximum_assurance_complete_requires_all_runtime_clauses(config_factory) -> None:
     config = _maximum_config(config_factory)
     assessment = MaximumAssuranceContract(config).evaluate(_complete_runtime(config))
-    assert assessment.status is MaximumAssuranceStatus.COMPLETE
+    assert assessment.status is MaximumAssuranceStatus.COMPLETE, [
+        (requirement.engine, requirement.detail)
+        for requirement in assessment.requirements
+        if not requirement.passed
+    ]
     assert not assessment.downgraded
     assert all(
         requirement.passed for requirement in assessment.requirements if requirement.required
@@ -1725,7 +2221,783 @@ def test_maximum_assurance_complete_requires_all_runtime_clauses(config_factory)
         for requirement in assessment.requirements
         if requirement.engine == "certified_model_ensemble"
     )
-    assert "candidate falsifier lineages=N/A" in certified_ensemble.detail
+    assert "candidate falsifier lineages=minimum=2/2 across 1 candidate(s)" in (
+        certified_ensemble.detail
+    )
+
+
+def test_maximum_assurance_rejects_missing_scheduler_artifact(config_factory) -> None:
+    config = _maximum_config(config_factory)
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(_complete_runtime(config), scheduler_artifact=None)
+    )
+
+    scheduler = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "seven_pass_scheduler"
+    )
+    assert not scheduler.passed
+    assert scheduler.state is AnalysisState.NOT_ANALYZED
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+@pytest.mark.parametrize(
+    ("field", "detail"),
+    [
+        ("expected_scheduler_bindings", "trusted runtime scheduler bindings were not supplied"),
+        (
+            "expected_scheduler_analysis_input_sha256",
+            "trusted runtime scheduler analysis-input binding was not supplied",
+        ),
+        (
+            "expected_scheduler_shard_inventory",
+            "trusted runtime scheduler shard inventory was not supplied",
+        ),
+        (
+            "expected_scheduler_cost_ledger_baseline",
+            "trusted runtime scheduler cost-ledger baseline was not supplied",
+        ),
+    ],
+)
+def test_maximum_assurance_rejects_missing_trusted_scheduler_inputs(
+    config_factory,
+    field: str,
+    detail: str,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    assessment = MaximumAssuranceContract(config).evaluate(replace(runtime, **{field: None}))
+    scheduler = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "seven_pass_scheduler"
+    )
+
+    assert not scheduler.passed
+    assert detail in scheduler.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_maximum_assurance_rejects_wrong_scheduler_binding(config_factory) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    binding = runtime.expected_scheduler_bindings
+    assert binding is not None
+    wrong = SchedulerBindings.build(
+        source_sha256=binding.source_sha256,
+        analysis_input_sha256=binding.analysis_input_sha256,
+        effective_config_sha256=binding.effective_config_sha256,
+        shard_inventory_sha256=binding.shard_inventory_sha256,
+        model_selection_sha256=binding.model_selection_sha256,
+        qualification_sha256=binding.qualification_sha256,
+        prompt_set_sha256=binding.prompt_set_sha256,
+        schema_set_sha256=binding.schema_set_sha256,
+        tool_policy_sha256=hashlib.sha256(b"wrong scheduler tool policy").hexdigest(),
+        cost_ledger_baseline_sha256=binding.cost_ledger_baseline_sha256,
+        privacy_evidence_custody_sha256=binding.privacy_evidence_custody_sha256,
+    )
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(runtime, expected_scheduler_bindings=wrong)
+    )
+    scheduler = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "seven_pass_scheduler"
+    )
+
+    assert not scheduler.passed
+    assert "artifact bindings differ from trusted runtime bindings" in scheduler.detail
+    assert "bindings differ from current configuration" in scheduler.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_maximum_assurance_rejects_wrong_scheduler_analysis_input_binding(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    assert runtime.expected_scheduler_analysis_input_sha256 is not None
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(runtime, expected_scheduler_analysis_input_sha256="f" * 64)
+    )
+    scheduler = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "seven_pass_scheduler"
+    )
+
+    assert not scheduler.passed
+    assert (
+        "bindings differ from the trusted pre-scheduler analysis-input digest" in scheduler.detail
+    )
+    assert "bindings differ from current configuration" in scheduler.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_maximum_assurance_rejects_wrong_scheduler_cost_ledger_baseline(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    baseline = runtime.expected_scheduler_cost_ledger_baseline
+    assert baseline is not None
+    wrong = SchedulerCostLedgerBaseline.build(
+        cap_usd_exact=baseline.cap_usd_exact,
+        spent_usd_exact=baseline.spent_usd_exact,
+        active_reserved_usd_exact=baseline.active_reserved_usd_exact,
+        entries=baseline.entries,
+        ledger_identity_sha256=baseline.ledger_identity_sha256,
+        ledger_snapshot_sha256=hashlib.sha256(b"wrong scheduler ledger snapshot").hexdigest(),
+    )
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(runtime, expected_scheduler_cost_ledger_baseline=wrong)
+    )
+    scheduler = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "seven_pass_scheduler"
+    )
+
+    assert not scheduler.passed
+    assert "cost-ledger baseline differs from trusted runtime baseline" in scheduler.detail
+    assert "bindings differ from current configuration" in scheduler.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_maximum_assurance_rejects_wrong_scheduler_shard_inventory(config_factory) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    wrong_inventory = build_complete_scheduler_artifact(
+        seed="wrong-assurance-inventory"
+    ).summary.manifest.shard_inventory
+    assert wrong_inventory != runtime.expected_scheduler_shard_inventory
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(runtime, expected_scheduler_shard_inventory=wrong_inventory)
+    )
+    scheduler = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "seven_pass_scheduler"
+    )
+
+    assert not scheduler.passed
+    assert "differs from trusted runtime inventory" in scheduler.detail
+    assert "lacks exact global whole-protocol source delivery" in scheduler.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_maximum_assurance_rejects_extra_unscheduled_provider_usage(config_factory) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    original = runtime.model_usage[0]
+    extra = original.model_copy(update={"request_id": "unscheduled-provider-request"})
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(runtime, model_usage=[*runtime.model_usage, extra])
+    )
+    scheduler = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "seven_pass_scheduler"
+    )
+
+    assert not scheduler.passed
+    assert "differs from the scheduler request inventory" in scheduler.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_maximum_assurance_rejects_mock_scheduler_usage(config_factory) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    original = runtime.model_usage[0]
+    mocked = original.model_copy(update={"execution_evidence": ExecutionEvidenceKind.MOCK})
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(
+            runtime,
+            model_usage=[
+                mocked if record.request_id == original.request_id else record
+                for record in runtime.model_usage
+            ],
+        )
+    )
+    scheduler = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "seven_pass_scheduler"
+    )
+
+    assert not scheduler.passed
+    assert "lacks real creditable usage" in scheduler.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_maximum_assurance_rejects_unqualified_real_scheduler_usage(config_factory) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    original = runtime.model_usage[0]
+    routing = {
+        key: value for key, value in original.routing.items() if not key.startswith("qualified_")
+    }
+    unqualified = reattest_synthetic_real_usage(original.model_copy(update={"routing": routing}))
+    assert is_creditable_usage_record(unqualified, require_real=True)
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(
+            runtime,
+            model_usage=[
+                unqualified if record.request_id == original.request_id else record
+                for record in runtime.model_usage
+            ],
+        )
+    )
+    scheduler = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "seven_pass_scheduler"
+    )
+
+    assert not scheduler.passed
+    assert "lacks current qualified certification-grade" in scheduler.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_maximum_assurance_rejects_scheduler_context_hash_mismatch(config_factory) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    original = next(record for record in runtime.model_usage if record.role == "threat_model")
+    context = ContextRequestEvidence.model_validate(original.routing["context_request_evidence"])
+    changed_context = ContextRequestEvidence.build(
+        request_id=context.request_id,
+        request_role=context.request_role,
+        context_role=context.context_role,
+        byte_budget=context.byte_budget,
+        declared_bytes_used=context.declared_bytes_used,
+        rendered_bytes=context.rendered_bytes,
+        source_bytes=context.source_bytes,
+        configured_maximum_source_tokens_per_request=(
+            context.configured_maximum_source_tokens_per_request
+        ),
+        effective_source_byte_ceiling=context.effective_source_byte_ceiling,
+        rendered_sha256=hashlib.sha256(b"different retained scheduler context").hexdigest(),
+    )
+    changed = reattest_synthetic_real_usage(
+        original.model_copy(
+            update={
+                "routing": {
+                    **original.routing,
+                    "context_request_evidence": changed_context.model_dump(mode="json"),
+                    "context_request_evidence_sha256": changed_context.evidence_sha256,
+                }
+            }
+        )
+    )
+    assert is_creditable_usage_record(changed, require_real=True)
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(
+            runtime,
+            model_usage=[
+                changed if record.request_id == original.request_id else record
+                for record in runtime.model_usage
+            ],
+        )
+    )
+    scheduler = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "seven_pass_scheduler"
+    )
+
+    assert not scheduler.passed
+    assert "differs from exact provider evidence" in scheduler.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_maximum_assurance_rejects_scheduler_usage_record_hash_mismatch(config_factory) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    original = next(record for record in runtime.model_usage if record.role == "threat_model")
+    changed = reattest_synthetic_real_usage(
+        original.model_copy(
+            update={
+                "routing": {
+                    **original.routing,
+                    "synthetic_runtime_observation": "different scheduler usage evidence",
+                }
+            }
+        )
+    )
+    assert is_creditable_usage_record(changed, require_real=True)
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(
+            runtime,
+            model_usage=[
+                changed if record.request_id == original.request_id else record
+                for record in runtime.model_usage
+            ],
+        )
+    )
+    scheduler = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "seven_pass_scheduler"
+    )
+
+    assert not scheduler.passed
+    assert "differs from exact provider evidence" in scheduler.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_declared_specialist_roles_without_execution_records_never_receive_credit(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(runtime, specialist_execution_records=[])
+    )
+
+    evidence = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "specialist_execution_evidence"
+    )
+    multi_agent = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "multi_agent_review"
+    )
+    assert not evidence.passed
+    assert "differs from accepted outcomes" in evidence.detail
+    assert not multi_agent.passed
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_real_specialist_usage_without_host_accepted_outcome_never_receives_credit(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    original = next(
+        record for record in runtime.specialist_execution_records if record.role == "access_control"
+    )
+    no_outcome = SpecialistExecutionRecord(
+        role=original.role,
+        role_kind=original.role_kind,
+        responsibility=original.responsibility,
+        response_schema=original.response_schema,
+        schema_name=original.schema_name,
+        configured=True,
+        execution_evidence=ExecutionEvidenceKind.UNVERIFIED,
+        context_limit_bytes=original.context_limit_bytes,
+        status=SpecialistExecutionStatus.NOT_SCHEDULED,
+    )
+    records = [
+        no_outcome if record.role == original.role else record
+        for record in runtime.specialist_execution_records
+    ]
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(runtime, specialist_execution_records=records)
+    )
+
+    evidence = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "specialist_execution_evidence"
+    )
+    multi_agent = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "multi_agent_review"
+    )
+    assert not evidence.passed
+    assert "declared investigator completion differs" in evidence.detail
+    assert not multi_agent.passed
+    assert "access_control" in multi_agent.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_mock_completed_specialist_is_descriptive_but_never_receives_assurance_credit(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    original = next(
+        record for record in runtime.specialist_execution_records if record.role == "access_control"
+    )
+    mock_completed = original.model_copy(update={"execution_evidence": ExecutionEvidenceKind.MOCK})
+    records = [
+        mock_completed if record.role == original.role else record
+        for record in runtime.specialist_execution_records
+    ]
+
+    assert mock_completed.status is SpecialistExecutionStatus.COMPLETED
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(runtime, specialist_execution_records=records)
+    )
+    evidence = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "specialist_execution_evidence"
+    )
+    multi_agent = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "multi_agent_review"
+    )
+
+    assert not evidence.passed
+    assert "declared investigator completion differs" in evidence.detail
+    assert not multi_agent.passed
+    assert "access_control" in multi_agent.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_scheduler_rejects_specialist_outcome_for_another_validated_response(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    original = next(
+        record for record in runtime.specialist_execution_records if record.role == "access_control"
+    )
+    assert len(original.accepted_outcomes) == 1
+    outcome = original.accepted_outcomes[0]
+    mismatched_outcome = SpecialistAcceptedOutcome.build(
+        request_id=outcome.request_id,
+        specialist_role=outcome.specialist_role,
+        request_role=outcome.request_role,
+        outcome_kind=outcome.outcome_kind,
+        validated_response_sha256=hashlib.sha256(
+            b"unrelated validated specialist response"
+        ).hexdigest(),
+        context_request_evidence_sha256=outcome.context_request_evidence_sha256,
+        requested_surface_count=outcome.requested_surface_count,
+        surface_review_artifact_sha256=outcome.surface_review_artifact_sha256,
+    )
+    changed_record = SpecialistExecutionRecord.model_validate(
+        original.model_copy(update={"accepted_outcomes": (mismatched_outcome,)}).model_dump(
+            mode="python"
+        )
+    )
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(
+            runtime,
+            specialist_execution_records=[
+                changed_record if record.role == original.role else record
+                for record in runtime.specialist_execution_records
+            ],
+        )
+    )
+    scheduler = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "seven_pass_scheduler"
+    )
+
+    assert not scheduler.passed
+    assert "differs from its exact host-accepted outcome" in scheduler.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_maximum_assurance_rejects_generic_blind_specialist_payload_with_declared_outcome(
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_payload = scheduler_support.build_scheduler_test_model_payload
+    original_outcome = scheduler_support._scheduler_test_specialist_outcome
+
+    def generic_specialist_payload(
+        plan: SchedulerPassPlan,
+        task: SchedulerTaskPlan,
+    ) -> object:
+        if task.role == "specialist:access_control":
+            return {"unvalidated_generic_summary": True}
+        return original_payload(plan, task)
+
+    def declared_specialist_outcome(
+        task: SchedulerTaskPlan,
+        usage: UsageRecord | None,
+        payload: object,
+        surface_review_artifact: ModelSurfaceReviewArtifact | None,
+    ) -> SpecialistAcceptedOutcome | None:
+        if task.role != "specialist:access_control":
+            return original_outcome(task, usage, payload, surface_review_artifact)
+        assert usage is not None
+        assert usage.validated_response_sha256 is not None
+        context = ContextRequestEvidence.model_validate(usage.routing["context_request_evidence"])
+        return SpecialistAcceptedOutcome.build(
+            request_id=usage.request_id,
+            specialist_role="access_control",
+            request_role=usage.role,
+            outcome_kind=SpecialistAcceptedOutcomeKind.CANDIDATE_REVIEW,
+            validated_response_sha256=usage.validated_response_sha256,
+            context_request_evidence_sha256=context.evidence_sha256,
+            requested_surface_count=1,
+            surface_review_artifact_sha256=hashlib.sha256(
+                b"nonexistent-specialist-review-artifact"
+            ).hexdigest(),
+        )
+
+    monkeypatch.setattr(
+        scheduler_support,
+        "build_scheduler_test_model_payload",
+        generic_specialist_payload,
+    )
+    monkeypatch.setattr(
+        scheduler_support,
+        "_scheduler_test_specialist_outcome",
+        declared_specialist_outcome,
+    )
+    config = _maximum_config(config_factory)
+    try:
+        runtime = _complete_runtime(config)
+    except ValueError as exc:
+        assert any(
+            marker in str(exc).lower()
+            for marker in ("specialist", "candidatereviewbatch", "surface")
+        )
+        return
+
+    assessment = MaximumAssuranceContract(config).evaluate(runtime)
+    scheduler = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "seven_pass_scheduler"
+    )
+    assert not scheduler.passed
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_maximum_assurance_rejects_generic_auxiliary_specialist_payload(
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_payload = scheduler_support.build_scheduler_test_model_payload
+
+    def generic_specialist_payload(
+        plan: SchedulerPassPlan,
+        task: SchedulerTaskPlan,
+    ) -> object:
+        if task.role == "specialist:invariant_review":
+            return {"unvalidated_generic_summary": True}
+        return original_payload(plan, task)
+
+    monkeypatch.setattr(
+        scheduler_support,
+        "build_scheduler_test_model_payload",
+        generic_specialist_payload,
+    )
+    config = _maximum_config(config_factory)
+    try:
+        runtime = _complete_runtime(config)
+    except ValueError as exc:
+        assert "specialist" in str(exc).lower()
+        return
+
+    assessment = MaximumAssuranceContract(config).evaluate(runtime)
+    scheduler = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "seven_pass_scheduler"
+    )
+    assert not scheduler.passed
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_maximum_assurance_rejects_generic_orientation_payload(
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_payload = scheduler_support.build_scheduler_test_model_payload
+
+    def generic_orientation_payload(
+        plan: SchedulerPassPlan,
+        task: SchedulerTaskPlan,
+    ) -> object:
+        if task.pass_kind is SchedulerPassKind.ORIENTATION:
+            return {"unvalidated_generic_summary": True}
+        return original_payload(plan, task)
+
+    monkeypatch.setattr(
+        scheduler_support,
+        "build_scheduler_test_model_payload",
+        generic_orientation_payload,
+    )
+    config = _maximum_config(config_factory)
+    try:
+        runtime = _complete_runtime(config)
+    except ValueError as exc:
+        assert any(
+            marker in str(exc).lower()
+            for marker in ("orientation", "threat", "scheduler task output")
+        )
+        return
+
+    assessment = MaximumAssuranceContract(config).evaluate(runtime)
+    scheduler = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "seven_pass_scheduler"
+    )
+    assert not scheduler.passed
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+@pytest.mark.parametrize(
+    "host_role",
+    ("host:finding_reducer", "host:evidence_cap_judgment"),
+)
+def test_maximum_assurance_rejects_generic_host_pass_payload(
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    host_role: str,
+) -> None:
+    original_build = SchedulerTaskOutput.build
+
+    def generic_host_output(
+        cls: type[SchedulerTaskOutput],
+        *,
+        plan: SchedulerPassPlan,
+        task: SchedulerTaskPlan,
+        activation: SchedulerTaskActivation,
+        payload: object,
+        usage_record: UsageRecord | None = None,
+        specialist_accepted_outcome: SpecialistAcceptedOutcome | None = None,
+        normalizer_sha256: str | None = None,
+        **extra: object,
+    ) -> SchedulerTaskOutput:
+        del cls
+        if task.task_kind is SchedulerTaskKind.HOST_COMPUTATION and task.role == host_role:
+            payload = {"unvalidated_generic_summary": True}
+        return original_build(
+            plan=plan,
+            task=task,
+            activation=activation,
+            payload=payload,
+            usage_record=usage_record,
+            specialist_accepted_outcome=specialist_accepted_outcome,
+            normalizer_sha256=normalizer_sha256,
+            **extra,
+        )
+
+    monkeypatch.setattr(SchedulerTaskOutput, "build", classmethod(generic_host_output))
+    config = _maximum_config(config_factory)
+    try:
+        runtime = _complete_runtime(config)
+    except ValueError as exc:
+        assert any(
+            marker in str(exc).lower()
+            for marker in ("host", "reduction", "judgment", "scheduler task output")
+        )
+        return
+
+    assessment = MaximumAssuranceContract(config).evaluate(runtime)
+    scheduler = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "seven_pass_scheduler"
+    )
+    assert not scheduler.passed
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_maximum_assurance_rejects_nonexistent_specialist_surface_artifact(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    access_control = next(
+        record for record in runtime.specialist_execution_records if record.role == "access_control"
+    )
+    assert len(access_control.accepted_outcomes) == 1
+    accepted = access_control.accepted_outcomes[0]
+    assert accepted.surface_review_artifact_sha256 is not None
+
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(
+            runtime,
+            model_surface_review_artifacts=[
+                artifact
+                for artifact in runtime.model_surface_review_artifacts
+                if artifact.request_id != accepted.request_id
+            ],
+        )
+    )
+    scheduler = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "seven_pass_scheduler"
+    )
+
+    assert not scheduler.passed
+    assert (
+        "runtime model-surface artifacts differ from scheduler request custody" in scheduler.detail
+    )
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+@pytest.mark.parametrize(
+    "tampered_field",
+    ("requested_surface_manifest_sha256", "rendered_context_sha256"),
+)
+def test_scheduler_rejects_runtime_surface_artifact_binding_tamper(
+    config_factory,
+    tampered_field: str,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    original = runtime.model_surface_review_artifacts[0]
+    payload = original.model_dump(mode="json")
+    payload[tampered_field] = hashlib.sha256(
+        f"tampered scheduler surface {tampered_field}".encode()
+    ).hexdigest()
+    payload["artifact_sha256"] = ModelSurfaceReviewArtifact.calculate_artifact_sha256(payload)
+    tampered = ModelSurfaceReviewArtifact.model_validate(payload)
+
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(
+            runtime,
+            model_surface_review_artifacts=[
+                tampered if artifact.request_id == original.request_id else artifact
+                for artifact in runtime.model_surface_review_artifacts
+            ],
+        )
+    )
+    scheduler = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "seven_pass_scheduler"
+    )
+
+    assert not scheduler.passed
+    assert "differs from exact runtime model-surface artifact" in scheduler.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_scheduler_rejects_duplicate_runtime_surface_artifact(config_factory) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    duplicate = runtime.model_surface_review_artifacts[0]
+
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(
+            runtime,
+            model_surface_review_artifacts=[
+                *runtime.model_surface_review_artifacts,
+                duplicate,
+            ],
+        )
+    )
+    scheduler = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "seven_pass_scheduler"
+    )
+
+    assert not scheduler.passed
+    assert (
+        "runtime model-surface artifacts differ from scheduler request custody" in scheduler.detail
+    )
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
 
 
 def test_certified_ensemble_requires_twenty_four_specialist_responsibilities(
@@ -2049,7 +3321,7 @@ def test_public_qualification_hashes_without_reasoning_evidence_receive_no_credi
             )
         )
     )
-    assert is_creditable_usage_record(
+    assert not is_creditable_usage_record(
         unbound,
         require_real=True,
         require_certification=True,
@@ -2132,7 +3404,11 @@ def test_reasoning_authority_mismatch_revokes_runtime_credit(
     elif fault == "qualification_binding":
         qualification_binding_sha256 = "f" * 64
     elif fault == "wrong_role_pair_binding":
-        original = next(record for record in runtime.model_usage if record.role == "falsifier")
+        original = next(
+            record
+            for record in runtime.model_usage
+            if record.role.startswith("candidate_falsifier:")
+        )
         model = qualification.model_for(
             original.requested_model,
             now=datetime.now(UTC).replace(microsecond=0),
@@ -2169,7 +3445,7 @@ def test_reasoning_authority_mismatch_revokes_runtime_credit(
         plan,
         observed_reasoning_tokens=0,
     )
-    assert is_creditable_usage_record(
+    assert not is_creditable_usage_record(
         mismatched,
         require_real=True,
         require_certification=True,
@@ -2198,7 +3474,7 @@ def test_reasoning_authority_mismatch_revokes_runtime_credit(
             if requirement.engine == "qualified_model_selection_execution"
         )
         assert not selection_execution.passed
-        assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
 
 
 @pytest.mark.parametrize("observed_reasoning_tokens", [0, None])
@@ -2337,11 +3613,18 @@ def test_mismatched_qualified_usage_projection_revokes_runtime_credit(
             output_capability_sha256=output_capability_sha256,
             mode=StructuredOutputMode(raw_structured_output["requested_mode"]),
         )
-        assert is_creditable_usage_record(
-            record,
-            require_real=True,
-            require_certification=True,
-        )
+        if fault == "endpoint_snapshot_sha256":
+            assert not is_creditable_usage_record(
+                record,
+                require_real=True,
+                require_certification=True,
+            )
+        else:
+            assert is_creditable_usage_record(
+                record,
+                require_real=True,
+                require_certification=True,
+            )
         usage.append(record)
 
     assessment = MaximumAssuranceContract(config).evaluate(replace(runtime, model_usage=usage))
@@ -3852,7 +5135,8 @@ def test_non_successful_compilation_never_satisfies_maximum_assurance(
     expected_state: AnalysisState,
     expected_assessment: MaximumAssuranceStatus,
 ) -> None:
-    runtime = _complete_runtime()
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
     runtime.compilations[0] = runtime.compilations[0].model_copy(
         update={
             "status": status,
@@ -3861,7 +5145,7 @@ def test_non_successful_compilation_never_satisfies_maximum_assurance(
         }
     )
 
-    assessment = MaximumAssuranceContract(_maximum_config(config_factory)).evaluate(runtime)
+    assessment = MaximumAssuranceContract(config).evaluate(runtime)
     gate = next(
         requirement
         for requirement in assessment.requirements
@@ -3934,7 +5218,8 @@ def test_partial_multi_project_compilation_fails_closed(config_factory) -> None:
 
 
 def test_fallback_parser_only_index_never_satisfies_ast_clause(config_factory) -> None:
-    runtime = _complete_runtime()
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
     assert runtime.index is not None
     runtime = replace(
         runtime,
@@ -3946,7 +5231,7 @@ def test_fallback_parser_only_index_never_satisfies_ast_clause(config_factory) -
         ),
     )
 
-    assessment = MaximumAssuranceContract(_maximum_config(config_factory)).evaluate(runtime)
+    assessment = MaximumAssuranceContract(config).evaluate(runtime)
     gate = next(
         requirement
         for requirement in assessment.requirements
@@ -4007,7 +5292,7 @@ def test_benchmark_gate_requires_current_typed_verification_and_artifact(
 
 def test_missing_traceability_fails_without_downgrade(config_factory) -> None:
     config = _maximum_config(config_factory)
-    runtime = replace(_complete_runtime(), traceability=None)
+    runtime = replace(_complete_runtime(config), traceability=None)
     assessment = MaximumAssuranceContract(config).evaluate(runtime)
     gate = next(
         requirement
@@ -4020,7 +5305,7 @@ def test_missing_traceability_fails_without_downgrade(config_factory) -> None:
 
 def test_missing_full_protocol_scope_blocks_maximum_assurance(config_factory) -> None:
     config = _maximum_config(config_factory)
-    runtime = _complete_runtime()
+    runtime = _complete_runtime(config)
     assessment = MaximumAssuranceContract(config).evaluate(
         replace(
             runtime,
@@ -4046,23 +5331,25 @@ def test_incomplete_required_traceability_is_failed_or_explicitly_downgraded(
         ImplementationStatus.UNAVAILABLE,
         ImplementationStatus.UNIMPLEMENTED,
     ):
-        runtime = replace(
-            _complete_runtime(),
-            traceability=MaximumAssuranceTraceability(
-                last_verified_commit="synthetic-test",
-                requirements=[
-                    TraceabilityRequirement(
-                        requirement_id="MA-SYNTHETIC-GAP",
-                        description="Synthetic blocking dependency.",
-                        implementation_status=status,
-                        required_for_complete=True,
-                        downgrade_reason="synthetic capability is incomplete",
-                        last_verified_commit="synthetic-test",
-                    )
-                ],
-            ),
+        traceability = MaximumAssuranceTraceability(
+            last_verified_commit="synthetic-test",
+            requirements=[
+                TraceabilityRequirement(
+                    requirement_id="MA-SYNTHETIC-GAP",
+                    description="Synthetic blocking dependency.",
+                    implementation_status=status,
+                    required_for_complete=True,
+                    downgrade_reason="synthetic capability is incomplete",
+                    last_verified_commit="synthetic-test",
+                )
+            ],
         )
-        failed = MaximumAssuranceContract(_maximum_config(config_factory)).evaluate(runtime)
+        failed_config = _maximum_config(config_factory)
+        failed_runtime = replace(
+            _complete_runtime(failed_config),
+            traceability=traceability,
+        )
+        failed = MaximumAssuranceContract(failed_config).evaluate(failed_runtime)
         assert failed.status is MaximumAssuranceStatus.FAILED
         gap = next(
             requirement
@@ -4072,9 +5359,12 @@ def test_incomplete_required_traceability_is_failed_or_explicitly_downgraded(
         assert not gap.passed
         assert status.value in gap.detail
 
-        downgraded = MaximumAssuranceContract(
-            _maximum_config(config_factory, allow_downgrade=True)
-        ).evaluate(runtime)
+        downgraded_config = _maximum_config(config_factory, allow_downgrade=True)
+        downgraded_runtime = replace(
+            _complete_runtime(downgraded_config),
+            traceability=traceability,
+        )
+        downgraded = MaximumAssuranceContract(downgraded_config).evaluate(downgraded_runtime)
         assert downgraded.status is MaximumAssuranceStatus.DOWNGRADED
         assert downgraded.downgraded
         assert any(status.value in reason for reason in downgraded.downgrade_reasons)
@@ -4107,9 +5397,10 @@ def test_incomplete_nonblocking_traceability_does_not_block(config_factory) -> N
 
 
 def test_current_required_traceability_gaps_all_block_complete(config_factory) -> None:
+    config = _maximum_config(config_factory)
     matrix = build_traceability_matrix("synthetic-test")
-    runtime = replace(_complete_runtime(), traceability=matrix)
-    assessment = MaximumAssuranceContract(_maximum_config(config_factory)).evaluate(runtime)
+    runtime = replace(_complete_runtime(config), traceability=matrix)
+    assessment = MaximumAssuranceContract(config).evaluate(runtime)
     expected = {
         f"traceability:{item.requirement_id.lower()}"
         for item in matrix.requirements
@@ -4128,7 +5419,7 @@ def test_current_required_traceability_gaps_all_block_complete(config_factory) -
 
 def test_maximum_assurance_reports_untyped_economic_templates(config_factory) -> None:
     config = _maximum_config(config_factory)
-    runtime = _complete_runtime()
+    runtime = _complete_runtime(config)
     runtime.economic_simulations.append(
         EconomicSimulationPlan(
             kind=EconomicSimulationKind.FLASH_ORACLE,
@@ -4380,60 +5671,38 @@ def test_duplicate_candidate_resolutions_fail_closed(config_factory) -> None:
 def test_high_critical_cross_examination_requires_two_lineages(config_factory) -> None:
     config = _maximum_config(config_factory)
     contract = MaximumAssuranceContract(config)
-    lineage_by_model = model_lineage_index(config)
     complete_runtime = _complete_runtime(config)
     qualification = complete_runtime.production_qualification
     assert qualification is not None
-    template = complete_runtime.model_usage[0]
-    falsifier_models = [
-        config.models.verifier.primary,
-        config.models.judge.primary,
+    candidate_id = "candidate-critical"
+    falsifier_request_ids = complete_runtime.candidate_falsifier_request_ids[candidate_id]
+    assert len(falsifier_request_ids) == 2
+    falsifier_usage = [
+        record
+        for record in complete_runtime.model_usage
+        if record.request_id in falsifier_request_ids
     ]
-    falsifier_usage: list[UsageRecord] = []
-    for reviewer_index, model_id in enumerate(falsifier_models, start=1):
-        generation_id = f"generation-cross-exam-{reviewer_index}"
-        usage = template.model_copy(
-            update={
-                "request_id": f"request-cross-exam-{reviewer_index}",
-                "role": candidate_falsifier_role("critical-1", reviewer_index),
-                "requested_model": model_id,
-                "returned_model": model_id,
-                "actual_model": model_id,
-                "model_family": model_id,
-                "openrouter_generation_id": generation_id,
-                "routing": {
-                    **template.routing,
-                    "generation_id": generation_id,
-                    "selected_model": model_id,
-                    "canonical_model": model_id,
-                    "catalog_identity_binding_sha256": canonical_sha256(
-                        {
-                            "canonical_slug": model_id,
-                            "id": model_id,
-                        }
-                    ),
-                },
+    assert len(falsifier_usage) == 2
+    assert (
+        len(
+            {
+                qualification.model_for(
+                    record.requested_model,
+                    now=qualification.verified_at,
+                ).root_lineage
+                for record in falsifier_usage
             }
         )
-        falsifier_usage.append(
-            _bind_usage_to_qualification(
-                usage,
-                qualification,
-                qualification.verified_at,
-            )
-        )
-    assert (
-        len({lineage_by_model[model_id.lower()].root_lineage for model_id in falsifier_models}) == 2
+        == 2
     )
     one_lineage = contract.evaluate(
         replace(
             complete_runtime,
-            eligible_high_critical_ids={"critical-1"},
+            eligible_high_critical_ids={candidate_id},
             falsifier_completed=True,
             candidate_falsifier_request_ids={
-                "critical-1": {falsifier_usage[0].request_id},
+                candidate_id: {falsifier_usage[0].request_id},
             },
-            model_usage=[*complete_runtime.model_usage, falsifier_usage[0]],
         )
     )
     one_lineage_gate = next(
@@ -4443,17 +5712,7 @@ def test_high_critical_cross_examination_requires_two_lineages(config_factory) -
     )
     assert not one_lineage_gate.passed
 
-    two_lineages = contract.evaluate(
-        replace(
-            complete_runtime,
-            eligible_high_critical_ids={"critical-1"},
-            falsifier_completed=True,
-            candidate_falsifier_request_ids={
-                "critical-1": {record.request_id for record in falsifier_usage},
-            },
-            model_usage=[*complete_runtime.model_usage, *falsifier_usage],
-        )
-    )
+    two_lineages = contract.evaluate(complete_runtime)
     two_lineage_gate = next(
         requirement
         for requirement in two_lineages.requirements

@@ -9,6 +9,7 @@ import re
 import unicodedata
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from itertools import pairwise
 from typing import Any, Literal, Self
@@ -846,8 +847,9 @@ class SolidityEntityKind(StrEnum):
 
 
 class ModelReviewSurfaceKind(StrEnum):
-    """Deterministic Solidity surface categories tracked across model contexts."""
+    """Deterministic source and Solidity surface categories tracked across model contexts."""
 
+    SOURCE_FILE = "source_file"
     CONTRACT = "contract"
     ENTRY_POINT = "entry_point"
     INTERNAL_FUNCTION = "internal_function"
@@ -10522,14 +10524,9 @@ class SpecialistAcceptedOutcome(StrictModel):
             if self.specialist_role not in SPECIALIST_INVESTIGATOR_ROLES:
                 raise ValueError("candidate-review outcome requires an investigator role")
             expected_request_role = f"specialist:{self.specialist_role}"
-            if self.requested_surface_count > 0 and self.surface_review_artifact_sha256 is None:
-                raise ValueError("requested candidate surfaces require an accepted review artifact")
-            if (
-                self.requested_surface_count == 0
-                and self.surface_review_artifact_sha256 is not None
-            ):
+            if self.requested_surface_count == 0 or self.surface_review_artifact_sha256 is None:
                 raise ValueError(
-                    "surface-review artifact cannot be declared without requested surfaces"
+                    "candidate-review outcome requires requested surfaces and an accepted artifact"
                 )
         elif self.outcome_kind is SpecialistAcceptedOutcomeKind.INVARIANT_REVIEW:
             if self.specialist_role != "invariant_review":
@@ -10579,6 +10576,7 @@ class SpecialistExecutionRecord(StrictModel):
     response_schema: str = Field(min_length=1, max_length=100)
     schema_name: str = Field(pattern=r"^[a-z][a-z0-9_]{0,127}$")
     configured: bool
+    execution_evidence: ExecutionEvidenceKind
     context_limit_bytes: int = Field(ge=1)
     context_budget_bytes: int | None = Field(default=None, ge=1)
     context_bytes_used: int | None = Field(default=None, ge=0)
@@ -10726,6 +10724,16 @@ class SpecialistExecutionRecord(StrictModel):
             raise ValueError("source-review credit differs from source-backed request evidence")
         if not self.configured and self.status is not SpecialistExecutionStatus.NOT_CONFIGURED:
             raise ValueError("unconfigured specialist must remain not_configured")
+        if not accounted_ids and self.execution_evidence is not ExecutionEvidenceKind.UNVERIFIED:
+            raise ValueError("specialist without requests cannot claim execution evidence")
+        if self.status in {
+            SpecialistExecutionStatus.COMPLETED,
+            SpecialistExecutionStatus.PARTIAL,
+        } and self.execution_evidence not in {
+            ExecutionEvidenceKind.REAL,
+            ExecutionEvidenceKind.MOCK,
+        }:
+            raise ValueError("accepted specialist execution requires real or mock evidence")
         if self.status is SpecialistExecutionStatus.COMPLETED and (
             self.successful_requests == 0 or self.failed_requests > 0
         ):
@@ -10762,6 +10770,14 @@ class UsageRecord(StrictModel):
     total_tokens: int = Field(default=0, ge=0)
     reported_cost_usd: float | None = Field(default=None, ge=0)
     accounted_cost_usd: float = Field(default=0, ge=0)
+    reported_cost_usd_exact: str | None = Field(
+        default=None,
+        pattern=r"^(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,36})?$",
+    )
+    accounted_cost_usd_exact: str | None = Field(
+        default=None,
+        pattern=r"^(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,36})?$",
+    )
     routing: dict[str, Any] = Field(default_factory=dict)
     prompt_sha256: str
     user_prompt_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
@@ -10791,8 +10807,56 @@ class UsageRecord(StrictModel):
     status: str
     attempts: int = Field(ge=1)
 
+    @model_validator(mode="before")
+    @classmethod
+    def exact_cost_strings_default_to_the_available_numeric_evidence(
+        cls,
+        value: Any,
+    ) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        normalized = dict(value)
+        if "reported_cost_usd_exact" not in normalized:
+            reported = normalized.get("reported_cost_usd")
+            normalized["reported_cost_usd_exact"] = (
+                None if reported is None else format(Decimal(str(reported)), "f")
+            )
+        if "accounted_cost_usd_exact" not in normalized:
+            accounted = normalized.get("accounted_cost_usd", 0)
+            normalized["accounted_cost_usd_exact"] = format(Decimal(str(accounted)), "f")
+        return normalized
+
     @model_validator(mode="after")
     def request_evidence_is_consistent(self) -> UsageRecord:
+        try:
+            exact_reported = (
+                Decimal(self.reported_cost_usd_exact)
+                if self.reported_cost_usd_exact is not None
+                else None
+            )
+            exact_accounted = (
+                Decimal(self.accounted_cost_usd_exact)
+                if self.accounted_cost_usd_exact is not None
+                else None
+            )
+        except InvalidOperation:
+            raise ValueError("usage exact cost evidence is invalid") from None
+        if (self.reported_cost_usd is None) != (exact_reported is None) and (
+            self.reported_cost_usd_exact is not None
+        ):
+            raise ValueError("usage reported exact cost presence is inconsistent")
+        if exact_reported is not None and (
+            self.reported_cost_usd is None or float(exact_reported) != self.reported_cost_usd
+        ):
+            raise ValueError("usage reported exact cost differs from presentation cost")
+        if exact_accounted is not None and float(exact_accounted) != self.accounted_cost_usd:
+            raise ValueError("usage accounted exact cost differs from presentation cost")
+        if (
+            exact_reported is not None
+            and exact_accounted is not None
+            and exact_accounted < exact_reported
+        ):
+            raise ValueError("usage exact accounted cost is below reported cost")
         raw_token_plan = self.routing.get("request_token_plan")
         token_plan: RequestTokenPlan | None = None
         if raw_token_plan is not None:

@@ -18,6 +18,7 @@ from mmaudit.orchestration.budgets import (
     Reservation,
     TokenReservationOverrunError,
     UnprovenCostBoundError,
+    _issue_trusted_request_limit_scope,
 )
 from mmaudit.orchestration.cost_ledger import (
     AtomicCostLedger,
@@ -175,18 +176,20 @@ async def test_reopened_manager_seeds_terminal_persistent_spend(tmp_path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_reopened_manager_fails_on_unrecovered_active_reservation(tmp_path) -> None:
+async def test_reopened_manager_blocks_dispatch_until_active_reservation_recovery(tmp_path) -> None:
     manager, ledger = _manager(tmp_path, cap="0.01")
     await manager.reserve("request-1", "review", "prompt")
 
-    with pytest.raises(BudgetReservationStateError, match="explicit recovery"):
-        BudgetManager(
-            total_usd=0.01,
-            max_output_tokens=10,
-            conservative_usd_per_million_tokens=1,
-            max_requests_per_agent=10,
-            atomic_ledger=ledger,
-        )
+    reopened = BudgetManager(
+        total_usd=0.01,
+        max_output_tokens=10,
+        conservative_usd_per_million_tokens=1,
+        max_requests_per_agent=10,
+        atomic_ledger=ledger,
+    )
+    assert reopened.recovery_required
+    with pytest.raises(BudgetReservationStateError, match="exact usage recovery"):
+        await reopened.reserve("request-2", "review", "prompt")
 
 
 def test_certification_cost_bounds_require_a_durable_atomic_ledger() -> None:
@@ -343,17 +346,172 @@ def _scoped_manager(
     output_tokens: int | None = None,
     model_caps: dict[str, str] | None = None,
     role_caps: dict[str, str] | None = None,
+    max_requests: int = 10,
 ) -> BudgetManager:
     return BudgetManager(
         total_usd=1,
         max_output_tokens=10,
         conservative_usd_per_million_tokens=1,
-        max_requests_per_agent=10,
+        max_requests_per_agent=max_requests,
         global_input_token_budget=input_tokens,
         global_output_token_budget=output_tokens,
         per_model_usd_caps=model_caps,
         per_role_usd_caps=role_caps,
     )
+
+
+@pytest.mark.asyncio
+async def test_scheduler_request_scopes_bound_each_task_without_splitting_role_accounting() -> None:
+    manager = _scoped_manager(
+        input_tokens=20,
+        output_tokens=20,
+        role_caps={"review": "0.001"},
+        max_requests=1,
+    )
+    first_scope = _issue_trusted_request_limit_scope("campaign-1.task-a")
+    second_scope = _issue_trusted_request_limit_scope("campaign-1.task-b")
+
+    reservations = await asyncio.gather(
+        manager.reserve(
+            "request-a",
+            "review",
+            "x",
+            exact_model_id="alpha/atlas-secure",
+            planned_prompt_tokens=4,
+            planned_visible_output_tokens=3,
+            planned_reasoning_tokens=1,
+            planned_completion_tokens=4,
+            request_token_plan_sha256="a" * 64,
+            request_limit_scope=first_scope,
+        ),
+        manager.reserve(
+            "request-b",
+            "review",
+            "x",
+            exact_model_id="alpha/atlas-secure",
+            planned_prompt_tokens=4,
+            planned_visible_output_tokens=3,
+            planned_reasoning_tokens=1,
+            planned_completion_tokens=4,
+            request_token_plan_sha256="b" * 64,
+            request_limit_scope=second_scope,
+        ),
+    )
+
+    assert [reservation.role for reservation in reservations] == ["review", "review"]
+    assert manager.reserved_role_usd("review") == Decimal("0.000022")
+    assert manager.reserved_input_tokens == manager.reserved_output_tokens == 8
+    for reservation, scope in zip(
+        reservations,
+        (first_scope.identifier, second_scope.identifier),
+        strict=True,
+    ):
+        evidence = reservation.request_limit_reservation_evidence
+        assert evidence is not None
+        assert reservation.request_limit_scope == evidence.request_limit_scope == scope
+        assert evidence.request_limit_count_before == 0
+        assert evidence.request_limit_count_after == evidence.request_limit_maximum == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_scheduler_retries_cannot_cross_one_task_request_limit() -> None:
+    manager = _scoped_manager(max_requests=1)
+    scope = _issue_trusted_request_limit_scope("campaign-1.same-task")
+
+    results = await asyncio.gather(
+        manager.reserve(
+            "request-a",
+            "review",
+            "x",
+            exact_model_id="alpha/atlas-secure",
+            planned_prompt_tokens=1,
+            planned_visible_output_tokens=1,
+            planned_reasoning_tokens=0,
+            planned_completion_tokens=1,
+            request_token_plan_sha256="a" * 64,
+            request_limit_scope=scope,
+        ),
+        manager.reserve(
+            "request-b",
+            "review",
+            "x",
+            exact_model_id="alpha/atlas-secure",
+            planned_prompt_tokens=1,
+            planned_visible_output_tokens=1,
+            planned_reasoning_tokens=0,
+            planned_completion_tokens=1,
+            request_token_plan_sha256="b" * 64,
+            request_limit_scope=scope,
+        ),
+        return_exceptions=True,
+    )
+
+    assert sum(isinstance(result, Reservation) for result in results) == 1
+    assert sum(isinstance(result, BudgetExhaustedError) for result in results) == 1
+
+
+@pytest.mark.asyncio
+async def test_scheduler_scope_never_bypasses_aggregate_role_or_token_caps() -> None:
+    manager = _scoped_manager(
+        input_tokens=6,
+        output_tokens=6,
+        role_caps={"review": "0.000015"},
+        max_requests=1,
+    )
+
+    results = await asyncio.gather(
+        *(
+            manager.reserve(
+                f"request-{index}",
+                "review",
+                "x",
+                exact_model_id="alpha/atlas-secure",
+                planned_prompt_tokens=6,
+                planned_visible_output_tokens=6,
+                planned_reasoning_tokens=0,
+                planned_completion_tokens=6,
+                request_token_plan_sha256=f"{index}" * 64,
+                request_limit_scope=_issue_trusted_request_limit_scope(f"campaign-1.task-{index}"),
+            )
+            for index in (1, 2)
+        ),
+        return_exceptions=True,
+    )
+
+    assert sum(isinstance(result, Reservation) for result in results) == 1
+    assert sum(isinstance(result, BudgetExhaustedError) for result in results) == 1
+    assert manager.reserved_input_tokens == manager.reserved_output_tokens == 6
+    assert manager.reserved_role_usd("review") == Decimal("0.000011")
+
+
+@pytest.mark.asyncio
+async def test_unscheduled_request_limit_remains_aggregated_by_semantic_role() -> None:
+    manager = _scoped_manager(max_requests=1)
+    await manager.reserve("request-a", "review", "x")
+
+    with pytest.raises(BudgetExhaustedError, match="request limit reached for role review"):
+        await manager.reserve("request-b", "review", "x")
+
+
+@pytest.mark.asyncio
+async def test_request_limit_scope_requires_trusted_plan_bound_identity() -> None:
+    manager = _scoped_manager(max_requests=1)
+    with pytest.raises(BudgetReservationStateError, match="capability is invalid"):
+        await manager.reserve(
+            "request-a",
+            "review",
+            "x",
+            request_limit_scope="campaign-1.task-a",  # type: ignore[arg-type]
+        )
+    with pytest.raises(BudgetReservationStateError, match="plan-bound"):
+        await manager.reserve(
+            "request-b",
+            "review",
+            "x",
+            request_limit_scope=_issue_trusted_request_limit_scope("campaign-1.task-b"),
+        )
+    with pytest.raises(BudgetReservationStateError, match="restricted non-secret"):
+        _issue_trusted_request_limit_scope("private/task/path")
 
 
 @pytest.mark.asyncio

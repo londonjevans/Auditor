@@ -345,6 +345,13 @@ def test_dynamic_and_fallback_roles_seal_semantic_and_configured_policy_mapping(
     assert aggregate_cross_examination.qualification_role == "falsifier"
     assert aggregate_cross_examination.mapping_kind == "candidate_cross_examination_context"
 
+    validation_falsifier = resolve_reasoning_request_role("candidate_falsifier")
+    assert validation_falsifier.semantic_role == "falsifier"
+    assert validation_falsifier.configured_policy_role == "falsifier"
+    assert validation_falsifier.qualification_role == "falsifier"
+    assert validation_falsifier.mapping_kind == "candidate_cross_examination"
+    assert artifact.control_for_request("candidate_falsifier").mode == "max_tokens"
+
     for reviewer_index in (1, 2):
         request_role = f"candidate_falsifier:{candidate_sha256}:reviewer_{reviewer_index}"
         resolution = resolve_reasoning_request_role(request_role)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -11,8 +12,19 @@ from mmaudit.models.schemas import (
     Location,
     ModelReviewSurfaceKind,
     ModelSurfaceReviewRequest,
+    SolidityEntity,
+    SolidityEntityKind,
+    SolidityGraphEdge,
+    SolidityGraphKind,
+    SolidityGraphNode,
+    SolidityGraphNodeKind,
+    SolidityGraphSet,
+    SolidityProvenance,
+    SoliditySymbolIndex,
 )
+from mmaudit.models.token_planning import ContextOmissionReason
 from mmaudit.orchestration.context import (
+    ContextBoundaryError,
     ContextBudgetError,
     ContextBuilder,
     context_category_byte_counts,
@@ -20,10 +32,15 @@ from mmaudit.orchestration.context import (
     context_json_escape_overhead_tokens,
     render_context,
     revalidate_context_package,
+    revalidate_model_surface_context_package,
 )
+from mmaudit.orchestration.model_coverage import model_review_edge_subject_id
+from mmaudit.orchestration.model_review_evidence import build_source_file_review_request
+from mmaudit.repository.chunking import line_range_hash
 from mmaudit.repository.discovery import discover_repository
 from mmaudit.repository.ignore import IgnoreMatcher
 from mmaudit.repository.mapping import build_repository_map
+from mmaudit.solidity.retrieval import compact_solidity_graphs, compact_solidity_index
 
 
 def test_specialist_context_budget_uses_source_and_package_bounds() -> None:
@@ -40,6 +57,316 @@ def test_specialist_context_budget_uses_source_and_package_bounds() -> None:
 
     assert source_bounded == 665_536
     assert package_bounded == 400_000
+
+
+def _internal_call_surface_builder(
+    tmp_path: Path,
+    config_factory,
+) -> tuple[ContextBuilder, ModelSurfaceReviewRequest, SolidityGraphEdge, SolidityGraphEdge]:
+    repository = tmp_path / "internal-call-context"
+    repository.mkdir()
+    source = """contract NestedCall {
+    function enter() external {
+        _route();
+    }
+    function _route() internal {
+        target.call("");
+    }
+}
+"""
+    (repository / "NestedCall.sol").write_text(source, encoding="utf-8")
+    config = config_factory(
+        repository={"max_total_context_bytes": 100_000},
+        privacy={"fail_on_detected_secret": False},
+    )
+    discovery = discover_repository(repository, config.repository, IgnoreMatcher())
+
+    def entity(
+        *,
+        entity_id: str,
+        name: str,
+        start_line: int,
+        end_line: int,
+        visibility: str,
+        signature: str,
+    ) -> SolidityEntity:
+        return SolidityEntity(
+            id=entity_id,
+            kind=SolidityEntityKind.FUNCTION,
+            name=name,
+            contract_name="NestedCall",
+            path="NestedCall.sol",
+            start_line=start_line,
+            end_line=end_line,
+            byte_start=0,
+            byte_end=len(source.encode("utf-8")),
+            source_hash=line_range_hash(source, start_line, end_line),
+            provenance=SolidityProvenance.COMPILER,
+            confidence=1,
+            transformation="synthetic_exact_internal_call_context",
+            visibility=visibility,
+            signature=signature,
+        )
+
+    entry = entity(
+        entity_id="function:NestedCall.enter",
+        name="enter",
+        start_line=2,
+        end_line=4,
+        visibility="external",
+        signature="enter()",
+    )
+    internal = entity(
+        entity_id="function:NestedCall._route",
+        name="_route",
+        start_line=5,
+        end_line=7,
+        visibility="internal",
+        signature="_route()",
+    )
+    upstream = SolidityGraphEdge(
+        graph=SolidityGraphKind.STATE_DEPENDENCY,
+        source_id=entry.id,
+        target_id=internal.id,
+        label="deterministic upstream dependency",
+        provenance=SolidityProvenance.COMPILER,
+        path="NestedCall.sol",
+        start_line=3,
+        end_line=3,
+        source_hash=line_range_hash(source, 3, 3),
+        confidence=1,
+        transformation="synthetic_non_call_reachability_edge",
+    )
+    requested_edge = SolidityGraphEdge(
+        graph=SolidityGraphKind.LOW_LEVEL_CALL,
+        source_id=internal.id,
+        target_id="external-target:target.call",
+        label="target.call",
+        provenance=SolidityProvenance.COMPILER,
+        path="NestedCall.sol",
+        start_line=6,
+        end_line=6,
+        source_hash=line_range_hash(source, 6, 6),
+        confidence=1,
+        transformation="synthetic_exact_requested_call",
+    )
+
+    def node(entity: SolidityEntity) -> SolidityGraphNode:
+        return SolidityGraphNode(
+            id=entity.id,
+            kind=SolidityGraphNodeKind.ENTITY,
+            label=entity.signature or entity.name,
+            path=entity.path,
+            start_line=entity.start_line,
+            end_line=entity.end_line,
+            source_hash=entity.source_hash,
+            provenance=entity.provenance,
+            confidence=entity.confidence,
+            transformation="synthetic_exact_entity_node",
+        )
+
+    index = SoliditySymbolIndex(
+        projects=[],
+        entities=[entry, internal],
+        ast_sources=["NestedCall.sol"],
+    )
+    graphs = SolidityGraphSet(
+        nodes=[node(entry), node(internal)],
+        edges=[requested_edge, upstream],
+        analyzed_graphs=[SolidityGraphKind.LOW_LEVEL_CALL, SolidityGraphKind.STATE_DEPENDENCY],
+        coverage={SolidityGraphKind.LOW_LEVEL_CALL.value: 1},
+    )
+    subject_id = model_review_edge_subject_id(requested_edge)
+    request = ModelSurfaceReviewRequest(
+        surface_id=ModelSurfaceReviewRequest.calculate_surface_id(
+            ModelReviewSurfaceKind.CALL,
+            subject_id,
+        ),
+        kind=ModelReviewSurfaceKind.CALL,
+        subject_id=subject_id,
+        contract="NestedCall",
+        function_or_state_surface="_route() -> target.call",
+        critical=True,
+        allowed_locations=(
+            Location(
+                path=requested_edge.path,
+                start_line=requested_edge.start_line,
+                end_line=requested_edge.end_line,
+                content_hash=requested_edge.source_hash,
+            ),
+        ),
+        allowed_symbols=tuple(
+            sorted({internal.id, internal.name, internal.signature or internal.name})
+        ),
+        invariant_considered="The exact reachable call must preserve state and asset integrity.",
+    )
+    return (
+        ContextBuilder(
+            discovery=discovery,
+            repository_map=build_repository_map(discovery),
+            repository_config=config.repository,
+            privacy=config.privacy,
+            scanner_findings=[],
+            solidity_index=index,
+            solidity_graphs=graphs,
+        ),
+        request,
+        upstream,
+        requested_edge,
+    )
+
+
+def test_call_surface_custody_retains_internal_source_path_and_allows_edge_only_target(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    builder, request, upstream, requested_edge = _internal_call_surface_builder(
+        tmp_path,
+        config_factory,
+    )
+
+    package = builder.build("business_logic", requested_model_surfaces=[request])
+
+    assert package.solidity_graphs is not None
+    assert {
+        model_review_edge_subject_id(upstream),
+        model_review_edge_subject_id(requested_edge),
+    } <= {model_review_edge_subject_id(edge) for edge in package.solidity_graphs.edges}
+    assert {upstream.source_id, upstream.target_id} <= {
+        node.id for node in package.solidity_graphs.nodes
+    }
+    assert requested_edge.target_id not in {node.id for node in package.solidity_graphs.nodes}
+    assert revalidate_model_surface_context_package(package) == package
+
+
+@pytest.mark.parametrize("removed_fact", ["requested_edge", "source_node"])
+def test_provider_preflight_rejects_nested_call_fact_removal(
+    tmp_path: Path,
+    config_factory,
+    removed_fact: str,
+) -> None:
+    builder, request, _upstream, requested_edge = _internal_call_surface_builder(
+        tmp_path,
+        config_factory,
+    )
+    package = builder.build("business_logic", requested_model_surfaces=[request]).model_copy(
+        deep=True
+    )
+    assert package.solidity_graphs is not None
+    if removed_fact == "requested_edge":
+        package.solidity_graphs.edges = [
+            edge for edge in package.solidity_graphs.edges if edge != requested_edge
+        ]
+    else:
+        package.solidity_graphs.nodes = [
+            node for node in package.solidity_graphs.nodes if node.id != requested_edge.source_id
+        ]
+    package = package.model_copy(update={"bytes_used": len(render_context(package).encode())})
+
+    with pytest.raises(ContextBoundaryError, match="model-surface custody"):
+        revalidate_model_surface_context_package(package)
+
+
+def test_entity_surface_context_rejects_missing_typed_index(
+    vulnerable_repo: Path,
+    config_factory,
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    discovery = discover_repository(vulnerable_repo, config.repository, IgnoreMatcher())
+    source = next(item for item in discovery.files if item.relative_path == "app.py")
+    subject_id = "function:SyntheticApplication.entry"
+    request = ModelSurfaceReviewRequest(
+        surface_id=ModelSurfaceReviewRequest.calculate_surface_id(
+            ModelReviewSurfaceKind.ENTRY_POINT,
+            subject_id,
+        ),
+        kind=ModelReviewSurfaceKind.ENTRY_POINT,
+        subject_id=subject_id,
+        contract="SyntheticApplication",
+        function_or_state_surface="entry",
+        critical=True,
+        allowed_locations=(
+            Location(
+                path=source.relative_path,
+                start_line=1,
+                end_line=1,
+                content_hash=line_range_hash(source.content, 1, 1),
+            ),
+        ),
+        allowed_symbols=tuple(sorted({subject_id, "entry"})),
+        invariant_considered="The exact entry point must retain its typed source identity.",
+    )
+
+    with pytest.raises(ContextBudgetError, match="lacks its exact index entity"):
+        ContextBuilder(
+            discovery=discovery,
+            repository_map=build_repository_map(discovery),
+            repository_config=config.repository,
+            privacy=config.privacy,
+            scanner_findings=[],
+        ).build("source_audit", requested_model_surfaces=[request])
+
+
+def test_compactors_reject_nonempty_mandatory_facts_without_inventory(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    _builder, _request, _upstream, requested_edge = _internal_call_surface_builder(
+        tmp_path,
+        config_factory,
+    )
+
+    with pytest.raises(ValueError, match="required Solidity index entities"):
+        compact_solidity_index(
+            None,
+            role="business_logic",
+            required_entity_ids={requested_edge.source_id},
+        )
+    with pytest.raises(ValueError, match="required Solidity graph edges"):
+        compact_solidity_graphs(
+            None,
+            role="business_logic",
+            required_edges=(requested_edge,),
+        )
+
+
+@pytest.mark.parametrize("tamper", ["size", "duplicate"])
+def test_provider_preflight_rejects_source_file_map_tampering(
+    vulnerable_repo: Path,
+    config_factory,
+    tamper: str,
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    discovery = discover_repository(vulnerable_repo, config.repository, IgnoreMatcher())
+    source = next(item for item in discovery.files if item.relative_path == "app.py")
+    request = build_source_file_review_request(
+        path=source.relative_path,
+        size=source.size,
+        lines=source.lines,
+        sha256=source.sha256,
+    )
+    package = (
+        ContextBuilder(
+            discovery=discovery,
+            repository_map=build_repository_map(discovery),
+            repository_config=config.repository,
+            privacy=config.privacy,
+            scanner_findings=[],
+        )
+        .build("source_audit", requested_model_surfaces=[request])
+        .model_copy(deep=True)
+    )
+    record = next(
+        item for item in package.repository_map.files if item.path == source.relative_path
+    )
+    if tamper == "size":
+        record.size += 1
+    else:
+        package.repository_map.files.append(record.model_copy(deep=True))
+    package = package.model_copy(update={"bytes_used": len(render_context(package).encode())})
+
+    with pytest.raises(ContextBoundaryError, match="model-surface custody"):
+        revalidate_model_surface_context_package(package)
 
 
 def test_context_builder_package_is_independent_of_unrelated_peer_roles(
@@ -156,6 +483,124 @@ def test_context_builder_never_exceeds_cumulative_source_token_ceiling(
     assert 0 < source_bytes <= 3_000
 
 
+def test_context_builder_enforces_exact_shard_source_allowlist(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    repository = tmp_path / "shard-context"
+    repository.mkdir()
+    (repository / "primary.py").write_text("def primary():\n    return 1\n", encoding="utf-8")
+    (repository / "peer.py").write_text("def peer():\n    return 2\n", encoding="utf-8")
+    config = config_factory(
+        repository={"max_total_context_bytes": 100_000},
+        privacy={"fail_on_detected_secret": False},
+    )
+    discovery = discover_repository(repository, config.repository, IgnoreMatcher())
+    builder = ContextBuilder(
+        discovery=discovery,
+        repository_map=build_repository_map(discovery),
+        repository_config=config.repository,
+        privacy=config.privacy,
+        scanner_findings=[],
+    )
+
+    first = builder.build(
+        "source_audit",
+        preferred_paths={"primary.py"},
+        allowed_source_paths={"primary.py"},
+    )
+    second = builder.build(
+        "source_audit",
+        preferred_paths={"primary.py"},
+        allowed_source_paths={"primary.py"},
+    )
+
+    assert first == second
+    assert {excerpt.path for excerpt in first.excerpts} == {"primary.py"}
+    assert any(
+        omission.reason is ContextOmissionReason.SHARD_SCOPE_WITHHELD
+        for omission in first.omissions
+    )
+
+
+def test_context_builder_retains_preferred_shard_identity_during_map_compaction(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    repository = tmp_path / "large-shard-context"
+    repository.mkdir()
+    for index in range(300):
+        (repository / f"source_{index:03d}.py").write_text("VALUE = 1\n", encoding="utf-8")
+    preferred_path = "zz_preferred.py"
+    (repository / preferred_path).write_text("REVIEWED_VALUE = 2\n", encoding="utf-8")
+    config = config_factory(
+        repository={
+            "max_files": 400,
+            "max_total_context_bytes": 500_000,
+        },
+        privacy={"fail_on_detected_secret": False},
+    )
+    discovery = discover_repository(repository, config.repository, IgnoreMatcher())
+    builder = ContextBuilder(
+        discovery=discovery,
+        repository_map=build_repository_map(discovery),
+        repository_config=config.repository,
+        privacy=config.privacy,
+        scanner_findings=[],
+    )
+
+    package = builder.build(
+        "source_audit",
+        preferred_paths={preferred_path},
+        allowed_source_paths={preferred_path},
+    )
+
+    preferred_identity = next(
+        item for item in package.repository_map.files if item.path == preferred_path
+    )
+    preferred_content = "REVIEWED_VALUE = 2\n"
+    assert preferred_identity.size == len(preferred_content.encode())
+    assert preferred_identity.lines == 1
+    assert preferred_identity.sha256 == hashlib.sha256(preferred_content.encode()).hexdigest()
+    assert {excerpt.path for excerpt in package.excerpts} == {preferred_path}
+
+
+@pytest.mark.parametrize(
+    ("allowed", "preferred"),
+    [
+        ({"missing.py"}, set()),
+        ({"../escape.py"}, set()),
+        ({"primary.py"}, {"peer.py"}),
+    ],
+)
+def test_context_builder_rejects_invalid_shard_source_allowlists(
+    tmp_path: Path,
+    config_factory,
+    allowed: set[str],
+    preferred: set[str],
+) -> None:
+    repository = tmp_path / "invalid-shard-context"
+    repository.mkdir()
+    (repository / "primary.py").write_text("def primary():\n    return 1\n", encoding="utf-8")
+    (repository / "peer.py").write_text("def peer():\n    return 2\n", encoding="utf-8")
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    discovery = discover_repository(repository, config.repository, IgnoreMatcher())
+    builder = ContextBuilder(
+        discovery=discovery,
+        repository_map=build_repository_map(discovery),
+        repository_config=config.repository,
+        privacy=config.privacy,
+        scanner_findings=[],
+    )
+
+    with pytest.raises(ContextBudgetError, match=r"shard source allowlist|outside"):
+        builder.build(
+            "source_audit",
+            preferred_paths=preferred,
+            allowed_source_paths=allowed,
+        )
+
+
 def test_context_builder_accounts_for_trusted_surface_request_manifest(
     vulnerable_repo: Path,
     config_factory,
@@ -166,20 +611,12 @@ def test_context_builder_accounts_for_trusted_surface_request_manifest(
     )
     discovery = discover_repository(vulnerable_repo, config.repository, IgnoreMatcher())
     repository_map = build_repository_map(discovery)
-    subject_id = "entity:synthetic-entry-point"
-    request = ModelSurfaceReviewRequest(
-        surface_id=ModelSurfaceReviewRequest.calculate_surface_id(
-            ModelReviewSurfaceKind.ENTRY_POINT,
-            subject_id,
-        ),
-        kind=ModelReviewSurfaceKind.ENTRY_POINT,
-        subject_id=subject_id,
-        contract="SyntheticApplication",
-        function_or_state_surface="synthetic_entry_point",
-        critical=True,
-        allowed_locations=(Location(path="app.py", start_line=1, end_line=1),),
-        allowed_symbols=("synthetic_entry_point",),
-        invariant_considered="Only an authorized identity may reach the protected state transition.",
+    source = next(item for item in discovery.files if item.relative_path == "app.py")
+    request = build_source_file_review_request(
+        path=source.relative_path,
+        size=source.size,
+        lines=source.lines,
+        sha256=source.sha256,
     )
     builder = ContextBuilder(
         discovery=discovery,
@@ -350,20 +787,12 @@ def test_model_surface_context_rejects_zero_source_before_transport(
         privacy={"fail_on_detected_secret": False},
     )
     discovery = discover_repository(repository, config.repository, IgnoreMatcher())
-    subject_id = "entity:oversized-synthetic-vault"
-    request = ModelSurfaceReviewRequest(
-        surface_id=ModelSurfaceReviewRequest.calculate_surface_id(
-            ModelReviewSurfaceKind.ENTRY_POINT,
-            subject_id,
-        ),
-        kind=ModelReviewSurfaceKind.ENTRY_POINT,
-        subject_id=subject_id,
-        contract="SyntheticVault",
-        function_or_state_surface="PAD",
-        critical=True,
-        allowed_locations=(Location(path="SyntheticVault.sol", start_line=1, end_line=3),),
-        allowed_symbols=("PAD",),
-        invariant_considered="The supplied source must be present before review credit.",
+    source = discovery.files[0]
+    request = build_source_file_review_request(
+        path=source.relative_path,
+        size=source.size,
+        lines=source.lines,
+        sha256=source.sha256,
     )
 
     with pytest.raises(ContextBudgetError, match="omitted all source evidence"):

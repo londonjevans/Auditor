@@ -30,6 +30,7 @@ from mmaudit.orchestration.budgets import BudgetManager
 from mmaudit.orchestration.context import (
     ContextBoundaryError,
     ContextBuilder,
+    _ContextInventorySnapshot,
     render_context,
     revalidate_context_package,
 )
@@ -99,6 +100,86 @@ def _bounded_package() -> ContextPackage:
 
 def _poison_nested_metadata(package: ContextPackage) -> None:
     package.scanner_findings[0].metadata["opaque"] = object()
+
+
+def _package_with_scanner_finding(finding: ScannerFinding) -> ContextPackage:
+    package = _bounded_package().model_copy(
+        update={"bytes_used": 0, "scanner_findings": (finding,)}
+    )
+    return package.model_copy(update={"bytes_used": len(render_context(package).encode("utf-8"))})
+
+
+def test_provider_scanner_projection_ignores_only_location_validation_time() -> None:
+    common_validation = {
+        "valid": True,
+        "content_hash": "a" * 64,
+        "errors": [],
+    }
+    first = _package_with_scanner_finding(
+        _scanner_finding(
+            metadata={
+                "location_validation": [
+                    {**common_validation, "validated_at": "2026-08-02T10:00:00Z"}
+                ]
+            }
+        )
+    )
+    timestamp_only_replay = _package_with_scanner_finding(
+        _scanner_finding(
+            metadata={
+                "location_validation": [
+                    {**common_validation, "validated_at": "2026-08-02T11:00:00Z"}
+                ]
+            }
+        )
+    )
+    changed_security_evidence = _package_with_scanner_finding(
+        _scanner_finding(
+            metadata={
+                "location_validation": [
+                    {
+                        **common_validation,
+                        "valid": False,
+                        "errors": ["synthetic source-content mismatch"],
+                        "validated_at": "2026-08-02T11:00:00Z",
+                    }
+                ]
+            }
+        )
+    )
+
+    first_rendered = render_context(first)
+    assert first_rendered == render_context(timestamp_only_replay)
+    assert first_rendered != render_context(changed_security_evidence)
+    assert "validated_at" not in first_rendered
+    assert revalidate_context_package(first) == first
+    assert revalidate_context_package(timestamp_only_replay) == timestamp_only_replay
+
+    def inventory_snapshot(finding: ScannerFinding) -> _ContextInventorySnapshot:
+        return _ContextInventorySnapshot.capture(
+            repository_map=_repository_map(),
+            scanner_findings=(finding,),
+            solidity_projects=(),
+            solidity_compilations=(),
+            solidity_index=None,
+            solidity_graphs=None,
+            solidity_invariants=None,
+            invariant_executions=(),
+            economic_simulations=(),
+            formal_runs=(),
+            solidity_coverage=None,
+        )
+
+    first_finding = first.scanner_findings[0]
+    replay_finding = timestamp_only_replay.scanner_findings[0]
+    changed_finding = changed_security_evidence.scanner_findings[0]
+    first_snapshot = inventory_snapshot(first_finding)
+    replay_snapshot = inventory_snapshot(replay_finding)
+    changed_snapshot = inventory_snapshot(changed_finding)
+
+    assert first_snapshot.entries == replay_snapshot.entries
+    assert first_snapshot.item_sha256(first_finding) == replay_snapshot.item_sha256(replay_finding)
+    assert first_snapshot.entries != changed_snapshot.entries
 
 
 def test_context_builder_normalizes_opaque_cyclic_and_nonfinite_scanner_metadata(

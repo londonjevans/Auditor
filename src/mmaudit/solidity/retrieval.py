@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from mmaudit.models.schemas import (
     SolidityEntity,
     SolidityEntityKind,
@@ -17,27 +19,38 @@ def compact_solidity_index(
     role: str,
     max_entities: int = 500,
     preferred_paths: set[str] | None = None,
+    required_entity_ids: set[str] | None = None,
 ) -> SoliditySymbolIndex | None:
     if index is None:
+        if required_entity_ids:
+            raise ValueError("required Solidity index entities are unavailable")
         return None
     preferred = preferred_paths or set()
+    required = required_entity_ids or set()
+    available_ids = {entity.id for entity in index.entities}
+    missing = required - available_ids
+    if missing:
+        raise ValueError("required Solidity index entities are unavailable")
     entities = sorted(
         index.entities,
         key=lambda entity: (
+            0 if entity.id in required else 1,
             0 if entity.path in preferred else 1,
             _entity_rank(entity, role),
             entity.path,
             entity.start_line,
         ),
     )
-    omitted = max(0, len(entities) - max_entities)
+    retained_limit = max(max_entities, len(required))
+    selected = entities[:retained_limit]
+    omitted = max(0, len(entities) - len(selected))
     warnings = list(index.warnings)
     if omitted:
         warnings.append(f"{omitted} Solidity indexed entities omitted from {role} context")
-    selected_paths = {entity.path for entity in entities[:max_entities]}
+    selected_paths = {entity.path for entity in selected}
     return index.model_copy(
         update={
-            "entities": entities[:max_entities],
+            "entities": selected,
             "ast_sources": [path for path in index.ast_sources if path in selected_paths],
             "fallback_sources": [path for path in index.fallback_sources if path in selected_paths],
             "warnings": warnings,
@@ -51,29 +64,38 @@ def compact_solidity_graphs(
     role: str,
     max_edges: int = 700,
     preferred_paths: set[str] | None = None,
+    required_edges: tuple[SolidityGraphEdge, ...] = (),
 ) -> SolidityGraphSet | None:
     if graphs is None:
+        if required_edges:
+            raise ValueError("required Solidity graph edges are unavailable")
         return None
     preferred = preferred_paths or set()
+    required = {_graph_edge_identity(edge) for edge in required_edges}
+    available = {_graph_edge_identity(edge) for edge in graphs.edges}
+    if not required <= available:
+        raise ValueError("required Solidity graph edges are unavailable")
     edges = sorted(
         graphs.edges,
         key=lambda edge: (
+            0 if _graph_edge_identity(edge) in required else 1,
             0 if edge.path in preferred else 1,
             _edge_rank(edge, role),
             edge.graph,
             edge.label,
         ),
     )
+    retained_limit = max(max_edges, len(required))
     warnings = list(graphs.warnings)
-    if len(edges) > max_edges:
+    if len(edges) > retained_limit:
         warnings.append(
-            f"{len(edges) - max_edges} Solidity graph edges omitted from {role} context"
+            f"{len(edges) - retained_limit} Solidity graph edges omitted from {role} context"
         )
-    selected = edges[:max_edges]
+    selected = edges[:retained_limit]
     referenced_ids = {
         identifier for edge in selected for identifier in (edge.source_id, edge.target_id)
     }
-    nodes = [node for node in graphs.nodes if node.id in referenced_ids][: max_edges * 2]
+    nodes = [node for node in graphs.nodes if node.id in referenced_ids][: retained_limit * 2]
     return graphs.model_copy(
         update={
             "edges": selected,
@@ -81,6 +103,18 @@ def compact_solidity_graphs(
             "storage_layout": graphs.storage_layout[:500],
             "warnings": warnings,
         }
+    )
+
+
+def _graph_edge_identity(edge: SolidityGraphEdge) -> str:
+    """Return one exact local identity for required-edge retention."""
+
+    return json.dumps(
+        edge.model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
     )
 
 

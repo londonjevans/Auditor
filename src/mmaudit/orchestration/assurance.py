@@ -13,14 +13,18 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Never, SupportsIndex
 
-from mmaudit.agents.specialists import canonical_specialist_role
+from mmaudit.agents.specialists import canonical_specialist_role, completed_specialist_roles
 from mmaudit.benchmark.certificate import (
     BenchmarkCertificateVerification,
     CertificateVerificationOrigin,
     CertificateVerificationStatus,
 )
 from mmaudit.config import AuditConfig, model_family, model_lineage_index
-from mmaudit.constants import ALL_SPECIALIST_ROLES, SPECIALIST_INVESTIGATOR_ROLES
+from mmaudit.constants import (
+    ALL_SPECIALIST_ROLES,
+    SPECIALIST_AUXILIARY_ROLES,
+    SPECIALIST_INVESTIGATOR_ROLES,
+)
 from mmaudit.models.qualification import (
     VerifiedProductionQualification,
     VerifiedTierAModelQualification,
@@ -30,6 +34,16 @@ from mmaudit.models.reasoning import (
     ReasoningPolicyError,
     resolve_reasoning_request_role,
 )
+from mmaudit.models.scheduler import (
+    SchedulerArtifact,
+    SchedulerBindings,
+    SchedulerCampaignStatus,
+    SchedulerCostLedgerBaseline,
+    SchedulerScope,
+    SchedulerShardInventory,
+    SchedulerTerminalStatus,
+    scheduler_canonical_sha256,
+)
 from mmaudit.models.schemas import (
     AnalysisState,
     AuditProfile,
@@ -37,6 +51,7 @@ from mmaudit.models.schemas import (
     AuditScopeAssessment,
     CandidateReproductionResolution,
     CompilationStatus,
+    ContextRequestEvidence,
     EconomicSimulationPlan,
     ExecutionEvidenceKind,
     FormalResultKind,
@@ -69,6 +84,9 @@ from mmaudit.models.schemas import (
     SolidityGraphSet,
     SolidityProjectMetadata,
     SoliditySymbolIndex,
+    SpecialistAcceptedOutcome,
+    SpecialistAcceptedOutcomeKind,
+    SpecialistExecutionRecord,
     UsageRecord,
 )
 from mmaudit.models.usage import (
@@ -218,6 +236,7 @@ class AssuranceRuntime:
     model_roles_completed: set[str] = field(default_factory=set)
     specialist_roles_completed: set[str] = field(default_factory=set)
     auxiliary_roles_completed: set[str] = field(default_factory=set)
+    specialist_execution_records: list[SpecialistExecutionRecord] = field(default_factory=list)
     verifier_completed: bool = False
     falsifier_completed: bool = False
     candidate_falsifier_request_ids: dict[str, set[str]] = field(default_factory=dict)
@@ -239,6 +258,320 @@ class AssuranceRuntime:
     scanner_only: bool = False
     artifacts: set[str] = field(default_factory=set)
     traceability: MaximumAssuranceTraceability | None = None
+    scheduler_artifact: SchedulerArtifact | None = None
+    expected_scheduler_bindings: SchedulerBindings | None = None
+    expected_scheduler_analysis_input_sha256: str | None = None
+    expected_scheduler_shard_inventory: SchedulerShardInventory | None = None
+    expected_scheduler_cost_ledger_baseline: SchedulerCostLedgerBaseline | None = None
+
+
+def _scheduler_assurance_errors(
+    config: AuditConfig,
+    runtime: AssuranceRuntime,
+) -> tuple[str, ...]:
+    """Return fail-closed scheduler binding and real-provider evidence defects."""
+
+    artifact = runtime.scheduler_artifact
+    expected_bindings = runtime.expected_scheduler_bindings
+    expected_analysis_input_sha256 = runtime.expected_scheduler_analysis_input_sha256
+    expected_inventory = runtime.expected_scheduler_shard_inventory
+    expected_cost_baseline = runtime.expected_scheduler_cost_ledger_baseline
+    if artifact is None:
+        return ("seven-pass scheduler evidence was not produced",)
+    try:
+        artifact = SchedulerArtifact.model_validate(artifact.model_dump(mode="python"))
+    except ValueError:
+        return ("seven-pass scheduler evidence is structurally invalid",)
+    errors: list[str] = []
+    if artifact.summary.status is not SchedulerCampaignStatus.COMPLETE:
+        errors.append(f"seven-pass scheduler did not complete: {artifact.summary.status.value}")
+    if expected_bindings is None:
+        errors.append("trusted runtime scheduler bindings were not supplied")
+    if expected_analysis_input_sha256 is None:
+        errors.append("trusted runtime scheduler analysis-input binding was not supplied")
+    if expected_inventory is None:
+        errors.append("trusted runtime scheduler shard inventory was not supplied")
+    if expected_cost_baseline is None:
+        errors.append("trusted runtime scheduler cost-ledger baseline was not supplied")
+    if (
+        expected_bindings is not None
+        and expected_analysis_input_sha256 is not None
+        and expected_bindings.analysis_input_sha256 != expected_analysis_input_sha256
+    ):
+        errors.append(
+            "scheduler bindings differ from the trusted pre-scheduler analysis-input digest"
+        )
+    manifest = artifact.summary.manifest
+    if expected_bindings is not None and manifest.bindings != expected_bindings:
+        errors.append("scheduler artifact bindings differ from trusted runtime bindings")
+    if expected_inventory is not None and manifest.shard_inventory != expected_inventory:
+        errors.append("scheduler artifact shard inventory differs from trusted runtime inventory")
+    if manifest.cost_ledger_baseline != expected_cost_baseline:
+        errors.append(
+            "scheduler artifact cost-ledger baseline differs from trusted runtime baseline"
+        )
+    privacy_custody = manifest.privacy_evidence_custody
+    if privacy_custody is None:
+        errors.append("scheduler artifact lacks exact pre-dispatch privacy custody")
+    elif (
+        expected_bindings is not None
+        and expected_bindings.privacy_evidence_custody_sha256 != privacy_custody.custody_sha256
+    ):
+        errors.append("scheduler privacy custody differs from trusted runtime bindings")
+    if expected_inventory is not None and expected_analysis_input_sha256 is not None:
+        from mmaudit.orchestration.scheduler_runtime import build_scheduler_bindings
+
+        try:
+            derived_bindings = build_scheduler_bindings(
+                config=config,
+                shard_inventory=expected_inventory,
+                qualification=runtime.production_qualification,
+                analysis_input_sha256=expected_analysis_input_sha256,
+                cost_ledger_baseline=expected_cost_baseline,
+                privacy_evidence_custody=privacy_custody,
+            )
+        except ValueError:
+            errors.append("trusted runtime scheduler analysis-input binding is invalid")
+            derived_bindings = None
+        if expected_bindings != derived_bindings:
+            errors.append(
+                "trusted runtime scheduler bindings differ from current configuration, "
+                "qualification, prompt, schema, tool, or source evidence"
+            )
+
+    requests = {item.logical_request_id: item for item in artifact.model_requests}
+    if not requests or len(requests) != len(artifact.model_requests):
+        errors.append("scheduler artifact lacks a unique substantive model-request inventory")
+        return tuple(errors)
+    usages = {item.request_id: item for item in runtime.model_usage}
+    if len(usages) != len(runtime.model_usage):
+        errors.append("runtime provider usage contains duplicate request identities")
+        return tuple(errors)
+    if set(usages) != set(requests):
+        errors.append("runtime provider usage differs from the scheduler request inventory")
+        return tuple(errors)
+    surface_artifacts: dict[str, ModelSurfaceReviewArtifact] = {}
+    duplicate_surface_artifact = False
+    for runtime_artifact in runtime.model_surface_review_artifacts:
+        try:
+            sealed_artifact = ModelSurfaceReviewArtifact.model_validate(
+                runtime_artifact.model_dump(mode="python")
+            )
+        except ValueError:
+            errors.append("runtime model-surface evidence contains an invalid artifact")
+            continue
+        if sealed_artifact.request_id in surface_artifacts:
+            duplicate_surface_artifact = True
+        surface_artifacts[sealed_artifact.request_id] = sealed_artifact
+    scheduler_surface_requests = {
+        request_id
+        for request_id, request in requests.items()
+        if request.model_surface_review_request_count > 0
+    }
+    if duplicate_surface_artifact or set(surface_artifacts) != scheduler_surface_requests:
+        errors.append("runtime model-surface artifacts differ from scheduler request custody")
+    specialist_outcomes: dict[str, SpecialistAcceptedOutcome] = {}
+    specialist_outcome_duplicate = False
+    for execution_record in runtime.specialist_execution_records:
+        try:
+            sealed_record = SpecialistExecutionRecord.model_validate(
+                execution_record.model_dump(mode="python")
+            )
+        except ValueError:
+            errors.append("scheduler specialist outcome evidence contains an invalid record")
+            continue
+        for outcome in sealed_record.accepted_outcomes:
+            if outcome.request_id in specialist_outcomes:
+                specialist_outcome_duplicate = True
+            specialist_outcomes[outcome.request_id] = outcome
+    scheduler_specialist_requests = {
+        request_id: role
+        for request_id, request in requests.items()
+        if (role := canonical_specialist_role(request.role)) is not None
+    }
+    if specialist_outcome_duplicate or set(specialist_outcomes) != set(
+        scheduler_specialist_requests
+    ):
+        errors.append("scheduler specialist requests differ from exact host-accepted outcomes")
+    expected_source_descriptors = (
+        {
+            source.source_descriptor_sha256
+            for shard in expected_inventory.shards
+            for source in shard.sources
+        }
+        if expected_inventory is not None
+        else set()
+    )
+    global_scope_sha256 = SchedulerScope.global_scope().scope_sha256
+    production_qualification = _current_production_qualification(runtime.production_qualification)
+    for request_id, request in sorted(requests.items()):
+        usage = usages[request_id]
+        routed_lineage = usage.routing.get("qualified_root_lineage")
+        specialist_role = scheduler_specialist_requests.get(request_id)
+        if specialist_role is not None:
+            accepted_outcome = specialist_outcomes.get(request_id)
+            if accepted_outcome is None:
+                errors.append(
+                    f"scheduler specialist request {request_id} lacks a host-accepted outcome"
+                )
+                continue
+            if accepted_outcome.outcome_kind is SpecialistAcceptedOutcomeKind.CANDIDATE_REVIEW and (
+                accepted_outcome.requested_surface_count
+                != request.model_surface_review_request_count
+                or accepted_outcome.surface_review_artifact_sha256
+                != request.model_surface_review_artifact_sha256
+            ):
+                errors.append(
+                    f"scheduler specialist request {request_id} differs from its exact "
+                    "model-surface custody"
+                )
+                continue
+            if (
+                accepted_outcome.specialist_role != specialist_role
+                or accepted_outcome.request_role != request.role
+                or accepted_outcome.validated_response_sha256 != request.validated_response_sha256
+                or accepted_outcome.context_request_evidence_sha256
+                != request.context_request_evidence_sha256
+                or request.specialist_accepted_outcome_sha256 != accepted_outcome.evidence_sha256
+            ):
+                errors.append(
+                    f"scheduler specialist request {request_id} differs from its exact "
+                    "host-accepted outcome"
+                )
+                continue
+        elif request.specialist_accepted_outcome_sha256 is not None:
+            errors.append(
+                f"non-specialist scheduler request {request_id} claims a specialist outcome"
+            )
+            continue
+        if request.terminal_status is not SchedulerTerminalStatus.SUCCEEDED:
+            errors.append(f"scheduler model request {request_id} did not succeed")
+            continue
+        if not is_creditable_usage_record(usage, require_real=True):
+            errors.append(f"scheduler model request {request_id} lacks real creditable usage")
+            continue
+        if not _is_real_model_usage(
+            usage,
+            config,
+            production_qualification,
+            runtime.provider_session,
+        ):
+            errors.append(
+                f"scheduler model request {request_id} lacks current qualified "
+                "certification-grade provider evidence"
+            )
+            continue
+        assert production_qualification is not None
+        try:
+            qualified_model = production_qualification.model_for(
+                usage.requested_model,
+                now=datetime.now(UTC).replace(microsecond=0),
+            )
+        except ValueError:
+            errors.append(f"scheduler model request {request_id} lacks a current qualified model")
+            continue
+        if source_backed_whole_protocol_context(usage) is not None and (
+            request.scope_sha256 != global_scope_sha256
+            or set(request.delivered_source_descriptor_sha256s) != expected_source_descriptors
+        ):
+            errors.append(
+                f"scheduler model request {request_id} lacks exact global "
+                "whole-protocol source delivery"
+            )
+            continue
+        raw_context = usage.routing.get("context_request_evidence")
+        try:
+            context_evidence = ContextRequestEvidence.model_validate(raw_context)
+        except ValueError:
+            errors.append(f"scheduler model request {request_id} lacks exact context evidence")
+            continue
+        surface_artifact = surface_artifacts.get(request_id)
+        if request.model_surface_review_request_count > 0:
+            if surface_artifact is None:
+                errors.append(
+                    f"scheduler model request {request_id} lacks its runtime model-surface artifact"
+                )
+                continue
+            if (
+                surface_artifact.request_id != request.logical_request_id
+                or surface_artifact.review_role != request.role
+                or len(surface_artifact.requested_surface_ids)
+                != request.model_surface_review_request_count
+                or surface_artifact.requested_surface_manifest_sha256
+                != request.model_surface_review_request_manifest_sha256
+                or surface_artifact.artifact_sha256 != request.model_surface_review_artifact_sha256
+                or surface_artifact.rendered_context_sha256 != context_evidence.rendered_sha256
+                or surface_artifact.prompt_sha256 != request.provider_prompt_sha256
+                or surface_artifact.response_sha256 != request.provider_response_sha256
+                or surface_artifact.validated_response_sha256 != request.validated_response_sha256
+                or surface_artifact.response_schema_sha256 != request.response_schema_sha256
+            ):
+                errors.append(
+                    f"scheduler model request {request_id} differs from exact runtime "
+                    "model-surface artifact"
+                )
+                continue
+        elif surface_artifact is not None:
+            errors.append(
+                f"scheduler model request {request_id} claims an unplanned runtime "
+                "model-surface artifact"
+            )
+            continue
+        if (
+            usage.role != request.role
+            or usage.requested_model != request.requested_model
+            or usage.returned_model != request.requested_model
+            or usage.actual_model != request.requested_model
+            or usage.prompt_sha256 != request.provider_prompt_sha256
+            or usage.user_prompt_sha256 != request.user_prompt_sha256
+            or usage.schema_sha256 != request.response_schema_sha256
+            or usage.validated_response_sha256 != request.terminal_evidence_sha256
+            or request.usage_record_sha256
+            != scheduler_canonical_sha256(usage.model_dump(mode="json"))
+            or request.context_request_evidence_sha256 != context_evidence.evidence_sha256
+            or request.provider_response_sha256 != usage.response_sha256
+            or request.validated_response_sha256 != usage.validated_response_sha256
+            or context_evidence.request_id != request.logical_request_id
+            or context_evidence.request_role != request.role
+            or usage.routing.get("context_request_evidence_sha256")
+            != context_evidence.evidence_sha256
+            or usage.fallback_used
+            or usage.substitution_detected
+            or routed_lineage != request.root_lineage
+            or request.root_lineage != qualified_model.root_lineage
+        ):
+            errors.append(
+                f"scheduler model request {request_id} differs from exact provider evidence"
+            )
+    return tuple(errors)
+
+
+def _specialist_execution_errors(
+    runtime: AssuranceRuntime,
+) -> tuple[set[str], tuple[str, ...]]:
+    """Derive completed specialist roles only from host-validated execution records."""
+
+    records: list[SpecialistExecutionRecord] = []
+    errors: list[str] = []
+    for record in runtime.specialist_execution_records:
+        try:
+            records.append(
+                SpecialistExecutionRecord.model_validate(record.model_dump(mode="python"))
+            )
+        except ValueError:
+            errors.append("specialist execution evidence contains an invalid record")
+    role_counts = Counter(record.role for record in records)
+    expected_roles = set(ALL_SPECIALIST_ROLES)
+    if set(role_counts) != expected_roles or any(count != 1 for count in role_counts.values()):
+        errors.append("specialist execution evidence differs from the exact role inventory")
+    derived = completed_specialist_roles(records)
+    derived_investigators = derived & set(SPECIALIST_INVESTIGATOR_ROLES)
+    derived_auxiliary = derived & set(SPECIALIST_AUXILIARY_ROLES)
+    if runtime.specialist_roles_completed != derived_investigators:
+        errors.append("declared investigator completion differs from accepted outcomes")
+    if runtime.auxiliary_roles_completed != derived_auxiliary:
+        errors.append("declared auxiliary completion differs from accepted outcomes")
+    return derived, tuple(errors)
 
 
 class MaximumAssuranceContract:
@@ -790,6 +1123,11 @@ class MaximumAssuranceContract:
             for request_role in real_model_roles
             if (role := canonical_specialist_role(request_role)) is not None
         }
+        completed_specialist_evidence, specialist_execution_errors = _specialist_execution_errors(
+            runtime
+        )
+        specialist_execution_bound = not specialist_execution_errors
+        accepted_real_specialist_roles = completed_specialist_evidence & real_specialist_roles
         executed_root_lineages = _real_model_usage_lineages(
             real_model_records,
             production_qualification,
@@ -823,7 +1161,9 @@ class MaximumAssuranceContract:
             len(executed_qualified_model_ids) >= CERTIFIED_ENSEMBLE_MIN_EXACT_MODELS
             and qualified_selection_execution_complete
             and len(executed_root_lineages) >= CERTIFIED_ENSEMBLE_MIN_ROOT_LINEAGES
-            and len(real_specialist_roles) >= CERTIFIED_ENSEMBLE_MIN_SPECIALIST_RESPONSIBILITIES
+            and specialist_execution_bound
+            and len(accepted_real_specialist_roles)
+            >= CERTIFIED_ENSEMBLE_MIN_SPECIALIST_RESPONSIBILITIES
             and len(whole_protocol_root_lineages) >= CERTIFIED_ENSEMBLE_MIN_WHOLE_PROTOCOL_LINEAGES
             and critical_surface_ensemble_complete
             and (candidate_falsifier_complete or not runtime.eligible_high_critical_ids)
@@ -844,7 +1184,7 @@ class MaximumAssuranceContract:
             f"{len(qualified_selection_model_ids)}; "
             f"root lineages={len(executed_root_lineages)}/"
             f"{CERTIFIED_ENSEMBLE_MIN_ROOT_LINEAGES}; "
-            f"specialist responsibilities={len(real_specialist_roles)}/"
+            f"specialist responsibilities={len(accepted_real_specialist_roles)}/"
             f"{CERTIFIED_ENSEMBLE_MIN_SPECIALIST_RESPONSIBILITIES}; "
             f"whole-protocol lineages={len(whole_protocol_root_lineages)}/"
             f"{CERTIFIED_ENSEMBLE_MIN_WHOLE_PROTOCOL_LINEAGES}; "
@@ -877,9 +1217,38 @@ class MaximumAssuranceContract:
             "business_logic",
             "configuration",
         }
-        completed_specialists = runtime.specialist_roles_completed & real_specialist_roles
+        completed_specialists = (
+            completed_specialist_evidence
+            & set(SPECIALIST_INVESTIGATOR_ROLES)
+            & real_specialist_roles
+        )
+        completed_auxiliary = (
+            completed_specialist_evidence & set(SPECIALIST_AUXILIARY_ROLES) & real_specialist_roles
+        )
         missing_investigators = set(SPECIALIST_INVESTIGATOR_ROLES) - completed_specialists
+        scheduler_errors = _scheduler_assurance_errors(self.config, runtime)
+        scheduler_complete = not scheduler_errors
         clauses = [
+            _requirement(
+                "seven_pass_scheduler",
+                scheduler_complete,
+                (
+                    "all seven ordered scheduler passes completed with exact runtime bindings "
+                    "and real provider evidence"
+                    if scheduler_complete
+                    else "; ".join(scheduler_errors)
+                ),
+                state=(
+                    AnalysisState.DETERMINISTIC
+                    if scheduler_complete
+                    else (
+                        AnalysisState.NOT_ANALYZED
+                        if runtime.scheduler_artifact is None
+                        else AnalysisState.ATTEMPTED_FAILED
+                    )
+                ),
+                artifacts=_present(runtime.artifacts, "scheduler-state.json"),
+            ),
             _requirement(
                 "full_protocol_scope",
                 runtime.scope_assessment is not None
@@ -1018,8 +1387,24 @@ class MaximumAssuranceContract:
                 artifacts=_present(runtime.artifacts, "scanner-results.json"),
             ),
             _requirement(
+                "specialist_execution_evidence",
+                specialist_execution_bound,
+                (
+                    "specialist responsibilities are derived from exact host-accepted outcomes"
+                    if specialist_execution_bound
+                    else "; ".join(specialist_execution_errors)
+                ),
+                state=(
+                    AnalysisState.MODEL_ONLY
+                    if runtime.specialist_execution_records
+                    else AnalysisState.NOT_ANALYZED
+                ),
+                artifacts=_present(runtime.artifacts, "specialist-execution.json"),
+            ),
+            _requirement(
                 "multi_agent_review",
-                base_roles <= real_model_roles
+                specialist_execution_bound
+                and base_roles <= real_model_roles
                 and len(completed_specialists)
                 >= self.config.maximum_assurance.minimum_specialist_agents
                 and not missing_investigators,
@@ -1077,17 +1462,15 @@ class MaximumAssuranceContract:
             ),
             _requirement(
                 "independent_invariant_review",
-                "invariant_review" in (runtime.auxiliary_roles_completed & real_specialist_roles),
+                "invariant_review" in completed_auxiliary,
                 (
                     "dedicated real-provider non-finding invariant-review role completed"
-                    if "invariant_review"
-                    in (runtime.auxiliary_roles_completed & real_specialist_roles)
+                    if "invariant_review" in completed_auxiliary
                     else "dedicated real-provider invariant-review role did not complete"
                 ),
                 state=(
                     AnalysisState.MODEL_ONLY
-                    if "invariant_review"
-                    in (runtime.auxiliary_roles_completed & real_specialist_roles)
+                    if "invariant_review" in completed_auxiliary
                     else AnalysisState.NOT_ANALYZED
                 ),
                 artifacts=_present(runtime.artifacts, "invariant-review.json"),
@@ -1243,8 +1626,7 @@ class MaximumAssuranceContract:
             _requirement(
                 "independent_test_synthesis",
                 (
-                    {"test_generation", "exploit_reproduction_planner"}
-                    <= (runtime.auxiliary_roles_completed & real_specialist_roles)
+                    {"test_generation", "exploit_reproduction_planner"} <= completed_auxiliary
                     or not runtime.eligible_high_critical_ids
                 ),
                 (
@@ -1253,7 +1635,7 @@ class MaximumAssuranceContract:
                         "test_generation",
                         "exploit_reproduction_planner",
                     }
-                    <= (runtime.auxiliary_roles_completed & real_specialist_roles)
+                    <= completed_auxiliary
                     else (
                         "no eligible high/critical candidate required test synthesis"
                         if not runtime.eligible_high_critical_ids
@@ -1276,11 +1658,10 @@ class MaximumAssuranceContract:
             ),
             _requirement(
                 "report_quality_review",
-                "report_quality" in (runtime.auxiliary_roles_completed & real_specialist_roles),
+                "report_quality" in completed_auxiliary,
                 (
                     "independent real-provider report-quality review completed"
-                    if "report_quality"
-                    in (runtime.auxiliary_roles_completed & real_specialist_roles)
+                    if "report_quality" in completed_auxiliary
                     else "independent real-provider report-quality review did not complete"
                 ),
             ),

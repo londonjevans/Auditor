@@ -6,7 +6,6 @@ import hashlib
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from mmaudit.constants import SEVERITY_ORDER
 from mmaudit.models.schemas import (
@@ -649,7 +648,10 @@ def merge_group(
             ),
             content_hash=aggregate_hash,
             errors=validation_errors,
-            validated_at=datetime.now(UTC),
+            # The validation substance is deterministic and already bound to
+            # exact source hashes. A wall-clock observation would make an exact
+            # scheduler replay serialize different finding evidence.
+            validated_at=None,
         ),
         disagreement=disagreement,
         contributing_candidate_ids=[candidate.candidate_id for candidate in group.candidates],

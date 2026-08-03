@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -387,13 +388,39 @@ class AtomicCostLedger:
             _cap, entries = _validate_state(state)
             return _snapshot(self.cap_usd, entries)
 
+    @property
+    def identity_sha256(self) -> str:
+        """Commit the operator-selected ledger and its persistent lock identity."""
+
+        with self._locked() as lock_descriptor:
+            lock_details = os.fstat(lock_descriptor)
+            material = {
+                "schema": "mmaudit.atomic-cost-ledger.identity.v1",
+                "canonical_path": self.path.as_posix(),
+                "lock_device": lock_details.st_dev,
+                "lock_inode": lock_details.st_ino,
+                "owner_uid": lock_details.st_uid,
+            }
+            return hashlib.sha256(
+                json.dumps(
+                    material,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                ).encode("utf-8")
+            ).hexdigest()
+
     @contextmanager
-    def _locked(self, *, create_lock: bool = False) -> Iterator[None]:
+    def _locked(self, *, create_lock: bool = False) -> Iterator[int]:
         with self._thread_lock:
             fd = _open_lock_file(self.lock_path, create=create_lock)
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX)
-                yield
+                _require_exact_lock_path(self.lock_path, fd)
+                try:
+                    yield fd
+                finally:
+                    _require_exact_lock_path(self.lock_path, fd)
             finally:
                 fcntl.flock(fd, fcntl.LOCK_UN)
                 os.close(fd)
@@ -527,6 +554,31 @@ def _open_lock_file(path: Path, *, create: bool) -> int:
     return descriptor
 
 
+def _require_exact_lock_path(path: Path, descriptor: int) -> None:
+    """Require the flocked descriptor to remain the exact configured lock path."""
+
+    try:
+        held = os.fstat(descriptor)
+        current = path.lstat()
+    except OSError as exc:
+        raise CostLedgerConfigurationError(
+            "cost ledger lock changed during the locked operation"
+        ) from exc
+    if (
+        not stat.S_ISREG(held.st_mode)
+        or held.st_uid != os.geteuid()
+        or held.st_nlink != 1
+        or stat.S_IMODE(held.st_mode) != 0o600
+        or not stat.S_ISREG(current.st_mode)
+        or stat.S_ISLNK(current.st_mode)
+        or current.st_uid != os.geteuid()
+        or current.st_nlink != 1
+        or stat.S_IMODE(current.st_mode) != 0o600
+        or (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino)
+    ):
+        raise CostLedgerConfigurationError("cost ledger lock changed during the locked operation")
+
+
 def _open_regular_private_file(path: Path) -> int:
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -557,27 +609,62 @@ def _new_state(cap: Decimal) -> dict[str, Any]:
     }
 
 
+def _serialize_entry(entry: CostEntry) -> dict[str, Any]:
+    return {
+        "request_id": entry.request_id,
+        "reservation_id": entry.reservation_id,
+        "status": entry.status.value,
+        "reserved_usd": _money_text(entry.reserved_usd),
+        "actual_cost_usd": (
+            None if entry.actual_cost_usd is None else _money_text(entry.actual_cost_usd)
+        ),
+        "accounted_cost_usd": _money_text(entry.accounted_cost_usd),
+        "release_reason": None if entry.release_reason is None else entry.release_reason.value,
+        "created_at": entry.created_at.isoformat(),
+        "updated_at": entry.updated_at.isoformat(),
+    }
+
+
+def cost_entry_sha256(entry: CostEntry) -> str:
+    """Hash every persisted field of one validated non-secret ledger entry."""
+
+    return hashlib.sha256(
+        json.dumps(
+            _serialize_entry(entry),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def cost_ledger_snapshot_sha256(snapshot: CostLedgerSnapshot) -> str:
+    """Hash the exact validated ledger head used as a scheduler baseline."""
+
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "cap_usd": _money_text(snapshot.cap_usd),
+                "spent_usd": _money_text(snapshot.spent_usd),
+                "active_reserved_usd": _money_text(snapshot.active_reserved_usd),
+                "entries": [
+                    _serialize_entry(entry)
+                    for entry in sorted(snapshot.entries, key=lambda item: item.request_id)
+                ],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def _serialize_state(cap: Decimal, entries: Mapping[str, CostEntry]) -> dict[str, Any]:
     return {
         "schema_version": _SCHEMA_VERSION,
         "cap_usd": _money_text(cap),
         "entries": {
-            request_id: {
-                "request_id": entry.request_id,
-                "reservation_id": entry.reservation_id,
-                "status": entry.status.value,
-                "reserved_usd": _money_text(entry.reserved_usd),
-                "actual_cost_usd": (
-                    None if entry.actual_cost_usd is None else _money_text(entry.actual_cost_usd)
-                ),
-                "accounted_cost_usd": _money_text(entry.accounted_cost_usd),
-                "release_reason": (
-                    None if entry.release_reason is None else entry.release_reason.value
-                ),
-                "created_at": entry.created_at.isoformat(),
-                "updated_at": entry.updated_at.isoformat(),
-            }
-            for request_id, entry in sorted(entries.items())
+            request_id: _serialize_entry(entry) for request_id, entry in sorted(entries.items())
         },
     }
 

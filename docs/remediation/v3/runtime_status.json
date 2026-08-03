@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-02T11:48:08Z",
-  "candidate_commit": "ca2209b0b292272f594dcac590a302a3ee7c3811",
+  "updated_at": "2026-08-03T01:02:48Z",
+  "candidate_commit": "8c84013869473635c28193d552498db20ccd4d80",
   "autorun_status": "RUNNING",
-  "current_milestone": "deterministic_coherent_semantic_shards",
-  "current_ticket": "V3-SHARD-001 (COMPLETE; checkpoint pending)",
-  "last_checkpoint_commit": "ca2209b0b292272f594dcac590a302a3ee7c3811",
+  "current_milestone": "resumable_seven_pass_map_reduce_scheduler",
+  "current_ticket": "V3-SCHEDULER-001 (COMPLETE; CHECKPOINT_PENDING)",
+  "last_checkpoint_commit": "8c84013869473635c28193d552498db20ccd4d80",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,
@@ -18,6 +18,86 @@
     "remaining": "249.9966584375"
   },
   "completed_real_audits": 0,
+  "last_validation": {
+    "command": ".venv/bin/pytest -q --cache-clear",
+    "result": "PASS: exact normalized tree 4401 passed, 11 explicit external-prerequisite skips, 1299.53s (21m39s), local loopback/Unix-socket mode; transient execution-origin failure did not recur"
+  },
+  "scheduler_assurance_validation": {
+    "status": "PASS_COMPONENT_FULL_ASSURANCE",
+    "nominal_command": ".venv/bin/pytest -q tests/unit/test_assurance.py::test_maximum_assurance_complete_requires_all_runtime_clauses",
+    "nominal_result": "PASS: nominal maximum-assurance runtime remained COMPLETE with exact scheduler-bound runtime surface artifacts",
+    "negative_command": ".venv/bin/pytest -q -rA tests/unit/test_assurance.py::{six permanent scheduler payload/artifact assays} tests/unit/test_assurance.py::{three runtime surface-artifact tamper assays}",
+    "negative_result": "PASS: all six permanent false-COMPLETE payload/artifact assays and three exact runtime surface-artifact inventory/binding tamper cases failed closed; 10 selected cases including nominal passed in 36.95s",
+    "full_command": ".venv/bin/pytest -q tests/unit/test_assurance.py",
+    "full_result": "PASS: 208 passed in 424.28s after descriptive MOCK specialist accounting remained excluded from REAL assurance credit",
+    "provider_calls": 0
+  },
+  "scheduler_analysis_input_validation": {
+    "status": "PASS_COMPONENT",
+    "semantic_projection_command": ".venv/bin/pytest -q tests/unit/test_scheduler_analysis_inputs.py -x",
+    "semantic_projection_result": "PASS: 4 passed in 0.25s; timing/staging relocation stable, security-relevant identity/status/result/external paths retained, exact in-repository exclusion authority enforced",
+    "custody_command": ".venv/bin/pytest -q tests/unit/test_scheduler_models.py tests/unit/test_scheduler_manifest.py tests/unit/test_scheduler_journal.py",
+    "custody_result": "PASS: 103 passed in 18.52s; canonical per-role schemas, nonempty response-artifact custody, typed host outputs, exact activation-input bindings, recovery authority, and private/public hash projections validated",
+    "provider_calls": 0
+  },
+  "scheduler_typed_host_validation": {
+    "status": "PASS_COMPONENT",
+    "command": ".venv/bin/pytest -q tests/unit/test_scheduler_models.py tests/unit/test_scheduler_manifest.py tests/unit/test_scheduler_journal.py tests/unit/test_scheduler_host_contracts.py tests/unit/test_scheduler_response_contracts.py",
+    "result": "PASS: 116 tests passed in 19.63s; typed response parsing, substantive orientation, exact surface custody, host activation binding, semantic relationship/scope custody, downstream candidate suppression, and reproduction coverage negatives validated",
+    "provider_calls": 0
+  },
+  "scheduler_retained_journal_reference_validation": {
+    "status": "PASS_COMPONENT",
+    "command": ".venv/bin/python scripts/generate_release_schemas.py && .venv/bin/pytest -q tests/unit/test_release_schemas.py tests/unit/test_scheduler_journal_reference.py",
+    "result": "PASS: 9 passed in 2.50s; cycle-free typed owner/consumer identity, exact physical-journal relative path, artifact/evidence hash bindings, tamper rejection, and committed release-schema sync validated",
+    "provider_calls": 0
+  },
+  "scheduler_completed_resume_validation": {
+    "status": "PASS_COMPONENT",
+    "command": ".venv/bin/pytest -q tests/integration/test_scheduler_pipeline.py::test_pipeline_resumes_exact_completed_campaign_without_provider_replay",
+    "result": "PASS: 1 passed in 19.73s; zero provider replay, unchanged cost ledger, exact report/finding/usage/coverage/context/public-artifact equality, typed no-copy retained-journal reference, and detached post-close manifest validation",
+    "provider_calls": 0
+  },
+  "scheduler_retained_journal_adversarial_validation": {
+    "status": "PASS_COMPONENT",
+    "command": ".venv/bin/pytest -q tests/unit/test_scheduler_journal_reference.py tests/unit/test_scheduler_retained_journal_manifest.py",
+    "result": "PASS: 24 passed in 5.82s; detached post-close reconstruction and exact manifest byte/hash binding passed, while missing/tampered/swapped/linked/chained/same-run/path-trick custody failed closed",
+    "provider_calls": 0
+  },
+  "scheduler_retained_journal_toctou_validation": {
+    "status": "PASS_COMPONENT",
+    "command": ".venv/bin/pytest -q tests/unit/test_scheduler_manifest.py tests/unit/test_scheduler_journal_reference.py tests/unit/test_scheduler_retained_journal_manifest.py -x",
+    "result": "PASS: 39 passed in 8.64s; sealed reference path/size/hash custody, held O_NOFOLLOW bytes, post-reconstruction path identity, and deterministic reference-replacement/owner-chain race barriers validated; an additional in-window atomic reference replacement passed 1 in 0.74s; completed-resume integration separately passed 1 in 19.06s",
+    "provider_calls": 0
+  },
+  "scheduler_cost_ledger_identity_validation": {
+    "status": "PASS_COMPONENT",
+    "command": ".venv/bin/pytest -q tests/unit/test_cost_ledger.py -x && .venv/bin/pytest -q tests/unit/test_scheduler_journal.py::test_scheduler_cost_baseline_is_stable_and_does_not_serialize_ledger_paths tests/unit/test_scheduler_journal.py::test_resume_reads_bound_baseline_and_recovers_only_campaign_delta",
+    "result": "PASS: 22 cost-ledger tests plus 2 scheduler baseline tests; flocked-descriptor identity, atomic lock replacement rejection, stable path-free baseline serialization, and same-cap ledger substitution rejection validated",
+    "provider_calls": 0
+  },
+  "scheduler_resume_privacy_custody_validation": {
+    "status": "PASS_COMPONENT",
+    "command": ".venv/bin/python scripts/generate_release_schemas.py --write && .venv/bin/python scripts/generate_release_schemas.py && .venv/bin/pytest -q tests/unit/test_scheduler_models.py tests/unit/test_scheduler_runtime.py tests/unit/test_scheduler_journal.py tests/unit/test_scheduler_manifest.py tests/unit/test_logical_request_identity.py -x",
+    "result": "PASS: 148 passed in 20.05s; pre-final exact privacy custody, final manifest/report byte join, pre-dispatch lifecycle binding, post-reservation policy recheck, post-transport accounting without credit, and schema synchronization validated; two partial-resume atomic-replacement/rehashed-tamper negatives additionally passed",
+    "provider_calls": 0
+  },
+  "scheduler_pipeline_validation": {
+    "status": "PASS_COMPONENT",
+    "command": ".venv/bin/pytest -q tests/integration/test_scheduler_pipeline.py",
+    "result": "PASS: final 30 production scheduler integration cases passed in 54.17s; fresh completion, exact completed and partial resume, crash uncertainty, drift classes, privacy tamper refusal, unsafe/safe accounting, formal-counterexample activation ordering, omission failure, host sole-authority behavior, and explicit MOCK coverage provenance validated",
+    "provider_calls": 0
+  },
+  "scheduler_full_suite_recovery": {
+    "status": "COMPLETE",
+    "initial_command": ".venv/bin/pytest -q",
+    "initial_result": "INTERRUPTED after more than 45 minutes: six regressions emitted before a CPU-bound maximum-assurance scheduler case; no result was claimed",
+    "diagnostic_command": ".venv/bin/pytest -x -vv",
+    "diagnostic_result": "FAIL: first stale integration assertion expected 6 legacy calls while the exact seven-pass campaign completed 14 typed fake-provider calls",
+    "focused_result": "PASS: 5 recovered pipeline integration cases passed in 64.24s; 40 manifest and scheduler-manifest unit tests passed in 8.80s; 207 assurance tests passed in 497.65s",
+    "remaining": "none; exact normalized tree passed 4401 tests with 11 explicit prerequisite skips in 1299.53s",
+    "provider_calls": 0
+  },
   "release_status": "INCOMPLETE",
   "superiority_status": "NOT_DEMONSTRATED"
 }

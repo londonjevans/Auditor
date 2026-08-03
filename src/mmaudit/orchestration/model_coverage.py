@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, replace
+from pathlib import PurePosixPath
 
 from mmaudit.config import AuditConfig, ModelLineageConfig, model_lineage_index
 from mmaudit.constants import SPECIALIST_INVESTIGATOR_ROLES
@@ -35,6 +36,7 @@ from mmaudit.models.schemas import (
     SolidityGraphEdge,
     SolidityGraphKind,
     SolidityGraphSet,
+    SolidityProvenance,
     SoliditySymbolIndex,
     UsageRecord,
 )
@@ -44,6 +46,7 @@ from mmaudit.orchestration.model_review_evidence import (
     model_surface_review_excerpt_validation_failures,
     model_surface_review_record_validation_failures,
 )
+from mmaudit.repository.chunking import line_range_hash
 from mmaudit.solidity.coverage import (
     bind_economic_plan_to_audited_entities,
     bind_invariant_to_audited_entities,
@@ -111,6 +114,49 @@ _CREDITABLE_REVIEW_STATUSES = frozenset(
         ModelSurfaceReviewStatus.REVIEWED_NO_ISSUE,
     }
 )
+_FORENSIC_LIMITATION_LABELS = {
+    "duplicate_artifact": "duplicate model-review artifacts were not credited",
+    "invalid_context": "model-review requests used an invalid context package",
+    "unknown_surfaces": "model-review artifacts referenced unknown surfaces",
+    "unregistered_model": "model-review requests used an unregistered model",
+    "unapproved_lineage": "model-review requests used an unapproved lineage",
+}
+
+
+def _record_forensic_limitation(
+    inventory: dict[str, set[str]],
+    *,
+    category: str,
+    identity: str,
+) -> None:
+    """Retain exact failure cardinality without overflowing the public summary schema."""
+
+    if category not in _FORENSIC_LIMITATION_LABELS:
+        raise ValueError("unknown forensic limitation category")
+    inventory.setdefault(category, set()).add(identity)
+
+
+def _forensic_limitation_summaries(inventory: dict[str, set[str]]) -> tuple[str, ...]:
+    """Commit sorted failure identities in deterministic bounded public summaries."""
+
+    summaries: list[str] = []
+    for category, identities in sorted(inventory.items()):
+        normalized = tuple(sorted(identities))
+        identity_set_sha256 = hashlib.sha256(
+            json.dumps(
+                {"category": category, "identities": normalized},
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        summaries.append(
+            f"{_FORENSIC_LIMITATION_LABELS[category]}; "
+            f"affected_identity_count={len(normalized)}; "
+            f"affected_identity_set_sha256={identity_set_sha256}"
+        )
+    return tuple(summaries)
 
 
 def build_model_review_coverage(
@@ -354,6 +400,105 @@ def build_model_surface_requests(
             else {}
         ),
     )
+
+
+def build_semantic_shard_source_review_request(
+    *,
+    index: SoliditySymbolIndex,
+    source_path: str,
+    source_content: str,
+    source_sha256: str,
+) -> ModelSurfaceReviewRequest:
+    """Build one exact semantic review surface omitted from audited-source coverage.
+
+    Solidity tests and other non-audited Solidity inputs can still form semantic
+    scheduler shards. They are intentionally absent from the product coverage
+    denominator, but a blind source-audit request must still name a typed Solidity
+    entity rather than receiving only a whole-file disposition. This helper derives
+    that supplemental request solely from a validated compiler/fallback index and
+    the exact current source bytes.
+    """
+
+    validated_index = SoliditySymbolIndex.model_validate(index.model_dump(mode="python"))
+    path = PurePosixPath(source_path)
+    if (
+        not source_path
+        or path.is_absolute()
+        or path.as_posix() != source_path
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
+        raise ValueError("semantic source review path must be normalized and relative")
+    encoded = source_content.encode("utf-8")
+    if hashlib.sha256(encoded).hexdigest() != source_sha256:
+        raise ValueError("semantic source review bytes differ from the exact source hash")
+
+    ast_backed = source_path in validated_index.ast_sources
+    fallback_backed = source_path in validated_index.fallback_sources
+    if ast_backed == fallback_backed:
+        raise ValueError("semantic source review requires one exact index provenance")
+    expected_provenance = SolidityProvenance.COMPILER if ast_backed else SolidityProvenance.FALLBACK
+    entities = sorted(
+        (entity for entity in validated_index.entities if entity.path == source_path),
+        key=lambda entity: (entity.start_line, entity.end_line, entity.id),
+    )
+    if not entities:
+        raise ValueError("semantic source review lacks a typed Solidity entity")
+
+    source_lines = source_content.splitlines(keepends=True)
+    for entity in entities:
+        if (
+            entity.provenance is not expected_provenance
+            or entity.end_line > len(source_lines)
+            or entity.byte_end > len(encoded)
+            or line_range_hash(source_content, entity.start_line, entity.end_line)
+            != entity.source_hash
+        ):
+            raise ValueError("semantic source review index differs from current source bytes")
+
+    reviewable = [
+        entity
+        for entity in entities
+        if entity.kind in _CONTRACT_KINDS | _FUNCTION_KINDS | _STATE_KINDS
+    ]
+    if not reviewable:
+        raise ValueError("semantic source review lacks a reviewable Solidity entity")
+    kind_order = {
+        **{kind: 0 for kind in _CONTRACT_KINDS},
+        **{kind: 1 for kind in _FUNCTION_KINDS},
+        **{kind: 2 for kind in _STATE_KINDS},
+    }
+    entity = min(
+        reviewable,
+        key=lambda item: (kind_order[item.kind], item.start_line, item.end_line, item.id),
+    )
+    if entity.kind in _CONTRACT_KINDS:
+        return _requests_from_seeds(
+            [
+                _SurfaceSeed(
+                    kind=ModelReviewSurfaceKind.CONTRACT,
+                    subject_id=entity.id,
+                    label=entity.name,
+                    critical=False,
+                    locations=(_entity_location(entity),),
+                    contract=entity.name,
+                    allowed_symbols=tuple(sorted({entity.id, entity.name})),
+                    invariant_considered=(
+                        f"Assess declared security invariants across contract {entity.name}."
+                    ),
+                )
+            ]
+        )[0]
+    if entity.kind in _FUNCTION_KINDS:
+        request_kind = (
+            ModelReviewSurfaceKind.ENTRY_POINT
+            if entity.kind is SolidityEntityKind.CONSTRUCTOR
+            or entity.visibility in {"public", "external"}
+            else ModelReviewSurfaceKind.INTERNAL_FUNCTION
+        )
+        return _requests_from_seeds([_entity_surface(request_kind, entity, critical=False)])[0]
+    return _requests_from_seeds(
+        [_entity_surface(ModelReviewSurfaceKind.STATE, entity, critical=False)]
+    )[0]
 
 
 def plan_model_surface_review_assignments(
@@ -798,6 +943,7 @@ def _review_evidence_references(
     lineage_by_model = model_lineage_index(config)
     require_certification = config.profile is AuditProfile.MAXIMUM_ASSURANCE
     references: dict[str, list[ModelReviewEvidenceReference]] = {}
+    forensic_limitations: dict[str, set[str]] = {}
     artifact_counts: dict[str, int] = {}
     for artifact in review_artifacts:
         artifact_counts[artifact.artifact_sha256] = (
@@ -811,8 +957,10 @@ def _review_evidence_references(
             continue
         processed_artifacts.add(artifact.artifact_sha256)
         if duplicate_artifact:
-            limitations.add(
-                f"duplicate model-review artifact {artifact.artifact_sha256} was not credited"
+            _record_forensic_limitation(
+                forensic_limitations,
+                category="duplicate_artifact",
+                identity=artifact.artifact_sha256,
             )
 
         reasons: list[str] = []
@@ -844,8 +992,10 @@ def _review_evidence_references(
             except ContextBudgetError:
                 context = None
                 reasons.append("source review context failed exact boundary validation")
-                limitations.add(
-                    f"model-review request {artifact.request_id} used an invalid context package"
+                _record_forensic_limitation(
+                    forensic_limitations,
+                    category="invalid_context",
+                    identity=artifact.request_id,
                 )
 
         artifact_requests: list[ModelSurfaceReviewRequest] = []
@@ -856,8 +1006,10 @@ def _review_evidence_references(
         ]
         if unknown_surface_ids:
             reasons.append("artifact requested surfaces outside the deterministic inventory")
-            limitations.add(
-                f"model-review artifact {artifact.artifact_sha256} referenced unknown surfaces"
+            _record_forensic_limitation(
+                forensic_limitations,
+                category="unknown_surfaces",
+                identity=artifact.artifact_sha256,
             )
         else:
             artifact_requests = [
@@ -930,16 +1082,20 @@ def _review_evidence_references(
             lineage = lineage_by_model.get(usage.requested_model.lower())
             if lineage is None:
                 reasons.append("requested model had no registered immutable lineage")
-                limitations.add(
-                    f"model-review request {usage.request_id} used an unregistered model"
+                _record_forensic_limitation(
+                    forensic_limitations,
+                    category="unregistered_model",
+                    identity=usage.request_id,
                 )
             else:
                 root_lineage = lineage.root_lineage
                 approved_lineages = set(config.privacy.approved_model_lineages)
                 if lineage.root_lineage not in approved_lineages:
                     reasons.append("requested model lineage lacked operator approval")
-                    limitations.add(
-                        f"model-review request {usage.request_id} used an unapproved lineage"
+                    _record_forensic_limitation(
+                        forensic_limitations,
+                        category="unapproved_lineage",
+                        identity=usage.request_id,
                     )
 
         for record in artifact.records:
@@ -986,6 +1142,8 @@ def _review_evidence_references(
                 ),
             )
             references.setdefault(record.surface_id, []).append(reference)
+
+    limitations.update(_forensic_limitation_summaries(forensic_limitations))
 
     for surface_references in references.values():
         surface_references.sort(
@@ -1856,6 +2014,12 @@ def _surface_id(kind: ModelReviewSurfaceKind, subject_id: str) -> str:
 
 def _edge_subject_id(edge: SolidityGraphEdge) -> str:
     return f"graph-edge:{_edge_digest(edge)}"
+
+
+def model_review_edge_subject_id(edge: SolidityGraphEdge) -> str:
+    """Return the stable public model-review subject for one normalized graph edge."""
+
+    return _edge_subject_id(edge)
 
 
 def _edge_token(edge: SolidityGraphEdge) -> str:

@@ -144,7 +144,7 @@ from mmaudit.traceability import (
     validate_traceability_evidence,
 )
 from tests.conftest import FIXTURES, model_registry_entry
-from tests.fake_openrouter import FakeOpenRouter, _request_schema_name
+from tests.fake_openrouter import FakeOpenRouter, _extract_json, _request_schema_name
 from tests.qualification_support import synthetic_production_qualification
 from tests.unit.test_execution_candidates import _inputs as _execution_origin_inputs
 
@@ -764,6 +764,7 @@ def _provider(
     *,
     api_key: str = "synthetic-test-key",
     usage: UsageLedger | None = None,
+    atomic_ledger: AtomicCostLedger | None = None,
 ) -> tuple[OpenRouterClient, httpx.AsyncClient]:
     http_client = httpx.AsyncClient(
         transport=httpx.MockTransport(fake.handler),
@@ -783,6 +784,8 @@ def _provider(
         per_role_usd_caps={
             role: str(cap) for role, cap in config.token_budgets.per_role_cost_budget_usd.items()
         },
+        atomic_ledger=atomic_ledger,
+        require_endpoint_cost_bound=atomic_ledger is not None,
     )
     controls = build_openrouter_runtime_controls(config, certification=False)
     return (
@@ -794,7 +797,7 @@ def _provider(
             usage=usage,
             http_client=http_client,
             provider_policy=controls.provider_policy,
-            reasoning_policy=controls.reasoning_policy,
+            reasoning_policy=(controls.reasoning_policy if atomic_ledger is None else None),
             token_budgets=config.token_budgets,
         ),
         http_client,
@@ -813,21 +816,26 @@ async def _run(
     formal_runner: Any | None = None,
     allow_fork_probing: bool = False,
     production_qualification=None,
+    cost_ledger: AtomicCostLedger | None = None,
+    resume_run_dir: Path | None = None,
+    output: Path | None = None,
 ):
-    client, http_client = _provider(config, fake)
+    client, http_client = _provider(config, fake, atomic_ledger=cost_ledger)
     pipeline = AuditPipeline(
         config,
         repo=vulnerable_repo,
-        output=tmp_path / "output",
+        output=output or (tmp_path / "output"),
         client=client,
         scanner_runner=scanner_runner or StaticScannerRunner(),  # type: ignore[arg-type]
         reproduction_runner=reproduction_runner,
         invariant_runner=invariant_runner,
         formal_runner=formal_runner,
         production_qualification=production_qualification,
+        cost_ledger=cost_ledger,
     )
     try:
         result = await pipeline.run(
+            resume_run_dir=resume_run_dir,
             allow_code_egress=True,
             allow_fork_probing=allow_fork_probing,
         )
@@ -1205,7 +1213,7 @@ async def test_mock_multi_agent_audit_preserves_artifacts_without_false_completi
     assert result.report.run_status is AuditRunStatus.INCOMPLETE
     assert any(finding.status == "confirmed" for finding in result.report.findings)
     assert before == after
-    assert fake.chat_calls == 6
+    assert fake.chat_calls == len(result.report.usage) == 14
     assert {record.role for record in result.report.usage} >= {
         "threat_model",
         "source_audit",
@@ -1419,8 +1427,9 @@ async def test_context_preview_failure_preserves_fail_closed_pipeline_artifacts(
 
     assert result.exit_code is ExitCode.MODEL_FAILURE
     assert not result.report.completed
+    failure_role = "candidate_falsifier" if failed_role == "judge" else failed_role
     assert any(
-        f"{failed_role}: synthetic {failed_role} context preview refusal" in reason
+        f"{failure_role}: synthetic {failed_role} context preview refusal" in reason
         for reason in result.report.incomplete_reasons
     )
     assert not any(
@@ -1635,7 +1644,7 @@ async def test_privacy_semantic_validation_rejects_source_and_usage_disagreement
         }
     )
     (result.run_dir / "privacy-policy.json").unlink()
-    with pytest.raises(ValueError, match=r"privacy-policy\.json presence"):
+    with pytest.raises(ValueError, match=r"privacy-policy\.json"):
         validate_manifest_artifacts(missing_policy_manifest, result.run_dir)
 
 
@@ -1888,7 +1897,7 @@ async def test_prior_audit_is_loaded_only_after_blind_model_discovery(
 
     def observe_post_discovery_load(**kwargs: Any) -> PriorAuditComparison:
         load_observations.append(fake.chat_calls)
-        assert fake.chat_calls == 6
+        assert fake.chat_calls == 14
         prompts = json.dumps(fake.requests)
         assert canary not in prompts
         assert "audit/prior.json" not in prompts
@@ -1904,7 +1913,7 @@ async def test_prior_audit_is_loaded_only_after_blind_model_discovery(
     assert result.exit_code is ExitCode.INCOMPLETE
     assert not result.report.completed
     assert result.report.run_status is AuditRunStatus.INCOMPLETE
-    assert load_observations == [6]
+    assert load_observations == [14]
     assert "audit/prior.json" not in {file.path for file in result.report.repository.files}
     assert all(
         "audit/prior.json" not in omission for omission in result.report.repository.omitted_files
@@ -1912,7 +1921,7 @@ async def test_prior_audit_is_loaded_only_after_blind_model_discovery(
     comparison = result.report.prior_audit_comparison
     assert comparison is not None
     assert comparison.loaded
-    assert comparison.model_request_count_before_load == len(result.report.usage) == 6
+    assert comparison.model_request_count_before_load == len(result.report.usage) == 14
     assert comparison.items[0].discovery_status is PriorAuditDiscoveryStatus.REDISCOVERED
     assert comparison.items[0].remediation_status is PriorAuditRemediationStatus.UNRESOLVED
     artifact = json.loads(
@@ -1942,11 +1951,12 @@ async def test_generated_foundry_reproduction_caps_solidity_classification(
         for path in repo.rglob("*")
         if path.is_file()
     }
+    fake = FakeOpenRouter(mode="solidity_reproduction")
     result = await _run(
         _solidity_reproduction_config(config_factory),
         repo,
         tmp_path,
-        FakeOpenRouter(mode="solidity_reproduction"),
+        fake,
         scanner_runner=StaticScannerRunner(status=ScannerStatus.UNAVAILABLE),
         reproduction_runner=SyntheticForkReproductionRunner(),
         allow_fork_probing=True,
@@ -1957,6 +1967,20 @@ async def test_generated_foundry_reproduction_caps_solidity_classification(
         if path.is_file()
     }
     assert before == after
+    source_audit_path_sets = {
+        frozenset(
+            location["path"]
+            for surface in _extract_json(
+                body["messages"][1]["content"],
+                "TRUSTED_MODEL_SURFACE_REQUESTS_JSON",
+            )
+            for location in surface["allowed_locations"]
+        )
+        for body in fake.requests
+        if _request_schema_name(body) == "mmaudit_source_audit_findings"
+    }
+    assert frozenset({"src/Vault.sol"}) in source_audit_path_sets
+    assert frozenset({"test/audit/VaultAudit.t.sol"}) in source_audit_path_sets
     assert result.exit_code is ExitCode.INCOMPLETE
     assert not result.report.completed
     assert result.report.run_status is AuditRunStatus.INCOMPLETE
@@ -1987,6 +2011,54 @@ async def test_generated_foundry_reproduction_caps_solidity_classification(
         assert any(
             finding.status is FindingStatus.REJECTED for finding in result.report.rejected_findings
         )
+
+
+@pytest.mark.asyncio
+async def test_verifier_rejection_retains_terminal_result_for_every_generated_test(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    repo = _foundry_repo(tmp_path, patched=False)
+    result = await _run(
+        _solidity_reproduction_config(config_factory),
+        repo,
+        tmp_path,
+        FakeOpenRouter(mode="solidity_reproduction", reject_verifier=True),
+        scanner_runner=StaticScannerRunner(status=ScannerStatus.UNAVAILABLE),
+        reproduction_runner=SyntheticForkReproductionRunner(),
+        allow_fork_probing=True,
+    )
+
+    artifact = json.loads(
+        (result.run_dir / "reproduction-results.json").read_text(encoding="utf-8")
+    )
+    specification_keys = {
+        (item["candidate_id"], item["name"]) for item in artifact["test_specifications"]
+    }
+    result_keys = {(item["candidate_id"], item["test_name"]) for item in artifact["results"]}
+    assert specification_keys
+    assert result_keys == specification_keys
+    assert all(item["state"] == ReproductionState.NOT_ATTEMPTED for item in artifact["results"])
+    assert all(item["attempts"] == 0 for item in artifact["results"])
+    assert all(item["integrity"] is None for item in artifact["results"])
+    assert all(item["command"] == [] for item in artifact["results"])
+    assert all(
+        "independent verification" in " ".join(item["limitations"]) for item in artifact["results"]
+    )
+    assert all(
+        result.state is ReproductionState.NOT_ATTEMPTED for result in result.report.reproductions
+    )
+    scheduler = json.loads((result.run_dir / "scheduler-state.json").read_text(encoding="utf-8"))
+    validation_pass = scheduler["summary"]["pass_results"][5]
+    reproduction_task_id = next(
+        task["task_id"]
+        for task in validation_pass["plan"]["tasks"]
+        if task["role"] == "host:reproduction"
+    )
+    reproduction_result = next(
+        item for item in validation_pass["task_results"] if item["task_id"] == reproduction_task_id
+    )
+    assert reproduction_result["terminal_status"] == "SUCCEEDED"
 
 
 @pytest.mark.asyncio
@@ -2035,6 +2107,7 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
         usage_records: list[UsageRecord],
         contexts: list[ContextPackage],
         accepted_outcomes: Any = (),
+        structurally_successful_request_ids: Any = None,
     ) -> Any:
         execution_contexts.extend(contexts)
         return build_specialist_execution_records(
@@ -2042,6 +2115,7 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
             usage_records=usage_records,
             contexts=contexts,
             accepted_outcomes=accepted_outcomes,
+            structurally_successful_request_ids=structurally_successful_request_ids,
         )
 
     monkeypatch.setattr(
@@ -2219,21 +2293,34 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
     ]
     assert len(reproduction_falsifier_contexts) == 1
     assert any(context.role == "candidate_cross_examination" for context in execution_contexts)
-    assert specialist_records["falsifier"]["context_budget_bytes"] == (
-        reproduction_falsifier_contexts[0].byte_budget
-    )
-    assert specialist_records["falsifier"]["context_bytes_used"] == (
-        reproduction_falsifier_contexts[0].bytes_used
-    )
     assert set(specialist_records) == set(ALL_SPECIALIST_ROLES)
     assert all(record["configured"] for record in specialist_records.values())
-    assert all(
-        record["status"] == "completed"
-        and record["context_bytes_used"]
-        <= record["context_budget_bytes"]
-        <= record["context_limit_bytes"]
-        for record in specialist_records.values()
-    )
+    for record in specialist_records.values():
+        assert record["status"] == "completed"
+        assert record["execution_evidence"] == ExecutionEvidenceKind.MOCK.value
+        assert record["successful_requests"] > 0
+        assert record["failed_requests"] == 0
+        assert record["failed_request_ids"] == []
+        assert {item["request_id"] for item in record["accepted_outcomes"]} == set(
+            record["successful_request_ids"]
+        )
+        assert {item["request_id"] for item in record["request_contexts"]} == set(
+            record["successful_request_ids"]
+        )
+        for context in record["contexts"]:
+            assert (
+                context["rendered_bytes"]
+                == context["declared_bytes_used"]
+                <= context["byte_budget"]
+                <= record["context_limit_bytes"]
+            )
+            assert context["source_bytes"] <= context["effective_source_byte_ceiling"]
+        if len(record["contexts"]) == 1:
+            assert record["context_budget_bytes"] == record["contexts"][0]["byte_budget"]
+            assert record["context_bytes_used"] == record["contexts"][0]["rendered_bytes"]
+        else:
+            assert record["context_budget_bytes"] is None
+            assert record["context_bytes_used"] is None
     assert len({record["schema_name"] for record in specialist_records.values()}) == len(
         ALL_SPECIALIST_ROLES
     )
@@ -2242,15 +2329,20 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
     )
     model_coverage = ModelReviewCoverage.model_validate(model_coverage_payload["coverage"])
     assert result.report.model_review_coverage == model_coverage
-    assert {surface.kind for surface in model_coverage.surfaces} == set(ModelReviewSurfaceKind)
+    assert {surface.kind for surface in model_coverage.surfaces} == (
+        set(ModelReviewSurfaceKind) - {ModelReviewSurfaceKind.SOURCE_FILE}
+    )
     assert model_coverage.overall.numerator == 0
     assert model_coverage.overall.denominator > 0
     assert "mock model usage was excluded from substantive model-review coverage" in (
         model_coverage.limitations
     )
     assert not model_coverage.critical_gate_passed
+    assert all(not surface.reviewed for surface in model_coverage.surfaces)
     assert all(
-        surface.reviewed == bool(surface.reviewer_roles and surface.root_lineages)
+        not surface.reviewer_roles
+        and not surface.root_lineages
+        and all(not reference.credited for reference in surface.evidence_references)
         for surface in model_coverage.surfaces
     )
     private_review_payload = json.loads(
@@ -2322,6 +2414,18 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
         for record in result.report.usage
         if record.role.startswith("candidate_falsifier:")
     }
+    cross_examination_usage = {
+        record.request_id: record
+        for record in result.report.usage
+        if record.role.startswith("candidate_falsifier:")
+    }
+    assert set(cross_examination_usage) == {
+        decision.request_id for decision in result.report.cross_examination_decisions
+    }
+    assert all(
+        record.execution_evidence is ExecutionEvidenceKind.MOCK
+        for record in cross_examination_usage.values()
+    )
     cross_examination_requests = [
         request
         for request in fake.requests
@@ -2382,10 +2486,9 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
     )
     assert quality_metrics["model_invariant_proposal_validation"]["numerator"] == 1
     assert quality_metrics["model_invariant_proposal_validation"]["denominator"] == 1
-    assert (
-        quality_metrics["model_role_completion"]["numerator"]
-        == quality_metrics["model_role_completion"]["denominator"]
-    )
+    assert quality_metrics["model_role_completion"]["numerator"] == 0
+    assert quality_metrics["model_role_completion"]["denominator"] > 0
+    assert quality_metrics["model_role_completion"]["state"] == "not_analyzed"
     quality_gate_names = {gate.gate for gate in result.report.quality_gates}
     assert {
         "compiler_contract_index_coverage",
@@ -2402,6 +2505,13 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
         "economic_template_execution_coverage",
         "dependency_resolution_coverage",
     } <= quality_gate_names
+    model_role_gate = next(
+        gate
+        for gate in result.report.quality_gates
+        if gate.gate == "configured_model_role_completion"
+    )
+    assert model_role_gate.required
+    assert not model_role_gate.passed
     markdown = (result.run_dir / "audit-report.md").read_text(encoding="utf-8")
     assert "DOWNGRADED" in markdown
     assert "Coverage scorecard" in markdown
@@ -2673,6 +2783,11 @@ async def test_mocked_runtime_post_judge_severity_fails_closed_across_pipeline_a
         invariant_runner=SyntheticInvariantRunner(),
     )
 
+    scheduler_payload = json.loads(
+        (result.run_dir / "scheduler-state.json").read_text(encoding="utf-8")
+    )
+    assert scheduler_payload["summary"]["status"] == "COMPLETE"
+    assert len(scheduler_payload["summary"]["completed_passes"]) == 7
     assert result.exit_code is ExitCode.INCOMPLETE
     # The mocked wiring intentionally has neither real compilation nor a real
     # scanner, so the evidence-derived run status can be stricter than the
@@ -3837,7 +3952,7 @@ async def test_state_ordering_harness_persists_seed_sequence_and_removal_trials(
 
 
 @pytest.mark.asyncio
-async def test_one_model_timeout_preserves_partial_report(
+async def test_one_model_timeout_preserves_partial_candidate_evidence_without_promotion(
     config_factory, vulnerable_repo: Path, tmp_path: Path
 ) -> None:
     config = config_factory(privacy={"fail_on_detected_secret": False})
@@ -3847,7 +3962,28 @@ async def test_one_model_timeout_preserves_partial_report(
     assert not result.report.completed
     assert any("source_audit" in reason for reason in result.report.incomplete_reasons)
     assert (result.run_dir / "final-findings.json").is_file()
-    assert result.report.findings
+    assert not result.report.findings
+    assert result.report.rejected_findings
+    candidate_artifact = CandidateFindingArtifact.model_validate_json(
+        (result.run_dir / "candidate-findings.json").read_text(encoding="utf-8")
+    )
+    candidate_ids = {candidate.candidate_id for candidate in candidate_artifact.findings}
+    rejected_candidate_ids = {
+        candidate_id
+        for finding in result.report.rejected_findings
+        for candidate_id in finding.contributing_candidate_ids
+    }
+    assert candidate_ids
+    assert rejected_candidate_ids == candidate_ids
+    scheduler_payload = json.loads(
+        (result.run_dir / "scheduler-state.json").read_text(encoding="utf-8")
+    )
+    assert scheduler_payload["summary"]["status"] == "FAILED"
+    assert scheduler_payload["summary"]["completed_passes"] == ["01_orientation"]
+    assert [item["status"] for item in scheduler_payload["summary"]["pass_results"]] == [
+        "COMPLETE",
+        "FAILED",
+    ]
 
 
 @pytest.mark.asyncio

@@ -353,6 +353,202 @@ def _extract_optional_json(content: str, tag: str) -> Any | None:
     return json.loads(content.split(start, 1)[1].split(end, 1)[0])
 
 
+def _requested_surface_ids_for_path(
+    user_prompt: str,
+    expected_path: str,
+) -> tuple[str, ...]:
+    """Return exact typed surface identities bound to one indexed source path."""
+
+    requests = _extract_json(user_prompt, "TRUSTED_MODEL_SURFACE_REQUESTS_JSON")
+    solidity_facts = _extract_json(user_prompt, "DETERMINISTIC_SOLIDITY_FACTS_JSON")
+    if not isinstance(requests, list):
+        raise AssertionError("synthetic model surface requests must be a list")
+    if not isinstance(solidity_facts, dict):
+        raise AssertionError("synthetic Solidity facts must be an object")
+    symbol_index = solidity_facts.get("symbol_index")
+    if not isinstance(symbol_index, dict):
+        raise AssertionError("synthetic Solidity facts omitted the symbol index")
+    entities = symbol_index.get("entities")
+    if not isinstance(entities, list):
+        raise AssertionError("synthetic Solidity symbol index omitted entities")
+    allowed_surface_kinds_by_entity_kind = {
+        "abstract_contract": {"contract"},
+        "contract": {"contract"},
+        "interface": {"contract"},
+        "library": {"contract"},
+        "constructor": {"entry_point", "privilege_function", "asset_function"},
+        "fallback": {"entry_point", "privilege_function", "asset_function"},
+        "function": {
+            "entry_point",
+            "internal_function",
+            "privilege_function",
+            "asset_function",
+        },
+        "modifier": {"internal_function", "privilege_function"},
+        "receive": {"entry_point", "privilege_function", "asset_function"},
+        "constant": {"state"},
+        "immutable": {"state"},
+        "state_variable": {"state"},
+    }
+    matching_surface_ids: set[str] = set()
+    for surface in requests:
+        if not isinstance(surface, dict):
+            raise AssertionError("synthetic model surface request must be an object")
+        surface_id = surface.get("surface_id")
+        if not isinstance(surface_id, str) or not surface_id:
+            raise AssertionError("synthetic model surface request omitted its surface ID")
+        locations = surface.get("allowed_locations")
+        if not isinstance(locations, list):
+            raise AssertionError("synthetic model surface request omitted allowed locations")
+        for location in locations:
+            if not isinstance(location, dict) or location.get("path") != expected_path:
+                continue
+            for entity in entities:
+                if not isinstance(entity, dict):
+                    raise AssertionError("synthetic Solidity entity must be an object")
+                allowed_surface_kinds = allowed_surface_kinds_by_entity_kind.get(entity.get("kind"))
+                if (
+                    allowed_surface_kinds is None
+                    or surface.get("kind") not in allowed_surface_kinds
+                ):
+                    continue
+                if (
+                    surface.get("subject_id") == entity.get("id")
+                    and location.get("path") == entity.get("path")
+                    and location.get("start_line") == entity.get("start_line")
+                    and location.get("end_line") == entity.get("end_line")
+                    and location.get("content_hash") == entity.get("source_hash")
+                ):
+                    matching_surface_ids.add(surface_id)
+    return tuple(sorted(matching_surface_ids))
+
+
+def _requested_surface_covers_path(user_prompt: str, expected_path: str) -> bool:
+    """Return whether one typed request has an exact indexed location binding."""
+
+    return bool(_requested_surface_ids_for_path(user_prompt, expected_path))
+
+
+def _delivered_excerpt_descriptors_for_location(
+    user_prompt: str,
+    expected_path: str,
+    expected_start_line: int,
+    expected_end_line: int,
+) -> tuple[dict[str, Any], ...]:
+    """Return exact provider-visible excerpts that contain one candidate location."""
+
+    if expected_start_line < 1 or expected_end_line < expected_start_line:
+        raise AssertionError("synthetic candidate location must be a valid line range")
+    metadata_open = "<REPOSITORY_EXCERPT_METADATA_JSON>\n"
+    metadata_close = "\n</REPOSITORY_EXCERPT_METADATA_JSON>"
+    descriptors: dict[tuple[str, int, int, str], dict[str, Any]] = {}
+    cursor = 0
+    while True:
+        metadata_offset = user_prompt.find(metadata_open, cursor)
+        if metadata_offset < 0:
+            break
+        metadata_start = metadata_offset + len(metadata_open)
+        metadata_end = user_prompt.find(metadata_close, metadata_start)
+        if metadata_end < 0:
+            raise AssertionError("synthetic prompt has an unterminated excerpt descriptor")
+        try:
+            metadata = json.loads(user_prompt[metadata_start:metadata_end])
+        except json.JSONDecodeError as exc:
+            raise AssertionError("synthetic prompt has invalid excerpt metadata") from exc
+        if not isinstance(metadata, dict) or set(metadata) != {
+            "path",
+            "start_line",
+            "end_line",
+            "content_sha256",
+        }:
+            raise AssertionError("synthetic prompt excerpt metadata is not canonical")
+        path = metadata["path"]
+        start_line = metadata["start_line"]
+        end_line = metadata["end_line"]
+        content_sha256 = metadata["content_sha256"]
+        if (
+            not isinstance(path, str)
+            or not path
+            or not isinstance(start_line, int)
+            or isinstance(start_line, bool)
+            or not isinstance(end_line, int)
+            or isinstance(end_line, bool)
+            or start_line < 1
+            or end_line < start_line
+            or not isinstance(content_sha256, str)
+            or len(content_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in content_sha256)
+        ):
+            raise AssertionError("synthetic prompt excerpt metadata is invalid")
+        sentinel = f"MMAUDIT-UNTRUSTED-{content_sha256.upper()}"
+        content_open = f"\n-----BEGIN {sentinel}-----\n"
+        content_close = f"\n-----END {sentinel}-----"
+        content_open_offset = metadata_end + len(metadata_close)
+        if not user_prompt.startswith(content_open, content_open_offset):
+            raise AssertionError("synthetic prompt excerpt lacks its hash-bound opening sentinel")
+        content_start = content_open_offset + len(content_open)
+        content_end = user_prompt.find(content_close, content_start)
+        if content_end < 0:
+            raise AssertionError("synthetic prompt excerpt lacks its hash-bound closing sentinel")
+        content = user_prompt[content_start:content_end]
+        if hashlib.sha256(content.encode("utf-8")).hexdigest() != content_sha256:
+            raise AssertionError("synthetic prompt excerpt hash differs from delivered bytes")
+        if len(content.splitlines()) != end_line - start_line + 1:
+            raise AssertionError("synthetic prompt excerpt line range differs from delivered bytes")
+        if (
+            path == expected_path
+            and start_line <= expected_start_line
+            and expected_end_line <= end_line
+        ):
+            identity = (path, start_line, end_line, content_sha256)
+            descriptors[identity] = {
+                "path": path,
+                "start_line": start_line,
+                "end_line": end_line,
+                "content_sha256": content_sha256,
+            }
+        cursor = content_end + len(content_close)
+    return tuple(descriptors[key] for key in sorted(descriptors))
+
+
+def _request_scoped_candidate_id(
+    base_candidate_id: str,
+    user_prompt: str,
+    expected_path: str,
+    expected_start_line: int,
+    expected_end_line: int,
+    *,
+    logical_request_id: str,
+) -> str | None:
+    """Bind a synthetic candidate identity to exact delivered source and request scope."""
+
+    source_excerpts = _delivered_excerpt_descriptors_for_location(
+        user_prompt,
+        expected_path,
+        expected_start_line,
+        expected_end_line,
+    )
+    if not source_excerpts:
+        return None
+    if not logical_request_id:
+        raise AssertionError("synthetic candidate request omitted its logical request ID")
+    payload = {
+        "base_candidate_id": base_candidate_id,
+        "logical_request_id": logical_request_id,
+        "source_excerpts": source_excerpts,
+    }
+    scope_sha256 = hashlib.sha256(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    return f"{base_candidate_id}-{scope_sha256[:20]}"
+
+
 def _entity_citation(entity: dict[str, Any], *, symbol: str | None = None) -> dict[str, Any]:
     resolved_symbol = symbol or entity["id"]
     return {
@@ -442,14 +638,41 @@ def _surface_review_path(
             terminal = {"location": location, "symbol": None}
             return terminal, [_entity_citation(entry_by_id[edge["source_id"]]), terminal]
 
+    if request["kind"] == "source_file" and len(allowed_locations) == 1:
+        terminal = {"location": allowed_locations[0], "symbol": None}
+        return terminal, [terminal]
+
     if request["kind"] in {"invariant", "template"}:
-        reachable = [
+        exactly_bound_target_ids = {
+            entity_id
+            for entity_id, entity in entities_by_id.items()
+            if entity_id in allowed_symbols
+            and any(
+                location["path"] == entity["path"]
+                and location["start_line"] == entity["start_line"]
+                and location["end_line"] == entity["end_line"]
+                and location["content_hash"] == entity["source_hash"]
+                for location in allowed_locations
+            )
+        }
+        exact_reachable = [
             (
                 entry_by_id[edge["source_id"]],
                 entities_by_id[edge["target_id"]],
             )
             for edge in edges
             if edge["source_id"] in entry_by_id
+            and edge["target_id"] in entities_by_id
+            and edge["target_id"] in exactly_bound_target_ids
+        ]
+        reachable = exact_reachable or [
+            (
+                entry_by_id[edge["source_id"]],
+                entities_by_id[edge["target_id"]],
+            )
+            for edge in edges
+            if not exactly_bound_target_ids
+            and edge["source_id"] in entry_by_id
             and edge["target_id"] in entities_by_id
             and {
                 entities_by_id[edge["target_id"]]["id"],
@@ -595,6 +818,7 @@ def _surface_reviews(
 class FakeOpenRouter:
     mode: str = "success"
     role: str | None = None
+    reject_verifier: bool = False
     first_pass_canary: str | None = None
     requests: list[dict[str, Any]] = field(default_factory=list)
     extra_model_ids: list[str] = field(default_factory=list)
@@ -672,39 +896,99 @@ class FakeOpenRouter:
                         "content_hash": None,
                     }
                 ]
+        elif schema_name.startswith("mmaudit_whole_protocol_review_"):
+            user = body["messages"][1]["content"]
+            metadata = body.get("metadata") or {}
+            request_role = metadata.get("mmaudit_role")
+            if not isinstance(request_role, str) or not request_role.startswith(
+                "whole_protocol_review:"
+            ):
+                raise AssertionError("synthetic whole-protocol request omitted its indexed role")
+            content = {
+                "findings": [],
+                "surface_reviews": _surface_reviews(user, role=request_role),
+            }
         elif schema_name == "mmaudit_source_audit_findings":
             user = body["messages"][1]["content"]
-            if self.mode in {"execution_origin_post_judge", "maximum_assurance"}:
+            if self.mode in {
+                "execution_origin_post_judge",
+                "maximum_assurance",
+                "semantic_accounting",
+            }:
                 content = {
                     "findings": [],
                     "surface_reviews": _surface_reviews(
                         user,
                         role="source_audit",
-                        force_inconclusive=self.mode == "execution_origin_post_judge",
                     ),
                 }
                 return self._completion(body, json.dumps(content, sort_keys=True))
-            path = (
-                "src/Vault.sol"
-                if self.mode == "solidity_reproduction"
-                else ("missing.py" if self.mode == "invalid_location" else "app.py")
+            reviews_vault = self.mode == "solidity_reproduction" and (
+                _requested_surface_covers_path(user, "src/Vault.sol")
             )
-            content = {
-                "findings": [
-                    _solidity_candidate("raw-source", "source_audit")
-                    if self.mode == "solidity_reproduction"
-                    else _candidate(
+            path = "missing.py" if self.mode == "invalid_location" else "app.py"
+            if self.mode == "solidity_reproduction":
+                findings = (
+                    [_solidity_candidate("raw-source", "source_audit")] if reviews_vault else []
+                )
+            else:
+                findings = [
+                    _candidate(
                         candidate_id="raw-source",
                         role="source_audit",
                         path=path,
                     )
-                ],
+                ]
+            content = {
+                "findings": findings,
                 "surface_reviews": _surface_reviews(user, role="source_audit"),
             }
-            if self.first_pass_canary is not None:
+            if self.first_pass_canary is not None and content["findings"]:
                 content["findings"][0]["summary"] += f" {self.first_pass_canary}"
         elif schema_name == "mmaudit_business_logic_findings":
             user = body["messages"][1]["content"]
+            if self.mode == "semantic_accounting":
+                requests = _extract_json(user, "TRUSTED_MODEL_SURFACE_REQUESTS_JSON")
+                cross_shard_review = any(
+                    str(request.get("invariant_considered", "")).startswith("Cross-shard")
+                    for request in requests
+                )
+                unsafe_accounting = (
+                    "totalRecorded += requested;" in user
+                    and "ledger.record(requested);" in user
+                    and "uint256 observed = ledger.record(requested);" not in user
+                )
+                findings: list[dict[str, Any]] = []
+                if cross_shard_review and unsafe_accounting:
+                    location = requests[0]["allowed_locations"][0]
+                    findings.append(
+                        _candidate(
+                            candidate_id="raw-cross-shard-accounting",
+                            role="business_logic",
+                            title="Observed and assumed cross-shard accounting diverge",
+                            path=str(location["path"]),
+                            start_line=int(location["start_line"]),
+                            end_line=int(location["end_line"]),
+                            cwe="CWE-682",
+                            symbol=(
+                                location.get("symbol")
+                                or (requests[0].get("allowed_symbols") or [None])[0]
+                            ),
+                        )
+                    )
+                content = {
+                    "findings": findings,
+                    "surface_reviews": _surface_reviews(
+                        user,
+                        role="business_logic",
+                        status=(
+                            "CANDIDATE"
+                            if cross_shard_review and unsafe_accounting
+                            else "REVIEWED_NO_ISSUE"
+                        ),
+                    ),
+                }
+                return self._completion(body, json.dumps(content, sort_keys=True))
             if self.mode in {"execution_origin_post_judge", "maximum_assurance"}:
                 content = {
                     "findings": [],
@@ -715,16 +999,23 @@ class FakeOpenRouter:
                     ),
                 }
                 return self._completion(body, json.dumps(content, sort_keys=True))
-            content = {
-                "findings": [
-                    _solidity_candidate("raw-business", "business_logic")
-                    if self.mode == "solidity_reproduction"
-                    else _candidate(
+            reviews_vault = self.mode == "solidity_reproduction" and (
+                _requested_surface_covers_path(user, "src/Vault.sol")
+            )
+            if self.mode == "solidity_reproduction":
+                findings = (
+                    [_solidity_candidate("raw-business", "business_logic")] if reviews_vault else []
+                )
+            else:
+                findings = [
+                    _candidate(
                         candidate_id="raw-business",
                         role="business_logic",
                         title="User search permits SQL query manipulation",
                     )
-                ],
+                ]
+            content = {
+                "findings": findings,
                 "surface_reviews": _surface_reviews(user, role="business_logic"),
             }
         elif schema_name == "mmaudit_configuration_findings":
@@ -743,6 +1034,7 @@ class FakeOpenRouter:
                     "execution_origin_post_judge",
                     "solidity_reproduction",
                     "maximum_assurance",
+                    "semantic_accounting",
                 }
                 else {
                     "findings": [
@@ -768,7 +1060,8 @@ class FakeOpenRouter:
                         "candidate_id": candidate["candidate_id"],
                         "verdict": (
                             "rejected"
-                            if self.mode == "verifier_rejection"
+                            if self.reject_verifier
+                            or self.mode == "verifier_rejection"
                             or (
                                 self.mode == "maximum_assurance"
                                 and candidate["locations"][0]["path"] == "src/SafeControls.sol"
@@ -777,7 +1070,8 @@ class FakeOpenRouter:
                         ),
                         "rationale": (
                             "Nearby control disproves the claim"
-                            if self.mode == "verifier_rejection"
+                            if self.reject_verifier
+                            or self.mode == "verifier_rejection"
                             or (
                                 self.mode == "maximum_assurance"
                                 and candidate["locations"][0]["path"] == "src/SafeControls.sol"
@@ -791,7 +1085,8 @@ class FakeOpenRouter:
                         "environmental_assumptions": [],
                         "guards_and_controls": (
                             ["Nearby authorization or reentrancy guard"]
-                            if self.mode == "verifier_rejection"
+                            if self.reject_verifier
+                            or self.mode == "verifier_rejection"
                             or (
                                 self.mode == "maximum_assurance"
                                 and candidate["locations"][0]["path"] == "src/SafeControls.sol"
@@ -808,7 +1103,8 @@ class FakeOpenRouter:
                         },
                         "confidence": (
                             0.1
-                            if self.mode == "verifier_rejection"
+                            if self.reject_verifier
+                            or self.mode == "verifier_rejection"
                             or (
                                 self.mode == "maximum_assurance"
                                 and candidate["locations"][0]["path"] == "src/SafeControls.sol"
@@ -953,12 +1249,33 @@ class FakeOpenRouter:
                     symbol="rescue",
                 ),
             }
+            specialist_candidate = candidate_by_role.get(specialist)
+            specialist_findings: list[dict[str, Any]] = []
+            if self.mode == "maximum_assurance" and specialist_candidate is not None:
+                metadata = body.get("metadata")
+                logical_request_id = (
+                    metadata.get("mmaudit_request_id") if isinstance(metadata, dict) else None
+                )
+                if not isinstance(logical_request_id, str) or not logical_request_id:
+                    raise AssertionError(
+                        "maximum-assurance synthetic specialist omitted its logical request ID"
+                    )
+                candidate_path = specialist_candidate["locations"][0]["path"]
+                candidate_start_line = specialist_candidate["locations"][0]["start_line"]
+                candidate_end_line = specialist_candidate["locations"][0]["end_line"]
+                candidate_id = _request_scoped_candidate_id(
+                    specialist_candidate["candidate_id"],
+                    user,
+                    candidate_path,
+                    candidate_start_line,
+                    candidate_end_line,
+                    logical_request_id=logical_request_id,
+                )
+                if candidate_id is not None:
+                    specialist_candidate["candidate_id"] = candidate_id
+                    specialist_findings.append(specialist_candidate)
             content = {
-                "findings": (
-                    [candidate_by_role[specialist]]
-                    if self.mode == "maximum_assurance" and specialist in candidate_by_role
-                    else []
-                ),
+                "findings": specialist_findings,
                 "surface_reviews": _surface_reviews(
                     user,
                     role=f"specialist:{specialist}",

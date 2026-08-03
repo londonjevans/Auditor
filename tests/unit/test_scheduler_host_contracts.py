@@ -1,0 +1,546 @@
+from __future__ import annotations
+
+import hashlib
+from types import SimpleNamespace
+from typing import Any, cast
+
+import pytest
+from pydantic import BaseModel, ValidationError
+
+from mmaudit.models.scheduler import (
+    SchedulerCrossShardDecision,
+    SchedulerCrossShardIntegrationOutput,
+    SchedulerCrossShardRelationship,
+    SchedulerEvidenceCapJudgmentOutput,
+    SchedulerFindingReductionCandidate,
+    SchedulerFindingReductionGroup,
+    SchedulerFindingReductionOutput,
+    SchedulerFindingReductionValidation,
+    SchedulerPassKind,
+    SchedulerReproductionHostOutput,
+    SchedulerScope,
+    SchedulerTaskActivation,
+    SchedulerTaskKind,
+    SchedulerTaskPlan,
+    _parse_scheduler_host_payload,
+    scheduler_canonical_sha256,
+)
+from mmaudit.orchestration.pipeline import _scheduled_reproduction_candidate_ids
+from tests.scheduler_support import _synthetic_manifest
+
+
+def _sha256(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def _task(
+    *,
+    seed: str,
+    pass_kind: SchedulerPassKind,
+    role: str,
+    task_kind: SchedulerTaskKind,
+    scope: SchedulerScope | None = None,
+    candidate_ids: tuple[str, ...] = (),
+) -> SchedulerTaskPlan:
+    manifest = _synthetic_manifest(seed)
+    model_fields: dict[str, Any] = {}
+    if task_kind is SchedulerTaskKind.MODEL_REQUEST:
+        model_fields = {
+            "requested_model": "synthetic/auditor-v1",
+            "root_lineage": "sha256:" + _sha256(f"{seed}:lineage:{role}"),
+            "system_prompt_sha256": _sha256(f"{seed}:system:{role}"),
+            "normalizer_sha256": _sha256(f"{seed}:normalizer:{role}"),
+        }
+    return SchedulerTaskPlan.build(
+        manifest=manifest,
+        pass_kind=pass_kind,
+        scope=scope or SchedulerScope.global_scope(),
+        task_kind=task_kind,
+        task_key=f"test-{role.replace(':', '-')}",
+        role=role,
+        candidate_ids=candidate_ids,
+        input_sha256=_sha256(f"{seed}:input:{role}"),
+        prompt_sha256=_sha256(f"{seed}:prompt:{role}"),
+        response_schema_sha256=_sha256(f"{seed}:schema:{role}"),
+        **model_fields,
+    )
+
+
+def _activation(actual_input: object) -> SchedulerTaskActivation:
+    return cast(
+        SchedulerTaskActivation,
+        SimpleNamespace(actual_input_sha256=scheduler_canonical_sha256(actual_input)),
+    )
+
+
+def _reduction_payload() -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "schema_version": "1.0",
+        "algorithm": "mmaudit.deterministic-finding-reduction.v1",
+        "blind_candidate_ids": ["candidate-a"],
+        "execution_candidate_ids": [],
+        "candidate_ids": ["candidate-a"],
+        "candidate_payload_sha256s": {"candidate-a": _sha256("candidate-a:payload")},
+        "candidate_records": [
+            SchedulerFindingReductionCandidate(
+                candidate_id="candidate-a",
+                candidate_sha256=_sha256("candidate-a:payload"),
+                location_validation=SchedulerFindingReductionValidation(
+                    valid=True,
+                    content_hash=_sha256("source"),
+                    errors=(),
+                ),
+            ).model_dump(mode="json")
+        ],
+        "groups": [
+            SchedulerFindingReductionGroup(
+                group_id="group-a",
+                candidate_ids=("candidate-a",),
+                canonical_candidate_id="candidate-a",
+                valid_candidate_ids=("candidate-a",),
+                invalid_candidate_ids=(),
+            ).model_dump(mode="json")
+        ],
+        "canonical_candidate_ids": ["candidate-a"],
+    }
+    return {**body, "reduction_sha256": scheduler_canonical_sha256(body)}
+
+
+def _cross_shard_payload(seed: str) -> dict[str, Any]:
+    manifest = _synthetic_manifest(seed)
+    source_shard_id, target_shard_id = manifest.shard_ids
+    relationship = SchedulerCrossShardRelationship(
+        relationship_id="relationship-a",
+        relationship_kind="graph_boundary",
+        source_shard_id=source_shard_id,
+        target_shard_id=target_shard_id,
+        source_path="contracts/A.sol",
+        target_path="contracts/B.sol",
+        resource_id="edge-a",
+        relationship_sha256=_sha256("trusted-relationship-a"),
+    )
+    decision = SchedulerCrossShardDecision(
+        relationship_id=relationship.relationship_id,
+        linked_candidate_ids=("candidate-a",),
+        status="CANDIDATE",
+        surface_id="model-surface:" + _sha256("surface-a"),
+        review_artifact_sha256=_sha256("review-artifact-a"),
+    )
+    body: dict[str, Any] = {
+        "schema_version": "1.0",
+        "algorithm": "mmaudit.cross-shard-integration.v1",
+        "status": "EVALUATED",
+        "semantic_inventory_sha256": manifest.shard_inventory.semantic_inventory_sha256,
+        "candidate_ids": ["candidate-a"],
+        "candidate_payload_sha256s": {"candidate-a": _sha256("candidate-a:payload")},
+        "shard_ids": list(manifest.shard_ids),
+        "semantic_relationship_ids": [relationship.relationship_id],
+        "boundary_review_artifact_sha256s": [decision.review_artifact_sha256],
+        "invariant_review_present": True,
+        "high_critical_candidate_ids": ["candidate-a"],
+        "validation_candidate_ids": ["candidate-a"],
+        "relationships": [relationship.model_dump(mode="json")],
+        "decisions": [decision.model_dump(mode="json")],
+        "invariant_review_decision_ids": ["invariant-a"],
+    }
+    return {**body, "integration_sha256": scheduler_canonical_sha256(body)}
+
+
+def _cross_shard_activation_input(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "candidate_ids": payload["candidate_ids"],
+        "candidate_payload_sha256s": payload["candidate_payload_sha256s"],
+        "high_critical_candidate_ids": payload["high_critical_candidate_ids"],
+        "validation_candidate_ids": payload["validation_candidate_ids"],
+        "shard_ids": payload["shard_ids"],
+        "semantic_inventory_sha256": payload["semantic_inventory_sha256"],
+        "semantic_relationship_ids": payload["semantic_relationship_ids"],
+        "semantic_relationships": payload["relationships"],
+        "boundary_review_artifact_sha256s": payload["boundary_review_artifact_sha256s"],
+        "invariant_review_present": payload["invariant_review_present"],
+    }
+
+
+@pytest.mark.parametrize(
+    "model",
+    (
+        SchedulerFindingReductionOutput,
+        SchedulerCrossShardIntegrationOutput,
+        SchedulerReproductionHostOutput,
+        SchedulerEvidenceCapJudgmentOutput,
+    ),
+)
+def test_host_contracts_reject_generic_payload(model: type[BaseModel]) -> None:
+    with pytest.raises(ValidationError):
+        model.model_validate({"unvalidated_generic_summary": True})
+
+
+def test_finding_reduction_rejects_omission_duplicate_and_hash_tamper() -> None:
+    payload = _reduction_payload()
+    SchedulerFindingReductionOutput.model_validate(payload)
+
+    missing = {**payload, "candidate_records": []}
+    missing["reduction_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in missing.items() if key != "reduction_sha256"}
+    )
+    with pytest.raises(ValidationError):
+        SchedulerFindingReductionOutput.model_validate(missing)
+
+    duplicated = {**payload, "groups": [*payload["groups"], *payload["groups"]]}
+    duplicated["reduction_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in duplicated.items() if key != "reduction_sha256"}
+    )
+    with pytest.raises(ValidationError):
+        SchedulerFindingReductionOutput.model_validate(duplicated)
+
+    with pytest.raises(ValidationError):
+        SchedulerFindingReductionOutput.model_validate(
+            {**payload, "reduction_sha256": _sha256("tampered-reduction")}
+        )
+
+    mismatched_record = {
+        **payload["candidate_records"][0],
+        "candidate_sha256": _sha256("different-candidate-payload"),
+    }
+    mismatched = {**payload, "candidate_records": [mismatched_record]}
+    mismatched["reduction_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in mismatched.items() if key != "reduction_sha256"}
+    )
+    with pytest.raises(ValidationError):
+        SchedulerFindingReductionOutput.model_validate(mismatched)
+
+    with pytest.raises(ValidationError):
+        SchedulerFindingReductionGroup(
+            group_id="group-unsorted",
+            candidate_ids=("candidate-a", "candidate-b"),
+            canonical_candidate_id="candidate-a",
+            valid_candidate_ids=("candidate-b", "candidate-a"),
+            invalid_candidate_ids=(),
+        )
+
+
+def test_finding_reduction_is_bound_to_activated_candidate_projection() -> None:
+    seed = "finding-activation"
+    task = _task(
+        seed=seed,
+        pass_kind=SchedulerPassKind.FINDING_REDUCTION,
+        role="host:finding_reducer",
+        task_kind=SchedulerTaskKind.HOST_COMPUTATION,
+    )
+    payload = _reduction_payload()
+    activation_input = {
+        "blind_candidate_ids": payload["blind_candidate_ids"],
+        "execution_candidate_ids": payload["execution_candidate_ids"],
+        "candidate_payload_sha256s": payload["candidate_payload_sha256s"],
+    }
+    plan = cast(Any, SimpleNamespace(tasks=(task,), manifest=_synthetic_manifest(seed)))
+    _parse_scheduler_host_payload(
+        plan=plan,
+        task=task,
+        activation=_activation(activation_input),
+        payload=payload,
+    )
+
+    changed = {
+        **payload,
+        "blind_candidate_ids": [],
+        "execution_candidate_ids": ["candidate-a"],
+    }
+    changed["reduction_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in changed.items() if key != "reduction_sha256"}
+    )
+    with pytest.raises(ValueError, match="activated inventory"):
+        _parse_scheduler_host_payload(
+            plan=plan,
+            task=task,
+            activation=_activation(activation_input),
+            payload=changed,
+        )
+
+
+def test_cross_shard_contract_rejects_omitted_duplicate_and_tampered_relationships() -> None:
+    payload = _cross_shard_payload("cross-shard-contract")
+    SchedulerCrossShardIntegrationOutput.model_validate(payload)
+
+    omitted = {**payload, "decisions": [], "boundary_review_artifact_sha256s": []}
+    omitted["integration_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in omitted.items() if key != "integration_sha256"}
+    )
+    with pytest.raises(ValidationError):
+        SchedulerCrossShardIntegrationOutput.model_validate(omitted)
+
+    duplicated = {
+        **payload,
+        "relationships": [*payload["relationships"], *payload["relationships"]],
+    }
+    duplicated["integration_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in duplicated.items() if key != "integration_sha256"}
+    )
+    with pytest.raises(ValidationError):
+        SchedulerCrossShardIntegrationOutput.model_validate(duplicated)
+
+    with pytest.raises(ValidationError):
+        SchedulerCrossShardIntegrationOutput.model_validate(
+            {**payload, "integration_sha256": _sha256("tampered-integration")}
+        )
+
+
+def test_cross_shard_relationship_descriptor_and_scope_are_activation_bound() -> None:
+    seed = "cross-shard-activation"
+    manifest = _synthetic_manifest(seed)
+    payload = _cross_shard_payload(seed)
+    surface_id = payload["decisions"][0]["surface_id"]
+    business_task = _task(
+        seed=seed,
+        pass_kind=SchedulerPassKind.CROSS_SHARD_INTEGRATION,
+        role="business_logic",
+        task_kind=SchedulerTaskKind.MODEL_REQUEST,
+        scope=SchedulerScope.shard_set(manifest.shard_ids),
+        candidate_ids=(surface_id,),
+    )
+    host_task = _task(
+        seed=seed,
+        pass_kind=SchedulerPassKind.CROSS_SHARD_INTEGRATION,
+        role="host:cross_shard_integrator",
+        task_kind=SchedulerTaskKind.HOST_COMPUTATION,
+    )
+    plan = cast(
+        Any,
+        SimpleNamespace(tasks=(business_task, host_task), manifest=manifest),
+    )
+    activation_input = _cross_shard_activation_input(payload)
+    _parse_scheduler_host_payload(
+        plan=plan,
+        task=host_task,
+        activation=_activation(activation_input),
+        payload=payload,
+    )
+
+    changed_relationship = {
+        **payload["relationships"][0],
+        "target_path": "contracts/Substituted.sol",
+        "relationship_sha256": _sha256("substituted-relationship"),
+    }
+    changed = {**payload, "relationships": [changed_relationship]}
+    changed["integration_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in changed.items() if key != "integration_sha256"}
+    )
+    with pytest.raises(ValueError, match="activated input"):
+        _parse_scheduler_host_payload(
+            plan=plan,
+            task=host_task,
+            activation=_activation(activation_input),
+            payload=changed,
+        )
+
+    suppressed_high = {**payload, "high_critical_candidate_ids": []}
+    suppressed_high["integration_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in suppressed_high.items() if key != "integration_sha256"}
+    )
+    with pytest.raises(ValueError, match="activated input"):
+        _parse_scheduler_host_payload(
+            plan=plan,
+            task=host_task,
+            activation=_activation(activation_input),
+            payload=suppressed_high,
+        )
+
+    suppressed_validation = {**payload, "validation_candidate_ids": []}
+    suppressed_validation["integration_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in suppressed_validation.items() if key != "integration_sha256"}
+    )
+    with pytest.raises(ValueError, match="activated input"):
+        _parse_scheduler_host_payload(
+            plan=plan,
+            task=host_task,
+            activation=_activation(activation_input),
+            payload=suppressed_validation,
+        )
+
+    changed_semantic = {
+        **payload,
+        "semantic_inventory_sha256": _sha256("substituted-semantic-inventory"),
+    }
+    changed_semantic["integration_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in changed_semantic.items() if key != "integration_sha256"}
+    )
+    with pytest.raises(ValueError, match="wrong semantic inventory"):
+        _parse_scheduler_host_payload(
+            plan=plan,
+            task=host_task,
+            activation=_activation(_cross_shard_activation_input(changed_semantic)),
+            payload=changed_semantic,
+        )
+
+    unknown_shard = "shard-000000000000000000000003"
+    wrong_scope_task = _task(
+        seed=seed,
+        pass_kind=SchedulerPassKind.CROSS_SHARD_INTEGRATION,
+        role="business_logic",
+        task_kind=SchedulerTaskKind.MODEL_REQUEST,
+        scope=SchedulerScope.shard_set((manifest.shard_ids[0], unknown_shard)),
+        candidate_ids=(surface_id,),
+    )
+    wrong_plan = cast(
+        Any,
+        SimpleNamespace(tasks=(wrong_scope_task, host_task), manifest=manifest),
+    )
+    with pytest.raises(ValueError, match="wrong shard scope"):
+        _parse_scheduler_host_payload(
+            plan=wrong_plan,
+            task=host_task,
+            activation=_activation(activation_input),
+            payload=payload,
+        )
+
+
+def test_reproduction_contract_requires_exact_candidate_and_test_coverage() -> None:
+    valid = SchedulerReproductionHostOutput(
+        eligible_candidate_ids=("candidate-a",),
+        generated_test_ids=("candidate-a:test-a",),
+        reproduction_result_ids=("candidate-a:test-a",),
+        falsification_decisions=1,
+    )
+    with pytest.raises(ValidationError):
+        SchedulerReproductionHostOutput(
+            eligible_candidate_ids=("candidate-a",),
+            generated_test_ids=(),
+            reproduction_result_ids=(),
+            falsification_decisions=0,
+        )
+
+    seed = "reproduction-partition"
+    planner_task = _task(
+        seed=seed,
+        pass_kind=SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+        role="specialist:test_generation:exploit_test",
+        task_kind=SchedulerTaskKind.MODEL_REQUEST,
+        candidate_ids=("candidate-a",),
+    )
+    host_task = _task(
+        seed=seed,
+        pass_kind=SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+        role="host:reproduction",
+        task_kind=SchedulerTaskKind.HOST_COMPUTATION,
+    )
+    plan = cast(
+        Any,
+        SimpleNamespace(
+            tasks=(planner_task, host_task),
+            manifest=_synthetic_manifest(seed),
+            candidate_workset=SimpleNamespace(selected_candidate_ids=("candidate-a",)),
+        ),
+    )
+    payload = valid.model_dump(mode="json", exclude_none=True)
+    _parse_scheduler_host_payload(
+        plan=plan,
+        task=host_task,
+        activation=_activation(payload),
+        payload=payload,
+    )
+
+    wrong = SchedulerReproductionHostOutput(
+        eligible_candidate_ids=("candidate-b",),
+        generated_test_ids=("candidate-b:test-b",),
+        reproduction_result_ids=("candidate-b:test-b",),
+        falsification_decisions=1,
+    ).model_dump(mode="json", exclude_none=True)
+    with pytest.raises(ValueError, match="exact candidate workset"):
+        _parse_scheduler_host_payload(
+            plan=plan,
+            task=host_task,
+            activation=_activation(wrong),
+            payload=wrong,
+        )
+
+
+def test_reproduction_inventory_remains_bound_when_post_verifier_eligibility_changes() -> None:
+    seed = "reproduction-planned-inventory"
+    planner_task = _task(
+        seed=seed,
+        pass_kind=SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+        role="specialist:test_generation:exploit_test",
+        task_kind=SchedulerTaskKind.MODEL_REQUEST,
+        candidate_ids=("candidate-a",),
+    )
+    host_task = _task(
+        seed=seed,
+        pass_kind=SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+        role="host:reproduction",
+        task_kind=SchedulerTaskKind.HOST_COMPUTATION,
+    )
+    plan = cast(
+        Any,
+        SimpleNamespace(
+            tasks=(planner_task, host_task),
+            manifest=_synthetic_manifest(seed),
+            candidate_workset=SimpleNamespace(selected_candidate_ids=("candidate-a",)),
+        ),
+    )
+
+    post_verifier_eligible_candidate_ids: tuple[str, ...] = ()
+    assert _scheduled_reproduction_candidate_ids(plan.tasks) == ("candidate-a",)
+    stale_payload = SchedulerReproductionHostOutput(
+        eligible_candidate_ids=post_verifier_eligible_candidate_ids,
+        generated_test_ids=(),
+        reproduction_result_ids=(),
+        falsification_decisions=0,
+    ).model_dump(mode="json", exclude_none=True)
+
+    with pytest.raises(ValueError, match="exact candidate workset"):
+        _parse_scheduler_host_payload(
+            plan=plan,
+            task=host_task,
+            activation=_activation(stale_payload),
+            payload=stale_payload,
+        )
+
+
+def test_evidence_cap_contract_is_bound_to_judge_partition_and_activation() -> None:
+    seed = "judgment-partition"
+    judge_task = _task(
+        seed=seed,
+        pass_kind=SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT,
+        role="judge",
+        task_kind=SchedulerTaskKind.MODEL_REQUEST,
+        candidate_ids=("group-a",),
+    )
+    host_task = _task(
+        seed=seed,
+        pass_kind=SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT,
+        role="host:evidence_cap_judgment",
+        task_kind=SchedulerTaskKind.HOST_COMPUTATION,
+    )
+    plan = cast(
+        Any,
+        SimpleNamespace(tasks=(judge_task, host_task), manifest=_synthetic_manifest(seed)),
+    )
+    output = SchedulerEvidenceCapJudgmentOutput(
+        group_ids=("group-a",),
+        judge_decision_ids=("group-a",),
+        final_finding_ids=("finding-a",),
+        rejected_finding_ids=(),
+    ).model_dump(mode="json")
+    _parse_scheduler_host_payload(
+        plan=plan,
+        task=host_task,
+        activation=_activation(output),
+        payload=output,
+    )
+
+    wrong = {**output, "group_ids": ["group-b"], "judge_decision_ids": ["group-b"]}
+    with pytest.raises(ValueError, match="judge partition"):
+        _parse_scheduler_host_payload(
+            plan=plan,
+            task=host_task,
+            activation=_activation(wrong),
+            payload=wrong,
+        )
+
+    with pytest.raises(ValidationError):
+        SchedulerEvidenceCapJudgmentOutput(
+            group_ids=("group-a", "group-b"),
+            judge_decision_ids=("group-a",),
+            final_finding_ids=(),
+            rejected_finding_ids=(),
+        )

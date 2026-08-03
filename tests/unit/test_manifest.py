@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -9,6 +11,7 @@ import pytest
 from pydantic import ValidationError
 from typer.testing import CliRunner
 
+import mmaudit.orchestration.manifest as manifest_module
 from mmaudit.cli import app
 from mmaudit.config import (
     _AUDIT_OVERRIDE_PATHS,
@@ -53,6 +56,7 @@ from mmaudit.orchestration.manifest import (
     canonical_sha256,
     collect_run_artifacts,
     load_run_evidence_manifest,
+    open_manifest_bound_json_artifacts,
     rebuild_run_evidence_manifest_for_verification,
     seal_run_evidence_manifest,
     validate_manifest_artifacts,
@@ -1253,6 +1257,69 @@ def test_manifest_rejects_linked_artifacts(
             report=report,
             config=config,
         )
+
+
+def test_manifest_bound_artifacts_propagate_consumer_abort_and_close_descriptors(
+    tmp_path: Path,
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ConsumerAbort(BaseException):
+        pass
+
+    config = config_factory()
+    report = _report(config)
+    run_dir = tmp_path / report.run_id
+    _write_required_artifacts(run_dir, report)
+    manifest = build_run_evidence_manifest(
+        run_dir=run_dir,
+        report=report,
+        config=config,
+    )
+    write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", manifest)
+
+    original_open = os.open
+    original_close = os.close
+    original_fstat = os.fstat
+    opened_descriptors: list[int] = []
+    closed_descriptors: list[int] = []
+    fstat_descriptors: list[int] = []
+
+    def observed_open(path: os.PathLike[str] | str, flags: int, mode: int = 0o777) -> int:
+        descriptor = original_open(path, flags, mode)
+        opened_descriptors.append(descriptor)
+        return descriptor
+
+    def observed_close(descriptor: int) -> None:
+        closed_descriptors.append(descriptor)
+        original_close(descriptor)
+
+    def observed_fstat(descriptor: int) -> os.stat_result:
+        fstat_descriptors.append(descriptor)
+        return original_fstat(descriptor)
+
+    monkeypatch.setattr(manifest_module.os, "open", observed_open)
+    monkeypatch.setattr(manifest_module.os, "close", observed_close)
+    monkeypatch.setattr(manifest_module.os, "fstat", observed_fstat)
+
+    names = ("metadata.json", "final-findings.json")
+    sentinel = ConsumerAbort("synthetic consumer abort")
+    with (
+        pytest.raises(ConsumerAbort) as raised,
+        open_manifest_bound_json_artifacts(run_dir, names) as payloads,
+    ):
+        assert set(payloads) == set(names)
+        raise sentinel
+
+    assert raised.value is sentinel
+    assert len(opened_descriptors) == 3
+    assert len(set(opened_descriptors)) == 3
+    assert closed_descriptors == list(reversed(opened_descriptors))
+    assert all(fstat_descriptors.count(descriptor) == 3 for descriptor in opened_descriptors)
+    for descriptor in opened_descriptors:
+        with pytest.raises(OSError) as closed:
+            original_fstat(descriptor)
+        assert closed.value.errno == errno.EBADF
 
 
 def test_manifest_file_bindings_reject_sensitive_paths() -> None:

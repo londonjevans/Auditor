@@ -7,7 +7,11 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from mmaudit.agents.base import ValidatedAgentResult, load_prompt
+from mmaudit.agents.base import (
+    AgentRequestProtocol,
+    ValidatedAgentResult,
+    build_agent_request_protocol,
+)
 from mmaudit.agents.specialists import SPECIALIST_ROLE_REGISTRY
 from mmaudit.config import AuditConfig, model_family
 from mmaudit.models.openrouter import OpenRouterClient, OpenRouterSchemaError
@@ -131,6 +135,16 @@ class ExploitTestPlannerAgent:
         self.investigator_role = investigator_role
         self.planner_role = planner_role
 
+    @property
+    def request_protocol(self) -> AgentRequestProtocol:
+        definition = SPECIALIST_ROLE_REGISTRY[self.planner_role or "exploit_reproduction_planner"]
+        return build_agent_request_protocol(
+            prompt_file="exploit_test.md",
+            schema_name=definition.effective_schema_name(),
+            response_model=GeneratedFoundryTestBatch,
+            role_contract=definition.prompt_contract(),
+        )
+
     def prepare_input(
         self,
         candidates: list[CandidateFinding],
@@ -186,11 +200,13 @@ class ExploitTestPlannerAgent:
         context: ContextPackage,
         *,
         prepared_input: PreparedExploitTestInput | None = None,
+        logical_request_id: str | None = None,
     ) -> GeneratedFoundryTestBatch:
         result = await self.run_with_evidence(
             candidates,
             context,
             prepared_input=prepared_input,
+            logical_request_id=logical_request_id,
         )
         return result.value if result is not None else GeneratedFoundryTestBatch(tests=[])
 
@@ -200,6 +216,7 @@ class ExploitTestPlannerAgent:
         context: ContextPackage,
         *,
         prepared_input: PreparedExploitTestInput | None = None,
+        logical_request_id: str | None = None,
     ) -> ValidatedAgentResult[GeneratedFoundryTestBatch] | None:
         expected_input = self.prepare_input(candidates)
         if prepared_input is not None and prepared_input != expected_input:
@@ -214,25 +231,18 @@ class ExploitTestPlannerAgent:
             if "exploit_reproduction_planner" in self.config.models.specialists
             else self.investigator_role.removeprefix("specialist:")
         )
-        definition = SPECIALIST_ROLE_REGISTRY[self.planner_role or "exploit_reproduction_planner"]
         configured = self.config.models.role(configured_role)
         role = f"specialist:{configured_role}:exploit_test"
+        protocol = self.request_protocol
         completion = await self.client.complete_with_evidence(
             role=role,
             models=[configured.primary, *configured.fallbacks],
-            system_prompt="\n\n".join(
-                (
-                    load_prompt("shared_security_rules.md"),
-                    load_prompt("exploit_test.md"),
-                    "<ROLE_CONTRACT_JSON>",
-                    definition.prompt_contract(),
-                    "</ROLE_CONTRACT_JSON>",
-                )
-            ),
+            system_prompt=protocol.system_prompt,
             user_prompt=effective_input.workflow_prompt + render_context(context),
             context_package=context,
-            response_model=GeneratedFoundryTestBatch,
-            schema_name=definition.effective_schema_name(),
+            response_model=protocol.response_model,
+            schema_name=protocol.schema_name,
+            logical_request_id=logical_request_id,
         )
         response = completion.value
         submitted = {candidate.candidate_id for candidate in candidates}
@@ -262,6 +272,7 @@ class ExploitTestPlannerAgent:
         return ValidatedAgentResult(
             value=GeneratedFoundryTestBatch(tests=stamped),
             completion_usage=completion.usage_record,
+            raw_response=response,
         )
 
 
@@ -271,6 +282,16 @@ class FalsifierAgent:
     def __init__(self, config: AuditConfig, client: OpenRouterClient) -> None:
         self.config = config
         self.client = client
+
+    @property
+    def request_protocol(self) -> AgentRequestProtocol:
+        definition = SPECIALIST_ROLE_REGISTRY["falsifier"]
+        return build_agent_request_protocol(
+            prompt_file="falsifier.md",
+            schema_name=definition.effective_schema_name(),
+            response_model=FalsificationBatch,
+            role_contract=definition.prompt_contract(),
+        )
 
     @staticmethod
     def prepare_input(
@@ -296,6 +317,7 @@ class FalsifierAgent:
         results: list[ReproductionResult],
         context: ContextPackage,
         prepared_input: PreparedFalsificationInput | None = None,
+        logical_request_id: str | None = None,
     ) -> FalsificationBatch:
         return (
             await self.run_with_evidence(
@@ -304,6 +326,7 @@ class FalsifierAgent:
                 results=results,
                 context=context,
                 prepared_input=prepared_input,
+                logical_request_id=logical_request_id,
             )
         ).value
 
@@ -315,6 +338,7 @@ class FalsifierAgent:
         results: list[ReproductionResult],
         context: ContextPackage,
         prepared_input: PreparedFalsificationInput | None = None,
+        logical_request_id: str | None = None,
     ) -> ValidatedAgentResult[FalsificationBatch]:
         expected_input = self.prepare_input(
             candidates=candidates,
@@ -329,24 +353,17 @@ class FalsifierAgent:
         configured_role = (
             "falsifier" if "falsifier" in self.config.models.specialists else "verifier"
         )
-        definition = SPECIALIST_ROLE_REGISTRY["falsifier"]
         verifier = self.config.models.role(configured_role)
+        protocol = self.request_protocol
         completion = await self.client.complete_with_evidence(
             role=("specialist:falsifier" if configured_role == "falsifier" else "falsifier"),
             models=[verifier.primary, *verifier.fallbacks],
-            system_prompt="\n\n".join(
-                (
-                    load_prompt("shared_security_rules.md"),
-                    load_prompt("falsifier.md"),
-                    "<ROLE_CONTRACT_JSON>",
-                    definition.prompt_contract(),
-                    "</ROLE_CONTRACT_JSON>",
-                )
-            ),
+            system_prompt=protocol.system_prompt,
             user_prompt=effective_input.workflow_prompt + render_context(context),
             context_package=context,
-            response_model=FalsificationBatch,
-            schema_name=definition.effective_schema_name(),
+            response_model=protocol.response_model,
+            schema_name=protocol.schema_name,
+            logical_request_id=logical_request_id,
         )
         response = completion.value
         expected = {(test.candidate_id, test.name) for test in tests}
@@ -362,4 +379,5 @@ class FalsifierAgent:
         return ValidatedAgentResult(
             value=response,
             completion_usage=completion.usage_record,
+            raw_response=response,
         )

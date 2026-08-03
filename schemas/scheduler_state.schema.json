@@ -1,0 +1,2311 @@
+{
+  "$defs": {
+    "SchedulerAbsenceReason": {
+      "description": "Closed predicates that may justify a conditional downstream no-op.",
+      "enum": [
+        "NO_HIGH_CRITICAL_CANDIDATES",
+        "NO_VALIDATION_CANDIDATES"
+      ],
+      "title": "SchedulerAbsenceReason",
+      "type": "string"
+    },
+    "SchedulerActivationStatus": {
+      "description": "Public activation disposition for one planned model request.",
+      "enum": [
+        "NOT_ACTIVATED",
+        "ACTIVATED",
+        "PREFLIGHT_FAILED"
+      ],
+      "title": "SchedulerActivationStatus",
+      "type": "string"
+    },
+    "SchedulerBindings": {
+      "additionalProperties": false,
+      "description": "Immutable hash-only inputs that define one scheduler campaign.",
+      "properties": {
+        "algorithm_version": {
+          "const": "mmaudit.seven-pass-scheduler.v1",
+          "default": "mmaudit.seven-pass-scheduler.v1",
+          "title": "Algorithm Version",
+          "type": "string"
+        },
+        "analysis_input_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Analysis Input Sha256",
+          "type": "string"
+        },
+        "bindings_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Bindings Sha256",
+          "type": "string"
+        },
+        "cost_ledger_baseline_sha256": {
+          "default": "8227a975d1a5b8535ad750d3c7eaa7d17dce60e81e8c22155e4bfbbbc9bf9aea",
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Cost Ledger Baseline Sha256",
+          "type": "string"
+        },
+        "effective_config_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Effective Config Sha256",
+          "type": "string"
+        },
+        "evidence_authority": {
+          "const": "comparison_required",
+          "default": "comparison_required",
+          "title": "Evidence Authority",
+          "type": "string"
+        },
+        "model_selection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Model Selection Sha256",
+          "type": "string"
+        },
+        "privacy_evidence_custody_sha256": {
+          "default": "f2c3a64d532ef20da04f64f4b41ac7ea9c3caa6f16f69470ce1ee801e7a05da8",
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Privacy Evidence Custody Sha256",
+          "type": "string"
+        },
+        "prompt_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prompt Set Sha256",
+          "type": "string"
+        },
+        "qualification_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Qualification Sha256",
+          "type": "string"
+        },
+        "schema_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Schema Set Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "shard_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Shard Inventory Sha256",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "tool_policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Tool Policy Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_sha256",
+        "analysis_input_sha256",
+        "effective_config_sha256",
+        "shard_inventory_sha256",
+        "model_selection_sha256",
+        "qualification_sha256",
+        "prompt_set_sha256",
+        "schema_set_sha256",
+        "tool_policy_sha256",
+        "bindings_sha256"
+      ],
+      "title": "SchedulerBindings",
+      "type": "object"
+    },
+    "SchedulerCampaignManifest": {
+      "additionalProperties": false,
+      "description": "Frozen campaign root from which every pass identity is derived.",
+      "properties": {
+        "algorithm_version": {
+          "const": "mmaudit.seven-pass-scheduler.v1",
+          "default": "mmaudit.seven-pass-scheduler.v1",
+          "title": "Algorithm Version",
+          "type": "string"
+        },
+        "bindings": {
+          "$ref": "#/$defs/SchedulerBindings"
+        },
+        "campaign_id": {
+          "pattern": "^scheduler-campaign-[0-9a-f]{64}$",
+          "title": "Campaign Id",
+          "type": "string"
+        },
+        "cost_ledger_baseline": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SchedulerCostLedgerBaseline"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "evidence_authority": {
+          "const": "comparison_required",
+          "default": "comparison_required",
+          "title": "Evidence Authority",
+          "type": "string"
+        },
+        "mandatory_passes": {
+          "items": {
+            "$ref": "#/$defs/SchedulerPassKind"
+          },
+          "title": "Mandatory Passes",
+          "type": "array"
+        },
+        "manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        },
+        "privacy_evidence_custody": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SchedulerPrivacyEvidenceCustody"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "shard_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100000,
+          "minItems": 1,
+          "title": "Shard Ids",
+          "type": "array"
+        },
+        "shard_inventory": {
+          "$ref": "#/$defs/SchedulerShardInventory"
+        }
+      },
+      "required": [
+        "bindings",
+        "shard_inventory",
+        "shard_ids",
+        "mandatory_passes",
+        "campaign_id",
+        "manifest_sha256"
+      ],
+      "title": "SchedulerCampaignManifest",
+      "type": "object"
+    },
+    "SchedulerCampaignStatus": {
+      "description": "A campaign status derived from its ordered mandatory pass results.",
+      "enum": [
+        "COMPLETE",
+        "FAILED",
+        "INCONCLUSIVE",
+        "INCOMPLETE"
+      ],
+      "title": "SchedulerCampaignStatus",
+      "type": "string"
+    },
+    "SchedulerCampaignSummary": {
+      "additionalProperties": false,
+      "description": "A fail-closed derived view of a contiguous campaign result prefix.",
+      "properties": {
+        "completed_passes": {
+          "items": {
+            "$ref": "#/$defs/SchedulerPassKind"
+          },
+          "title": "Completed Passes",
+          "type": "array"
+        },
+        "evidence_authority": {
+          "const": "comparison_required",
+          "default": "comparison_required",
+          "title": "Evidence Authority",
+          "type": "string"
+        },
+        "manifest": {
+          "$ref": "#/$defs/SchedulerCampaignManifest"
+        },
+        "next_pass": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SchedulerPassKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pass_results": {
+          "items": {
+            "$ref": "#/$defs/SchedulerPassResult"
+          },
+          "maxItems": 7,
+          "title": "Pass Results",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/SchedulerCampaignStatus"
+        },
+        "summary_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Summary Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "manifest",
+        "pass_results",
+        "status",
+        "completed_passes",
+        "next_pass",
+        "summary_sha256"
+      ],
+      "title": "SchedulerCampaignSummary",
+      "type": "object"
+    },
+    "SchedulerCandidatePayloadBinding": {
+      "additionalProperties": false,
+      "description": "Canonical identity of one normalized candidate carried across scheduler passes.",
+      "properties": {
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "candidate_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "candidate_payload_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Payload Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "candidate_payload_sha256",
+        "binding_sha256"
+      ],
+      "title": "SchedulerCandidatePayloadBinding",
+      "type": "object"
+    },
+    "SchedulerCandidateWorkset": {
+      "additionalProperties": false,
+      "description": "Candidate inventory deterministically projected from pass-four output.",
+      "properties": {
+        "candidate_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100000,
+          "title": "Candidate Ids",
+          "type": "array"
+        },
+        "candidate_payload_bindings": {
+          "items": {
+            "$ref": "#/$defs/SchedulerCandidatePayloadBinding"
+          },
+          "maxItems": 100000,
+          "title": "Candidate Payload Bindings",
+          "type": "array"
+        },
+        "high_critical_candidate_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100000,
+          "title": "High Critical Candidate Ids",
+          "type": "array"
+        },
+        "pass_kind": {
+          "$ref": "#/$defs/SchedulerPassKind"
+        },
+        "selected_candidate_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100000,
+          "title": "Selected Candidate Ids",
+          "type": "array"
+        },
+        "source_output_artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Output Artifact Sha256",
+          "type": "string"
+        },
+        "source_pass_kind": {
+          "const": "04_cross_shard_integration",
+          "title": "Source Pass Kind",
+          "type": "string"
+        },
+        "source_pass_result_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Pass Result Sha256",
+          "type": "string"
+        },
+        "source_result_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Result Sha256",
+          "type": "string"
+        },
+        "source_task_id": {
+          "pattern": "^scheduler-task-[0-9a-f]{64}$",
+          "title": "Source Task Id",
+          "type": "string"
+        },
+        "validation_candidate_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100000,
+          "title": "Validation Candidate Ids",
+          "type": "array"
+        },
+        "workset_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Workset Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pass_kind",
+        "source_pass_kind",
+        "source_pass_result_sha256",
+        "source_task_id",
+        "source_result_sha256",
+        "source_output_artifact_sha256",
+        "candidate_ids",
+        "candidate_payload_bindings",
+        "high_critical_candidate_ids",
+        "validation_candidate_ids",
+        "selected_candidate_ids",
+        "workset_sha256"
+      ],
+      "title": "SchedulerCandidateWorkset",
+      "type": "object"
+    },
+    "SchedulerConditionalAbsence": {
+      "additionalProperties": false,
+      "description": "Typed no-work proof derived from an exact empty candidate workset.",
+      "properties": {
+        "absence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Absence Sha256",
+          "type": "string"
+        },
+        "candidate_workset_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Workset Sha256",
+          "type": "string"
+        },
+        "pass_kind": {
+          "$ref": "#/$defs/SchedulerPassKind"
+        },
+        "reason": {
+          "$ref": "#/$defs/SchedulerAbsenceReason"
+        },
+        "source_output_artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Output Artifact Sha256",
+          "type": "string"
+        },
+        "source_pass_result_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Pass Result Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pass_kind",
+        "reason",
+        "candidate_workset_sha256",
+        "source_pass_result_sha256",
+        "source_output_artifact_sha256",
+        "absence_sha256"
+      ],
+      "title": "SchedulerConditionalAbsence",
+      "type": "object"
+    },
+    "SchedulerCostLedgerBaseline": {
+      "additionalProperties": false,
+      "description": "Exact terminal ledger head frozen before any campaign provider request.",
+      "properties": {
+        "active_reserved_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,18})?$",
+          "title": "Active Reserved Usd Exact",
+          "type": "string"
+        },
+        "baseline_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Baseline Sha256",
+          "type": "string"
+        },
+        "cap_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,18})?$",
+          "title": "Cap Usd Exact",
+          "type": "string"
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/SchedulerCostLedgerBaselineEntry"
+          },
+          "maxItems": 1000000,
+          "title": "Entries",
+          "type": "array"
+        },
+        "evidence_authority": {
+          "const": "comparison_required",
+          "default": "comparison_required",
+          "title": "Evidence Authority",
+          "type": "string"
+        },
+        "ledger_identity_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ledger Identity Sha256",
+          "type": "string"
+        },
+        "ledger_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ledger Snapshot Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "spent_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,18})?$",
+          "title": "Spent Usd Exact",
+          "type": "string"
+        }
+      },
+      "required": [
+        "cap_usd_exact",
+        "spent_usd_exact",
+        "active_reserved_usd_exact",
+        "entries",
+        "ledger_identity_sha256",
+        "ledger_snapshot_sha256",
+        "baseline_sha256"
+      ],
+      "title": "SchedulerCostLedgerBaseline",
+      "type": "object"
+    },
+    "SchedulerCostLedgerBaselineEntry": {
+      "additionalProperties": false,
+      "description": "Exact immutable identity of one ledger entry predating this campaign.",
+      "properties": {
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "ledger_entry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ledger Entry Sha256",
+          "type": "string"
+        },
+        "request_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$",
+          "title": "Request Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "ledger_entry_sha256",
+        "binding_sha256"
+      ],
+      "title": "SchedulerCostLedgerBaselineEntry",
+      "type": "object"
+    },
+    "SchedulerJournalEvidence": {
+      "additionalProperties": false,
+      "description": "Public exact hash-and-count projection of controller-owned journal state.",
+      "properties": {
+        "analysis_input_descriptor_count": {
+          "maximum": 24,
+          "minimum": 24,
+          "title": "Analysis Input Descriptor Count",
+          "type": "integer"
+        },
+        "analysis_input_descriptor_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 24,
+          "minItems": 24,
+          "title": "Analysis Input Descriptor Sha256S",
+          "type": "array"
+        },
+        "analysis_input_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Analysis Input Sha256",
+          "type": "string"
+        },
+        "campaign_id": {
+          "pattern": "^scheduler-campaign-[0-9a-f]{64}$",
+          "title": "Campaign Id",
+          "type": "string"
+        },
+        "event_count": {
+          "maximum": 2800000,
+          "minimum": 0,
+          "title": "Event Count",
+          "type": "integer"
+        },
+        "event_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 2800000,
+          "title": "Event Sha256S",
+          "type": "array"
+        },
+        "evidence_authority": {
+          "const": "comparison_required",
+          "default": "comparison_required",
+          "title": "Evidence Authority",
+          "type": "string"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "explicit_empty_count": {
+          "maximum": 7,
+          "minimum": 0,
+          "title": "Explicit Empty Count",
+          "type": "integer"
+        },
+        "failed_count": {
+          "maximum": 700000,
+          "minimum": 0,
+          "title": "Failed Count",
+          "type": "integer"
+        },
+        "inconclusive_count": {
+          "maximum": 700000,
+          "minimum": 0,
+          "title": "Inconclusive Count",
+          "type": "integer"
+        },
+        "invalid_count": {
+          "maximum": 700000,
+          "minimum": 0,
+          "title": "Invalid Count",
+          "type": "integer"
+        },
+        "manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        },
+        "model_request_count": {
+          "maximum": 700000,
+          "minimum": 0,
+          "title": "Model Request Count",
+          "type": "integer"
+        },
+        "model_request_evidence_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 700000,
+          "title": "Model Request Evidence Sha256S",
+          "type": "array"
+        },
+        "pass_plan_count": {
+          "maximum": 7,
+          "minimum": 0,
+          "title": "Pass Plan Count",
+          "type": "integer"
+        },
+        "pass_plan_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 7,
+          "title": "Pass Plan Sha256S",
+          "type": "array"
+        },
+        "pass_result_count": {
+          "maximum": 7,
+          "minimum": 0,
+          "title": "Pass Result Count",
+          "type": "integer"
+        },
+        "pass_result_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 7,
+          "title": "Pass Result Sha256S",
+          "type": "array"
+        },
+        "preflight_failure_count": {
+          "maximum": 700000,
+          "minimum": 0,
+          "title": "Preflight Failure Count",
+          "type": "integer"
+        },
+        "provider_attempt_count": {
+          "maximum": 700000,
+          "minimum": 0,
+          "title": "Provider Attempt Count",
+          "type": "integer"
+        },
+        "provider_attempt_evidence_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 700000,
+          "title": "Provider Attempt Evidence Sha256S",
+          "type": "array"
+        },
+        "result_observation_count": {
+          "maximum": 1400000,
+          "minimum": 0,
+          "title": "Result Observation Count",
+          "type": "integer"
+        },
+        "result_observation_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1400000,
+          "title": "Result Observation Sha256S",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "shard_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Shard Inventory Sha256",
+          "type": "string"
+        },
+        "succeeded_count": {
+          "maximum": 700000,
+          "minimum": 0,
+          "title": "Succeeded Count",
+          "type": "integer"
+        },
+        "summary_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Summary Sha256",
+          "type": "string"
+        },
+        "task_activation_count": {
+          "maximum": 700000,
+          "minimum": 0,
+          "title": "Task Activation Count",
+          "type": "integer"
+        },
+        "task_activation_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 700000,
+          "title": "Task Activation Sha256S",
+          "type": "array"
+        },
+        "task_output_artifact_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 700000,
+          "title": "Task Output Artifact Sha256S",
+          "type": "array"
+        },
+        "task_output_count": {
+          "maximum": 700000,
+          "minimum": 0,
+          "title": "Task Output Count",
+          "type": "integer"
+        },
+        "task_plan_count": {
+          "maximum": 700000,
+          "minimum": 0,
+          "title": "Task Plan Count",
+          "type": "integer"
+        },
+        "task_plan_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 700000,
+          "title": "Task Plan Sha256S",
+          "type": "array"
+        },
+        "task_result_count": {
+          "maximum": 700000,
+          "minimum": 0,
+          "title": "Task Result Count",
+          "type": "integer"
+        },
+        "task_result_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 700000,
+          "title": "Task Result Sha256S",
+          "type": "array"
+        },
+        "terminal_event_chain_head_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Terminal Event Chain Head Sha256"
+        },
+        "truncated_count": {
+          "maximum": 700000,
+          "minimum": 0,
+          "title": "Truncated Count",
+          "type": "integer"
+        },
+        "unbound_count": {
+          "maximum": 700000,
+          "minimum": 0,
+          "title": "Unbound Count",
+          "type": "integer"
+        },
+        "uncertain_count": {
+          "maximum": 700000,
+          "minimum": 0,
+          "title": "Uncertain Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "campaign_id",
+        "manifest_sha256",
+        "summary_sha256",
+        "analysis_input_sha256",
+        "analysis_input_descriptor_sha256s",
+        "analysis_input_descriptor_count",
+        "shard_inventory_sha256",
+        "pass_plan_sha256s",
+        "task_plan_sha256s",
+        "model_request_evidence_sha256s",
+        "task_activation_sha256s",
+        "task_output_artifact_sha256s",
+        "provider_attempt_evidence_sha256s",
+        "task_result_sha256s",
+        "result_observation_sha256s",
+        "pass_result_sha256s",
+        "event_sha256s",
+        "pass_plan_count",
+        "task_plan_count",
+        "model_request_count",
+        "task_activation_count",
+        "task_output_count",
+        "provider_attempt_count",
+        "task_result_count",
+        "result_observation_count",
+        "preflight_failure_count",
+        "pass_result_count",
+        "event_count",
+        "succeeded_count",
+        "explicit_empty_count",
+        "failed_count",
+        "truncated_count",
+        "invalid_count",
+        "unbound_count",
+        "inconclusive_count",
+        "uncertain_count",
+        "evidence_sha256"
+      ],
+      "title": "SchedulerJournalEvidence",
+      "type": "object"
+    },
+    "SchedulerModelRequestEvidence": {
+      "additionalProperties": false,
+      "description": "Public hash-only projection of one exact planned model request lifecycle.",
+      "properties": {
+        "activation_id": {
+          "anyOf": [
+            {
+              "pattern": "^scheduler-activation-[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Activation Id"
+        },
+        "activation_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Activation Sha256"
+        },
+        "activation_status": {
+          "$ref": "#/$defs/SchedulerActivationStatus"
+        },
+        "actual_input_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actual Input Sha256"
+        },
+        "campaign_id": {
+          "pattern": "^scheduler-campaign-[0-9a-f]{64}$",
+          "title": "Campaign Id",
+          "type": "string"
+        },
+        "context_request_evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Request Evidence Sha256"
+        },
+        "delivered_source_descriptor_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100000,
+          "title": "Delivered Source Descriptor Sha256S",
+          "type": "array"
+        },
+        "evidence_authority": {
+          "const": "comparison_required",
+          "default": "comparison_required",
+          "title": "Evidence Authority",
+          "type": "string"
+        },
+        "logical_request_id": {
+          "pattern": "^scheduler-request-[0-9a-f]{64}$",
+          "title": "Logical Request Id",
+          "type": "string"
+        },
+        "manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        },
+        "model_completion_evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Completion Evidence Sha256"
+        },
+        "model_surface_review_artifact_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Surface Review Artifact Sha256"
+        },
+        "model_surface_review_request_count": {
+          "default": 0,
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Model Surface Review Request Count",
+          "type": "integer"
+        },
+        "model_surface_review_request_manifest_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Surface Review Request Manifest Sha256"
+        },
+        "normalizer_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizer Sha256"
+        },
+        "output_artifact_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Artifact Sha256"
+        },
+        "output_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Sha256"
+        },
+        "pass_id": {
+          "pattern": "^scheduler-pass-[0-9a-f]{64}$",
+          "title": "Pass Id",
+          "type": "string"
+        },
+        "pass_kind": {
+          "$ref": "#/$defs/SchedulerPassKind"
+        },
+        "pass_plan_id": {
+          "pattern": "^scheduler-plan-[0-9a-f]{64}$",
+          "title": "Pass Plan Id",
+          "type": "string"
+        },
+        "pass_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Pass Plan Sha256",
+          "type": "string"
+        },
+        "provider_prompt_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Prompt Sha256"
+        },
+        "provider_response_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Response Sha256"
+        },
+        "request_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Evidence Sha256",
+          "type": "string"
+        },
+        "requested_model": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+          "title": "Requested Model",
+          "type": "string"
+        },
+        "response_schema_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Response Schema Sha256"
+        },
+        "result_id": {
+          "anyOf": [
+            {
+              "pattern": "^scheduler-result-[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Result Id"
+        },
+        "result_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Result Sha256"
+        },
+        "reviewed_candidate_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100000,
+          "title": "Reviewed Candidate Ids",
+          "type": "array"
+        },
+        "reviewed_source_descriptor_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100000,
+          "title": "Reviewed Source Descriptor Sha256S",
+          "type": "array"
+        },
+        "role": {
+          "pattern": "^[a-z][a-z0-9_:.-]{0,127}$",
+          "title": "Role",
+          "type": "string"
+        },
+        "root_lineage": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Root Lineage",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "scope_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Scope Sha256",
+          "type": "string"
+        },
+        "specialist_accepted_outcome_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Specialist Accepted Outcome Sha256"
+        },
+        "system_prompt_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "System Prompt Sha256"
+        },
+        "task_id": {
+          "pattern": "^scheduler-task-[0-9a-f]{64}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "task_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Task Plan Sha256",
+          "type": "string"
+        },
+        "terminal_evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Terminal Evidence Sha256"
+        },
+        "terminal_status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SchedulerTerminalStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "usage_record_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Usage Record Sha256"
+        },
+        "user_prompt_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "User Prompt Sha256"
+        },
+        "validated_response_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Validated Response Sha256"
+        }
+      },
+      "required": [
+        "campaign_id",
+        "manifest_sha256",
+        "pass_kind",
+        "pass_id",
+        "pass_plan_id",
+        "pass_plan_sha256",
+        "task_id",
+        "task_plan_sha256",
+        "logical_request_id",
+        "scope_sha256",
+        "role",
+        "requested_model",
+        "root_lineage",
+        "activation_status",
+        "delivered_source_descriptor_sha256s",
+        "reviewed_source_descriptor_sha256s",
+        "reviewed_candidate_ids",
+        "request_evidence_sha256"
+      ],
+      "title": "SchedulerModelRequestEvidence",
+      "type": "object"
+    },
+    "SchedulerPassDependency": {
+      "additionalProperties": false,
+      "description": "One exact prior pass artifact required by a later pass.",
+      "properties": {
+        "dependency_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Dependency Sha256",
+          "type": "string"
+        },
+        "pass_id": {
+          "pattern": "^scheduler-pass-[0-9a-f]{64}$",
+          "title": "Pass Id",
+          "type": "string"
+        },
+        "pass_kind": {
+          "$ref": "#/$defs/SchedulerPassKind"
+        },
+        "pass_result_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Pass Result Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pass_kind",
+        "pass_id",
+        "pass_result_sha256",
+        "dependency_sha256"
+      ],
+      "title": "SchedulerPassDependency",
+      "type": "object"
+    },
+    "SchedulerPassKind": {
+      "description": "The exact closed and ordered maximum-depth audit passes.",
+      "enum": [
+        "01_orientation",
+        "02_blind_shard_review",
+        "03_finding_reduction",
+        "04_cross_shard_integration",
+        "05_adversarial_cross_examination",
+        "06_multi_lineage_validation_falsification",
+        "07_evidence_capped_judgment"
+      ],
+      "title": "SchedulerPassKind",
+      "type": "string"
+    },
+    "SchedulerPassPlan": {
+      "additionalProperties": false,
+      "description": "A sealed exact task inventory for one mandatory pass.",
+      "properties": {
+        "blind_plan_barrier_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Blind Plan Barrier Sha256"
+        },
+        "candidate_workset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SchedulerCandidateWorkset"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "conditional_absence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SchedulerConditionalAbsence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "dependencies": {
+          "items": {
+            "$ref": "#/$defs/SchedulerPassDependency"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "evidence_authority": {
+          "const": "comparison_required",
+          "default": "comparison_required",
+          "title": "Evidence Authority",
+          "type": "string"
+        },
+        "manifest": {
+          "$ref": "#/$defs/SchedulerCampaignManifest"
+        },
+        "pass_id": {
+          "pattern": "^scheduler-pass-[0-9a-f]{64}$",
+          "title": "Pass Id",
+          "type": "string"
+        },
+        "pass_kind": {
+          "$ref": "#/$defs/SchedulerPassKind"
+        },
+        "pass_plan_id": {
+          "pattern": "^scheduler-plan-[0-9a-f]{64}$",
+          "title": "Pass Plan Id",
+          "type": "string"
+        },
+        "pass_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Pass Plan Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "tasks": {
+          "items": {
+            "$ref": "#/$defs/SchedulerTaskPlan"
+          },
+          "maxItems": 100000,
+          "minItems": 1,
+          "title": "Tasks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "manifest",
+        "pass_kind",
+        "pass_id",
+        "dependencies",
+        "tasks",
+        "pass_plan_id",
+        "pass_plan_sha256"
+      ],
+      "title": "SchedulerPassPlan",
+      "type": "object"
+    },
+    "SchedulerPassResult": {
+      "additionalProperties": false,
+      "description": "Exact terminal result set for one sealed mandatory pass.",
+      "properties": {
+        "evidence_authority": {
+          "const": "comparison_required",
+          "default": "comparison_required",
+          "title": "Evidence Authority",
+          "type": "string"
+        },
+        "pass_result_id": {
+          "pattern": "^scheduler-pass-result-[0-9a-f]{64}$",
+          "title": "Pass Result Id",
+          "type": "string"
+        },
+        "pass_result_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Pass Result Sha256",
+          "type": "string"
+        },
+        "plan": {
+          "$ref": "#/$defs/SchedulerPassPlan"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/SchedulerPassStatus"
+        },
+        "task_results": {
+          "items": {
+            "$ref": "#/$defs/SchedulerTaskResult"
+          },
+          "maxItems": 100000,
+          "minItems": 1,
+          "title": "Task Results",
+          "type": "array"
+        }
+      },
+      "required": [
+        "plan",
+        "task_results",
+        "status",
+        "pass_result_id",
+        "pass_result_sha256"
+      ],
+      "title": "SchedulerPassResult",
+      "type": "object"
+    },
+    "SchedulerPassStatus": {
+      "description": "A pass status derived from its exact terminal task inventory.",
+      "enum": [
+        "COMPLETE",
+        "FAILED",
+        "INCONCLUSIVE",
+        "INCOMPLETE"
+      ],
+      "title": "SchedulerPassStatus",
+      "type": "string"
+    },
+    "SchedulerPrivacyEvidenceCustody": {
+      "additionalProperties": false,
+      "description": "Exact non-secret privacy files committed before first provider dispatch.",
+      "properties": {
+        "custody_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Custody Sha256",
+          "type": "string"
+        },
+        "effective_policy_artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Effective Policy Artifact Sha256",
+          "type": "string"
+        },
+        "effective_policy_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Effective Policy Evidence Sha256",
+          "type": "string"
+        },
+        "effective_policy_path": {
+          "const": "privacy-policy.json",
+          "default": "privacy-policy.json",
+          "title": "Effective Policy Path",
+          "type": "string"
+        },
+        "effective_policy_size": {
+          "maximum": 1048576,
+          "minimum": 1,
+          "title": "Effective Policy Size",
+          "type": "integer"
+        },
+        "evidence_authority": {
+          "const": "comparison_required",
+          "default": "comparison_required",
+          "title": "Evidence Authority",
+          "type": "string"
+        },
+        "policy_source_provenance_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Source Provenance Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_provenance_artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Provenance Artifact Sha256",
+          "type": "string"
+        },
+        "source_provenance_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Provenance Evidence Sha256",
+          "type": "string"
+        },
+        "source_provenance_path": {
+          "const": "privacy-source-provenance.json",
+          "default": "privacy-source-provenance.json",
+          "title": "Source Provenance Path",
+          "type": "string"
+        },
+        "source_provenance_size": {
+          "maximum": 1048576,
+          "minimum": 1,
+          "title": "Source Provenance Size",
+          "type": "integer"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_sha256",
+        "source_provenance_size",
+        "source_provenance_artifact_sha256",
+        "source_provenance_evidence_sha256",
+        "effective_policy_size",
+        "effective_policy_artifact_sha256",
+        "effective_policy_evidence_sha256",
+        "policy_source_provenance_sha256",
+        "custody_sha256"
+      ],
+      "title": "SchedulerPrivacyEvidenceCustody",
+      "type": "object"
+    },
+    "SchedulerResultOrigin": {
+      "description": "Whether a result follows activation or a typed local preflight abort.",
+      "enum": [
+        "ACTIVATED",
+        "LOCAL_PREFLIGHT"
+      ],
+      "title": "SchedulerResultOrigin",
+      "type": "string"
+    },
+    "SchedulerScope": {
+      "additionalProperties": false,
+      "description": "Canonical shard scope included in every task and result identity.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/SchedulerScopeKind"
+        },
+        "scope_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Scope Sha256",
+          "type": "string"
+        },
+        "shard_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Shard Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "scope_sha256"
+      ],
+      "title": "SchedulerScope",
+      "type": "object"
+    },
+    "SchedulerScopeKind": {
+      "description": "Whether work concerns the whole inventory, one shard, or a shard set.",
+      "enum": [
+        "GLOBAL",
+        "SINGLE_SHARD",
+        "SHARD_SET"
+      ],
+      "title": "SchedulerScopeKind",
+      "type": "string"
+    },
+    "SchedulerShardDescriptor": {
+      "additionalProperties": false,
+      "description": "A semantic Solidity shard or the deterministic non-Solidity pseudo-shard.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/SchedulerShardKind"
+        },
+        "semantic_shard_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Semantic Shard Sha256"
+        },
+        "shard_descriptor_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Shard Descriptor Sha256",
+          "type": "string"
+        },
+        "shard_id": {
+          "pattern": "^shard-[0-9a-f]{24}$",
+          "title": "Shard Id",
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/SchedulerSourceDescriptor"
+          },
+          "maxItems": 100000,
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        }
+      },
+      "required": [
+        "shard_id",
+        "kind",
+        "sources",
+        "shard_descriptor_sha256"
+      ],
+      "title": "SchedulerShardDescriptor",
+      "type": "object"
+    },
+    "SchedulerShardInventory": {
+      "additionalProperties": false,
+      "description": "Exact source-to-shard assignment for every audited source path.",
+      "properties": {
+        "evidence_authority": {
+          "const": "comparison_required",
+          "default": "comparison_required",
+          "title": "Evidence Authority",
+          "type": "string"
+        },
+        "inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Inventory Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "semantic_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Semantic Inventory Sha256",
+          "type": "string"
+        },
+        "shards": {
+          "items": {
+            "$ref": "#/$defs/SchedulerShardDescriptor"
+          },
+          "maxItems": 100000,
+          "minItems": 1,
+          "title": "Shards",
+          "type": "array"
+        },
+        "source_count": {
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Source Count",
+          "type": "integer"
+        },
+        "source_tree_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Tree Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "semantic_inventory_sha256",
+        "shards",
+        "source_tree_sha256",
+        "source_count",
+        "inventory_sha256"
+      ],
+      "title": "SchedulerShardInventory",
+      "type": "object"
+    },
+    "SchedulerShardKind": {
+      "description": "Closed shard-descriptor kinds for an exact audited source inventory.",
+      "enum": [
+        "SOLIDITY_SEMANTIC",
+        "REPOSITORY_PSEUDO"
+      ],
+      "title": "SchedulerShardKind",
+      "type": "string"
+    },
+    "SchedulerSourceDescriptor": {
+      "additionalProperties": false,
+      "description": "One exact normalized source path in the audited repository.",
+      "properties": {
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size": {
+          "maximum": 4294967296,
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        },
+        "source_descriptor_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Descriptor Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "size",
+        "source_descriptor_sha256"
+      ],
+      "title": "SchedulerSourceDescriptor",
+      "type": "object"
+    },
+    "SchedulerTaskKind": {
+      "description": "The authority responsible for one planned unit of work.",
+      "enum": [
+        "MODEL_REQUEST",
+        "HOST_COMPUTATION",
+        "EMPTY_COMPLETION"
+      ],
+      "title": "SchedulerTaskKind",
+      "type": "string"
+    },
+    "SchedulerTaskPlan": {
+      "additionalProperties": false,
+      "description": "One canonical host or model work recipe within a mandatory pass.\n\nThe three request hashes are immutable recipe commitments known while the\npass is sealed.  Actual rendered input, provider prompt, schema, and dynamic\ndependency-result hashes are bound immediately before dispatch by\n:class:`SchedulerTaskActivation`.",
+      "properties": {
+        "campaign_id": {
+          "pattern": "^scheduler-campaign-[0-9a-f]{64}$",
+          "title": "Campaign Id",
+          "type": "string"
+        },
+        "candidate_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100000,
+          "title": "Candidate Ids",
+          "type": "array"
+        },
+        "evidence_authority": {
+          "const": "comparison_required",
+          "default": "comparison_required",
+          "title": "Evidence Authority",
+          "type": "string"
+        },
+        "input_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Input Sha256",
+          "type": "string"
+        },
+        "logical_request_id": {
+          "pattern": "^scheduler-request-[0-9a-f]{64}$",
+          "title": "Logical Request Id",
+          "type": "string"
+        },
+        "manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        },
+        "normalizer_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizer Sha256"
+        },
+        "pass_id": {
+          "pattern": "^scheduler-pass-[0-9a-f]{64}$",
+          "title": "Pass Id",
+          "type": "string"
+        },
+        "pass_kind": {
+          "$ref": "#/$defs/SchedulerPassKind"
+        },
+        "prompt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prompt Sha256",
+          "type": "string"
+        },
+        "requested_model": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requested Model"
+        },
+        "response_schema_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Response Schema Sha256",
+          "type": "string"
+        },
+        "role": {
+          "pattern": "^[a-z][a-z0-9_:.-]{0,127}$",
+          "title": "Role",
+          "type": "string"
+        },
+        "root_lineage": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Root Lineage"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/SchedulerScope"
+        },
+        "system_prompt_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "System Prompt Sha256"
+        },
+        "task_id": {
+          "pattern": "^scheduler-task-[0-9a-f]{64}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "task_key": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$",
+          "title": "Task Key",
+          "type": "string"
+        },
+        "task_kind": {
+          "$ref": "#/$defs/SchedulerTaskKind"
+        },
+        "task_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Task Plan Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "campaign_id",
+        "manifest_sha256",
+        "pass_kind",
+        "pass_id",
+        "scope",
+        "task_kind",
+        "task_key",
+        "role",
+        "input_sha256",
+        "prompt_sha256",
+        "response_schema_sha256",
+        "task_id",
+        "logical_request_id",
+        "task_plan_sha256"
+      ],
+      "title": "SchedulerTaskPlan",
+      "type": "object"
+    },
+    "SchedulerTaskResult": {
+      "additionalProperties": false,
+      "description": "One terminal task result bound to activation or typed local preflight failure.",
+      "properties": {
+        "activation_id": {
+          "anyOf": [
+            {
+              "pattern": "^scheduler-activation-[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Activation Id"
+        },
+        "activation_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Activation Sha256"
+        },
+        "campaign_id": {
+          "pattern": "^scheduler-campaign-[0-9a-f]{64}$",
+          "title": "Campaign Id",
+          "type": "string"
+        },
+        "context_request_evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Request Evidence Sha256"
+        },
+        "evidence_authority": {
+          "const": "comparison_required",
+          "default": "comparison_required",
+          "title": "Evidence Authority",
+          "type": "string"
+        },
+        "logical_request_id": {
+          "pattern": "^scheduler-request-[0-9a-f]{64}$",
+          "title": "Logical Request Id",
+          "type": "string"
+        },
+        "manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        },
+        "model_completion_evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Completion Evidence Sha256"
+        },
+        "model_surface_review_artifact_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Surface Review Artifact Sha256"
+        },
+        "model_surface_review_request_count": {
+          "default": 0,
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Model Surface Review Request Count",
+          "type": "integer"
+        },
+        "model_surface_review_request_manifest_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Surface Review Request Manifest Sha256"
+        },
+        "normalizer_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalizer Sha256"
+        },
+        "output_artifact_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Artifact Sha256"
+        },
+        "output_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Sha256"
+        },
+        "pass_id": {
+          "pattern": "^scheduler-pass-[0-9a-f]{64}$",
+          "title": "Pass Id",
+          "type": "string"
+        },
+        "pass_kind": {
+          "$ref": "#/$defs/SchedulerPassKind"
+        },
+        "pass_plan_id": {
+          "pattern": "^scheduler-plan-[0-9a-f]{64}$",
+          "title": "Pass Plan Id",
+          "type": "string"
+        },
+        "pass_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Pass Plan Sha256",
+          "type": "string"
+        },
+        "provider_response_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Response Sha256"
+        },
+        "result_id": {
+          "pattern": "^scheduler-result-[0-9a-f]{64}$",
+          "title": "Result Id",
+          "type": "string"
+        },
+        "result_origin": {
+          "$ref": "#/$defs/SchedulerResultOrigin"
+        },
+        "result_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Result Sha256",
+          "type": "string"
+        },
+        "reviewed_candidate_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100000,
+          "title": "Reviewed Candidate Ids",
+          "type": "array"
+        },
+        "reviewed_source_descriptor_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100000,
+          "title": "Reviewed Source Descriptor Sha256S",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/SchedulerScope"
+        },
+        "specialist_accepted_outcome_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Specialist Accepted Outcome Sha256"
+        },
+        "task_id": {
+          "pattern": "^scheduler-task-[0-9a-f]{64}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "task_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Task Plan Sha256",
+          "type": "string"
+        },
+        "terminal_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Terminal Evidence Sha256",
+          "type": "string"
+        },
+        "terminal_status": {
+          "$ref": "#/$defs/SchedulerTerminalStatus"
+        },
+        "usage_record_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Usage Record Sha256"
+        },
+        "validated_response_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Validated Response Sha256"
+        }
+      },
+      "required": [
+        "campaign_id",
+        "manifest_sha256",
+        "pass_kind",
+        "pass_id",
+        "pass_plan_id",
+        "pass_plan_sha256",
+        "task_id",
+        "task_plan_sha256",
+        "logical_request_id",
+        "scope",
+        "result_origin",
+        "terminal_status",
+        "reviewed_source_descriptor_sha256s",
+        "reviewed_candidate_ids",
+        "terminal_evidence_sha256",
+        "result_id",
+        "result_sha256"
+      ],
+      "title": "SchedulerTaskResult",
+      "type": "object"
+    },
+    "SchedulerTerminalStatus": {
+      "description": "Exact terminal outcomes; only the first two satisfy a mandatory task.",
+      "enum": [
+        "SUCCEEDED",
+        "EXPLICIT_EMPTY",
+        "FAILED",
+        "TRUNCATED",
+        "INVALID",
+        "UNBOUND",
+        "INCONCLUSIVE",
+        "UNCERTAIN"
+      ],
+      "title": "SchedulerTerminalStatus",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/scheduler_state.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Public scheduler envelope requiring controller-derived journal evidence.",
+  "properties": {
+    "artifact_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Artifact Sha256",
+      "type": "string"
+    },
+    "evidence_authority": {
+      "const": "comparison_required",
+      "default": "comparison_required",
+      "title": "Evidence Authority",
+      "type": "string"
+    },
+    "journal_evidence": {
+      "$ref": "#/$defs/SchedulerJournalEvidence"
+    },
+    "model_requests": {
+      "items": {
+        "$ref": "#/$defs/SchedulerModelRequestEvidence"
+      },
+      "maxItems": 700000,
+      "title": "Model Requests",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "summary": {
+      "$ref": "#/$defs/SchedulerCampaignSummary"
+    }
+  },
+  "required": [
+    "summary",
+    "journal_evidence",
+    "model_requests",
+    "artifact_sha256"
+  ],
+  "title": "mmaudit seven-pass scheduler state",
+  "type": "object"
+}

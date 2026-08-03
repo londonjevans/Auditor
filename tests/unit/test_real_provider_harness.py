@@ -1038,7 +1038,9 @@ def test_unbound_smoke_integration_branch_requires_live_real_evidence_and_writes
             {
                 **original_record.model_dump(mode="json"),
                 "reported_cost_usd": None,
+                "reported_cost_usd_exact": None,
                 "accounted_cost_usd": 0.00072452,
+                "accounted_cost_usd_exact": "0.00072452",
             }
         )
     )

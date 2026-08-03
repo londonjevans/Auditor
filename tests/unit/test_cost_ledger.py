@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import mmaudit.orchestration.cost_ledger as cost_ledger_module
 from mmaudit.orchestration.cost_ledger import (
     AtomicCostLedger,
     CostBudgetExceededError,
@@ -20,6 +21,60 @@ from mmaudit.orchestration.cost_ledger import (
     CostReservationStateError,
     ReleaseReason,
 )
+
+
+def test_ledger_identity_is_stable_for_exact_file_and_distinct_across_ledgers(
+    tmp_path: Path,
+) -> None:
+    first_path = tmp_path / "first-costs.json"
+    second_path = tmp_path / "second-costs.json"
+    first = AtomicCostLedger.initialize(first_path, cap_usd=Decimal("1.00"))
+    second = AtomicCostLedger.initialize(second_path, cap_usd=Decimal("1.00"))
+
+    reopened = AtomicCostLedger.open_existing(first_path, cap_usd=Decimal("1.00"))
+
+    assert first_path.read_bytes() == second_path.read_bytes()
+    assert reopened.identity_sha256 == first.identity_sha256
+    assert second.identity_sha256 != first.identity_sha256
+
+
+def test_ledger_identity_changes_when_the_persistent_lock_is_replaced(tmp_path: Path) -> None:
+    path = tmp_path / "costs.json"
+    ledger = AtomicCostLedger.initialize(path, cap_usd=Decimal("1.00"))
+    retained_identity = ledger.identity_sha256
+
+    ledger.lock_path.unlink()
+    ledger.lock_path.touch(mode=0o600)
+    ledger.lock_path.chmod(0o600)
+
+    assert ledger.identity_sha256 != retained_identity
+
+
+def test_ledger_identity_rejects_lock_swap_after_descriptor_open(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "costs.json"
+    ledger = AtomicCostLedger.initialize(path, cap_usd=Decimal("1.00"))
+    original_open = cost_ledger_module._open_lock_file
+    swapped = False
+
+    def open_then_swap(lock_path: Path, *, create: bool) -> int:
+        nonlocal swapped
+        descriptor = original_open(lock_path, create=create)
+        if not create and not swapped:
+            swapped = True
+            replacement = lock_path.with_name(f".{lock_path.name}.replacement")
+            replacement.touch(mode=0o600)
+            replacement.chmod(0o600)
+            os.replace(replacement, lock_path)
+        return descriptor
+
+    monkeypatch.setattr(cost_ledger_module, "_open_lock_file", open_then_swap)
+
+    with pytest.raises(CostLedgerConfigurationError, match="changed during"):
+        _ = ledger.identity_sha256
+    assert swapped
 
 
 def test_reservation_reconciles_actual_cost_and_releases_unused_amount(tmp_path: Path) -> None:

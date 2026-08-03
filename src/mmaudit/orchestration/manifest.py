@@ -7,6 +7,8 @@ import json
 import math
 import os
 import stat
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from importlib.resources import files
@@ -20,9 +22,24 @@ from mmaudit.config import (
     AuditConfigOverrides,
     AuditRunOptions,
     canonical_audit_config_json,
+    model_lineage_index,
     parse_canonical_audit_config,
 )
 from mmaudit.constants import ALL_MODEL_ROLES, VERSION
+from mmaudit.models.scheduler import (
+    ABSENT_QUALIFICATION_SHA256,
+    SchedulerActivationStatus,
+    SchedulerArtifact,
+    SchedulerCampaignStatus,
+    SchedulerModelRequestEvidence,
+    SchedulerPrivacyEvidenceCustody,
+    SchedulerReportBinding,
+    SchedulerRetainedJournalReference,
+    SchedulerShardInventory,
+    SchedulerTaskKind,
+    SchedulerTerminalStatus,
+    scheduler_canonical_sha256,
+)
 from mmaudit.models.schemas import (
     AuditProfile,
     AuditReport,
@@ -30,6 +47,7 @@ from mmaudit.models.schemas import (
     CandidateFindingArtifact,
     CandidateOriginKind,
     CandidateReproductionResolution,
+    ExecutionEvidenceKind,
     ExecutionOriginDispositionKind,
     FalsificationDecision,
     FindingOriginKind,
@@ -39,6 +57,8 @@ from mmaudit.models.schemas import (
     InvariantExecutionOriginDispositionArtifact,
     InvariantExecutionResult,
     MaximumAssuranceStatus,
+    ModelIdentityStrength,
+    ModelRequestValidationStatus,
     PropertyCorpus,
     ReproductionIntegrityStatus,
     ReproductionResolutionKind,
@@ -46,6 +66,9 @@ from mmaudit.models.schemas import (
     ReproductionState,
     Severity,
     StrictModel,
+)
+from mmaudit.models.schemas import (
+    ContextRequestEvidence as ProviderContextRequestEvidence,
 )
 from mmaudit.models.sharding import (
     SolidityGraphsArtifact,
@@ -83,11 +106,14 @@ if TYPE_CHECKING:
     from mmaudit.models.reasoning import ReasoningPolicyArtifact
     from mmaudit.models.registry import ProductionQualificationValidation
     from mmaudit.models.schemas import UsageRecord
+    from mmaudit.orchestration.scheduler import SchedulerJournal
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
+_MAX_SCHEDULER_PRIVACY_EVIDENCE_BYTES = 1_048_576
 _MAX_MANIFEST_FILES = 100_000
 _MAX_MANIFEST_BYTES = 4 * 1024**3
 _MAX_JSON_ARTIFACT_BYTES = 100_000_000
+SCHEDULER_RETAINED_JOURNAL_REFERENCE_FILENAME = "scheduler-journal-reference.json"
 
 
 class ManifestFileBinding(StrictModel):
@@ -358,6 +384,7 @@ def build_run_evidence_manifest(
     cli_overrides: AuditConfigOverrides | None = None,
     run_options: AuditRunOptions | None = None,
     production_qualification: VerifiedProductionQualification | None = None,
+    scheduler_runtime_journal: SchedulerJournal | None = None,
 ) -> RunEvidenceManifest:
     """Build runtime MAN-001 projections, requiring opaque qualification authority."""
 
@@ -370,6 +397,7 @@ def build_run_evidence_manifest(
         cli_overrides=cli_overrides,
         run_options=run_options,
         production_qualification=production_qualification,
+        scheduler_runtime_journal=scheduler_runtime_journal,
         sealed_verification_manifest=None,
     )
 
@@ -401,6 +429,7 @@ def rebuild_run_evidence_manifest_for_verification(
         cli_overrides=cli_overrides,
         run_options=run_options,
         production_qualification=None,
+        scheduler_runtime_journal=None,
         sealed_verification_manifest=sealed_manifest,
     )
 
@@ -415,6 +444,7 @@ def _build_run_evidence_manifest(
     cli_overrides: AuditConfigOverrides | None,
     run_options: AuditRunOptions | None,
     production_qualification: VerifiedProductionQualification | None,
+    scheduler_runtime_journal: SchedulerJournal | None,
     sealed_verification_manifest: RunEvidenceManifest | None,
 ) -> RunEvidenceManifest:
     """Build either runtime evidence or a read-only verification projection."""
@@ -482,6 +512,20 @@ def _build_run_evidence_manifest(
         if qualification_path.exists()
         else None
     )
+    scheduler_path = root / "scheduler-state.json"
+    if (
+        sealed_verification_manifest is None
+        and (scheduler_path.exists() or scheduler_path.is_symlink() or scheduler_path.is_junction())
+        and scheduler_runtime_journal is None
+    ):
+        raise ValueError("scheduler manifest issuance requires live runtime journal authority")
+    scheduler_artifact = validate_scheduler_artifact(
+        root,
+        report,
+        config=effective_config,
+        qualification_runtime=qualification_runtime,
+        scheduler_runtime_journal=scheduler_runtime_journal,
+    )
 
     bindings = ManifestBindingSet(
         configuration=_configuration_bindings(effective_config),
@@ -517,6 +561,7 @@ def _build_run_evidence_manifest(
             model_coverage,
             scope_assessment,
             context_manifest,
+            scheduler_artifact,
         ),
     )
     return seal_run_evidence_manifest(
@@ -752,6 +797,8 @@ def _validate_report_artifact_consistency(root: Path, report: AuditReport) -> No
         "context_preflight_records"
     ):
         raise ValueError("metadata.json context preflight differs from the final report")
+    if embedded_metadata.get("scheduler") != report.metadata.get("scheduler"):
+        raise ValueError("metadata.json scheduler binding differs from the final report")
     serialized_differential = (
         report.repository_suite_differential.model_dump(mode="json")
         if report.repository_suite_differential is not None
@@ -1238,6 +1285,126 @@ def load_run_evidence_manifest(path: Path) -> RunEvidenceManifest:
     return RunEvidenceManifest.model_validate(payload)
 
 
+@contextmanager
+def open_manifest_bound_json_artifacts(
+    run_dir: Path,
+    names: tuple[str, ...],
+    *,
+    required_bindings: tuple[ManifestFileBinding, ...] | None = None,
+    max_bytes: int = _MAX_JSON_ARTIFACT_BYTES,
+) -> Iterator[dict[str, dict[str, Any]]]:
+    """Hold exact manifest-bound JSON artifacts through semantic validation.
+
+    The manifest and every requested artifact remain open through stable
+    ``O_NOFOLLOW`` descriptors until the caller finishes consuming them.  This
+    prevents resume-time evidence from being replaced between its manifest hash
+    check and its typed semantic validation.
+    """
+
+    absolute = Path(os.path.abspath(run_dir))
+    try:
+        root = absolute.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("manifest-bound run directory is unavailable") from exc
+    if root != absolute or not root.is_dir() or root.is_symlink() or root.is_junction():
+        raise ValueError("manifest-bound run directory must be canonical and non-linked")
+    normalized_names = tuple(normalize_relative_path(name) for name in names)
+    if (
+        not normalized_names
+        or normalized_names != names
+        or len(normalized_names) != len(set(normalized_names))
+        or "run-evidence-manifest.json" in normalized_names
+    ):
+        raise ValueError("manifest-bound artifact names must be unique normalized paths")
+
+    with _open_json_artifact_observation(
+        root,
+        "run-evidence-manifest.json",
+    ) as manifest_payload:
+        manifest = RunEvidenceManifest.model_validate(manifest_payload)
+        if manifest.run_id != root.name:
+            raise ValueError("run evidence manifest identifies a different exact run")
+        bindings = {binding.path: binding for binding in manifest.artifacts}
+        missing = tuple(name for name in normalized_names if name not in bindings)
+        if missing:
+            raise ValueError("run evidence manifest lacks a required retained artifact")
+        if required_bindings is not None:
+            required = {binding.path: binding for binding in required_bindings}
+            if set(required) != set(normalized_names) or any(
+                bindings[name] != required[name] for name in normalized_names
+            ):
+                raise ValueError("run evidence manifest differs from scheduler privacy custody")
+        with ExitStack() as observations:
+            payloads = {
+                name: observations.enter_context(
+                    _open_json_artifact_observation(
+                        root,
+                        name,
+                        expected_binding=bindings[name],
+                        max_bytes=max_bytes,
+                    )
+                )
+                for name in normalized_names
+            }
+            yield payloads
+
+
+@contextmanager
+def open_pre_manifest_json_artifacts(
+    run_dir: Path,
+    names: tuple[str, ...],
+    *,
+    expected_bindings: tuple[ManifestFileBinding, ...],
+    max_bytes: int = _MAX_JSON_ARTIFACT_BYTES,
+) -> Iterator[dict[str, dict[str, Any]]]:
+    """Hold exact scheduler-bound JSON while a final run manifest is absent."""
+
+    absolute = Path(os.path.abspath(run_dir))
+    try:
+        root = absolute.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("pre-manifest run directory is unavailable") from exc
+    if root != absolute or not root.is_dir() or root.is_symlink() or root.is_junction():
+        raise ValueError("pre-manifest run directory must be canonical and non-linked")
+    normalized_names = tuple(normalize_relative_path(name) for name in names)
+    bindings = {binding.path: binding for binding in expected_bindings}
+    if (
+        not normalized_names
+        or normalized_names != names
+        or len(normalized_names) != len(set(normalized_names))
+        or set(bindings) != set(normalized_names)
+    ):
+        raise ValueError("pre-manifest artifact custody is incomplete or non-canonical")
+    final_manifest_path = root / "run-evidence-manifest.json"
+
+    def require_final_manifest_absent() -> None:
+        try:
+            final_manifest_path.lstat()
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise ValueError("final run-manifest state cannot be inspected") from exc
+        raise ValueError("pre-manifest evidence contradicts an emitted final run manifest")
+
+    require_final_manifest_absent()
+    with ExitStack() as observations:
+        payloads = {
+            name: observations.enter_context(
+                _open_json_artifact_observation(
+                    root,
+                    name,
+                    expected_binding=bindings[name],
+                    max_bytes=max_bytes,
+                )
+            )
+            for name in normalized_names
+        }
+        try:
+            yield payloads
+        finally:
+            require_final_manifest_absent()
+
+
 def resolve_run_evidence_config(
     manifest: RunEvidenceManifest,
     *,
@@ -1354,13 +1521,726 @@ def validate_solidity_shard_artifacts(
     )
 
 
+def validate_scheduler_artifact(
+    run_dir: Path,
+    report: AuditReport,
+    *,
+    config: AuditConfig | None = None,
+    qualification_runtime: dict[str, Any] | None = None,
+    scheduler_runtime_journal: SchedulerJournal | None = None,
+    scheduler_reference_binding: ManifestFileBinding | None = None,
+) -> SchedulerArtifact | None:
+    """Cross-check the durable seven-pass summary against report and provider evidence."""
+
+    # Local import avoids manifest -> qualification -> benchmark -> manifest at module load.
+    from mmaudit.orchestration.scheduler_runtime import (
+        build_scheduler_shard_inventory,
+        scheduler_prompt_template_set_sha256,
+        scheduler_response_schema_hashes,
+        scheduler_response_schema_set_sha256,
+        scheduler_tool_policy_sha256,
+    )
+
+    root = run_dir.resolve(strict=True)
+    path = root / "scheduler-state.json"
+    artifact_present = path.exists() or path.is_symlink() or path.is_junction()
+    binding_payload = report.metadata.get("scheduler")
+    current_scheduler_required = report.schema_version == "1.2" and (
+        report.completed or bool(report.usage)
+    )
+    if not artifact_present:
+        if scheduler_runtime_journal is not None:
+            raise ValueError("live scheduler authority lacks its persisted public artifact")
+        if binding_payload is not None:
+            raise ValueError("scheduler report binding lacks its persisted artifact")
+        if current_scheduler_required:
+            raise ValueError("current provider or completed report lacks scheduler evidence")
+        return None
+    if binding_payload is None:
+        raise ValueError("scheduler artifact lacks its final-report binding")
+
+    artifact = SchedulerArtifact.model_validate(_read_json_artifact(root, "scheduler-state.json"))
+    binding = SchedulerReportBinding.model_validate(binding_payload)
+    binding.require_exact(artifact)
+    if (
+        report.schema_version == "1.2"
+        and report.completed
+        and artifact.summary.status is not SchedulerCampaignStatus.COMPLETE
+    ):
+        raise ValueError("completed current report contains an incomplete scheduler campaign")
+
+    summary = artifact.summary
+    scheduler_bindings = summary.manifest.bindings
+    source_projection = sorted(
+        (
+            ManifestFileBinding(
+                path=source.path,
+                sha256=source.sha256,
+                size=source.size,
+            )
+            for source in report.repository.files
+        ),
+        key=lambda item: item.path,
+    )
+    expected_source_sha256 = canonical_sha256(
+        [item.model_dump(mode="json") for item in source_projection]
+    )
+    if scheduler_bindings.source_sha256 != expected_source_sha256:
+        raise ValueError("scheduler source binding differs from the final report")
+    if scheduler_bindings.effective_config_sha256 != report.configuration_hash:
+        raise ValueError("scheduler configuration binding differs from the final report")
+    if scheduler_bindings.model_selection_sha256 != report.model_configuration_hash:
+        raise ValueError("scheduler model-selection binding differs from the final report")
+    qualification_validation = _qualification_validation(qualification_runtime)
+    expected_qualification_sha256 = (
+        qualification_validation.qualification_artifact_sha256
+        if qualification_validation is not None
+        and qualification_validation.qualification_artifact_sha256 is not None
+        else ABSENT_QUALIFICATION_SHA256
+    )
+    if scheduler_bindings.qualification_sha256 != expected_qualification_sha256:
+        raise ValueError("scheduler qualification binding differs from runtime evidence")
+
+    solidity_sources = [
+        source
+        for source in report.repository.files
+        if PurePosixPath(source.path).suffix.lower() == ".sol"
+    ]
+    semantic_inventory = None
+    if solidity_sources:
+        validate_solidity_shard_artifacts(root, report)
+        shards_artifact = SolidityShardsArtifact.model_validate(
+            _read_json_artifact(root, "solidity-shards.json")
+        )
+        semantic_inventory = shards_artifact.inventory
+        if semantic_inventory is None:
+            raise ValueError("Solidity scheduler campaign lacks a semantic shard inventory")
+    expected_shard_inventory = build_scheduler_shard_inventory(
+        report.repository,
+        semantic_inventory,
+    )
+    if summary.manifest.shard_inventory != expected_shard_inventory:
+        raise ValueError("scheduler campaign differs from its exact audited shard inventory")
+    if (
+        scheduler_bindings.shard_inventory_sha256 != expected_shard_inventory.inventory_sha256
+        or summary.manifest.shard_ids != expected_shard_inventory.shard_ids
+    ):
+        raise ValueError("scheduler campaign differs from its exact audited shard inventory")
+
+    if config is not None:
+        expected_prompt_set_sha256 = scheduler_prompt_template_set_sha256()
+        expected_tool_policy_sha256 = scheduler_tool_policy_sha256(config)
+        if scheduler_bindings.prompt_set_sha256 != expected_prompt_set_sha256:
+            raise ValueError("scheduler prompt-set binding differs from trusted templates")
+        if scheduler_bindings.schema_set_sha256 != scheduler_response_schema_set_sha256():
+            raise ValueError("scheduler schema-set binding differs from trusted response schemas")
+        if scheduler_bindings.tool_policy_sha256 != expected_tool_policy_sha256:
+            raise ValueError("scheduler tool-policy binding differs from run evidence")
+
+    _require_scheduler_journal_authority(
+        root=root,
+        report=report,
+        public_artifact=artifact,
+        expected_shard_inventory=expected_shard_inventory,
+        runtime_journal=scheduler_runtime_journal,
+        reference_binding=scheduler_reference_binding,
+    )
+
+    model_task_records = {
+        task.logical_request_id: (pass_result.plan, task, result)
+        for pass_result in summary.pass_results
+        for task in pass_result.plan.tasks
+        for result in pass_result.task_results
+        if result.task_id == task.task_id
+        if task.task_kind is SchedulerTaskKind.MODEL_REQUEST
+    }
+    model_requests = {request.logical_request_id: request for request in artifact.model_requests}
+    terminal_request_ids = set(model_task_records)
+    request_ids = set(model_requests)
+    if (
+        len(model_requests) != len(artifact.model_requests)
+        or not terminal_request_ids <= request_ids
+        or (
+            summary.status is SchedulerCampaignStatus.COMPLETE
+            and request_ids != terminal_request_ids
+        )
+    ):
+        raise ValueError("scheduler public model-request inventory differs from durable tasks")
+    permitted_schema_hashes = scheduler_response_schema_hashes()
+    if any(
+        task.response_schema_sha256 not in permitted_schema_hashes
+        for _plan, task, _result in model_task_records.values()
+    ):
+        raise ValueError("scheduler model task uses an unregistered response schema")
+    configured_lineages = model_lineage_index(config) if config is not None else {}
+    known_source_descriptors = {
+        source.source_descriptor_sha256
+        for shard in expected_shard_inventory.shards
+        for source in shard.sources
+    }
+    for logical_request_id, request in model_requests.items():
+        terminal_record = model_task_records.get(logical_request_id)
+        if terminal_record is not None:
+            plan, task, result = terminal_record
+            _validate_scheduler_model_request(
+                request=request,
+                plan=plan,
+                task=task,
+                result=result,
+                permitted_schema_hashes=permitted_schema_hashes,
+            )
+        elif request.terminal_status is SchedulerTerminalStatus.SUCCEEDED:
+            raise ValueError("successful scheduler request lacks its sealed pass result")
+        if (
+            request.response_schema_sha256 is not None
+            and request.response_schema_sha256 not in permitted_schema_hashes
+        ):
+            raise ValueError("scheduler model task uses an unregistered response schema")
+        if not set(request.delivered_source_descriptor_sha256s) <= known_source_descriptors:
+            raise ValueError("scheduler model request claims an unknown delivered source")
+        if config is not None:
+            lineage = configured_lineages.get(request.requested_model.lower())
+            if (
+                lineage is None
+                or lineage.root_lineage != request.root_lineage
+                or request.root_lineage not in config.privacy.approved_model_lineages
+            ):
+                raise ValueError("scheduler model request lacks an approved configured lineage")
+
+    usages_by_logical_id: dict[str, list[UsageRecord]] = {
+        request_id: [] for request_id in model_requests
+    }
+    observed_usage_ids = [usage.request_id for usage in report.usage]
+    if len(observed_usage_ids) != len(set(observed_usage_ids)):
+        raise ValueError("provider usage contains duplicate scheduler request evidence")
+    for usage in report.usage:
+        matched_request_id = usage.request_id if usage.request_id in model_requests else None
+        route_suffix = ""
+        if matched_request_id is None:
+            route_base, route_marker, route_suffix = usage.request_id.rpartition(":route:")
+            if route_marker and route_base in model_requests:
+                matched_request_id = route_base
+        if matched_request_id is None:
+            raise ValueError("provider usage is orphaned from scheduler task evidence")
+        if usage.request_id != matched_request_id and (
+            not route_suffix.isascii()
+            or not route_suffix.isdecimal()
+            or len(route_suffix) > 6
+            or int(route_suffix) < 2
+        ):
+            raise ValueError("provider usage has an invalid scheduler route identity")
+        usages_by_logical_id[matched_request_id].append(usage)
+
+    uncertain_provider_successes = 0
+    for logical_request_id, request in model_requests.items():
+        terminal_record = model_task_records.get(logical_request_id)
+        terminal_status = request.terminal_status
+        usages = usages_by_logical_id[logical_request_id]
+        for usage in usages:
+            _validate_scheduler_usage_join(usage=usage, request=request)
+        creditable = [
+            usage
+            for usage in usages
+            if _scheduler_usage_is_creditable(usage=usage, request=request, config=config)
+        ]
+        if terminal_status is SchedulerTerminalStatus.SUCCEEDED:
+            if len(usages) != 1 or len(creditable) != 1:
+                raise ValueError(
+                    "successful scheduler task lacks one exact creditable provider result"
+                )
+            if (
+                terminal_record is None
+                or terminal_record[2].terminal_evidence_sha256
+                != creditable[0].validated_response_sha256
+            ):
+                raise ValueError("scheduler terminal evidence differs from provider usage")
+        elif len(creditable) > 1:
+            raise ValueError("non-success scheduler result has duplicate provider success evidence")
+        elif creditable and terminal_status not in {
+            SchedulerTerminalStatus.INVALID,
+            SchedulerTerminalStatus.UNCERTAIN,
+        }:
+            raise ValueError("non-success scheduler result contradicts provider success evidence")
+        if terminal_status is SchedulerTerminalStatus.UNCERTAIN and creditable:
+            uncertain_provider_successes += 1
+    retained_uncredited_outputs = (
+        artifact.journal_evidence.task_output_count - artifact.journal_evidence.succeeded_count
+    )
+    if uncertain_provider_successes > retained_uncredited_outputs:
+        raise ValueError("uncertain provider success lacks retained uncredited output evidence")
+    return artifact
+
+
+def _require_scheduler_journal_authority(
+    *,
+    root: Path,
+    report: AuditReport,
+    public_artifact: SchedulerArtifact,
+    expected_shard_inventory: SchedulerShardInventory,
+    runtime_journal: SchedulerJournal | None,
+    reference_binding: ManifestFileBinding | None,
+) -> None:
+    """Compare public state to owner-held runtime or descriptor-reopened private evidence."""
+
+    with _resolve_scheduler_journal_authority_path(
+        root=root,
+        public_artifact=public_artifact,
+        reference_binding=reference_binding,
+        detached=runtime_journal is None,
+    ) as journal_path:
+        if runtime_journal is not None:
+            from mmaudit.orchestration.scheduler import SchedulerJournal
+
+            if not isinstance(runtime_journal, SchedulerJournal):
+                raise ValueError("scheduler runtime authority must be an owner-held live journal")
+            if runtime_journal.path.resolve(strict=True) != journal_path:
+                raise ValueError("scheduler runtime journal path differs from the run custody path")
+            if (
+                runtime_journal.manifest.bindings != public_artifact.summary.manifest.bindings
+                or runtime_journal.manifest.shard_inventory != expected_shard_inventory
+            ):
+                raise ValueError("scheduler runtime journal bindings differ from public evidence")
+            reconstructed = _validate_scheduler_privacy_custody_and_reconstruct(
+                root=root,
+                report=report,
+                public_artifact=public_artifact,
+                journal=runtime_journal,
+            )
+            if reconstructed != public_artifact:
+                raise ValueError("scheduler public artifact differs from live runtime authority")
+            return
+
+        from mmaudit.orchestration.scheduler import open_scheduler_journal_for_verification
+
+        journal = open_scheduler_journal_for_verification(
+            journal_path,
+            expected_bindings=public_artifact.summary.manifest.bindings,
+            expected_shard_inventory=expected_shard_inventory,
+            expected_cost_ledger_baseline=(public_artifact.summary.manifest.cost_ledger_baseline),
+            expected_privacy_evidence_custody=(
+                public_artifact.summary.manifest.privacy_evidence_custody
+            ),
+        )
+        try:
+            reconstructed = _validate_scheduler_privacy_custody_and_reconstruct(
+                root=root,
+                report=report,
+                public_artifact=public_artifact,
+                journal=journal,
+            )
+        finally:
+            journal.close()
+        if reconstructed != public_artifact:
+            raise ValueError("scheduler public artifact differs from its private journal")
+
+
+def _validate_scheduler_privacy_custody_and_reconstruct(
+    *,
+    root: Path,
+    report: AuditReport,
+    public_artifact: SchedulerArtifact,
+    journal: SchedulerJournal,
+) -> SchedulerArtifact:
+    """Join exact privacy bytes to a descriptor-held scheduler manifest and report."""
+
+    expected_custody = public_artifact.summary.manifest.privacy_evidence_custody
+    if expected_custody is None:
+        return journal.artifact()
+    with journal.open_privacy_evidence_custody() as observed_custody:
+        if observed_custody != expected_custody:
+            raise ValueError("scheduler privacy custody differs from its private authority")
+        _validate_scheduler_privacy_artifacts(
+            root=root,
+            report=report,
+            custody=observed_custody,
+        )
+        return journal.artifact()
+
+
+def _validate_scheduler_privacy_artifacts(
+    *,
+    root: Path,
+    report: AuditReport,
+    custody: SchedulerPrivacyEvidenceCustody,
+) -> None:
+    """Validate exact emitted privacy files while their descriptors remain held."""
+
+    from mmaudit.privacy import EffectivePrivacyPolicyEvidence
+    from mmaudit.repository.privacy_provenance import PrivacySourceProvenanceEvidence
+
+    names = (custody.source_provenance_path, custody.effective_policy_path)
+    bindings = (
+        ManifestFileBinding(
+            path=custody.source_provenance_path,
+            sha256=custody.source_provenance_artifact_sha256,
+            size=custody.source_provenance_size,
+        ),
+        ManifestFileBinding(
+            path=custody.effective_policy_path,
+            sha256=custody.effective_policy_artifact_sha256,
+            size=custody.effective_policy_size,
+        ),
+    )
+    final_manifest_path = root / "run-evidence-manifest.json"
+    try:
+        final_manifest_path.lstat()
+    except FileNotFoundError:
+        artifact_observation = open_pre_manifest_json_artifacts(
+            root,
+            names,
+            expected_bindings=bindings,
+            max_bytes=_MAX_SCHEDULER_PRIVACY_EVIDENCE_BYTES,
+        )
+    except OSError as exc:
+        raise ValueError("scheduler privacy run-manifest state cannot be inspected") from exc
+    else:
+        artifact_observation = open_manifest_bound_json_artifacts(
+            root,
+            names,
+            required_bindings=bindings,
+            max_bytes=_MAX_SCHEDULER_PRIVACY_EVIDENCE_BYTES,
+        )
+
+    with artifact_observation as payloads:
+        try:
+            provenance = PrivacySourceProvenanceEvidence.model_validate(
+                payloads[custody.source_provenance_path]
+            )
+            policy = EffectivePrivacyPolicyEvidence.model_validate(
+                payloads[custody.effective_policy_path]
+            )
+            reported_provenance = PrivacySourceProvenanceEvidence.model_validate(
+                report.privacy.get("source_provenance")
+            )
+            reported_policy = EffectivePrivacyPolicyEvidence.model_validate(
+                report.privacy.get("effective_policy")
+            )
+        except (TypeError, ValueError):
+            raise ValueError("scheduler privacy custody lacks valid typed evidence") from None
+        if provenance != reported_provenance or policy != reported_policy:
+            raise ValueError("scheduler privacy evidence differs from the final report")
+        if (
+            provenance.source_sha256 != custody.source_sha256
+            or policy.source_sha256 != custody.source_sha256
+            or provenance.evidence_sha256 != custody.source_provenance_evidence_sha256
+            or policy.evidence_sha256 != custody.effective_policy_evidence_sha256
+            or policy.source_provenance_sha256 != custody.policy_source_provenance_sha256
+        ):
+            raise ValueError("scheduler privacy evidence differs from its exact custody")
+
+
+@contextmanager
+def _resolve_scheduler_journal_authority_path(
+    *,
+    root: Path,
+    public_artifact: SchedulerArtifact,
+    reference_binding: ManifestFileBinding | None,
+    detached: bool,
+) -> Iterator[Path]:
+    """Resolve physical same-run or typed no-copy prior-run journal custody."""
+
+    absolute_root = Path(os.path.abspath(root))
+    current_component = Path(absolute_root.anchor)
+    for part in absolute_root.parts[1:]:
+        current_component /= part
+        if current_component.is_symlink() or current_component.is_junction():
+            raise ValueError("scheduler run custody refuses linked path components")
+    try:
+        resolved_root = absolute_root.resolve(strict=True)
+        runs_root = resolved_root.parent
+        runs_metadata = runs_root.lstat()
+        run_metadata = resolved_root.lstat()
+        private_dir = resolved_root / "private"
+        private_metadata = private_dir.lstat()
+    except OSError as exc:
+        raise ValueError("scheduler run custody path is unavailable") from exc
+    if (
+        not stat.S_ISDIR(runs_metadata.st_mode)
+        or stat.S_ISLNK(runs_metadata.st_mode)
+        or runs_root.is_junction()
+        or not stat.S_ISDIR(run_metadata.st_mode)
+        or stat.S_ISLNK(run_metadata.st_mode)
+        or resolved_root.is_junction()
+        or not stat.S_ISDIR(private_metadata.st_mode)
+        or stat.S_ISLNK(private_metadata.st_mode)
+        or private_dir.is_junction()
+    ):
+        raise ValueError("scheduler run custody requires unlinked physical directories")
+
+    journal_path = private_dir / "scheduler-journal"
+    reference_path = private_dir / SCHEDULER_RETAINED_JOURNAL_REFERENCE_FILENAME
+    journal_exists = journal_path.exists() or journal_path.is_symlink()
+    reference_exists = reference_path.exists() or reference_path.is_symlink()
+    if journal_exists and reference_exists:
+        raise ValueError("scheduler run custody cannot contain journal and retained reference")
+    if journal_exists:
+        if reference_binding is not None:
+            raise ValueError("physical scheduler journal contradicts a sealed reference binding")
+        try:
+            journal_metadata = journal_path.lstat()
+        except OSError as exc:
+            raise ValueError("scheduler public artifact lacks its private journal") from exc
+        if (
+            not stat.S_ISDIR(journal_metadata.st_mode)
+            or stat.S_ISLNK(journal_metadata.st_mode)
+            or journal_path.is_junction()
+        ):
+            raise ValueError("scheduler private journal must be an unlinked directory")
+        resolved_journal = journal_path.resolve(strict=True)
+        if resolved_journal.parent != private_dir:
+            raise ValueError("scheduler private journal escaped its owning run")
+        custody = {
+            runs_root: _artifact_stat_identity(runs_metadata),
+            resolved_root: _artifact_stat_identity(run_metadata),
+            private_dir: _artifact_stat_identity(private_metadata),
+            journal_path: _artifact_stat_identity(journal_metadata),
+        }
+        try:
+            yield resolved_journal
+        finally:
+            _require_exact_path_custody(custody)
+        return
+    if not reference_exists:
+        raise ValueError("scheduler public artifact lacks its private journal custody evidence")
+    if detached and reference_binding is None:
+        raise ValueError("detached scheduler reference lacks its sealed manifest binding")
+
+    reference_name = f"private/{SCHEDULER_RETAINED_JOURNAL_REFERENCE_FILENAME}"
+    with _open_json_artifact_observation(
+        resolved_root,
+        reference_name,
+        expected_binding=reference_binding,
+    ) as reference_payload:
+        try:
+            reference = SchedulerRetainedJournalReference.model_validate(reference_payload)
+            reference.require_exact(
+                owner_run_id=reference.owner_run_id,
+                consumer_run_id=resolved_root.name,
+                artifact=public_artifact,
+            )
+        except ValueError as exc:
+            raise ValueError("scheduler retained-journal reference is invalid") from exc
+
+        owner_run = runs_root / reference.owner_run_id
+        owner_private = owner_run / "private"
+        owner_journal = owner_private / "scheduler-journal"
+        try:
+            owner_metadata = owner_run.lstat()
+            owner_private_metadata = owner_private.lstat()
+            owner_journal_metadata = owner_journal.lstat()
+        except OSError as exc:
+            raise ValueError("scheduler retained journal is unavailable") from exc
+        if (
+            owner_run.parent != runs_root
+            or not stat.S_ISDIR(owner_metadata.st_mode)
+            or stat.S_ISLNK(owner_metadata.st_mode)
+            or owner_run.is_junction()
+            or not stat.S_ISDIR(owner_private_metadata.st_mode)
+            or stat.S_ISLNK(owner_private_metadata.st_mode)
+            or owner_private.is_junction()
+            or not stat.S_ISDIR(owner_journal_metadata.st_mode)
+            or stat.S_ISLNK(owner_journal_metadata.st_mode)
+            or owner_journal.is_junction()
+        ):
+            raise ValueError("scheduler retained journal path is unsafe")
+        owner_reference = owner_private / SCHEDULER_RETAINED_JOURNAL_REFERENCE_FILENAME
+        if owner_reference.exists() or owner_reference.is_symlink():
+            raise ValueError("scheduler retained-journal reference chains are forbidden")
+        resolved_owner = owner_run.resolve(strict=True)
+        resolved_owner_private = owner_private.resolve(strict=True)
+        resolved_owner_journal = owner_journal.resolve(strict=True)
+        if (
+            resolved_owner.parent != runs_root
+            or resolved_owner_private != resolved_owner / "private"
+            or resolved_owner_journal != resolved_owner_private / "scheduler-journal"
+            or reference.relative_journal_path
+            != f"{reference.owner_run_id}/private/scheduler-journal"
+        ):
+            raise ValueError("scheduler retained journal escaped the exact runs root")
+        custody = {
+            runs_root: _artifact_stat_identity(runs_metadata),
+            resolved_root: _artifact_stat_identity(run_metadata),
+            private_dir: _artifact_stat_identity(private_metadata),
+            owner_run: _artifact_stat_identity(owner_metadata),
+            owner_private: _artifact_stat_identity(owner_private_metadata),
+            owner_journal: _artifact_stat_identity(owner_journal_metadata),
+        }
+        try:
+            yield resolved_owner_journal
+        finally:
+            _require_exact_path_custody(custody)
+            if owner_reference.exists() or owner_reference.is_symlink():
+                raise ValueError("scheduler retained-journal reference chains are forbidden")
+
+
+def _require_exact_path_custody(
+    expected: dict[Path, tuple[int, int, int, int, int, int, int]],
+) -> None:
+    """Reject link, replacement, or metadata drift across one authority decision."""
+
+    try:
+        observed = {path: path.lstat() for path in expected}
+    except OSError as exc:
+        raise ValueError("scheduler journal custody changed during validation") from exc
+    if any(
+        _artifact_stat_identity(observed[path]) != identity
+        or stat.S_ISLNK(observed[path].st_mode)
+        or path.is_junction()
+        for path, identity in expected.items()
+    ):
+        raise ValueError("scheduler journal custody changed during validation")
+
+
+def _validate_scheduler_model_request(
+    *,
+    request: SchedulerModelRequestEvidence,
+    plan: Any,
+    task: Any,
+    result: Any,
+    permitted_schema_hashes: frozenset[str],
+) -> None:
+    """Require the public lifecycle projection to equal its terminal task evidence."""
+
+    if (
+        request.campaign_id != plan.manifest.campaign_id
+        or request.manifest_sha256 != plan.manifest.manifest_sha256
+        or request.pass_kind is not plan.pass_kind
+        or request.pass_id != plan.pass_id
+        or request.pass_plan_id != plan.pass_plan_id
+        or request.pass_plan_sha256 != plan.pass_plan_sha256
+        or request.task_id != task.task_id
+        or request.task_plan_sha256 != task.task_plan_sha256
+        or request.scope_sha256 != task.scope.scope_sha256
+        or request.role != task.role
+        or request.requested_model != task.requested_model
+        or request.root_lineage != task.root_lineage
+        or request.terminal_status is not result.terminal_status
+        or request.result_id != result.result_id
+        or request.result_sha256 != result.result_sha256
+        or request.terminal_evidence_sha256 != result.terminal_evidence_sha256
+        or request.output_sha256 != result.output_sha256
+        or request.output_artifact_sha256 != result.output_artifact_sha256
+        or request.model_completion_evidence_sha256 != result.model_completion_evidence_sha256
+        or request.usage_record_sha256 != result.usage_record_sha256
+        or request.context_request_evidence_sha256 != result.context_request_evidence_sha256
+        or request.provider_response_sha256 != result.provider_response_sha256
+        or request.validated_response_sha256 != result.validated_response_sha256
+        or request.normalizer_sha256 != result.normalizer_sha256
+        or request.reviewed_source_descriptor_sha256s != result.reviewed_source_descriptor_sha256s
+        or request.reviewed_candidate_ids != result.reviewed_candidate_ids
+    ):
+        raise ValueError("scheduler public model request differs from terminal task evidence")
+    if result.activation_id is None:
+        if request.activation_status is not SchedulerActivationStatus.PREFLIGHT_FAILED:
+            raise ValueError("scheduler preflight result differs from public activation status")
+        return
+    if (
+        request.activation_status is not SchedulerActivationStatus.ACTIVATED
+        or request.activation_id != result.activation_id
+        or request.activation_sha256 != result.activation_sha256
+        or request.actual_input_sha256 is None
+        or request.actual_input_sha256 != request.user_prompt_sha256
+        or request.system_prompt_sha256 != task.system_prompt_sha256
+        or request.provider_prompt_sha256 is None
+        or request.response_schema_sha256 not in permitted_schema_hashes
+    ):
+        raise ValueError("scheduler activated request lacks exact public request hashes")
+
+
+def _validate_scheduler_usage_join(
+    *,
+    usage: UsageRecord,
+    request: SchedulerModelRequestEvidence,
+) -> None:
+    """Reject provider records that contradict the scheduler's pre-transport activation."""
+
+    if request.activation_status is not SchedulerActivationStatus.ACTIVATED:
+        raise ValueError("provider usage exists for an unactivated scheduler request")
+    routed_lineage = usage.routing.get("qualified_root_lineage")
+    raw_context_evidence = usage.routing.get("context_request_evidence")
+    try:
+        context_evidence = ProviderContextRequestEvidence.model_validate(raw_context_evidence)
+    except ValueError as exc:
+        raise ValueError("provider usage lacks typed scheduler context evidence") from exc
+    if (
+        usage.role != request.role
+        or usage.requested_model != request.requested_model
+        or usage.prompt_sha256 != request.provider_prompt_sha256
+        or usage.user_prompt_sha256 != request.user_prompt_sha256
+        or usage.schema_sha256 != request.response_schema_sha256
+        or context_evidence.request_id != request.logical_request_id
+        or context_evidence.request_role != request.role
+        or usage.routing.get("context_request_evidence_sha256") != context_evidence.evidence_sha256
+        or (routed_lineage is not None and routed_lineage != request.root_lineage)
+    ):
+        raise ValueError("provider usage differs from its scheduler activation identity")
+    if request.terminal_status is SchedulerTerminalStatus.SUCCEEDED and (
+        request.usage_record_sha256 != scheduler_canonical_sha256(usage.model_dump(mode="json"))
+        or request.context_request_evidence_sha256 != context_evidence.evidence_sha256
+        or request.provider_response_sha256 != usage.response_sha256
+        or request.validated_response_sha256 != usage.validated_response_sha256
+    ):
+        raise ValueError("provider usage differs from persisted scheduler completion evidence")
+
+
+def _scheduler_usage_is_creditable(
+    *,
+    usage: UsageRecord,
+    request: SchedulerModelRequestEvidence,
+    config: AuditConfig | None,
+) -> bool:
+    """Credit only one exact, validated, non-fallback completion for its activation."""
+
+    routed_lineage = usage.routing.get("qualified_root_lineage")
+    configured_lineage = (
+        model_lineage_index(config).get(request.requested_model.lower())
+        if config is not None
+        else None
+    )
+    lineage_bound = (
+        routed_lineage == request.root_lineage
+        if routed_lineage is not None
+        else configured_lineage is not None
+        and configured_lineage.root_lineage == request.root_lineage
+    )
+    real_identity_bound = (
+        usage.execution_evidence is not ExecutionEvidenceKind.REAL
+        or usage.identity_strength is not ModelIdentityStrength.UNBOUND
+    )
+    return bool(
+        usage.request_id == request.logical_request_id
+        and usage.execution_evidence in {ExecutionEvidenceKind.REAL, ExecutionEvidenceKind.MOCK}
+        and usage.status == "success"
+        and usage.validation_status is ModelRequestValidationStatus.VALID
+        and real_identity_bound
+        and usage.provider_error_classification is None
+        and usage.finish_reason == "stop"
+        and usage.returned_model == request.requested_model
+        and usage.actual_model == request.requested_model
+        and usage.response_sha256 is not None
+        and usage.validated_response_sha256 is not None
+        and usage.request_body_sha256 is not None
+        and not usage.fallback_used
+        and not usage.substitution_detected
+        and lineage_bound
+    )
+
+
 def validate_manifest_artifacts(
     manifest: RunEvidenceManifest,
     run_dir: Path,
+    *,
+    scheduler_runtime_journal: SchedulerJournal | None = None,
 ) -> None:
     """Verify every run file is listed and unchanged without executing target code."""
 
-    root = run_dir.resolve(strict=True)
+    absolute_run_dir = Path(os.path.abspath(run_dir))
+    current_component = Path(absolute_run_dir.anchor)
+    for part in absolute_run_dir.parts[1:]:
+        current_component /= part
+        if current_component.is_symlink() or current_component.is_junction():
+            raise ValueError("run artifact validation refuses linked path components")
+    root = absolute_run_dir.resolve(strict=True)
     expected = {binding.path: binding for binding in manifest.artifacts}
     actual = {binding.path: binding for binding in collect_run_artifacts(root)}
     if set(actual) != set(expected):
@@ -1376,16 +2256,40 @@ def validate_manifest_artifacts(
                     f"current run manifest requires emitted artifact: {required_artifact}"
                 )
     if "final-findings.json" in expected:
+        scheduler_reference_binding = expected.get(
+            f"private/{SCHEDULER_RETAINED_JOURNAL_REFERENCE_FILENAME}"
+        )
         report = AuditReport.model_validate(_read_json_artifact(root, "final-findings.json"))
         _validate_report_artifact_consistency(root, report)
         validate_solidity_shard_artifacts(root, report)
         context_manifest = _validated_context_manifest(root, report)
         if manifest.run_configuration is not None:
             effective_config = manifest.run_configuration.reconstruct_effective_config()
+            qualification_path = root / "model-qualification-runtime.json"
+            qualification_runtime = (
+                _read_json_artifact(root, "model-qualification-runtime.json")
+                if qualification_path.exists()
+                else None
+            )
+            validate_scheduler_artifact(
+                root,
+                report,
+                config=effective_config,
+                qualification_runtime=qualification_runtime,
+                scheduler_runtime_journal=scheduler_runtime_journal,
+                scheduler_reference_binding=scheduler_reference_binding,
+            )
             _validate_repository_differential_configuration(report, effective_config)
             _validate_context_manifest_configuration(
                 context_manifest,
                 effective_config,
+            )
+        else:
+            validate_scheduler_artifact(
+                root,
+                report,
+                scheduler_runtime_journal=scheduler_runtime_journal,
+                scheduler_reference_binding=scheduler_reference_binding,
             )
         expected_classification = (
             manifest.run_configuration.run_options.privacy_source_classification
@@ -2509,6 +3413,7 @@ def _coverage_bindings(
     model_coverage: dict[str, Any],
     scope_assessment: dict[str, Any],
     context_manifest: ContextManifest | None,
+    scheduler_artifact: SchedulerArtifact | None,
 ) -> list[ManifestHashBinding]:
     bindings = [
         _binding(
@@ -2551,6 +3456,27 @@ def _coverage_bindings(
                     "provider_reported_requests": str(
                         context_manifest.totals.provider_reported_request_count
                     ),
+                },
+            )
+        )
+    if scheduler_artifact is None:
+        bindings.append(
+            _binding(
+                "scheduler/absent",
+                {"present": False},
+                {"state": "legacy_without_scheduler_evidence"},
+            )
+        )
+    else:
+        summary = scheduler_artifact.summary
+        bindings.append(
+            ManifestHashBinding(
+                identifier="scheduler/artifact",
+                sha256=scheduler_artifact.artifact_sha256,
+                details={
+                    "artifact": "scheduler-state.json",
+                    "status": summary.status.value,
+                    "passes": str(len(summary.pass_results)),
                 },
             )
         )
@@ -2693,13 +3619,111 @@ def _artifact_stat_identity(
 
 
 def _read_json_artifact(run_dir: Path, name: str) -> dict[str, Any]:
+    with _open_json_artifact_observation(run_dir, name) as payload:
+        return payload
+
+
+@contextmanager
+def _open_json_artifact_observation(
+    run_dir: Path,
+    name: str,
+    *,
+    expected_binding: ManifestFileBinding | None = None,
+    max_bytes: int = _MAX_JSON_ARTIFACT_BYTES,
+) -> Iterator[dict[str, Any]]:
+    """Hold one stable no-follow artifact descriptor across semantic validation."""
+
     normalized = normalize_relative_path(name)
     path = run_dir / normalized
     if path.is_symlink() or path.is_junction():
         raise ValueError(f"run JSON artifact may not be a link: {name}")
-    resolved = path.resolve(strict=True)
-    resolved.relative_to(run_dir)
-    content = _read_stable_json_artifact_bytes(resolved, name=name)
+    try:
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(run_dir)
+        before = path.lstat()
+    except OSError as exc:
+        raise ValueError(f"run JSON artifact is unavailable: {name}") from exc
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > max_bytes:
+        raise ValueError(f"run JSON artifact is not a bounded unique regular file: {name}")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(f"run JSON artifact could not be opened safely: {name}") from exc
+    chunks: list[bytes] = []
+    size = 0
+    try:
+        try:
+            opened = os.fstat(descriptor)
+            while True:
+                remaining = max_bytes - size
+                chunk = os.read(descriptor, min(1024 * 1024, remaining + 1))
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > max_bytes:
+                    raise ValueError(f"run JSON artifact exceeds its byte limit: {name}")
+                chunks.append(chunk)
+            finished = os.fstat(descriptor)
+            after_read = path.lstat()
+            if (
+                len(
+                    {
+                        _artifact_stat_identity(before),
+                        _artifact_stat_identity(opened),
+                        _artifact_stat_identity(finished),
+                        _artifact_stat_identity(after_read),
+                    }
+                )
+                != 1
+                or not stat.S_ISREG(finished.st_mode)
+                or finished.st_nlink != 1
+                or finished.st_size != size
+                or path.resolve(strict=True) != resolved
+            ):
+                raise ValueError(f"run JSON artifact changed while it was read: {name}")
+            content = b"".join(chunks)
+            if expected_binding is not None and (
+                expected_binding.path != normalized
+                or expected_binding.size != len(content)
+                or expected_binding.sha256 != hashlib.sha256(content).hexdigest()
+            ):
+                raise ValueError(f"run JSON artifact differs from its sealed binding: {name}")
+            payload = _parse_json_artifact_content(content, name=name)
+        except OSError as exc:
+            raise ValueError(f"run JSON artifact could not be read safely: {name}") from exc
+
+        try:
+            yield payload
+        finally:
+            try:
+                after_validation = path.lstat()
+                descriptor_after = os.fstat(descriptor)
+                current_resolved = path.resolve(strict=True)
+            except OSError as exc:
+                raise ValueError(
+                    f"run JSON artifact changed during semantic validation: {name}"
+                ) from exc
+            if (
+                len(
+                    {
+                        _artifact_stat_identity(before),
+                        _artifact_stat_identity(descriptor_after),
+                        _artifact_stat_identity(after_validation),
+                    }
+                )
+                != 1
+                or current_resolved != resolved
+                or path.is_symlink()
+                or path.is_junction()
+            ):
+                raise ValueError(f"run JSON artifact changed during semantic validation: {name}")
+    finally:
+        os.close(descriptor)
+
+
+def _parse_json_artifact_content(content: bytes, *, name: str) -> dict[str, Any]:
+    """Decode one unique finite UTF-8 JSON object from already-held bytes."""
 
     def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}
@@ -2730,64 +3754,6 @@ def _read_json_artifact(run_dir: Path, name: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError(f"run JSON artifact must contain an object: {name}")
     return payload
-
-
-def _read_stable_json_artifact_bytes(path: Path, *, name: str) -> bytes:
-    """Read one bounded unique artifact while holding and rechecking its descriptor identity."""
-
-    try:
-        before = path.lstat()
-    except OSError as exc:
-        raise ValueError(f"run JSON artifact is unavailable: {name}") from exc
-    if (
-        not stat.S_ISREG(before.st_mode)
-        or before.st_nlink != 1
-        or before.st_size > _MAX_JSON_ARTIFACT_BYTES
-    ):
-        raise ValueError(f"run JSON artifact is not a bounded unique regular file: {name}")
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(path, flags)
-    except OSError as exc:
-        raise ValueError(f"run JSON artifact could not be opened safely: {name}") from exc
-    chunks: list[bytes] = []
-    size = 0
-    try:
-        opened = os.fstat(descriptor)
-        while True:
-            remaining = _MAX_JSON_ARTIFACT_BYTES - size
-            chunk = os.read(descriptor, min(1024 * 1024, remaining + 1))
-            if not chunk:
-                break
-            size += len(chunk)
-            if size > _MAX_JSON_ARTIFACT_BYTES:
-                raise ValueError(f"run JSON artifact exceeds its byte limit: {name}")
-            chunks.append(chunk)
-        finished = os.fstat(descriptor)
-    except OSError as exc:
-        raise ValueError(f"run JSON artifact could not be read safely: {name}") from exc
-    finally:
-        os.close(descriptor)
-    try:
-        after = path.lstat()
-    except OSError as exc:
-        raise ValueError(f"run JSON artifact changed while it was read: {name}") from exc
-    if (
-        len(
-            {
-                _artifact_stat_identity(before),
-                _artifact_stat_identity(opened),
-                _artifact_stat_identity(finished),
-                _artifact_stat_identity(after),
-            }
-        )
-        != 1
-        or not stat.S_ISREG(finished.st_mode)
-        or finished.st_nlink != 1
-        or finished.st_size != size
-    ):
-        raise ValueError(f"run JSON artifact changed while it was read: {name}")
-    return b"".join(chunks)
 
 
 def _object_list(payload: dict[str, Any], key: str) -> list[dict[str, Any]]:

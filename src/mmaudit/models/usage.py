@@ -10,6 +10,7 @@ import threading
 import weakref
 from collections.abc import Callable
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
@@ -27,7 +28,10 @@ from mmaudit.models.schemas import (
     UsageRecord,
 )
 from mmaudit.models.token_planning import RequestTokenPlan
-from mmaudit.orchestration.budgets import AtomicTokenReservationEvidence
+from mmaudit.orchestration.budgets import (
+    AtomicRequestLimitReservationEvidence,
+    AtomicTokenReservationEvidence,
+)
 from mmaudit.privacy import EndpointPolicyClass, PrivacyProfile, PrivacySourceClassification
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -92,6 +96,108 @@ def is_creditable_usage_record(
         require_real=require_real,
         require_certification=require_certification,
         allow_unbound_real=False,
+    )
+
+
+def is_accountable_usage_record(
+    record: UsageRecord,
+    *,
+    require_real: bool = False,
+) -> bool:
+    """Return whether exact paid-attempt accounting is safe without review credit."""
+
+    return _is_accountable_usage_record(
+        record,
+        require_real=require_real,
+        require_runtime_attestation=True,
+    )
+
+
+def is_structurally_accountable_usage_record(
+    record: UsageRecord,
+    *,
+    require_real: bool = False,
+) -> bool:
+    """Validate serialized accounting evidence without granting REAL authority."""
+
+    return _is_accountable_usage_record(
+        record,
+        require_real=require_real,
+        require_runtime_attestation=False,
+    )
+
+
+def _is_accountable_usage_record(
+    record: UsageRecord,
+    *,
+    require_real: bool,
+    require_runtime_attestation: bool,
+) -> bool:
+    if record.execution_evidence not in {
+        ExecutionEvidenceKind.REAL,
+        ExecutionEvidenceKind.MOCK,
+    }:
+        return False
+    if require_real and record.execution_evidence is not ExecutionEvidenceKind.REAL:
+        return False
+    if (
+        record.execution_evidence is ExecutionEvidenceKind.REAL
+        and require_runtime_attestation
+        and not _has_owned_real_usage_attestation(record)
+    ):
+        return False
+    if (
+        record.started_at is None
+        or record.ended_at is None
+        or record.ended_at < record.started_at
+        or record.timestamp != record.started_at
+        or record.latency_ms is None
+        or record.retry_count != record.attempts - 1
+        or record.user_prompt_sha256 is None
+        or record.request_body_sha256 is None
+        or record.schema_sha256 is None
+        or record.accounted_cost_usd_exact is None
+    ):
+        return False
+    try:
+        accounted = Decimal(record.accounted_cost_usd_exact)
+        reported = (
+            Decimal(record.reported_cost_usd_exact)
+            if record.reported_cost_usd_exact is not None
+            else None
+        )
+    except InvalidOperation:
+        return False
+    if (
+        accounted < 0
+        or float(accounted) != record.accounted_cost_usd
+        or (reported is None) != (record.reported_cost_usd is None)
+        or (
+            reported is not None
+            and (
+                reported < 0 or reported > accounted or float(reported) != record.reported_cost_usd
+            )
+        )
+    ):
+        return False
+    raw_context = record.routing.get("context_request_evidence")
+    try:
+        context = ContextRequestEvidence.model_validate(raw_context)
+        plan = request_token_plan_from_usage(record)
+        if plan is None:
+            return False
+        token_evidence = atomic_token_reservations_from_usage(record, plan)
+        request_evidence = atomic_request_limit_reservations_from_usage(record, plan)
+    except (TypeError, ValueError):
+        return False
+    return (
+        context.request_id == record.request_id
+        and context.request_role == record.role
+        and record.routing.get("context_request_evidence_sha256") == context.evidence_sha256
+        and len(token_evidence) == record.attempts
+        and len(request_evidence) == record.attempts
+        and tuple(item.request_id for item in token_evidence)
+        == tuple(item.request_id for item in request_evidence)
     )
 
 
@@ -197,6 +303,20 @@ def _is_strict_usage_record(
         or record.accounted_cost_usd + 1e-12 < record.reported_cost_usd
     ):
         return False
+    if record.execution_evidence is ExecutionEvidenceKind.REAL:
+        if record.reported_cost_usd_exact is None or record.accounted_cost_usd_exact is None:
+            return False
+        try:
+            exact_reported = Decimal(record.reported_cost_usd_exact)
+            exact_accounted = Decimal(record.accounted_cost_usd_exact)
+        except InvalidOperation:
+            return False
+        if (
+            exact_accounted < exact_reported
+            or float(exact_reported) != record.reported_cost_usd
+            or float(exact_accounted) != record.accounted_cost_usd
+        ):
+            return False
     actual_endpoint = record.actual_provider_endpoint
     if not isinstance(actual_endpoint, str):
         return False
@@ -318,6 +438,7 @@ def request_token_plan_from_usage(record: UsageRecord) -> RequestTokenPlan | Non
     if configured_endpoints and not local_mock_route and configured_endpoints != planned_endpoints:
         raise ValueError("usage routing token plan differs from configured endpoints")
     atomic_token_reservations_from_usage(record, plan)
+    atomic_request_limit_reservations_from_usage(record, plan)
     return plan
 
 
@@ -408,6 +529,99 @@ def atomic_token_reservations_from_usage(
         raise ValueError(
             "usage routing final atomic reservation differs from its token plan or inventory"
         )
+    return inventory
+
+
+def atomic_request_limit_reservations_from_usage(
+    record: UsageRecord,
+    plan: RequestTokenPlan | None = None,
+) -> tuple[AtomicRequestLimitReservationEvidence, ...]:
+    """Return scheduled request-count evidence, or an empty tuple for legacy requests."""
+
+    evidence_keys = (
+        "atomic_request_limit_reservations",
+        "atomic_request_limit_reservation_sha256s",
+        "atomic_request_limit_reservation",
+        "atomic_request_limit_reservation_sha256",
+    )
+    raw_values = tuple(record.routing.get(key) for key in evidence_keys)
+    if all(value is None for value in raw_values):
+        return ()
+    if any(value is None for value in raw_values):
+        raise ValueError("usage routing request-limit reservation evidence is incomplete")
+    raw_inventory, raw_inventory_hashes, raw_final, raw_final_hash = raw_values
+    if (
+        not isinstance(raw_inventory, list)
+        or not isinstance(raw_inventory_hashes, list)
+        or not isinstance(raw_final, dict)
+        or not _is_sha256(raw_final_hash)
+        or len(raw_inventory) != record.attempts
+        or len(raw_inventory_hashes) != record.attempts
+        or any(not isinstance(item, dict) for item in raw_inventory)
+        or any(not _is_sha256(item) for item in raw_inventory_hashes)
+    ):
+        raise ValueError("usage routing request-limit reservation evidence is malformed")
+    resolved_plan = plan
+    if resolved_plan is None:
+        raw_plan = record.routing.get("request_token_plan")
+        raw_plan_hash = record.routing.get("request_token_plan_sha256")
+        if not isinstance(raw_plan, dict) or not _is_sha256(raw_plan_hash):
+            raise ValueError("request-limit reservations require a request token plan")
+        resolved_plan = _strict_json_evidence(
+            RequestTokenPlan,
+            raw_plan,
+            label="request token plan",
+        )
+        if (
+            raw_plan_hash != resolved_plan.plan_sha256
+            or resolved_plan.request_id != record.request_id
+            or resolved_plan.role != record.role
+            or resolved_plan.route_intersection.exact_model_ids != (record.requested_model,)
+        ):
+            raise ValueError("request-limit reservation token plan differs from its request")
+    inventory = tuple(
+        _strict_json_evidence(
+            AtomicRequestLimitReservationEvidence,
+            item,
+            label="request-limit reservation",
+        )
+        for item in raw_inventory
+    )
+    inventory_hashes = tuple(raw_inventory_hashes)
+    final_evidence = _strict_json_evidence(
+        AtomicRequestLimitReservationEvidence,
+        raw_final,
+        label="request-limit reservation",
+    )
+    expected_request_ids = tuple(
+        record.request_id if attempt == 1 else f"{record.request_id}:attempt:{attempt}"
+        for attempt in range(1, record.attempts + 1)
+    )
+    if (
+        tuple(item.request_id for item in inventory) != expected_request_ids
+        or tuple(item.request_limit_scope for item in inventory)
+        != (record.request_id,) * record.attempts
+        or tuple(item.request_limit_count_before for item in inventory)
+        != tuple(range(record.attempts))
+        or tuple(item.request_limit_count_after for item in inventory)
+        != tuple(range(1, record.attempts + 1))
+        or len({item.request_limit_maximum for item in inventory}) != 1
+    ):
+        raise ValueError("scheduled usage request-limit attempts are incomplete or unordered")
+    for evidence, evidence_hash in zip(inventory, inventory_hashes, strict=True):
+        if (
+            evidence.evidence_sha256 != evidence_hash
+            or evidence.exact_model_id != record.requested_model
+            or evidence.role != record.role
+            or evidence.request_token_plan_sha256 != resolved_plan.plan_sha256
+        ):
+            raise ValueError("scheduled usage request-limit evidence differs from its request")
+    if (
+        final_evidence != inventory[-1]
+        or raw_final != final_evidence.model_dump(mode="json")
+        or raw_final_hash != final_evidence.evidence_sha256
+    ):
+        raise ValueError("usage routing final request-limit reservation differs from inventory")
     return inventory
 
 
@@ -783,6 +997,96 @@ def _usage_record_sha256(record: UsageRecord) -> str:
             ensure_ascii=True,
         ).encode("utf-8")
     ).hexdigest()
+
+
+class _TrustedUsageRecoveryScope:
+    """Opaque one-shot authority for records recovered from one validated journal."""
+
+    __slots__ = ("__weakref__",)
+
+
+def _build_trusted_usage_recovery_authority() -> tuple[
+    Callable[[tuple[UsageRecord, ...]], _TrustedUsageRecoveryScope],
+    Callable[[tuple[UsageRecord, ...], _TrustedUsageRecoveryScope], tuple[UsageRecord, ...]],
+]:
+    """Keep recovery authority process-local and outside serialized evidence."""
+
+    registry: dict[
+        int,
+        tuple[
+            weakref.ReferenceType[_TrustedUsageRecoveryScope],
+            tuple[str, ...],
+            bool,
+        ],
+    ] = {}
+    lock = threading.RLock()
+
+    def normalize_structural(records: tuple[UsageRecord, ...]) -> tuple[UsageRecord, ...]:
+        normalized = tuple(
+            UsageRecord.model_validate(record.model_dump(mode="json")) for record in records
+        )
+        if any(
+            record.execution_evidence is ExecutionEvidenceKind.REAL
+            and not (
+                is_structurally_creditable_usage_record(record, require_real=True)
+                or is_structurally_accountable_usage_record(record, require_real=True)
+            )
+            for record in normalized
+        ):
+            raise ValueError("journal recovery contains structurally invalid REAL usage")
+        request_ids = tuple(record.request_id for record in normalized)
+        if request_ids != tuple(sorted(set(request_ids))):
+            raise ValueError("journal recovery usage identities must be unique and sorted")
+        return normalized
+
+    def issue(records: tuple[UsageRecord, ...]) -> _TrustedUsageRecoveryScope:
+        normalized = normalize_structural(records)
+        hashes = tuple(_usage_record_sha256(record) for record in normalized)
+        scope = object.__new__(_TrustedUsageRecoveryScope)
+        key = id(scope)
+
+        def discard(reference: weakref.ReferenceType[_TrustedUsageRecoveryScope]) -> None:
+            with lock:
+                current = registry.get(key)
+                if current is not None and current[0] is reference:
+                    registry.pop(key, None)
+
+        reference = weakref.ref(scope, discard)
+        with lock:
+            registry[key] = (reference, hashes, False)
+        return scope
+
+    def recover(
+        records: tuple[UsageRecord, ...],
+        scope: _TrustedUsageRecoveryScope,
+    ) -> tuple[UsageRecord, ...]:
+        normalized = normalize_structural(records)
+        hashes = tuple(_usage_record_sha256(record) for record in normalized)
+        with lock:
+            registered = registry.get(id(scope))
+            if (
+                type(scope) is not _TrustedUsageRecoveryScope
+                or registered is None
+                or registered[0]() is not scope
+                or registered[1] != hashes
+                or registered[2]
+            ):
+                raise ValueError("journal usage recovery capability is invalid or consumed")
+            registry[id(scope)] = (registered[0], registered[1], True)
+        return tuple(
+            _attest_owned_real_usage_record(record)
+            if record.execution_evidence is ExecutionEvidenceKind.REAL
+            else record
+            for record in normalized
+        )
+
+    return issue, recover
+
+
+(
+    _issue_trusted_usage_recovery_scope,
+    _recover_trusted_usage_records,
+) = _build_trusted_usage_recovery_authority()
 
 
 def _has_valid_bound_identity(record: UsageRecord) -> bool:

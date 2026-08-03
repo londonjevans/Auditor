@@ -20,6 +20,7 @@ from mmaudit.models.refresh import (
     ModelRefreshSourceEvidence,
 )
 from mmaudit.models.refresh_staging import ModelRefreshWorkflowStatus
+from mmaudit.models.scheduler import SchedulerArtifact, SchedulerRetainedJournalReference
 from mmaudit.models.schemas import (
     HardhatInventoryPhaseRequest,
     HardhatReporterExecution,
@@ -66,6 +67,8 @@ MODELS: dict[str, type[BaseModel]] = {
     "release_run_binding.schema.json": ReleaseRunBinding,
     "release_run_verification_binding.schema.json": ReleaseRunVerificationBinding,
     "release_static_evidence.schema.json": StaticReleaseEvidence,
+    "scheduler_state.schema.json": SchedulerArtifact,
+    "scheduler_retained_journal_reference.schema.json": SchedulerRetainedJournalReference,
     "semantic_shard_inventory.schema.json": SolidityShardsArtifact,
 }
 TITLE_OVERRIDES = {
@@ -83,6 +86,10 @@ TITLE_OVERRIDES = {
     "model_refresh_snapshot.schema.json": "mmaudit model refresh snapshot",
     "model_refresh_source_evidence.schema.json": "mmaudit model refresh source evidence",
     "model_refresh_workflow_status.schema.json": "mmaudit model refresh workflow status",
+    "scheduler_state.schema.json": "mmaudit seven-pass scheduler state",
+    "scheduler_retained_journal_reference.schema.json": (
+        "mmaudit retained scheduler journal reference"
+    ),
     "semantic_shard_inventory.schema.json": "mmaudit Solidity semantic shard inventory",
 }
 

@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from mmaudit.agents.base import AgentBase
+from mmaudit.agents.base import AgentBase, AgentRequestProtocol, build_agent_request_protocol
 from mmaudit.models.openrouter import OpenRouterSchemaError
 from mmaudit.models.schemas import ContextPackage, JudgeDecisionBatch, ThreatModel
 from mmaudit.orchestration.context import render_context
@@ -80,6 +80,14 @@ class JudgeAgent(AgentBase):
     role = "judge"
     prompt_file = "judge.md"
 
+    @property
+    def request_protocol(self) -> AgentRequestProtocol:
+        return build_agent_request_protocol(
+            prompt_file=self.prompt_file,
+            schema_name="mmaudit_judgment",
+            response_model=JudgeDecisionBatch,
+        )
+
     @staticmethod
     def prepare_input(
         *,
@@ -102,6 +110,7 @@ class JudgeAgent(AgentBase):
         context: ContextPackage,
         threat_model: ThreatModel | None,
         prepared_input: PreparedJudgmentInput | None = None,
+        logical_request_id: str | None = None,
     ) -> JudgeDecisionBatch:
         expected_input = self.prepare_input(groups=groups, threat_model=threat_model)
         if prepared_input is not None and prepared_input != expected_input:
@@ -109,14 +118,16 @@ class JudgeAgent(AgentBase):
                 "prepared judgment workflow differs from submitted judgment evidence"
             )
         effective_input = prepared_input or expected_input
+        protocol = self.request_protocol
         response = await self.client.complete(
             role=self.role,
             models=self.configured_models,
-            system_prompt=self.system_prompt,
+            system_prompt=protocol.system_prompt,
             user_prompt=effective_input.workflow_prompt + render_context(context),
             context_package=context,
-            response_model=JudgeDecisionBatch,
-            schema_name="mmaudit_judgment",
+            response_model=protocol.response_model,
+            schema_name=protocol.schema_name,
+            logical_request_id=logical_request_id,
         )
         allowed = {str(group["group_id"]) for group in groups}
         response_ids = [decision.group_id for decision in response.decisions]

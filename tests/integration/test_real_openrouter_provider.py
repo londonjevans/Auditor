@@ -1064,6 +1064,7 @@ def _is_rejection_transport_usage_record(
         {
             **record.model_dump(mode="json"),
             "reported_cost_usd": record.accounted_cost_usd,
+            "reported_cost_usd_exact": record.accounted_cost_usd_exact,
         }
     )
     return _is_strict_usage_record(

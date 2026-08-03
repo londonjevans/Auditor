@@ -6,6 +6,7 @@ from mmaudit.agents.verifier import (
     anonymize_cross_examination_candidates,
     normalize_cross_examination_response,
     select_candidate_falsifier_models,
+    select_validation_falsifier_models,
 )
 from mmaudit.models.openrouter import OpenRouterSchemaError
 from mmaudit.models.schemas import (
@@ -90,6 +91,31 @@ def test_candidate_falsifiers_use_two_distinct_registered_lineages(
 
     assert len(selected) == 2
     assert len({root_lineage for _model_id, root_lineage in selected}) == 2
+
+
+def test_candidate_falsifier_portfolios_use_registered_roles_without_optional_specialist(
+    config_factory,
+) -> None:
+    config = config_factory()
+
+    cross_examiners = select_candidate_falsifier_models(config)
+    validation_falsifiers = select_validation_falsifier_models(config)
+
+    assert [model_id for model_id, _lineage in cross_examiners] == [
+        config.models.verifier.primary,
+        config.models.judge.primary,
+    ]
+    assert [model_id for model_id, _lineage in validation_falsifiers] == [
+        config.models.judge.primary,
+        config.models.business_logic.primary,
+    ]
+    verifier_lineage = next(
+        entry.root_lineage
+        for entry in config.models.registry
+        if entry.canonical_model_id == config.models.verifier.primary
+    )
+    assert verifier_lineage not in {lineage for _model_id, lineage in validation_falsifiers}
+    assert len({lineage for _model_id, lineage in validation_falsifiers}) == 2
 
 
 def test_candidate_falsifiers_exclude_unapproved_lineages(

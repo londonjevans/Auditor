@@ -397,6 +397,17 @@ def test_python_chunking_preserves_complete_symbols() -> None:
     assert line_range_hash(content, 1, 1)
 
 
+def test_empty_source_chunk_is_explicit_provider_visible_whole_file() -> None:
+    result = chunk_text(path="empty.py", content="")
+
+    assert len(result.excerpts) == 1
+    excerpt = result.excerpts[0]
+    assert (excerpt.start_line, excerpt.end_line, excerpt.content) == (1, 1, "")
+    assert not excerpt.omitted_before
+    assert not excerpt.omitted_after
+    assert result.omissions == ()
+
+
 def test_oversized_logical_symbol_is_reported_not_split() -> None:
     content = "def giant():\n" + "\n".join(f"    value_{i} = {i}" for i in range(100))
     result = chunk_text(path="giant.py", content=content, max_chunk_bytes=100)

@@ -62,9 +62,14 @@ from mmaudit.orchestration.context import render_context
 from mmaudit.orchestration.model_coverage import (
     build_model_review_coverage,
     build_model_surface_requests,
+    build_semantic_shard_source_review_request,
     model_review_critical_surface_gate,
     model_surface_assignment_feasibility_gate,
     plan_model_surface_review_assignments,
+)
+from tests.fake_openrouter import (
+    _request_scoped_candidate_id,
+    _requested_surface_covers_path,
 )
 from tests.identity_fixtures import (
     bind_synthetic_usage_identity,
@@ -219,7 +224,7 @@ def _inventory() -> tuple[SoliditySymbolIndex, SolidityGraphSet, InvariantSuite]
     invariants = InvariantSuite(
         invariants=[
             InvariantSpec(
-                id="inv:observed-assets",
+                id="inv-00000000000000000001",
                 title="Observed assets back accounting",
                 category=InvariantCategory.ACCOUNTING,
                 description="Recorded accounting cannot exceed locally observed assets.",
@@ -231,9 +236,16 @@ def _inventory() -> tuple[SoliditySymbolIndex, SolidityGraphSet, InvariantSuite]
                         end_line=11,
                         symbol="deposit(uint256)",
                         content_hash=_source_hash(10, 11),
-                    )
+                    ),
+                    Location(
+                        path=_PATH,
+                        start_line=5,
+                        end_line=6,
+                        symbol="totalAssets",
+                        content_hash=_source_hash(5, 6),
+                    ),
                 ],
-                entity_ids=["function:Vault.deposit"],
+                entity_ids=["function:Vault.deposit", "state:Vault.totalAssets"],
                 state_variables=["totalAssets"],
                 functions=["deposit(uint256)"],
                 provenance=SolidityProvenance.COMPILER,
@@ -696,7 +708,11 @@ def test_surface_requests_cover_full_deterministic_inventory() -> None:
     assert len(requests) == 9
     assert requests == sorted(requests, key=lambda request: request.surface_id)
     assert set(request.kind for request in requests) == (
-        set(ModelReviewSurfaceKind) - {ModelReviewSurfaceKind.INTERNAL_FUNCTION}
+        set(ModelReviewSurfaceKind)
+        - {
+            ModelReviewSurfaceKind.INTERNAL_FUNCTION,
+            ModelReviewSurfaceKind.SOURCE_FILE,
+        }
     )
     assert all(
         request.contract
@@ -705,6 +721,147 @@ def test_surface_requests_cover_full_deterministic_inventory() -> None:
         and request.invariant_considered
         for request in requests
     )
+
+
+def test_semantic_shard_request_uses_exact_fallback_parser_entity_custody() -> None:
+    path = "test/audit/AuditHarness.t.sol"
+    source = "contract AuditHarness {\n    function check() external {}\n}\n"
+    source_sha256 = hashlib.sha256(source.encode()).hexdigest()
+    index = SoliditySymbolIndex(
+        projects=[
+            SolidityProjectMetadata(
+                project_type=SolidityProjectType.FOUNDRY,
+                project_root=".",
+                source_directories=["src"],
+                test_directories=["test"],
+            )
+        ],
+        entities=[
+            SolidityEntity(
+                id="contract:AuditHarness",
+                kind=SolidityEntityKind.CONTRACT,
+                name="AuditHarness",
+                contract_name=None,
+                path=path,
+                start_line=1,
+                end_line=3,
+                byte_start=0,
+                byte_end=len(source.encode()),
+                source_hash=source_sha256,
+                provenance=SolidityProvenance.FALLBACK,
+                confidence=0.55,
+                transformation="synthetic_fallback_parser",
+            )
+        ],
+        fallback_sources=[path],
+    )
+
+    request = build_semantic_shard_source_review_request(
+        index=index,
+        source_path=path,
+        source_content=source,
+        source_sha256=source_sha256,
+    )
+
+    assert request.kind is ModelReviewSurfaceKind.CONTRACT
+    assert request.subject_id == "contract:AuditHarness"
+    assert request.allowed_locations == (
+        Location(
+            path=path,
+            start_line=1,
+            end_line=3,
+            symbol="AuditHarness",
+            content_hash=source_sha256,
+        ),
+    )
+
+
+def test_semantic_shard_request_rejects_source_drift() -> None:
+    path = "test/audit/AuditHarness.t.sol"
+    source = "contract AuditHarness {}\n"
+    source_sha256 = hashlib.sha256(source.encode()).hexdigest()
+    entity = SolidityEntity(
+        id="contract:AuditHarness",
+        kind=SolidityEntityKind.CONTRACT,
+        name="AuditHarness",
+        path=path,
+        start_line=1,
+        end_line=1,
+        byte_start=0,
+        byte_end=len(source.encode()),
+        source_hash=source_sha256,
+        provenance=SolidityProvenance.FALLBACK,
+        confidence=0.55,
+        transformation="synthetic_fallback_parser",
+    )
+    project = SolidityProjectMetadata(
+        project_type=SolidityProjectType.FOUNDRY,
+        project_root=".",
+        test_directories=["test"],
+    )
+
+    with pytest.raises(ValueError, match="exact source hash"):
+        build_semantic_shard_source_review_request(
+            index=SoliditySymbolIndex(
+                projects=[project],
+                entities=[entity],
+                fallback_sources=[path],
+            ),
+            source_path=path,
+            source_content=source + "// drift\n",
+            source_sha256=source_sha256,
+        )
+
+
+@pytest.mark.parametrize(
+    ("ast_backed", "fallback_backed", "entity_provenance", "expected_message"),
+    [
+        (False, False, SolidityProvenance.FALLBACK, "exact index provenance"),
+        (True, True, SolidityProvenance.FALLBACK, "exact index provenance"),
+        (False, True, SolidityProvenance.COMPILER, "index differs from current source bytes"),
+    ],
+)
+def test_semantic_shard_request_rejects_missing_ambiguous_or_wrong_provenance(
+    ast_backed: bool,
+    fallback_backed: bool,
+    entity_provenance: SolidityProvenance,
+    expected_message: str,
+) -> None:
+    path = "test/audit/AuditHarness.t.sol"
+    source = "contract AuditHarness {}\n"
+    source_sha256 = hashlib.sha256(source.encode()).hexdigest()
+    entity = SolidityEntity(
+        id="contract:AuditHarness",
+        kind=SolidityEntityKind.CONTRACT,
+        name="AuditHarness",
+        path=path,
+        start_line=1,
+        end_line=1,
+        byte_start=0,
+        byte_end=len(source.encode()),
+        source_hash=source_sha256,
+        provenance=entity_provenance,
+        confidence=0.55,
+        transformation="synthetic_fallback_parser",
+    )
+    project = SolidityProjectMetadata(
+        project_type=SolidityProjectType.FOUNDRY,
+        project_root=".",
+        test_directories=["test"],
+    )
+
+    with pytest.raises(ValueError, match=expected_message):
+        build_semantic_shard_source_review_request(
+            index=SoliditySymbolIndex(
+                projects=[project],
+                entities=[entity],
+                ast_sources=[path] if ast_backed else [],
+                fallback_sources=[path] if fallback_backed else [],
+            ),
+            source_path=path,
+            source_content=source,
+            source_sha256=source_sha256,
+        )
 
 
 def test_exact_critical_gap_elevates_only_its_surfaces_without_changing_ids() -> None:
@@ -766,7 +923,7 @@ def test_invariant_only_internal_function_receives_an_elevated_review_surface() 
     )
     index = index.model_copy(update={"entities": [*index.entities, internal]})
     invariant = InvariantSpec(
-        id="inv:internal-transition",
+        id="inv-00000000000000000002",
         title="Internal transition preserves accounting",
         category=InvariantCategory.ACCOUNTING,
         description="The internal transition preserves the declared accounting boundary.",
@@ -843,18 +1000,18 @@ def test_direct_and_location_bound_invariants_make_exact_contract_surfaces_criti
     invariants = InvariantSuite(
         invariants=[
             invariant(
-                "inv:direct-contract",
-                entity_ids=[contract.id],
+                "inv-00000000000000000003",
+                entity_ids=[contract.id, state.id],
                 location=_entity_citation(contract).location,
             ),
             invariant(
-                "inv:direct-state",
+                "inv-00000000000000000004",
                 entity_ids=[state.id],
                 location=_entity_citation(state).location,
             ),
             invariant(
-                "inv:location-function",
-                entity_ids=[],
+                "inv-00000000000000000005",
+                entity_ids=[state.id],
                 location=_entity_citation(admin).location,
             ),
         ]
@@ -1128,7 +1285,7 @@ def test_test_harness_entities_edges_and_invariants_never_enter_surface_denomina
         }
     )
     harness_invariant = InvariantSpec(
-        id="inv:test-harness-only",
+        id="inv-00000000000000000006",
         title="Test harness helper behavior",
         category=InvariantCategory.STATE_MACHINE,
         description="Test-only helper state is never part of the audited-source denominator.",
@@ -1358,7 +1515,7 @@ def test_public_model_coverage_paths_reject_incomplete_critical_classification_i
         }
     )
     unbound_invariant = InvariantSpec(
-        id="inv:unbound-symbolic",
+        id="inv-00000000000000000007",
         title="Unbound symbolic invariant",
         category=InvariantCategory.STATE_MACHINE,
         description="A symbolic name alone cannot identify exact current source.",
@@ -2190,6 +2347,363 @@ def test_context_delivery_or_successful_usage_without_response_earns_no_credit(
     assert coverage.critical.state is AnalysisState.NOT_ANALYZED
     assert not coverage.critical_gate_passed
     assert not model_review_critical_surface_gate(coverage, required=True).passed
+
+
+@pytest.mark.parametrize("include_known_surface", [False, True])
+def test_supplemental_surface_artifacts_cannot_inflate_or_receive_product_coverage_credit(
+    config_factory: Callable[..., AuditConfig],
+    include_known_surface: bool,
+) -> None:
+    config = config_factory()
+    index, graphs, invariants, authoritative_requests = _requests()
+    known = next(
+        request
+        for request in authoritative_requests
+        if request.kind is ModelReviewSurfaceKind.ENTRY_POINT
+    )
+    supplemental_subject = "function:SupplementalAuditHarness.check"
+    supplemental = ModelSurfaceReviewRequest.model_validate(
+        {
+            **known.model_dump(mode="python"),
+            "surface_id": ModelSurfaceReviewRequest.calculate_surface_id(
+                known.kind,
+                supplemental_subject,
+            ),
+            "subject_id": supplemental_subject,
+            "contract": "SupplementalAuditHarness",
+            "function_or_state_surface": "check()",
+            "critical": False,
+        }
+    )
+    requested = sorted(
+        [supplemental, *([known] if include_known_surface else [])],
+        key=lambda request: request.surface_id,
+    )
+    usage = _usage(
+        "source_audit",
+        config.models.source_audit.primary,
+        f"request-supplemental-{'mixed' if include_known_surface else 'only'}",
+    )
+    contexts = _review_contexts(requested, [usage], index, graphs)
+
+    baseline = build_model_review_coverage(
+        config,
+        usage_records=[],
+        review_artifacts=[],
+        review_contexts_by_request={},
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+    )
+    coverage = build_model_review_coverage(
+        config,
+        usage_records=[usage],
+        review_artifacts=[_artifact(requested, usage, index, graphs)],
+        review_contexts_by_request=contexts,
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+    )
+
+    authoritative_ids = {request.surface_id for request in authoritative_requests}
+    assert coverage.overall.denominator == baseline.overall.denominator
+    assert coverage.overall.numerator == baseline.overall.numerator == 0
+    assert {surface.surface_id for surface in coverage.surfaces} == authoritative_ids
+    assert supplemental.surface_id not in authoritative_ids
+    assert any("referenced unknown surfaces" in item for item in coverage.limitations)
+    if include_known_surface:
+        known_surface = next(
+            surface for surface in coverage.surfaces if surface.surface_id == known.surface_id
+        )
+        assert len(known_surface.evidence_references) == 1
+        assert not known_surface.evidence_references[0].credited
+        assert "outside the deterministic inventory" in known_surface.evidence_references[0].reason
+    else:
+        assert all(not surface.evidence_references for surface in coverage.surfaces)
+
+
+def test_supplemental_surface_failures_are_bounded_without_hiding_accounting(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = config_factory()
+    index, graphs, invariants, authoritative_requests = _requests()
+    known = next(
+        request
+        for request in authoritative_requests
+        if request.kind is ModelReviewSurfaceKind.ENTRY_POINT
+    )
+    supplemental_subject = "function:SupplementalAuditHarness.check"
+    supplemental = ModelSurfaceReviewRequest.model_validate(
+        {
+            **known.model_dump(mode="python"),
+            "surface_id": ModelSurfaceReviewRequest.calculate_surface_id(
+                known.kind,
+                supplemental_subject,
+            ),
+            "subject_id": supplemental_subject,
+            "contract": "SupplementalAuditHarness",
+            "function_or_state_surface": "check()",
+            "critical": False,
+        }
+    )
+    usages = [
+        _usage(
+            "source_audit",
+            config.models.source_audit.primary,
+            f"request-supplemental-overflow-{ordinal:03d}",
+        )
+        for ordinal in range(101)
+    ]
+    contexts = _review_contexts([supplemental], usages, index, graphs)
+    artifacts = [_artifact([supplemental], usage, index, graphs) for usage in usages]
+
+    baseline = build_model_review_coverage(
+        config,
+        usage_records=[],
+        review_artifacts=[],
+        review_contexts_by_request={},
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+    )
+    coverage = build_model_review_coverage(
+        config,
+        usage_records=usages,
+        review_artifacts=artifacts,
+        review_contexts_by_request=contexts,
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+    )
+
+    artifact_identities = tuple(sorted(artifact.artifact_sha256 for artifact in artifacts))
+    identity_set_sha256 = hashlib.sha256(
+        json.dumps(
+            {"category": "unknown_surfaces", "identities": artifact_identities},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    expected_summary = (
+        "model-review artifacts referenced unknown surfaces; "
+        "affected_identity_count=101; "
+        f"affected_identity_set_sha256={identity_set_sha256}"
+    )
+
+    assert coverage.overall == baseline.overall
+    assert coverage.by_kind == baseline.by_kind
+    assert coverage.critical == baseline.critical
+    assert len(coverage.limitations) <= 100
+    assert expected_summary in coverage.limitations
+    assert sum("referenced unknown surfaces" in item for item in coverage.limitations) == 1
+    assert all(not surface.evidence_references for surface in coverage.surfaces)
+
+
+@pytest.mark.parametrize(
+    ("mutated_kind", "mutated_content_hash", "expected"),
+    [
+        (None, None, True),
+        (ModelReviewSurfaceKind.SOURCE_FILE.value, None, False),
+        (None, "0" * 64, False),
+    ],
+)
+def test_synthetic_path_gate_requires_exact_typed_index_location(
+    mutated_kind: str | None,
+    mutated_content_hash: str | None,
+    expected: bool,
+) -> None:
+    index, _, _, requests = _requests()
+    request = next(
+        request for request in requests if request.kind is ModelReviewSurfaceKind.ENTRY_POINT
+    )
+    request_payload = request.model_dump(mode="json")
+    if mutated_kind is not None:
+        request_payload["kind"] = mutated_kind
+    if mutated_content_hash is not None:
+        request_payload["allowed_locations"][0]["content_hash"] = mutated_content_hash
+    prompt = "\n".join(
+        [
+            "<TRUSTED_MODEL_SURFACE_REQUESTS_JSON>",
+            json.dumps([request_payload], sort_keys=True),
+            "</TRUSTED_MODEL_SURFACE_REQUESTS_JSON>",
+            "<DETERMINISTIC_SOLIDITY_FACTS_JSON>",
+            json.dumps({"symbol_index": index.model_dump(mode="json")}, sort_keys=True),
+            "</DETERMINISTIC_SOLIDITY_FACTS_JSON>",
+        ]
+    )
+
+    assert _requested_surface_covers_path(prompt, _PATH) is expected
+
+
+def test_synthetic_candidate_identity_is_bound_to_request_and_exact_delivered_excerpt() -> None:
+    index, _, _, requests = _requests()
+    entry_request = next(
+        request for request in requests if request.kind is ModelReviewSurfaceKind.ENTRY_POINT
+    )
+    state_request = next(
+        request for request in requests if request.kind is ModelReviewSurfaceKind.STATE
+    )
+
+    excerpt_content = "".join(_SOURCE.splitlines(keepends=True)[18:23])
+
+    def prompt_for(
+        request: ModelSurfaceReviewRequest,
+        *,
+        path: str = _PATH,
+        content: str = excerpt_content,
+        requested_surface_path: str | None = None,
+    ) -> str:
+        start_line = 19
+        end_line = start_line + len(content.splitlines()) - 1
+        content_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        sentinel = f"MMAUDIT-UNTRUSTED-{content_sha256.upper()}"
+        request_payload = request.model_dump(mode="json")
+        if requested_surface_path is not None:
+            request_payload["allowed_locations"][0]["path"] = requested_surface_path
+        return "\n".join(
+            [
+                "<TRUSTED_MODEL_SURFACE_REQUESTS_JSON>",
+                json.dumps([request_payload], sort_keys=True),
+                "</TRUSTED_MODEL_SURFACE_REQUESTS_JSON>",
+                "<DETERMINISTIC_SOLIDITY_FACTS_JSON>",
+                json.dumps({"symbol_index": index.model_dump(mode="json")}, sort_keys=True),
+                "</DETERMINISTIC_SOLIDITY_FACTS_JSON>",
+                "<REPOSITORY_EXCERPT_METADATA_JSON>",
+                json.dumps(
+                    {
+                        "path": path,
+                        "start_line": start_line,
+                        "end_line": end_line,
+                        "content_sha256": content_sha256,
+                    },
+                    sort_keys=True,
+                ),
+                "</REPOSITORY_EXCERPT_METADATA_JSON>",
+                f"-----BEGIN {sentinel}-----",
+                content,
+                f"-----END {sentinel}-----",
+            ]
+        )
+
+    entry_prompt = prompt_for(entry_request)
+    entry_candidate_id = _request_scoped_candidate_id(
+        "specialist-access",
+        entry_prompt,
+        _PATH,
+        20,
+        22,
+        logical_request_id="scheduler-request-a",
+    )
+
+    assert entry_candidate_id is not None
+    assert entry_candidate_id == _request_scoped_candidate_id(
+        "specialist-access",
+        entry_prompt,
+        _PATH,
+        20,
+        22,
+        logical_request_id="scheduler-request-a",
+    )
+    assert entry_candidate_id == _request_scoped_candidate_id(
+        "specialist-access",
+        prompt_for(state_request, requested_surface_path="src/Dependency.sol"),
+        _PATH,
+        20,
+        22,
+        logical_request_id="scheduler-request-a",
+    )
+    assert entry_candidate_id != _request_scoped_candidate_id(
+        "specialist-access",
+        entry_prompt,
+        _PATH,
+        20,
+        22,
+        logical_request_id="scheduler-request-b",
+    )
+    changed_excerpt = "".join(
+        _SOURCE.replace("line 20", "line XX").splitlines(keepends=True)[18:23]
+    )
+    assert entry_candidate_id != _request_scoped_candidate_id(
+        "specialist-access",
+        prompt_for(state_request, content=changed_excerpt),
+        _PATH,
+        20,
+        22,
+        logical_request_id="scheduler-request-a",
+    )
+    assert (
+        _request_scoped_candidate_id(
+            "specialist-access",
+            entry_prompt,
+            "src/OutsideScope.sol",
+            20,
+            22,
+            logical_request_id="scheduler-request-a",
+        )
+        is None
+    )
+    assert (
+        _request_scoped_candidate_id(
+            "specialist-access",
+            prompt_for(entry_request, path="src/OutsideScope.sol"),
+            _PATH,
+            20,
+            22,
+            logical_request_id="scheduler-request-a",
+        )
+        is None
+    )
+    assert (
+        _request_scoped_candidate_id(
+            "specialist-access",
+            entry_prompt,
+            _PATH,
+            18,
+            22,
+            logical_request_id="scheduler-request-a",
+        )
+        is None
+    )
+
+
+def test_synthetic_candidate_identity_rejects_tampered_delivered_excerpt() -> None:
+    content = "line one\nline two\n"
+    content_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    sentinel = f"MMAUDIT-UNTRUSTED-{content_sha256.upper()}"
+    prompt = "\n".join(
+        [
+            "<REPOSITORY_EXCERPT_METADATA_JSON>",
+            json.dumps(
+                {
+                    "path": _PATH,
+                    "start_line": 1,
+                    "end_line": 2,
+                    "content_sha256": content_sha256,
+                },
+                sort_keys=True,
+            ),
+            "</REPOSITORY_EXCERPT_METADATA_JSON>",
+            f"-----BEGIN {sentinel}-----",
+            f"{content}tampered",
+            f"-----END {sentinel}-----",
+        ]
+    )
+
+    with pytest.raises(AssertionError, match="hash differs"):
+        _request_scoped_candidate_id(
+            "specialist-access",
+            prompt,
+            _PATH,
+            1,
+            2,
+            logical_request_id="scheduler-request-a",
+        )
 
 
 def test_model_review_schema_requires_explicit_critical_classification(

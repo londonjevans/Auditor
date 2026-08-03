@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from mmaudit.agents.base import ValidatedAgentResult, load_prompt
+from mmaudit.agents.base import (
+    AgentRequestProtocol,
+    ValidatedAgentResult,
+    build_agent_request_protocol,
+)
 from mmaudit.agents.specialists import SPECIALIST_ROLE_REGISTRY
 from mmaudit.config import AuditConfig
 from mmaudit.models.openrouter import OpenRouterClient, OpenRouterSchemaError
@@ -19,32 +23,47 @@ class InvariantReviewAgent:
         self.config = config
         self.client = client
 
-    async def run(self, context: ContextPackage) -> InvariantReviewBatch:
-        return (await self.run_with_evidence(context)).value
+    @property
+    def request_protocol(self) -> AgentRequestProtocol:
+        definition = SPECIALIST_ROLE_REGISTRY[self.role]
+        return build_agent_request_protocol(
+            prompt_file="invariant_review.md",
+            schema_name=definition.effective_schema_name(),
+            response_model=InvariantReviewBatch,
+            role_contract=definition.prompt_contract(),
+        )
+
+    async def run(
+        self,
+        context: ContextPackage,
+        *,
+        logical_request_id: str | None = None,
+    ) -> InvariantReviewBatch:
+        return (
+            await self.run_with_evidence(
+                context,
+                logical_request_id=logical_request_id,
+            )
+        ).value
 
     async def run_with_evidence(
         self,
         context: ContextPackage,
+        *,
+        logical_request_id: str | None = None,
     ) -> ValidatedAgentResult[InvariantReviewBatch]:
         configured = self.config.models.role(self.role)
-        definition = SPECIALIST_ROLE_REGISTRY[self.role]
         request_role = f"specialist:{self.role}"
+        protocol = self.request_protocol
         completion = await self.client.complete_with_evidence(
             role=request_role,
             models=[configured.primary, *configured.fallbacks],
-            system_prompt="\n\n".join(
-                (
-                    load_prompt("shared_security_rules.md"),
-                    load_prompt("invariant_review.md"),
-                    "<ROLE_CONTRACT_JSON>",
-                    definition.prompt_contract(),
-                    "</ROLE_CONTRACT_JSON>",
-                )
-            ),
+            system_prompt=protocol.system_prompt,
             user_prompt=render_context(context),
             context_package=context,
-            response_model=InvariantReviewBatch,
-            schema_name=definition.effective_schema_name(),
+            response_model=protocol.response_model,
+            schema_name=protocol.schema_name,
+            logical_request_id=logical_request_id,
         )
         response = completion.value
         existing_ids = {
@@ -66,4 +85,5 @@ class InvariantReviewAgent:
         return ValidatedAgentResult(
             value=response,
             completion_usage=completion.usage_record,
+            raw_response=response,
         )

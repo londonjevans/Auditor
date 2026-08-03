@@ -311,7 +311,22 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Acceptance criteria:** Every request/result has stable pass/shard identity and
   durable resume state; incomplete mandatory passes cannot be represented complete.
 - **Dependencies:** `V3-SHARD-001`.
-- **Status:** `QUEUED`
+- **Status:** `COMPLETE`
+- **Evidence:** All seven typed passes have stable request, shard, candidate, activation, output,
+  and durable-journal identity. Exact completed/partial resume, crash uncertainty, binding drift,
+  privacy/cost custody, mandatory-pass failure, retained-journal reconstruction, report/manifest
+  serialization, and CLI tamper rejection pass. Paired local cross-shard accounting fixtures
+  distinguish the unsafe condition from the safe implementation. The final production regression
+  binds overlapping formal counterexample evidence before pass-three activation and proves the old
+  ordering would fail. The scheduler integration file passed `30` tests; the final local-socket
+  full suite passed `4401` tests with `11` explicit external-prerequisite skips in `1299.39s`.
+  Ruff format/check, strict mypy over `165` source files, release schemas, CLI interfaces, diff,
+  secret, and artifact hygiene passed.
+- **Honest limitation:** Model-pass execution is deterministic fake-provider evidence. Real
+  multi-lineage execution remains provisional until the qualification and real-provider tickets;
+  no MOCK result receives REAL review or maximum-assurance credit.
+- **Next action:** None; checkpoint and continue with authoritative execution-order ticket
+  `V3-FORKSUITE-001`.
 
 ## V3-TRUNCATION-001 — Preserve and reshard truncated responses
 
@@ -330,9 +345,18 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   feasibility before paid work.
 - **Acceptance criteria:** Critical surfaces receive the configured independent
   substantive reviews; missing mandatory coverage blocks completion; no exact
-  all-surface response requirement makes the gate impossible.
+  all-surface response requirement makes the gate impossible. Preserve the hard
+  floor of 24 distinct substantive specialist responsibilities while making at
+  least 24 candidate-independent responsibilities executable on a clean target,
+  or adopt another non-vacuous policy that still executes at least 24 distinct
+  responsibilities. Conditional absence, repeated calls, aliases, and retries do
+  not count as responsibilities.
 - **Dependencies:** `V3-TRUNCATION-001`.
 - **Status:** `QUEUED`
+- **Current action:** Design and test the candidate-independent responsibility
+  portfolio so a no-candidate maximum-assurance run can satisfy the existing 24
+  responsibility floor without lowering it or crediting unexecuted conditional
+  work.
 
 ## V3-CONSENSUS-001 — Independent cross-examination and adjudication
 
@@ -719,7 +743,8 @@ are invisible to source review by construction.
 - **Files expected to change:** `config/models.maximum-assurance.toml`,
   `src/mmaudit/models/qualification.py`, `src/mmaudit/models/qualification_workflow.py`,
   benchmark corpus, regressions.
-- **Dependencies:** `V3-TOKENS-001`. Must precede `V3-QUALIFY-001`.
+- **Dependencies:** `V3-TOKENS-001`.
+- **Unblocks:** `V3-QUALIFY-001`, which must not begin before this completes.
 - **Status:** `PARTIAL`
 - **Starting evidence:** The committed policy still requires `1.0` on every one of seventeen
   dimensions and an overall `1.0`, while the qualification conclusion has no role-scoped
@@ -1398,6 +1423,199 @@ are invisible to source review by construction.
   a host path. It remains fail closed and is an explicit acceptance item of `V3-HARDHAT-001`.
 - **Next action:** Checkpoint this ticket, then begin `V3-HARDHAT-001`.
 
+## V3-OBJECTIVE-001 — Commit the hash-verified product objective into the repository
+
+- **Priority:** High and nearly free. Do it at the next clean boundary.
+- **Objective:** Place the authoritative v3 product objective under version control so the
+  requirement this queue implements is readable inside the repository.
+- **Why this is needed.** The queue, worklog, and `review_traceability.json` all reference the
+  objective only as SHA-256 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
+  Hashing every non-ignored file in the repository returns no match, so the document is not
+  present. The hash provides integrity for a copy someone already holds; it conveys no
+  content. Consequences:
+  - Nobody reading the repository can determine what the product is required to become, and
+    no reviewer can check whether these tickets are *sufficient* to deliver it — only that
+    they are internally consistent.
+  - The definition of the work exists in exactly one place outside version control. If it is
+    lost, the hash becomes unverifiable and the queue loses its authority.
+  - The worklog records the objective being reread in bounded chunks and hash-verified at
+    every autorun resume, so the executing agent demonstrably holds the content. This ticket
+    is therefore a commit, not an authoring task.
+- **Acceptance criteria:**
+  - The complete objective is committed verbatim, byte-for-byte, at a stable repository path.
+  - Its committed SHA-256 is recomputed and equals
+    `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`. A mismatch fails the
+    ticket; it must not be "fixed" by editing the document or by updating the expected hash.
+  - No credential, secret path, private prompt, or provider completion is introduced. If the
+    source document contains any, the ticket is `BLOCKED_SAFETY` and the operator is asked to
+    supply a redacted variant together with its own hash — the original hash reference is then
+    superseded explicitly and never silently.
+  - The queue, worklog, and `review_traceability.json` references are updated to name the
+    committed path alongside the hash.
+  - A regression asserts the committed file still matches the recorded hash, so silent drift
+    is impossible.
+- **Explicitly out of scope:** reconstructing, summarising, paraphrasing, or regenerating the
+  objective. Only the exact held document is acceptable. A reconstruction would fail the hash
+  and would assert authority it does not have.
+- **Files expected to change:** new objective document, `docs/remediation/v3/work_queue.md`,
+  `docs/remediation/v3/worklog.md`, `docs/remediation/v3/review_traceability.json`, regression.
+- **Dependencies:** None.
+- **Unblocks:** `V3-TARGETSPEC-001`.
+- **Status:** `QUEUED`
+
+## V3-TARGETSPEC-001 — Reconcile the product vision with the objective and correct the README
+
+- **Objective:** Establish one coherent, non-contradictory statement of the target state, and
+  bring the README into agreement with what the engine actually does.
+- **Status change rationale.** This ticket originally asked for a target-state specification to
+  be written. The operator supplied
+  `product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.md` on 2026-08-02 — 1,812 lines covering
+  scope, principles, client journey, architecture, model intelligence, audit orchestration,
+  finding lifecycle, coverage semantics, deliverables, benchmarking, release gates, permitted
+  and forbidden claims, and a completion definition. The authoring work is substantially done.
+  What remains is reconciliation, four commercial gaps, and the README correction.
+- **Defect 1 — two authoritative documents, no precedence rule.** The product vision hashes to
+  `77e5ab93225377e86e4ad08f09775deaac86b927a6817b8dca9eaa6f81b8a2a6`. The objective this queue
+  implements hashes to `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
+  They are different documents, and the vision states it should guide "product design, system
+  architecture, implementation priorities, testing, release gates, marketing claims, and
+  independent evaluation" — overlapping the objective's role. Nothing states which governs on
+  conflict. Resolve explicitly in the vision document itself.
+- **Defect 2 — commercial gaps.** Measured by keyword presence in the vision document:
+  - Turnaround and SLA: absent. Section 4 claims superiority in "time to completion" without
+    defining it. A self-serve product must state expected turnaround, concurrency, and what
+    happens when a run exceeds it.
+  - Product tiers: never enumerated, although section 23 requires that "every product tier must
+    state exactly what it includes".
+  - Liability posture: one incidental mention; insurance and indemnity absent. This constrains
+    what section 26 permits the product to claim and must be settled before the first sale.
+  - Incident policy: absent. There is no stated response for an audited protocol later being
+    exploited — post-mortem, corpus addition, client and public disclosure. It is foreseeable
+    and should be decided in advance rather than under pressure.
+  - Optional human review: absent. The vision commits to completion "without an internal
+    operator", which implicitly forecloses a premium expert-review tier. Record whether that
+    exclusion is deliberate.
+- **Defect 3 — unacknowledged tension.** Section 9.6 requires "every qualified, policy-eligible
+  Tier-A frontier model"; section 23 requires never silently reducing model coverage to fit
+  cost and failing preflight when quality cannot fit the approved budget. Together these mean
+  an under-funded audit fails rather than degrades. That is defensible and should be stated as
+  a deliberate choice, since it determines the tier definitions section 23 demands.
+- **Defect 4 — ingestion paths conflated.** Sections 3 and 7.2 offer "connect a Git provider"
+  and "upload an immutable repository snapshot" as equivalent. A read token into a client's
+  Git provider is a materially larger attack surface than an uploaded snapshot. Section 21
+  treats the auditor as a high-risk system but does not separate these. Give each its own
+  threat treatment, or defer provider connection to a later phase.
+- **Defect 5 — the README contradicts the built system.** It contains no mention of sharding,
+  the seven-pass scheduler, execution-originated findings, repository-suite fork execution,
+  assertion-strength measurement, or token budgets. It still documents "total role-context
+  allocations to 2 MB" as a design default; that is the depleting shared context pool removed
+  by `V3-TOKENS-001` and `V3-OMISSION-001` — a corrected defect presented as intended
+  behaviour. `docs/models/model_selection.md` still presents the superseded twelve-model
+  roster as the selection.
+- **Acceptance criteria:**
+  - The vision document states its precedence relationship to the committed objective, and the
+    objective's hash is referenced from it.
+  - The five commercial gaps are either filled or explicitly recorded as deliberate deferrals
+    with a named decision owner.
+  - The coverage-versus-cost tension is stated as a deliberate choice, and product tiers are
+    enumerated with what each includes.
+  - Git-provider connection and snapshot upload have distinct threat treatments, or provider
+    connection is deferred with that stated.
+  - The README describes current capability accurately: stale defaults removed, built
+    capabilities named, and no corrected defect presented as design.
+    `docs/models/model_selection.md` is refreshed or marked superseded.
+  - Capability markings derive from ticket status rather than assertion, and a regression fails
+    when a marking disagrees with its ticket status, so the documents cannot drift again.
+- **Dependencies:** `V3-OBJECTIVE-001`.
+- **Status:** `QUEUED`
+
+## V3-POLICYELIG-001 — Provider terms and jurisdictional eligibility for model use
+
+- **Objective:** Establish and enforce that a model and endpoint may be used for paid,
+  customer-facing audits of client source, on legal and contractual grounds, before it is
+  selectable.
+- **Why this is needed.** Section 9.2 of the product vision requires current evidence that the
+  provider's terms permit the intended defensive security analysis, that commercial
+  customer-facing use is permitted, that source-code analysis is permitted, and that both the
+  client's and Corrovera's entity and location are permitted. **No ticket in this queue covers
+  any of it.** The implemented eligibility gates are technical and privacy-based — ZDR,
+  data-collection denial, retention policy, structured output, endpoint pinning. A model can
+  satisfy every one of those and still be contractually ineligible for commercial resale of
+  its output, or unavailable to a client in a particular jurisdiction.
+- **Acceptance criteria:**
+  - Policy eligibility is a distinct, recorded, typed gate, separate from privacy and technical
+    eligibility, and evaluated per exact model and provider endpoint.
+  - Each eligibility determination carries its evidence, source, date, and reviewer, and
+    expires; stale determinations fail closed rather than persisting indefinitely.
+  - An ineligible model is excluded from production selection with a recorded reason, and the
+    exclusion is distinguishable from technical unavailability in every artifact.
+  - Client-side constraints — the client's own jurisdiction or contractual restrictions on
+    which providers may process their source — are representable per audit, not only globally.
+  - The determination is an operator and legal judgment. It must not be inferred from catalogue
+    metadata, and no automated refresh may mark a model policy-eligible on its own; a refresh
+    may only flag that a determination is missing or expired.
+  - The daily refresh in `V3-MODELREFRESH-001` surfaces provider policy changes as drift
+    requiring re-determination.
+- **Dependencies:** None for the mechanism. The determinations themselves are an operator and
+  legal task and can proceed alongside.
+- **Unblocks:** honest use of `V3-QUALIFY-001` output in a commercial, customer-facing audit.
+- **Status:** `QUEUED`
+
+
+## V3-TOOLDIAG-002 — Complete deterministic scanner execution on macOS
+
+- **Priority:** Blocking the deterministic product. `V3-TOOLDIAG-001` fixed tool exec and
+  version bounding — `semgrep 1.172.0` now reports `success` and every version string is clean
+  and host-path-free. Four of five scanners still fail, and two of those are product defects,
+  so a real deterministic audit still produces zero static-analyzer findings.
+- **Objective:** Take the remaining scanners from executing-but-failing to producing validated
+  machine output, and stop classifying a not-applicable scanner as failed.
+- **Verified diagnoses.** Reproduced on the operator host on 2026-08-02 against
+  `tests/fixtures/solidity/realistic_scale/solidity_005k`. Retained stderr under
+  `private/scanner-output/<tool>/<tool>.stderr.txt` made each one identifiable, which is the
+  `V3-TOOLDIAG-001` retention behaviour working as intended.
+  - **`gitleaks` — product defect, same class as the original sandbox bug.**
+    `unable to load gitleaks config, err: open .../src/mmaudit/scanners/rules/gitleaks.toml:
+    operation not permitted`. The profile now grants resolved toolchain prefixes but not
+    mmaudit's own bundled rules directory. The rules ship inside the installed package, so
+    this fails for a `site-packages` install exactly as it does for an editable one. Grant
+    read access to the resolved bundled-rules path the same way toolchain prefixes are
+    granted; do not widen the profile beyond that.
+  - **`osv` — product defect, misclassification.** `No package sources found` with exit `128`
+    on a Solidity-only repository containing no package manifests. That is correct scanner
+    behaviour and a correct result, but mmaudit records it as `failed`. A scanner reporting
+    that it has nothing in scope must be `skipped` or not-applicable, never `failed`, so it
+    neither alarms a client nor implies a broken toolchain.
+  - **`trivy` — operator prerequisite, not a defect.**
+    `[vulndb] The first run cannot skip downloading DB`. Trivy runs offline by design and has
+    no local database yet. Record the exact one-time preparation command in
+    `operator_prerequisites.md`, and report the condition as an explicit unmet prerequisite
+    rather than a generic non-zero exit.
+  - **`slither` — undiagnosed, and the diagnostic gap is itself the defect.** Exit `1` with a
+    completely empty stderr and zero bytes of output. Investigate — the likely candidates are
+    solc resolution, `solc-select` writing under the private `HOME`, or Foundry remappings —
+    but regardless of cause, a tool that fails while emitting nothing must not be reported as
+    a bare exit code. Capture and classify the silent-failure case.
+- **Acceptance criteria:**
+  - `gitleaks` loads its bundled rules and produces validated machine output under isolation.
+  - A scanner with nothing in scope is classified not-applicable, distinctly from failure, in
+    Markdown, JSON, and SARIF, and does not count against the analysis floor as a failure.
+  - An unmet external prerequisite, such as a missing vulnerability database, is its own typed
+    status naming the exact preparation step.
+  - A tool that exits non-zero with empty output receives a distinct diagnosis rather than a
+    bare exit code, and the private stderr path is named in the report so an operator can find
+    it without searching.
+  - At least `semgrep`, `gitleaks`, and `slither` produce validated non-empty machine output
+    against a committed Solidity fixture under the real backend, asserted by an end-to-end
+    regression on macOS. The suite currently passes with every scanner failing, which is how
+    this survived `V3-TOOLDIAG-001`.
+- **Files expected to change:** `src/mmaudit/solidity/reproduction.py`,
+  `src/mmaudit/scanners/base.py`, `src/mmaudit/scanners/gitleaks.py`,
+  `src/mmaudit/scanners/osv.py`, `src/mmaudit/scanners/trivy.py`,
+  `src/mmaudit/scanners/slither.py`, reporting, `operator_prerequisites.md`, regressions.
+- **Dependencies:** `V3-TOOLDIAG-001` (`COMPLETE`).
+- **Status:** `QUEUED`
+
 ## V3-BOOTSTRAP-001 — Separate declared model identity from measured model quality
 
 - **Priority:** Blocking the entire model track. This is the shared root cause of three
@@ -1447,8 +1665,9 @@ are invisible to source review by construction.
 - **Files expected to change:** `src/mmaudit/config.py`, `src/mmaudit/benchmark/models.py`,
   `src/mmaudit/models/registry.py`, `src/mmaudit/models/qualification_workflow.py`,
   configuration schema and template, regressions.
-- **Dependencies:** None. It unblocks `V3-CALIBRATE-001`, `V3-LINEAGE-001`, and
-  `V3-MODELREFRESH-001`, and transitively `V3-QUALIFY-001` and every real-audit ticket.
+- **Dependencies:** None.
+- **Unblocks:** `V3-CALIBRATE-001`, `V3-LINEAGE-001`, `V3-MODELREFRESH-001`, and transitively
+  `V3-QUALIFY-001` and every real-audit ticket.
 - **Status:** `QUEUED`
 
 ## V3-MODELREFRESH-001 — Daily catalogue refresh and candidate drift detection
@@ -1501,8 +1720,11 @@ are invisible to source review by construction.
 - **Files expected to change:** `src/mmaudit/models/discovery.py`,
   `src/mmaudit/models/registry.py`, `src/mmaudit/models/qualification_workflow.py`,
   `src/mmaudit/cli.py`, drift-report schema, `.github/workflows/`, documentation, regressions.
-- **Dependencies:** `V3-CALIBRATE-001` and `V3-LINEAGE-001` for the promotion path; the
-  discovery, diffing, and alerting portion can land before either and is useful immediately.
+- **Dependencies:** None for the discovery, diffing, and alerting scope, which is the portion
+  scheduled at execution-order step 8 and is useful immediately.
+- **Dependencies for completion:** `V3-CALIBRATE-001` and `V3-LINEAGE-001`. Only the promotion
+  path — moving a discovered model to selectable — requires them. Expect this ticket to remain
+  `PARTIAL` from step 8 until step 10.
 - **Status:** `PARTIAL`
 - **Starting scope:** Implement and validate only discovery, immutable snapshotting, deterministic
   drift classification, staleness/production blocking, and the scheduled provider-free test path
@@ -1613,74 +1835,119 @@ are invisible to source review by construction.
   wait.
 - **Status:** `QUEUED`
 
-## Revised sequencing
+## Execution order
 
-Three tracks are largely independent and should not be run as one strict chain. The
-execution-evidence track needs no model qualification and no provider spend. The benchmark
-track needs no sharding. Only the model track is gated on qualification. Running them
-sequentially adds months for no engineering reason; the one-ticket-at-a-time discipline
-still applies within a track.
+**This supersedes the previous three-track layout.** That structure described tracks as
+independent and warned against running them "as one strict chain". That was written for
+parallel workers. Execution is a **single serial agent taking one ticket at a time**, so the
+tracks were labels on one queue with a `Next action` marker parked in Track 1 — which is why
+Track 2 was never entered and `V3-BOOTSTRAP-001` was passed over twice. Track names are kept
+below only to show what gates what. The numbered order is authoritative.
 
-**Track 1 — engine and execution evidence**
+Ordering principle: **small unblockers before the heavy work whose validation depends on
+them.** A component built before the capability it orchestrates can only be proven against
+the fake provider, which is the `PROVEN_MOCK_ONLY` condition this remediation exists to
+remove.
 
-**Next action: `V3-SCHEDULER-001`.** `V3-SHARD-001` and the remaining scale-fixture acceptance
-item are complete. `V3-HARDHAT-001` completed every currently safe local component but remains
-`PARTIAL`: its real Hardhat/Mocha, image-identity, rootless-container, supervision, and per-test
-relay integrations are explicit technical blockers and receive no execution credit. `V3-CI-001`
-likewise has no independent safe code portion remaining while its hosted real stack is blocked.
+This order was checked against the declared dependency graph: no cycles, no omitted ticket,
+no duplicate, and no ticket scheduled before a declared dependency completes.
 
-1. `V3-TOKENS-001` — `COMPLETE`.
-2. `V3-FLOOR-001` — `COMPLETE`. Verified independently: the previously false-clean
-   scanner-only run now exits `6`, reports `RUN STATUS: INCOMPLETE`, and names the failed
-   `minimum_analysis_floor` gate.
-3. `V3-FORKSUITE-001` — `PARTIAL`; Hardhat execution blocked pending `V3-HARDHAT-001`.
-4. `V3-OMISSION-001` — `COMPLETE`, with `V3-FIXTURE-001` `PARTIAL`. Verified independently:
-   a 15,551-line Solidity target now delivers 100 per cent of its source to a specialist
-   package, and the omission ledger fell from 143,479 bytes across 536 records to a single
-   970-byte aggregate.
-5. `V3-FORKDIFF-001`, `V3-EXECORIGIN-001`, and `V3-TOOLDIAG-001` — `COMPLETE`. Then
-   `V3-HARDHAT-001` to unblock the Hardhat share of the market.
-6. `V3-CI-001`.
-7. `V3-SHARD-001`, `V3-SCHEDULER-001`, `V3-TRUNCATION-001`, `V3-COVERAGE-001`,
-   `V3-TAXONOMY-001`, `V3-CONSENSUS-001`, `V3-REPORT-001`, `V3-SCOPE-001`.
-8. `V3-RETRIEVAL-001`.
+### Phase 1 — finish in flight, then unblock
 
-**Track 2 — model selection and quality**
+1. `V3-SCHEDULER-001` — complete. Note for the record that its
+   passes are all model passes and its multi-lineage validation cannot be exercised for real
+   until Phase 3, so treat fake-provider coverage as provisional and revisit after
+   `V3-QUALIFY-001`.
+2. `V3-FORKSUITE-001` — in progress; complete the Foundry path. The Hardhat subtask stays
+   `BLOCKED_TECHNICAL` behind `V3-HARDHAT-001` and its operator container prerequisite.
+3. `V3-OBJECTIVE-001` — commit the objective document. Nearly free, and until it lands no
+   reviewer can check whether this queue is sufficient to deliver the requirement, only that
+   it is internally consistent.
+4. `V3-TARGETSPEC-001` — reconcile the supplied product vision with the objective, define
+   precedence, close the commercial gaps, and correct the README.
+5. `V3-BOOTSTRAP-001` — **highest leverage remaining ticket.** Small, no dependencies, and
+   until it lands no model can be benchmarked, `approved_model_lineages` cannot be populated,
+   and the recorded operator lineage authorisation cannot take effect.
+6. `V3-TOOLDIAG-002` — small; without it a real audit still returns zero static-analyzer
+   findings.
+7. `V3-FIXTURE-001` — close-out only. Its sole remaining gap was that `V3-SHARD-001` had to
+   consume the scale corpus; `V3-SHARD-001` is `COMPLETE` and its evidence records the
+   4,952/15,116/35,444-line corpus passing deterministic sharding. Verify and mark `COMPLETE`.
 
-**Blocked at the root by `V3-BOOTSTRAP-001`.** Three tickets in this track are `PARTIAL` with
-next actions that reference each other in a cycle. The cause is a schema dependency: a model
-must already have a measured quality score to be benchmarked, and only benchmarking produces
-one. Take `V3-BOOTSTRAP-001` before any further work here; the other tickets cannot progress
-regardless of effort spent on them.
+### Phase 2 — the shippable deterministic product
 
-1. `V3-MODELREFRESH-001` (discovery/diff portion) then `V3-LINEAGE-001`. Re-run discovery
-   first: the frozen candidate set predates the removal of the frontier-excluding catalogue
-   filter, so reviewing the lineages of twelve obsolete mid-tier models would waste the
-   review. Discover the current set, then review those lineages once.
-   See `docs/remediation/v3/model_selection_candidates.md`.
-2. `V3-EFFORT-001` — small, and likely the largest quality gain per line of code available.
-3. `V3-CALIBRATE-001`, then `V3-QUALIFY-001`.
-4. `V3-SINGLE-AUDIT-001`, `V3-MULTI-AUDIT-001`.
-5. `V3-ENSEMBLE-001` — settle the specialist architecture on measured evidence before
-   committing to its cost and latency.
+8. `V3-REPORT-001` — client-facing deliverable. Needed by every product variant.
+9. `V3-SCOPE-001` — claims match capability.
 
-**Track 3 — evidence, claims, and product**
+At this point the deterministic offering is complete and saleable: pinned-fork suite
+execution, local-versus-fork divergence, execution-originated findings, audited-suite
+coverage and assertion strength, honest fail-closed status, and full evidence — with no
+model, no qualification, and no provider spend anywhere in the path.
 
-1. `V3-TIMESPLIT-001`, then `V3-HUMANCMP-001`. These gate every quality claim and are the
-   binding constraint on the commercial objective, not on the engineering.
-2. `V3-STABILITY-001`.
-3. Remaining existing tickets through `V3-RELEASE-001`.
-4. `V3-QUOTE-001`, `V3-LIFECYCLE-001`, `V3-REVERIFY-001`.
-5. `V3-AUTONOMY-001` — the gating inventory in its first acceptance criterion is useful
-   immediately and should be produced early, even though the managed profile itself lands
-   late. It is what tells you how far the product actually is from self-serve.
-5. `V3-INTAKE-001`, `V3-CONSENT-001`, `V3-SERVICE-001`.
+### Phase 3 — real models
 
-**Deferrals.** `V3-BYTECODE-001` and the parts of `V3-CERTIFICATE-001` that bind toolchain
-and isolation evidence lose nothing by moving after `V3-MULTI-AUDIT-001`. The evidence
-apparatus is a genuine differentiator, but its marginal value is close to zero until the
-engine demonstrably finds real defects. Effort spent proving in detail that the engine found
-nothing is effort not spent making it find something.
+10. `V3-MODELREFRESH-001` — **discovery, diff, and alerting portion only.** Its declared
+   dependencies cover the promotion path; the ticket states the discovery portion "can land
+   before either and is useful immediately". Expect it to stay `PARTIAL` until step 10.
+11. `V3-LINEAGE-001` — join the recorded operator authorisation to the refreshed candidate set.
+12. `V3-CALIBRATE-001` — reachable thresholds. Must precede qualification: the frozen
+    all-dimension `1.0` policy would otherwise reject every model regardless of capability,
+    after spending real budget. Close the `V3-MODELREFRESH-001` promotion path here.
+13. `V3-POLICYELIG-001` — provider terms and jurisdictional eligibility. A model can pass
+   every privacy and technical gate and still be contractually ineligible for commercial use.
+14. `V3-QUALIFY-001` — first qualified models.
+15. `V3-SINGLE-AUDIT-001` — **first real audit.** `completed_real_audits` becomes non-zero.
+
+### Phase 4 — orchestration hardening, now provable against real models
+
+16. `V3-TRUNCATION-001`
+17. `V3-COVERAGE-001`
+18. `V3-CONSENSUS-001` — must precede the multi-model audit, since it is what prevents a
+    single verifier suppressing a candidate group.
+19. `V3-MULTI-AUDIT-001`
+20. `V3-ENSEMBLE-001` — settle whether the specialist ensemble beats concentrated compute
+    before committing to its cost and latency.
+21. `V3-TAXONOMY-001`
+22. `V3-RETRIEVAL-001`
+23. `V3-MUTATION-001`
+
+### Phase 5 — evidence and claims
+
+24. `V3-TIMESPLIT-001`
+25. `V3-HUMANCMP-001` — the only ticket that can ever substantiate a superiority claim.
+26. `V3-STABILITY-001`
+
+### Phase 6 — release
+
+27. `V3-BYTECODE-001`
+28. `V3-ENGINES-001`
+29. `V3-BENCHMARK-001`
+30. `V3-CERTIFICATE-001`
+31. `V3-ADR-001`
+32. `V3-RELEASE-001`
+
+### Phase 7 — operator-prerequisite and product work
+
+33. `V3-QUOTE-001`
+34. `V3-HARDHAT-001` — resumes only when the digest-pinned rootless image exists.
+35. `V3-CI-001`
+36. `V3-LIFECYCLE-001`
+37. `V3-REVERIFY-001`
+38. `V3-INTAKE-001`
+39. `V3-CONSENT-001`
+40. `V3-SERVICE-001`
+41. `V3-AUTONOMY-001`
+
+### Standing instructions
+
+- Re-check `PARTIAL` tickets whenever a ticket completes. `PARTIAL` records a blocker at the
+  time it was set and nothing re-evaluates it; `V3-FIXTURE-001` sat blocked on an already
+  satisfied condition. A cleared blocker is not visible from inside the blocked ticket.
+- Read the queue whole, not ticket by ticket, at each phase boundary. Locally correct
+  `PARTIAL` statuses concealed a model-track deadlock that no single ticket could see.
+- A `Dependencies:` field states only what must complete first. Anything a ticket enables
+  belongs in a separate `Unblocks:` field, never in the dependency sentence.
+
 
 ## Operator decisions required
 

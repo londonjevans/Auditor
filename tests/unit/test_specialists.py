@@ -24,6 +24,7 @@ from mmaudit.models.schemas import (
     ContextExecutionEvidence,
     ContextPackage,
     ContextRequestEvidence,
+    ExecutionEvidenceKind,
     Location,
     ModelReviewSurfaceKind,
     ModelSurfaceReviewRequest,
@@ -107,6 +108,7 @@ def _usage(
     request_id: str,
     role: str,
     context: ContextPackage,
+    execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.REAL,
 ) -> UsageRecord:
     rendered = render_context(context).encode("utf-8")
     context_evidence = ContextRequestEvidence.build(
@@ -126,6 +128,7 @@ def _usage(
     return UsageRecord(
         request_id=request_id,
         role=role,
+        execution_evidence=execution_evidence,
         requested_model="alpha/atlas-secure",
         model_family="alpha",
         timestamp=datetime(2026, 7, 30, tzinfo=UTC),
@@ -145,8 +148,8 @@ def _accepted(
     *,
     specialist_role: str = "access_control",
     outcome_kind: SpecialistAcceptedOutcomeKind = (SpecialistAcceptedOutcomeKind.CANDIDATE_REVIEW),
-    requested_surface_count: int = 0,
-    surface_review_artifact_sha256: str | None = None,
+    requested_surface_count: int = 1,
+    surface_review_artifact_sha256: str | None = "c" * 64,
 ) -> SpecialistAcceptedOutcome:
     context_evidence_sha256 = usage.routing["context_request_evidence_sha256"]
     assert isinstance(context_evidence_sha256, str)
@@ -304,6 +307,156 @@ def test_specialist_execution_records_configured_cap_and_every_actual_context(
         first_context.bytes_used,
         second_context.bytes_used,
     ]
+    assert record.status is SpecialistExecutionStatus.NOT_SCHEDULED
+    assert record.execution_evidence is ExecutionEvidenceKind.UNVERIFIED
+
+
+def test_mock_multi_shard_specialist_execution_is_observed_without_real_credit(
+    config_factory,
+    monkeypatch,
+) -> None:
+    config = config_factory(
+        repository={"max_total_context_bytes": 2_000_000},
+        token_budgets={"maximum_source_tokens_per_request": 200_000},
+        models={
+            "specialists": {
+                "access_control": {
+                    "primary": "alpha/atlas-secure",
+                    "fallbacks": [],
+                }
+            }
+        },
+    )
+    contexts = [
+        _context(
+            role="specialist:access_control",
+            byte_budget=321_000,
+            source="contract First {}",
+            path="First.sol",
+            requested_model_surfaces=(_surface_request(),),
+        ),
+        _context(
+            role="specialist:access_control",
+            byte_budget=222_000,
+            source="contract Second {}",
+            path="Second.sol",
+            requested_model_surfaces=(_surface_request(),),
+        ),
+    ]
+    usage = [
+        _usage(
+            request_id=f"mock-shard-{index}",
+            role="specialist:access_control",
+            context=context,
+            execution_evidence=ExecutionEvidenceKind.MOCK,
+        )
+        for index, context in enumerate(contexts, start=1)
+    ]
+    monkeypatch.setattr(specialists_module, "is_creditable_usage_record", lambda _record: True)
+
+    record = next(
+        item
+        for item in build_specialist_execution_records(
+            config,
+            usage_records=usage,
+            contexts=contexts,
+            accepted_outcomes=[_accepted(item) for item in usage],
+        )
+        if item.role == "access_control"
+    )
+
+    assert record.status is SpecialistExecutionStatus.COMPLETED
+    assert record.execution_evidence is ExecutionEvidenceKind.MOCK
+    assert record.successful_requests == 2
+    assert record.failed_requests == 0
+    assert record.context_budget_bytes is None
+    assert record.context_bytes_used is None
+    assert len(record.contexts) == 2
+    assert completed_specialist_roles([record]) == set()
+
+
+def test_specialist_execution_rejects_mixed_real_and_mock_role_evidence(
+    config_factory,
+) -> None:
+    config = config_factory(
+        models={
+            "specialists": {
+                "access_control": {
+                    "primary": "alpha/atlas-secure",
+                    "fallbacks": [],
+                }
+            }
+        }
+    )
+    context = _context(role="specialist:access_control")
+    usage = [
+        _usage(
+            request_id="real-shard",
+            role="specialist:access_control",
+            context=context,
+        ),
+        _usage(
+            request_id="mock-shard",
+            role="specialist:access_control",
+            context=context,
+            execution_evidence=ExecutionEvidenceKind.MOCK,
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="mixes incompatible execution evidence"):
+        build_specialist_execution_records(
+            config,
+            usage_records=usage,
+            contexts=[context],
+        )
+
+
+def test_scheduler_failed_request_cannot_receive_descriptive_completion(
+    config_factory,
+    monkeypatch,
+) -> None:
+    config = config_factory(
+        models={
+            "specialists": {
+                "access_control": {
+                    "primary": "alpha/atlas-secure",
+                    "fallbacks": [],
+                }
+            }
+        }
+    )
+    context = _context(role="specialist:access_control", source="contract Synthetic {}")
+    succeeded = _usage(
+        request_id="scheduler-succeeded",
+        role="specialist:access_control",
+        context=context,
+        execution_evidence=ExecutionEvidenceKind.MOCK,
+    )
+    failed = _usage(
+        request_id="scheduler-failed",
+        role="specialist:access_control",
+        context=context,
+        execution_evidence=ExecutionEvidenceKind.MOCK,
+    )
+    monkeypatch.setattr(specialists_module, "is_creditable_usage_record", lambda _record: True)
+
+    record = next(
+        item
+        for item in build_specialist_execution_records(
+            config,
+            usage_records=[succeeded, failed],
+            contexts=[context],
+            accepted_outcomes=[_accepted(succeeded)],
+            structurally_successful_request_ids={succeeded.request_id},
+        )
+        if item.role == "access_control"
+    )
+
+    assert record.status is SpecialistExecutionStatus.PARTIAL
+    assert record.execution_evidence is ExecutionEvidenceKind.MOCK
+    assert record.successful_request_ids == (succeeded.request_id,)
+    assert record.failed_request_ids == (failed.request_id,)
+    assert completed_specialist_roles([record]) == set()
 
 
 def test_specialist_execution_rejects_package_above_configured_limit(
@@ -457,20 +610,7 @@ def test_source_free_investigator_completion_receives_no_runtime_credit(
     assert completed_specialist_roles([relabeled]) == set()
 
 
-def test_source_backed_zero_surface_investigator_receives_no_runtime_credit(
-    config_factory,
-    monkeypatch,
-) -> None:
-    config = config_factory(
-        models={
-            "specialists": {
-                "access_control": {
-                    "primary": "alpha/atlas-secure",
-                    "fallbacks": [],
-                }
-            }
-        }
-    )
+def test_source_backed_zero_surface_candidate_outcome_is_rejected_during_construction() -> None:
     context = _context(
         role="specialist:access_control",
         source="contract Synthetic {}",
@@ -480,27 +620,16 @@ def test_source_backed_zero_surface_investigator_receives_no_runtime_credit(
         role="specialist:access_control",
         context=context,
     )
-    monkeypatch.setattr(
-        specialists_module,
-        "is_creditable_usage_record",
-        lambda _record: True,
-    )
 
-    record = next(
-        item
-        for item in build_specialist_execution_records(
-            config,
-            usage_records=[usage],
-            contexts=[context],
-            accepted_outcomes=[_accepted(usage)],
+    with pytest.raises(
+        ValidationError,
+        match="candidate-review outcome requires requested surfaces and an accepted artifact",
+    ):
+        _accepted(
+            usage,
+            requested_surface_count=0,
+            surface_review_artifact_sha256=None,
         )
-        if item.role == "access_control"
-    )
-
-    assert record.status is SpecialistExecutionStatus.COMPLETED
-    assert record.successful_request_ids == ("zero-surface-success",)
-    assert record.source_review_creditable_requests == 0
-    assert completed_specialist_roles([record]) == set()
 
 
 def test_raw_provider_success_without_host_accepted_outcome_is_failed(
@@ -711,6 +840,8 @@ def test_specialist_record_rejects_self_hashed_outcome_with_wrong_context_digest
         outcome_kind=accepted.outcome_kind,
         validated_response_sha256=accepted.validated_response_sha256,
         context_request_evidence_sha256="f" * 64,
+        requested_surface_count=accepted.requested_surface_count,
+        surface_review_artifact_sha256=accepted.surface_review_artifact_sha256,
     )
     monkeypatch.setattr(
         specialists_module,

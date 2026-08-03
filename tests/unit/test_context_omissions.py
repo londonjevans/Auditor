@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+import mmaudit.orchestration.context as context_module
 from mmaudit.models.token_planning import (
     CONTEXT_OMISSION_SAMPLE_CAP,
     ContextOmissionCategory,
@@ -184,3 +185,36 @@ def test_context_package_requires_and_enforces_explicit_source_ceiling(
         boolean_payload[field] = True
         with pytest.raises(ValidationError, match="valid integer"):
             type(package).model_validate(boolean_payload)
+
+
+def test_context_inventory_cache_hit_never_invokes_fallback_hashing(
+    vulnerable_repo: Path,
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    discovery = discover_repository(vulnerable_repo, config.repository, IgnoreMatcher())
+    builder = ContextBuilder(
+        discovery=discovery,
+        repository_map=build_repository_map(discovery),
+        repository_config=config.repository,
+        privacy=config.privacy,
+        scanner_findings=[],
+    )
+    assert builder._repository_map.files
+    original = context_module._inventory_item_sha256
+    fallback_calls = 0
+
+    def counted_fallback(item: object) -> str:
+        nonlocal fallback_calls
+        fallback_calls += 1
+        return original(item)
+
+    monkeypatch.setattr(context_module, "_inventory_item_sha256", counted_fallback)
+
+    cached = builder._inventory_snapshot.item_sha256(builder._repository_map.files[0])
+    assert cached
+    assert fallback_calls == 0
+
+    assert builder._inventory_snapshot.item_sha256({"uncached": True})
+    assert fallback_calls == 1

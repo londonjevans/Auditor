@@ -14,7 +14,11 @@ from mmaudit.models.schemas import (
     SoliditySymbolIndex,
 )
 from mmaudit.models.token_planning import ContextOmissionCategory, ContextOmissionReason
-from mmaudit.orchestration.context import ContextBuilder, render_context
+from mmaudit.orchestration.context import (
+    ContextBuilder,
+    _ContextInventorySnapshot,
+    render_context,
+)
 from mmaudit.repository.discovery import discover_repository
 from mmaudit.repository.ignore import IgnoreMatcher
 from mmaudit.repository.mapping import build_repository_map
@@ -319,3 +323,132 @@ def test_context_builder_commits_compacted_isolated_graph_nodes(
     assert all(omission.omitted_item_count == 1 for omission in graph_omissions)
     assert packages[0].solidity_graphs == packages[1].solidity_graphs
     assert _provider_omission_commitment(packages[0]) != _provider_omission_commitment(packages[1])
+
+
+def test_context_inventory_snapshot_is_byte_equivalent_to_legacy_hashing(
+    vulnerable_repo: Path,
+    config_factory,
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    discovery = discover_repository(vulnerable_repo, config.repository, IgnoreMatcher())
+    index = SoliditySymbolIndex(
+        projects=[],
+        entities=[],
+        ast_sources=["SyntheticOrphan.sol"],
+    )
+    graphs = SolidityGraphSet(
+        nodes=[
+            SolidityGraphNode(
+                id="isolated:inventory-equivalence",
+                kind=SolidityGraphNodeKind.UNKNOWN,
+                label="isolated inventory equivalence",
+                path="SyntheticOrphan.sol",
+                start_line=1,
+                end_line=1,
+                source_hash="a" * 64,
+                provenance=SolidityProvenance.COMPILER,
+                confidence=1,
+                transformation="synthetic compiler evidence",
+            )
+        ],
+        edges=[],
+    )
+    builder = ContextBuilder(
+        discovery=discovery,
+        repository_map=build_repository_map(discovery),
+        repository_config=config.repository,
+        privacy=config.privacy,
+        scanner_findings=[],
+        solidity_index=index,
+        solidity_graphs=graphs,
+    )
+
+    cached = builder.build("source_audit")
+    assert builder._inventory_snapshot.entries
+    builder._inventory_snapshot = _ContextInventorySnapshot.empty()
+    uncached = builder.build("source_audit")
+
+    assert cached == uncached
+    assert cached.omissions
+    assert render_context(cached) == render_context(uncached)
+    assert _provider_omission_commitment(cached) == _provider_omission_commitment(uncached)
+
+
+def test_context_inventory_snapshot_isolated_from_caller_mutation(
+    vulnerable_repo: Path,
+    config_factory,
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    discovery = discover_repository(vulnerable_repo, config.repository, IgnoreMatcher())
+    repository_map = build_repository_map(discovery)
+    project = SolidityProjectMetadata(
+        project_type=SolidityProjectType.FOUNDRY,
+        project_root="synthetic-original",
+    )
+    index = SoliditySymbolIndex(
+        projects=[],
+        entities=[],
+        ast_sources=["SyntheticOriginal.sol"],
+    )
+    graphs = SolidityGraphSet(
+        nodes=[
+            SolidityGraphNode(
+                id="isolated:owned-snapshot",
+                kind=SolidityGraphNodeKind.UNKNOWN,
+                label="owned snapshot original",
+                path="SyntheticOriginal.sol",
+                start_line=1,
+                end_line=1,
+                source_hash="b" * 64,
+                provenance=SolidityProvenance.COMPILER,
+                confidence=1,
+                transformation="synthetic compiler evidence",
+            )
+        ],
+        edges=[],
+    )
+    control_map = repository_map.model_copy(deep=True)
+    control_project = project.model_copy(deep=True)
+    control_index = index.model_copy(deep=True)
+    control_graphs = graphs.model_copy(deep=True)
+    builder = ContextBuilder(
+        discovery=discovery,
+        repository_map=repository_map,
+        repository_config=config.repository,
+        privacy=config.privacy,
+        scanner_findings=[],
+        solidity_projects=[project],
+        solidity_index=index,
+        solidity_graphs=graphs,
+    )
+
+    repository_map.files[0].size += 1
+    project.project_root = "synthetic-mutated"
+    index.ast_sources[0] = "SyntheticMutated.sol"
+    graphs.nodes[0].label = "owned snapshot mutated"
+    exposed_map = builder.repository_map
+    exposed_projects = builder.solidity_projects
+    exposed_index = builder.solidity_index
+    exposed_graphs = builder.solidity_graphs
+    exposed_map.files[0].size += 100
+    exposed_projects[0].project_root = "synthetic-exposed-mutation"
+    assert exposed_index is not None
+    exposed_index.ast_sources[0] = "SyntheticExposedMutation.sol"
+    assert exposed_graphs is not None
+    exposed_graphs.nodes[0].label = "owned snapshot exposed mutation"
+
+    observed = builder.build("source_audit")
+    expected = ContextBuilder(
+        discovery=discovery,
+        repository_map=control_map,
+        repository_config=config.repository,
+        privacy=config.privacy,
+        scanner_findings=[],
+        solidity_projects=[control_project],
+        solidity_index=control_index,
+        solidity_graphs=control_graphs,
+    ).build("source_audit")
+
+    assert observed == expected
+    assert render_context(observed) == render_context(expected)
+    assert _provider_omission_commitment(observed) == _provider_omission_commitment(expected)

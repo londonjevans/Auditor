@@ -90,6 +90,31 @@ def test_strict_decoder_accepts_one_complete_json_document() -> None:
     assert result.repair_used is False
 
 
+def test_strict_decoder_ignores_mutated_model_validate_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_open_model_validate_json(
+        cls: type[_Response],
+        _content: str,
+        **_kwargs: object,
+    ) -> _Response:
+        return cls.model_construct(name={"invalid": "nested"}, count="not-an-integer")
+
+    monkeypatch.setattr(
+        _Response,
+        "model_validate_json",
+        classmethod(fail_open_model_validate_json),
+    )
+
+    with pytest.raises(StructuredOutputDecodeError) as raised:
+        decode_structured_output('{"unexpected":"payload"}', _Response)
+
+    assert raised.value.code is StructuredOutputFailureCode.SCHEMA_VALIDATION_FAILED
+    parsed = decode_structured_output('{"name":"safe","count":2,"nested":null}', _Response)
+    assert type(parsed.value) is _Response
+    assert parsed.value.count == 2
+
+
 def test_strict_decoder_accepts_nested_production_str_enum_json() -> None:
     content = (
         '{"decisions":[{"candidate_ref":"candidate-0001","verdict":"supported",'

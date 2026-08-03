@@ -1,0 +1,100 @@
+{
+  "$id": "https://mmaudit.local/schemas/scheduler_retained_journal_reference.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Cycle-free identity for one prior run's physical scheduler journal.\n\nThe relative path is descriptive, not authority: detached verification must\nresolve it beneath the configured ``runs`` directory, require the referenced\nrun to physically own the private journal, and reconstruct the artifact before\naccepting this exact identity projection.",
+  "properties": {
+    "campaign_id": {
+      "pattern": "^scheduler-campaign-[0-9a-f]{64}$",
+      "title": "Campaign Id",
+      "type": "string"
+    },
+    "consumer_run_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Consumer Run Id",
+      "type": "string"
+    },
+    "evidence_authority": {
+      "const": "comparison_required",
+      "default": "comparison_required",
+      "title": "Evidence Authority",
+      "type": "string"
+    },
+    "owner_run_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Owner Run Id",
+      "type": "string"
+    },
+    "ownership_mode": {
+      "const": "physical_private_journal",
+      "default": "physical_private_journal",
+      "title": "Ownership Mode",
+      "type": "string"
+    },
+    "reference_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Reference Sha256",
+      "type": "string"
+    },
+    "relative_journal_path": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Relative Journal Path",
+      "type": "string"
+    },
+    "scheduler_artifact_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Scheduler Artifact Sha256",
+      "type": "string"
+    },
+    "scheduler_journal_evidence_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Scheduler Journal Evidence Sha256",
+      "type": "string"
+    },
+    "scheduler_manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Scheduler Manifest Sha256",
+      "type": "string"
+    },
+    "scheduler_summary_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Scheduler Summary Sha256",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "terminal_event_chain_head_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Terminal Event Chain Head Sha256"
+    }
+  },
+  "required": [
+    "owner_run_id",
+    "consumer_run_id",
+    "relative_journal_path",
+    "campaign_id",
+    "scheduler_manifest_sha256",
+    "scheduler_summary_sha256",
+    "scheduler_journal_evidence_sha256",
+    "scheduler_artifact_sha256",
+    "reference_sha256"
+  ],
+  "title": "mmaudit retained scheduler journal reference",
+  "type": "object"
+}

@@ -5,12 +5,12 @@ The objective source has SHA-256
 Do not record credentials, raw private prompts, or raw provider completions here.
 
 AUTORUN_STATUS: RUNNING
-CURRENT_MILESTONE: Deterministic coherent semantic shards
-CURRENT_TICKET: V3-SHARD-001 (COMPLETE; checkpoint pending)
-LAST_COMPLETED_TICKET: V3-SHARD-001
-NEXT_ACTION: Complete final diff/secret/artifact review, create and push the isolated V3-SHARD-001 checkpoint, then begin V3-SCHEDULER-001.
-LAST_COMMAND: `.venv/bin/pytest -q`
-LAST_RESULT: PASS — `4062 passed, 11 skipped in 931.46s` with the socket-enabled local test permission required by existing isolation regressions. Skips are explicit unavailable external prerequisites and receive no credit. The affected `155`-test matrix, Ruff format/check, strict mypy over `162` source files, release schemas, and diff integrity also pass.
+CURRENT_MILESTONE: Resumable seven-pass map-reduce scheduler
+CURRENT_TICKET: V3-SCHEDULER-001 (COMPLETE; CHECKPOINT_PENDING)
+LAST_COMPLETED_TICKET: V3-SCHEDULER-001
+NEXT_ACTION: Create and push the isolated V3-SCHEDULER-001 checkpoint, then begin authoritative execution-order ticket V3-FORKSUITE-001 without pausing.
+LAST_COMMAND: `.venv/bin/pytest -q --cache-clear`
+LAST_RESULT: PASS: the exact normalized candidate tree passed 4401 tests with 11 explicit external-prerequisite skips in 1299.53s (21m39s) under the required local loopback/Unix-socket mode. The prior one-off execution-origin failure did not recur after isolated and two predecessor-sequence passes. No production change was made for that transient observation. Ruff format/check, strict mypy, release schemas, focused scheduler integration, CLI, staged diff, secret, and artifact gates are green.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,1086 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: ca2209b0b292272f594dcac590a302a3ee7c3811
+LAST_CHECKPOINT_COMMIT: 8c84013869473635c28193d552498db20ccd4d80
+
+## 2026-08-02 — V3-SCHEDULER-001
+
+- **Status:** `COMPLETE`; isolated checkpoint pending.
+- **Defensive objective:** Represent orientation, blind shard review, finding reduction,
+  cross-shard integration, adversarial cross-examination, multi-lineage validation/falsification,
+  and evidence-capped judgment as durable, resumable, fail-closed passes.
+- **Starting boundary:** Reuse existing request, context, candidate, specialist, verification,
+  falsification, judgment, and run-manifest evidence. This ticket will not call a provider, grant
+  review credit from scheduled work, or make an incomplete mandatory pass representable as
+  complete.
+- **Pass-two invariant-terminal diagnostic:** The first post-context-custody maximum-assurance
+  rerun failed closed after `145.87s` with two invalid accounting-specialist tasks. Exact local
+  artifacts traced both to one canonical invariant surface: generators emit `inv-<20 hex>` IDs,
+  while terminal validation recognized only `inv:`. Independent reconstruction also proved a
+  latent HIGH-severity ambiguity: the synthetic reviewer and validator could resolve a generic
+  `credit` symbol to an unrelated same-name state in another contract if the delimiter alone were
+  corrected.
+- **Invariant-terminal remediation:** Canonical invariant IDs and enum-bound template IDs now
+  derive composite terminal authority only from request-bound exact entity IDs and locations.
+  Reachability rechecks the adjacency-disambiguated final frontier, and the synthetic provider
+  prefers an exact location-and-ID target instead of a cross-contract same-name symbol. The new
+  negative regression accepts the exact Fee-like entry-to-state path and rejects the unrelated
+  Safe-like path. Affected Ruff and mypy passed; model-review/model-coverage tests passed `91`
+  cases, the focused scheduler accounting integration passed in `9.49s`, and `git diff --check`
+  passed. No assurance gate was weakened and no real provider call ran.
+- **Reproduction join diagnostic:** The materially changed maximum-assurance run advanced through
+  the corrected invariant review and independent verifier, then failed closed after `130.63s`
+  while building the final run manifest. Its retained `reproduction-results.json` contains three
+  generated specifications but only the result for `Exploit1`; `Exploit2` and `Exploit3` have no
+  terminal result row. Production currently plans tests from the exact pass-four validation
+  workset but executes them through a later decision-filtered eligibility map, silently skipping
+  a specification when those inventories diverge. The manifest rejection is correct and remains
+  unchanged. The next bounded slice will make every accepted specification terminate explicitly
+  and prove the exact key join before another end-to-end run.
+- **Reproduction join remediation:** The sealed pre-verifier planned-candidate inventory now owns
+  every generated test identity. Post-verifier eligibility controls only whether the local runner
+  executes: a pruned candidate receives an explicit `NOT_ATTEMPTED` result with zero attempts and
+  no command or integrity evidence, while an unknown specification candidate fails immediately.
+  This preserves exact specification/result custody without allowing nonexecution to satisfy the
+  existing real-attempt gate. The focused regression and generated-reproduction/host-contract
+  matrix passed `14` tests in `12.40s`; affected Ruff, source mypy, and `git diff --check` passed.
+  Independent artifact review confirmed the retained failure and the remediation invariant. No
+  provider or network call ran.
+- **Post-join report diagnostic:** The materially changed maximum-assurance run passed the prior
+  pass-six join and final manifest boundary, then failed a later report-content assertion after
+  `152.42s`. The accepted report retained only the reproduced ReentrantBank finding; AccessVault,
+  SpotOracleLender, and UnsafeUUPS were absent from the expected unsafe-contract set. The exact run
+  is retained under pytest run `3534` for artifact-by-artifact tracing. This is not yet classified
+  as a stale fixture or production evidence-loss defect, and the unchanged end-to-end command will
+  not be retried until that distinction is proven.
+- **Missing-candidate root cause and remediation:** Pass-02 evidence proved that no later pass
+  dropped a candidate: AccessVault, SpotOracleLender, and UnsafeUUPS were never created. A blind
+  specialist task could declare a primary shard while disposing only a semantic-neighbour surface;
+  the scheduler now retains neighbour assignments but adds an exact whole-file disposition for
+  every otherwise-unreviewed primary source. Separately, the synthetic provider incorrectly used
+  fine-grained surface identity as its candidate gate even when an exact `SOURCE_FILE` request and
+  source excerpt had been delivered. Synthetic candidate identity now binds the logical request to
+  the exact provider-visible excerpt path, line range, content hash, and verified bytes. The full
+  model-coverage unit file passed `56` tests; the primary-shard regressions passed `2`; the combined
+  exact synthetic subset passed `5` with `51` deselected. Affected Ruff, source mypy, and diff checks
+  passed. No provider or network call ran.
+- **Specialist execution accounting remediation:** The scheduler journal now exposes a distinct
+  structurally successful review inventory without promoting MOCK evidence to REAL. Specialist
+  artifacts bind host-accepted outcomes only to scheduler-succeeded requests, record one explicit
+  execution-evidence class, reject mixed REAL/MOCK role evidence, and retain null scalar summaries
+  for multi-context roles. Mock workflows may therefore be described as completed test execution,
+  while `completed_specialist_roles`, substantive model coverage, the minimum analysis floor, and
+  maximum-assurance role credit remain REAL-only. Failed or unbound scheduler tasks cannot become
+  descriptive successes. The combined specialist, scheduler-journal, and primary-shard matrix
+  passed `106` tests in `8.87s`; four targeted assurance regressions passed in `18.05s`; the exact
+  synthetic fixture subset passed `5` in `0.23s`; affected strict mypy, Ruff, and diff checks passed.
+  An earlier full assurance run was deliberately interrupted after `68` tests and `279.90s` because
+  it predated the final custody refinement, so no result is claimed from that run. No provider or
+  network call ran.
+- **Authoritative coverage-boundary migration:** The next materially changed end-to-end run
+  completed the audit and artifact pipeline in `158.08s`, retained all four expected unsafe-fixture
+  findings, and passed the reproduction and specialist-execution checks. It then reached a stale
+  assertion requiring every enum member—including supplemental whole-file `SOURCE_FILE` custody—to
+  appear in the authoritative product model-surface denominator. The typed coverage builder and its
+  permanent unit regression intentionally reconstruct the denominator from audited Solidity
+  entities, graphs, invariants, and templates; whole-file scheduler requests are supplemental and
+  cannot inflate it. The E2E assertion now excludes only `SOURCE_FILE`, requires zero reviewed
+  surfaces and zero reviewer/lineage credit for MOCK usage, and retains every sealed but uncredited
+  evidence reference. Four focused authoritative/supplemental coverage cases passed in `0.63s`;
+  Ruff and diff checks passed. Retained report artifacts also prove exact cross-examination usage
+  joins and the required `0/31` `not_analyzed` model-role gate. No provider or network call ran.
+- **Mock coverage provenance remediation:** The next run passed the corrected coverage-kind
+  boundary and again reached final artifacts in `158.13s`, then proved that prefiltering coverage
+  input to REAL usage erased the explicit reason its sealed MOCK review artifacts received no
+  credit. Coverage construction now receives only structurally creditable, scheduler-succeeded
+  review usage and performs its existing REAL/certification checks internally. This preserves the
+  explicit MOCK-exclusion limitation and uncredited forensic references without changing the
+  zero numerator. The minimum analysis floor, successful role inventory, and maximum-assurance
+  inputs continue receiving only REAL creditable usage. A focused production scheduler wiring
+  regression passed in `4.07s`; two mock/supplemental coverage cases passed in `0.25s`; affected
+  Ruff, strict pipeline mypy, and diff checks passed. No provider or network call ran.
+- **Changed-boundary end-to-end validation:** `.venv/bin/pytest -q
+  tests/integration/test_pipeline.py::test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete
+  --durations=5` passed `1` test in `156.99s`. The run retained all expected unsafe-fixture
+  findings and safe-control rejection, exact reproduction joins, seven-pass scheduler custody,
+  descriptive MOCK specialist completion with zero REAL credit, supplemental source custody outside
+  the authoritative denominator, explicit MOCK-exclusion provenance, sealed report artifacts, and
+  an honest fail-closed downgraded result. Pytest emitted only the previously observed macOS
+  temporary cleanup permission warnings. No provider or network call ran.
+- **Consolidated scheduler validation:** The stable pre-format tree passed `28` scheduler pipeline
+  integration tests in `51.94s`, `224` scheduler/identity unit tests in `16.69s`, `208` assurance
+  tests in `424.28s`, and `34` release-schema/scheduler-manifest tests in `6.71s`. Full mypy passed
+  over `165` source files, Ruff lint passed, and release-schema generation/verification passed. The
+  full pipeline integration file passed `103` tests and exposed two stale expectations: an
+  intentionally all-INCONCLUSIVE fake source audit now correctly fails mandatory pass 2, and a
+  timed-out mandatory task preserves successful peer candidates without promoting them through
+  unexecuted verifier/judge passes. The post-judge fixture now emits a substantive source
+  disposition and proves all seven passes completed; the timeout regression proves exact candidate
+  IDs survive in rejected evidence while the scheduler stops after pass 2. Both focused cases
+  passed in `5.37s`. A permanent unit negative proves INCONCLUSIVE blind source dispositions never
+  earn custody. No production gate was weakened and no provider or network call ran.
+- **Preview schema TOCTOU closure:** Scheduler request preview now returns the schema hash from the
+  single sealed structured-output request plan instead of regenerating the schema after planning.
+  A race regression replaces the public schema generator after the plan is built and proves no
+  second generation occurs. The new race, exact preview/usage join, and INCONCLUSIVE source-custody
+  negative passed `3` tests in `0.54s`; affected Ruff, strict mypy, and diff checks passed.
+- **Repository-wide gate diagnosis:** The exact `.venv/bin/pytest -q` gate did not pass and its
+  detached terminal session expired before the summary could be retained. Pytest's historical
+  cache initially listed `145` nodes, but focused collection proved that inventory mixed obsolete
+  renamed tests with current failures and therefore was not a valid current-failure count. Current
+  model/provider files passed `430` tests, the complete OpenRouter file passed `208`, and the
+  isolation/RPC cluster passed all `208` cases when local socket creation was permitted. The broad
+  error burst was the managed sandbox's socket restriction. One genuine stale test fixture changed
+  floating-point cost fields without their exact-decimal compatibility fields; the fixture and its
+  test-only rejection normalizer now update both representations, and all `61` real-provider
+  harness unit tests pass. A clean-cache full run with local loopback/Unix-socket permission is next.
+- **Clean repository-wide gate:** `.venv/bin/pytest -q --cache-clear` passed `4399` tests with
+  `11` explicit external-prerequisite skips in `1293.27s` (`21m33s`) under the local-only socket
+  mode required by the isolation tests. The skipped cases remain unavailable rootless images,
+  Echidna, Halmos, Medusa, pinned compiler/replay/fork integrations, the explicitly opted-out paid
+  provider test, and realistic-scale AST validation; none was promoted to passing evidence. Two
+  inherited pytest cleanup warnings reference old permission-restricted clean-Anvil garbage trees
+  and did not affect the run. No provider, public network, live target, external engine, or secret
+  was used.
+- **Final static, schema, and CLI gates:** `.venv/bin/ruff format .` left all `418` files
+  unchanged; `.venv/bin/ruff check .` passed; strict `.venv/bin/mypy` passed all `165` source
+  files; and `.venv/bin/python scripts/generate_release_schemas.py` verified the committed schemas
+  synchronized. Root CLI help and `verify-run --help` exited `0`. One legacy operator invocation,
+  `mmaudit audit --help`, exited `2` because the command is named `run`; the corrected
+  `mmaudit run --help` exited `0`. `git diff --check` passed. Added-diff and untracked-file scans
+  found no private-key marker, OpenRouter-key assignment, mnemonic/seed assignment, debug break,
+  or generated runtime artifact. The `.env` file was not read.
+- **Independent final-review finding and remediation:** Production review found one fail-closed
+  ordering defect: pass-three activation hashed blind and pending candidates before overlapping
+  formal counterexamples were attached, while its reduction output hashed the later evidence-rich
+  payloads. Useful formal evidence therefore made the reducer invalidate itself. Pending execution
+  candidates and formal evidence are now finalized before one shared activation projection is
+  sealed and reused by the deterministic output. The strengthened regression executes the real
+  seven-pass pipeline, opens durable pass-three activation/output evidence, proves the fixed hashes
+  match, proves at least one formal-bound candidate is retained, and proves the old-order projection
+  differs. It and the nominal seven-pass persistence test passed `2` cases in `7.56s`; affected
+  Ruff/format/diff checks passed. The complete scheduler integration file then passed `30` tests
+  in `54.17s`; final Ruff format/check, strict mypy over `165` source files, and release-schema
+  verification passed. Independent re-review found no remaining material production or regression
+  gap. Repository-wide validation must be repeated after this change.
+- **Final post-review gate:** `.venv/bin/pytest -q --cache-clear` passed `4401` tests with `11`
+  explicit external-prerequisite skips in `1299.39s` (`21m39s`) under the required local-only
+  loopback/Unix-socket mode. No failure occurred. The skips preserve unavailable rootless images,
+  Echidna, Halmos, Medusa, pinned compiler/replay/fork integrations, realistic-scale AST, and the
+  explicitly disabled paid-provider test as unavailable; none received passing credit. The two
+  inherited permission-restricted clean-Anvil garbage cleanup warnings remained non-failing.
+- **Independent closure reviews:** Production review found no remaining fail-open, privacy, cost,
+  resume, identity, or formal-order defect after the remediation. Acceptance review found stable
+  identity, crash/resume, mandatory-pass rejection, normalized evidence, report/manifest joins,
+  CLI tamper rejection, and paired unsafe/safe fixture coverage substantive. Hygiene review found
+  no secret, host path, symlink/executable untracked file, runtime artifact, cache, or log. The
+  operator-authored Corrovera product vision is preserved for a separate commit. Real multi-lineage
+  model execution remains explicitly provisional until qualification; MOCK evidence grants no REAL
+  credit.
+- **Staged-diff normalization:** The first staged diff check rejected six synthetic fixture files
+  with one extra blank line at EOF. Removing those lines changed derived source hashes and exposed a
+  brittle test-only request order; production correctly requires stable surface-ID ordering. The
+  fixture test now sorts its two requests by `surface_id`, both fixture-dependent regressions passed
+  in `8.93s`, and `git diff --cached --check` is clean. This exact tree postdates the `4401`-pass
+  run, so no final-tree claim is made until the full gate repeats.
+- **Post-normalization full-gate diagnostic:** The exact full run emitted one early failure marker;
+  it was deliberately interrupted during the next long pipeline case rather than allowed to spend
+  another full cycle on a known-bad run. Fresh pytest cache identified only
+  `test_real_counterexample_originates_pipeline_finding_but_safe_control_does_not`. That real local
+  execution-origin case passed alone under the same isolation permission in `16.32s`; inside the
+  restricted sandbox it correctly skipped because hardened isolation is unavailable. The failure
+  is therefore not yet reproducible in isolation. Its preceding local Foundry/economic sequence
+  must be tested before changing production or retrying the unchanged full command.
+- **Execution-origin non-reproduction:** The entire economic predecessor sequence followed by the
+  execution-origin test passed `21` cases in `91.74s`. The remaining adversarial and clean-chain
+  lifecycle predecessors followed by execution-origin passed `4` with `1` explicit rootless-image
+  skip in `17.45s`. Along with its isolated `16.32s` pass, two materially different order tests did
+  not reproduce the failure. It is therefore a transient local integration observation, not a
+  basis for changing production. One unchanged full retry is permitted; a repeated failure will be
+  retained and scoped to that integration under the no-progress rule.
+- **Exact normalized-tree completion gate:** The single permitted unchanged full retry passed
+  `4401` tests with `11` explicit external-prerequisite skips in `1299.53s` (`21m39s`). The
+  execution-origin integration passed in normal collection order and the transient failure did not
+  recur. The external-prerequisite skips remain unchanged and receive no passing credit. No
+  provider, public network, live target, external engine, or secret was used. This supersedes the
+  earlier pre-normalization full-suite evidence as the ticket's final complete-tree gate.
+- **Typed response and surface-custody closure:** Every model pass now uses its exact canonical
+  response-schema digest and a strict typed payload. Candidate-review tasks retain a nonempty,
+  deterministic requested-surface manifest and response artifact joined to the scheduled request,
+  provider prompt/context/response/schema hashes, and any host-accepted specialist outcome. Typed
+  host outputs bind pass-3 candidate inventory, pass-4 semantic inventory and downstream candidate
+  partitions, and pass-6/pass-7 output identity to their activation inputs. Maximum assurance now
+  requires the public scheduler request fields to join one-for-one to runtime surface artifacts;
+  missing, duplicate, wrong-manifest, or wrong-context artifacts fail closed. The scheduler
+  model/manifest/journal matrix passed `103` tests in `18.52s`; nominal assurance plus the six
+  permanent false-COMPLETE assays and three new artifact-tamper cases passed `10` tests in
+  `36.95s`. Affected Ruff checks and production assurance mypy passed; no provider call ran.
+- **Production integration diagnostic:** `.venv/bin/pytest -q
+  tests/integration/test_scheduler_pipeline.py --maxfail=20` passed `7` cases and failed `6` in
+  `26.25s`. The live pipeline has not yet migrated its candidate-review request/artifact into the
+  host-accepted specialist outcome, so maximum campaigns fail closed rather than claiming blind
+  review completion. The failed first run also leaves no resumable completed journal, and the
+  verifier/judge omission assays correctly cannot reach their intended later passes. These are
+  active production integration defects assigned to the pipeline slice; no assurance gate was
+  weakened and no provider or network call ran.
+- **Full assurance regression diagnostic:** `.venv/bin/pytest -q
+  tests/unit/test_assurance.py` passed `190` cases and failed `17` in `382.22s`. The failures are
+  retained evidence of three stale fixture assumptions: copied or tampered REAL usage was still
+  asserted creditable despite non-transferable runtime authority; nominal runtime construction
+  omitted the exact configuration later evaluated, leaving scheduler bindings intentionally
+  incomplete; and one falsifier test appended calls outside the exact scheduler inventory. These
+  are test-fixture migrations, not production-gate failures. No assertion or threshold has been
+  weakened and no provider or network call ran.
+- **First exact failure rerun:** `.venv/bin/pytest -q --lf
+  tests/unit/test_assurance.py` passed `15` of the previously failing cases and retained `2`
+  fixture failures in `117.07s`. The remaining cases referenced a removed unscheduled `falsifier`
+  role and looked up scheduler-added candidate-falsifier models in static configuration rather
+  than the exact qualification artifact. Production evidence remained fail closed; the next
+  focused migration uses only the two scheduler-owned candidate-falsifier requests.
+- **Exact fixture closure:** The two remaining cases now select the candidate-falsifier requests
+  already scheduled in the campaign and resolve their two independent root lineages from the
+  exact qualification artifact. `.venv/bin/pytest -q
+  'tests/unit/test_assurance.py::test_reasoning_authority_mismatch_revokes_runtime_credit[wrong_role_pair_binding]'
+  tests/unit/test_assurance.py::test_high_critical_cross_examination_requires_two_lineages`
+  passed `2` tests in `14.14s`. No unscheduled usage was appended and no provider call ran.
+- **Full assurance closure:** `.venv/bin/pytest -q tests/unit/test_assurance.py` passed all `207`
+  cases in `480.38s`. Copied or tampered serialized REAL records remain non-creditable without
+  fresh runtime authority, scheduler bindings use the exact evaluated configuration, and the
+  independent-falsifier assay uses only scheduler-owned qualified requests. No production gate,
+  threshold, or runtime-authority rule was weakened and no provider or network call ran.
+- **Cycle-free retained-journal contract:** Resumed runs can bind one exact prior direct-child
+  owner without copying its private journal. The typed, self-hashed reference commits the owner
+  and consumer run IDs, exact relative physical-journal location, campaign, scheduler manifest,
+  summary, journal-evidence, public-artifact, and event-chain identities; same-run, path/basename,
+  hash, and recursive-field substitution fail closed. The contract is registered in release
+  schema generation as `schemas/scheduler_retained_journal_reference.schema.json`, and the
+  scheduler-state schema was regenerated from the current typed model. `.venv/bin/python
+  scripts/generate_release_schemas.py && .venv/bin/pytest -q
+  tests/unit/test_release_schemas.py tests/unit/test_scheduler_journal_reference.py` passed `9`
+  tests in `2.50s`; affected Ruff and strict mypy checks passed. No provider call ran. Physical
+  owner resolution, no-chain enforcement, and detached reconstruction remain in the production
+  pipeline integration slice and are not claimed by this component result.
+- **Production aggregate recovery check:** After the pipeline added deterministic source-file
+  review surfaces for scheduled blind roles that lacked a fine-grained assignment, the previously
+  red `.venv/bin/pytest -q
+  tests/integration/test_scheduler_pipeline.py::test_pipeline_persists_exact_seven_pass_scheduler_evidence
+  -x` passed `1` test in `16.19s`. The case completed and persisted all seven typed passes, compared
+  the persisted artifact against its owner-held physical journal, and validated the fresh run
+  evidence. Only inherited protected disposable-toolchain cleanup warnings were emitted; they did
+  not change the result. This focused result does not exercise completed-run resume or the
+  retained-reference resolver, does not replace the remaining integration/assurance matrix, and
+  made no real provider or network call.
+- **Completed-resume accounting-order diagnostic:** The separate `.venv/bin/pytest -q
+  tests/integration/test_scheduler_pipeline.py::test_pipeline_resumes_exact_completed_campaign_without_provider_replay
+  -x` reached a provider-free resumed report but failed `1` test in `18.66s` because its restored
+  `UsageRecord` inventory was reordered. The owner report retained provider completion/timestamp
+  order, while `SchedulerJournal.retained_provider_usage_records` returned the same exact records
+  sorted by request ID. This is an active recovery-integrity defect; it is not a replay, reference,
+  or passing result. The pipeline slice will restore report ordering from durable usage evidence
+  and rerun the case. No provider or network call ran.
+- **Completed-resume recovery closure:** Report serialization now canonically orders usage by
+  stable logical request ID, matching the durable scheduler/context identity order and removing
+  concurrency completion-order drift without changing or re-attesting any `UsageRecord`. The
+  materially changed rerun of `.venv/bin/pytest -q
+  tests/integration/test_scheduler_pipeline.py::test_pipeline_resumes_exact_completed_campaign_without_provider_replay
+  -x` passed `1` test in `19.73s`. It proves zero provider replay, unchanged cost ledger, exact
+  report/finding/usage/coverage/context/public-scheduler equality, one typed no-copy prior-journal
+  reference, and detached run-manifest validation after the live owner closed. No real provider or
+  network call ran; adversarial missing/tampered/swap/symlink/reference-chain cases remain part of
+  final retained-custody validation.
+- **Retained-journal adversarial custody matrix:** A separate manifest test module now validates
+  detached reconstruction after the physical owner closes and asserts the public run manifest's
+  exact SHA-256 and size binding for the private reference bytes. It fails closed for missing
+  owner/journal, a tampered self-hash, a semantically valid reference swapped to a different valid
+  physical journal, linked reference/consumer/owner/private/journal components, an owner reference
+  chain, same-run ownership, mutable `latest`, parent traversal, and normalized-path tricks.
+  `.venv/bin/pytest -q tests/unit/test_scheduler_journal_reference.py
+  tests/unit/test_scheduler_retained_journal_manifest.py` passed `24` tests in `5.82s`; `.venv/bin/ruff
+  check tests/unit/test_scheduler_journal_reference.py
+  tests/unit/test_scheduler_retained_journal_manifest.py` passed. An exploratory test-module-only
+  mypy command followed imported legacy test helpers and reported the repository's pre-existing
+  test typing backlog (`153` errors across `10` imported test modules); a `--follow-imports=skip`
+  variant reported `5` untyped pytest-decorator/import-skip artifacts. Neither is recorded as a
+  production typing pass; strict mypy for the affected production scheduler model had already
+  passed. No provider or network call ran.
+- **Retained-reference TOCTOU closure:** Independent review found that detached manifest
+  validation first hashed the reference, then reopened it later without carrying the sealed
+  `ManifestFileBinding`; an owner-A reference could therefore be replaced after inventory with a
+  self-valid owner-B reference backed by an exact duplicate journal. Owner-chain absence was also
+  checked only before reconstruction. Detached validation now passes the sealed reference binding
+  into scheduler validation; one `O_NOFOLLOW` descriptor retains the exact unique reference bytes
+  across parsing and reconstruction, enforces the sealed path/size/SHA-256, and rechecks descriptor
+  and path identity afterward. Consumer, owner, private, and journal directory identities are
+  revalidated across the authority decision, and owner-chain absence is checked again immediately
+  before return. Deterministic monkeypatch barriers permanently exercise both replacement windows.
+  The first adjacent manifest run stopped at `1 failed, 3 passed` because an existing assertion
+  expected the older missing-journal diagnostic; restoring the compatible fail-closed wording and
+  rerunning `.venv/bin/pytest -q tests/unit/test_scheduler_manifest.py
+  tests/unit/test_scheduler_journal_reference.py
+  tests/unit/test_scheduler_retained_journal_manifest.py -x` passed `39` tests in `8.64s`.
+  `.venv/bin/pytest -q
+  tests/integration/test_scheduler_pipeline.py::test_pipeline_resumes_exact_completed_campaign_without_provider_replay
+  -x` passed `1` test in `19.06s`, including issuance under the live owner and detached post-close
+  verification. Ruff, strict mypy for `manifest.py` and `models/scheduler.py`, and `git diff
+  --check` passed. A final atomic replacement barrier swaps the consumer reference only after its
+  descriptor is held and while journal reconstruction is in progress; `.venv/bin/pytest -q
+  tests/unit/test_scheduler_retained_journal_manifest.py::test_manifest_rejects_reference_replacement_during_journal_reconstruction`
+  passed `1` test in `0.74s`, and affected Ruff checks passed. No real provider or network call
+  ran.
+- **Production crash-window and drift closure:** The pipeline now adopts an exact activated,
+  pre-dispatch model reservation and dispatches that logical request once after restart. A request
+  durably marked dispatched without a terminal result becomes `UNCERTAIN`, accounts its full
+  reservation once, never re-enters provider transport, and can be inspected through repeated
+  resumes without charging or replaying again. The first dispatched-resume assay correctly found
+  that a second resume treated the already `UNCERTAIN_ACCOUNTED` entry as unbound (`1 failed in
+  2.16s`); recovery now idempotently rejoins that terminal ledger entry to the exact dispatched
+  scheduler task. An exact non-secret ledger identity commitment binds the canonical
+  operator-selected ledger and persistent private lock identity into the scheduler baseline, so a
+  byte-identical empty same-cap ledger or replaced lock cannot masquerade as the campaign ledger.
+  Two identity tests plus scheduler schema/baseline assurance passed `4` tests in `6.02s`.
+- **Production resume drift matrix:** Source, effective configuration, resolved tool policy, model
+  selection, pre-scheduler analysis inputs, journal contents, and persistent ledger identity are
+  each changed after an activated pre-dispatch crash. Source/model changes fail at retained privacy
+  binding; all other changes fail at scheduler preflight; every case records zero resumed provider
+  transports. The first source case exposed a report/artifact mismatch because a valid current
+  privacy policy was retained in memory but not emitted after prior-run privacy mismatch (`1 failed
+  in 1.61s`); the failure path now emits that already-resolved current policy. The final focused
+  command `.venv/bin/pytest -q
+  tests/integration/test_scheduler_pipeline.py::test_pipeline_resume_rejects_drift_before_provider_transport`
+  passed `7` tests in `7.16s`.
+- **Combined restart acceptance command:** `.venv/bin/pytest -q
+  tests/integration/test_scheduler_pipeline.py::test_pipeline_resumes_activated_request_after_pre_dispatch_crash_once
+  tests/integration/test_scheduler_pipeline.py::test_pipeline_marks_dispatched_crash_uncertain_and_never_retries
+  tests/integration/test_scheduler_pipeline.py::test_pipeline_resume_rejects_drift_before_provider_transport`
+  passed `9` tests in `22.75s` after the retry-edge recovery patch landed. It proves exact
+  request/reservation ID and amount adoption, one provider transport for the resumed logical
+  request, `RECONCILED` completion, conservative post-dispatch uncertainty, repeated no-retry
+  recovery, and all seven pre-transport drift refusals. Release-schema generation and verification
+  passed. These are deterministic local fake-provider transports; no real provider or network call
+  ran.
+- **Reproduction host sole-authority closure:** Pass six now emits its deterministic reproduction
+  host result at one post-falsification write point. Its candidate denominator is derived only from
+  the exact sealed exploit-test planner and falsifier task plans, so a verifier's later disposition
+  cannot shrink planned reproduction work; missing generated-test or result identities make the
+  typed host result fail rather than pass vacuously. The focused host-contract suite, including a
+  post-verifier eligibility-divergence regression, passed `11` tests in `0.52s`; the unsafe/safe
+  cross-shard accounting and verifier/judge omission integrations passed `3` tests in `87.82s`.
+  Affected Ruff, strict production mypy, and `git diff --check` passed. These were deterministic
+  local fake-provider runs with no network access or real provider call.
+- **Architecture inventory:** The production pipeline currently performs the relevant work in one
+  in-memory orchestration method. It freezes blind specialist contexts before awaiting peer work
+  and enforces two-lineage candidate cross-examination and host-side evidence caps, but it has no
+  pass journal, exact resume API, persisted blind barrier, explicit cross-shard integration pass,
+  or stable scheduler identity on provider requests. Provider logical request IDs are random by
+  default and every audit creates a fresh UUID-suffixed run directory.
+- **Acceptance decision:** A standalone planning schema would not satisfy this ticket. The live
+  `AuditPipeline` request path must use the scheduler, every scheduled request/result must carry a
+  stable pass and shard scope, and emitted state must make every missing, failed, truncated,
+  invalid, unbound, inconclusive, or crash-uncertain mandatory item block scheduler completion.
+  CLI-level resume is not stated as mandatory, but an exact public resume API and production
+  pipeline integration are required. No provider call or external engine execution is part of
+  this implementation slice.
+- **Stable request-identity slice:** Provider completion APIs now accept an optional bounded
+  scheduler logical request ID. Exact fallback routes and retry attempts receive deterministic,
+  distinct suffixes; one client atomically rejects reuse. The identity reaches provider metadata,
+  token/context planning, usage evidence, and the atomic cost ledger. Every current agent entry
+  point threads the optional identity while preserving random UUID behavior for ordinary
+  unscheduled calls. The focused OpenRouter, usage, context-manifest, and new identity regressions
+  passed `396` tests in `2.04s`; no provider request ran.
+- **Exact pre-transport lifecycle slice:** `OpenRouterClient` can now preview the exact primary
+  route prompt, user-prompt, and response-schema hashes, and accepts one run-local lifecycle
+  observer. The observer is notified with those exact commitments and durable dispatch identity
+  before token planning or transport, while normalized success remains subject to later agent-side
+  validation. The OpenRouter and identity matrix passed `228` tests; no provider request ran.
+- **Shard-scoped context slice:** Context construction now accepts an exact normalized source-path
+  allowlist, excludes all other source excerpts with a typed hash-only
+  `SHARD_SCOPE_WITHHELD` omission commitment, and rejects unknown, unsafe, or inconsistent
+  requested paths. The focused context/token-planning matrix passed `129` tests; Ruff and strict
+  mypy passed.
+- **Adversarial design review:** The first typed/journal draft passed its focused tests but was not
+  accepted. Review demonstrated a descriptor-custody root-swap window, orientation/blind false
+  completion through empty tasks, summary-only public completion without journal evidence,
+  missing private normalized outputs needed for resume, no late-bound activation for dependent
+  tasks, and incomplete mixed-language shard coverage. These are active implementation defects,
+  not limitations or passing evidence. Remediation is in progress before pipeline integration.
+- **Hardened contract slice:** Exact all-source shard descriptors, late-bound task activations,
+  private normalized outputs, typed local-preflight failures, and a public journal hash/count
+  projection are now implemented. The production binding layer creates one deterministic
+  non-Solidity pseudo-shard while refusing to let Solidity source bypass semantic sharding. Its
+  focused runtime suite passed `5` tests with Ruff and strict mypy clean, and the pure scheduler
+  model suite passed `33` tests. A single journal-suite run during API convergence exposed `14`
+  outdated-helper failures versus `8` passes; these remain active remediation evidence rather
+  than a passing claim and were handed to the journal owner without an unchanged retry.
+- **Durable journal slice:** Descriptor-held `O_NOFOLLOW` custody now spans journal creation and
+  resume; exact activation, dispatch, private normalized output, terminal, and preflight records
+  survive crashes. A dispatched request without terminal evidence becomes non-retriable
+  `UNCERTAIN`, while activated-but-undispatched work remains exactly resumable. Swap, tamper,
+  deletion, duplicate, lifecycle, reconstruction, and journal-binding regressions brought the
+  scheduler model/journal/runtime matrix to `78` passing tests with Ruff and strict mypy clean.
+- **Assurance integration slice:** Maximum assurance now requires a complete seven-pass artifact
+  and the emitted `scheduler-state.json`; the fully satisfied assurance fixture carries a
+  journal-derived scheduler artifact, and the missing-artifact negative assay fails closed. Ruff
+  passed, strict mypy passed on the production assurance module, and
+  `tests/unit/test_assurance.py` passed `182` tests in `119.06s`.
+- **Focused lifecycle validation:** The scheduler model, durable journal, production binding, and
+  logical-request identity suites passed `107` tests in `2.10s`. The affected OpenRouter,
+  budget, context, usage, and token-planning suites passed `487` tests in `4.78s`; request-count
+  ceilings are task-scoped for scheduler retries while existing role cost/token caps remain in
+  force. Two pytest cleanup warnings concerned pre-existing protected disposable toolchain paths
+  and did not change either test result. Ruff and `git diff --check` passed, and strict mypy found
+  no issues in all eight affected production modules.
+- **Production and manifest slice:** The live fake-provider audit completed all seven passes with
+  `12` exact scheduled model requests; a forced orientation timeout produced one failed pass and
+  no later calls. Report binding, exact mixed-source inventory reconstruction, emitted artifact
+  hashing, and request↔activation↔result↔provider joins now validate, including fail-closed
+  rejection of stale, fallback, malformed, truncated, unqualified, and substituted evidence.
+  The production scheduler integration passed `2` tests in `3.47s`, the focused manifest suite
+  passed `9` tests in `1.29s`, and the adjacent manifest/sharding/scheduler matrix passed `131`
+  tests. No provider or network call occurred.
+- **Second adversarial review:** The integrated build is not yet accepted. Independent review
+  demonstrated remaining false-completion or unverifiable-resume paths involving downstream
+  lineage/subject semantics, self-declared absence, blind source delivery, provider-output
+  normalization, trusted prompt derivation, assurance/runtime binding, durable-journal release
+  verification, pass-3 reduction, pass-4 cross-boundary integration, omitted verifier/judge
+  decisions, and restoration of provider usage/context evidence after a crash. These are active
+  defects being remediated, not limitations or passing evidence.
+- **Request-count capability fix:** Lifecycle observation alone no longer authorizes fresh
+  per-task request ceilings. Only an exact scheduler validation may return the private local
+  capability; generic observers retain the configured per-role ceiling. The new two-ID no-op
+  observer assay and adjacent OpenRouter/logical-identity matrix passed `232` tests in `1.56s`.
+- **Exact source-delivery boundary:** Provider lifecycle activation now receives only sorted paths
+  proven to be present as exact whole-file provider-visible excerpts matching repository-map
+  path, UTF-8 size, line span, and SHA-256. Repository metadata, partial excerpts, omitted source,
+  and reconstructed multi-excerpt files receive no delivery credit. Strict mypy passed and the
+  logical-identity suite passed `31` tests in `0.38s`; scheduler-side descriptor custody and the
+  cited-but-undelivered completion assay remain active before this slice can receive review credit.
+- **Typed non-Solidity file review:** Repository pseudo-shards no longer need to choose between
+  false AST evidence and delivery-only credit. A `SOURCE_FILE` surface binds normalized path,
+  UTF-8 size, line count, whole-file SHA-256, an explicit model disposition, concrete
+  source/security observations, and an exact file-level path record to one whole provider-visible
+  excerpt. Other surface kinds still require the deterministic Solidity index/graph. Empty files
+  use an explicit empty excerpt rather than metadata-only credit. Ruff and strict mypy passed; the
+  model-review-evidence suite passed `33` tests in `0.88s` and the logical lifecycle suite passed
+  `31` tests in `0.40s`.
+- **Compacted map identity fix:** Repository-map metadata compaction now retains every requested or
+  preferred shard path ahead of role-weighted optional entries, including when the original map
+  exceeds its 300-file default projection. This prevents an exact whole-file excerpt from losing
+  the provider-visible path/size/line/hash identity needed for review credit. Five focused
+  shard-context tests passed in `0.92s`, and all `17` context tests passed in `1.56s`; no provider
+  request ran.
+- **Assurance fixture assay:** The missing-scheduler negative test remains fail-closed, but the
+  nominal maximum-assurance fixture now correctly falls to `INCONCLUSIVE` because its scheduler
+  artifact is detached from the runtime configuration, shard inventory, and REAL request set. The
+  focused command produced `1 failed, 1 passed in 2.94s`; this is active fixture/integration work,
+  not passing evidence or a weakened join.
+- **Qualification and pass-order review:** A generic REAL usage check is insufficient for a
+  mandatory scheduled request: each request must independently join the current production
+  qualification, approved provider session, exact model, and verified root lineage. The first
+  full-ensemble fixture API also placed optional model tasks in orientation, which would weaken
+  blind-discovery ordering. Both remain active remediation: orientation is restricted to its
+  threat-model contract, specialist work belongs to blind shard review, and global whole-protocol
+  review must remain blind and precede adversarial cross-examination.
+- **Exact cost-recovery slice:** Usage evidence now retains exact decimal reported and accounted
+  costs independently of presentation floats, and one-shot journal-authorized budget recovery
+  cross-checks the exact persistent ledger values without charging USD twice. Ruff, strict mypy,
+  and `171` budget/usage/journal tests passed in `3.15s` (`7.4s` command wall), including an
+  18-decimal regression. Active reservations and provider failures without normalized output are
+  still unresolved and receive no completion claim.
+- **Scheduler pass-role contract:** Orientation now permits only its exact threat-model request;
+  specialist/source work is shard-scoped in blind review, candidate reviewers and validators stay
+  in their ordered passes, and judgment stays last. The scheduler model/journal matrix passed `81`
+  tests in `3.41s` after formatting, Ruff, and strict mypy. Whole-protocol reviews are global
+  blind-pass work and must deliver the entire trusted source inventory; their follow-up negative
+  assay remains in progress.
+- **Whole-protocol production gap:** Assurance alignment showed that the live pipeline had no
+  `whole_protocol_review:N` calls even though the certified ensemble requires four independent
+  whole-protocol lineages. This is a safely failing functional blocker, not fixture-only work.
+  Production blind-pass scheduling, qualified-lineage selection, full trusted-source delivery,
+  and exact usage/context joins are now part of the active scheduler remediation.
+- **Specialist responsibility honesty:** A successful REAL request label alone does not prove a
+  specialist responsibility completed. Scheduler task evidence and maximum assurance must join the
+  exact host-validated `SpecialistAcceptedOutcome` and its response, context, requested-surface,
+  and artifact hashes; the contract must derive completed investigator/auxiliary roles from the
+  resulting specialist execution records. Arbitrary specialist JSON remains active negative-test
+  work and cannot be used to make the nominal fixture complete.
+- **Active-reservation recovery:** Resume now distinguishes the journal-proven send boundary.
+  ACTIVATED without DISPATCH retains its exact reservation for one-shot adoption by the same stable
+  logical request, model, role, and maximum; every other dispatch remains blocked until adoption.
+  The resumed task dispatches and reconciles once. DISPATCHED without durable output becomes
+  non-retriable `UNCERTAIN`, accounts the full reservation exactly once, restores scoped model/role
+  cost, and conservatively exhausts unknown token ceilings. The initial matrix passed `211` tests;
+  the corrected adoption assay passed `85` budget/journal tests in `2.97s` (`6.9s` wall).
+  Failed-paid-attempt custody remains unresolved; campaign-ledger delta binding is recorded below.
+- **Campaign-ledger delta binding:** The scheduler freezes exact terminal cost-entry and ledger-head
+  hashes before its first provider request. Resume reads that baseline under journal custody,
+  verifies the current ledger as the exact immutable prefix plus campaign-only entries, restores
+  baseline spend without attributing it to campaign model/role counters, and restores only the
+  campaign delta into scoped counters. Formatting, Ruff, strict mypy, and `87` budget/journal tests
+  passed in `3.11s` (`4.6s` wall). Durable failed-paid-attempt evidence remains the last P0 recovery
+  slice.
+- **Unseeded pass-4 discovery regression:** Two synthetic local campaigns now reach all seven passes
+  through the fake provider without pre-seeding a host finding; the unsafe condition produces a
+  persisted boundary candidate/workset while the safe implementation produces the safe disposition.
+  `.venv/bin/pytest -q tests/integration/test_scheduler_pipeline.py -k
+  pass_four_model_discovery` passed `1` test with `8` deselected in `20.34s`.
+- **Pipeline assurance wiring:** The live pipeline now supplies the exact scheduler bindings, shard
+  inventory, and specialist execution records to maximum assurance. Formatting, Ruff, strict mypy,
+  and the exact seven-pass persistence integration passed, ending with `1 passed in 6.55s`.
+  Whole-protocol maximum-assurance end-to-end coverage and production resume remain active.
+- **Whole-protocol first end-to-end assay:** The initial exact maximum-assurance integration ran
+  for `189.07s` and failed safely with run status `FAILED` rather than the expected `INCOMPLETE`:
+  duplicating the complete fine-grained surface catalogue made the first whole-protocol request's
+  minimum metadata exceed its `119478`-byte allocation before blind calls. The changed design still
+  delivers every trusted source but requests one exact validated `SOURCE_FILE` disposition per
+  source; critical/function coverage remains a separate mandatory denominator. An identical-command
+  rerun was attempted once and the first failure is not passing evidence.
+- **Whole-protocol focused production closure:** Surface-evidence sealing now accepts only the
+  closed relationship between a frozen `whole_protocol_review` context and its exact indexed
+  `whole_protocol_review:N` request role; a different investigator role remains rejected. The
+  literal role-boundary command `.venv/bin/pytest -q tests/unit/test_model_review_evidence.py -k
+  'whole_protocol_context'` passed `2` tests with `33` deselected in `0.47s`. The literal combined
+  production command recorded in `LAST_COMMAND` passed Ruff, strict mypy, and `1` integration test
+  in `25.86s`. That assay proves exactly four scheduler-managed global blind tasks, four exact
+  models, four distinct root lineages, successful terminal results, exact source-descriptor
+  delivery, and four validated `SOURCE_FILE` review artifacts with the exact path and content hash.
+  Fine-grained critical/function coverage remains independently enforced by the existing shard
+  review and model-coverage gates; whole-source delivery alone does not satisfy those denominators.
+- **Failed-paid-attempt custody closure:** Every dispatched model exception path now supplies the
+  exact accountable usage record to scheduler failure handling. The focused command
+  `.venv/bin/ruff format src/mmaudit/orchestration/pipeline.py
+  tests/integration/test_scheduler_pipeline.py && .venv/bin/ruff check
+  src/mmaudit/orchestration/pipeline.py tests/integration/test_scheduler_pipeline.py &&
+  .venv/bin/mypy src/mmaudit/orchestration/pipeline.py && .venv/bin/pytest -q
+  tests/integration/test_scheduler_pipeline.py::test_failed_mandatory_scheduler_pass_stops_later_provider_calls`
+  passed Ruff, strict mypy, and `1` regression in `1.28s`. The failed dispatched request retained
+  one private provider-attempt object plus exact public hash/count evidence, the pass remained
+  failed, and no later provider request ran. Preflight failures remain correctly usage-free.
+- **Default in-repository output authority:** The scheduler aggregate now receives the exact
+  prevalidated audited-output exclusion root used by discovery and scanner source hashing, while
+  every run-private path remains separately classified as disposable. The production-default
+  command `.venv/bin/pytest -q
+  tests/integration/test_scheduler_pipeline.py::test_scheduler_accepts_default_in_repository_private_output_exclusion`
+  passed `1` test in `6.35s`. It ran a complete synthetic local seven-pass campaign beneath the
+  target's excluded `.mmaudit/runs/<run-id>` root and emitted the private typed analysis-input
+  inventory. No network, live target, or real provider was used.
+- **Mandatory aggregate fresh-run validation:** After making the typed pre-scheduler aggregate
+  mandatory, the exact command `.venv/bin/pytest -q
+  tests/integration/test_scheduler_pipeline.py::test_pipeline_persists_exact_seven_pass_scheduler_evidence
+  tests/integration/test_scheduler_pipeline.py::test_maximum_scheduler_executes_four_blind_whole_protocol_reviews
+  tests/integration/test_scheduler_pipeline.py::test_pass_four_model_discovery_distinguishes_unsafe_and_safe_cross_shard_accounting
+  tests/integration/test_scheduler_pipeline.py::test_failed_mandatory_scheduler_pass_stops_later_provider_calls`
+  passed `4` tests in `53.21s`. Fresh unsafe/safe, whole-protocol, and mandatory-failure campaign
+  behavior remains intact; the two cleanup warnings concerned pre-existing protected disposable
+  toolchain paths. No network, live target, or real provider was used.
+- **Whole-protocol bounded rerun:** The materially changed 15-shard integration remained CPU-bound
+  and was interrupted once after `669.57s`; pytest had not reached assertion completion. The
+  interruption exposed completed task failures because exact indexed `whole_protocol_review:N`
+  roles were still rejected by the surface-evidence contract as non-investigators. The large run
+  will not be retried unchanged. A focused schema assay and small production campaign must prove
+  exactly four distinct qualified global calls, full source delivery, and exact `SOURCE_FILE`
+  dispositions before this slice can pass.
+- **Exact maximum-assurance scheduler closure:** The nominal runtime now derives and supplies the
+  exact pre-scheduler analysis-input digest, cost-ledger baseline, effective bindings, shard/source
+  inventory, current production qualification, REAL provider usage/context records, typed
+  host-accepted specialist outcomes, and journal-bound outcome hashes. It reached `COMPLETE` with
+  `14/14` selected qualified models executed, `25/24` accepted specialist responsibilities,
+  `4/4` independent whole-protocol lineages with exact global source delivery, one critical
+  surface with `3/3` independent lineages, and `2/2` candidate-falsifier lineages. Exact evidence:
+  - `.venv/bin/pytest -q
+    tests/unit/test_assurance.py::test_maximum_assurance_complete_requires_all_runtime_clauses`
+    passed `1` test in `5.28s`; every required assurance clause passed.
+  - `.venv/bin/pytest -q tests/unit/test_assurance.py -k
+    'missing_scheduler_artifact or missing_trusted_scheduler_inputs or wrong_scheduler_binding or
+    wrong_scheduler_analysis_input_binding or wrong_scheduler_cost_ledger_baseline or
+    wrong_scheduler_shard_inventory or extra_unscheduled_provider_usage or mock_scheduler_usage or
+    unqualified_real_scheduler_usage or scheduler_context_hash_mismatch or
+    scheduler_usage_record_hash_mismatch or declared_specialist_roles_without_execution_records or
+    real_specialist_usage_without_host_accepted_outcome or
+    scheduler_rejects_specialist_outcome_for_another_validated_response'` passed `17` tests with
+    `181` deselected in `79.11s`. Missing, wrong, extra, MOCK, unqualified, detached, and
+    hash-mismatched evidence all remained non-`COMPLETE`.
+  - `.venv/bin/pytest -q tests/unit/test_scheduler_models.py` passed `39` tests in `0.60s` after
+    exact specialist-outcome journaling and global-scope source delivery were incorporated.
+  - The exact `LAST_COMMAND` passed formatting, Ruff, and strict mypy. No provider or network call
+    occurred; all fixture evidence is synthetic, local, and explicitly test-only.
+- **Adversarial specialist closure assays:** Six permanent negative assay cases now demonstrate
+  that scheduler completion remains incorrectly reachable with (1) a generic blind investigator
+  payload plus a declared accepted outcome, (2) a generic invariant-review payload, or (3) an
+  investigator outcome whose declared surface-artifact hash resolves to no runtime artifact, plus
+  generic (4) orientation, (5) deterministic finding-reduction, and (6) evidence-cap judgment
+  payloads. The first three exact focused commands failed as intended in `5.19s`, `5.55s`, and
+  `5.63s`; the final three-case command failed in `15.02s`, always with
+  `seven_pass_scheduler` still passing. Generic pass-five, verifier, judge, and cross-shard
+  integration payloads were already rejected by typed validation or exact downstream candidate
+  inventory and did not receive duplicate regressions. These are active remediation evidence, not
+  passing release evidence. The helper has no pass-six reproduction-host task to mutate safely, so
+  reproduction-resolution payload validation remains an explicit part of architecture's typed
+  host-output contract rather than an additional assurance fixture assay. No provider or network
+  call occurred.
+- **Safe-target responsibility availability:** A no-candidate campaign executes the 20
+  investigator roles plus candidate-independent invariant and report-quality review, yielding only
+  22 distinct responsibilities against the preserved hard floor of 24. This is fail-closed
+  availability, not false completion. `V3-COVERAGE-001` now requires at least 24 distinct
+  candidate-independent substantive responsibilities (or an equally non-vacuous policy that still
+  executes 24); conditional absence, retries, aliases, and repeated calls receive no credit.
+- **Mandatory analysis-input custody migration:** All `306` selected scheduler/assurance tests
+  collected after the complete typed analysis-input inventory became mandatory scheduler evidence.
+  The focused scheduler model, release-manifest, and durable-journal matrix passed `102` tests in
+  `6.51s`; Ruff format/check passed across the shared scheduler helper and affected test modules.
+  The test custody layout now expects `analysis-input-inventory.json`. No production architecture
+  file was modified in this mechanical migration, and no provider or network call occurred.
+- **Reproducible semantic projection:** The production scheduler commits a closed 24-label,
+  hash-only inventory of all deterministic pre-scheduler inputs. Engine projections exclude only
+  schema-known timing, process identity, and disposable-output fields; exact status, normalized
+  findings/results, tool/compiler hashes, coverage, failures, limitations, and external
+  rule/spec/source paths remain bound. Normalizing a path requires an explicitly validated
+  disposable root and, for the default in-repository output, exact exclusion authority proven
+  disjoint from discovered source. Resume retains and exact-compares every private descriptor and
+  reports only drift labels; public evidence contains the aggregate hash, all descriptor hashes,
+  and exact count.
+  - `.venv/bin/ruff check src/mmaudit/models/scheduler.py
+    src/mmaudit/orchestration/scheduler.py src/mmaudit/orchestration/scheduler_runtime.py
+    tests/unit/test_scheduler_analysis_inputs.py` — PASS; Ruff clean.
+  - `.venv/bin/mypy src/mmaudit/models/scheduler.py
+    src/mmaudit/orchestration/scheduler.py src/mmaudit/orchestration/scheduler_runtime.py
+    tests/unit/test_scheduler_analysis_inputs.py` — PASS; strict mypy clean across four files.
+  - `.venv/bin/pytest -q tests/unit/test_scheduler_analysis_inputs.py -x` — PASS,
+    `4 passed in 0.25s`, covering stable timing/staging relocation, changed tool/status/result and
+    external-path inequality, and exact in-repository exclusion authority. No provider, scanner,
+    compiler, formal engine, or network call occurred.
+- **Typed-contract migration diagnostic:** After central schema-hash response parsing and
+  model-surface artifact custody landed, `.venv/bin/pytest -q
+  tests/unit/test_scheduler_models.py` produced `24 passed, 16 failed in 2.08s`. The failures
+  are active fixture-migration evidence: legacy arbitrary payloads and candidate-review helpers
+  lacked their now-mandatory typed surface requests and artifacts. No gate was weakened and no
+  provider or network call occurred. The independent analysis-input/request-identity command
+  recorded in `LAST_COMMAND` subsequently passed `35` tests in `0.45s`.
+- **Typed fixture recovery:** Canonical per-role schemas, nonempty candidate-review surface
+  requests/artifacts, specialist outcome binding, typed host outputs, and recovery fixtures now
+  replace every legacy arbitrary success payload. The exact command recorded in `LAST_COMMAND`
+  passed `103` tests in `18.77s`; no provider or network call occurred. Exact assurance
+  artifact joins and activation-input/relationship descriptor tamper negatives remain active.
+- **Typed response and host activation closure:** Every scheduled model success now parses through
+  one closed response-schema-hash-to-Pydantic registry and its exact role contract. Blind model
+  reviews retain nonempty exact surface requests and the sealed private review artifact; task and
+  public request evidence expose the artifact hash, request-manifest hash, and exact count.
+  Candidate-review specialist acceptance must match that artifact and cannot claim a zero-surface
+  responsibility. Orientation additionally requires nonempty core threat evidence.
+  Pass-three candidate hashes, location dispositions, canonical groups, and blind/execution
+  partitions are bound to activation. Pass four binds its semantic inventory, complete campaign
+  shard set, high/critical and valid downstream candidate sets, every semantic relationship
+  descriptor/hash, review artifact, invariant-presence bit, and exact review surface/shard scope.
+  Pass six binds planned reproduction candidate and generated-test/result coverage; pass seven
+  requires one judge decision for every planned group and binds its complete output to activation.
+  Permanent negatives cover generic payloads, omissions, duplicates, detached hashes, relationship
+  descriptor and semantic-inventory substitution, downstream candidate suppression, wrong scope,
+  and incomplete reproduction coverage.
+  - `.venv/bin/ruff check src/mmaudit/models/scheduler.py
+    tests/unit/test_scheduler_host_contracts.py tests/unit/test_scheduler_response_contracts.py`
+    passed; `.venv/bin/mypy src/mmaudit/models/scheduler.py` passed strict checking.
+  - `.venv/bin/pytest -q tests/unit/test_scheduler_host_contracts.py
+    tests/unit/test_scheduler_response_contracts.py` passed `13` tests in `0.30s`.
+  - `.venv/bin/pytest -q tests/unit/test_scheduler_models.py
+    tests/unit/test_scheduler_manifest.py tests/unit/test_scheduler_journal.py
+    tests/unit/test_scheduler_host_contracts.py tests/unit/test_scheduler_response_contracts.py`
+    passed `116` tests in `19.63s`. Two inherited protected-temporary-tree cleanup warnings were
+    non-failing. No provider, network, live target, external scanner, compiler, or formal engine
+    ran in these tests.
+- **Next safe action:** Complete the read-only adversarial review of the final assurance,
+  architecture, and pipeline joins; remediate only concrete fail-open gaps, then run the combined
+  scheduler validation matrix while retaining `V3-SCHEDULER-001` as `IN_PROGRESS`.
+- **Blind surface-custody remediation:** Every scheduled blind role that has no fine-grained
+  assignment now receives deterministic shard `SOURCE_FILE` review requests bound to the exact
+  discovery path, byte count, line count, and SHA-256. A scheduled `CandidateReviewBatch` can no
+  longer reach specialist acceptance with zero requested surfaces or a missing review artifact.
+  `.venv/bin/pytest -q
+  tests/integration/test_scheduler_pipeline.py::test_maximum_scheduler_executes_four_blind_whole_protocol_reviews
+  --maxfail=1` passed, `1 passed in 79.46s`; only local synthetic fixtures and the mock provider
+  transport ran.
+- **Resume stability and containment slice:** Provider-visible scanner evidence now omits only the
+  incidental `location_validation[].validated_at` observation time while retaining validation
+  status, content hash, and errors; a focused test proves timestamp-only replay stability and
+  security-relevant evidence drift inequality. Exact private-run resolution rejects both a
+  symlinked run and a symlinked `<run>/private` descendant. Completed resume now reaches release
+  emission with retained terminal failures adopted and no provider replay; detached no-copy prior
+  journal authority remains the active implementation gate.
+- **Exact completed-resume acceptance:** A completed campaign is adopted from one explicit prior
+  direct-child run with zero repeated provider calls and no copied private journal. The consumer
+  run retains a typed, self-hashed, same-output-root reference to the physical owner journal;
+  detached manifest validation reopens that journal after live custody closes and reconstructs
+  the exact public artifact. The assay proves byte/hash equality for candidate findings,
+  model-review coverage, and scheduler evidence; exact finding, usage, scheduler metadata,
+  context-request evidence, and cost-ledger snapshot equality; and a distinct consumer run ID.
+  `.venv/bin/pytest -q
+  tests/integration/test_scheduler_pipeline.py::test_pipeline_resumes_exact_completed_campaign_without_provider_replay`
+  passed, `1 passed in 19.73s`. No network, live target, external engine, or real provider ran.
+- **Cost-ledger identity custody review:** The scheduler baseline serializes only hash and exact
+  accounting fields, remains stable when the exact operator ledger is reopened, and rejects a
+  different same-cap ledger. The ledger identity now derives from the descriptor actually held
+  under `flock`; every locked operation compares that descriptor with the configured lock path
+  both before and after its critical section. A deterministic atomic replacement after descriptor
+  open now fails closed instead of computing identity for an unheld replacement lock.
+  `.venv/bin/pytest -q tests/unit/test_cost_ledger.py -x` passed `22` tests in `0.46s`; the
+  baseline/same-cap subset passed `3` tests in `6.19s`; and the stable path-free baseline subset
+  passed `2` tests in `0.35s`.
+- **Retained privacy-evidence custody review:** Exact resume no longer performs independent
+  path-based reads of provenance and policy. The prior run manifest and both exact manifest-bound
+  JSON artifacts remain held through unique `O_NOFOLLOW` descriptors across strict typed and
+  current-source/policy semantic validation. A deterministic identical-byte atomic replacement
+  after descriptor read is rejected by the post-validation custody check. The privacy race assay
+  passed `1` test in `15.91s`; combined with completed zero-replay resume it passed `2` tests in
+  `33.99s`. Affected Ruff checks and strict mypy over `manifest.py`, `pipeline.py`, and
+  `cost_ledger.py` passed; `git diff --check` was clean. These local synthetic tests made no paid
+  call and persisted no credential, secret path, prompt, or completion.
+- **Pre-final privacy-custody closure:** The scheduler campaign now freezes a self-hashed
+  `SchedulerPrivacyEvidenceCustody` before any model task can be sealed. It binds the exact source,
+  fixed provenance/policy artifact names, emitted byte size and SHA-256, typed evidence hashes,
+  and policy-to-provenance link. Model-task construction, plan sealing, activation, dispatch, and
+  persisted-state reload all fail closed when exact custody is absent. Partial crash resumes hold
+  the scheduler manifest and both prior privacy files through no-follow descriptors even though no
+  final run manifest exists; completed runs additionally require the final manifest's exact file
+  bindings. Final artifact validation holds the private scheduler manifest while descriptor-reading
+  both files and exact-joining their typed evidence to the report. Source mismatch, valid rehashed
+  tamper, and identical-byte atomic path replacement are permanent negative regressions.
+- **Provider lifecycle privacy join:** The validated in-memory OpenRouter policy now supplies a
+  frozen, non-secret source/policy/provenance triple to the scheduler before request activation.
+  The client retains that accepted binding and revalidates the canonical live policy after cost
+  reservation and immediately before every dispatch/network attempt; policy replacement releases
+  the reservation with zero transport, zero usage, and no `DISPATCHED` event. Successful provider
+  usage must repeat the exact campaign custody triple. A post-transport mismatch remains retained
+  as accountable provider-attempt evidence but terminalizes `UNBOUND`, never `SUCCEEDED`.
+- **Privacy-custody validation evidence:**
+  - `.venv/bin/python scripts/generate_release_schemas.py --write && .venv/bin/python
+    scripts/generate_release_schemas.py && .venv/bin/pytest -q
+    tests/unit/test_scheduler_models.py tests/unit/test_scheduler_runtime.py
+    tests/unit/test_scheduler_journal.py tests/unit/test_scheduler_manifest.py
+    tests/unit/test_logical_request_identity.py -x` — PASS; `148 passed in 20.05s` and the generated
+    scheduler schema verified current.
+  - `.venv/bin/ruff check --fix src/mmaudit/models/openrouter.py
+    src/mmaudit/models/scheduler.py src/mmaudit/orchestration/assurance.py
+    src/mmaudit/orchestration/manifest.py src/mmaudit/orchestration/pipeline.py
+    src/mmaudit/orchestration/scheduler.py src/mmaudit/orchestration/scheduler_runtime.py
+    tests/scheduler_support.py tests/unit/test_scheduler_journal.py
+    tests/unit/test_logical_request_identity.py tests/integration/test_scheduler_pipeline.py &&
+    .venv/bin/ruff format src/mmaudit/models/openrouter.py src/mmaudit/models/scheduler.py
+    src/mmaudit/orchestration/assurance.py src/mmaudit/orchestration/manifest.py
+    src/mmaudit/orchestration/pipeline.py src/mmaudit/orchestration/scheduler.py
+    src/mmaudit/orchestration/scheduler_runtime.py tests/scheduler_support.py
+    tests/unit/test_scheduler_journal.py tests/unit/test_logical_request_identity.py
+    tests/integration/test_scheduler_pipeline.py && .venv/bin/mypy
+    src/mmaudit/models/openrouter.py src/mmaudit/models/scheduler.py
+    src/mmaudit/orchestration/assurance.py src/mmaudit/orchestration/manifest.py
+    src/mmaudit/orchestration/pipeline.py src/mmaudit/orchestration/scheduler.py
+    src/mmaudit/orchestration/scheduler_runtime.py && .venv/bin/pytest -q
+    tests/unit/test_logical_request_identity.py::test_scheduler_privacy_binding_is_rechecked_after_reservation
+    tests/integration/test_scheduler_pipeline.py::test_partial_scheduler_resume_privacy_rejects_atomic_path_replacement
+    tests/integration/test_scheduler_pipeline.py::test_partial_scheduler_resume_privacy_rejects_valid_rehashed_tamper`
+    — PASS; Ruff fixed one import-order issue, strict mypy passed seven production files, and all
+    three focused lifecycle/partial-resume negatives passed in `1.60s`.
+- **Recovered crash/drift acceptance:** `.venv/bin/pytest -q
+  tests/integration/test_scheduler_pipeline.py::test_pipeline_resumes_activated_request_after_pre_dispatch_crash_once
+  tests/integration/test_scheduler_pipeline.py::test_pipeline_marks_dispatched_crash_uncertain_and_never_retries
+  'tests/integration/test_scheduler_pipeline.py::test_pipeline_resume_rejects_drift_before_provider_transport[config]'
+  'tests/integration/test_scheduler_pipeline.py::test_pipeline_resume_rejects_drift_before_provider_transport[tool]'
+  'tests/integration/test_scheduler_pipeline.py::test_pipeline_resume_rejects_drift_before_provider_transport[analysis]'
+  'tests/integration/test_scheduler_pipeline.py::test_pipeline_resume_rejects_drift_before_provider_transport[journal]'
+  'tests/integration/test_scheduler_pipeline.py::test_pipeline_resume_rejects_drift_before_provider_transport[ledger]'`
+  passed all `7` cases in `21.18s`. Activated pre-dispatch work resumed once; dispatched work stayed
+  uncertain and non-retriable; configuration, tool, deterministic-analysis, journal, and exact
+  ledger-identity drift each refused before a resumed provider transport.
+- **Full production scheduler integration acceptance:** `.venv/bin/pytest -q
+  tests/integration/test_scheduler_pipeline.py` passed all `23` cases in `251.37s`. This includes
+  fresh and exact completed resume, pre-final partial resume, descriptor-held privacy replacement
+  rejection, all seven drift dimensions, primary-route failure, typed unsafe/safe semantic
+  accounting, omitted verifier/judge failures, exact reduction, cross-shard evidence, and semantic
+  blind-context delivery. Only inherited protected disposable-toolchain cleanup warnings were
+  emitted. `.venv/bin/ruff check src/mmaudit/models/scheduler.py
+  src/mmaudit/models/openrouter.py src/mmaudit/orchestration/pipeline.py
+  src/mmaudit/orchestration/scheduler.py src/mmaudit/orchestration/scheduler_runtime.py
+  src/mmaudit/orchestration/cost_ledger.py src/mmaudit/orchestration/manifest.py
+  tests/scheduler_support.py tests/unit/test_scheduler_host_contracts.py
+  tests/unit/test_scheduler_journal.py tests/unit/test_scheduler_manifest.py
+  tests/unit/test_scheduler_models.py tests/integration/test_scheduler_pipeline.py` passed.
+  `.venv/bin/mypy src/mmaudit/models/scheduler.py src/mmaudit/models/openrouter.py
+  src/mmaudit/orchestration/pipeline.py src/mmaudit/orchestration/scheduler.py
+  src/mmaudit/orchestration/scheduler_runtime.py src/mmaudit/orchestration/cost_ledger.py
+  src/mmaudit/orchestration/manifest.py` reported no issues in seven production files, and `git
+  diff --check` was clean. All executions were deterministic local fake-provider tests with no real
+  provider or network call.
+- **Recorded operator-level limitation:** Cost-ledger snapshot and descriptor-derived identity are
+  each locked observations but are still acquired by two sequential calls when building the
+  scheduler baseline. A same-operator process able to replace the private `0700` control-plane lock
+  path in the exact interval could mix observation heads. Audited target content cannot access that
+  path. This does not weaken the target isolation boundary, but a future cohesive baseline API
+  should take both values under one lock.
+- **Consolidated scheduler validation:** `.venv/bin/pytest -q tests/unit/test_budgets.py
+  tests/unit/test_cost_ledger.py tests/unit/test_logical_request_identity.py
+  tests/unit/test_scheduler_analysis_inputs.py tests/unit/test_scheduler_host_contracts.py
+  tests/unit/test_scheduler_journal.py tests/unit/test_scheduler_journal_reference.py
+  tests/unit/test_scheduler_manifest.py tests/unit/test_scheduler_models.py
+  tests/unit/test_scheduler_response_contracts.py
+  tests/unit/test_scheduler_retained_journal_manifest.py tests/unit/test_scheduler_runtime.py`
+  passed `256` tests in `27.92s`. `.venv/bin/pytest -q
+  tests/integration/test_scheduler_pipeline.py` passed all `23` production scheduler integration
+  cases in `251.37s`. The complete integration covers fresh completion, exact completed and partial
+  resume, pre-dispatch adoption, post-dispatch conservative uncertainty without retry, seven drift
+  classes, privacy atomic replacement and valid-rehashed tamper refusal, unsafe/safe cross-shard
+  accounting, mandatory omissions, and deterministic host sole-authority behavior. Only inherited
+  protected disposable-toolchain cleanup warnings were non-failing. No network, live target,
+  external engine, or real provider ran.
+- **Specialist candidate-review fixture closure:** The stale accepted-outcome helper now carries
+  the mandatory positive requested-surface count and accepted surface-artifact digest. The obsolete
+  zero-surface success expectation is a construction-rejection regression, and the self-hashed
+  context-digest splice retains the original candidate-review custody fields so it reaches the
+  intended context-binding check. `.venv/bin/ruff format tests/unit/test_specialists.py &&
+  .venv/bin/ruff check tests/unit/test_specialists.py && .venv/bin/pytest -q
+  tests/unit/test_specialists.py --tb=short` passed Ruff and all `30` tests in `0.45s`. Two
+  inherited protected disposable-toolchain cleanup warnings were non-failing. No production schema,
+  provider, network, live target, or external engine was changed or used.
+- **Complete-suite recovery assay:** The first `.venv/bin/pytest -q` attempt was interrupted after
+  more than 45 minutes because it had emitted six failures and then remained CPU-bound in the
+  maximum-assurance pipeline case. A changed diagnostic command, `.venv/bin/pytest -x -vv`,
+  identified the first stale assertion after `37` passes and `5` explicit external-prerequisite
+  skips: the seven-pass campaign executed `14` typed fake-provider requests rather than the legacy
+  six-call path. The focused pipeline module exposed exactly six regressions before the slow case:
+  two stale call-count assertions, one scheduler-phase error-label assertion, one descriptor-held
+  missing-artifact exception-boundary defect, and two compile-disabled Solidity reproduction
+  controls lacking a typed semantic source surface. A bounded profile of the following
+  maximum-assurance case found `350` deterministic model tasks, `7,417` repeated strict-schema
+  generations, and `929,708` repeated context-inventory hashes; no blocking I/O or external
+  provider call was involved. The complete assurance unit module independently passed all `207`
+  tests in `497.65s`.
+- **Recovered pipeline regressions:** The seven-pass fake-provider and blind-prior-audit checks now
+  assert the exact `14` completed requests. A judge-config preview refusal is attributed to the
+  earlier `candidate_falsifier` scheduler role while still proving that no final judgment request
+  occurred. Descriptor-held JSON validation no longer catches an exception raised by a different
+  artifact observation and relabels it as a read failure on the already-open file. The focused
+  command recorded in `LAST_COMMAND` passed all `5` selected integration cases in `64.24s`;
+  `tests/unit/test_manifest.py tests/unit/test_scheduler_manifest.py` separately passed `40`
+  tests in `8.80s`. No network, provider, live target, or paid call ran.
+- **Immutable schema-cache correction:** The bounded maximum-assurance profile showed that the
+  closed nine-model scheduler response registry was regenerating all strict Pydantic schemas for
+  every planned task. Strict schemas are now cached only as canonical immutable JSON and every
+  caller receives a newly decoded object; the scheduler retains its closed registry behind a
+  read-only mapping and returns mutation-isolated public copies. Immutable runtime registry pairs,
+  the schema-set digest, permitted hash set, and normalizer digests are cached without changing
+  task planning, task counts, request schemas, or canonical hashes. The pipeline resolves each
+  scheduler response hash from that exact closed registry instead of regenerating it. Mutation
+  regressions cover nested strict schemas, parser maps, and runtime record dictionaries. `.venv/bin/ruff
+  check src/mmaudit/models/openrouter.py src/mmaudit/models/scheduler.py
+  src/mmaudit/orchestration/scheduler_runtime.py src/mmaudit/orchestration/pipeline.py
+  tests/unit/test_openrouter.py tests/unit/test_scheduler_runtime.py
+  tests/unit/test_scheduler_response_contracts.py` passed; strict `.venv/bin/mypy` over the four
+  affected production modules passed; and `.venv/bin/pytest -q tests/unit/test_openrouter.py
+  tests/unit/test_scheduler_runtime.py tests/unit/test_scheduler_response_contracts.py` passed all
+  `214` tests in `1.48s`. A fresh-process equivalence assay performed `10,000` complete public
+  registry reads in `0.014571s` after a `0.014031s` cold build while proving every returned
+  contract equal. No provider, network, live target, or external engine ran.
+- **Generation-bound schema-cache hardening:** A same-class `model_rebuild(force=True)` can replace
+  Pydantic's live validator and core schema while a class-keyed cache retains the old structured
+  contract. Strict-schema JSON and digest caches are now independently bounded to `128` entries
+  and keyed by identity-only live validator/core-schema generations. Cache misses and callers
+  check those identities before and after schema generation, normalization, and hashing, so a
+  concurrent rebuild fails closed instead of storing new semantics under an old key. The fixed
+  scheduler registry revalidates every live class against its frozen hash before exposing cached
+  records, and parsing captures/rechecks both generation identities and the exact hash around
+  `model_validate`. Regressions cover forced same-class semantic drift, rebuild during schema
+  generation, rebuild during parsing, caller mutation isolation, and `160` transient dynamic
+  response classes without exceeding either cache bound. Affected Ruff and strict mypy passed;
+  `.venv/bin/pytest -q tests/unit/test_openrouter.py
+  tests/unit/test_scheduler_response_contracts.py tests/unit/test_scheduler_runtime.py` passed all
+  `219` tests in `2.12s`. No provider or network call ran.
+- **Context-inventory cache assessment:** The same profile's repeated inventory hashes cannot be
+  safely memoized by object identity alone because the current Pydantic/dict inputs are mutable;
+  doing so could preserve a stale omission identity after caller or concurrent mutation. The safe
+  follow-up is an owned immutable inventory snapshot at `ContextBuilder` construction, with
+  ordinal/field-bound canonical item identities consumed by compaction, plus before/after
+  regression equivalence for every omission aggregate. This requires a separate context-custody
+  slice and was not mixed into the response-schema cache.
+- **Owned context-inventory snapshot:** `ContextBuilder` now deep-copies every provider-visible
+  repository, scanner, Solidity, invariant, economic, formal, and coverage model into builder
+  custody before capturing an immutable field/ordinal-bound digest inventory. Compaction resolves
+  identities only against those owned objects. The field and ordinal are cache lookup custody,
+  not new digest inputs, so every cached raw, tagged-index, tagged-graph, and repository-list item
+  retains its exact legacy SHA-256. A cache-disabled reference build is byte-for-byte identical,
+  including omission aggregates and provider commitment; mutating the caller's repository map,
+  project, index, and graph after construction cannot alter either rendered context or omission
+  evidence. Affected Ruff and strict production mypy passed; `.venv/bin/pytest -q
+  tests/unit/test_context.py tests/unit/test_context_omissions.py
+  tests/unit/test_context_optional_metadata.py tests/unit/test_context_serialization_boundary.py
+  tests/unit/test_scheduler_analysis_inputs.py tests/unit/test_scheduler_runtime.py` passed all
+  `45` tests in `2.09s`. No provider, network, live target, or external engine ran.
+- **Context cache-hit correction:** Review caught that `dict.get(key, expensive_fallback())`
+  evaluates the fallback eagerly. The lookup now uses an explicit branch. A monkeypatched
+  call-count regression proves an owned item performs zero fallback serializations while one
+  unknown item performs exactly one. Affected Ruff and strict mypy passed; the omission and
+  optional-metadata modules passed all `13` tests in `0.69s`.
+- **Combined cache/parser regression gate:** `.venv/bin/pytest -q tests/unit/test_context.py
+  tests/unit/test_context_omissions.py tests/unit/test_context_optional_metadata.py
+  tests/unit/test_context_serialization_boundary.py tests/unit/test_scheduler_analysis_inputs.py
+  tests/unit/test_openrouter.py tests/unit/test_scheduler_response_contracts.py
+  tests/unit/test_scheduler_runtime.py tests/unit/test_scheduler_models.py` passed all `302` tests
+  in `3.96s`; `git diff --check` passed. The two inherited protected temporary-toolchain cleanup
+  warnings were non-failing.
+- **Residual maximum-assurance runtime evidence:** A fresh execution of
+  `tests/integration/test_pipeline.py::test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete`
+  remained CPU-bound beyond the bounded observation window and was interrupted with exit `130`
+  rather than misreported as a pass. The interrupt stacks had progressed into concurrent task
+  dispatch, but repeatedly rebuilt and compared the complete scheduler journal in
+  `_validate_state`, including linear Pydantic task membership. This is a distinct scheduler-state
+  validation hotspot; it does not invalidate the context equivalence tests and should not be
+  addressed by reducing the required `350`-task denominator.
+- **Post-linearization maximum-assurance rerun:** After the journal owner replaced repeated full
+  validation with exact incremental joins, `.venv/bin/pytest -q
+  tests/integration/test_pipeline.py::test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete
+  --durations=5` no longer stalled: it reached post-scheduler model-review coverage and failed in
+  `49.48s` (`48.85s` call duration). `ModelReviewCoverage` rejected `132` distinct limitations
+  against its explicit `100`-item bound at `model_coverage.py:285`. This is retained next-failure
+  evidence, not a pass and not a direct context/schema-cache regression; no implementation was
+  changed by this diagnostic run.
+- **Manifest consumer-exception custody regression:** A public two-artifact
+  `open_manifest_bound_json_artifacts` regression now raises one exact sentinel `BaseException`
+  from the stable consumer. It proves the same exception object propagates, all three held
+  descriptors (manifest plus two sealed artifacts) receive their post-validation `fstat`, close
+  once in reverse acquisition order, and subsequently fail `fstat` with `EBADF`. The existing
+  deterministic atomic-replacement case separately retains custody-error precedence. `.venv/bin/ruff
+  format tests/unit/test_manifest.py && .venv/bin/ruff check tests/unit/test_manifest.py &&
+  .venv/bin/pytest -q
+  tests/unit/test_manifest.py::test_manifest_bound_artifacts_propagate_consumer_abort_and_close_descriptors
+  --tb=short` passed Ruff and `1` test in `0.61s`; two inherited protected disposable-toolchain
+  cleanup warnings were non-failing. Production code was unchanged and no provider or network call
+  ran.
+- **Supplemental-surface coverage hardening:** Test-only regressions now prove that a semantic
+  scheduler surface outside the authoritative product inventory cannot enter the product coverage
+  denominator or receive credit, and that mixing one such supplemental surface with a known
+  product surface invalidates credit for the complete response artifact rather than laundering the
+  known record. The semantic-shard custody assay now parameterizes missing, ambiguous, and
+  entity/index-mismatched provenance. The local fake-provider finding gate requires an exact typed
+  entity ID, surface kind, path, line range, and current indexed content hash instead of path-only
+  delivery; direct wrong-kind and wrong-hash negatives prove that boundary. `.venv/bin/ruff format
+  tests/unit/test_model_coverage.py tests/fake_openrouter.py` and
+  `.venv/bin/ruff check tests/unit/test_model_coverage.py tests/fake_openrouter.py
+  tests/integration/test_pipeline.py` passed. `.venv/bin/pytest -q
+  tests/unit/test_model_coverage.py` passed all `53` tests in `0.53s`; `.venv/bin/pytest -q
+  tests/integration/test_pipeline.py::test_generated_foundry_reproduction_caps_solidity_classification`
+  passed both unsafe/safe local cases in `17.89s`. Two inherited protected temporary-toolchain
+  cleanup warnings were non-failing. Production code was unchanged; no provider, network, live
+  target, or external engine ran.
+- **Scheduler-bound verify-run CLI regression:** A scheduler-bound synthetic run is now emitted
+  through the existing manifest/journal helpers, its public `scheduler-state.json` self-hash is
+  changed after manifest issuance, and the actual Typer `mmaudit verify-run` command is invoked
+  through `CliRunner`. The command returns the nonzero `INCOMPLETE` exit, writes typed `STALE`
+  verification evidence with nonempty mismatches, and never represents the run `CURRENT` or
+  complete. `.venv/bin/ruff format tests/unit/test_scheduler_manifest.py && .venv/bin/ruff check
+  tests/unit/test_scheduler_manifest.py && .venv/bin/pytest -q
+  tests/unit/test_scheduler_manifest.py::test_verify_run_cli_fails_closed_after_scheduler_artifact_tampering
+  --tb=short` passed Ruff and `1` test in `0.81s`. Only inherited protected disposable-toolchain
+  cleanup warnings were non-failing. Production code was unchanged; no provider, network, live
+  target, external engine, or secret was used.
+- **Scheduler durable-state final-boundary closure:** The journal append path retains its exact
+  indexed, append-local validation, while `require_complete()` and public evidence generation now
+  descriptor-read the canonical manifest, analysis-input inventory, and every retained plan,
+  activation, event, output, provider attempt, task result, and pass result. Full validation
+  compares the durable reconstruction with retained state, rebuilds the indexes from durable
+  evidence, and brackets reconstruction with exact `(path, file identity, raw SHA-256)` snapshots.
+  This rejects in-place byte drift, same-name atomic replacement, and replacement of an already-read
+  artifact during a later cross-file read. `PipelineScheduler.require_complete()`, `artifact()`, and
+  `report_binding()` now delegate through that journal authority rather than deriving a potentially
+  stale `COMPLETE` projection from memory. The negative matrix covers in-place and same-name
+  replacement of a middle event, task result, and pass result; deleted wrapper evidence; wrapper
+  tampering; a deterministic post-read identical-byte inode replacement; and replacement between
+  `artifact()` summary derivation and journal-evidence validation.
+- **Durable-state focused validation:** `.venv/bin/pytest -q
+  tests/unit/test_scheduler_journal.py::test_live_full_validation_rejects_retained_artifact_byte_drift
+  tests/unit/test_scheduler_journal.py::test_live_full_validation_rejects_replacement_after_an_earlier_artifact_read
+  tests/unit/test_scheduler_journal.py::test_artifact_rejects_replacement_between_summary_and_journal_evidence
+  tests/unit/test_scheduler_journal.py::test_pipeline_scheduler_final_boundaries_delegate_to_durable_validation`
+  passed all `10` cases in `2.86s`. `.venv/bin/pytest -q
+  tests/unit/test_scheduler_journal.py` passed all `71` cases in `8.36s`.
+- **Durable-state scheduler matrix:** `.venv/bin/pytest -q
+  tests/unit/test_scheduler_analysis_inputs.py tests/unit/test_scheduler_host_contracts.py
+  tests/unit/test_scheduler_journal.py tests/unit/test_scheduler_journal_reference.py
+  tests/unit/test_scheduler_manifest.py tests/unit/test_scheduler_models.py
+  tests/unit/test_scheduler_response_contracts.py
+  tests/unit/test_scheduler_retained_journal_manifest.py tests/unit/test_scheduler_runtime.py
+  tests/integration/test_scheduler_pipeline.py` passed all `210` cases in `67.77s` with exit `0`.
+  Two inherited protected disposable-toolchain cleanup warnings were non-failing. `.venv/bin/ruff
+  format src/mmaudit/orchestration/scheduler.py tests/unit/test_scheduler_journal.py
+  src/mmaudit/orchestration/scheduler_runtime.py` left the files unchanged;
+  `.venv/bin/ruff check` over those three files passed; and `.venv/bin/mypy
+  src/mmaudit/orchestration/scheduler.py src/mmaudit/orchestration/scheduler_runtime.py` reported no
+  issues. No provider, network, live target, external engine, or secret was used.
+- **Bounded model-coverage failure accounting:** Supplemental semantic-shard surfaces remain
+  outside the authoritative product denominator and receive no credit. Identity-specific duplicate,
+  invalid-context, unknown-surface, unregistered-model, and unapproved-lineage limitations are now
+  represented by one deterministic category summary containing the exact affected identity count
+  and a SHA-256 commitment over the sorted unique identities. Full per-record rejection reasons and
+  private artifacts remain unchanged. A `101`-artifact overflow regression proves the public
+  limitation list remains within its `100`-item schema bound while numerator, denominator, critical
+  metric, by-kind metrics, and evidence references remain identical to the no-credit baseline.
+- **Exact response-schema generation custody:** The closed scheduler registry now freezes each
+  response class with its exact original `SchemaValidator`, core-schema identity, and strict-schema
+  digest. Parsing invokes that captured pydantic-core validator directly, requires the exact output
+  class, and detached-revalidates before credit; mutating `model_validate` cannot bypass validation.
+  Strict-schema decoding checks generation identity after cached JSON decode. OpenRouter captures
+  one generation through structured planning, token planning, request activation, request body/hash,
+  pre-transport, and bound response decoding/hashing. Rebuild after token planning fails with zero
+  transport and zero usage records. Provider response decoding likewise invokes the captured
+  validator directly and rejects classmethod mutation or generation drift.
+- **Context inventory custody and scanner projection closure:** Builder-owned repository, scanner,
+  Solidity, invariant, economic, formal, and coverage models are now private; public properties
+  return detached deep copies, so mutating `builder.repository_map` or another exposed view cannot
+  stale the cached omission identities. Internal cache hits retain zero fallback serialization.
+  Scanner inventory identities now use the same provider projection as rendering, consistently
+  excluding only incidental location-validation `validated_at` values while retaining security
+  evidence changes. Timestamp-only replay has identical rendered and omission identities; changed
+  validation evidence does not.
+- **Affected integrity matrix:** Ruff passed over all affected production and test modules; strict
+  mypy passed the five affected production modules. `.venv/bin/pytest -q tests/unit/test_openrouter.py
+  tests/unit/test_structured_output.py tests/unit/test_scheduler_response_contracts.py
+  tests/unit/test_scheduler_runtime.py tests/unit/test_context.py
+  tests/unit/test_context_omissions.py tests/unit/test_context_optional_metadata.py
+  tests/unit/test_context_serialization_boundary.py tests/unit/test_model_coverage.py
+  --durations=15` passed all `355` tests in `4.21s`. Two inherited protected temporary-toolchain
+  cleanup warnings were non-failing. No provider, network, live target, external engine, or secret
+  was used.
+- **Synthetic specialist candidate identity recovery:** The first maximum-assurance rerun reached
+  pass `02_blind_shard_review` and failed closed because the synthetic provider emitted five static
+  candidate IDs across independent shard tasks. Exact typed path/surface gating removed unrelated
+  emissions, but the second rerun still failed after `101.04s`: semantic overlap correctly exposed
+  the SafeControls surface in more than one independent request, so surface identity alone did not
+  distinguish origins. The fixture now commits each candidate ID to both the required
+  `mmaudit_request_id` and the sorted exact typed matching-surface set. An exact retry remains
+  stable, a distinct request or surface differs, and an out-of-scope path emits no candidate.
+  Production duplicate/conflict rejection is unchanged. The direct regression passed `4` tests
+  in `0.27s`; affected Ruff passed.
+- **Host origin-identity correction:** The next exact rerun failed in `100.99s` at the same first
+  typed boundary because both generic and specialist agent normalization discarded the provider
+  candidate ID and stamped only role, title, path, and line. Independently scheduled overlapping
+  reviews therefore collided even after the synthetic provider supplied request-bound identities.
+  One shared host helper now derives the origin candidate ID from the exact validated usage request
+  ID, request role, raw candidate identity, and canonical security payload while excluding only
+  fields that the host itself overwrites. Both agent paths reject duplicate raw IDs before
+  stamping. Same-request retained replay is stable; distinct requests, raw identities, or raw
+  security content differ; pass-three semantic grouping remains deterministic across identical
+  scheduler reruns. Production origin-package duplicate rejection remains unchanged.
+- **Origin-identity validation:** The direct request/replay, distinct-request/raw/content,
+  duplicate-raw, generic/specialist binder, and deterministic-grouping matrix passed `8` tests in
+  `0.49s`. The broader model-review evidence, specialist, and consensus matrix passed all `83`
+  tests in `0.64s`; affected Ruff and strict mypy over both production modules passed. Inherited
+  protected temporary-toolchain cleanup warnings were non-failing.
+- **Post-origin maximum-assurance evidence:** Exactly one rerun of `.venv/bin/pytest -q
+  tests/integration/test_pipeline.py::test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete
+  --durations=5` ran for `101.52s` (`100.97s` call). Passes `01_orientation`,
+  `02_blind_shard_review`, and `03_finding_reduction` completed, proving the duplicate origin-ID
+  failure is closed. The run then failed closed at the first pass-four business-logic task over
+  two exact shards with `cross-shard boundary review was not substantively completed`. The exit
+  code was `INCOMPLETE`, but report status remained `FAILED`, so the integration assertion did not
+  pass. No second rerun was launched and no production gate was reduced.
+- **Historical next safe action (superseded by the later green gates above):** Run one exact
+  maximum-assurance end-to-end regression, retain only its first
+  typed failure if any, then run repository-wide static, schema, complete-suite, diff, artifact,
+  and secret gates before checkpointing `V3-SCHEDULER-001`.
 
 ## 2026-08-02 — V3-SHARD-001
 

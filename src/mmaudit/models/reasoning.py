@@ -682,7 +682,9 @@ def _resolve_reasoning_request_role_fields(
             "falsifier",
             "candidate_cross_examination_context",
         )
-    if _CANDIDATE_FALSIFIER_REQUEST_ROLE.fullmatch(request_role) is not None:
+    if request_role == "candidate_falsifier" or (
+        _CANDIDATE_FALSIFIER_REQUEST_ROLE.fullmatch(request_role) is not None
+    ):
         return "falsifier", "falsifier", "falsifier", "candidate_cross_examination"
     if _WHOLE_PROTOCOL_REQUEST_ROLE.fullmatch(request_role) is not None:
         return (

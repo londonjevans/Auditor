@@ -12,6 +12,7 @@ from enum import StrEnum
 from typing import Any, Literal, Never
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic_core import SchemaValidator
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
@@ -136,12 +137,48 @@ def decode_structured_output[ResponseT: BaseModel](
     if type(truncated) is not bool:
         raise TypeError("truncated must be a boolean")
 
+    schema_validator = getattr(response_model, "__pydantic_validator__", None)
+    core_schema = getattr(response_model, "__pydantic_core_schema__", None)
+    if not isinstance(schema_validator, SchemaValidator) or core_schema is None:
+        raise TypeError("response_model lacks a live Pydantic schema")
+    return _decode_structured_output_with_schema_generation(
+        content,
+        response_model,
+        schema_validator=schema_validator,
+        core_schema=core_schema,
+        max_repair_attempts=max_repair_attempts,
+        truncated=truncated,
+    )
+
+
+def _decode_structured_output_with_schema_generation[ResponseT: BaseModel](
+    content: str,
+    response_model: type[ResponseT],
+    *,
+    schema_validator: SchemaValidator,
+    core_schema: object,
+    max_repair_attempts: int = 0,
+    truncated: bool = False,
+) -> StructuredOutputDecodeResult[ResponseT]:
+    """Decode against one exact caller-captured validator/core-schema generation."""
+
+    if (
+        getattr(response_model, "__pydantic_validator__", None) is not schema_validator
+        or getattr(response_model, "__pydantic_core_schema__", None) is not core_schema
+    ):
+        raise StructuredOutputDecodeError(StructuredOutputFailureCode.SCHEMA_VALIDATION_FAILED)
+
     original_sha256 = _text_sha256(content)
     if truncated:
         raise StructuredOutputDecodeError(StructuredOutputFailureCode.TRUNCATED_RESPONSE)
 
     try:
-        value = _decode_and_validate(content, response_model)
+        value = _decode_and_validate(
+            content,
+            response_model,
+            schema_validator=schema_validator,
+            core_schema=core_schema,
+        )
     except StructuredOutputDecodeError:
         if max_repair_attempts == 0:
             raise
@@ -153,7 +190,12 @@ def decode_structured_output[ResponseT: BaseModel](
             repaired_response=repaired,
         )
         try:
-            value = _decode_and_validate(repaired, response_model)
+            value = _decode_and_validate(
+                repaired,
+                response_model,
+                schema_validator=schema_validator,
+                core_schema=core_schema,
+            )
         except StructuredOutputDecodeError as repaired_error:
             raise StructuredOutputDecodeError(
                 repaired_error.code,
@@ -177,6 +219,9 @@ def decode_structured_output[ResponseT: BaseModel](
 def _decode_and_validate[ResponseT: BaseModel](
     content: str,
     response_model: type[ResponseT],
+    *,
+    schema_validator: SchemaValidator,
+    core_schema: object,
 ) -> ResponseT:
     decode_failure: StructuredOutputFailureCode | None = None
     try:
@@ -206,13 +251,33 @@ def _decode_and_validate[ResponseT: BaseModel](
         # preflight above. Strict Python-mode validation would reject legitimate
         # JSON representations of types such as StrEnum, while non-strict
         # Python-mode validation would permit coercions such as "2" to 2.
-        candidate = response_model.model_validate_json(
+        candidate = schema_validator.validate_json(
             content,
             strict=True,
             extra="forbid",
         )
+        if type(candidate) is not response_model:
+            raise TypeError("schema validator returned the wrong response type")
+        if (
+            getattr(response_model, "__pydantic_validator__", None) is not schema_validator
+            or getattr(response_model, "__pydantic_core_schema__", None) is not core_schema
+        ):
+            raise ValueError("response model changed during JSON validation")
         _ensure_all_fields_supplied(candidate)
-        value = candidate
+        detached = schema_validator.validate_python(
+            candidate.model_dump(mode="python", round_trip=True),
+            strict=True,
+            extra="forbid",
+        )
+        if type(detached) is not response_model:
+            raise TypeError("schema validator returned the wrong detached response type")
+        if (
+            getattr(response_model, "__pydantic_validator__", None) is not schema_validator
+            or getattr(response_model, "__pydantic_core_schema__", None) is not core_schema
+        ):
+            raise ValueError("response model changed during detached validation")
+        _ensure_all_fields_supplied(detached)
+        value = detached
     if value is None:
         raise StructuredOutputDecodeError(StructuredOutputFailureCode.SCHEMA_VALIDATION_FAILED)
     return value
