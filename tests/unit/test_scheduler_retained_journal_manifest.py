@@ -207,6 +207,43 @@ def test_complete_forensic_export_retains_resumed_run_journal_after_source_remov
     assert (destination / dependency.journal_directory).is_dir()
 
 
+def test_complete_forensic_export_preserves_physical_same_run_journal_directories(
+    retained_case: _RetainedJournalCase,
+    tmp_path: Path,
+) -> None:
+    physical_run = retained_case.owner.parent / retained_case.report.run_id
+    retained_case.owner.rename(physical_run)
+    with _live_scheduler_journal(physical_run, retained_case.artifact) as journal:
+        manifest = build_run_evidence_manifest(
+            run_dir=physical_run,
+            report=retained_case.report,
+            config=retained_case.config,
+            scheduler_runtime_journal=journal,
+        )
+    write_run_evidence_manifest(physical_run / "run-evidence-manifest.json", manifest)
+    destination = tmp_path / "complete-forensic-physical-run"
+
+    descriptor = export_complete_forensic_bundle(
+        source_run=physical_run,
+        destination=destination,
+        acknowledge_sensitive_evidence=True,
+    )
+
+    assert descriptor.retained_journal_dependencies == []
+    exported_journal = (
+        destination / descriptor.primary_run_directory / "private" / "scheduler-journal"
+    )
+    assert (exported_journal / "task-outputs").is_dir()
+    retained_case.owner.parent.rename(tmp_path / "physical-source-runs-removed")
+    assert (
+        verify_complete_forensic_bundle(
+            delivery_root=destination,
+            acknowledge_sensitive_evidence=True,
+        )
+        == descriptor
+    )
+
+
 def test_forensic_verifier_rejects_byte_identical_retained_journal_swap(
     retained_case: _RetainedJournalCase,
     tmp_path: Path,

@@ -90,6 +90,11 @@ class RetainedJournalDependency(StrictModel):
         )
         if self.artifact_inventory_sha256 != expected_hash:
             raise ValueError("retained-journal delivery inventory hash is inconsistent")
+        required_directories = {
+            f"{_RUNS_DIRECTORY_NAME}/{self.reference.owner_run_id}",
+            f"{_RUNS_DIRECTORY_NAME}/{self.reference.owner_run_id}/private",
+            expected_directory,
+        }
         if self.directories != sorted(set(self.directories)) or any(
             directory != expected_directory
             and not directory.startswith(f"{expected_directory}/")
@@ -101,6 +106,8 @@ class RetainedJournalDependency(StrictModel):
             for directory in self.directories
         ):
             raise ValueError("retained-journal directory inventory is not exact")
+        if not required_directories <= set(self.directories):
+            raise ValueError("retained-journal directory inventory lacks required custody roots")
         if self.directory_count != len(self.directories):
             raise ValueError("retained-journal directory count is inconsistent")
         if self.directory_inventory_sha256 != canonical_sha256(self.directories):
@@ -422,6 +429,13 @@ def verify_complete_forensic_bundle(
             evidence_root=wrapper_root,
             relative_path=_DESCRIPTOR_NAME,
         )
+        anchored_descriptor_content = _read_anchored_file_twice(
+            anchors.wrapper_descriptor,
+            _DESCRIPTOR_NAME,
+            max_bytes=_MAX_DESCRIPTOR_BYTES,
+        )
+        if anchored_descriptor_content != descriptor_observation.content:
+            raise ValueError("forensic delivery descriptor differs from its held wrapper")
         descriptor = ForensicDeliveryDescriptor.model_validate(descriptor_observation.value)
         _anchor_primary_run(wrapper_root, descriptor, anchors)
         manifest, manifest_content, source_inventory = _observe_complete_run(
@@ -446,6 +460,15 @@ def verify_complete_forensic_bundle(
         )
         if descriptor_final.content != descriptor_observation.content:
             raise ValueError("forensic delivery descriptor changed during verification")
+        if (
+            _read_anchored_file_twice(
+                anchors.wrapper_descriptor,
+                _DESCRIPTOR_NAME,
+                max_bytes=_MAX_DESCRIPTOR_BYTES,
+            )
+            != anchored_descriptor_content
+        ):
+            raise ValueError("forensic delivery descriptor changed in its held wrapper")
         final_manifest, final_manifest_content, final_source_inventory = _observe_complete_run(
             wrapper_root / descriptor.primary_run_directory
         )
@@ -949,14 +972,16 @@ def _write_incomplete_marker(wrapper_descriptor: int) -> None:
         ):
             raise ValueError("forensic incomplete marker changed while it was created")
         os.fsync(wrapper_descriptor)
-    except OSError as exc:
+    except BaseException as exc:
         if created_identity is not None:
             _unlink_exact_entry(
                 wrapper_descriptor,
                 _INCOMPLETE_MARKER_NAME,
                 created_identity,
             )
-        raise ValueError("forensic incomplete marker could not be created safely") from exc
+        if isinstance(exc, OSError):
+            raise ValueError("forensic incomplete marker could not be created safely") from exc
+        raise
     finally:
         if descriptor is not None:
             os.close(descriptor)
@@ -1255,6 +1280,65 @@ def _open_direct_child_directory(parent_descriptor: int, name: str, *, label: st
         raise
 
 
+def _read_anchored_file_twice(
+    parent_descriptor: int,
+    name: str,
+    *,
+    max_bytes: int,
+) -> bytes:
+    def read_once() -> bytes:
+        file_descriptor: int | None = None
+        try:
+            before = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_nlink != 1
+                or stat.S_IMODE(before.st_mode) != 0o600
+                or before.st_size > max_bytes
+            ):
+                raise ValueError("forensic anchored file is not a bounded private regular file")
+            file_descriptor = os.open(
+                name,
+                os.O_RDONLY | _CLOEXEC_FLAG | _NOFOLLOW_FLAG,
+                dir_fd=parent_descriptor,
+            )
+            opened = os.fstat(file_descriptor)
+            content = bytearray()
+            while len(content) <= max_bytes:
+                chunk = os.read(file_descriptor, min(1024 * 1024, max_bytes + 1 - len(content)))
+                if not chunk:
+                    break
+                content.extend(chunk)
+            finished = os.fstat(file_descriptor)
+            after = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+            if (
+                len(
+                    {
+                        _file_identity(before),
+                        _file_identity(opened),
+                        _file_identity(finished),
+                        _file_identity(after),
+                    }
+                )
+                != 1
+                or len(content) > max_bytes
+                or len(content) != before.st_size
+            ):
+                raise ValueError("forensic anchored file changed while it was read")
+            return bytes(content)
+        except OSError as exc:
+            raise ValueError("forensic anchored file could not be read safely") from exc
+        finally:
+            if file_descriptor is not None:
+                os.close(file_descriptor)
+
+    first = read_once()
+    second = read_once()
+    if first != second:
+        raise ValueError("forensic anchored file changed between observations")
+    return second
+
+
 def _directory_has_entry(root: Path, name: str) -> bool:
     descriptor = _open_directory_descriptor(root)
     try:
@@ -1266,41 +1350,36 @@ def _directory_has_entry(root: Path, name: str) -> bool:
 
 
 def _observe_directory_inventory(root: Path) -> list[str]:
-    root_descriptor = _open_directory_descriptor(root)
     directories: list[str] = []
-
-    def observe(descriptor: int, prefix: PurePosixPath) -> None:
+    pending = [PurePosixPath()]
+    while pending:
+        prefix = pending.pop()
+        directory = root if not prefix.parts else root / prefix.as_posix()
+        descriptor = _open_directory_descriptor(directory)
         try:
             names = sorted(os.listdir(descriptor))
         except OSError as exc:
+            os.close(descriptor)
             raise ValueError("forensic directory inventory could not be listed safely") from exc
-        for name in names:
-            _require_safe_component(name)
-            relative = (prefix / name).as_posix()
-            try:
-                entry = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
-            except OSError as exc:
-                raise ValueError("forensic directory inventory entry is unavailable") from exc
-            if stat.S_ISDIR(entry.st_mode):
-                child = os.open(
-                    name,
-                    os.O_RDONLY | _DIRECTORY_FLAG | _CLOEXEC_FLAG | _NOFOLLOW_FLAG,
-                    dir_fd=descriptor,
-                )
+        try:
+            for name in names:
+                _require_safe_component(name)
+                relative = (prefix / name).as_posix()
+                if len(relative) > 4_096:
+                    raise ValueError("forensic directory inventory path exceeds its bound")
                 try:
-                    if _directory_identity(os.fstat(child)) != _directory_identity(entry):
-                        raise ValueError("forensic directory inventory changed while observed")
+                    entry = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                except OSError as exc:
+                    raise ValueError("forensic directory inventory entry is unavailable") from exc
+                if stat.S_ISDIR(entry.st_mode):
                     directories.append(relative)
-                    observe(child, PurePosixPath(relative))
-                finally:
-                    os.close(child)
-            elif not stat.S_ISREG(entry.st_mode) or entry.st_nlink != 1:
-                raise ValueError("forensic directory inventory contains an unsafe entry")
-
-    try:
-        observe(root_descriptor, PurePosixPath())
-    finally:
-        os.close(root_descriptor)
+                    if len(directories) > _MAX_ARTIFACTS:
+                        raise ValueError("forensic directory inventory exceeds its count bound")
+                    pending.append(PurePosixPath(relative))
+                elif not stat.S_ISREG(entry.st_mode) or entry.st_nlink != 1:
+                    raise ValueError("forensic directory inventory contains an unsafe entry")
+        finally:
+            os.close(descriptor)
     return sorted(directories)
 
 
@@ -1387,7 +1466,7 @@ def _require_portable_paths(paths: list[str], directory_paths: list[str] | None 
 
     def register(path: str, *, leaf_kind: Literal["file", "directory"]) -> None:
         normalized = normalize_relative_path(path)
-        if normalized != path or unicodedata.normalize("NFC", path) != path:
+        if len(path) > 4_096 or normalized != path or unicodedata.normalize("NFC", path) != path:
             raise ValueError("forensic delivery path is not portable NFC")
         parts = PurePosixPath(path).parts
         for index in range(len(parts)):

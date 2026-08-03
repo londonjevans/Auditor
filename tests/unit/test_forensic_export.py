@@ -418,6 +418,35 @@ def test_marker_creation_failure_rolls_back_exact_empty_wrapper(
     assert not destination.exists()
 
 
+def test_partial_marker_write_removes_only_its_created_inode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wrapper = tmp_path / "wrapper"
+    wrapper.mkdir(mode=0o700)
+    descriptor = forensic_export_module._open_directory_descriptor(wrapper)
+    real_write = forensic_export_module.os.write
+    attempted = False
+
+    def fail_after_partial_write(file_descriptor: int, content) -> int:
+        nonlocal attempted
+        if not attempted:
+            attempted = True
+            real_write(file_descriptor, content[:1])
+            raise OSError("synthetic partial marker write failure")
+        return real_write(file_descriptor, content)
+
+    monkeypatch.setattr(forensic_export_module.os, "write", fail_after_partial_write)
+    try:
+        with pytest.raises(ValueError, match="could not be created safely"):
+            forensic_export_module._write_incomplete_marker(descriptor)
+    finally:
+        os.close(descriptor)
+
+    assert attempted
+    assert not (wrapper / "INCOMPLETE_FORENSIC_EXPORT").exists()
+
+
 def test_marker_finalization_fsync_failure_restores_incomplete_marker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -487,6 +516,19 @@ def test_final_verifier_failure_restores_incomplete_marker(
 def test_portable_path_collisions_are_rejected_before_copy(paths: list[str]) -> None:
     with pytest.raises(ValueError, match="portable-name collision"):
         forensic_export_module._require_portable_paths(paths)
+
+
+def test_directory_inventory_count_is_bounded_before_delivery_creation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "many-directories"
+    (root / "one").mkdir(parents=True)
+    (root / "two").mkdir()
+    monkeypatch.setattr(forensic_export_module, "_MAX_ARTIFACTS", 1)
+
+    with pytest.raises(ValueError, match="directory inventory exceeds its count bound"):
+        forensic_export_module._observe_directory_inventory(root)
 
 
 @pytest.mark.parametrize("changed_directory", ["wrapper", "primary"])

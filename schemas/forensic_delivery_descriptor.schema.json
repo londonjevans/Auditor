@@ -28,6 +28,203 @@
       ],
       "title": "ManifestFileBinding",
       "type": "object"
+    },
+    "RetainedJournalDependency": {
+      "additionalProperties": false,
+      "description": "Exact owner-journal bytes required to verify one resumed scheduler run.",
+      "properties": {
+        "artifact_count": {
+          "maximum": 200001,
+          "minimum": 1,
+          "title": "Artifact Count",
+          "type": "integer"
+        },
+        "artifact_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Artifact Inventory Sha256",
+          "type": "string"
+        },
+        "artifact_total_bytes": {
+          "maximum": 8689934592,
+          "minimum": 1,
+          "title": "Artifact Total Bytes",
+          "type": "integer"
+        },
+        "artifacts": {
+          "items": {
+            "$ref": "#/$defs/ManifestFileBinding"
+          },
+          "maxItems": 200001,
+          "minItems": 1,
+          "title": "Artifacts",
+          "type": "array"
+        },
+        "dependency_kind": {
+          "const": "SCHEDULER_RETAINED_JOURNAL",
+          "default": "SCHEDULER_RETAINED_JOURNAL",
+          "title": "Dependency Kind",
+          "type": "string"
+        },
+        "directories": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 200001,
+          "minItems": 3,
+          "title": "Directories",
+          "type": "array"
+        },
+        "directory_count": {
+          "maximum": 200001,
+          "minimum": 3,
+          "title": "Directory Count",
+          "type": "integer"
+        },
+        "directory_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Directory Inventory Sha256",
+          "type": "string"
+        },
+        "journal_directory": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Journal Directory",
+          "type": "string"
+        },
+        "reference": {
+          "$ref": "#/$defs/SchedulerRetainedJournalReference"
+        },
+        "reference_file_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reference File Sha256",
+          "type": "string"
+        },
+        "reference_path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Reference Path",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reference_path",
+        "reference_file_sha256",
+        "journal_directory",
+        "reference",
+        "artifact_count",
+        "artifact_total_bytes",
+        "artifact_inventory_sha256",
+        "artifacts",
+        "directory_count",
+        "directory_inventory_sha256",
+        "directories"
+      ],
+      "title": "RetainedJournalDependency",
+      "type": "object"
+    },
+    "SchedulerRetainedJournalReference": {
+      "additionalProperties": false,
+      "description": "Cycle-free identity for one prior run's physical scheduler journal.\n\nThe relative path is descriptive, not authority: detached verification must\nresolve it beneath the configured ``runs`` directory, require the referenced\nrun to physically own the private journal, and reconstruct the artifact before\naccepting this exact identity projection.",
+      "properties": {
+        "campaign_id": {
+          "pattern": "^scheduler-campaign-[0-9a-f]{64}$",
+          "title": "Campaign Id",
+          "type": "string"
+        },
+        "consumer_run_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Consumer Run Id",
+          "type": "string"
+        },
+        "evidence_authority": {
+          "const": "comparison_required",
+          "default": "comparison_required",
+          "title": "Evidence Authority",
+          "type": "string"
+        },
+        "owner_run_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Owner Run Id",
+          "type": "string"
+        },
+        "ownership_mode": {
+          "const": "physical_private_journal",
+          "default": "physical_private_journal",
+          "title": "Ownership Mode",
+          "type": "string"
+        },
+        "reference_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reference Sha256",
+          "type": "string"
+        },
+        "relative_journal_path": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Relative Journal Path",
+          "type": "string"
+        },
+        "scheduler_artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Scheduler Artifact Sha256",
+          "type": "string"
+        },
+        "scheduler_journal_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Scheduler Journal Evidence Sha256",
+          "type": "string"
+        },
+        "scheduler_manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Scheduler Manifest Sha256",
+          "type": "string"
+        },
+        "scheduler_summary_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Scheduler Summary Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "terminal_event_chain_head_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Terminal Event Chain Head Sha256"
+        }
+      },
+      "required": [
+        "owner_run_id",
+        "consumer_run_id",
+        "relative_journal_path",
+        "campaign_id",
+        "scheduler_manifest_sha256",
+        "scheduler_summary_sha256",
+        "scheduler_journal_evidence_sha256",
+        "scheduler_artifact_sha256",
+        "reference_sha256"
+      ],
+      "title": "SchedulerRetainedJournalReference",
+      "type": "object"
     }
   },
   "$id": "https://mmaudit.local/schemas/forensic_delivery_descriptor.schema.json",
@@ -36,7 +233,7 @@
   "description": "Self-hashed descriptor for a complete forensic delivery directory.",
   "properties": {
     "artifact_count": {
-      "maximum": 100001,
+      "maximum": 200001,
       "minimum": 2,
       "title": "Artifact Count",
       "type": "integer"
@@ -47,7 +244,7 @@
       "type": "string"
     },
     "artifact_total_bytes": {
-      "maximum": 4394967296,
+      "maximum": 8689934592,
       "minimum": 1,
       "title": "Artifact Total Bytes",
       "type": "integer"
@@ -56,7 +253,7 @@
       "items": {
         "$ref": "#/$defs/ManifestFileBinding"
       },
-      "maxItems": 100001,
+      "maxItems": 200001,
       "minItems": 2,
       "title": "Artifacts",
       "type": "array"
@@ -72,14 +269,34 @@
       "title": "Descriptor Sha256",
       "type": "string"
     },
+    "directories": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 200001,
+      "minItems": 2,
+      "title": "Directories",
+      "type": "array"
+    },
+    "directory_count": {
+      "maximum": 200001,
+      "minimum": 2,
+      "title": "Directory Count",
+      "type": "integer"
+    },
+    "directory_inventory_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Directory Inventory Sha256",
+      "type": "string"
+    },
     "evidence_inclusion_policy": {
-      "const": "ALL_MANIFEST_BOUND_ARTIFACTS",
-      "default": "ALL_MANIFEST_BOUND_ARTIFACTS",
+      "const": "ALL_MANIFEST_BOUND_AND_REQUIRED_DEPENDENCY_ARTIFACTS",
+      "default": "ALL_MANIFEST_BOUND_AND_REQUIRED_DEPENDENCY_ARTIFACTS",
       "title": "Evidence Inclusion Policy",
       "type": "string"
     },
     "log_artifact_count": {
-      "maximum": 100001,
+      "maximum": 200001,
       "minimum": 0,
       "title": "Log Artifact Count",
       "type": "integer"
@@ -88,8 +305,14 @@
       "title": "Logs Included",
       "type": "boolean"
     },
+    "primary_run_directory": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "title": "Primary Run Directory",
+      "type": "string"
+    },
     "private_artifact_count": {
-      "maximum": 100001,
+      "maximum": 200001,
       "minimum": 0,
       "title": "Private Artifact Count",
       "type": "integer"
@@ -98,10 +321,18 @@
       "title": "Private Evidence Included",
       "type": "boolean"
     },
-    "run_directory": {
-      "const": "run",
-      "default": "run",
-      "title": "Run Directory",
+    "retained_journal_dependencies": {
+      "items": {
+        "$ref": "#/$defs/RetainedJournalDependency"
+      },
+      "maxItems": 1,
+      "title": "Retained Journal Dependencies",
+      "type": "array"
+    },
+    "runs_directory": {
+      "const": "runs",
+      "default": "runs",
+      "title": "Runs Directory",
       "type": "string"
     },
     "schema_version": {
@@ -122,14 +353,20 @@
       "type": "string"
     },
     "source_manifest_path": {
-      "const": "run-evidence-manifest.json",
-      "default": "run-evidence-manifest.json",
+      "maxLength": 4096,
+      "minLength": 1,
       "title": "Source Manifest Path",
       "type": "string"
     },
     "source_manifest_self_sha256": {
       "pattern": "^[0-9a-f]{64}$",
       "title": "Source Manifest Self Sha256",
+      "type": "string"
+    },
+    "source_run_directory_name": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Source Run Directory Name",
       "type": "string"
     },
     "source_run_id": {
@@ -141,12 +378,18 @@
   },
   "required": [
     "source_run_id",
+    "source_run_directory_name",
+    "primary_run_directory",
+    "source_manifest_path",
     "source_manifest_file_sha256",
     "source_manifest_self_sha256",
     "artifact_count",
     "artifact_total_bytes",
     "artifact_inventory_sha256",
     "artifacts",
+    "directory_count",
+    "directory_inventory_sha256",
+    "directories",
     "private_evidence_included",
     "logs_included",
     "private_artifact_count",
