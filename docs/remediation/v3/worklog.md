@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
-LAST_CHECKPOINT_COMMIT: a1ebb7169c80fb9a44f33b602824a11f0794b756
+LAST_CHECKPOINT_COMMIT: 9c14487ed1587d384f12ca4d99f790b99565b442
 
 ## 2026-08-03 — V3-REPORT-001
 
@@ -80,6 +80,9 @@ LAST_CHECKPOINT_COMMIT: a1ebb7169c80fb9a44f33b602824a11f0794b756
   inventory. These are the exact resume targets. All delegated agents have finished, no test or
   provider process remains active, no provider/network call occurred, and this checkpoint is
   explicitly WIP rather than ticket-complete evidence.
+- **WIP checkpoint:** The preserved report, manifest, CI, schema, documentation, and adversarial
+  regression slice is committed at `9c14487ed1587d384f12ca4d99f790b99565b442`.
+  It deliberately retains the two documented red tests and makes no completion or release claim.
 
 ## 2026-08-03 — V3-FIXTURE-001
 
