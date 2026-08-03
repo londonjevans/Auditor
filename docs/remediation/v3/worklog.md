@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
-LAST_CHECKPOINT_COMMIT: 38bed8d76c72af77c01d6ac20790482348dcbd9b
+LAST_CHECKPOINT_COMMIT: dada6ac2ab521f521ab186c8797505ec9bfef597
 
 ## 2026-08-03T21:01:54Z — Graceful operator pause
 
@@ -43,6 +43,9 @@ LAST_CHECKPOINT_COMMIT: 38bed8d76c72af77c01d6ac20790482348dcbd9b
 - **Safety/cost:** No provider call, public RPC, secret read, or target-controlled command was
   performed. All delegated work is stopped and no pytest, Ruff, mypy, schema, or mmaudit process
   remains active.
+- **WIP checkpoint:** The exact partial implementation and pause record are preserved at
+  `dada6ac2ab521f521ab186c8797505ec9bfef597`. This commit intentionally retains the `32`
+  focused fixture/helper failures and is not ticket-complete evidence.
 
 ## 2026-08-03 — V3-REPORT-001
 
