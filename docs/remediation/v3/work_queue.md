@@ -1713,11 +1713,35 @@ are invisible to source review by construction.
     no local database yet. Record the exact one-time preparation command in
     `operator_prerequisites.md`, and report the condition as an explicit unmet prerequisite
     rather than a generic non-zero exit.
-  - **`slither` — undiagnosed, and the diagnostic gap is itself the defect.** Exit `1` with a
-    completely empty stderr and zero bytes of output. Investigate — the likely candidates are
-    solc resolution, `solc-select` writing under the private `HOME`, or Foundry remappings —
-    but regardless of cause, a tool that fails while emitting nothing must not be reported as
-    a bare exit code. Capture and classify the silent-failure case.
+  - **`slither` — diagnosed 2026-08-03; it is an isolated-invocation defect, not a tool defect,
+    and it is the single highest-value remaining fix in this ticket.**
+    - Run directly on `tests/fixtures/solidity/realistic_scale/solidity_005k`, slither `0.11.6`
+      returns `"success": true` and **213 detector results** — 46 Medium, 165 Low, 2
+      Informational; principally `reentrancy-events` 90, `reentrancy-benign` 45,
+      `reentrancy-no-eth` 30, `unused-return` 15, `events-maths` 15, `timestamp` 15.
+    - Run through `mmaudit scan --run-slither` against the identical fixture, it produces exit
+      `1`, zero output bytes, and a completely empty stderr. The typed `silent_failure` status
+      added by this ticket now reports the condition correctly, but the underlying invocation
+      is still broken.
+    - **The gap between these two runs is 213 findings against zero on a 5,000-line protocol.**
+      Every other deterministic capability — indexing, sharding, coverage, execution-origination,
+      honest status — already works, so this one invocation is the difference between a run that
+      reports nothing and a usable deterministic audit.
+    - **Probable cause:** slither compiles before analysing, so it resolves `solc` through
+      `crytic-compile` and `solc-select`. Reproducing the backend profile by hand earlier
+      produced `FileExistsError: /Users/<operator>/.solc-select/artifacts`, which indicates
+      `solc` resolution and the `solc-select` artifact directory failing against the private
+      `HOME` and scrubbed environment the backend supplies. Investigate solc discovery, the
+      private `HOME` layout, `SOLC_VERSION`/`solc-select` state, and whether the pinned
+      compiler must be provisioned inside the isolated workspace rather than resolved from the
+      operator's home directory.
+    - **Do not fix this by unscrubbing the environment, widening the sandbox beyond the
+      resolved toolchain prefixes, or running slither outside isolation.** The correct fix
+      provisions what the compiler needs inside the boundary.
+    - **Verification:** the same fixture must yield a non-empty validated detector set through
+      `mmaudit`, and the count must be of the same order as the standalone run. A run that
+      succeeds but returns far fewer detectors indicates partial compilation and is not a pass.
+
 - **Acceptance criteria:**
   - `gitleaks` loads its bundled rules and produces validated machine output under isolation.
   - A scanner with nothing in scope is classified not-applicable, distinctly from failure, in
