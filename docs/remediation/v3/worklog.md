@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
-LAST_CHECKPOINT_COMMIT: d01490bac1f11956c58f2c4a619ec5129e49d46d
+LAST_CHECKPOINT_COMMIT: 873e266824e2e1ad59acd5f513ec09f821f574c6
 
 ## 2026-08-03T22:55:05Z — Graceful operator pause
 
@@ -40,6 +40,9 @@ LAST_CHECKPOINT_COMMIT: d01490bac1f11956c58f2c4a619ec5129e49d46d
   ledger's fail-closed parent validation.
 - **Safety and external state:** No model/provider call, network target, public RPC, credential,
   or release operation occurred. The read-only reviewer was stopped before the pause.
+- **WIP checkpoint:** The exact implementation state is committed at
+  `873e266824e2e1ad59acd5f513ec09f821f574c6`; it is intentionally not ticket-complete or
+  release evidence. A following pause-metadata commit records this hash for clean resumption.
 
 ## 2026-08-03T22:02:03Z — Graceful operator pause
 
