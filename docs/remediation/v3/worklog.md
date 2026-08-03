@@ -5,12 +5,12 @@ The objective source has SHA-256
 Do not record credentials, raw private prompts, or raw provider completions here.
 
 AUTORUN_STATUS: RUNNING
-CURRENT_MILESTONE: Pinned repository-suite execution
-CURRENT_TICKET: V3-FORKSUITE-001 (PARTIAL; TERMINAL_RECONCILIATION_PENDING)
+CURRENT_MILESTONE: Model qualification bootstrap
+CURRENT_TICKET: V3-BOOTSTRAP-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-SCHEDULER-001
-NEXT_ACTION: Commit and push the reconciled V3-FORKSUITE-001 terminal status, then inspect authoritative execution-order ticket V3-OBJECTIVE-001 without pausing.
-LAST_COMMAND: `git push origin main`
-LAST_RESULT: PASS: scheduler checkpoint `136f8322aee78f53812461f20c4987fc6b6b1918` and separate operator-authored Corrovera product-vision commit `3d97425d5db42bbbda776dfc3abe27270670b127` were pushed to the configured GitHub SSH remote. The current tree is clean. V3-FORKSUITE-001's safe Foundry scope was already fully validated; only the real Hardhat runtime integration remains BLOCKED_TECHNICAL, so its persisted status is being reconciled to PARTIAL before continuing.
+NEXT_ACTION: Separate declared model identity from optional measured quality without weakening production selection; add focused bootstrap and fail-closed regressions.
+LAST_COMMAND: `git ls-files -co --exclude-standard -z | xargs -0 shasum -a 256 | awk '$1 == "f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43" { print; matches += 1 } END { print "HASHED=" NR; print "MATCHES=" (matches + 0) }'`
+LAST_RESULT: BLOCKED_TECHNICAL: V3-OBJECTIVE-001 exact-source audit hashed 918 tracked/untracked nonignored files and found 0 matches; the digest appears only as a reference and reconstruction is forbidden. V3-TARGETSPEC-001 is dependency-blocked. The distinct Corrovera vision is restored at its recorded `77e5ab...` hash, and commit `d8e075a8e39f0008853dd59b9ffea2364171832e` is present on `origin/main`. Continuing with independent V3-BOOTSTRAP-001.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -18,8 +18,26 @@ OPENROUTER_COST_USED_USD: 0.0033415625
 OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
-BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 136f8322aee78f53812461f20c4987fc6b6b1918
+BLOCKED_EXTERNAL_ITEMS: Exact objective source bytes matching `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43` are absent, blocking V3-OBJECTIVE-001 and dependent V3-TARGETSPEC-001; exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
+LAST_CHECKPOINT_COMMIT: 6b83b527ce14b7cff3b8abbe153603b2e8e14ae9
+
+## 2026-08-03 — V3-OBJECTIVE-001 and V3-TARGETSPEC-001 dependency disposition
+
+- **V3-OBJECTIVE-001 status:** `BLOCKED_TECHNICAL`.
+- **Exact source audit:** The required SHA-256 is
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
+  The exact nonignored-file command shown in `LAST_COMMAND` hashed `918` files and returned
+  `MATCHES=0`. Only the queue, this worklog, and `review_traceability.json` mention the digest,
+  and none supplies a canonical source path.
+- **Integrity boundary:** The separate 1,812-line Corrovera product vision hashes to
+  `77e5ab93225377e86e4ad08f09775deaac86b927a6817b8dca9eaa6f81b8a2a6` and cannot substitute
+  for the absent objective. The objective was not reconstructed, summarized, or paraphrased.
+- **V3-TARGETSPEC-001 status:** `BLOCKED_TECHNICAL` on its explicit objective dependency. Its
+  precedence and reconciliation acceptance criteria cannot be completed without knowing the
+  missing objective's content.
+- **Operator prerequisite:** Supply the exact byte stream or canonical readable source path
+  matching the required objective digest. No other safe portion remains in these two tickets.
+- **Continuation:** `V3-BOOTSTRAP-001` is dependency-free and is now `IN_PROGRESS`.
 
 ## 2026-08-02 — V3-SCHEDULER-001
 

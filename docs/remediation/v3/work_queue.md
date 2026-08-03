@@ -1460,7 +1460,18 @@ are invisible to source review by construction.
   `docs/remediation/v3/worklog.md`, `docs/remediation/v3/review_traceability.json`, regression.
 - **Dependencies:** None.
 - **Unblocks:** `V3-TARGETSPEC-001`.
-- **Status:** `QUEUED`
+- **Status:** `BLOCKED_TECHNICAL`
+- **Blocker evidence:** On 2026-08-03, the exact digest scan hashed all `918`
+  tracked/untracked nonignored repository files and found `0` matches. The digest occurs only as
+  a reference in this queue, the worklog, and `review_traceability.json`; no canonical source
+  path is recorded. The distinct Corrovera product vision was restored byte-for-byte and hashes
+  to `77e5ab93225377e86e4ad08f09775deaac86b927a6817b8dca9eaa6f81b8a2a6`.
+- **Required operator prerequisite:** Supply the exact objective byte stream or a canonical
+  readable source path whose SHA-256 is
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
+  The document will not be reconstructed or replaced with the different product vision.
+- **Next action:** Resume this ticket only when that exact source is available; continue now
+  with dependency-free `V3-BOOTSTRAP-001`.
 
 ## V3-TARGETSPEC-001 — Reconcile the product vision with the objective and correct the README
 
@@ -1526,7 +1537,12 @@ are invisible to source review by construction.
   - Capability markings derive from ticket status rather than assertion, and a regression fails
     when a marking disagrees with its ticket status, so the documents cannot drift again.
 - **Dependencies:** `V3-OBJECTIVE-001`.
-- **Status:** `QUEUED`
+- **Status:** `BLOCKED_TECHNICAL`
+- **Blocker:** Its authoritative precedence and reconciliation work requires the exact objective
+  document, while `V3-OBJECTIVE-001` is blocked on the absent hash-matching source. No safe
+  reconciliation can infer the missing document's content from its digest.
+- **Next action:** Resume after `V3-OBJECTIVE-001`; continue with dependency-free
+  `V3-BOOTSTRAP-001`.
 
 ## V3-POLICYELIG-001 — Provider terms and jurisdictional eligibility for model use
 
@@ -1667,7 +1683,10 @@ are invisible to source review by construction.
 - **Dependencies:** None.
 - **Unblocks:** `V3-CALIBRATE-001`, `V3-LINEAGE-001`, `V3-MODELREFRESH-001`, and transitively
   `V3-QUALIFY-001` and every real-audit ticket.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
+- **Current action:** Trace the existing identity/quality coupling across configuration,
+  benchmarking, qualification, and production selection; implement the smallest typed split and
+  prove identity-only measurement plus production-selection rejection.
 
 ## V3-MODELREFRESH-001 — Daily catalogue refresh and candidate drift detection
 
@@ -1859,11 +1878,10 @@ no duplicate, and no ticket scheduled before a declared dependency completes.
    `V3-QUALIFY-001`.
 2. `V3-FORKSUITE-001` — partial with the safe Foundry path complete. The Hardhat subtask stays
    `BLOCKED_TECHNICAL` behind `V3-HARDHAT-001` and its operator container prerequisite.
-3. `V3-OBJECTIVE-001` — commit the objective document. Nearly free, and until it lands no
-   reviewer can check whether this queue is sufficient to deliver the requirement, only that
-   it is internally consistent.
-4. `V3-TARGETSPEC-001` — reconcile the supplied product vision with the objective, define
-   precedence, close the commercial gaps, and correct the README.
+3. `V3-OBJECTIVE-001` — blocked technical: the exact hash-matching byte stream is absent and
+   reconstruction is forbidden. Resume only when the operator supplies it.
+4. `V3-TARGETSPEC-001` — blocked technical on `V3-OBJECTIVE-001`; reconciliation cannot infer
+   the missing objective from its hash.
 5. `V3-BOOTSTRAP-001` — **highest leverage remaining ticket.** Small, no dependencies, and
    until it lands no model can be benchmarked, `approved_model_lineages` cannot be populated,
    and the recorded operator lineage authorisation cannot take effect.
