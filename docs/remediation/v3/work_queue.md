@@ -1780,7 +1780,7 @@ are invisible to source review by construction.
 - **Dependencies:** None.
 - **Unblocks:** `V3-CALIBRATE-001`, `V3-LINEAGE-001`, `V3-MODELREFRESH-001`, and transitively
   `V3-QUALIFY-001` and every real-audit ticket.
-- **Status:** `IN_PROGRESS`
+- **Status:** `COMPLETE`
 - **Implementation:** Declared lineage identity and retention are now independent of one optional,
   atomic nested measured-quality record. Approved identity-only records work in the deterministic
   benchmark target/egress path, while audit preflight, ordinary role validation, and verified
@@ -1802,15 +1802,21 @@ are invisible to source review by construction.
   production audit to rely on a manually populated static quality record without current opaque
   qualification. The preceding full-suite result applies to that pre-review tree only and is not
   final acceptance evidence for this ticket.
-- **Current status:** The qualification gate and subsequent issuer-held OpenRouter transport,
-  request-callable, pool-content, and class-dispatch hardening are implemented. The final focused
-  OpenRouter/generation matrix passed `323` tests, and bounded independent re-probing found both
-  last false-REAL paths closed. The complete pipeline gate was paused by the operator after `79`
-  passes without failure, so the ticket remains in progress and that partial run earns no
-  acceptance credit.
-- **Next action:** Rerun the complete pipeline integration file from the beginning, then run the
-  changed model/config/schema matrix and repository-wide static/full-suite gates before
-  checkpointing.
+- **Final status:** The qualification gate and issuer-held OpenRouter transport,
+  request-callable, pool-content, and class-dispatch hardening are complete. The final
+  pipeline gate passed `113` tests; the corrected model/config/schema matrix passed `740`;
+  the consolidated stale-harness regression matrix passed `271`; the host-policy listener
+  matrix passed `138`; and `.venv/bin/pytest -q --cache-clear` passed `4452` tests with `11`
+  explicit external-prerequisite/paid-provider skips and zero failures or errors in `1385.11s`.
+  Ruff formatting/checks, strict mypy over `165` source files, release-schema verification,
+  TOML parsing, Ajv 2020 strict schema compilation, and diff checks passed. Independent review
+  found no remaining acceptance gap or weakened production gate.
+- **Evidence boundary:** All provider behavior in this ticket was synthetic and explicitly
+  `MOCK`; arbitrary injected transports remain `UNVERIFIED`. No provider call, network target,
+  operator secret, reservation, or additional spend occurred. This ticket enables honest
+  measurement and promotion only; it does not claim a real provider benchmark, qualified
+  production ensemble, or real audit.
+- **Next action:** None; continue `V3-TOOLDIAG-002`.
 
 ## V3-MODELREFRESH-001 — Daily catalogue refresh and candidate drift detection
 
@@ -2002,9 +2008,8 @@ no duplicate, and no ticket scheduled before a declared dependency completes.
    `V3-QUALIFY-001`.
 2. `V3-FORKSUITE-001` — partial with the safe Foundry path complete. The Hardhat subtask stays
    `BLOCKED_TECHNICAL` behind `V3-HARDHAT-001` and its operator container prerequisite.
-3. `V3-BOOTSTRAP-001` — **highest leverage remaining ticket.** Small, no dependencies, and
-   until it lands no model can be benchmarked, `approved_model_lineages` cannot be populated,
-   and the recorded operator lineage authorisation cannot take effect.
+3. `V3-BOOTSTRAP-001` — complete. Declared identity can now be measured without prior quality,
+   while production selection remains bound to current opaque qualification evidence.
 4. `V3-TOOLDIAG-002` — small; without it a real audit still returns zero static-analyzer
    findings.
 5. `V3-FIXTURE-001` — close-out only. Its sole remaining gap was that `V3-SHARD-001` had to

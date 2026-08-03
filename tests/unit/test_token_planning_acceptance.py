@@ -664,13 +664,10 @@ async def test_high_capacity_context_executes_through_fake_provider_and_manifest
             "reserved_output_tokens": 32_768,
         },
     )
-    transport = httpx.MockTransport(
-        lambda _request: _completion_response('{"answer":"high-capacity context reviewed"}')
-    )
-    http_client = httpx.AsyncClient(
-        transport=transport,
-        base_url="https://fake.test/api/v1/",
-    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return _completion_response('{"answer":"high-capacity context reviewed"}')
+
     usage = UsageLedger()
     client = OpenRouterClient(
         api_key="synthetic-key",
@@ -687,8 +684,9 @@ async def test_high_capacity_context_executes_through_fake_provider_and_manifest
             global_output_token_budget=config.token_budgets.global_output_token_budget,
         ),
         usage=usage,
-        http_client=http_client,
+        base_url="https://fake.test/api/v1/",
         token_budgets=config.token_budgets,
+        test_only_mock_handler=handler,
     )
     try:
         package_budget = client.context_package_byte_budget([_MODEL_ID])
@@ -711,8 +709,7 @@ async def test_high_capacity_context_executes_through_fake_provider_and_manifest
             schema_name="answer",
         )
     finally:
-        client.clear_credentials()
-        await http_client.aclose()
+        await client.close()
 
     assert result.answer == "high-capacity context reviewed"
     assert len(usage.records) == 1

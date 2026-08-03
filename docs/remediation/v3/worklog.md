@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_BY_OPERATOR
+AUTORUN_STATUS: RUNNING
 CURRENT_MILESTONE: Model qualification bootstrap
-CURRENT_TICKET: V3-BOOTSTRAP-001 (IN_PROGRESS)
-LAST_COMPLETED_TICKET: V3-OBJECTIVE-001 (BLOCKED_TECHNICAL disposition checkpointed)
-NEXT_ACTION: On operator resume, rerun `.venv/bin/pytest -q tests/integration/test_pipeline.py --cache-clear` from the beginning, then complete the affected and repository-wide validation gates.
-LAST_COMMAND: `.venv/bin/pytest -q tests/integration/test_pipeline.py --cache-clear`
-LAST_RESULT: PAUSED_BY_OPERATOR: interrupted cleanly after 79 passing tests in 302.30s; no failure had surfaced and the partial run is not acceptance evidence.
+CURRENT_TICKET: V3-BOOTSTRAP-001 (COMPLETE; CHECKPOINT_PENDING)
+LAST_COMPLETED_TICKET: V3-BOOTSTRAP-001 (COMPLETE)
+NEXT_ACTION: Complete final artifact/secret review, create and push the isolated Bootstrap checkpoint, then begin V3-TOOLDIAG-002.
+LAST_COMMAND: `.venv/bin/ruff format tests/unit/test_token_planning_acceptance.py && .venv/bin/pytest -q tests/unit/test_token_planning_acceptance.py --cache-clear && .venv/bin/ruff format --check . && .venv/bin/ruff check . && .venv/bin/mypy && .venv/bin/python scripts/generate_release_schemas.py && git diff --check`
+LAST_RESULT: PASS: mechanical formatting normalized one test, its 5 focused cases passed in 2.10s, all 419 files are formatted, Ruff passed, strict mypy passed 165 source files, schemas verified, and diff checks passed; the preceding host-policy full suite passed 4452 with 11 explicit skips in 1385.11s.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,11 +19,11 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
-LAST_CHECKPOINT_COMMIT: 517559e5c9526f78e516374ebc194933d01eac7f
+LAST_CHECKPOINT_COMMIT: 266646cdf033f0a076872e5152b2785c672176a0
 
 ## 2026-08-03 — V3-BOOTSTRAP-001
 
-- **Status:** `IN_PROGRESS`; independent review found one remaining fail-closed boundary gap.
+- **Status:** `COMPLETE`; final independent review found no remaining acceptance gap.
 - **Defensive objective:** Remove the quality-before-quality-measurement cycle while keeping
   every audit-role and production-selection path fail closed for unmeasured identities.
 - **Typed separation:** `ModelLineageConfig` now contains immutable declared identity and
@@ -241,6 +241,109 @@ LAST_CHECKPOINT_COMMIT: 517559e5c9526f78e516374ebc194933d01eac7f
   commit was created from the not-yet-final tree.
 - **Resume action:** Rerun `.venv/bin/pytest -q tests/integration/test_pipeline.py --cache-clear`,
   then the changed model/config/schema matrix, repository-wide static gates, and complete pytest.
+- **Autorun resumed:** The authoritative 1,417-line objective was reread from the operator
+  attachment and reverified at SHA-256
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`. Repository guidance,
+  both durable queues/worklogs, and Git state were rechecked. Source checkpoint
+  `116657c0a3d4ecc23af457a1a7a93977be947f45` was clean and one commit ahead of the SSH remote;
+  that unrelated queue-only operator change is preserved. The complete pipeline gate is being
+  rerun from the beginning; no paid-provider opt-in is enabled.
+- **Final pipeline gate:** `.venv/bin/pytest -q tests/integration/test_pipeline.py --cache-clear`
+  passed all `113` tests in `666.31s` (`11m06s`) on the request-boundary and pool-content-sealed
+  tree. Two inherited best-effort cleanup warnings referenced stale permission-restricted
+  clean-Anvil temporary directories and did not affect the result. No provider, network,
+  target, secret, reservation, or spend was used.
+- **Independent acceptance review:** Read-only review found no material ticket acceptance gap;
+  its focused matrix passed `9` tests in `7.69s`. The reviewer explicitly classified all of this
+  as unit or synthetic/mock integration evidence, not a real benchmark, qualification, provider,
+  or production-audit execution.
+- **Next action:** Run the complete model/config/schema acceptance matrix, then repository-wide
+  formatting, lint, strict typing, schema/template checks, and full pytest.
+- **Broad-matrix stale expectation:** The first model/config/schema matrix completed with
+  `1 failed, 739 passed in 469.10s`. The sole case still expected a caller-injected
+  `httpx.MockTransport` to receive descriptive MOCK evidence. The hardened issuer boundary
+  correctly returns `UNVERIFIED` and refuses the injected client before discovery sealing. The
+  regression now asserts that stronger negative behavior and its exact focused test passed in
+  `1.20s`; affected Ruff passed. No production behavior or acceptance threshold was weakened.
+- **Next action:** Rerun the complete `740`-test model/config/schema matrix, then continue to
+  repository-wide gates.
+- **Corrected broad acceptance gate:** `.venv/bin/pytest -q tests/unit/test_cli.py
+  tests/unit/test_config.py tests/unit/test_model_*.py
+  tests/unit/test_openrouter_qualification_config.py tests/unit/test_release_schemas.py` passed
+  all `740` tests in `507.83s` (`8m27s`). The two inherited best-effort stale temporary-tree
+  cleanup warnings remained non-failing. No provider, network, target, secret, reservation, or
+  spend was used.
+- **Pre-full-suite static gates:** `.venv/bin/ruff format .` left all `419` files unchanged;
+  `.venv/bin/ruff check .` passed; strict mypy passed all `165` source files; committed release
+  schemas verified without drift; both TOML templates parsed; the models schema compiled under
+  Ajv 2020 strict mode; and `git diff --check` passed.
+- **Next action:** Run `.venv/bin/pytest -q --cache-clear`, then perform the final diff/artifact
+  review and checkpoint the ticket only if the complete suite is green.
+- **Repository-wide gate result:** `.venv/bin/pytest -q --cache-clear` completed in `5501.57s`
+  (`1h31m41s`) with `4335 passed`, `16 skipped`, `24 failed`, and `88 errors`. The errors are
+  concentrated in listener-backed Hardhat/RPC fixtures and report managed-environment
+  `PermissionError: [Errno 1] Operation not permitted` during local socket creation. The failures
+  are concentrated in candidate benchmarking, mocked OpenRouter routing, context/token planning,
+  and Hardhat relay tests. This result is failure evidence, not acceptance evidence; the ticket
+  remains `IN_PROGRESS`. Focused diagnosis is running, and no threshold or isolation control will
+  be weakened to make the gate pass. No paid-provider opt-in, provider request, target execution,
+  operator-secret read, reservation, or additional spend occurred.
+- **Next action:** Resolve genuine bootstrap regressions with focused tests, keep environmental
+  listener denials explicitly classified, then rerun the affected matrix and the complete gate.
+- **Failure isolation:** The `24` failures split into `19` stale test-harness expectations and
+  `5` AF_UNIX listener denials. Candidate benchmark tests still supplied a caller-owned
+  `httpx.MockTransport`; context/token tests did the same; and five discovery tests used
+  synthetic identity evidence whose fixed date had crossed the real seven-day TTL. Production
+  behavior was correct: injected clients remained `UNVERIFIED`, and expired identity evidence
+  remained non-creditable. The tests now use the sealed internal test-only MOCK seam and generate
+  fresh synthetic discovery evidence without changing the production TTL. No production code or
+  acceptance threshold changed.
+- **Focused model validation:** `.venv/bin/ruff check
+  tests/unit/test_candidate_benchmark.py tests/unit/test_context_serialization_boundary.py
+  tests/unit/test_model_discovery.py tests/unit/test_openrouter.py
+  tests/unit/test_token_planning_acceptance.py` passed. The combined command
+  `.venv/bin/pytest -q tests/unit/test_candidate_benchmark.py
+  tests/unit/test_candidate_benchmark_campaign.py tests/unit/test_candidate_benchmark_cli.py
+  tests/unit/test_candidate_reasoning_profile_campaign.py
+  tests/unit/test_context_serialization_boundary.py tests/unit/test_openrouter.py
+  tests/unit/test_token_planning_acceptance.py --cache-clear` passed all `271` tests in `7.31s`.
+  Two inherited stale temporary-tree cleanup warnings were non-failing.
+- **Listener classification:** Under the managed sandbox, the three listener-backed files
+  produced `36 passed, 88 errors`; every error was an AF_INET bind denied with `EPERM`. The relay
+  file produced `9 passed, 5 failed`; each failed before product logic at AF_UNIX bind with the
+  same `EPERM`. An exact host-policy rerun using `.venv/bin/pytest -q
+  tests/unit/test_read_only_rpc_bridge.py tests/unit/test_read_only_rpc_unix_bridge.py
+  tests/unit/test_hardhat_isolation_backend.py tests/unit/test_hardhat_loopback_relay.py` passed
+  all `138` tests in `51.57s`. This is local test execution, not live RPC or external-network
+  evidence.
+- **Next action:** Rerun the complete repository suite with the same host policy so local
+  listeners are available; retain the managed-sandbox failure as environmental evidence and
+  claim acceptance only from the completed host-policy result.
+- **Final repository-wide gate:** `.venv/bin/pytest -q --cache-clear` under the local host policy
+  passed `4452` tests with `11` explicit external-prerequisite or paid-provider opt-in skips and
+  zero failures/errors in `1385.11s` (`23m05s`). The skips were the unavailable rootless image
+  cases, Echidna, Halmos, Medusa, offline replay compiler, realistic AST compiler,
+  fork-differential compiler, Foundry fork compiler, and deliberately disabled paid-provider
+  integration. The two inherited cleanup warnings concern stale permission-restricted temporary
+  clean-Anvil directories and did not affect the result.
+- **Exact schema/template checks:** `.venv/bin/python -c 'import tomllib; from pathlib import
+  Path; [tomllib.loads(Path(path).read_text(encoding="utf-8")) for path in
+  ("mmaudit.example.toml", "src/mmaudit/templates/mmaudit.example.toml")];
+  print("TOML_TEMPLATES_OK")'` returned `TOML_TEMPLATES_OK`. `node -e 'const
+  fs=require("fs"); const Ajv2020=require("ajv/dist/2020").default; const
+  schema=JSON.parse(fs.readFileSync("schemas/models_config.schema.json","utf8")); new
+  Ajv2020({strict:true,allErrors:true}).compile(schema); console.log("AJV_STRICT_OK")'` returned
+  `AJV_STRICT_OK`.
+- **Final static gate:** After Ruff normalized one blank line in the token-planning regression,
+  that file's `5` focused cases passed in `2.10s`; all `419` files passed Ruff format check and
+  Ruff lint, strict mypy passed all `165` source files, release schemas verified without drift,
+  and `git diff --check` passed. The formatting change was mechanical and followed by its focused
+  semantic test.
+- **Completion boundary:** No paid-provider opt-in, provider request, external target, operator
+  secret, reservation, or spend was used. The final evidence is deterministic/unit, synthetic
+  MOCK integration, and local listener execution only; it grants no real benchmark,
+  qualification, ensemble, or production-audit credit.
+- **Next action:** Create and push the isolated checkpoint, then begin `V3-TOOLDIAG-002`.
 
 ## 2026-08-03 — V3-OBJECTIVE-001 and V3-TARGETSPEC-001 dependency disposition
 

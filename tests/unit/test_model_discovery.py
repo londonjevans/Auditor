@@ -1129,9 +1129,12 @@ async def test_mock_transport_cannot_seal_real_discovery_evidence(
         usage=UsageLedger(),
         http_client=http_client,
     )
-    assert client.execution_evidence.value == "mock"
+    # A caller-injected HTTPX mock is not the issuer-bound internal test seam and therefore
+    # receives no MOCK provenance credit. It must remain UNVERIFIED and unable to seal REAL
+    # discovery evidence.
+    assert client.execution_evidence.value == "unverified"
     try:
-        with pytest.raises(OpenRouterPrivacyError, match="authenticated owned provider client"):
+        with pytest.raises(OpenRouterPrivacyError, match="injected provider clients"):
             client.seal_real_model_discovery_run(
                 run_id="1" * 32,
                 retrieved_at=datetime(2026, 7, 27, 8, 0, tzinfo=UTC),

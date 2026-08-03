@@ -227,22 +227,19 @@ class _MockClientFactory:
                 json={"error": {"message": "synthetic endpoint unavailable"}},
             )
 
-        http_client = httpx.AsyncClient(
-            transport=httpx.MockTransport(handler),
-            base_url="https://fake.test/api/v1/",
-        )
         client = OpenRouterClient(
             api_key=api_key,
             execution=config.execution,
             privacy=config.privacy,
             budget=budget,
             usage=usage,
-            http_client=http_client,
+            base_url="https://fake.test/api/v1/",
             provider_policy=provider_policy,
             reasoning_policy=reasoning_policy,
+            test_only_mock_handler=handler,
         )
         self.clients.append(client)
-        self.http_clients.append(http_client)
+        self.http_clients.append(client._client)
         return client
 
     async def close(self) -> None:

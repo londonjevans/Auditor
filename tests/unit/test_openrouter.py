@@ -627,7 +627,7 @@ def _model_discovery_run(
     )
     _provenance, evidence = _issue_real_openrouter_discovery_run(
         run_id="1" * 32,
-        retrieved_at=datetime(2026, 7, 27, 12, 0, tzinfo=UTC),
+        retrieved_at=datetime.now(UTC).replace(microsecond=0),
         client_fingerprint_sha256="a" * 64,
         provider_fingerprint_sha256="b" * 64,
         catalog_snapshot_sha256=hashlib.sha256(

@@ -252,10 +252,6 @@ async def test_opaque_nested_metadata_fails_provider_preflight_without_transport
         return httpx.Response(500)
 
     config = config_factory()
-    http_client = httpx.AsyncClient(
-        transport=httpx.MockTransport(handler),
-        base_url="https://synthetic.invalid/api/v1/",
-    )
     usage = UsageLedger()
     client = OpenRouterClient(
         api_key="synthetic-key",
@@ -272,9 +268,10 @@ async def test_opaque_nested_metadata_fails_provider_preflight_without_transport
             global_output_token_budget=config.token_budgets.global_output_token_budget,
         ),
         usage=usage,
-        http_client=http_client,
+        base_url="https://synthetic.invalid/api/v1/",
         provider_policy=OpenRouterProviderPolicy(),
         token_budgets=config.token_budgets,
+        test_only_mock_handler=handler,
     )
     package = _bounded_package()
     valid_prompt = render_context(package)
@@ -291,7 +288,7 @@ async def test_opaque_nested_metadata_fails_provider_preflight_without_transport
                 schema_name="answer",
             )
     finally:
-        await http_client.aclose()
+        await client.close()
 
     assert calls == 0
     assert usage.records == []

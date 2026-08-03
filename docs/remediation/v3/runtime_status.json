@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-03T03:55:47Z",
-  "candidate_commit": "517559e5c9526f78e516374ebc194933d01eac7f",
-  "autorun_status": "PAUSED_BY_OPERATOR",
+  "updated_at": "2026-08-03T15:15:25Z",
+  "candidate_commit": "52e5bc84e2a2f9b147944826fd755300b79447ab",
+  "autorun_status": "RUNNING",
   "current_milestone": "model_qualification_bootstrap",
-  "current_ticket": "V3-BOOTSTRAP-001 (IN_PROGRESS)",
-  "last_checkpoint_commit": "517559e5c9526f78e516374ebc194933d01eac7f",
+  "current_ticket": "V3-BOOTSTRAP-001 (COMPLETE; CHECKPOINT_PENDING)",
+  "last_checkpoint_commit": "266646cdf033f0a076872e5152b2785c672176a0",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,
@@ -23,8 +23,8 @@
     "V3-FORKSUITE-001.hardhat": "Real Hardhat execution requires the process-attested digest-pinned rootless single-loopback runtime and trusted image-baked reporter specified by V3-HARDHAT-001."
   },
   "last_validation": {
-    "command": ".venv/bin/pytest -q tests/integration/test_pipeline.py --cache-clear",
-    "result": "PAUSED_BY_OPERATOR: interrupted cleanly after 79 passing tests in 302.30s; no failure had surfaced; partial run is not acceptance evidence"
+    "command": ".venv/bin/pytest -q --cache-clear (sandbox_permissions=require_escalated)",
+    "result": "PASS: 4452 passed, 11 explicit prerequisite/paid-provider skips, zero failures or errors in 1385.11s; final Ruff, strict mypy, schema, TOML, Ajv, and diff gates also passed"
   },
   "scheduler_assurance_validation": {
     "status": "PASS_COMPONENT_FULL_ASSURANCE",
