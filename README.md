@@ -488,8 +488,13 @@ Each invocation creates:
 ├── reproduction-results.json
 ├── maximum_assurance_traceability.json
 ├── run-evidence-manifest.json
+├── client-report.md          # concise Corrovera client assessment
+├── forensic-report.md        # exhaustive evidence and coverage companion
+├── findings.json             # typed final, rejected, and candidate-linked evidence
+├── coverage.json             # typed scope and coverage projection
+├── model-execution.json      # non-secret model identity, usage, latency, and cost
 ├── final-findings.json
-├── audit-report.md
+├── audit-report.md           # legacy exhaustive Markdown compatibility output
 ├── audit-results.sarif
 ├── logs/
 └── private/                 # scanner output; debug model material only when enabled
@@ -499,10 +504,12 @@ Each invocation creates:
 complete effective configuration, allowlisted environment and CLI override layers, non-secret run
 options, prompts, model and executable identities, compiler and isolation evidence, campaign seeds,
 property corpus, generated harnesses, reproductions, coverage, and every other regular run artifact.
-Manifest schema `1.1` can reconstruct a profile-overridden run without relying on ambient
+Manifest schema `1.2` additionally requires and semantically reconciles the complete client and
+forensic report bundle. It can reconstruct a profile-overridden run without relying on ambient
 environment state or operator recollection; supplying `--config` additionally checks the current
 base configuration for drift. The manifest excludes itself from the artifact list so its canonical
-digest is stable. Legacy schema `1.0` manifests remain readable but require an explicit
+digest is stable. Schema `1.1` remains readable for pre-bundle runs. Legacy schema `1.0` manifests
+remain readable but require an explicit
 configuration for verification, replay, and certification.
 The self-hash provides deterministic integrity and reconciliation, not an external
 signature; retain a trusted manifest digest or release attestation when provenance

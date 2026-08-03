@@ -117,8 +117,10 @@ def observe_release_artifacts(
     )
     if manifest_before != manifest_after:
         raise ValueError("run evidence manifest changed while release artifacts were observed")
-    if manifest.schema_version != "1.1" or manifest.run_configuration is None:
-        raise ValueError("release artifact evidence requires reconstructable manifest schema 1.1")
+    if manifest.schema_version != "1.2" or manifest.run_configuration is None:
+        raise ValueError(
+            "release artifact evidence requires manifest schema 1.2 and its report bundle"
+        )
 
     validate_manifest_artifacts(manifest, root)
     observed_artifacts = collect_run_artifacts(root)

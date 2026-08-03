@@ -38,6 +38,15 @@ from mmaudit.release_artifacts import (
     write_release_artifact_evidence,
 )
 from mmaudit.release_run import ReleaseRunBinding, observe_release_run_binding
+from mmaudit.reporting.bundle import (
+    build_coverage_artifact,
+    build_findings_artifact,
+    build_model_execution_artifact,
+)
+from mmaudit.reporting.client import render_client_markdown
+from mmaudit.reporting.json_report import write_json
+from mmaudit.reporting.markdown import render_forensic_markdown
+from mmaudit.reporting.sarif import generate_sarif
 from mmaudit.traceability import (
     ImplementationStatus,
     build_traceability_matrix,
@@ -200,6 +209,29 @@ def _write_report_artifacts(run_dir: Path, report: AuditReport) -> None:
         + "\n",
         encoding="utf-8",
     )
+    write_json(run_dir / "findings.json", build_findings_artifact(report))
+    write_json(run_dir / "coverage.json", build_coverage_artifact(report))
+    write_json(run_dir / "model-execution.json", build_model_execution_artifact(report))
+    write_json(
+        run_dir / "audit-results.sarif",
+        generate_sarif(
+            report.findings,
+            scanner_runs=report.scanner_runs,
+            maximum_assurance=report.maximum_assurance,
+            run_status=report.run_status,
+            quality_status=report.quality_status,
+            completed=report.completed,
+            incomplete_reasons=report.incomplete_reasons,
+        ),
+    )
+    (run_dir / "client-report.md").write_text(
+        render_client_markdown(report, {}),
+        encoding="utf-8",
+    )
+    (run_dir / "forensic-report.md").write_text(
+        render_forensic_markdown(report),
+        encoding="utf-8",
+    )
 
 
 def _write_run(
@@ -246,6 +278,7 @@ def _write_run(
         run_configuration=_run_configuration(config),
         bindings=_bindings(),
         artifacts=collect_run_artifacts(run_dir),
+        schema_version="1.2",
         tool_version="test",
     )
     write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", manifest)
@@ -525,5 +558,5 @@ def test_observer_requires_reconstructable_manifest_schema(
         RunEvidenceManifest.model_validate(payload),
     )
 
-    with pytest.raises(ValueError, match=r"schema 1\.1"):
+    with pytest.raises(ValueError, match=r"schema 1\.2"):
         observe_release_run_binding(run_dir, ROOT, evidence_path)

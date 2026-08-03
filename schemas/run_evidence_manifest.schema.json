@@ -21,7 +21,8 @@
     "schema_version": {
       "enum": [
         "1.0",
-        "1.1"
+        "1.1",
+        "1.2"
       ]
     },
     "generated_by": {
@@ -111,7 +112,10 @@
       "if": {
         "properties": {
           "schema_version": {
-            "const": "1.1"
+            "enum": [
+              "1.1",
+              "1.2"
+            ]
           }
         },
         "required": [

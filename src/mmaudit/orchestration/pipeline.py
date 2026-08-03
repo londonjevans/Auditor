@@ -326,8 +326,14 @@ from mmaudit.privacy import (
     resolve_trusted_privacy_authorization,
     validate_trusted_privacy_authorization,
 )
+from mmaudit.reporting.bundle import (
+    build_coverage_artifact,
+    build_findings_artifact,
+    build_model_execution_artifact,
+)
+from mmaudit.reporting.client import build_client_source_excerpts, render_client_markdown
 from mmaudit.reporting.json_report import stable_json, write_json
-from mmaudit.reporting.markdown import render_markdown
+from mmaudit.reporting.markdown import render_forensic_markdown, render_markdown
 from mmaudit.reporting.sarif import generate_sarif
 from mmaudit.repository.discovery import (
     DiscoveryResult,
@@ -7042,6 +7048,7 @@ class AuditPipeline:
         self._write_artifacts(
             run_dir=run_dir,
             report=report,
+            source_contents={item.relative_path: item.content for item in discovery.files},
             candidates=candidates,
             verifications=verifications,
             cross_examinations=cross_examinations,
@@ -7781,6 +7788,7 @@ class AuditPipeline:
         *,
         run_dir: Path,
         report: AuditReport,
+        source_contents: dict[str, str],
         candidates: list[CandidateFinding],
         verifications: VerificationBatch,
         cross_examinations: list[CandidateCrossExaminationDecision],
@@ -7973,7 +7981,30 @@ class AuditPipeline:
                 ],
             },
         )
+        source_excerpts = build_client_source_excerpts(report, source_contents)
+        findings_artifact = build_findings_artifact(
+            report,
+            candidates=candidates,
+            reproduction_resolutions=reproduction_resolutions,
+            source_excerpts=source_excerpts,
+        )
         write_json(run_dir / "final-findings.json", report)
+        write_json(run_dir / "findings.json", findings_artifact)
+        write_json(run_dir / "coverage.json", build_coverage_artifact(report))
+        write_json(run_dir / "model-execution.json", build_model_execution_artifact(report))
+        (run_dir / "client-report.md").write_text(
+            render_client_markdown(
+                report,
+                source_contents,
+                candidates=candidates,
+                reproduction_resolutions=reproduction_resolutions,
+            ),
+            encoding="utf-8",
+        )
+        (run_dir / "forensic-report.md").write_text(
+            render_forensic_markdown(report),
+            encoding="utf-8",
+        )
         (run_dir / "audit-report.md").write_text(render_markdown(report), encoding="utf-8")
         write_json(
             run_dir / "audit-results.sarif",
@@ -8038,8 +8069,13 @@ class AuditPipeline:
             "execution-origin-dispositions.json",
             "verification-results.json",
             "final-findings.json",
+            "findings.json",
+            "client-report.md",
+            "forensic-report.md",
             "audit-report.md",
             "audit-results.sarif",
+            "coverage.json",
+            "model-execution.json",
             "solidity-projects.json",
             "dependency-preparation.json",
             "dependency-sbom.json",

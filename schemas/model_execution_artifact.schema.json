@@ -1,0 +1,897 @@
+{
+  "$defs": {
+    "AuditRunStatus": {
+      "description": "Evidence-derived terminal state for an audit run.",
+      "enum": [
+        "COMPLETE",
+        "DEGRADED",
+        "INCOMPLETE",
+        "FAILED"
+      ],
+      "title": "AuditRunStatus",
+      "type": "string"
+    },
+    "ExecutionEvidenceKind": {
+      "description": "Whether a runtime record came from a real process or a test double.",
+      "enum": [
+        "real",
+        "mock",
+        "unverified"
+      ],
+      "title": "ExecutionEvidenceKind",
+      "type": "string"
+    },
+    "ModelRequestValidationStatus": {
+      "description": "Fail-closed terminal validation state for one provider request.",
+      "enum": [
+        "not_validated",
+        "valid",
+        "invalid_response",
+        "truncated",
+        "model_mismatch",
+        "provider_mismatch",
+        "provider_error"
+      ],
+      "title": "ModelRequestValidationStatus",
+      "type": "string"
+    },
+    "OpenRouterIdentityStrength": {
+      "description": "Strength of a completed model and provider identity observation.\n\n``CANONICAL_MODEL_AND_ENDPOINT_BOUND`` is a policy-constrained OpenRouter\nbinding: exact ``provider.only`` routing, no fallback, router observations,\nand generation metadata agree. OpenRouter does not expose a documented\npreflight-tag to post-call endpoint-ID join, so this is not a cryptographic\nprovider-deployment attestation.",
+      "enum": [
+        "IMMUTABLE_VERSION_BOUND",
+        "CANONICAL_MODEL_AND_ENDPOINT_BOUND",
+        "UNBOUND"
+      ],
+      "title": "OpenRouterIdentityStrength",
+      "type": "string"
+    },
+    "ReasoningControlProfile": {
+      "additionalProperties": false,
+      "description": "One effective reasoning control with an explicit token reservation.",
+      "properties": {
+        "effort": {
+          "anyOf": [
+            {
+              "enum": [
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effort"
+        },
+        "exclude": {
+          "default": false,
+          "title": "Exclude",
+          "type": "boolean"
+        },
+        "max_tokens": {
+          "anyOf": [
+            {
+              "maximum": 65536,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Tokens"
+        },
+        "mode": {
+          "enum": [
+            "disabled",
+            "default",
+            "effort",
+            "max_tokens"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Profile Sha256",
+          "type": "string"
+        },
+        "reserved_reasoning_tokens": {
+          "maximum": 65536,
+          "minimum": 0,
+          "title": "Reserved Reasoning Tokens",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "reserved_reasoning_tokens",
+        "profile_sha256"
+      ],
+      "title": "ReasoningControlProfile",
+      "type": "object"
+    },
+    "ReasoningExecutionEvidence": {
+      "additionalProperties": false,
+      "description": "Provider accounting joined to the exact pre-transport reasoning plan.",
+      "properties": {
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "observation_available": {
+          "title": "Observation Available",
+          "type": "boolean"
+        },
+        "observed_reasoning_tokens": {
+          "anyOf": [
+            {
+              "maximum": 65536,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed Reasoning Tokens"
+        },
+        "provider_completion_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Completion Tokens"
+        },
+        "request_body_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Body Sha256",
+          "type": "string"
+        },
+        "request_plan": {
+          "$ref": "#/$defs/ReasoningRequestPlanEvidence"
+        },
+        "request_token_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Token Plan Sha256",
+          "type": "string"
+        },
+        "reserved_reasoning_tokens": {
+          "maximum": 65536,
+          "minimum": 0,
+          "title": "Reserved Reasoning Tokens",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "disabled_observed",
+            "disabled_unreported",
+            "active_observed",
+            "active_unavailable",
+            "failed_before_observation"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "visible_completion_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Visible Completion Tokens"
+        }
+      },
+      "required": [
+        "request_plan",
+        "reserved_reasoning_tokens",
+        "observation_available",
+        "state",
+        "request_token_plan_sha256",
+        "request_body_sha256",
+        "evidence_sha256"
+      ],
+      "title": "ReasoningExecutionEvidence",
+      "type": "object"
+    },
+    "ReasoningRequestPlanEvidence": {
+      "additionalProperties": false,
+      "description": "Exact role, control, capability, and qualification joins for one request plan.",
+      "properties": {
+        "binding_state": {
+          "enum": [
+            "policy_only",
+            "capability_bound",
+            "qualification_bound"
+          ],
+          "title": "Binding State",
+          "type": "string"
+        },
+        "control_profile": {
+          "$ref": "#/$defs/ReasoningControlProfile"
+        },
+        "endpoint_capability_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Capability Sha256"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "policy_artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Artifact Sha256",
+          "type": "string"
+        },
+        "policy_role_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Role Binding Sha256",
+          "type": "string"
+        },
+        "qualification_binding_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Qualification Binding Sha256"
+        },
+        "resolution": {
+          "$ref": "#/$defs/ReasoningRequestRoleResolution"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resolution",
+        "control_profile",
+        "policy_artifact_sha256",
+        "policy_role_binding_sha256",
+        "binding_state",
+        "evidence_sha256"
+      ],
+      "title": "ReasoningRequestPlanEvidence",
+      "type": "object"
+    },
+    "ReasoningRequestRoleResolution": {
+      "additionalProperties": false,
+      "description": "Exact host request-role meaning, policy routing, and qualification role.",
+      "properties": {
+        "configured_policy_role": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Configured Policy Role",
+          "type": "string"
+        },
+        "mapping_kind": {
+          "enum": [
+            "base_exact",
+            "specialist_investigator",
+            "specialist_auxiliary",
+            "dedicated_exploit_test",
+            "fallback_exploit_test",
+            "falsifier_fallback",
+            "candidate_cross_examination_context",
+            "candidate_cross_examination",
+            "whole_protocol_indexed",
+            "prequalification_benchmark",
+            "prequalification_role_benchmark"
+          ],
+          "title": "Mapping Kind",
+          "type": "string"
+        },
+        "qualification_role": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Qualification Role",
+          "type": "string"
+        },
+        "request_role": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Request Role",
+          "type": "string"
+        },
+        "resolution_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Resolution Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "semantic_role": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Semantic Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_role",
+        "semantic_role",
+        "configured_policy_role",
+        "qualification_role",
+        "mapping_kind",
+        "resolution_sha256"
+      ],
+      "title": "ReasoningRequestRoleResolution",
+      "type": "object"
+    },
+    "UsageRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "accounted_cost_usd": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Accounted Cost Usd",
+          "type": "number"
+        },
+        "accounted_cost_usd_exact": {
+          "anyOf": [
+            {
+              "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,36})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Accounted Cost Usd Exact"
+        },
+        "actual_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actual Model"
+        },
+        "actual_provider_endpoint": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actual Provider Endpoint"
+        },
+        "attempts": {
+          "minimum": 1,
+          "title": "Attempts",
+          "type": "integer"
+        },
+        "cached_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Cached Tokens",
+          "type": "integer"
+        },
+        "completion_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Completion Tokens",
+          "type": "integer"
+        },
+        "configured_provider_endpoints": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Configured Provider Endpoints",
+          "type": "array"
+        },
+        "ended_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ended At"
+        },
+        "execution_evidence": {
+          "$ref": "#/$defs/ExecutionEvidenceKind",
+          "default": "unverified"
+        },
+        "fallback_used": {
+          "default": false,
+          "title": "Fallback Used",
+          "type": "boolean"
+        },
+        "finish_reason": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Finish Reason"
+        },
+        "identity_strength": {
+          "$ref": "#/$defs/OpenRouterIdentityStrength",
+          "default": "UNBOUND"
+        },
+        "latency_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latency Ms"
+        },
+        "model_family": {
+          "title": "Model Family",
+          "type": "string"
+        },
+        "openrouter_generation_id": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Openrouter Generation Id"
+        },
+        "prompt_sha256": {
+          "title": "Prompt Sha256",
+          "type": "string"
+        },
+        "prompt_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Prompt Tokens",
+          "type": "integer"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider"
+        },
+        "provider_error_classification": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Error Classification"
+        },
+        "reasoning_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningExecutionEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "reasoning_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Reasoning Tokens",
+          "type": "integer"
+        },
+        "reported_cost_usd": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reported Cost Usd"
+        },
+        "reported_cost_usd_exact": {
+          "anyOf": [
+            {
+              "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,36})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reported Cost Usd Exact"
+        },
+        "request_body_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Body Sha256"
+        },
+        "request_id": {
+          "title": "Request Id",
+          "type": "string"
+        },
+        "requested_model": {
+          "title": "Requested Model",
+          "type": "string"
+        },
+        "response_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Response Sha256"
+        },
+        "retry_count": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry Count"
+        },
+        "returned_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Returned Model"
+        },
+        "role": {
+          "title": "Role",
+          "type": "string"
+        },
+        "routing": {
+          "additionalProperties": true,
+          "title": "Routing",
+          "type": "object"
+        },
+        "schema_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Schema Sha256"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Started At"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "substitution_detected": {
+          "default": false,
+          "title": "Substitution Detected",
+          "type": "boolean"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        },
+        "total_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Total Tokens",
+          "type": "integer"
+        },
+        "user_prompt_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "User Prompt Sha256"
+        },
+        "validated_response_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Validated Response Sha256"
+        },
+        "validation_status": {
+          "$ref": "#/$defs/ModelRequestValidationStatus",
+          "default": "not_validated"
+        }
+      },
+      "required": [
+        "request_id",
+        "role",
+        "requested_model",
+        "model_family",
+        "timestamp",
+        "prompt_sha256",
+        "status",
+        "attempts"
+      ],
+      "title": "UsageRecord",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/model_execution_artifact.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Non-secret model execution and cost evidence for the forensic bundle.",
+  "properties": {
+    "accounted_cost_usd": {
+      "minimum": 0,
+      "title": "Accounted Cost Usd",
+      "type": "number"
+    },
+    "accounted_cost_usd_exact": {
+      "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,36})?$",
+      "title": "Accounted Cost Usd Exact",
+      "type": "string"
+    },
+    "actual_models": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Actual Models",
+      "type": "array"
+    },
+    "budget_usd": {
+      "minimum": 0,
+      "title": "Budget Usd",
+      "type": "number"
+    },
+    "cached_tokens": {
+      "minimum": 0,
+      "title": "Cached Tokens",
+      "type": "integer"
+    },
+    "completed": {
+      "title": "Completed",
+      "type": "boolean"
+    },
+    "completion_tokens": {
+      "minimum": 0,
+      "title": "Completion Tokens",
+      "type": "integer"
+    },
+    "configured_fallbacks": {
+      "additionalProperties": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "title": "Configured Fallbacks",
+      "type": "object"
+    },
+    "configured_models": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Configured Models",
+      "type": "object"
+    },
+    "privacy_profile": {
+      "title": "Privacy Profile",
+      "type": "string"
+    },
+    "prompt_tokens": {
+      "minimum": 0,
+      "title": "Prompt Tokens",
+      "type": "integer"
+    },
+    "provider_endpoints": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Provider Endpoints",
+      "type": "array"
+    },
+    "raw_prompts_retained": {
+      "title": "Raw Prompts Retained",
+      "type": "boolean"
+    },
+    "raw_responses_retained": {
+      "title": "Raw Responses Retained",
+      "type": "boolean"
+    },
+    "reasoning_tokens": {
+      "minimum": 0,
+      "title": "Reasoning Tokens",
+      "type": "integer"
+    },
+    "requested_models": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Requested Models",
+      "type": "array"
+    },
+    "run_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Run Id",
+      "type": "string"
+    },
+    "run_status": {
+      "$ref": "#/$defs/AuditRunStatus"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_code_egress_enabled": {
+      "title": "Source Code Egress Enabled",
+      "type": "boolean"
+    },
+    "usage": {
+      "items": {
+        "$ref": "#/$defs/UsageRecord"
+      },
+      "title": "Usage",
+      "type": "array"
+    }
+  },
+  "required": [
+    "run_id",
+    "run_status",
+    "completed",
+    "configured_models",
+    "configured_fallbacks",
+    "requested_models",
+    "actual_models",
+    "provider_endpoints",
+    "usage",
+    "prompt_tokens",
+    "completion_tokens",
+    "reasoning_tokens",
+    "cached_tokens",
+    "accounted_cost_usd",
+    "accounted_cost_usd_exact",
+    "budget_usd",
+    "privacy_profile",
+    "source_code_egress_enabled",
+    "raw_prompts_retained",
+    "raw_responses_retained"
+  ],
+  "title": "mmaudit model execution artifact",
+  "type": "object"
+}

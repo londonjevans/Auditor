@@ -1,0 +1,2235 @@
+{
+  "$defs": {
+    "AuditQualityStatus": {
+      "enum": [
+        "completed",
+        "completed_with_limitations",
+        "incomplete",
+        "failed",
+        "environment_unsafe",
+        "target_unsupported"
+      ],
+      "title": "AuditQualityStatus",
+      "type": "string"
+    },
+    "AuditRunStatus": {
+      "description": "Evidence-derived terminal state for an audit run.",
+      "enum": [
+        "COMPLETE",
+        "DEGRADED",
+        "INCOMPLETE",
+        "FAILED"
+      ],
+      "title": "AuditRunStatus",
+      "type": "string"
+    },
+    "CandidateCrossExaminationDecision": {
+      "additionalProperties": false,
+      "description": "Normalized multi-lineage dissent retained in the audit report.",
+      "properties": {
+        "candidate_id": {
+          "minLength": 1,
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "contradictions": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 50,
+          "title": "Contradictions",
+          "type": "array"
+        },
+        "missing_evidence": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 50,
+          "title": "Missing Evidence",
+          "type": "array"
+        },
+        "rationale": {
+          "maxLength": 8000,
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "request_id": {
+          "minLength": 1,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "requested_model": {
+          "minLength": 1,
+          "title": "Requested Model",
+          "type": "string"
+        },
+        "returned_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Returned Model"
+        },
+        "reviewer_index": {
+          "maximum": 2,
+          "minimum": 1,
+          "title": "Reviewer Index",
+          "type": "integer"
+        },
+        "root_lineage": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Root Lineage",
+          "type": "string"
+        },
+        "verdict": {
+          "$ref": "#/$defs/CandidateCrossExaminationVerdict"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "request_id",
+        "reviewer_index",
+        "requested_model",
+        "root_lineage",
+        "verdict",
+        "rationale"
+      ],
+      "title": "CandidateCrossExaminationDecision",
+      "type": "object"
+    },
+    "CandidateCrossExaminationVerdict": {
+      "enum": [
+        "supported",
+        "disputed",
+        "inconclusive"
+      ],
+      "title": "CandidateCrossExaminationVerdict",
+      "type": "string"
+    },
+    "CandidateFinding": {
+      "additionalProperties": false,
+      "description": "Finding proposed by an analysis role before independent verification.",
+      "properties": {
+        "attack_path": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Attack Path",
+          "type": "array"
+        },
+        "candidate_id": {
+          "minLength": 1,
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "compensating_controls": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Compensating Controls",
+          "type": "array"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "cwe": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Cwe",
+          "type": "array"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "minItems": 1,
+          "title": "Evidence",
+          "type": "array"
+        },
+        "execution_provenance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvariantExecutionCandidateProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "false_positive_conditions": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "False Positive Conditions",
+          "type": "array"
+        },
+        "impact": {
+          "minLength": 1,
+          "title": "Impact",
+          "type": "string"
+        },
+        "locations": {
+          "items": {
+            "$ref": "#/$defs/Location"
+          },
+          "minItems": 1,
+          "title": "Locations",
+          "type": "array"
+        },
+        "model_family": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model Family"
+        },
+        "model_votes": {
+          "items": {
+            "$ref": "#/$defs/ModelVote"
+          },
+          "title": "Model Votes",
+          "type": "array"
+        },
+        "origin_kind": {
+          "$ref": "#/$defs/CandidateOriginKind",
+          "default": "model_review"
+        },
+        "owasp": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Owasp",
+          "type": "array"
+        },
+        "preconditions": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Preconditions",
+          "type": "array"
+        },
+        "recommendation": {
+          "minLength": 1,
+          "title": "Recommendation",
+          "type": "string"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Role"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "sink": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceSink"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceSink"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "summary": {
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "verification_test": {
+          "$ref": "#/$defs/VerificationTest"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "title",
+        "severity",
+        "confidence",
+        "summary",
+        "impact",
+        "preconditions",
+        "locations",
+        "attack_path",
+        "evidence",
+        "false_positive_conditions",
+        "recommendation",
+        "verification_test",
+        "role",
+        "model_family"
+      ],
+      "title": "CandidateFinding",
+      "type": "object"
+    },
+    "CandidateOriginKind": {
+      "description": "Trusted origin of a candidate before consensus and adjudication.",
+      "enum": [
+        "model_review",
+        "deterministic_execution"
+      ],
+      "title": "CandidateOriginKind",
+      "type": "string"
+    },
+    "CandidateReproductionResolution": {
+      "additionalProperties": false,
+      "description": "Evidence references supporting the terminal state of one candidate.",
+      "properties": {
+        "candidate_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "detail": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/ReproductionResolutionKind"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "kind",
+        "detail"
+      ],
+      "title": "CandidateReproductionResolution",
+      "type": "object"
+    },
+    "Evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "fingerprint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fingerprint"
+        },
+        "rule_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rule Id"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "model",
+            "scanner",
+            "execution",
+            "reproduction",
+            "formal",
+            "repository"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "source",
+        "description"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    },
+    "EvidenceStrength": {
+      "enum": [
+        "none",
+        "model_inference",
+        "independent_model_support",
+        "validated_attack_path",
+        "deterministic_analyzer",
+        "deterministic_execution_counterexample",
+        "local_fork_reproduction",
+        "minimized_local_fork_reproduction",
+        "formal_counterexample"
+      ],
+      "title": "EvidenceStrength",
+      "type": "string"
+    },
+    "ExecutionEvidenceKind": {
+      "description": "Whether a runtime record came from a real process or a test double.",
+      "enum": [
+        "real",
+        "mock",
+        "unverified"
+      ],
+      "title": "ExecutionEvidenceKind",
+      "type": "string"
+    },
+    "FalsificationDecision": {
+      "additionalProperties": false,
+      "properties": {
+        "assumptions_validated": {
+          "title": "Assumptions Validated",
+          "type": "boolean"
+        },
+        "candidate_id": {
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "contradictions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Contradictions",
+          "type": "array"
+        },
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "test_matches_claim": {
+          "title": "Test Matches Claim",
+          "type": "boolean"
+        },
+        "test_name": {
+          "title": "Test Name",
+          "type": "string"
+        },
+        "verdict": {
+          "$ref": "#/$defs/FalsificationVerdict"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "test_name",
+        "verdict",
+        "test_matches_claim",
+        "assumptions_validated",
+        "rationale"
+      ],
+      "title": "FalsificationDecision",
+      "type": "object"
+    },
+    "FalsificationVerdict": {
+      "enum": [
+        "accepted",
+        "falsified",
+        "inconclusive",
+        "unsafe"
+      ],
+      "title": "FalsificationVerdict",
+      "type": "string"
+    },
+    "FinancialAssetKind": {
+      "enum": [
+        "native",
+        "erc20"
+      ],
+      "title": "FinancialAssetKind",
+      "type": "string"
+    },
+    "FinancialSettlementEvidence": {
+      "additionalProperties": false,
+      "description": "Single-asset settled cashflow with exact base-unit arithmetic.",
+      "properties": {
+        "actor": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Actor",
+          "type": "string"
+        },
+        "asset_kind": {
+          "$ref": "#/$defs/FinancialAssetKind"
+        },
+        "asset_target": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Asset Target"
+        },
+        "borrowed_assets": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Borrowed Assets",
+          "type": "integer"
+        },
+        "ending_assets": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Ending Assets",
+          "type": "integer"
+        },
+        "fees_paid": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Fees Paid",
+          "type": "integer"
+        },
+        "gross_assets_received": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Gross Assets Received",
+          "type": "integer"
+        },
+        "net_impact": {
+          "maximum": 57896044618658097711785492504343953926634992332820282019728792003956564819967,
+          "minimum": -57896044618658097711785492504343953926634992332820282019728792003956564819968,
+          "title": "Net Impact",
+          "type": "integer"
+        },
+        "repaid_assets": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Repaid Assets",
+          "type": "integer"
+        },
+        "slippage_loss": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Slippage Loss",
+          "type": "integer"
+        },
+        "starting_assets": {
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+          "minimum": 0,
+          "title": "Starting Assets",
+          "type": "integer"
+        },
+        "unit": {
+          "const": "base_units",
+          "default": "base_units",
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "actor",
+        "asset_kind",
+        "starting_assets",
+        "borrowed_assets",
+        "repaid_assets",
+        "gross_assets_received",
+        "fees_paid",
+        "slippage_loss",
+        "ending_assets",
+        "net_impact"
+      ],
+      "title": "FinancialSettlementEvidence",
+      "type": "object"
+    },
+    "Finding": {
+      "additionalProperties": false,
+      "properties": {
+        "attack_path": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Attack Path",
+          "type": "array"
+        },
+        "compensating_controls": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Compensating Controls",
+          "type": "array"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "contributing_candidate_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Contributing Candidate Ids",
+          "type": "array"
+        },
+        "cwe": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Cwe",
+          "type": "array"
+        },
+        "disagreement": {
+          "default": "",
+          "title": "Disagreement",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "evidence_strength": {
+          "$ref": "#/$defs/EvidenceStrength",
+          "default": "none"
+        },
+        "execution_provenance": {
+          "items": {
+            "$ref": "#/$defs/InvariantExecutionCandidateProvenance"
+          },
+          "maxItems": 100,
+          "title": "Execution Provenance",
+          "type": "array"
+        },
+        "false_positive_conditions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "False Positive Conditions",
+          "type": "array"
+        },
+        "group_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Group Id"
+        },
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "impact": {
+          "minLength": 1,
+          "title": "Impact",
+          "type": "string"
+        },
+        "location_validation": {
+          "$ref": "#/$defs/LocationValidation"
+        },
+        "locations": {
+          "items": {
+            "$ref": "#/$defs/Location"
+          },
+          "title": "Locations",
+          "type": "array"
+        },
+        "model_votes": {
+          "items": {
+            "$ref": "#/$defs/ModelVote"
+          },
+          "title": "Model Votes",
+          "type": "array"
+        },
+        "origin_kind": {
+          "$ref": "#/$defs/FindingOriginKind",
+          "default": "model_review"
+        },
+        "owasp": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Owasp",
+          "type": "array"
+        },
+        "preconditions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Preconditions",
+          "type": "array"
+        },
+        "recommendation": {
+          "default": "",
+          "title": "Recommendation",
+          "type": "string"
+        },
+        "reproduction_state": {
+          "$ref": "#/$defs/ReproductionState",
+          "default": "not_attempted"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "sink": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceSink"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceSink"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "status": {
+          "$ref": "#/$defs/FindingStatus"
+        },
+        "summary": {
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "verification_test": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VerificationTest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "status",
+        "severity",
+        "confidence",
+        "summary",
+        "impact",
+        "location_validation"
+      ],
+      "title": "Finding",
+      "type": "object"
+    },
+    "FindingOriginKind": {
+      "description": "Trusted discovery origin retained on a normalized finding.",
+      "enum": [
+        "model_review",
+        "deterministic_execution",
+        "static_analyzer"
+      ],
+      "title": "FindingOriginKind",
+      "type": "string"
+    },
+    "FindingStatus": {
+      "enum": [
+        "confirmed",
+        "strongly_supported",
+        "high_confidence",
+        "plausible",
+        "needs_review",
+        "informational",
+        "insufficient_context",
+        "unsupported",
+        "rejected"
+      ],
+      "title": "FindingStatus",
+      "type": "string"
+    },
+    "ForensicDisposition": {
+      "description": "Client-facing projection that cannot increase deterministic finding authority.",
+      "enum": [
+        "CONFIRMED",
+        "SUPPORTED",
+        "DISPUTED",
+        "INCONCLUSIVE",
+        "REJECTED"
+      ],
+      "title": "ForensicDisposition",
+      "type": "string"
+    },
+    "ForensicFindingRecord": {
+      "additionalProperties": false,
+      "description": "One final finding with all candidate-linked review evidence kept together.",
+      "properties": {
+        "candidate_findings": {
+          "items": {
+            "$ref": "#/$defs/CandidateFinding"
+          },
+          "title": "Candidate Findings",
+          "type": "array"
+        },
+        "cross_examination_decisions": {
+          "items": {
+            "$ref": "#/$defs/CandidateCrossExaminationDecision"
+          },
+          "title": "Cross Examination Decisions",
+          "type": "array"
+        },
+        "disposition": {
+          "$ref": "#/$defs/ForensicDisposition"
+        },
+        "falsification_decisions": {
+          "items": {
+            "$ref": "#/$defs/FalsificationDecision"
+          },
+          "title": "Falsification Decisions",
+          "type": "array"
+        },
+        "finding": {
+          "$ref": "#/$defs/Finding"
+        },
+        "finding_id": {
+          "minLength": 1,
+          "title": "Finding Id",
+          "type": "string"
+        },
+        "reproduction_resolutions": {
+          "items": {
+            "$ref": "#/$defs/CandidateReproductionResolution"
+          },
+          "title": "Reproduction Resolutions",
+          "type": "array"
+        },
+        "reproductions": {
+          "items": {
+            "$ref": "#/$defs/ReproductionResult"
+          },
+          "title": "Reproductions",
+          "type": "array"
+        },
+        "source_excerpt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceExcerptEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "verification_decisions": {
+          "items": {
+            "$ref": "#/$defs/VerificationDecision"
+          },
+          "title": "Verification Decisions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "finding_id",
+        "disposition",
+        "finding"
+      ],
+      "title": "ForensicFindingRecord",
+      "type": "object"
+    },
+    "InvariantExecutionCandidateProvenance": {
+      "additionalProperties": false,
+      "description": "Self-hashed origin evidence for one replayed deterministic counterexample.",
+      "properties": {
+        "attempts": {
+          "maximum": 10,
+          "minimum": 2,
+          "title": "Attempts",
+          "type": "integer"
+        },
+        "compiler_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Compiler Sha256",
+          "type": "string"
+        },
+        "compiler_version": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Compiler Version",
+          "type": "string"
+        },
+        "executable_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Executable Sha256",
+          "type": "string"
+        },
+        "execution_evidence": {
+          "const": "real",
+          "default": "real",
+          "title": "Execution Evidence",
+          "type": "string"
+        },
+        "execution_observation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Execution Observation Sha256",
+          "type": "string"
+        },
+        "execution_result_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Execution Result Sha256",
+          "type": "string"
+        },
+        "harness_name": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Harness Name",
+          "type": "string"
+        },
+        "harness_spec_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Harness Spec Sha256",
+          "type": "string"
+        },
+        "invariant_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Invariant Evidence Sha256",
+          "type": "string"
+        },
+        "invariant_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Invariant Id",
+          "type": "string"
+        },
+        "isolation_attestation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Isolation Attestation Sha256",
+          "type": "string"
+        },
+        "isolation_backend": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Isolation Backend",
+          "type": "string"
+        },
+        "minimized": {
+          "title": "Minimized",
+          "type": "boolean"
+        },
+        "producer": {
+          "const": "foundry_invariant",
+          "default": "foundry_invariant",
+          "title": "Producer",
+          "type": "string"
+        },
+        "property_corpus_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Property Corpus Sha256",
+          "type": "string"
+        },
+        "property_hashes": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Property Hashes",
+          "type": "array"
+        },
+        "property_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Property Ids",
+          "type": "array"
+        },
+        "provenance_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Provenance Sha256",
+          "type": "string"
+        },
+        "replay_confirmed": {
+          "const": true,
+          "default": true,
+          "title": "Replay Confirmed",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_locations": {
+          "items": {
+            "$ref": "#/$defs/Location"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Source Locations",
+          "type": "array"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "successful_attempts": {
+          "maximum": 10,
+          "minimum": 2,
+          "title": "Successful Attempts",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "invariant_id",
+        "invariant_evidence_sha256",
+        "harness_name",
+        "harness_spec_sha256",
+        "property_corpus_sha256",
+        "property_ids",
+        "property_hashes",
+        "execution_result_sha256",
+        "execution_observation_sha256",
+        "executable_sha256",
+        "source_sha256",
+        "compiler_version",
+        "compiler_sha256",
+        "isolation_backend",
+        "isolation_attestation_sha256",
+        "attempts",
+        "successful_attempts",
+        "minimized",
+        "source_locations",
+        "provenance_sha256"
+      ],
+      "title": "InvariantExecutionCandidateProvenance",
+      "type": "object"
+    },
+    "Location": {
+      "additionalProperties": false,
+      "properties": {
+        "content_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Hash"
+        },
+        "end_line": {
+          "minimum": 1,
+          "title": "End Line",
+          "type": "integer"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "start_line": {
+          "minimum": 1,
+          "title": "Start Line",
+          "type": "integer"
+        },
+        "symbol": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Symbol"
+        }
+      },
+      "required": [
+        "path",
+        "start_line",
+        "end_line"
+      ],
+      "title": "Location",
+      "type": "object"
+    },
+    "LocationValidation": {
+      "additionalProperties": false,
+      "properties": {
+        "content_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Hash"
+        },
+        "errors": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Errors",
+          "type": "array"
+        },
+        "valid": {
+          "title": "Valid",
+          "type": "boolean"
+        },
+        "validated_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Validated At"
+        }
+      },
+      "required": [
+        "valid"
+      ],
+      "title": "LocationValidation",
+      "type": "object"
+    },
+    "ModelVote": {
+      "additionalProperties": false,
+      "properties": {
+        "family": {
+          "title": "Family",
+          "type": "string"
+        },
+        "rationale": {
+          "default": "",
+          "title": "Rationale",
+          "type": "string"
+        },
+        "requested_model": {
+          "title": "Requested Model",
+          "type": "string"
+        },
+        "returned_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Returned Model"
+        },
+        "role": {
+          "title": "Role",
+          "type": "string"
+        },
+        "verdict": {
+          "title": "Verdict",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "requested_model",
+        "family",
+        "verdict"
+      ],
+      "title": "ModelVote",
+      "type": "object"
+    },
+    "ReproductionAttemptEvidence": {
+      "additionalProperties": false,
+      "description": "Deterministic evidence for one isolated execution from a fresh copy.",
+      "properties": {
+        "attempt": {
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "fresh_workspace": {
+          "title": "Fresh Workspace",
+          "type": "boolean"
+        },
+        "generated_test_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Generated Test Sha256",
+          "type": "string"
+        },
+        "repository_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Repository Sha256",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/ReproductionState"
+        },
+        "stderr_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Stderr Sha256",
+          "type": "string"
+        },
+        "stdout_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Stdout Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "attempt",
+        "state",
+        "repository_sha256",
+        "generated_test_sha256",
+        "fresh_workspace",
+        "stdout_sha256",
+        "stderr_sha256"
+      ],
+      "title": "ReproductionAttemptEvidence",
+      "type": "object"
+    },
+    "ReproductionIntegrityAssessment": {
+      "additionalProperties": false,
+      "description": "Hash-linked decision over every REAL-003 integrity requirement.",
+      "properties": {
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/ReproductionIntegrityCheck"
+          },
+          "maxItems": 6,
+          "minItems": 6,
+          "title": "Checks",
+          "type": "array"
+        },
+        "integrity_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Integrity Sha256",
+          "type": "string"
+        },
+        "minimization": {
+          "$ref": "#/$defs/ReproductionMinimizationEvidence"
+        },
+        "reachability": {
+          "items": {
+            "$ref": "#/$defs/ReproductionReachabilityEvidence"
+          },
+          "maxItems": 40,
+          "title": "Reachability",
+          "type": "array"
+        },
+        "repository_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repository Sha256"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "settlement": {
+          "$ref": "#/$defs/ReproductionSettlementEvidence"
+        },
+        "status": {
+          "$ref": "#/$defs/ReproductionIntegrityStatus"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/ReproductionTargetIdentity"
+          },
+          "maxItems": 40,
+          "title": "Targets",
+          "type": "array"
+        }
+      },
+      "required": [
+        "status",
+        "settlement",
+        "minimization",
+        "checks",
+        "integrity_sha256"
+      ],
+      "title": "ReproductionIntegrityAssessment",
+      "type": "object"
+    },
+    "ReproductionIntegrityCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "check": {
+          "$ref": "#/$defs/ReproductionIntegrityCheckKind"
+        },
+        "detail": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "check",
+        "passed",
+        "detail",
+        "evidence_sha256"
+      ],
+      "title": "ReproductionIntegrityCheck",
+      "type": "object"
+    },
+    "ReproductionIntegrityCheckKind": {
+      "enum": [
+        "target_identity",
+        "cited_reachability",
+        "clean_replay",
+        "repository_hash",
+        "settlement",
+        "minimization"
+      ],
+      "title": "ReproductionIntegrityCheckKind",
+      "type": "string"
+    },
+    "ReproductionIntegrityStatus": {
+      "enum": [
+        "verified",
+        "rejected",
+        "inconclusive"
+      ],
+      "title": "ReproductionIntegrityStatus",
+      "type": "string"
+    },
+    "ReproductionMinimizationEvidence": {
+      "additionalProperties": false,
+      "description": "Bounded proof metadata for a claimed minimized attacker sequence.",
+      "properties": {
+        "original_step_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 40,
+          "minItems": 1,
+          "title": "Original Step Ids",
+          "type": "array"
+        },
+        "proven_minimal": {
+          "title": "Proven Minimal",
+          "type": "boolean"
+        },
+        "removal_trials": {
+          "items": {
+            "$ref": "#/$defs/ReproductionMinimizationTrial"
+          },
+          "maxItems": 40,
+          "title": "Removal Trials",
+          "type": "array"
+        },
+        "retained_step_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 40,
+          "minItems": 1,
+          "title": "Retained Step Ids",
+          "type": "array"
+        },
+        "strategy": {
+          "enum": [
+            "single_step_trivial",
+            "bounded_step_deletion",
+            "not_attempted"
+          ],
+          "title": "Strategy",
+          "type": "string"
+        }
+      },
+      "required": [
+        "original_step_ids",
+        "retained_step_ids",
+        "strategy",
+        "proven_minimal"
+      ],
+      "title": "ReproductionMinimizationEvidence",
+      "type": "object"
+    },
+    "ReproductionMinimizationTrial": {
+      "additionalProperties": false,
+      "properties": {
+        "attempted_step_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 39,
+          "title": "Attempted Step Ids",
+          "type": "array"
+        },
+        "removed_step_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Removed Step Id",
+          "type": "string"
+        },
+        "repository_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Repository Sha256",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/ReproductionState"
+        }
+      },
+      "required": [
+        "removed_step_id",
+        "attempted_step_ids",
+        "state",
+        "repository_sha256"
+      ],
+      "title": "ReproductionMinimizationTrial",
+      "type": "object"
+    },
+    "ReproductionReachabilityEvidence": {
+      "additionalProperties": false,
+      "description": "Source-index evidence linking one declared call to a cited entry point.",
+      "properties": {
+        "entity_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "function_signature": {
+          "maxLength": 256,
+          "minLength": 3,
+          "title": "Function Signature",
+          "type": "string"
+        },
+        "location": {
+          "$ref": "#/$defs/Location"
+        },
+        "provenance": {
+          "$ref": "#/$defs/SolidityProvenance"
+        },
+        "step_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Step Id",
+          "type": "string"
+        },
+        "target": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Target",
+          "type": "string"
+        }
+      },
+      "required": [
+        "step_id",
+        "target",
+        "function_signature",
+        "entity_id",
+        "location",
+        "provenance"
+      ],
+      "title": "ReproductionReachabilityEvidence",
+      "type": "object"
+    },
+    "ReproductionResolutionKind": {
+      "description": "Typed terminal adjudication for one high/critical candidate.",
+      "enum": [
+        "reproduced",
+        "inconclusive"
+      ],
+      "title": "ReproductionResolutionKind",
+      "type": "string"
+    },
+    "ReproductionResult": {
+      "additionalProperties": false,
+      "properties": {
+        "assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "attempt_evidence": {
+          "items": {
+            "$ref": "#/$defs/ReproductionAttemptEvidence"
+          },
+          "maxItems": 10,
+          "title": "Attempt Evidence",
+          "type": "array"
+        },
+        "attempts": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Attempts",
+          "type": "integer"
+        },
+        "candidate_id": {
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "command": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Command",
+          "type": "array"
+        },
+        "duration_seconds": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Duration Seconds",
+          "type": "number"
+        },
+        "executable_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Executable Sha256"
+        },
+        "execution_evidence": {
+          "$ref": "#/$defs/ExecutionEvidenceKind",
+          "default": "unverified"
+        },
+        "expected_chain_id": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Chain Id"
+        },
+        "financial_settlement": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FinancialSettlementEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "financial_settlement_verified": {
+          "default": false,
+          "title": "Financial Settlement Verified",
+          "type": "boolean"
+        },
+        "generated_test_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Generated Test Path"
+        },
+        "generated_test_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Generated Test Sha256"
+        },
+        "integrity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReproductionIntegrityAssessment"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "isolation_attestation_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Isolation Attestation Sha256"
+        },
+        "isolation_backend": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Isolation Backend"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        },
+        "minimization_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReproductionMinimizationEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "minimized_steps": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Minimized Steps",
+          "type": "integer"
+        },
+        "original_steps": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Original Steps",
+          "type": "integer"
+        },
+        "regression_test_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Regression Test Path"
+        },
+        "repository_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repository Sha256"
+        },
+        "required_block_number": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required Block Number"
+        },
+        "specification_sha256": {
+          "title": "Specification Sha256",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/ReproductionState"
+        },
+        "stderr_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stderr Path"
+        },
+        "stdout_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stdout Path"
+        },
+        "successful_attempts": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Successful Attempts",
+          "type": "integer"
+        },
+        "test_name": {
+          "title": "Test Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "test_name",
+        "state",
+        "specification_sha256"
+      ],
+      "title": "ReproductionResult",
+      "type": "object"
+    },
+    "ReproductionSettlementEvidence": {
+      "additionalProperties": false,
+      "description": "Execution state for the specification's declared end-state assertions.",
+      "properties": {
+        "assertion_count": {
+          "maximum": 40,
+          "minimum": 1,
+          "title": "Assertion Count",
+          "type": "integer"
+        },
+        "assertions_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Assertions Sha256",
+          "type": "string"
+        },
+        "financial_settlement_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Financial Settlement Sha256"
+        },
+        "financial_settlement_verified": {
+          "default": false,
+          "title": "Financial Settlement Verified",
+          "type": "boolean"
+        },
+        "status": {
+          "$ref": "#/$defs/ReproductionSettlementStatus"
+        },
+        "verified_attempts": {
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Verified Attempts",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "status",
+        "assertions_sha256",
+        "assertion_count",
+        "verified_attempts"
+      ],
+      "title": "ReproductionSettlementEvidence",
+      "type": "object"
+    },
+    "ReproductionSettlementStatus": {
+      "enum": [
+        "assertions_satisfied",
+        "claim_not_reproduced",
+        "not_executed"
+      ],
+      "title": "ReproductionSettlementStatus",
+      "type": "string"
+    },
+    "ReproductionState": {
+      "enum": [
+        "not_attempted",
+        "generation_failed",
+        "compile_failed",
+        "environment_blocked",
+        "not_reproduced",
+        "partially_reproduced",
+        "reproduced",
+        "reproduced_and_minimized",
+        "formally_proven",
+        "disproven"
+      ],
+      "title": "ReproductionState",
+      "type": "string"
+    },
+    "ReproductionTargetIdentity": {
+      "additionalProperties": false,
+      "description": "Exact chain/block/address/source-name identity used by a reproduction.",
+      "properties": {
+        "address": {
+          "pattern": "^0x[0-9a-fA-F]{40}$",
+          "title": "Address",
+          "type": "string"
+        },
+        "alias": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,47}$",
+          "title": "Alias",
+          "type": "string"
+        },
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "block_number": {
+          "minimum": 0,
+          "title": "Block Number",
+          "type": "integer"
+        },
+        "chain_id": {
+          "minimum": 1,
+          "title": "Chain Id",
+          "type": "integer"
+        },
+        "contract_name": {
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$",
+          "title": "Contract Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "alias",
+        "contract_name",
+        "address",
+        "chain_id",
+        "block_number",
+        "binding_sha256"
+      ],
+      "title": "ReproductionTargetIdentity",
+      "type": "object"
+    },
+    "Severity": {
+      "enum": [
+        "informational",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "title": "Severity",
+      "type": "string"
+    },
+    "SolidityProvenance": {
+      "enum": [
+        "compiler",
+        "fallback",
+        "static_tool",
+        "heuristic",
+        "model_suggested"
+      ],
+      "title": "SolidityProvenance",
+      "type": "string"
+    },
+    "SourceExcerptEvidence": {
+      "additionalProperties": false,
+      "description": "A small source excerpt bound to the discovered file and cited range.",
+      "properties": {
+        "cited_content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Cited Content Sha256",
+          "type": "string"
+        },
+        "cited_end_line": {
+          "minimum": 1,
+          "title": "Cited End Line",
+          "type": "integer"
+        },
+        "cited_start_line": {
+          "minimum": 1,
+          "title": "Cited Start Line",
+          "type": "integer"
+        },
+        "content": {
+          "maxLength": 16384,
+          "title": "Content",
+          "type": "string"
+        },
+        "content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "excerpt_end_line": {
+          "minimum": 1,
+          "title": "Excerpt End Line",
+          "type": "integer"
+        },
+        "excerpt_start_line": {
+          "minimum": 1,
+          "title": "Excerpt Start Line",
+          "type": "integer"
+        },
+        "file_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "File Sha256",
+          "type": "string"
+        },
+        "omitted_after": {
+          "title": "Omitted After",
+          "type": "boolean"
+        },
+        "omitted_before": {
+          "title": "Omitted Before",
+          "type": "boolean"
+        },
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "symbol": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Symbol"
+        }
+      },
+      "required": [
+        "path",
+        "file_sha256",
+        "cited_start_line",
+        "cited_end_line",
+        "cited_content_sha256",
+        "excerpt_start_line",
+        "excerpt_end_line",
+        "content",
+        "content_sha256",
+        "omitted_before",
+        "omitted_after"
+      ],
+      "title": "SourceExcerptEvidence",
+      "type": "object"
+    },
+    "SourceSink": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "line": {
+          "minimum": 1,
+          "title": "Line",
+          "type": "integer"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "description",
+        "path",
+        "line"
+      ],
+      "title": "SourceSink",
+      "type": "object"
+    },
+    "VerificationDecision": {
+      "additionalProperties": false,
+      "properties": {
+        "authentication": {
+          "title": "Authentication",
+          "type": "string"
+        },
+        "candidate_id": {
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "environmental_assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Environmental Assumptions",
+          "type": "array"
+        },
+        "false_positive_conditions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "False Positive Conditions",
+          "type": "array"
+        },
+        "guards_and_controls": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Guards And Controls",
+          "type": "array"
+        },
+        "privilege_requirements": {
+          "title": "Privilege Requirements",
+          "type": "string"
+        },
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "reachability": {
+          "title": "Reachability",
+          "type": "string"
+        },
+        "safe_verification_test": {
+          "$ref": "#/$defs/VerificationTest"
+        },
+        "source_to_sink": {
+          "title": "Source To Sink",
+          "type": "string"
+        },
+        "verdict": {
+          "$ref": "#/$defs/VerificationVerdict"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "verdict",
+        "rationale",
+        "source_to_sink",
+        "reachability",
+        "authentication",
+        "privilege_requirements",
+        "environmental_assumptions",
+        "guards_and_controls",
+        "false_positive_conditions",
+        "safe_verification_test",
+        "confidence"
+      ],
+      "title": "VerificationDecision",
+      "type": "object"
+    },
+    "VerificationTest": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "safe": {
+          "default": true,
+          "title": "Safe",
+          "type": "boolean"
+        },
+        "type": {
+          "const": "local",
+          "default": "local",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "description"
+      ],
+      "title": "VerificationTest",
+      "type": "object"
+    },
+    "VerificationVerdict": {
+      "enum": [
+        "verified",
+        "plausible",
+        "rejected",
+        "insufficient_context"
+      ],
+      "title": "VerificationVerdict",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/findings_artifact.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Complete final/candidate finding history for the forensic bundle.",
+  "properties": {
+    "candidate_findings": {
+      "items": {
+        "$ref": "#/$defs/CandidateFinding"
+      },
+      "title": "Candidate Findings",
+      "type": "array"
+    },
+    "completed": {
+      "title": "Completed",
+      "type": "boolean"
+    },
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/Finding"
+      },
+      "title": "Findings",
+      "type": "array"
+    },
+    "quality_status": {
+      "$ref": "#/$defs/AuditQualityStatus"
+    },
+    "records": {
+      "items": {
+        "$ref": "#/$defs/ForensicFindingRecord"
+      },
+      "title": "Records",
+      "type": "array"
+    },
+    "rejected_findings": {
+      "items": {
+        "$ref": "#/$defs/Finding"
+      },
+      "title": "Rejected Findings",
+      "type": "array"
+    },
+    "run_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Run Id",
+      "type": "string"
+    },
+    "run_status": {
+      "$ref": "#/$defs/AuditRunStatus"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "run_status",
+    "quality_status",
+    "completed",
+    "findings",
+    "rejected_findings",
+    "records"
+  ],
+  "title": "mmaudit forensic findings artifact",
+  "type": "object"
+}

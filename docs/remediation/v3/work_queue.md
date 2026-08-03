@@ -406,9 +406,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   dissent and limitations are prominent; large coverage tables stay forensic.
 - **Dependencies:** `V3-FLOOR-001`.
 - **Status:** `IN_PROGRESS`
-- **Current action:** Audit the existing Markdown/JSON/SARIF/run-manifest pipeline against every
-  client and forensic deliverable requirement, reproduce the current report-quality failures,
-  and add the smallest cohesive typed split that preserves existing evidence controls.
+- **Current action:** `PAUSED` after implementing the typed client/forensic split and manifest
+  `1.2` binding. Resume with strict mypy and the broader reporting/release test matrix, then
+  review the final diff and update traceability from actual validation evidence.
 
 ## V3-SCOPE-001 — Honest Solidity/EVM product profile
 

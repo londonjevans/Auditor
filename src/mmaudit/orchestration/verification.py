@@ -220,7 +220,7 @@ def verify_run_evidence(
         None,
     )
     emitted_metadata, metadata_present = _load_metadata_artifact(root, metadata_binding)
-    if manifest.schema_version == "1.1" and not metadata_present:
+    if manifest.schema_version in {"1.1", "1.2"} and not metadata_present:
         mismatches.append(
             RunVerificationMismatch(
                 category=RunVerificationCategory.MANIFEST,
@@ -233,7 +233,7 @@ def verify_run_evidence(
                 expected_sha256=(metadata_binding.sha256 if metadata_binding is not None else None),
             )
         )
-    elif manifest.schema_version == "1.1" and metadata_binding is None:
+    elif manifest.schema_version in {"1.1", "1.2"} and metadata_binding is None:
         mismatches.append(
             RunVerificationMismatch(
                 category=RunVerificationCategory.MANIFEST,

@@ -42,6 +42,16 @@ from mmaudit.release_artifacts import (
     observe_release_artifacts,
     write_release_artifact_evidence,
 )
+from mmaudit.reporting.bundle import (
+    MANIFEST_BOUND_REPORT_DELIVERABLES,
+    build_coverage_artifact,
+    build_findings_artifact,
+    build_model_execution_artifact,
+)
+from mmaudit.reporting.client import render_client_markdown
+from mmaudit.reporting.json_report import write_json
+from mmaudit.reporting.markdown import render_forensic_markdown
+from mmaudit.reporting.sarif import generate_sarif
 from mmaudit.traceability import (
     ImplementationStatus,
     build_traceability_matrix,
@@ -118,6 +128,7 @@ def _seal_manifest(
         run_configuration=_run_configuration(config),
         bindings=_bindings(),
         artifacts=collect_run_artifacts(run_dir),
+        schema_version="1.2",
         tool_version="test",
     )
     write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", manifest)
@@ -226,6 +237,29 @@ def _write_report_artifacts(run_dir: Path, report: AuditReport) -> None:
         + "\n",
         encoding="utf-8",
     )
+    write_json(run_dir / "findings.json", build_findings_artifact(report))
+    write_json(run_dir / "coverage.json", build_coverage_artifact(report))
+    write_json(run_dir / "model-execution.json", build_model_execution_artifact(report))
+    write_json(
+        run_dir / "audit-results.sarif",
+        generate_sarif(
+            report.findings,
+            scanner_runs=report.scanner_runs,
+            maximum_assurance=report.maximum_assurance,
+            run_status=report.run_status,
+            quality_status=report.quality_status,
+            completed=report.completed,
+            incomplete_reasons=report.incomplete_reasons,
+        ),
+    )
+    (run_dir / "client-report.md").write_text(
+        render_client_markdown(report, {}),
+        encoding="utf-8",
+    )
+    (run_dir / "forensic-report.md").write_text(
+        render_forensic_markdown(report),
+        encoding="utf-8",
+    )
 
 
 def _write_run(run_dir: Path, config: AuditConfig) -> RunEvidenceManifest:
@@ -285,6 +319,31 @@ def test_observer_binds_actual_manifest_inventory_and_traceability(
     write_release_artifact_evidence(output, evidence)
     assert load_release_artifact_evidence(output) == evidence
     assert oct(output.stat().st_mode & 0o777) == "0o600"
+
+
+@pytest.mark.parametrize("artifact_name", sorted(MANIFEST_BOUND_REPORT_DELIVERABLES))
+def test_observer_rejects_coherently_resealed_missing_report_deliverable(
+    tmp_path: Path,
+    config_factory,
+    artifact_name: str,
+) -> None:
+    run_dir = tmp_path / "run"
+    manifest = _write_run(run_dir, config_factory())
+    (run_dir / artifact_name).unlink()
+    payload = manifest.model_dump(mode="json")
+    payload["artifacts"] = [
+        binding for binding in payload["artifacts"] if binding["path"] != artifact_name
+    ]
+    payload["manifest_sha256"] = canonical_sha256(
+        {key: value for key, value in payload.items() if key != "manifest_sha256"}
+    )
+    write_run_evidence_manifest(
+        run_dir / "run-evidence-manifest.json",
+        RunEvidenceManifest.model_validate(payload),
+    )
+
+    with pytest.raises(ValueError, match=f"requires emitted artifact: {artifact_name}"):
+        observe_release_artifacts(run_dir, ROOT)
 
 
 def test_observer_parses_the_exact_safely_read_manifest_bytes(
@@ -485,7 +544,7 @@ def test_observer_rejects_legacy_manifest_without_reconstructable_config(
         RunEvidenceManifest.model_validate(payload),
     )
 
-    with pytest.raises(ValueError, match=r"schema 1\.1"):
+    with pytest.raises(ValueError, match=r"schema 1\.2"):
         observe_release_artifacts(run_dir, ROOT)
 
 

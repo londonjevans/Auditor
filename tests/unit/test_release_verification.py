@@ -209,6 +209,7 @@ def _workspace(
         run_configuration=_run_configuration(config),
         bindings=_bindings(),
         artifacts=[artifact_binding],
+        schema_version="1.2",
         tool_version="test",
     )
     manifest_path = run_dir / "run-evidence-manifest.json"

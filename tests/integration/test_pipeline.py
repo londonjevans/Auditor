@@ -134,6 +134,7 @@ from mmaudit.privacy import (
     PrivacySourceClassification,
     load_privacy_retention_consent,
 )
+from mmaudit.reporting.bundle import CoverageArtifact, FindingsArtifact, ModelExecutionArtifact
 from mmaudit.reporting.json_report import write_json
 from mmaudit.scanners.base import (
     ScannerSourceIntegrityError,
@@ -1570,8 +1571,13 @@ async def test_mock_multi_agent_audit_preserves_artifacts_without_false_completi
         "property-corpus.json",
         "scope-assessment.json",
         "final-findings.json",
+        "findings.json",
+        "client-report.md",
+        "forensic-report.md",
         "audit-report.md",
         "audit-results.sarif",
+        "coverage.json",
+        "model-execution.json",
         "context-manifest.json",
         "maximum_assurance_traceability.json",
         "run-evidence-manifest.json",
@@ -1581,6 +1587,20 @@ async def test_mock_multi_agent_audit_preserves_artifacts_without_false_completi
     AuditReport.model_validate_json(
         (result.run_dir / "final-findings.json").read_text(encoding="utf-8")
     )
+    FindingsArtifact.model_validate_json(
+        (result.run_dir / "findings.json").read_text(encoding="utf-8")
+    )
+    CoverageArtifact.model_validate_json(
+        (result.run_dir / "coverage.json").read_text(encoding="utf-8")
+    )
+    ModelExecutionArtifact.model_validate_json(
+        (result.run_dir / "model-execution.json").read_text(encoding="utf-8")
+    )
+    client_report = (result.run_dir / "client-report.md").read_text(encoding="utf-8")
+    forensic_report = (result.run_dir / "forensic-report.md").read_text(encoding="utf-8")
+    assert "Forensic bundle index" in client_report
+    assert "Complete model-review surface coverage" not in client_report
+    assert "Corrovera Forensic Evidence Report" in forensic_report
     sarif = json.loads((result.run_dir / "audit-results.sarif").read_text(encoding="utf-8"))
     assert sarif["version"] == "2.1.0"
     traceability = MaximumAssuranceTraceability.model_validate_json(
@@ -1594,6 +1614,7 @@ async def test_mock_multi_agent_audit_preserves_artifacts_without_false_completi
     manifest = RunEvidenceManifest.model_validate_json(
         (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
     )
+    assert manifest.schema_version == "1.2"
     validate_manifest_artifacts(manifest, result.run_dir)
     context_manifest = load_context_manifest(result.run_dir / "context-manifest.json")
     validate_context_manifest_against_usage(
@@ -1626,6 +1647,36 @@ async def test_mock_multi_agent_audit_preserves_artifacts_without_false_completi
         getattr(manifest.bindings, category)
         for category in manifest.bindings.__class__.model_fields
     )
+
+    missing_bundle = tmp_path / "missing-client-report"
+    shutil.copytree(result.run_dir, missing_bundle)
+    (missing_bundle / "client-report.md").unlink()
+    with pytest.raises(ValueError, match="artifact set"):
+        validate_manifest_artifacts(manifest, missing_bundle)
+
+    resealed_bundle = tmp_path / "resealed-coverage-mismatch"
+    shutil.copytree(result.run_dir, resealed_bundle)
+    coverage_path = resealed_bundle / "coverage.json"
+    changed_coverage = json.loads(coverage_path.read_text(encoding="utf-8"))
+    changed_coverage["run_id"] = "coherently-resealed-wrong-run"
+    write_json(coverage_path, changed_coverage)
+    resealed_payload = manifest.model_dump(mode="json")
+    coverage_bytes = coverage_path.read_bytes()
+    coverage_binding = next(
+        binding for binding in resealed_payload["artifacts"] if binding["path"] == "coverage.json"
+    )
+    coverage_binding["sha256"] = hashlib.sha256(coverage_bytes).hexdigest()
+    coverage_binding["size"] = len(coverage_bytes)
+    resealed_payload["manifest_sha256"] = canonical_sha256(
+        {key: value for key, value in resealed_payload.items() if key != "manifest_sha256"}
+    )
+    resealed_manifest = RunEvidenceManifest.model_validate(resealed_payload)
+    write_run_evidence_manifest(
+        resealed_bundle / "run-evidence-manifest.json",
+        resealed_manifest,
+    )
+    with pytest.raises(ValueError, match=r"coverage\.json differs"):
+        validate_manifest_artifacts(resealed_manifest, resealed_bundle)
 
 
 @pytest.mark.asyncio

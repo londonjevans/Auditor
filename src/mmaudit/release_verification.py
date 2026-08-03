@@ -266,8 +266,8 @@ def _require_manifest_run_binding(
     run_binding: ReleaseRunBinding,
 ) -> None:
     run_configuration = manifest.run_configuration
-    if manifest.schema_version != "1.1" or run_configuration is None:
-        raise ValueError("release verification requires reconstructable manifest schema 1.1")
+    if manifest.schema_version != "1.2" or run_configuration is None:
+        raise ValueError("release verification requires report-bundle manifest schema 1.2")
     expected = (
         manifest.run_id,
         manifest.repository_root_name,

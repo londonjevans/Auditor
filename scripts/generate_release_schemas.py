@@ -39,6 +39,7 @@ from mmaudit.release_run import ReleaseRunBinding
 from mmaudit.release_runtime import LocalReleaseGateResult
 from mmaudit.release_static import StaticReleaseEvidence
 from mmaudit.release_verification import ReleaseRunVerificationBinding
+from mmaudit.reporting.bundle import CoverageArtifact, FindingsArtifact, ModelExecutionArtifact
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_ROOT = ROOT / "schemas"
@@ -46,11 +47,14 @@ SCHEMA_BASE = "https://mmaudit.local/schemas"
 MODELS: dict[str, type[BaseModel]] = {
     "benchmark_report.schema.json": BenchmarkReport,
     "context_manifest.schema.json": ContextManifest,
+    "coverage_artifact.schema.json": CoverageArtifact,
+    "findings_artifact.schema.json": FindingsArtifact,
     "hardhat_reporter_inventory.schema.json": HardhatReporterInventory,
     "hardhat_reporter_test.schema.json": HardhatReporterExecution,
     "hardhat_request_inventory.schema.json": HardhatInventoryPhaseRequest,
     "hardhat_request_test.schema.json": HardhatTestPhaseRequest,
     "model_calibration.schema.json": ModelCalibrationArtifact,
+    "model_execution_artifact.schema.json": ModelExecutionArtifact,
     "model_lineage_review.schema.json": ModelLineageReviewArtifact,
     "models_config.schema.json": ModelsConfig,
     "model_qualification.schema.json": ModelQualificationArtifact,
@@ -75,11 +79,14 @@ MODELS: dict[str, type[BaseModel]] = {
 }
 TITLE_OVERRIDES = {
     "benchmark_report.schema.json": "mmaudit benchmark report",
+    "coverage_artifact.schema.json": "mmaudit forensic coverage artifact",
+    "findings_artifact.schema.json": "mmaudit forensic findings artifact",
     "hardhat_reporter_inventory.schema.json": "mmaudit Hardhat inventory observation",
     "hardhat_reporter_test.schema.json": "mmaudit Hardhat test observation",
     "hardhat_request_inventory.schema.json": "mmaudit Hardhat inventory phase request",
     "hardhat_request_test.schema.json": "mmaudit Hardhat test phase request",
     "model_calibration.schema.json": "mmaudit model calibration artifact",
+    "model_execution_artifact.schema.json": "mmaudit model execution artifact",
     "model_lineage_review.schema.json": "mmaudit model lineage review artifact",
     "models_config.schema.json": "mmaudit models configuration",
     "model_qualification.schema.json": "mmaudit model qualification artifact",

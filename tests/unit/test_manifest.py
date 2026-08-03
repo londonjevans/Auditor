@@ -919,7 +919,7 @@ def test_manifest_provenance_hashes_fail_closed_and_v1_0_remains_readable(
     missing_provenance["manifest_sha256"] = canonical_sha256(
         {key: value for key, value in missing_provenance.items() if key != "manifest_sha256"}
     )
-    with pytest.raises(ValidationError, match=r"1\.1 requires"):
+    with pytest.raises(ValidationError, match="requires run configuration provenance"):
         RunEvidenceManifest.model_validate(missing_provenance)
 
     legacy = manifest.model_dump(mode="json")
@@ -941,7 +941,7 @@ def test_manifest_provenance_hashes_fail_closed_and_v1_0_remains_readable(
             if key not in {"manifest_sha256", "run_configuration"}
         }
     )
-    with pytest.raises(ValidationError, match=r"1\.1 requires"):
+    with pytest.raises(ValidationError, match="requires run configuration provenance"):
         RunEvidenceManifest.model_validate(legacy_with_provenance)
 
 
@@ -1338,7 +1338,7 @@ def test_published_manifest_schema_is_strict_and_bounded() -> None:
     assert schema["$defs"]["fileBinding"]["additionalProperties"] is False
     assert schema["$defs"]["hashBinding"]["additionalProperties"] is False
     assert schema["$defs"]["bindingSet"]["additionalProperties"] is False
-    assert schema["properties"]["schema_version"]["enum"] == ["1.0", "1.1"]
+    assert schema["properties"]["schema_version"]["enum"] == ["1.0", "1.1", "1.2"]
     expected_profiles = {"quick", "standard", "deep", "maximum-assurance"}
     assert (
         set(schema["$defs"]["runConfiguration"]["properties"]["requested_profile"]["enum"])
@@ -1403,12 +1403,12 @@ def test_published_manifest_schema_is_strict_and_bounded() -> None:
     legacy_rule = next(
         rule
         for rule in compatibility
-        if rule["if"]["properties"]["schema_version"]["const"] == "1.0"
+        if rule["if"]["properties"]["schema_version"].get("const") == "1.0"
     )
     current_rule = next(
         rule
         for rule in compatibility
-        if rule["if"]["properties"]["schema_version"]["const"] == "1.1"
+        if set(rule["if"]["properties"]["schema_version"].get("enum", [])) == {"1.1", "1.2"}
     )
     assert legacy_rule["then"]["properties"]["run_configuration"] == {"type": "null"}
     assert "run_configuration" in current_rule["then"]["required"]

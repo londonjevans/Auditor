@@ -44,6 +44,7 @@ from mmaudit.models.schemas import (
     AuditProfile,
     AuditReport,
     AuditRunStatus,
+    CandidateFinding,
     CandidateFindingArtifact,
     CandidateOriginKind,
     CandidateReproductionResolution,
@@ -90,7 +91,17 @@ from mmaudit.orchestration.context_manifest import (
 from mmaudit.orchestration.execution_candidates import (
     validate_invariant_execution_candidate_provenance,
 )
+from mmaudit.reporting.bundle import (
+    MANIFEST_BOUND_REPORT_DELIVERABLES,
+    CoverageArtifact,
+    FindingsArtifact,
+    ModelExecutionArtifact,
+    build_coverage_artifact,
+    build_findings_artifact,
+    build_model_execution_artifact,
+)
 from mmaudit.reporting.json_report import write_json
+from mmaudit.reporting.sarif import generate_sarif
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_name, is_sensitive_workspace_path
 from mmaudit.solidity.sharding import (
@@ -259,7 +270,7 @@ class RunConfigurationBinding(StrictModel):
 class RunEvidenceManifest(StrictModel):
     """Self-hashed manifest over source, run evidence projections, and artifacts."""
 
-    schema_version: Literal["1.0", "1.1"] = "1.1"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.1"
     generated_by: Literal["mmaudit"] = "mmaudit"
     tool_version: str = Field(min_length=1, max_length=100)
     run_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -274,8 +285,10 @@ class RunEvidenceManifest(StrictModel):
 
     @model_validator(mode="after")
     def hashes_and_paths_are_consistent(self) -> RunEvidenceManifest:
-        if (self.schema_version == "1.1") != (self.run_configuration is not None):
-            raise ValueError("manifest 1.1 requires run configuration provenance")
+        if (self.schema_version in {"1.1", "1.2"}) != (self.run_configuration is not None):
+            raise ValueError(
+                f"manifest {self.schema_version} requires run configuration provenance"
+            )
         source_paths = [binding.path for binding in self.sources]
         if source_paths != sorted(set(source_paths)):
             raise ValueError("manifest source paths must be unique and sorted")
@@ -349,6 +362,7 @@ def seal_run_evidence_manifest(
     run_configuration: RunConfigurationBinding,
     bindings: ManifestBindingSet,
     artifacts: list[ManifestFileBinding],
+    schema_version: Literal["1.1", "1.2"] = "1.1",
     tool_version: str = VERSION,
 ) -> RunEvidenceManifest:
     """Sort and self-hash an otherwise complete manifest payload."""
@@ -356,7 +370,7 @@ def seal_run_evidence_manifest(
     ordered_sources = sorted(sources, key=lambda item: item.path)
     ordered_artifacts = sorted(artifacts, key=lambda item: item.path)
     payload: dict[str, Any] = {
-        "schema_version": "1.1",
+        "schema_version": schema_version,
         "generated_by": "mmaudit",
         "tool_version": tool_version,
         "run_id": run_id,
@@ -564,6 +578,9 @@ def _build_run_evidence_manifest(
             scheduler_artifact,
         ),
     )
+    artifacts = _collect_artifacts(root)
+    artifact_names = {artifact.path for artifact in artifacts}
+    report_bundle_present = artifact_names >= MANIFEST_BOUND_REPORT_DELIVERABLES
     return seal_run_evidence_manifest(
         run_id=report.run_id,
         repository_root_name=report.repository.root_name,
@@ -571,7 +588,8 @@ def _build_run_evidence_manifest(
         sources=sources,
         run_configuration=run_configuration,
         bindings=bindings,
-        artifacts=_collect_artifacts(root),
+        artifacts=artifacts,
+        schema_version="1.2" if report_bundle_present else "1.1",
     )
 
 
@@ -782,6 +800,91 @@ def _validate_reproduction_candidate_obligations(
             raise ValueError("inconclusive resolution contradicts a qualifying reproduction result")
 
 
+def _validate_report_bundle_artifacts(
+    root: Path,
+    report: AuditReport,
+    *,
+    candidates: list[CandidateFinding],
+    reproduction_resolutions: list[CandidateReproductionResolution],
+) -> None:
+    """Cross-check every canonical client/forensic leaf against the final report."""
+
+    present = {
+        name
+        for name in MANIFEST_BOUND_REPORT_DELIVERABLES
+        if (root / name).exists() or (root / name).is_symlink() or (root / name).is_junction()
+    }
+    if not present:
+        return
+    if present != MANIFEST_BOUND_REPORT_DELIVERABLES:
+        missing = sorted(MANIFEST_BOUND_REPORT_DELIVERABLES - present)
+        raise ValueError("client/forensic report bundle is incomplete: " + ", ".join(missing))
+
+    findings = FindingsArtifact.model_validate(_read_json_artifact(root, "findings.json"))
+    expected_findings = build_findings_artifact(
+        report,
+        candidates=candidates,
+        reproduction_resolutions=reproduction_resolutions,
+    )
+    if (
+        findings.run_id != expected_findings.run_id
+        or findings.run_status is not expected_findings.run_status
+        or findings.quality_status is not expected_findings.quality_status
+        or findings.completed != expected_findings.completed
+        or findings.findings != expected_findings.findings
+        or findings.rejected_findings != expected_findings.rejected_findings
+        or findings.candidate_findings != expected_findings.candidate_findings
+        or len(findings.records) != len(expected_findings.records)
+    ):
+        raise ValueError("findings.json differs from the final report")
+    repository_sources = {item.path: item.sha256 for item in report.repository.files}
+    for observed, expected in zip(findings.records, expected_findings.records, strict=True):
+        if observed.model_copy(update={"source_excerpt": None}) != expected:
+            raise ValueError("findings.json evidence differs from the final report")
+        excerpt = observed.source_excerpt
+        if observed.finding.status is not FindingStatus.REJECTED and excerpt is None:
+            raise ValueError("active forensic finding lacks a source-bound excerpt")
+        if excerpt is None:
+            continue
+        matching_locations = [
+            location
+            for location in observed.finding.locations
+            if location.path == excerpt.path
+            and location.start_line == excerpt.cited_start_line
+            and location.end_line == excerpt.cited_end_line
+            and location.symbol == excerpt.symbol
+        ]
+        if (
+            len(matching_locations) != 1
+            or repository_sources.get(excerpt.path) != excerpt.file_sha256
+            or (
+                matching_locations[0].content_hash is not None
+                and matching_locations[0].content_hash != excerpt.cited_content_sha256
+            )
+        ):
+            raise ValueError("forensic source excerpt differs from final source evidence")
+
+    coverage = CoverageArtifact.model_validate(_read_json_artifact(root, "coverage.json"))
+    if coverage != build_coverage_artifact(report):
+        raise ValueError("coverage.json differs from the final report")
+    model_execution = ModelExecutionArtifact.model_validate(
+        _read_json_artifact(root, "model-execution.json")
+    )
+    if model_execution != build_model_execution_artifact(report):
+        raise ValueError("model-execution.json differs from the final report")
+    expected_sarif = generate_sarif(
+        report.findings,
+        scanner_runs=report.scanner_runs,
+        maximum_assurance=report.maximum_assurance,
+        run_status=report.run_status,
+        quality_status=report.quality_status,
+        completed=report.completed,
+        incomplete_reasons=report.incomplete_reasons,
+    )
+    if _read_json_artifact(root, "audit-results.sarif") != expected_sarif:
+        raise ValueError("audit-results.sarif differs from the final report")
+
+
 def _validate_report_artifact_consistency(root: Path, report: AuditReport) -> None:
     """Require emitted report summaries to agree before sealing their byte hashes."""
 
@@ -817,6 +920,16 @@ def _validate_report_artifact_consistency(root: Path, report: AuditReport) -> No
         _ManifestReproductionArtifact.model_validate(raw_reproduction_artifact)
         if report.schema_version == "1.2"
         else None
+    )
+    _validate_report_bundle_artifacts(
+        root,
+        report,
+        candidates=list(candidate_artifact.findings),
+        reproduction_resolutions=(
+            list(reproduction_artifact.candidate_resolutions)
+            if reproduction_artifact is not None
+            else []
+        ),
     )
     disposition_path = root / "execution-origin-dispositions.json"
     disposition_artifact_present = (
@@ -2249,8 +2362,11 @@ def validate_manifest_artifacts(
         observed = actual[path]
         if observed.size != binding.size or observed.sha256 != binding.sha256:
             raise ValueError(f"run artifact hash mismatch: {path}")
-    if manifest.schema_version == "1.1":
-        for required_artifact in ("final-findings.json", "metadata.json"):
+    if manifest.schema_version in {"1.1", "1.2"}:
+        required_artifacts = {"final-findings.json", "metadata.json"}
+        if manifest.schema_version == "1.2":
+            required_artifacts.update(MANIFEST_BOUND_REPORT_DELIVERABLES)
+        for required_artifact in sorted(required_artifacts):
             if required_artifact not in expected:
                 raise ValueError(
                     f"current run manifest requires emitted artifact: {required_artifact}"

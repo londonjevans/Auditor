@@ -376,6 +376,39 @@ def build_traceability_matrix(commit: str | None) -> MaximumAssuranceTraceabilit
             ],
         ),
         _row(
+            "MA-REPORT-BUNDLE",
+            "Every audit emits a concise branded client report and a separately hash-bound "
+            "complete forensic evidence bundle.",
+            ImplementationStatus.IMPLEMENTED,
+            verified,
+            implementation_paths=[
+                "schemas/coverage_artifact.schema.json",
+                "schemas/findings_artifact.schema.json",
+                "schemas/model_execution_artifact.schema.json",
+                "schemas/run_evidence_manifest.schema.json",
+                "src/mmaudit/reporting/bundle.py",
+                "src/mmaudit/reporting/client.py",
+                "src/mmaudit/reporting/markdown.py",
+                "src/mmaudit/orchestration/manifest.py",
+                "src/mmaudit/orchestration/pipeline.py",
+            ],
+            unit_tests=[
+                "tests/unit/test_client_forensic_reporting.py",
+                "tests/unit/test_manifest.py",
+                "tests/unit/test_release_artifacts.py",
+            ],
+            real_integration_tests=["tests/integration/test_pipeline.py"],
+            runtime_artifacts=[
+                "client-report.md",
+                "forensic-report.md",
+                "findings.json",
+                "audit-results.sarif",
+                "coverage.json",
+                "model-execution.json",
+                "run-evidence-manifest.json",
+            ],
+        ),
+        _row(
             "MA-EVIDENCE-MANIFEST",
             "Every run emits a deterministic hash-linked manifest of its effective "
             "configuration, safe override provenance, inputs, and artifacts.",

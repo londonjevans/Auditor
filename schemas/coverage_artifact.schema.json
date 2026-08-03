@@ -1,0 +1,1563 @@
+{
+  "$defs": {
+    "AnalysisState": {
+      "description": "Evidence-aware state used by engines and coverage reports.",
+      "enum": [
+        "not_analyzed",
+        "attempted_but_failed",
+        "analyzed_with_fallback_parser",
+        "model_only",
+        "scanner_supported",
+        "deterministic",
+        "reproduced",
+        "formally_proven"
+      ],
+      "title": "AnalysisState",
+      "type": "string"
+    },
+    "AuditRunStatus": {
+      "description": "Evidence-derived terminal state for an audit run.",
+      "enum": [
+        "COMPLETE",
+        "DEGRADED",
+        "INCOMPLETE",
+        "FAILED"
+      ],
+      "title": "AuditRunStatus",
+      "type": "string"
+    },
+    "AuditScope": {
+      "enum": [
+        "contracts-only",
+        "contracts-and-deployment",
+        "full-protocol"
+      ],
+      "title": "AuditScope",
+      "type": "string"
+    },
+    "AuditScopeAssessment": {
+      "additionalProperties": false,
+      "description": "Requested-versus-achieved scope with fail-closed component evidence.",
+      "properties": {
+        "achieved": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuditScope"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "complete": {
+          "title": "Complete",
+          "type": "boolean"
+        },
+        "components": {
+          "items": {
+            "$ref": "#/$defs/ScopeComponentEvidence"
+          },
+          "title": "Components",
+          "type": "array"
+        },
+        "gate_required": {
+          "title": "Gate Required",
+          "type": "boolean"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "missing_required_components": {
+          "items": {
+            "$ref": "#/$defs/ScopeComponent"
+          },
+          "title": "Missing Required Components",
+          "type": "array"
+        },
+        "requested": {
+          "$ref": "#/$defs/AuditScope"
+        }
+      },
+      "required": [
+        "requested",
+        "gate_required",
+        "complete",
+        "components"
+      ],
+      "title": "AuditScopeAssessment",
+      "type": "object"
+    },
+    "AuditedSuiteAssertionStatus": {
+      "description": "Assertion-strength state; absence of evidence is never called weak.",
+      "enum": [
+        "not_analyzed",
+        "inconclusive",
+        "assertion_covered",
+        "weak_assertion"
+      ],
+      "title": "AuditedSuiteAssertionStatus",
+      "type": "string"
+    },
+    "AuditedSuiteCoverage": {
+      "additionalProperties": false,
+      "description": "Source-only coverage and assertion-strength evidence from repository-owned tests.",
+      "properties": {
+        "contract_statement_coverage": {
+          "$ref": "#/$defs/CoverageMetric"
+        },
+        "critical_classification_complete": {
+          "title": "Critical Classification Complete",
+          "type": "boolean"
+        },
+        "critical_function_assertion_coverage": {
+          "$ref": "#/$defs/CoverageMetric"
+        },
+        "function_statement_coverage": {
+          "$ref": "#/$defs/CoverageMetric"
+        },
+        "gaps": {
+          "items": {
+            "$ref": "#/$defs/AuditedSuiteCoverageGap"
+          },
+          "maxItems": 100000,
+          "title": "Gaps",
+          "type": "array"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "repository_tests_executed": {
+          "default": 0,
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Repository Tests Executed",
+          "type": "integer"
+        },
+        "repository_tests_failed": {
+          "default": 0,
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Repository Tests Failed",
+          "type": "integer"
+        },
+        "repository_tests_selected": {
+          "default": 0,
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Repository Tests Selected",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_classification_complete": {
+          "title": "Source Classification Complete",
+          "type": "boolean"
+        },
+        "surfaces": {
+          "items": {
+            "$ref": "#/$defs/AuditedSuiteSurfaceCoverage"
+          },
+          "maxItems": 100000,
+          "title": "Surfaces",
+          "type": "array"
+        }
+      },
+      "required": [
+        "contract_statement_coverage",
+        "function_statement_coverage",
+        "critical_function_assertion_coverage",
+        "source_classification_complete",
+        "critical_classification_complete"
+      ],
+      "title": "AuditedSuiteCoverage",
+      "type": "object"
+    },
+    "AuditedSuiteCoverageGap": {
+      "additionalProperties": false,
+      "description": "Exact non-finding coverage gap for one critical audited-source surface.",
+      "properties": {
+        "assertion_status": {
+          "$ref": "#/$defs/AuditedSuiteAssertionStatus"
+        },
+        "detail": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "entity_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "entity_kind": {
+          "$ref": "#/$defs/SolidityEntityKind"
+        },
+        "evidence_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "title": "Evidence Sha256S",
+          "type": "array"
+        },
+        "gap_id": {
+          "pattern": "^audited-suite-gap:[0-9a-f]{64}$",
+          "title": "Gap Id",
+          "type": "string"
+        },
+        "is_finding": {
+          "const": false,
+          "default": false,
+          "title": "Is Finding",
+          "type": "boolean"
+        },
+        "kind": {
+          "$ref": "#/$defs/AuditedSuiteCoverageGapKind"
+        },
+        "location": {
+          "$ref": "#/$defs/Location"
+        }
+      },
+      "required": [
+        "gap_id",
+        "entity_id",
+        "entity_kind",
+        "location",
+        "kind",
+        "assertion_status",
+        "detail"
+      ],
+      "title": "AuditedSuiteCoverageGap",
+      "type": "object"
+    },
+    "AuditedSuiteCoverageGapKind": {
+      "description": "Non-finding reason a critical audited source surface lacks assertion credit.",
+      "enum": [
+        "assertion_not_analyzed",
+        "assertion_inconclusive",
+        "weak_assertion"
+      ],
+      "title": "AuditedSuiteCoverageGapKind",
+      "type": "string"
+    },
+    "AuditedSuiteMutationEvidence": {
+      "additionalProperties": false,
+      "description": "Fully joined but unattested mutation result retained on one exact source surface.",
+      "properties": {
+        "campaign_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Campaign Evidence Sha256",
+          "type": "string"
+        },
+        "evidence_origin": {
+          "const": "planned_unattested",
+          "default": "planned_unattested",
+          "title": "Evidence Origin",
+          "type": "string"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "mutation_id": {
+          "pattern": "^mut-[a-z0-9][a-z0-9-]{0,75}$",
+          "title": "Mutation Id",
+          "type": "string"
+        },
+        "mutation_specification_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Mutation Specification Sha256",
+          "type": "string"
+        },
+        "observation_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observation Sha256"
+        },
+        "outcome": {
+          "$ref": "#/$defs/AuditedSuiteMutationOutcome"
+        },
+        "plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "property_id": {
+          "pattern": "^prop-[0-9a-f]{24}$",
+          "title": "Property Id",
+          "type": "string"
+        },
+        "source_repository_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Repository Sha256",
+          "type": "string"
+        },
+        "surface_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Surface Binding Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "property_id",
+        "mutation_id",
+        "outcome",
+        "plan_sha256",
+        "source_repository_sha256",
+        "mutation_specification_sha256",
+        "campaign_evidence_sha256",
+        "surface_binding_sha256",
+        "evidence_sha256"
+      ],
+      "title": "AuditedSuiteMutationEvidence",
+      "type": "object"
+    },
+    "AuditedSuiteMutationOutcome": {
+      "description": "Typed result of one applicable mutation challenged by the audited suite.",
+      "enum": [
+        "killed",
+        "survived",
+        "inconclusive"
+      ],
+      "title": "AuditedSuiteMutationOutcome",
+      "type": "string"
+    },
+    "AuditedSuiteStatementStatus": {
+      "description": "Entity-level statement-coverage state from the audited repository's own suite.",
+      "enum": [
+        "not_analyzed",
+        "inconclusive",
+        "covered",
+        "uncovered"
+      ],
+      "title": "AuditedSuiteStatementStatus",
+      "type": "string"
+    },
+    "AuditedSuiteSurfaceCoverage": {
+      "additionalProperties": false,
+      "description": "Coverage evidence for one exact indexed audited-source entity.",
+      "properties": {
+        "assertion_status": {
+          "$ref": "#/$defs/AuditedSuiteAssertionStatus"
+        },
+        "contract_name": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Contract Name",
+          "type": "string"
+        },
+        "critical": {
+          "title": "Critical",
+          "type": "boolean"
+        },
+        "entity_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "entity_kind": {
+          "$ref": "#/$defs/SolidityEntityKind"
+        },
+        "location": {
+          "$ref": "#/$defs/Location"
+        },
+        "mutation_evidence": {
+          "items": {
+            "$ref": "#/$defs/AuditedSuiteMutationEvidence"
+          },
+          "maxItems": 10000,
+          "title": "Mutation Evidence",
+          "type": "array"
+        },
+        "repository_test_execution_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "title": "Repository Test Execution Sha256S",
+          "type": "array"
+        },
+        "statement_evidence_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "title": "Statement Evidence Sha256S",
+          "type": "array"
+        },
+        "statement_status": {
+          "$ref": "#/$defs/AuditedSuiteStatementStatus"
+        }
+      },
+      "required": [
+        "entity_id",
+        "entity_kind",
+        "contract_name",
+        "location",
+        "critical",
+        "statement_status",
+        "assertion_status"
+      ],
+      "title": "AuditedSuiteSurfaceCoverage",
+      "type": "object"
+    },
+    "CoverageExclusion": {
+      "additionalProperties": false,
+      "description": "One explicitly evidenced member removed from a coverage denominator.",
+      "properties": {
+        "provenance": {
+          "$ref": "#/$defs/CoverageProvenance"
+        },
+        "reason": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "subject": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Subject",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject",
+        "reason",
+        "provenance"
+      ],
+      "title": "CoverageExclusion",
+      "type": "object"
+    },
+    "CoverageMetric": {
+      "additionalProperties": false,
+      "description": "One independently auditable coverage dimension; never a context-free score.",
+      "properties": {
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "denominator": {
+          "minimum": 0,
+          "title": "Denominator",
+          "type": "integer"
+        },
+        "detail": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "exclusions": {
+          "items": {
+            "$ref": "#/$defs/CoverageExclusion"
+          },
+          "title": "Exclusions",
+          "type": "array"
+        },
+        "failures": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Failures",
+          "type": "array"
+        },
+        "not_applicable_evidence": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Not Applicable Evidence",
+          "type": "array"
+        },
+        "numerator": {
+          "minimum": 0,
+          "title": "Numerator",
+          "type": "integer"
+        },
+        "percentage": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Percentage"
+        },
+        "population": {
+          "minimum": 0,
+          "title": "Population",
+          "type": "integer"
+        },
+        "provenance": {
+          "items": {
+            "$ref": "#/$defs/CoverageProvenance"
+          },
+          "minItems": 1,
+          "title": "Provenance",
+          "type": "array"
+        },
+        "state": {
+          "$ref": "#/$defs/AnalysisState"
+        }
+      },
+      "required": [
+        "numerator",
+        "denominator",
+        "population",
+        "exclusions",
+        "not_applicable_evidence",
+        "confidence",
+        "provenance",
+        "failures",
+        "state",
+        "detail"
+      ],
+      "title": "CoverageMetric",
+      "type": "object"
+    },
+    "CoverageProvenance": {
+      "description": "Origin of a coverage count, exclusion, or failure observation.",
+      "enum": [
+        "discovery",
+        "configuration",
+        "compiler",
+        "symbol_index",
+        "semantic_graph",
+        "static_tool",
+        "model_context",
+        "model_review",
+        "invariant_execution",
+        "formal_engine",
+        "runtime"
+      ],
+      "title": "CoverageProvenance",
+      "type": "string"
+    },
+    "EconomicSimulationKind": {
+      "enum": [
+        "erc4626_donation_inflation",
+        "reward_index_manipulation",
+        "flash_loan_oracle_manipulation",
+        "oracle_freshness_scale_availability",
+        "amm_reserve_manipulation",
+        "liquidation_edge_cases",
+        "share_price_exchange_rate",
+        "fee_on_transfer_rebasing_accounting",
+        "rounding_exploitation",
+        "governance_timelock_race",
+        "upgrade_initializer_misuse",
+        "cross_chain_duplicate_ordering",
+        "callback_receiver_reentrancy",
+        "bounded_state_growth",
+        "multi_transaction_state_ordering",
+        "sandwich_sensitive_flow",
+        "signature_nonce_domain_replay"
+      ],
+      "title": "EconomicSimulationKind",
+      "type": "string"
+    },
+    "EconomicTemplateExecutionCoverage": {
+      "additionalProperties": false,
+      "description": "Per-template generated-harness lifecycle evidence.",
+      "properties": {
+        "applicable": {
+          "title": "Applicable",
+          "type": "boolean"
+        },
+        "compiler_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Compiler Sha256S",
+          "type": "array"
+        },
+        "counterexamples": {
+          "minimum": 0,
+          "title": "Counterexamples",
+          "type": "integer"
+        },
+        "counterexamples_minimized": {
+          "minimum": 0,
+          "title": "Counterexamples Minimized",
+          "type": "integer"
+        },
+        "execution_required": {
+          "title": "Execution Required",
+          "type": "boolean"
+        },
+        "harnesses_compiled": {
+          "minimum": 0,
+          "title": "Harnesses Compiled",
+          "type": "integer"
+        },
+        "harnesses_executed": {
+          "minimum": 0,
+          "title": "Harnesses Executed",
+          "type": "integer"
+        },
+        "harnesses_generated": {
+          "minimum": 0,
+          "title": "Harnesses Generated",
+          "type": "integer"
+        },
+        "harnesses_replayed": {
+          "minimum": 0,
+          "title": "Harnesses Replayed",
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/EconomicSimulationKind"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        },
+        "source_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Sha256S",
+          "type": "array"
+        },
+        "statuses": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/InvariantExecutionStatus"
+          },
+          "title": "Statuses",
+          "type": "object"
+        },
+        "typed_harness_available": {
+          "title": "Typed Harness Available",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "applicable",
+        "execution_required",
+        "typed_harness_available",
+        "harnesses_generated",
+        "harnesses_compiled",
+        "harnesses_executed",
+        "harnesses_replayed",
+        "counterexamples",
+        "counterexamples_minimized"
+      ],
+      "title": "EconomicTemplateExecutionCoverage",
+      "type": "object"
+    },
+    "InvariantExecutionStatus": {
+      "enum": [
+        "not_attempted",
+        "generation_failed",
+        "environment_blocked",
+        "compile_failed",
+        "execution_failed",
+        "timed_out",
+        "passed",
+        "counterexample"
+      ],
+      "title": "InvariantExecutionStatus",
+      "type": "string"
+    },
+    "Location": {
+      "additionalProperties": false,
+      "properties": {
+        "content_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Hash"
+        },
+        "end_line": {
+          "minimum": 1,
+          "title": "End Line",
+          "type": "integer"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "start_line": {
+          "minimum": 1,
+          "title": "Start Line",
+          "type": "integer"
+        },
+        "symbol": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Symbol"
+        }
+      },
+      "required": [
+        "path",
+        "start_line",
+        "end_line"
+      ],
+      "title": "Location",
+      "type": "object"
+    },
+    "ModelReviewCoverage": {
+      "additionalProperties": false,
+      "description": "Per-surface response evidence with an independent critical-surface gate.",
+      "properties": {
+        "applicable": {
+          "title": "Applicable",
+          "type": "boolean"
+        },
+        "by_kind": {
+          "additionalProperties": {
+            "$ref": "#/$defs/CoverageMetric"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/ModelReviewSurfaceKind"
+          },
+          "title": "By Kind",
+          "type": "object"
+        },
+        "critical": {
+          "$ref": "#/$defs/CoverageMetric"
+        },
+        "critical_classification_complete": {
+          "title": "Critical Classification Complete",
+          "type": "boolean"
+        },
+        "critical_gate_passed": {
+          "title": "Critical Gate Passed",
+          "type": "boolean"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "minimum_critical_root_lineages": {
+          "default": 3,
+          "maximum": 16,
+          "minimum": 2,
+          "title": "Minimum Critical Root Lineages",
+          "type": "integer"
+        },
+        "overall": {
+          "$ref": "#/$defs/CoverageMetric"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "surfaces": {
+          "items": {
+            "$ref": "#/$defs/ModelReviewSurface"
+          },
+          "title": "Surfaces",
+          "type": "array"
+        }
+      },
+      "required": [
+        "applicable",
+        "critical_classification_complete",
+        "overall",
+        "by_kind",
+        "critical",
+        "critical_gate_passed"
+      ],
+      "title": "ModelReviewCoverage",
+      "type": "object"
+    },
+    "ModelReviewEvidenceReference": {
+      "additionalProperties": false,
+      "description": "One normalized decision about whether a response record earns surface credit.",
+      "properties": {
+        "artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Artifact Sha256",
+          "type": "string"
+        },
+        "credited": {
+          "title": "Credited",
+          "type": "boolean"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "pattern": "^[^\\s/]+/[^\\s/]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "reason": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "request_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "requested_model": {
+          "anyOf": [
+            {
+              "pattern": "^[^\\s/]+/[^\\s/]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requested Model"
+        },
+        "review_role": {
+          "pattern": "^[a-z][a-z0-9_:.-]{0,127}$",
+          "title": "Review Role",
+          "type": "string"
+        },
+        "root_lineage": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Root Lineage"
+        },
+        "status": {
+          "$ref": "#/$defs/ModelSurfaceReviewStatus"
+        },
+        "surface_id": {
+          "pattern": "^model-surface:[0-9a-f]{64}$",
+          "title": "Surface Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "surface_id",
+        "request_id",
+        "artifact_sha256",
+        "review_role",
+        "status",
+        "credited",
+        "reason"
+      ],
+      "title": "ModelReviewEvidenceReference",
+      "type": "object"
+    },
+    "ModelReviewSurface": {
+      "additionalProperties": false,
+      "description": "One deterministic surface and its explicit model-authored review evidence.",
+      "properties": {
+        "critical": {
+          "title": "Critical",
+          "type": "boolean"
+        },
+        "evidence_references": {
+          "items": {
+            "$ref": "#/$defs/ModelReviewEvidenceReference"
+          },
+          "maxItems": 10000,
+          "title": "Evidence References",
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/ModelReviewSurfaceKind"
+        },
+        "label": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "locations": {
+          "items": {
+            "$ref": "#/$defs/Location"
+          },
+          "maxItems": 100,
+          "title": "Locations",
+          "type": "array"
+        },
+        "reviewed": {
+          "default": false,
+          "title": "Reviewed",
+          "type": "boolean"
+        },
+        "reviewer_roles": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Reviewer Roles",
+          "type": "array"
+        },
+        "root_lineages": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Root Lineages",
+          "type": "array"
+        },
+        "subject_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Subject Id",
+          "type": "string"
+        },
+        "surface_id": {
+          "pattern": "^model-surface:[0-9a-f]{64}$",
+          "title": "Surface Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "surface_id",
+        "kind",
+        "subject_id",
+        "label",
+        "critical"
+      ],
+      "title": "ModelReviewSurface",
+      "type": "object"
+    },
+    "ModelReviewSurfaceKind": {
+      "description": "Deterministic source and Solidity surface categories tracked across model contexts.",
+      "enum": [
+        "source_file",
+        "contract",
+        "entry_point",
+        "internal_function",
+        "privilege_function",
+        "asset_function",
+        "call",
+        "state",
+        "invariant",
+        "template"
+      ],
+      "title": "ModelReviewSurfaceKind",
+      "type": "string"
+    },
+    "ModelSurfaceReviewStatus": {
+      "description": "Explicit outcome for one requested deterministic review surface.",
+      "enum": [
+        "REVIEWED_NO_ISSUE",
+        "CANDIDATE",
+        "INCONCLUSIVE",
+        "NOT_REVIEWED"
+      ],
+      "title": "ModelSurfaceReviewStatus",
+      "type": "string"
+    },
+    "QualityGateResult": {
+      "additionalProperties": false,
+      "properties": {
+        "artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Artifacts",
+          "type": "array"
+        },
+        "detail": {
+          "title": "Detail",
+          "type": "string"
+        },
+        "gate": {
+          "title": "Gate",
+          "type": "string"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        },
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/$defs/AnalysisState",
+          "default": "not_analyzed"
+        }
+      },
+      "required": [
+        "gate",
+        "required",
+        "passed",
+        "detail"
+      ],
+      "title": "QualityGateResult",
+      "type": "object"
+    },
+    "ScopeComponent": {
+      "enum": [
+        "contracts",
+        "deployment",
+        "documentation",
+        "offchain",
+        "tests"
+      ],
+      "title": "ScopeComponent",
+      "type": "string"
+    },
+    "ScopeComponentEvidence": {
+      "additionalProperties": false,
+      "description": "Bounded discovery evidence for one requested audit-scope component.",
+      "properties": {
+        "analyzed_paths": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 2000,
+          "title": "Analyzed Paths",
+          "type": "array"
+        },
+        "component": {
+          "$ref": "#/$defs/ScopeComponent"
+        },
+        "detail": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "omissions": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 2000,
+          "title": "Omissions",
+          "type": "array"
+        },
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "status": {
+          "$ref": "#/$defs/ScopeEvidenceStatus"
+        }
+      },
+      "required": [
+        "component",
+        "required",
+        "status",
+        "detail"
+      ],
+      "title": "ScopeComponentEvidence",
+      "type": "object"
+    },
+    "ScopeEvidenceStatus": {
+      "enum": [
+        "analyzed",
+        "missing",
+        "omitted"
+      ],
+      "title": "ScopeEvidenceStatus",
+      "type": "string"
+    },
+    "SolidityCoverage": {
+      "additionalProperties": false,
+      "properties": {
+        "asset_flow_direction_counts": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Asset Flow Direction Counts",
+          "type": "object"
+        },
+        "asset_flow_operation_counts": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Asset Flow Operation Counts",
+          "type": "object"
+        },
+        "ast_backed_files": {
+          "default": 0,
+          "title": "Ast Backed Files",
+          "type": "integer"
+        },
+        "audited_suite_coverage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuditedSuiteCoverage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "context_limitations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Context Limitations",
+          "type": "array"
+        },
+        "contracts_failed_compilation": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Contracts Failed Compilation",
+          "type": "array"
+        },
+        "contracts_indexed": {
+          "default": 0,
+          "title": "Contracts Indexed",
+          "type": "integer"
+        },
+        "control_resolution_counts": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Control Resolution Counts",
+          "type": "object"
+        },
+        "dependency_resolution_counts": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Dependency Resolution Counts",
+          "type": "object"
+        },
+        "economic_simulations_executed": {
+          "default": 0,
+          "title": "Economic Simulations Executed",
+          "type": "integer"
+        },
+        "economic_simulations_planned": {
+          "default": 0,
+          "title": "Economic Simulations Planned",
+          "type": "integer"
+        },
+        "economic_template_execution": {
+          "additionalProperties": {
+            "$ref": "#/$defs/EconomicTemplateExecutionCoverage"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/EconomicSimulationKind"
+          },
+          "title": "Economic Template Execution",
+          "type": "object"
+        },
+        "excluded_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Excluded Paths",
+          "type": "array"
+        },
+        "executable_invariants": {
+          "default": 0,
+          "title": "Executable Invariants",
+          "type": "integer"
+        },
+        "fallback_parser_files": {
+          "default": 0,
+          "title": "Fallback Parser Files",
+          "type": "integer"
+        },
+        "files_discovered": {
+          "default": 0,
+          "title": "Files Discovered",
+          "type": "integer"
+        },
+        "formal_tools_available": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Formal Tools Available",
+          "type": "array"
+        },
+        "formal_tools_failed": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Formal Tools Failed",
+          "type": "array"
+        },
+        "formal_tools_unavailable": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Formal Tools Unavailable",
+          "type": "array"
+        },
+        "functions_covered_by_static_tools": {
+          "default": 0,
+          "title": "Functions Covered By Static Tools",
+          "type": "integer"
+        },
+        "functions_indexed": {
+          "default": 0,
+          "title": "Functions Indexed",
+          "type": "integer"
+        },
+        "functions_reviewed_by_models": {
+          "default": 0,
+          "title": "Functions Reviewed By Models",
+          "type": "integer"
+        },
+        "governance_stage_counts": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Governance Stage Counts",
+          "type": "object"
+        },
+        "graph_analysis_state": {
+          "$ref": "#/$defs/AnalysisState",
+          "default": "not_analyzed"
+        },
+        "graph_edge_counts": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Graph Edge Counts",
+          "type": "object"
+        },
+        "graph_node_counts": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Graph Node Counts",
+          "type": "object"
+        },
+        "graph_warnings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Graph Warnings",
+          "type": "array"
+        },
+        "invariant_campaign_functions_declared": {
+          "default": 0,
+          "title": "Invariant Campaign Functions Declared",
+          "type": "integer"
+        },
+        "invariant_campaign_functions_observed": {
+          "default": 0,
+          "title": "Invariant Campaign Functions Observed",
+          "type": "integer"
+        },
+        "invariant_campaign_state_properties_declared": {
+          "default": 0,
+          "title": "Invariant Campaign State Properties Declared",
+          "type": "integer"
+        },
+        "invariant_campaign_state_properties_observed": {
+          "default": 0,
+          "title": "Invariant Campaign State Properties Observed",
+          "type": "integer"
+        },
+        "invariant_counterexample_sequences_minimized": {
+          "default": 0,
+          "title": "Invariant Counterexample Sequences Minimized",
+          "type": "integer"
+        },
+        "invariant_counterexample_sequences_observed": {
+          "default": 0,
+          "title": "Invariant Counterexample Sequences Observed",
+          "type": "integer"
+        },
+        "invariants_discovered": {
+          "default": 0,
+          "title": "Invariants Discovered",
+          "type": "integer"
+        },
+        "invariants_executed": {
+          "default": 0,
+          "title": "Invariants Executed",
+          "type": "integer"
+        },
+        "missing_dependencies": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Dependencies",
+          "type": "array"
+        },
+        "model_invariants_proposed": {
+          "default": 0,
+          "title": "Model Invariants Proposed",
+          "type": "integer"
+        },
+        "model_invariants_validated": {
+          "default": 0,
+          "title": "Model Invariants Validated",
+          "type": "integer"
+        },
+        "modifiers_indexed": {
+          "default": 0,
+          "title": "Modifiers Indexed",
+          "type": "integer"
+        },
+        "oracle_freshness_counts": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Oracle Freshness Counts",
+          "type": "object"
+        },
+        "project_configuration_assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Project Configuration Assumptions",
+          "type": "array"
+        },
+        "project_types": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Project Types",
+          "type": "array"
+        },
+        "projects_discovered": {
+          "default": 0,
+          "title": "Projects Discovered",
+          "type": "integer"
+        },
+        "quality_metrics": {
+          "additionalProperties": {
+            "$ref": "#/$defs/CoverageMetric"
+          },
+          "title": "Quality Metrics",
+          "type": "object"
+        },
+        "reproduction_attempts": {
+          "default": 0,
+          "title": "Reproduction Attempts",
+          "type": "integer"
+        },
+        "solidity_files_analyzed": {
+          "default": 0,
+          "title": "Solidity Files Analyzed",
+          "type": "integer"
+        },
+        "state_variables_indexed": {
+          "default": 0,
+          "title": "State Variables Indexed",
+          "type": "integer"
+        },
+        "tests_executed": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Tests Executed",
+          "type": "integer"
+        },
+        "tests_failed": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Tests Failed",
+          "type": "integer"
+        },
+        "tools_executed": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tools Executed",
+          "type": "array"
+        },
+        "tools_failed": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tools Failed",
+          "type": "array"
+        },
+        "tools_unavailable": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tools Unavailable",
+          "type": "array"
+        },
+        "unresolved_imports": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unresolved Imports",
+          "type": "array"
+        },
+        "unsupported_files": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unsupported Files",
+          "type": "array"
+        }
+      },
+      "title": "SolidityCoverage",
+      "type": "object"
+    },
+    "SolidityEntityKind": {
+      "enum": [
+        "contract",
+        "interface",
+        "library",
+        "function",
+        "constructor",
+        "modifier",
+        "event",
+        "error",
+        "struct",
+        "enum",
+        "state_variable",
+        "immutable",
+        "constant"
+      ],
+      "title": "SolidityEntityKind",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/coverage_artifact.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Compact typed coverage projection with full typed coverage bodies retained.",
+  "properties": {
+    "completed": {
+      "title": "Completed",
+      "type": "boolean"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "model_review_coverage": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ModelReviewCoverage"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "quality_gates": {
+      "items": {
+        "$ref": "#/$defs/QualityGateResult"
+      },
+      "title": "Quality Gates",
+      "type": "array"
+    },
+    "run_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Run Id",
+      "type": "string"
+    },
+    "run_status": {
+      "$ref": "#/$defs/AuditRunStatus"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "scope_assessment": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AuditScopeAssessment"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "solidity_coverage": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SolidityCoverage"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "run_id",
+    "run_status",
+    "completed",
+    "scope_assessment",
+    "solidity_coverage",
+    "model_review_coverage",
+    "quality_gates",
+    "limitations"
+  ],
+  "title": "mmaudit forensic coverage artifact",
+  "type": "object"
+}

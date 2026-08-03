@@ -1539,10 +1539,7 @@ def render_markdown(report: AuditReport) -> str:
         ]
     )
     for finding in report.rejected_findings:
-        lines.append(
-            f"- {_inline(finding.id)} [{_text(_origin_label(finding))}] — "
-            f"{_text(finding.title)}: {_text(finding.disagreement)}"
-        )
+        lines.extend(_finding(finding, report))
     lines.extend(
         [
             "",
@@ -1564,3 +1561,19 @@ def render_markdown(report: AuditReport) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def render_forensic_markdown(report: AuditReport) -> str:
+    """Render the exhaustive evidence-oriented report separately from the client summary."""
+
+    rendered = render_markdown(report)
+    title = "# Corrovera Security Assurance Report"
+    if not rendered.startswith(title):
+        raise ValueError("forensic report source has an unexpected title")
+    return rendered.replace(
+        title,
+        "# Corrovera Forensic Evidence Report\n\n"
+        "This exhaustive companion retains coverage, execution, dissent, and rejected evidence. "
+        "Use `client-report.md` for the concise client-facing assessment.",
+        1,
+    )

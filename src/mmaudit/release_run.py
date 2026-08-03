@@ -122,8 +122,8 @@ def observe_release_run_binding(
     manifest = RunEvidenceManifest.model_validate(
         _decode_json_object(manifest_bytes, label="run evidence manifest")
     )
-    if manifest.schema_version != "1.1" or manifest.run_configuration is None:
-        raise ValueError("release run binding requires reconstructable manifest schema 1.1")
+    if manifest.schema_version != "1.2" or manifest.run_configuration is None:
+        raise ValueError("release run binding requires report-bundle manifest schema 1.2")
     _require_manifest_evidence_equality(
         manifest=manifest,
         manifest_bytes=manifest_bytes,
@@ -219,7 +219,7 @@ def _require_manifest_evidence_equality(
     """Cross-reconcile every manifest identity copied into artifact evidence."""
 
     if (
-        manifest.schema_version != "1.1"
+        manifest.schema_version != "1.2"
         or manifest.run_configuration is None
         or evidence.run_id != manifest.run_id
         or evidence.manifest_path != _MANIFEST_NAME

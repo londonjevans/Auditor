@@ -199,6 +199,14 @@ def test_sarif_job_is_isolated_and_has_fork_artifact_fallback() -> None:
     assert "outputs:" in scanner_job
     assert "steps.public_stage.outputs.sarif_ready" in scanner_job
     assert '"audit-results.sarif"' in public_stage
+    for artifact_name in (
+        "client-report.md",
+        "forensic-report.md",
+        "findings.json",
+        "coverage.json",
+        "model-execution.json",
+    ):
+        assert f'"{artifact_name}"' in public_stage
     assert '"validated-sarif.json"' in public_stage
     assert "manifest-bound SARIF failed structural validation" in public_stage
     assert '"sarif_sha256": copied["audit-results.sarif"]' in public_stage
