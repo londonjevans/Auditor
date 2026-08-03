@@ -1291,7 +1291,7 @@ are invisible to source review by construction.
   `tests/` selection markers, affected regressions.
 - **Dependencies:** None; can be built alongside `V3-OMISSION-001` and is required by its
   acceptance criteria.
-- **Status:** `PARTIAL`
+- **Status:** `COMPLETE`
 - **Evidence:** A deterministic scripted corpus now provides independent 4,952,
   15,116, and 35,444-line synthetic Foundry roots with plausible inheritance,
   proxy, external-call, asset-flow, oracle, initializer, state-write, and
@@ -1306,11 +1306,14 @@ are invisible to source review by construction.
   fallback indexing, semantic graph construction, and deterministic shard inventory validation.
   The marked 5k/15k/35k sharding regression passed as part of the `155`-test affected matrix and
   the `4062`-test complete suite.
-- **Current action:** Revalidate the committed corpus manifests, deterministic regeneration,
-  marked scale tests, and `V3-SHARD-001` consumption evidence against the current tree; close the
-  ticket only if every original fixture acceptance criterion is already satisfied. The optional
-  real compiler integration remains independently prerequisite-gated and receives no fabricated
-  credit.
+- **Final validation:** The current tree regenerated and verified all `196` committed files
+  byte-for-byte. Generator safety/provenance tests passed `8`; the marked discovery, index, graph,
+  coverage, context, and all-three-root semantic-sharding matrix passed `8`; the focused shard and
+  blind-review matrix passed `57`; and the explicit trusted local Solidity `0.8.30` offline AST
+  integration passed `1` without a skip. The roots remain exactly 4,952, 15,116, and 35,444
+  Solidity lines with independently bound tree hashes. No provider call or external network was
+  used.
+- **Next action:** None; checkpoint the close-out and begin `V3-REPORT-001`.
 
 ## V3-HARDHAT-001 — Hardhat reporter contract and single-loopback backend
 

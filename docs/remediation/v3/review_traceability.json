@@ -123,14 +123,14 @@
       "id": "I",
       "title": "Coherent repository sharding and seven-pass review",
       "tickets": ["V3-FIXTURE-001", "V3-OMISSION-001", "V3-SHARD-001", "V3-SCHEDULER-001"],
-      "status": "PARTIAL",
+      "status": "COMPLETE",
       "current_evidence_class": "LOCAL_IMPLEMENTATION",
       "evidence": [
-        "A scripted, synthetic, non-deployable corpus now supplies independently manifested 4,952, 15,116, and 35,444-line Solidity roots for scale-dependent indexing, graph, coverage, context, and future sharding regressions.",
-        "The current marked realistic-scale suite passes five discovery/index/graph/coverage/context-input checks across the approximately 5,000-, 15,000-, and 35,000-line fixtures; the two former V3-OMISSION-001 expected reds no longer remain.",
-        "V3-OMISSION-001 is COMPLETE: candidate locations are validated only against their exact originating context; substantive review credit is request-, prompt-, response-, context-, and surface-bound; the final focused, scale, schema, Ruff, strict-mypy, trusted-compiler, and 3,095-test gates passed. No semantic-sharding execution is claimed."
+        "The deterministic generator and self-hashed corpus manifest bind 196 committed files across synthetic, non-deployable 4,952, 15,116, and 35,444-line Solidity roots; current byte-for-byte regeneration and eight generator-integrity tests passed.",
+        "The marked current-tree scale matrix passed eight tests across all three roots, exercising discovery, fallback indexing, semantic graphs, coverage denominators, bounded context omissions, and stable complete semantic-shard inventories. The focused semantic/blind-shard matrix passed 57 tests.",
+        "The explicit trusted local Solidity 0.8.30 offline integration passed and proved AST-backed inheritance for the 5k root without mutating source. V3-OMISSION-001, V3-SHARD-001, and V3-SCHEDULER-001 are COMPLETE; scheduler model passes remain deterministic fake-provider evidence and receive no REAL model-review credit."
       ],
-      "remaining_proof": "Provide stable semantic shards that consume the realistic-scale corpus, plus resumable orientation, blind review, reduction, integration, cross-examination, validation, and judgment passes."
+      "remaining_proof": null
     },
     {
       "id": "J",
@@ -265,7 +265,7 @@
       "evidence": [
         "Baseline ticket followed reproduce, validate, trace, and checkpoint sequencing; normal tests did not enable paid calls.",
         "V3-FORKDIFF-001 reproduced two distinct replay defects, added fail-closed regressions, passed a real local clean/pinned Foundry matrix and manifest-bound default replay, then passed 574 focused tests, Ruff, strict mypy, schema synchronization, diff review, and the full 2992-test suite with 10 explicit prerequisite skips.",
-        "At its checkpoint, V3-FIXTURE-001 generated and verified 196 deterministic realistic-scale fixture files, passed its real local compiler integration, and passed the complete suite with 3005 tests, 11 explicit prerequisite skips, and the two then-open omission expected reds. That historical fixture ticket remains PARTIAL because semantic sharding is not implemented; the current V3-OMISSION-001 scale suite has since converted both expected reds to passing regressions.",
+        "V3-FIXTURE-001 is COMPLETE. Its historical PARTIAL checkpoint generated 196 deterministic files and passed a real local compiler integration; V3-OMISSION-001 subsequently removed the expected reds, V3-SHARD-001 consumed all three roots, and current close-out revalidation passed 8 generator, 8 marked scale, 57 shard, and 1 real offline compiler-backed tests without provider execution.",
         "V3-EXECORIGIN-001 closed two independent serialized-evidence false-complete gaps, passed its 154-test final focused matrix, schema synchronization, Ruff, strict mypy over 149 source files, diff and artifact review, and the complete local suite with 3203 tests and 11 explicit prerequisite skips. Paid-provider execution remained disabled.",
         "V3-MODELREFRESH-001 completed its provider-free discovery/diff/workflow slice with independent adversarial replay, 354 touched tests, Ruff, strict mypy over 154 source files, generated-schema and workflow-shell verification, diff and artifact review, and a final complete result of 3602 passed with 11 explicit prerequisite skips. The paid-provider test remained disabled and the ticket stayed PARTIAL.",
         "V3-LINEAGE-001 completed its provider-free non-authorizing overlay and all eight consumer fail-closed regressions. The joined matrix passed 565 tests; repository Ruff, strict mypy over 155 source files, schema synchronization, and diff integrity passed; the complete local suite had only sandbox-denied loopback setup errors, and the exact 76-test bridge file passed with local-loopback permission. The ticket remains PARTIAL because no current real refresh or independently authenticated complete operator decision exists.",

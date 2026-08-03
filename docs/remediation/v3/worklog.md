@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_BY_OPERATOR
+AUTORUN_STATUS: RUNNING
 CURRENT_MILESTONE: Realistic-scale fixture close-out
-CURRENT_TICKET: V3-FIXTURE-001 (IN_PROGRESS)
-LAST_COMPLETED_TICKET: V3-TOOLDIAG-002 (COMPLETE)
-NEXT_ACTION: Verify V3-FIXTURE-001 corpus manifests, reproducible generation, marked 5k/15k/35k scale tests, and deterministic shard consumption; then close or retain only the evidenced gap.
-LAST_COMMAND: `git push origin main`
-LAST_RESULT: PASS: SSH origin advanced from b81745d to 94b5234 with V3-TOOLDIAG-002 complete and its exact-final-tree evidence green.
+CURRENT_TICKET: V3-FIXTURE-001 (COMPLETE; CHECKPOINT_PENDING)
+LAST_COMPLETED_TICKET: V3-FIXTURE-001 (COMPLETE)
+NEXT_ACTION: Validate the documentation-only close-out, create and SSH-push its isolated checkpoint, then begin V3-REPORT-001.
+LAST_COMMAND: `.venv/bin/ruff format --check .`; `.venv/bin/ruff check .`; `.venv/bin/mypy`
+LAST_RESULT: PASS: 423 files formatted, Ruff clean, and strict mypy passed 166 source files after the fixture close-out; focused validation passed 8 generator, 8 scale, 57 shard, and 1 real compiler-backed tests.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,11 +19,12 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
-LAST_CHECKPOINT_COMMIT: 94b5234e09814daff90c67ffb17910a1fb999fd9
+LAST_CHECKPOINT_COMMIT: 13d46b79b46766ed03843afd879f771a569eec06
 
 ## 2026-08-03 — V3-FIXTURE-001
 
-- **Status:** `IN_PROGRESS` close-out; no new fixture architecture is authorized or required.
+- **Status:** `COMPLETE`; this was a close-out of existing implementation, with no new fixture
+  architecture required.
 - **Defensive objective:** Verify that the already committed deterministic 5k/15k/35k
   synthetic Solidity corpus satisfies every original fixture acceptance criterion and that the
   completed shard implementation actually consumes all three roots.
@@ -37,6 +38,36 @@ LAST_CHECKPOINT_COMMIT: 94b5234e09814daff90c67ffb17910a1fb999fd9
 - **Pause:** At `2026-08-03T17:04:13Z`, the operator requested a graceful laptop-safe pause.
   Delegated read-only work was stopped before validation began. No provider call, test process,
   or repository mutation is intentionally left running. Resume from the preceding next action.
+- **Resume:** At `2026-08-03T17:06:04Z`, the operator resumed the persistent goal. Validation
+  restarts from the clean `13d46b7` pause checkpoint; provider calls remain zero for this ticket.
+- **Closure result:** Every original acceptance criterion is satisfied on the current tree. The
+  deterministic generator verified `196` exact committed files; the corpus manifest binds
+  4,952/15,116/35,444-line roots with source-tree hashes
+  `7634650a...44e`, `b2a56a28...131`, and `e5b21b27...fb8`. The generator and corpus-file hashes
+  are `52579570...1b0` and `5acc4a50...099`; the embedded corpus self-hash is
+  `32a8812c...266`.
+- **Commands and results:**
+  - `.venv/bin/python scripts/generate_realistic_scale_fixtures.py`: PASS, `verified 196
+    deterministic fixture files`.
+  - `.venv/bin/pytest -q tests/unit/test_realistic_scale_fixture_generator.py --cache-clear`:
+    PASS, `8 passed in 1.48s`.
+  - `.venv/bin/pytest -q -m large_scale tests/large_scale/test_realistic_solidity_scale.py
+    --cache-clear`: the first invocation was externally interrupted and received no credit; a
+    clean materially separate rerun passed `8` tests in `69.38s` with no skip.
+  - `.venv/bin/pytest -q tests/unit/test_semantic_sharding.py
+    tests/unit/test_scheduler_blind_shards.py --cache-clear`: PASS, `57 passed in 3.01s`.
+  - `env MMAUDIT_TEST_SOLC_EXECUTABLE=/opt/homebrew/Cellar/solidity/0.8.30/bin/solc
+    .venv/bin/pytest -q tests/integration/test_realistic_scale_fixture.py -rs`: PASS, `1 passed
+    in 2.08s`; compiler SHA-256 `a037e036...ddc4`. Execution was offline and disposable.
+  - `.venv/bin/ruff format --check .`; `.venv/bin/ruff check .`; `.venv/bin/mypy`: PASS,
+    `423` files formatted, Ruff clean, strict mypy clean across `166` source files.
+- **Independent review:** A requirement-by-requirement review found no closure blocker. All three
+  roots are consumed by coverage, bounded-context, and complete deterministic semantic-shard
+  regressions; both large-scale modules carry registered `large_scale` and `slow` markers.
+- **Honest limitation:** Authorship/originality is provenance evidence supported by the committed
+  deterministic generator, not an independently machine-provable property. No production source,
+  provider execution, or customer target is claimed.
+- **Status:** `COMPLETE`.
 
 ## 2026-08-03 — V3-TOOLDIAG-002
 
