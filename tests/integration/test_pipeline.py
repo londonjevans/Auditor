@@ -39,6 +39,12 @@ from mmaudit.models.openrouter import (
     trusted_openrouter_execution_evidence,
 )
 from mmaudit.models.runtime import build_openrouter_runtime_controls
+from mmaudit.models.scheduler import (
+    SchedulerArtifact,
+    SchedulerReproductionHostOutput,
+    SchedulerTaskOutput,
+    SchedulerTerminalReportAuthority,
+)
 from mmaudit.models.schemas import (
     AnalysisState,
     AuditProfile,
@@ -110,6 +116,8 @@ from mmaudit.orchestration.context_manifest import (
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.manifest import (
     RunEvidenceManifest,
+    _ManifestReproductionArtifact,
+    _validate_scheduler_prejudgment_evidence_authority,
     canonical_sha256,
     validate_manifest_artifacts,
     validate_report_privacy_consistency,
@@ -119,6 +127,10 @@ from mmaudit.orchestration.manifest import (
 from mmaudit.orchestration.pipeline import AuditPipeline
 from mmaudit.orchestration.prior_audit import build_prior_audit_comparison
 from mmaudit.orchestration.replay import OfflineReplayOrchestrator
+from mmaudit.orchestration.reproduction_resolution import (
+    build_candidate_reproduction_resolutions,
+)
+from mmaudit.orchestration.scheduler import open_scheduler_journal_for_verification
 from mmaudit.orchestration.verification import (
     RunVerificationStatus,
     verify_run_evidence,
@@ -2540,11 +2552,62 @@ async def test_generated_foundry_reproduction_caps_solidity_classification(
     serialized_results = [
         ReproductionResult.model_validate(item) for item in reproduction_artifact["results"]
     ]
+    assert reproduction_artifact["test_specifications"]
+    assert serialized_results
     assert serialized_results == result.report.reproductions
     assert all(
         reproduction.integrity is not None and reproduction.integrity.status.value == "verified"
         for reproduction in serialized_results
     )
+    scheduler_artifact = SchedulerArtifact.model_validate_json(
+        (result.run_dir / "scheduler-state.json").read_text(encoding="utf-8")
+    )
+    validation_pass = scheduler_artifact.summary.pass_results[5]
+    reproduction_task = next(
+        task for task in validation_pass.plan.tasks if task.role == "host:reproduction"
+    )
+    retained_outputs = tuple(
+        SchedulerTaskOutput.model_validate_json(path.read_text(encoding="utf-8"))
+        for path in sorted(
+            (result.run_dir / "private" / "scheduler-journal" / "task-outputs").glob("*.json")
+        )
+    )
+    retained_output = next(
+        output for output in retained_outputs if output.task_id == reproduction_task.task_id
+    )
+    retained_reproduction = SchedulerReproductionHostOutput.model_validate(retained_output.payload)
+    assert retained_reproduction.generated_tests
+    assert retained_reproduction.reproduction_results
+    assert retained_reproduction.generated_test_ids is None
+    assert retained_reproduction.reproduction_result_ids is None
+    assert [
+        item.model_dump(mode="json") for item in retained_reproduction.generated_tests
+    ] == sorted(
+        reproduction_artifact["test_specifications"],
+        key=lambda item: (item["candidate_id"], item["name"]),
+    )
+    assert [
+        item.model_dump(mode="json") for item in retained_reproduction.reproduction_results
+    ] == sorted(
+        reproduction_artifact["results"],
+        key=lambda item: (item["candidate_id"], item["test_name"]),
+    )
+    candidate_artifact = CandidateFindingArtifact.model_validate_json(
+        (result.run_dir / "candidate-findings.json").read_text(encoding="utf-8")
+    )
+    typed_reproduction_artifact = _ManifestReproductionArtifact.model_validate(
+        reproduction_artifact
+    )
+    assert typed_reproduction_artifact.candidate_resolutions == (
+        build_candidate_reproduction_resolutions(
+            candidates=candidate_artifact.findings,
+            results=retained_reproduction.reproduction_results,
+        )
+    )
+    manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    validate_manifest_artifacts(manifest, result.run_dir)
     markdown = (result.run_dir / "audit-report.md").read_text(encoding="utf-8")
     assert "Executable verification" in markdown
     assert "| verified |" in markdown
@@ -2561,6 +2624,99 @@ async def test_generated_foundry_reproduction_caps_solidity_classification(
         assert any(
             finding.status is FindingStatus.REJECTED for finding in result.report.rejected_findings
         )
+    if expect_confirmed:
+        first_resolution = typed_reproduction_artifact.candidate_resolutions[0]
+        resolution_tampered_artifact = _ManifestReproductionArtifact.model_validate(
+            {
+                **typed_reproduction_artifact.model_dump(mode="json"),
+                "candidate_resolutions": [
+                    {
+                        **first_resolution.model_dump(mode="json"),
+                        "detail": "Coherently resealed but non-authoritative resolution detail.",
+                    },
+                    *[
+                        item.model_dump(mode="json")
+                        for item in typed_reproduction_artifact.candidate_resolutions[1:]
+                    ],
+                ],
+            }
+        )
+        first_result = typed_reproduction_artifact.results[0]
+        result_tampered_artifact = _ManifestReproductionArtifact.model_validate(
+            {
+                **typed_reproduction_artifact.model_dump(mode="json"),
+                "results": [
+                    {
+                        **first_result.model_dump(mode="json"),
+                        "limitations": [
+                            *first_result.limitations,
+                            "Coherently resealed non-identity result payload drift.",
+                        ],
+                    },
+                    *[
+                        item.model_dump(mode="json")
+                        for item in typed_reproduction_artifact.results[1:]
+                    ],
+                ],
+            }
+        )
+        journal = open_scheduler_journal_for_verification(
+            result.run_dir / "private" / "scheduler-journal",
+            expected_bindings=scheduler_artifact.summary.manifest.bindings,
+            expected_shard_inventory=scheduler_artifact.summary.manifest.shard_inventory,
+            expected_cost_ledger_baseline=(
+                scheduler_artifact.summary.manifest.cost_ledger_baseline
+            ),
+            expected_privacy_evidence_custody=(
+                scheduler_artifact.summary.manifest.privacy_evidence_custody
+            ),
+            expected_terminal_report_authority_required=(
+                scheduler_artifact.summary.manifest.terminal_report_authority_required
+            ),
+            expected_terminal_evidence_authority_required=(
+                scheduler_artifact.summary.manifest.terminal_evidence_authority_required
+            ),
+        )
+        try:
+            original_authority = journal.terminal_report_authority
+            assert original_authority is not None
+
+            def rebuilt_authority(
+                artifact: _ManifestReproductionArtifact,
+            ) -> SchedulerTerminalReportAuthority:
+                return SchedulerTerminalReportAuthority.build(
+                    manifest=journal.manifest,
+                    summary=journal.summary,
+                    severity_threshold=original_authority.severity_threshold,
+                    candidates=candidate_artifact.findings,
+                    final_findings=result.report.findings,
+                    rejected_findings=result.report.rejected_findings,
+                    filtered_findings=result.report.filtered_findings,
+                    report_quality_review=result.report.report_quality_review,
+                    verification_decisions=result.report.verification_decisions,
+                    cross_examination_decisions=result.report.cross_examination_decisions,
+                    falsification_decisions=result.report.falsification_decisions,
+                    reproduction_results=artifact.results,
+                    reproduction_resolutions=artifact.candidate_resolutions,
+                )
+
+            for coherently_resealed_artifact in (
+                result_tampered_artifact,
+                resolution_tampered_artifact,
+            ):
+                with pytest.raises(
+                    ValueError,
+                    match="scheduler terminal reproduction differs from retained pass six",
+                ):
+                    _validate_scheduler_prejudgment_evidence_authority(
+                        authority=rebuilt_authority(coherently_resealed_artifact),
+                        report=result.report,
+                        candidates=tuple(candidate_artifact.findings),
+                        reproduction_artifact=coherently_resealed_artifact,
+                        journal=journal,
+                    )
+        finally:
+            journal.close()
 
 
 @pytest.mark.asyncio
@@ -4736,8 +4892,7 @@ async def test_high_candidate_below_critical_threshold_remains_in_forensic_custo
     assert result.report.metadata["severity_threshold"] == Severity.CRITICAL.value
     assert result.report.filtered_findings
     assert all(
-        finding.severity is not Severity.CRITICAL
-        for finding in result.report.filtered_findings
+        finding.severity is not Severity.CRITICAL for finding in result.report.filtered_findings
     )
     artifact = FindingsArtifact.model_validate_json(
         (result.run_dir / "findings.json").read_text(encoding="utf-8")

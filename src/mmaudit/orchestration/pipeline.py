@@ -186,7 +186,6 @@ from mmaudit.models.schemas import (
     RepositoryMap,
     RepositorySuiteDifferentialRun,
     ReproductionIntegrityStatus,
-    ReproductionResolutionKind,
     ReproductionResult,
     ReproductionState,
     ScannerFinding,
@@ -300,6 +299,9 @@ from mmaudit.orchestration.prior_audit import (
     prior_audit_quality_gate,
     withhold_prior_audit_from_discovery,
 )
+from mmaudit.orchestration.reproduction_resolution import (
+    build_candidate_reproduction_resolutions,
+)
 from mmaudit.orchestration.run_status import (
     assess_minimum_analysis_floor,
     audit_quality_status_for_run_status,
@@ -345,6 +347,10 @@ from mmaudit.reporting.client import (
 )
 from mmaudit.reporting.json_report import stable_json, write_json
 from mmaudit.reporting.markdown import render_forensic_markdown, render_markdown
+from mmaudit.reporting.run_authority import (
+    RUN_TERMINAL_REPORT_AUTHORITY_PATH,
+    RunTerminalReportAuthority,
+)
 from mmaudit.reporting.sarif import generate_report_sarif
 from mmaudit.reporting.status import report_status_metadata
 from mmaudit.repository.chunking import line_range_hash
@@ -5937,12 +5943,20 @@ class AuditPipeline:
                     )
                     reproduction_summary = {
                         "eligible_candidate_ids": scheduled_reproduction_candidate_ids,
-                        "generated_test_ids": sorted(
-                            f"{test.candidate_id}:{test.name}" for test in generated_tests
-                        ),
-                        "reproduction_result_ids": sorted(
-                            f"{result.candidate_id}:{result.test_name}" for result in reproductions
-                        ),
+                        "generated_tests": [
+                            test.model_dump(mode="json")
+                            for test in sorted(
+                                generated_tests,
+                                key=lambda item: (item.candidate_id, item.name),
+                            )
+                        ],
+                        "reproduction_results": [
+                            result.model_dump(mode="json")
+                            for result in sorted(
+                                reproductions,
+                                key=lambda item: (item.candidate_id, item.test_name),
+                            )
+                        ],
                         "falsification_decisions": len(falsifications.decisions),
                     }
                     if completed_pass_six is None:
@@ -6260,7 +6274,7 @@ class AuditPipeline:
                         payload=payload,
                     ).model_dump(mode="json")
 
-                judgment_reproduction_resolutions = _build_candidate_reproduction_resolutions(
+                judgment_reproduction_resolutions = build_candidate_reproduction_resolutions(
                     candidates=candidates,
                     results=reproductions,
                     forced_candidate_ids=set(post_judge_execution_severity_candidates),
@@ -6492,7 +6506,7 @@ class AuditPipeline:
             runtime_eligible_candidates_by_id.values(),
             key=lambda candidate: candidate.candidate_id,
         )
-        reproduction_resolutions = _build_candidate_reproduction_resolutions(
+        reproduction_resolutions = build_candidate_reproduction_resolutions(
             candidates=candidates,
             results=reproductions,
             forced_candidate_ids=set(post_judge_execution_severity_candidates),
@@ -8382,6 +8396,23 @@ class AuditPipeline:
             run_dir / "audit-results.sarif",
             generate_report_sarif(report, findings_artifact=findings_artifact),
         )
+        terminal_authority_path = run_dir / RUN_TERMINAL_REPORT_AUTHORITY_PATH
+        if (
+            terminal_authority_path.exists()
+            or terminal_authority_path.is_symlink()
+            or terminal_authority_path.is_junction()
+        ):
+            raise ValueError("run terminal report authority destination already exists")
+        terminal_authority_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        terminal_authority_path.parent.chmod(0o700)
+        write_json(
+            terminal_authority_path,
+            RunTerminalReportAuthority.build(
+                report,
+                scheduler_artifact=scheduler_artifact,
+            ),
+        )
+        terminal_authority_path.chmod(0o600)
         if ci_state is not None:
             write_json(run_dir / CI_STATE_FILENAME, ci_state)
         traceability = build_traceability_matrix(report.repository.git_commit)
@@ -9332,74 +9363,6 @@ def _enforce_post_judge_execution_severity_accounting(
         accounting_candidates,
         limitation,
     )
-
-
-def _build_candidate_reproduction_resolutions(
-    *,
-    candidates: list[CandidateFinding],
-    results: list[ReproductionResult],
-    forced_candidate_ids: set[str] | None = None,
-) -> list[CandidateReproductionResolution]:
-    """Derive one fail-closed terminal resolution per high/critical obligation.
-
-    Forced IDs retain their exact emitted candidate payload while a post-judgment
-    impact assessment introduces the high/critical assurance obligation.
-    """
-
-    forced_candidate_ids = forced_candidate_ids or set()
-    results_by_candidate: dict[str, list[ReproductionResult]] = {}
-    for result in results:
-        results_by_candidate.setdefault(result.candidate_id, []).append(result)
-    resolutions: list[CandidateReproductionResolution] = []
-    for candidate in sorted(candidates, key=lambda item: item.candidate_id):
-        if (
-            candidate.severity not in {Severity.HIGH, Severity.CRITICAL}
-            and candidate.candidate_id not in forced_candidate_ids
-        ):
-            continue
-        candidate_results = results_by_candidate.get(candidate.candidate_id, [])
-        reproduced_refs: set[str] = set()
-        for result in candidate_results:
-            if (
-                result.state
-                in {
-                    ReproductionState.REPRODUCED,
-                    ReproductionState.REPRODUCED_AND_MINIMIZED,
-                }
-                and result.attempts > 0
-                and result.successful_attempts == result.attempts
-                and result.integrity is not None
-                and result.integrity.status is ReproductionIntegrityStatus.VERIFIED
-            ):
-                reproduced_refs.add(f"reproduction:{result.integrity.integrity_sha256}")
-        if reproduced_refs:
-            resolutions.append(
-                CandidateReproductionResolution(
-                    candidate_id=candidate.candidate_id,
-                    kind=ReproductionResolutionKind.REPRODUCED,
-                    evidence_refs=sorted(reproduced_refs),
-                    detail="verified deterministic reproduction resolved candidate",
-                )
-            )
-            continue
-
-        attempted_states = sorted(
-            {result.state.value for result in candidate_results if result.attempts > 0}
-        )
-        resolutions.append(
-            CandidateReproductionResolution(
-                candidate_id=candidate.candidate_id,
-                kind=ReproductionResolutionKind.INCONCLUSIVE,
-                evidence_refs=[],
-                detail=(
-                    "attempted reproduction did not produce a qualifying terminal outcome: "
-                    + ", ".join(attempted_states)
-                    if attempted_states
-                    else "no qualifying integrity-bound deterministic reproduction evidence"
-                ),
-            )
-        )
-    return resolutions
 
 
 def _record_reproduction_attempts(

@@ -55,12 +55,26 @@ from mmaudit.models.scheduler import (
     scheduler_source_tree_sha256,
 )
 from mmaudit.models.schemas import (
+    CandidateCrossExaminationDecision,
+    CandidateCrossExaminationVerdict,
+    CandidateFinding,
+    CandidateReproductionResolution,
     CandidateReviewBatch,
+    Evidence,
+    FalsificationDecision,
+    FalsificationVerdict,
+    Location,
     ModelReviewSurfaceKind,
     ModelSurfaceReviewRequest,
     ModelSurfaceReviewStatus,
     ReportQualityReview,
+    ReproductionResolutionKind,
+    ReproductionResult,
+    ReproductionState,
     Severity,
+    VerificationDecision,
+    VerificationTest,
+    VerificationVerdict,
 )
 from tests.scheduler_support import (
     SchedulerFixtureModelTask,
@@ -664,6 +678,222 @@ def test_terminal_report_authority_rejects_each_mismatched_hash_inventory(
     )
     with pytest.raises(ValidationError, match="payload inventory is not canonical"):
         SchedulerTerminalReportAuthority.model_validate(payload)
+
+
+def _terminal_authority_candidate() -> CandidateFinding:
+    return CandidateFinding(
+        candidate_id="candidate-terminal-authority",
+        title="Synthetic terminal evidence candidate",
+        severity=Severity.HIGH,
+        confidence=0.75,
+        summary="A bounded synthetic state transition requires independent validation.",
+        impact="The synthetic transition could violate its declared invariant.",
+        preconditions=["The synthetic transition is locally reachable."],
+        locations=[Location(path="src/Synthetic.sol", start_line=7, end_line=9)],
+        attack_path=["Exercise the bounded local transition."],
+        evidence=[
+            Evidence(
+                type="model",
+                source="source_audit",
+                description="Synthetic model-review evidence for terminal binding tests.",
+            )
+        ],
+        false_positive_conditions=["A local guard preserves the invariant."],
+        recommendation="Preserve the invariant and rerun the local regression.",
+        verification_test=VerificationTest(description="Replay the local negative control."),
+        role="source_audit",
+        model_family="synthetic-lineage",
+    )
+
+
+def _terminal_verification() -> VerificationDecision:
+    return VerificationDecision(
+        candidate_id="candidate-terminal-authority",
+        verdict=VerificationVerdict.PLAUSIBLE,
+        rationale="The synthetic transition remains plausible pending local replay.",
+        source_to_sink="A bounded input reaches the synthetic state transition.",
+        reachability="Locally reachable in the synthetic fixture.",
+        authentication="No external authentication is involved.",
+        privilege_requirements="No privileged identity is assumed.",
+        environmental_assumptions=[],
+        guards_and_controls=[],
+        false_positive_conditions=["The local guard rejects the transition."],
+        safe_verification_test=VerificationTest(description="Replay the local negative control."),
+        confidence=0.65,
+    )
+
+
+def _terminal_cross_examination() -> CandidateCrossExaminationDecision:
+    return CandidateCrossExaminationDecision(
+        candidate_id="candidate-terminal-authority",
+        request_id="cross-terminal-1",
+        reviewer_index=1,
+        requested_model="synthetic/reviewer-one",
+        returned_model="synthetic/reviewer-one",
+        root_lineage="sha256:" + "1" * 64,
+        verdict=CandidateCrossExaminationVerdict.INCONCLUSIVE,
+        rationale="The synthetic transition needs deterministic evidence.",
+    )
+
+
+def _terminal_falsification() -> FalsificationDecision:
+    return FalsificationDecision(
+        candidate_id="candidate-terminal-authority",
+        test_name="synthetic-negative-control",
+        verdict=FalsificationVerdict.INCONCLUSIVE,
+        test_matches_claim=True,
+        assumptions_validated=False,
+        rationale="The synthetic negative control was inconclusive.",
+    )
+
+
+def _terminal_reproduction() -> ReproductionResult:
+    return ReproductionResult(
+        candidate_id="candidate-terminal-authority",
+        test_name="synthetic-reproduction",
+        state=ReproductionState.NOT_ATTEMPTED,
+        specification_sha256="2" * 64,
+    )
+
+
+def _terminal_resolution() -> CandidateReproductionResolution:
+    return CandidateReproductionResolution(
+        candidate_id="candidate-terminal-authority",
+        kind=ReproductionResolutionKind.INCONCLUSIVE,
+        detail="The bounded synthetic reproduction remains inconclusive.",
+    )
+
+
+@pytest.mark.parametrize(
+    ("evidence_field", "records", "error_label"),
+    (
+        (
+            "verification_decisions",
+            (
+                _terminal_verification(),
+                _terminal_verification().model_copy(update={"confidence": 0.25}),
+            ),
+            "verification",
+        ),
+        (
+            "cross_examination_decisions",
+            (
+                _terminal_cross_examination(),
+                _terminal_cross_examination().model_copy(
+                    update={"rationale": "A different response for the same reviewer slot."}
+                ),
+            ),
+            "cross-examination",
+        ),
+        (
+            "falsification_decisions",
+            (
+                _terminal_falsification(),
+                _terminal_falsification().model_copy(
+                    update={"rationale": "A conflicting result for the same named test."}
+                ),
+            ),
+            "falsification",
+        ),
+        (
+            "reproduction_results",
+            (
+                _terminal_reproduction(),
+                _terminal_reproduction().model_copy(
+                    update={"limitations": ["A conflicting observation for the same test."]}
+                ),
+            ),
+            "reproduction",
+        ),
+        (
+            "reproduction_resolutions",
+            (
+                _terminal_resolution(),
+                _terminal_resolution().model_copy(
+                    update={"detail": "A conflicting resolution for the same candidate."}
+                ),
+            ),
+            "reproduction resolution",
+        ),
+    ),
+)
+def test_terminal_report_authority_rejects_duplicate_semantic_evidence_inputs(
+    evidence_field: str,
+    records: tuple[object, object],
+    error_label: str,
+) -> None:
+    manifest = _manifest()
+    summary = SchedulerCampaignSummary.build(manifest=manifest, pass_results=())
+    evidence: dict[str, object] = {
+        "verification_decisions": (),
+        "cross_examination_decisions": (),
+        "falsification_decisions": (),
+        "reproduction_results": (),
+        "reproduction_resolutions": (),
+    }
+    evidence[evidence_field] = records
+
+    with pytest.raises(
+        ValueError,
+        match=rf"scheduler terminal {error_label} evidence repeats a semantic identity",
+    ):
+        SchedulerTerminalReportAuthority.build(
+            manifest=manifest,
+            summary=summary,
+            severity_threshold=Severity.MEDIUM,
+            candidates=(_terminal_authority_candidate(),),
+            final_findings=(),
+            rejected_findings=(),
+            filtered_findings=(),
+            report_quality_review=None,
+            **evidence,  # type: ignore[arg-type]
+        )
+
+
+def test_terminal_report_authority_accepts_distinct_cross_reviewer_and_test_slots() -> None:
+    manifest = _manifest()
+    summary = SchedulerCampaignSummary.build(manifest=manifest, pass_results=())
+    first_cross = _terminal_cross_examination()
+    first_falsification = _terminal_falsification()
+    first_reproduction = _terminal_reproduction()
+
+    authority = SchedulerTerminalReportAuthority.build(
+        manifest=manifest,
+        summary=summary,
+        severity_threshold=Severity.MEDIUM,
+        candidates=(_terminal_authority_candidate(),),
+        final_findings=(),
+        rejected_findings=(),
+        filtered_findings=(),
+        report_quality_review=None,
+        verification_decisions=(_terminal_verification(),),
+        cross_examination_decisions=(
+            first_cross,
+            first_cross.model_copy(
+                update={
+                    "request_id": "cross-terminal-2",
+                    "reviewer_index": 2,
+                    "requested_model": "synthetic/reviewer-two",
+                    "returned_model": "synthetic/reviewer-two",
+                    "root_lineage": "sha256:" + "2" * 64,
+                }
+            ),
+        ),
+        falsification_decisions=(
+            first_falsification,
+            first_falsification.model_copy(update={"test_name": "second-negative-control"}),
+        ),
+        reproduction_results=(
+            first_reproduction,
+            first_reproduction.model_copy(update={"test_name": "second-reproduction"}),
+        ),
+        reproduction_resolutions=(_terminal_resolution(),),
+    )
+
+    assert authority.schema_version == "1.1"
+    assert len(authority.cross_examination_decisions or ()) == 2
+    assert len(authority.falsification_decisions or ()) == 2
+    assert len(authority.reproduction_results or ()) == 2
 
 
 def test_inventory_binds_every_mixed_source_and_campaign_uses_exact_descriptors() -> None:

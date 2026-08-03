@@ -8,10 +8,12 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from mmaudit.models.scheduler import (
+    SchedulerCampaignSummary,
     SchedulerCrossShardDecision,
     SchedulerCrossShardIntegrationOutput,
     SchedulerCrossShardRelationship,
     SchedulerEvidenceCapJudgmentOutput,
+    SchedulerEvidencePayloadBinding,
     SchedulerFindingReductionCandidate,
     SchedulerFindingReductionGroup,
     SchedulerFindingReductionOutput,
@@ -22,8 +24,23 @@ from mmaudit.models.scheduler import (
     SchedulerTaskActivation,
     SchedulerTaskKind,
     SchedulerTaskPlan,
+    SchedulerTerminalReportAuthority,
+    SchedulerTerminalStatus,
     _parse_scheduler_host_payload,
     scheduler_canonical_sha256,
+)
+from mmaudit.models.schemas import (
+    AuditReport,
+    CandidateReproductionResolution,
+    GeneratedFoundryTestSpec,
+    ReproductionResolutionKind,
+    ReproductionResult,
+    ReproductionState,
+    Severity,
+)
+from mmaudit.orchestration.manifest import (
+    _ManifestReproductionArtifact,
+    _validate_scheduler_prejudgment_evidence_authority,
 )
 from mmaudit.orchestration.pipeline import _scheduled_reproduction_candidate_ids
 from tests.scheduler_support import _synthetic_manifest
@@ -591,6 +608,135 @@ def test_reproduction_inventory_remains_bound_when_post_verifier_eligibility_cha
             activation=_activation(stale_payload),
             payload=stale_payload,
         )
+
+
+def test_current_manifest_requires_empty_reproduction_evidence_without_successful_host() -> None:
+    manifest = _synthetic_manifest("absent-reproduction-host")
+    summary = SchedulerCampaignSummary.build(manifest=manifest, pass_results=())
+    authority = SchedulerTerminalReportAuthority.build(
+        manifest=manifest,
+        summary=summary,
+        severity_threshold=Severity.MEDIUM,
+        candidates=(),
+        final_findings=(),
+        rejected_findings=(),
+        filtered_findings=(),
+        report_quality_review=None,
+        verification_decisions=(),
+        cross_examination_decisions=(),
+        falsification_decisions=(),
+        reproduction_results=(),
+        reproduction_resolutions=(),
+    )
+    report = AuditReport.model_construct(findings=[], rejected_findings=[])
+    empty_artifact = _ManifestReproductionArtifact(
+        schema_version="1.0",
+        test_specifications=[],
+        results=[],
+        candidate_resolutions=[],
+        falsification_decisions=[],
+    )
+    absence_task = SimpleNamespace(
+        task_id="scheduler-task-conditional-absence",
+        task_kind=SchedulerTaskKind.EMPTY_COMPLETION,
+        role="host:conditional_absence",
+    )
+    absence_result = SimpleNamespace(
+        task_id=absence_task.task_id,
+        terminal_status=SchedulerTerminalStatus.EXPLICIT_EMPTY,
+    )
+    absence_pass = SimpleNamespace(
+        plan=SimpleNamespace(
+            pass_kind=SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+            tasks=(absence_task,),
+            conditional_absence=object(),
+        ),
+        task_results=(absence_result,),
+    )
+    absent_host_journal = cast(Any, SimpleNamespace(pass_results=(absence_pass,)))
+
+    _validate_scheduler_prejudgment_evidence_authority(
+        authority=authority,
+        report=report,
+        candidates=(),
+        reproduction_artifact=empty_artifact,
+        journal=absent_host_journal,
+    )
+
+    result = ReproductionResult(
+        candidate_id="candidate-a",
+        test_name="SyntheticReplay",
+        state=ReproductionState.NOT_ATTEMPTED,
+        specification_sha256="1" * 64,
+    )
+    resolution = CandidateReproductionResolution(
+        candidate_id="candidate-a",
+        kind=ReproductionResolutionKind.INCONCLUSIVE,
+        detail="No successful host retained this synthetic resolution.",
+    )
+    typed_presence_cases = (
+        empty_artifact.model_copy(
+            update={
+                "test_specifications": [
+                    GeneratedFoundryTestSpec.model_construct(
+                        candidate_id="candidate-a",
+                        name="SyntheticReplay",
+                    )
+                ]
+            }
+        ),
+        empty_artifact.model_copy(update={"results": [result]}),
+        empty_artifact.model_copy(update={"candidate_resolutions": [resolution]}),
+    )
+    for nonempty_artifact in typed_presence_cases:
+        with pytest.raises(
+            ValueError,
+            match="reproduction evidence exists without a successful pass-six host",
+        ):
+            _validate_scheduler_prejudgment_evidence_authority(
+                authority=authority,
+                report=report,
+                candidates=(),
+                reproduction_artifact=nonempty_artifact,
+                journal=absent_host_journal,
+            )
+
+    authority_presence_cases = (
+        authority.model_copy(
+            update={
+                "reproduction_results": (
+                    SchedulerEvidencePayloadBinding.build(
+                        kind="reproduction",
+                        subject_id=result.candidate_id,
+                        payload=result,
+                    ),
+                )
+            }
+        ),
+        authority.model_copy(
+            update={
+                "reproduction_resolutions": (
+                    SchedulerEvidencePayloadBinding.build(
+                        kind="reproduction_resolution",
+                        subject_id=resolution.candidate_id,
+                        payload=resolution,
+                    ),
+                )
+            }
+        ),
+    )
+    for nonempty_authority in authority_presence_cases:
+        with pytest.raises(
+            ValueError,
+            match="reproduction evidence exists without a successful pass-six host",
+        ):
+            _validate_scheduler_prejudgment_evidence_authority(
+                authority=nonempty_authority,
+                report=report,
+                candidates=(),
+                reproduction_artifact=empty_artifact,
+                journal=absent_host_journal,
+            )
 
 
 def test_evidence_cap_contract_is_bound_to_judge_partition_and_activation() -> None:

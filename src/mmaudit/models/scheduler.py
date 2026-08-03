@@ -4719,9 +4719,7 @@ class SchedulerTerminalReportAuthority(StrictModel):
             ),
             "cross_examination_decisions": cls._evidence_payload_bindings(
                 "cross_examination",
-                (
-                    (item.candidate_id, item) for item in canonical_cross_examinations
-                ),
+                ((item.candidate_id, item) for item in canonical_cross_examinations),
             ),
             "falsification_decisions": cls._evidence_payload_bindings(
                 "falsification",

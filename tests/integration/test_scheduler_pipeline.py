@@ -19,7 +19,11 @@ from mmaudit.models.scheduler import (
     SchedulerArtifact,
     SchedulerBindings,
     SchedulerCampaignStatus,
+    SchedulerEvidencePayloadBinding,
     SchedulerPassKind,
+    SchedulerPassResult,
+    SchedulerPassStatus,
+    SchedulerReproductionHostOutput,
     SchedulerRetainedJournalReference,
     SchedulerTaskActivation,
     SchedulerTaskOutput,
@@ -616,6 +620,29 @@ async def test_pipeline_persists_exact_seven_pass_scheduler_evidence(
     assert all(task.candidate_ids == expected_candidate_ids for task in falsifier_tasks)
     assert len({task.root_lineage for task in falsifier_tasks}) == 2
     assert verifier_tasks[0].root_lineage not in {task.root_lineage for task in falsifier_tasks}
+    reproduction_task = next(
+        task for task in validation_pass.plan.tasks if task.role == "host:reproduction"
+    )
+    reproduction_output = SchedulerReproductionHostOutput.model_validate(
+        _scheduler_outputs(result.run_dir)[reproduction_task.task_id].payload
+    )
+    assert reproduction_output.generated_tests is not None
+    assert reproduction_output.reproduction_results is not None
+    assert reproduction_output.generated_test_ids is None
+    assert reproduction_output.reproduction_result_ids is None
+    reproduction_artifact = json.loads(
+        (result.run_dir / "reproduction-results.json").read_text(encoding="utf-8")
+    )
+    assert [item.model_dump(mode="json") for item in reproduction_output.generated_tests] == sorted(
+        reproduction_artifact["test_specifications"],
+        key=lambda item: (item["candidate_id"], item["name"]),
+    )
+    assert [
+        item.model_dump(mode="json") for item in reproduction_output.reproduction_results
+    ] == sorted(
+        reproduction_artifact["results"],
+        key=lambda item: (item["candidate_id"], item["test_name"]),
+    )
     falsifier_requests = tuple(
         request for request in artifact.model_requests if request.role == "candidate_falsifier"
     )
@@ -945,6 +972,89 @@ async def test_manifest_rejects_non_null_report_quality_coherent_reseal(
         match="public report quality differs from scheduler terminal authority",
     ):
         validate_manifest_artifacts(resealed, result.run_dir)
+
+
+@pytest.mark.asyncio
+async def test_manifest_rejects_retained_judge_drift_after_report_quality_failure(
+    config_factory: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = _deep_scheduler_report_quality_config(config_factory)
+    fake = FakeOpenRouter(
+        mode="timeout",
+        role="report_quality_review",
+        extra_model_ids=["golf/gale-secure", _REPORT_QUALITY_MODEL_ID],
+    )
+
+    class _MismatchedJudgeBinding:
+        @staticmethod
+        def build(
+            *,
+            kind: Any,
+            subject_id: str,
+            payload: Any,
+        ) -> SchedulerEvidencePayloadBinding:
+            exact = SchedulerEvidencePayloadBinding.build(
+                kind=kind,
+                subject_id=subject_id,
+                payload=payload,
+            )
+            if kind != "judge":
+                return exact
+            altered_payload_sha256 = scheduler_canonical_sha256(
+                {
+                    "domain": "mmaudit.synthetic-mismatched-judge-binding.v1",
+                    "exact_payload_sha256": exact.payload_sha256,
+                }
+            )
+            return SchedulerEvidencePayloadBinding(
+                record_id=scheduler_canonical_sha256(
+                    {
+                        "kind": kind,
+                        "subject_id": subject_id,
+                        "payload_sha256": altered_payload_sha256,
+                    }
+                ),
+                subject_id=subject_id,
+                payload_sha256=altered_payload_sha256,
+            )
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "SchedulerEvidencePayloadBinding",
+        _MismatchedJudgeBinding,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="scheduler judgment differs from exact retained judge decisions",
+    ):
+        await _run(config, vulnerable_repo, tmp_path, fake)
+
+    run_dir = _only_scheduler_run(tmp_path / "output")
+    pass_seven = SchedulerPassResult.model_validate_json(
+        (
+            run_dir / "private" / "scheduler-journal" / "pass-results" / "pass-07-result.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert pass_seven.plan.pass_kind is SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT
+    assert pass_seven.status is SchedulerPassStatus.FAILED
+    results_by_task_id = {result.task_id: result for result in pass_seven.task_results}
+    host_task = next(
+        task for task in pass_seven.plan.tasks if task.role == "host:evidence_cap_judgment"
+    )
+    report_quality_task = next(
+        task for task in pass_seven.plan.tasks if task.role == "specialist:report_quality"
+    )
+    assert (
+        results_by_task_id[host_task.task_id].terminal_status is SchedulerTerminalStatus.SUCCEEDED
+    )
+    assert (
+        results_by_task_id[report_quality_task.task_id].terminal_status
+        is SchedulerTerminalStatus.FAILED
+    )
 
 
 @pytest.mark.asyncio

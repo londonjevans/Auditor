@@ -9,9 +9,9 @@ from mmaudit.models.schemas import (
     Severity,
 )
 from mmaudit.orchestration.consensus import group_candidates, merge_group
-from mmaudit.orchestration.pipeline import (
-    _build_candidate_reproduction_resolutions,
-    _enforce_post_judge_execution_severity_accounting,
+from mmaudit.orchestration.pipeline import _enforce_post_judge_execution_severity_accounting
+from mmaudit.orchestration.reproduction_resolution import (
+    build_candidate_reproduction_resolutions,
 )
 from tests.unit.test_execution_origin_consensus import (
     _execution_candidate,
@@ -64,7 +64,7 @@ def test_post_judge_high_execution_origin_fails_closed_and_enters_accounting() -
     assert accounting_candidate.locations == candidate.locations
     assert accounting_candidate.model_dump(mode="json") == candidate.model_dump(mode="json")
 
-    resolutions = _build_candidate_reproduction_resolutions(
+    resolutions = build_candidate_reproduction_resolutions(
         candidates=list(accounting_candidates),
         results=[],
         forced_candidate_ids={candidate.candidate_id},

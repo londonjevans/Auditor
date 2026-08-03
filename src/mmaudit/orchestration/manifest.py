@@ -119,6 +119,9 @@ from mmaudit.orchestration.context_manifest import (
 from mmaudit.orchestration.execution_candidates import (
     validate_invariant_execution_candidate_provenance,
 )
+from mmaudit.orchestration.reproduction_resolution import (
+    build_candidate_reproduction_resolutions,
+)
 from mmaudit.reporting.bundle import (
     MANIFEST_BOUND_REPORT_DELIVERABLES,
     CostLedgerAbsenceEvidence,
@@ -133,6 +136,10 @@ from mmaudit.reporting.bundle import (
 from mmaudit.reporting.client import render_client_markdown_from_artifact
 from mmaudit.reporting.json_report import write_json
 from mmaudit.reporting.markdown import render_forensic_markdown, render_markdown
+from mmaudit.reporting.run_authority import (
+    RUN_TERMINAL_REPORT_AUTHORITY_PATH,
+    RunTerminalReportAuthority,
+)
 from mmaudit.reporting.sarif import generate_report_sarif
 from mmaudit.reporting.status import effective_report_status, report_status_metadata
 from mmaudit.repository.ignore import normalize_relative_path
@@ -333,7 +340,8 @@ class RunEvidenceManifest(StrictModel):
             raise ValueError("manifest artifact paths must be unique and sorted")
         if self.schema_version == "1.2":
             missing_report_artifacts = sorted(
-                MANIFEST_BOUND_REPORT_DELIVERABLES - set(artifact_paths)
+                (MANIFEST_BOUND_REPORT_DELIVERABLES | {RUN_TERMINAL_REPORT_AUTHORITY_PATH})
+                - set(artifact_paths)
             )
             if missing_report_artifacts:
                 raise ValueError(
@@ -643,6 +651,13 @@ def _build_run_evidence_manifest(
             scheduler_artifact,
             current_model_execution_required=report_bundle_required,
         )
+    if report_bundle_required:
+        _validate_run_terminal_report_authority(
+            root,
+            report,
+            scheduler_artifact=scheduler_artifact,
+            achieved_profile=run_configuration.achieved_profile,
+        )
 
     bindings = ManifestBindingSet(
         configuration=_configuration_bindings(effective_config),
@@ -794,6 +809,29 @@ def validate_report_privacy_consistency(
             raise ValueError("provider usage privacy routing disagrees with report evidence")
 
 
+def _post_judgment_execution_resolution_ids(
+    *,
+    report: AuditReport,
+    execution_candidate_ids: set[str],
+    pre_judgment_high_critical_ids: set[str],
+) -> set[str]:
+    """Derive execution candidates whose high/critical obligation arose at judgment."""
+
+    forced_ids: set[str] = set()
+    for finding in [*report.findings, *report.rejected_findings]:
+        if (
+            finding.origin_kind is not FindingOriginKind.DETERMINISTIC_EXECUTION
+            or finding.status is FindingStatus.REJECTED
+            or finding.severity not in {Severity.HIGH, Severity.CRITICAL}
+        ):
+            continue
+        forced_ids.update(
+            (set(finding.contributing_candidate_ids) & execution_candidate_ids)
+            - pre_judgment_high_critical_ids
+        )
+    return forced_ids
+
+
 def _validate_reproduction_candidate_obligations(
     *,
     report: AuditReport,
@@ -846,7 +884,11 @@ def _validate_reproduction_candidate_obligations(
         if candidate.severity in {Severity.HIGH, Severity.CRITICAL}
     }
     high_critical_execution_ids: set[str] = set()
-    post_judgment_execution_ids: set[str] = set()
+    post_judgment_execution_ids = _post_judgment_execution_resolution_ids(
+        report=report,
+        execution_candidate_ids=execution_candidate_ids,
+        pre_judgment_high_critical_ids=high_critical_candidate_ids,
+    )
     accepted_statuses = {
         FindingStatus.CONFIRMED,
         FindingStatus.STRONGLY_SUPPORTED,
@@ -864,10 +906,9 @@ def _validate_reproduction_candidate_obligations(
             set(finding.contributing_candidate_ids) & execution_candidate_ids
         )
         high_critical_execution_ids.update(contributing_execution_ids)
-        elevated_ids = contributing_execution_ids - high_critical_candidate_ids
+        elevated_ids = contributing_execution_ids & post_judgment_execution_ids
         if not elevated_ids:
             continue
-        post_judgment_execution_ids.update(elevated_ids)
         if finding.status in accepted_statuses:
             raise ValueError(
                 "post-judgment execution severity elevation cannot retain an accepted status"
@@ -910,6 +951,13 @@ def _validate_reproduction_candidate_obligations(
             raise ValueError("inconclusive resolution contains unsupported evidence references")
         elif expected_refs:
             raise ValueError("inconclusive resolution contradicts a qualifying reproduction result")
+    expected_resolutions = build_candidate_reproduction_resolutions(
+        candidates=candidate_artifact.findings,
+        results=reproduction_artifact.results,
+        forced_candidate_ids=post_judgment_execution_ids,
+    )
+    if reproduction_artifact.candidate_resolutions != expected_resolutions:
+        raise ValueError("candidate reproduction resolutions differ from deterministic replay")
 
 
 def _validate_report_bundle_artifacts(
@@ -1043,6 +1091,25 @@ def _validate_report_bundle_artifacts(
     expected_sarif = generate_report_sarif(report, findings_artifact=findings)
     if _read_json_artifact(root, "audit-results.sarif") != expected_sarif:
         raise ValueError("audit-results.sarif differs from the final report")
+
+
+def _validate_run_terminal_report_authority(
+    root: Path,
+    report: AuditReport,
+    *,
+    scheduler_artifact: SchedulerArtifact | None,
+    achieved_profile: AuditProfile | None,
+) -> None:
+    """Compare public report semantics with the required private terminal authority."""
+
+    authority = RunTerminalReportAuthority.model_validate(
+        _read_json_artifact(root, RUN_TERMINAL_REPORT_AUTHORITY_PATH)
+    )
+    authority.require_exact_report(report, scheduler_artifact=scheduler_artifact)
+    if authority.achieved_profile != (
+        achieved_profile.value if achieved_profile is not None else None
+    ):
+        raise ValueError("run achieved profile differs from private terminal report authority")
 
 
 def _validate_model_execution_cost_ledger_custody(
@@ -3217,6 +3284,7 @@ def _validate_scheduler_retained_judge_decisions(
 def _validate_scheduler_prejudgment_evidence_authority(
     *,
     authority: SchedulerTerminalReportAuthority,
+    report: AuditReport,
     candidates: tuple[CandidateFinding, ...],
     reproduction_artifact: _ManifestReproductionArtifact,
     journal: SchedulerJournal,
@@ -3229,6 +3297,7 @@ def _validate_scheduler_prejudgment_evidence_authority(
     assert authority.verification_decisions is not None
     assert authority.falsification_decisions is not None
     assert authority.reproduction_results is not None
+    assert authority.reproduction_resolutions is not None
 
     retained_cross_examinations = []
     cross_pass = _scheduler_pass_result(
@@ -3364,61 +3433,120 @@ def _validate_scheduler_prejudgment_evidence_authority(
 
     reproduction_host = None
     if validation_pass is not None:
-        host_tasks = tuple(
-            task for task in validation_pass.plan.tasks if task.role == "host:reproduction"
-        )
-        if (
-            len(host_tasks) != 1
-            or host_tasks[0].task_kind is not SchedulerTaskKind.HOST_COMPUTATION
-        ):
-            raise ValueError("scheduler pass six lacks one exact reproduction host")
-        host_results = tuple(
-            result
-            for result in validation_pass.task_results
-            if result.task_id == host_tasks[0].task_id
-        )
-        if len(host_results) != 1:
-            raise ValueError("scheduler reproduction host lacks one terminal result")
-        if host_results[0].terminal_status is SchedulerTerminalStatus.SUCCEEDED:
-            host_output = _successful_scheduler_task_output(
-                journal=journal,
-                pass_result=validation_pass,
-                task_id=host_tasks[0].task_id,
+        if validation_pass.plan.conditional_absence is not None:
+            absence_tasks = validation_pass.plan.tasks
+            absence_results = validation_pass.task_results
+            if (
+                len(absence_tasks) != 1
+                or absence_tasks[0].role != "host:conditional_absence"
+                or absence_tasks[0].task_kind is not SchedulerTaskKind.EMPTY_COMPLETION
+                or len(absence_results) != 1
+                or absence_results[0].task_id != absence_tasks[0].task_id
+                or absence_results[0].terminal_status is not SchedulerTerminalStatus.EXPLICIT_EMPTY
+            ):
+                raise ValueError("scheduler pass-six conditional absence is not exact")
+        else:
+            host_tasks = tuple(
+                task for task in validation_pass.plan.tasks if task.role == "host:reproduction"
             )
-            reproduction_host = SchedulerReproductionHostOutput.model_validate(host_output.payload)
+            if (
+                len(host_tasks) != 1
+                or host_tasks[0].task_kind is not SchedulerTaskKind.HOST_COMPUTATION
+            ):
+                raise ValueError("scheduler pass six lacks one exact reproduction host")
+            host_results = tuple(
+                result
+                for result in validation_pass.task_results
+                if result.task_id == host_tasks[0].task_id
+            )
+            if len(host_results) != 1:
+                raise ValueError("scheduler reproduction host lacks one terminal result")
+            if host_results[0].terminal_status is SchedulerTerminalStatus.SUCCEEDED:
+                host_output = _successful_scheduler_task_output(
+                    journal=journal,
+                    pass_result=validation_pass,
+                    task_id=host_tasks[0].task_id,
+                )
+                reproduction_host = SchedulerReproductionHostOutput.model_validate(
+                    host_output.payload
+                )
     if reproduction_host is None:
+        if (
+            reproduction_artifact.test_specifications
+            or reproduction_artifact.results
+            or reproduction_artifact.candidate_resolutions
+            or authority.reproduction_results
+            or authority.reproduction_resolutions
+        ):
+            raise ValueError(
+                "scheduler reproduction evidence exists without a successful pass-six host"
+            )
         return
-    generated_ids = tuple(
+    if reproduction_host.generated_tests is None or reproduction_host.reproduction_results is None:
+        raise ValueError("current scheduler reproduction host lacks exact payload authority")
+    retained_tests = tuple(
         sorted(
-            f"{item.candidate_id}:{item.name}" for item in reproduction_artifact.test_specifications
+            reproduction_host.generated_tests,
+            key=lambda item: (item.candidate_id, item.name),
         )
     )
-    result_ids = tuple(
-        sorted(f"{item.candidate_id}:{item.test_name}" for item in reproduction_artifact.results)
-    )
-    expected_generated_ids = (
-        reproduction_host.generated_test_ids
-        if reproduction_host.generated_test_ids is not None
-        else tuple(
-            sorted(
-                f"{item.candidate_id}:{item.name}"
-                for item in (reproduction_host.generated_tests or ())
-            )
+    retained_results = tuple(
+        sorted(
+            reproduction_host.reproduction_results,
+            key=lambda item: (item.candidate_id, item.test_name),
         )
     )
-    expected_result_ids = (
-        reproduction_host.reproduction_result_ids
-        if reproduction_host.reproduction_result_ids is not None
-        else tuple(
-            sorted(
-                f"{item.candidate_id}:{item.test_name}"
-                for item in (reproduction_host.reproduction_results or ())
-            )
+    public_tests = tuple(
+        sorted(
+            reproduction_artifact.test_specifications,
+            key=lambda item: (item.candidate_id, item.name),
         )
+    )
+    public_results = tuple(
+        sorted(
+            reproduction_artifact.results,
+            key=lambda item: (item.candidate_id, item.test_name),
+        )
+    )
+    retained_reproduction_bindings = _scheduler_evidence_payload_bindings(
+        "reproduction",
+        ((item.candidate_id, item) for item in retained_results),
+    )
+    candidate_ids = {candidate.candidate_id for candidate in candidates}
+    execution_candidate_ids = {
+        candidate.candidate_id
+        for candidate in candidates
+        if candidate.origin_kind is CandidateOriginKind.DETERMINISTIC_EXECUTION
+    }
+    forced_candidate_ids = _post_judgment_execution_resolution_ids(
+        report=report,
+        execution_candidate_ids=execution_candidate_ids,
+        pre_judgment_high_critical_ids={
+            candidate.candidate_id
+            for candidate in candidates
+            if candidate.severity in {Severity.HIGH, Severity.CRITICAL}
+        },
+    )
+    if not forced_candidate_ids <= candidate_ids:
+        raise ValueError("post-judgment reproduction resolution references an unknown candidate")
+    retained_resolutions = tuple(
+        build_candidate_reproduction_resolutions(
+            candidates=candidates,
+            results=retained_results,
+            forced_candidate_ids=forced_candidate_ids,
+        )
+    )
+    public_resolutions = tuple(reproduction_artifact.candidate_resolutions)
+    retained_resolution_bindings = _scheduler_evidence_payload_bindings(
+        "reproduction_resolution",
+        ((item.candidate_id, item) for item in retained_resolutions),
     )
     if (
-        generated_ids != expected_generated_ids
-        or result_ids != expected_result_ids
+        public_tests != retained_tests
+        or public_results != retained_results
+        or public_resolutions != retained_resolutions
+        or retained_reproduction_bindings != authority.reproduction_results
+        or retained_resolution_bindings != authority.reproduction_resolutions
         or reproduction_host.falsification_decisions != len(authority.falsification_decisions)
     ):
         raise ValueError("scheduler terminal reproduction differs from retained pass six")
@@ -3679,6 +3807,7 @@ def _validate_scheduler_report_authority(
         )
         _validate_scheduler_prejudgment_evidence_authority(
             authority=terminal_authority,
+            report=report,
             candidates=tuple(candidate_artifact.findings),
             reproduction_artifact=reproduction_artifact,
             journal=journal,
@@ -4107,7 +4236,9 @@ def validate_manifest_artifacts(
     if manifest.schema_version in {"1.1", "1.2"}:
         required_artifacts = {"final-findings.json", "metadata.json"}
         if manifest.schema_version == "1.2":
-            required_artifacts.update(MANIFEST_BOUND_REPORT_DELIVERABLES)
+            required_artifacts.update(
+                MANIFEST_BOUND_REPORT_DELIVERABLES | {RUN_TERMINAL_REPORT_AUTHORITY_PATH}
+            )
         for required_artifact in sorted(required_artifacts):
             if required_artifact not in expected:
                 raise ValueError(
@@ -4161,6 +4292,14 @@ def validate_manifest_artifacts(
                 report,
                 scheduler_artifact,
                 current_model_execution_required=manifest.schema_version == "1.2",
+            )
+        if manifest.schema_version == "1.2":
+            assert manifest.run_configuration is not None
+            _validate_run_terminal_report_authority(
+                root,
+                report,
+                scheduler_artifact=scheduler_artifact,
+                achieved_profile=manifest.run_configuration.achieved_profile,
             )
         expected_classification = (
             manifest.run_configuration.run_options.privacy_source_classification

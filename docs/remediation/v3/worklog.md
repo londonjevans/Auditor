@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Client report and forensic evidence bundle
 CURRENT_TICKET: V3-REPORT-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-FIXTURE-001 (COMPLETE)
-NEXT_ACTION: Finish partial pass-seven judge-output authority, strengthen reproduction payload/resolution custody, reject conflicting semantic duplicates, regenerate scheduler schemas, then run focused and full V3-REPORT-001 gates.
-LAST_COMMAND: `.venv/bin/python -m py_compile src/mmaudit/agents/verifier.py src/mmaudit/models/scheduler.py src/mmaudit/orchestration/manifest.py src/mmaudit/orchestration/pipeline.py src/mmaudit/orchestration/scheduler.py src/mmaudit/orchestration/scheduler_runtime.py && git diff --check`
-LAST_RESULT: PASS: the interrupted terminal-evidence authority implementation compiles and the working diff has no whitespace errors; this pause-only check is not ticket acceptance evidence.
+NEXT_ACTION: Close the invalid-location/conditional-absence pipeline edge; add coherent-reseal coverage for the private terminal run authority; regenerate release schemas; then run focused, integration, Ruff, mypy, and full V3-REPORT-001 gates.
+LAST_COMMAND: `.venv/bin/python -m py_compile src/mmaudit/models/scheduler.py src/mmaudit/orchestration/manifest.py src/mmaudit/orchestration/pipeline.py src/mmaudit/orchestration/reproduction_resolution.py src/mmaudit/reporting/run_authority.py && git diff --check`
+LAST_RESULT: PASS: all affected production modules compile and the working diff has no whitespace errors; process inspection was unavailable under the sandbox, and all delegated agents are stopped or complete. This is pause-integrity evidence, not ticket acceptance.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -20,6 +20,38 @@ OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
 LAST_CHECKPOINT_COMMIT: 6d320a5fb4e7be4d22954486da6a5817b3f7454a
+
+## 2026-08-03T23:57:43Z — Graceful operator pause
+
+- **State:** `PAUSED_BY_OPERATOR`; `V3-REPORT-001` remains `IN_PROGRESS`. No ticket,
+  release, or maximum-assurance completion is claimed.
+- **Preserved implementation:** Exact partial pass-seven judge authority, semantic-identity
+  duplicate rejection, full pass-six reproduction payload custody, deterministic exact
+  reproduction-resolution replay, and a private manifest-bound terminal run authority are saved
+  in the working tree.
+- **Focused evidence:** Scheduler model tests passed `55`; reproduction host/resolution unit tests
+  passed `18`; the nonempty synthetic Solidity reproduction regression passed `2`; the partial
+  judge drift regression and adjacent cases passed in their recorded focused runs. Affected Ruff,
+  strict mypy, Python compilation, and `git diff --check` passed in the bounded slices.
+- **Known unfinished acceptance work:** Close the invalid-location/conditional-absence pipeline
+  edge; add coherent public-reseal, achieved-profile, and missing-private-authority regressions;
+  update current-manifest fixtures; regenerate schemas; then run the focused through full ticket
+  gates.
+- **Safety/cost:** All delegated agents are stopped or complete. No provider call, public RPC,
+  secret read, target-controlled command, or paid operation occurred. OpenRouter usage remains
+  `0.0033415625` USD.
+- **Exact resume action:** Inspect the saved diff, close the two terminal-authority fixture seams,
+  synchronize generated schemas, and execute the recorded `V3-REPORT-001` validation matrix.
+- **Checkpoint:** The current implementation will be committed as a WIP pause checkpoint; it is
+  intentionally not ticket-complete or release evidence.
+
+## 2026-08-03T23:29:27Z — Resume
+
+- Resumed `V3-REPORT-001` from clean, SSH-synchronized pause commit
+  `c25f569a7203644b3cc6f2c2a12db2ddaded5a27`.
+- Work remains bounded to the four recorded terminal-evidence authority and generated-schema
+  blockers before the ticket's focused and full acceptance gates. No provider call is required
+  for this slice.
 
 ## 2026-08-03T23:26:38Z — Graceful operator pause
 

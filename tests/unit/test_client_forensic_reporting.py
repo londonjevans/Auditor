@@ -38,6 +38,7 @@ from mmaudit.reporting.bundle import (
 )
 from mmaudit.reporting.client import render_client_markdown
 from mmaudit.reporting.markdown import render_forensic_markdown
+from mmaudit.reporting.run_authority import RunTerminalReportAuthority
 from mmaudit.reporting.status import effective_report_status
 from mmaudit.repository.chunking import line_range_hash
 
@@ -245,6 +246,21 @@ def _render_client(
         candidates=candidates,
         reproduction_resolutions=reproduction_resolutions or [],
     )
+
+
+def test_terminal_report_authority_binds_the_exact_validated_report() -> None:
+    report = _report(completed=False)
+    authority = RunTerminalReportAuthority.build(report)
+
+    authority.require_exact_report(report)
+    changed = report.model_copy(
+        update={"incomplete_reasons": ["A coherently rewritten terminal run limitation."]}
+    )
+    with pytest.raises(
+        ValueError,
+        match="public report differs from private terminal report authority",
+    ):
+        authority.require_exact_report(changed)
 
 
 @pytest.mark.parametrize(
