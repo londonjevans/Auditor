@@ -49,6 +49,9 @@ from mmaudit.agents.verifier import (
     select_candidate_falsifier_models,
     select_validation_falsifier_models,
 )
+from mmaudit.agents.verifier import (
+    insufficient_verifications as _insufficient_verifications,
+)
 from mmaudit.benchmark.certificate import (
     BenchmarkCertificateVerification,
     CertificateVerificationOrigin,
@@ -112,6 +115,7 @@ from mmaudit.models.scheduler import (
     SchedulerBindings,
     SchedulerCandidateWorkset,
     SchedulerCostLedgerBaseline,
+    SchedulerEvidencePayloadBinding,
     SchedulerPassKind,
     SchedulerPassResult,
     SchedulerPassStatus,
@@ -203,7 +207,6 @@ from mmaudit.models.schemas import (
     UsageRecord,
     VerificationBatch,
     VerificationDecision,
-    VerificationTest,
     VerificationVerdict,
 )
 from mmaudit.models.sharding import (
@@ -6240,23 +6243,22 @@ class AuditPipeline:
 
                 def evidence_payload_binding(
                     *,
-                    kind: str,
+                    kind: Literal[
+                        "judge",
+                        "verification",
+                        "cross_examination",
+                        "falsification",
+                        "reproduction",
+                        "reproduction_resolution",
+                    ],
                     subject_id: str,
                     payload: Any,
                 ) -> dict[str, str]:
-                    model_payload = payload.model_dump(mode="json")
-                    payload_sha256 = scheduler_canonical_sha256(model_payload)
-                    return {
-                        "record_id": scheduler_canonical_sha256(
-                            {
-                                "kind": kind,
-                                "subject_id": subject_id,
-                                "payload_sha256": payload_sha256,
-                            }
-                        ),
-                        "subject_id": subject_id,
-                        "payload_sha256": payload_sha256,
-                    }
+                    return SchedulerEvidencePayloadBinding.build(
+                        kind=kind,
+                        subject_id=subject_id,
+                        payload=payload,
+                    ).model_dump(mode="json")
 
                 judgment_reproduction_resolutions = _build_candidate_reproduction_resolutions(
                     candidates=candidates,
@@ -6761,6 +6763,11 @@ class AuditPipeline:
                 rejected_findings=rejected_findings,
                 filtered_findings=filtered_findings,
                 report_quality_review=report_quality_review,
+                verification_decisions=verifications.decisions,
+                cross_examination_decisions=cross_examinations,
+                falsification_decisions=falsifications.decisions,
+                reproduction_results=reproductions,
+                reproduction_resolutions=reproduction_resolutions,
             )
             scheduler_artifact = scheduler.artifact()
             scheduler_report_binding = scheduler.report_binding().model_dump(mode="json")
@@ -8989,32 +8996,6 @@ def _judge_vote(
         family=usage.model_family,
         verdict=decision.status.value,
         rationale=decision.rationale,
-    )
-
-
-def _insufficient_verifications(
-    candidates: list[CandidateFinding],
-) -> VerificationBatch:
-    return VerificationBatch(
-        decisions=[
-            VerificationDecision(
-                candidate_id=candidate.candidate_id,
-                verdict=VerificationVerdict.INSUFFICIENT_CONTEXT,
-                rationale="Verifier was unavailable",
-                source_to_sink="Not established",
-                reachability="Not established",
-                authentication="Unknown",
-                privilege_requirements="Unknown",
-                environmental_assumptions=[],
-                guards_and_controls=[],
-                false_positive_conditions=candidate.false_positive_conditions,
-                safe_verification_test=VerificationTest(
-                    description="Review the cited code locally in a disposable fixture"
-                ),
-                confidence=0,
-            )
-            for candidate in candidates
-        ]
     )
 
 

@@ -807,6 +807,116 @@ async def test_manifest_rejects_incomplete_terminal_finding_coherent_reseal(
 
 
 @pytest.mark.asyncio
+async def test_manifest_rejects_incomplete_after_pass_five_cross_exam_coherent_reseal(
+    config_factory: Any,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = _deep_scheduler_config(config_factory)
+    fake = FakeOpenRouter(
+        mode="verifier_omission",
+        extra_model_ids=["golf/gale-secure"],
+    )
+
+    result = await _run(config, vulnerable_repo, tmp_path, fake)
+
+    scheduler_artifact = SchedulerArtifact.model_validate_json(
+        (result.run_dir / "scheduler-state.json").read_text(encoding="utf-8")
+    )
+    assert scheduler_artifact.summary.status is SchedulerCampaignStatus.FAILED
+    assert scheduler_artifact.summary.pass_results[-1].plan.pass_kind is SCHEDULER_PASS_ORDER[5]
+    assert result.report.cross_examination_decisions
+    assert not result.report.completed
+    manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    validate_manifest_artifacts(manifest, result.run_dir)
+
+    first = result.report.cross_examination_decisions[0]
+    changed = first.model_copy(
+        update={"rationale": "Coherently resealed incomplete pass-five decision."}
+    )
+    tampered_report = result.report.model_copy(
+        update={
+            "cross_examination_decisions": [
+                changed,
+                *result.report.cross_examination_decisions[1:],
+            ]
+        }
+    )
+    _rewrite_public_report_bundle(result.run_dir, tampered_report)
+    cross_examination_payload = json.loads(
+        (result.run_dir / "cross-examination.json").read_text(encoding="utf-8")
+    )
+    cross_examination_payload["decisions"] = [
+        item.model_dump(mode="json") for item in tampered_report.cross_examination_decisions
+    ]
+    write_json(result.run_dir / "cross-examination.json", cross_examination_payload)
+    resealed = _reseal_scheduler_run(result.run_dir, manifest)
+
+    with pytest.raises(
+        ValueError,
+        match="public cross-examination evidence differs from scheduler terminal authority",
+    ):
+        validate_manifest_artifacts(resealed, result.run_dir)
+
+
+@pytest.mark.asyncio
+async def test_manifest_rejects_incomplete_after_pass_six_verification_coherent_reseal(
+    config_factory: Any,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = _deep_scheduler_config(config_factory)
+    fake = FakeOpenRouter(
+        mode="judge_omission",
+        extra_model_ids=["golf/gale-secure"],
+    )
+
+    result = await _run(config, vulnerable_repo, tmp_path, fake)
+
+    scheduler_artifact = SchedulerArtifact.model_validate_json(
+        (result.run_dir / "scheduler-state.json").read_text(encoding="utf-8")
+    )
+    assert scheduler_artifact.summary.status is SchedulerCampaignStatus.FAILED
+    assert scheduler_artifact.summary.pass_results[-1].plan.pass_kind is SCHEDULER_PASS_ORDER[6]
+    assert result.report.verification_decisions
+    assert not result.report.completed
+    manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    validate_manifest_artifacts(manifest, result.run_dir)
+
+    first = result.report.verification_decisions[0]
+    changed = first.model_copy(
+        update={"rationale": "Coherently resealed incomplete pass-six decision."}
+    )
+    tampered_report = result.report.model_copy(
+        update={
+            "verification_decisions": [
+                changed,
+                *result.report.verification_decisions[1:],
+            ]
+        }
+    )
+    _rewrite_public_report_bundle(result.run_dir, tampered_report)
+    verification_payload = json.loads(
+        (result.run_dir / "verification-results.json").read_text(encoding="utf-8")
+    )
+    verification_payload["decisions"] = [
+        item.model_dump(mode="json") for item in tampered_report.verification_decisions
+    ]
+    write_json(result.run_dir / "verification-results.json", verification_payload)
+    resealed = _reseal_scheduler_run(result.run_dir, manifest)
+
+    with pytest.raises(
+        ValueError,
+        match="public verification evidence differs from scheduler terminal authority",
+    ):
+        validate_manifest_artifacts(resealed, result.run_dir)
+
+
+@pytest.mark.asyncio
 async def test_manifest_rejects_non_null_report_quality_coherent_reseal(
     config_factory: Any,
     vulnerable_repo: Path,
@@ -1567,10 +1677,12 @@ async def test_pass_four_model_discovery_distinguishes_unsafe_and_safe_cross_sha
             mode="semantic_accounting",
             extra_model_ids=["golf/gale-secure"],
         )
+        run_root = tmp_path / f"run-{variant}"
+        run_root.mkdir(mode=0o700)
         result = await _run(
             config,
             repository,
-            tmp_path / f"run-{variant}",
+            run_root,
             fake,
         )
         artifact = SchedulerArtifact.model_validate_json(
@@ -2059,6 +2171,43 @@ async def test_pipeline_activates_pass_three_after_overlapping_formal_evidence_i
     assert formally_bound_candidate_ids <= set(output.payload["candidate_payload_sha256s"])
     assert after == output.payload["candidate_payload_sha256s"]
     assert scheduler_canonical_sha256(old_order_input) != activation.actual_input_sha256
+
+    manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    validate_manifest_artifacts(manifest, result.run_dir)
+
+    def invent_non_formal_candidate_change(
+        candidates: list[CandidateFinding],
+        formal_runs: list[FormalToolRun],
+    ) -> list[CandidateFinding]:
+        attached = original_attach(candidates, formal_runs)
+        return [
+            candidate.model_copy(update={"title": f"{candidate.title} (invented change)"})
+            for candidate in attached
+        ]
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "_attach_formal_counterexamples",
+        invent_non_formal_candidate_change,
+    )
+    tampered_root = tmp_path / "tampered-formal-authority"
+    tampered_root.mkdir(mode=0o700)
+    with pytest.raises(
+        ValueError,
+        match="scheduler pass-three differs from accepted blind candidates",
+    ):
+        await _run(
+            config,
+            repository,
+            tampered_root,
+            FakeOpenRouter(
+                mode="solidity_reproduction",
+                extra_model_ids=["golf/gale-secure"],
+            ),
+            formal_runner=OverlappingFormalRunner(),
+        )
 
 
 def test_cross_shard_integration_distinguishes_unsafe_and_safe_boundary_evidence(

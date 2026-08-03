@@ -18,6 +18,11 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import Field, field_validator, model_validator
 
+from mmaudit.agents.verifier import (
+    insufficient_verifications,
+    normalize_cross_examination_response,
+    normalize_verification_response,
+)
 from mmaudit.config import (
     AuditConfig,
     AuditConfigOverrides,
@@ -42,6 +47,7 @@ from mmaudit.models.scheduler import (
     SchedulerPassStatus,
     SchedulerPrivacyEvidenceCustody,
     SchedulerReportBinding,
+    SchedulerReproductionHostOutput,
     SchedulerRetainedJournalReference,
     SchedulerShardInventory,
     SchedulerTaskKind,
@@ -55,12 +61,14 @@ from mmaudit.models.schemas import (
     AuditProfile,
     AuditReport,
     AuditRunStatus,
+    CandidateCrossExaminationResponse,
     CandidateFinding,
     CandidateFindingArtifact,
     CandidateOriginKind,
     CandidateReproductionResolution,
     ExecutionEvidenceKind,
     ExecutionOriginDispositionKind,
+    FalsificationBatch,
     FalsificationDecision,
     Finding,
     FindingOriginKind,
@@ -85,6 +93,7 @@ from mmaudit.models.schemas import (
     ScannerStatus,
     Severity,
     StrictModel,
+    VerificationBatch,
 )
 from mmaudit.models.schemas import (
     ContextRequestEvidence as ProviderContextRequestEvidence,
@@ -97,6 +106,7 @@ from mmaudit.models.sharding import (
     SolidityShardsArtifact,
 )
 from mmaudit.models.token_planning import PromptAllocationCategory, RequestTokenPlan
+from mmaudit.orchestration.candidate_enrichment import attach_formal_counterexamples
 from mmaudit.orchestration.context_manifest import (
     ContextManifest,
     ContextManifestReportBinding,
@@ -2707,6 +2717,9 @@ def _require_scheduler_journal_authority(
             expected_terminal_report_authority_required=(
                 public_artifact.summary.manifest.terminal_report_authority_required
             ),
+            expected_terminal_evidence_authority_required=(
+                public_artifact.summary.manifest.terminal_evidence_authority_required
+            ),
         )
         try:
             reconstructed = _validate_scheduler_privacy_custody_and_reconstruct(
@@ -2846,18 +2859,26 @@ def _successful_scheduler_task_output(
 
 def _scheduler_accepted_candidate_authority(
     journal: SchedulerJournal,
-) -> dict[SchedulerPassKind, dict[str, str]]:
+) -> tuple[
+    dict[SchedulerPassKind, dict[str, str]],
+    dict[SchedulerPassKind, dict[str, CandidateFinding]],
+]:
     """Collect exact host-accepted candidates even when a later task failed."""
 
-    authority: dict[SchedulerPassKind, dict[str, str]] = {
+    hash_authority: dict[SchedulerPassKind, dict[str, str]] = {
         SchedulerPassKind.BLIND_SHARD_REVIEW: {},
         SchedulerPassKind.CROSS_SHARD_INTEGRATION: {},
     }
-    for pass_kind in tuple(authority):
+    candidate_authority: dict[SchedulerPassKind, dict[str, CandidateFinding]] = {
+        SchedulerPassKind.BLIND_SHARD_REVIEW: {},
+        SchedulerPassKind.CROSS_SHARD_INTEGRATION: {},
+    }
+    for pass_kind in tuple(hash_authority):
         pass_result = _scheduler_pass_result(journal, pass_kind)
         if pass_result is None:
             continue
-        accepted = authority[pass_kind]
+        accepted_hashes = hash_authority[pass_kind]
+        accepted_candidates = candidate_authority[pass_kind]
         for result in pass_result.task_results:
             if result.terminal_status is not SchedulerTerminalStatus.SUCCEEDED:
                 continue
@@ -2866,12 +2887,22 @@ def _scheduler_accepted_candidate_authority(
                 pass_result=pass_result,
                 task_id=result.task_id,
             )
+            output_candidates = {
+                candidate.candidate_id: candidate for candidate in output.accepted_candidates
+            }
+            if set(output_candidates) != set(output.accepted_candidate_payload_sha256s):
+                raise ValueError("scheduler accepted candidate objects differ from their hashes")
             for candidate_id, payload_sha256 in output.accepted_candidate_payload_sha256s.items():
-                if candidate_id in accepted:
+                if candidate_id in accepted_hashes:
                     raise ValueError("scheduler accepted candidate authority repeats an identity")
-                accepted[candidate_id] = payload_sha256
-        authority[pass_kind] = dict(sorted(accepted.items()))
-    return authority
+                candidate = output_candidates[candidate_id]
+                if scheduler_canonical_sha256(candidate.model_dump(mode="json")) != payload_sha256:
+                    raise ValueError("scheduler accepted candidate object hash is inconsistent")
+                accepted_hashes[candidate_id] = payload_sha256
+                accepted_candidates[candidate_id] = candidate
+        hash_authority[pass_kind] = dict(sorted(accepted_hashes.items()))
+        candidate_authority[pass_kind] = dict(sorted(accepted_candidates.items()))
+    return hash_authority, candidate_authority
 
 
 def _reconstruct_successful_scheduler_output[OutputT: StrictModel](
@@ -2936,18 +2967,11 @@ def _scheduler_evidence_payload_bindings(
 
     bindings: list[SchedulerEvidencePayloadBinding] = []
     for subject_id, record in records:
-        payload_sha256 = scheduler_canonical_sha256(record.model_dump(mode="json"))
         bindings.append(
-            SchedulerEvidencePayloadBinding(
-                record_id=scheduler_canonical_sha256(
-                    {
-                        "kind": kind,
-                        "subject_id": subject_id,
-                        "payload_sha256": payload_sha256,
-                    }
-                ),
+            SchedulerEvidencePayloadBinding.build(
+                kind=kind,
                 subject_id=subject_id,
-                payload_sha256=payload_sha256,
+                payload=record,
             )
         )
     ordered = tuple(sorted(bindings, key=lambda item: (item.subject_id, item.record_id)))
@@ -3032,6 +3056,7 @@ def _scheduler_finding_payload_sha256s(
 def _validate_scheduler_terminal_projection_authority(
     *,
     report: AuditReport,
+    reproduction_artifact: _ManifestReproductionArtifact,
     candidate_hashes: dict[str, str],
     authority: SchedulerTerminalReportAuthority,
 ) -> None:
@@ -3079,11 +3104,60 @@ def _validate_scheduler_terminal_projection_authority(
     if report_quality_payload_sha256 != authority.report_quality_payload_sha256:
         raise ValueError("public report quality differs from scheduler terminal authority")
 
+    if authority.schema_version == "1.0":
+        return
+    public_evidence = (
+        (
+            "verification",
+            _scheduler_evidence_payload_bindings(
+                "verification",
+                ((item.candidate_id, item) for item in report.verification_decisions),
+            ),
+            authority.verification_decisions,
+        ),
+        (
+            "cross-examination",
+            _scheduler_evidence_payload_bindings(
+                "cross_examination",
+                ((item.candidate_id, item) for item in report.cross_examination_decisions),
+            ),
+            authority.cross_examination_decisions,
+        ),
+        (
+            "falsification",
+            _scheduler_evidence_payload_bindings(
+                "falsification",
+                ((item.candidate_id, item) for item in report.falsification_decisions),
+            ),
+            authority.falsification_decisions,
+        ),
+        (
+            "reproduction",
+            _scheduler_evidence_payload_bindings(
+                "reproduction",
+                ((item.candidate_id, item) for item in report.reproductions),
+            ),
+            authority.reproduction_results,
+        ),
+        (
+            "reproduction resolution",
+            _scheduler_evidence_payload_bindings(
+                "reproduction_resolution",
+                ((item.candidate_id, item) for item in reproduction_artifact.candidate_resolutions),
+            ),
+            authority.reproduction_resolutions,
+        ),
+    )
+    for label, observed, expected in public_evidence:
+        if observed != expected:
+            raise ValueError(f"public {label} evidence differs from scheduler terminal authority")
+
 
 def _validate_scheduler_terminal_authority_against_judgment(
     *,
     authority: SchedulerTerminalReportAuthority,
     judgment: SchedulerEvidenceCapJudgmentOutput,
+    journal: SchedulerJournal,
 ) -> None:
     """Require a successful pass-seven host result to equal terminal report authority."""
 
@@ -3091,6 +3165,263 @@ def _validate_scheduler_terminal_authority_against_judgment(
         authority.require_exact_judgment(judgment)
     except ValueError as exc:
         raise ValueError("scheduler terminal authority differs from pass-seven judgment") from exc
+    _validate_scheduler_retained_judge_decisions(
+        judgment=judgment,
+        journal=journal,
+        require_complete_pass=False,
+    )
+
+
+def _validate_scheduler_retained_judge_decisions(
+    *,
+    judgment: SchedulerEvidenceCapJudgmentOutput,
+    journal: SchedulerJournal,
+    require_complete_pass: bool,
+) -> None:
+    """Join judgment bindings to exact retained judge outputs, including partial pass seven."""
+
+    pass_result = _scheduler_pass_result(
+        journal,
+        SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT,
+    )
+    if pass_result is None or (
+        require_complete_pass and pass_result.status is not SchedulerPassStatus.COMPLETE
+    ):
+        raise ValueError("scheduler judgment authority lacks its completed pass")
+    retained_judges = []
+    for task in (task for task in pass_result.plan.tasks if task.role == "judge"):
+        if task.task_kind is not SchedulerTaskKind.MODEL_REQUEST:
+            raise ValueError("scheduler judge authority is not a model request")
+        results = tuple(
+            result for result in pass_result.task_results if result.task_id == task.task_id
+        )
+        if len(results) != 1:
+            raise ValueError("scheduler judge task lacks one terminal result")
+        if results[0].terminal_status is not SchedulerTerminalStatus.SUCCEEDED:
+            continue
+        batch = _reconstruct_successful_scheduler_output(
+            journal=journal,
+            pass_result=pass_result,
+            task_id=task.task_id,
+            output_type=JudgeDecisionBatch,
+        )
+        retained_judges.extend(batch.decisions)
+    judge_bindings = _scheduler_evidence_payload_bindings(
+        "judge",
+        ((item.group_id, item) for item in retained_judges),
+    )
+    if judge_bindings != judgment.judge_decisions:
+        raise ValueError("scheduler judgment differs from exact retained judge decisions")
+
+
+def _validate_scheduler_prejudgment_evidence_authority(
+    *,
+    authority: SchedulerTerminalReportAuthority,
+    candidates: tuple[CandidateFinding, ...],
+    reproduction_artifact: _ManifestReproductionArtifact,
+    journal: SchedulerJournal,
+) -> None:
+    """Join current terminal evidence to exact successful pass-five/six outputs."""
+
+    if authority.schema_version == "1.0":
+        return
+    assert authority.cross_examination_decisions is not None
+    assert authority.verification_decisions is not None
+    assert authority.falsification_decisions is not None
+    assert authority.reproduction_results is not None
+
+    retained_cross_examinations = []
+    cross_pass = _scheduler_pass_result(
+        journal,
+        SchedulerPassKind.ADVERSARIAL_CROSS_EXAMINATION,
+    )
+    if cross_pass is not None:
+        for task in cross_pass.plan.tasks:
+            if task.task_kind is not SchedulerTaskKind.MODEL_REQUEST:
+                continue
+            results = tuple(
+                result for result in cross_pass.task_results if result.task_id == task.task_id
+            )
+            if len(results) != 1:
+                raise ValueError("scheduler pass-five task lacks one terminal result")
+            if results[0].terminal_status is not SchedulerTerminalStatus.SUCCEEDED:
+                continue
+            if (
+                len(task.candidate_ids) != 1
+                or task.requested_model is None
+                or task.root_lineage is None
+            ):
+                raise ValueError("scheduler pass-five task lacks exact candidate/model authority")
+            candidate_id = task.candidate_ids[0]
+            reviewer_text = task.role.rsplit("_", 1)[-1]
+            if reviewer_text not in {"1", "2"}:
+                raise ValueError("scheduler pass-five task lacks an exact reviewer index")
+            reviewer_index = int(reviewer_text)
+            expected_role = (
+                "candidate_falsifier:"
+                + hashlib.sha256(candidate_id.encode("utf-8")).hexdigest()
+                + f":reviewer_{reviewer_index}"
+            )
+            if task.role != expected_role:
+                raise ValueError("scheduler pass-five task role differs from its candidate")
+            output = _successful_scheduler_task_output(
+                journal=journal,
+                pass_result=cross_pass,
+                task_id=task.task_id,
+            )
+            completion = output.model_completion_evidence
+            if completion is None:
+                raise ValueError("scheduler pass-five output lacks completion evidence")
+            response = _reconstruct_successful_scheduler_output(
+                journal=journal,
+                pass_result=cross_pass,
+                task_id=task.task_id,
+                output_type=CandidateCrossExaminationResponse,
+            )
+            usage = completion.usage_record
+            retained_cross_examinations.extend(
+                normalize_cross_examination_response(
+                    response,
+                    candidate_ids={"candidate-0001": candidate_id},
+                    request_id=usage.request_id,
+                    reviewer_index=reviewer_index,
+                    requested_model=task.requested_model,
+                    returned_model=usage.returned_model,
+                    root_lineage=task.root_lineage,
+                )
+            )
+    retained_cross_bindings = _scheduler_evidence_payload_bindings(
+        "cross_examination",
+        ((item.candidate_id, item) for item in retained_cross_examinations),
+    )
+    if retained_cross_bindings != authority.cross_examination_decisions:
+        raise ValueError("scheduler terminal cross-examination differs from retained pass five")
+
+    validation_pass = _scheduler_pass_result(
+        journal,
+        SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
+    )
+    candidate_by_id = {candidate.candidate_id: candidate for candidate in candidates}
+    retained_verifications = []
+    retained_falsifications = []
+    if validation_pass is not None:
+        for task in validation_pass.plan.tasks:
+            if task.task_kind is not SchedulerTaskKind.MODEL_REQUEST:
+                continue
+            results = tuple(
+                result for result in validation_pass.task_results if result.task_id == task.task_id
+            )
+            if len(results) != 1:
+                raise ValueError("scheduler pass-six task lacks one terminal result")
+            if task.role == "verifier":
+                try:
+                    task_candidates = tuple(
+                        candidate_by_id[candidate_id] for candidate_id in task.candidate_ids
+                    )
+                except KeyError as exc:
+                    raise ValueError(
+                        "scheduler pass-six verifier references an unknown candidate"
+                    ) from exc
+                if results[0].terminal_status is SchedulerTerminalStatus.SUCCEEDED:
+                    retained_verifications.extend(
+                        normalize_verification_response(
+                            task_candidates,
+                            _reconstruct_successful_scheduler_output(
+                                journal=journal,
+                                pass_result=validation_pass,
+                                task_id=task.task_id,
+                                output_type=VerificationBatch,
+                            ),
+                        ).decisions
+                    )
+                else:
+                    retained_verifications.extend(
+                        insufficient_verifications(task_candidates).decisions
+                    )
+            elif task.role in {"falsifier", "specialist:falsifier"}:
+                if results[0].terminal_status is not SchedulerTerminalStatus.SUCCEEDED:
+                    continue
+                retained_falsifications.extend(
+                    _reconstruct_successful_scheduler_output(
+                        journal=journal,
+                        pass_result=validation_pass,
+                        task_id=task.task_id,
+                        output_type=FalsificationBatch,
+                    ).decisions
+                )
+    retained_verification_bindings = _scheduler_evidence_payload_bindings(
+        "verification",
+        ((item.candidate_id, item) for item in retained_verifications),
+    )
+    if retained_verification_bindings != authority.verification_decisions:
+        raise ValueError("scheduler terminal verification differs from retained pass six")
+    retained_falsification_bindings = _scheduler_evidence_payload_bindings(
+        "falsification",
+        ((item.candidate_id, item) for item in retained_falsifications),
+    )
+    if retained_falsification_bindings != authority.falsification_decisions:
+        raise ValueError("scheduler terminal falsification differs from retained pass six")
+
+    reproduction_host = None
+    if validation_pass is not None:
+        host_tasks = tuple(
+            task for task in validation_pass.plan.tasks if task.role == "host:reproduction"
+        )
+        if (
+            len(host_tasks) != 1
+            or host_tasks[0].task_kind is not SchedulerTaskKind.HOST_COMPUTATION
+        ):
+            raise ValueError("scheduler pass six lacks one exact reproduction host")
+        host_results = tuple(
+            result
+            for result in validation_pass.task_results
+            if result.task_id == host_tasks[0].task_id
+        )
+        if len(host_results) != 1:
+            raise ValueError("scheduler reproduction host lacks one terminal result")
+        if host_results[0].terminal_status is SchedulerTerminalStatus.SUCCEEDED:
+            host_output = _successful_scheduler_task_output(
+                journal=journal,
+                pass_result=validation_pass,
+                task_id=host_tasks[0].task_id,
+            )
+            reproduction_host = SchedulerReproductionHostOutput.model_validate(host_output.payload)
+    if reproduction_host is None:
+        return
+    generated_ids = tuple(
+        sorted(
+            f"{item.candidate_id}:{item.name}" for item in reproduction_artifact.test_specifications
+        )
+    )
+    result_ids = tuple(
+        sorted(f"{item.candidate_id}:{item.test_name}" for item in reproduction_artifact.results)
+    )
+    expected_generated_ids = (
+        reproduction_host.generated_test_ids
+        if reproduction_host.generated_test_ids is not None
+        else tuple(
+            sorted(
+                f"{item.candidate_id}:{item.name}"
+                for item in (reproduction_host.generated_tests or ())
+            )
+        )
+    )
+    expected_result_ids = (
+        reproduction_host.reproduction_result_ids
+        if reproduction_host.reproduction_result_ids is not None
+        else tuple(
+            sorted(
+                f"{item.candidate_id}:{item.test_name}"
+                for item in (reproduction_host.reproduction_results or ())
+            )
+        )
+    )
+    if (
+        generated_ids != expected_generated_ids
+        or result_ids != expected_result_ids
+        or reproduction_host.falsification_decisions != len(authority.falsification_decisions)
+    ):
+        raise ValueError("scheduler terminal reproduction differs from retained pass six")
 
 
 def _successful_scheduler_partial_host_output[OutputT: StrictModel](
@@ -3232,30 +3563,11 @@ def _validate_scheduler_terminal_report_authority(
         if observed != expected:
             raise ValueError(f"public {label} evidence differs from scheduler judgment authority")
 
-    pass_result = _scheduler_pass_result(
-        journal,
-        SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT,
+    _validate_scheduler_retained_judge_decisions(
+        judgment=judgment,
+        journal=journal,
+        require_complete_pass=True,
     )
-    if pass_result is None or pass_result.status is not SchedulerPassStatus.COMPLETE:
-        raise ValueError("scheduler judgment authority lacks its completed pass")
-    judge_tasks = tuple(task for task in pass_result.plan.tasks if task.role == "judge")
-    retained_judges = []
-    for task in judge_tasks:
-        if task.task_kind is not SchedulerTaskKind.MODEL_REQUEST:
-            raise ValueError("scheduler judge authority is not a model request")
-        batch = _reconstruct_successful_scheduler_output(
-            journal=journal,
-            pass_result=pass_result,
-            task_id=task.task_id,
-            output_type=JudgeDecisionBatch,
-        )
-        retained_judges.extend(batch.decisions)
-    judge_bindings = _scheduler_evidence_payload_bindings(
-        "judge",
-        ((item.group_id, item) for item in retained_judges),
-    )
-    if judge_bindings != judgment.judge_decisions:
-        raise ValueError("scheduler judgment differs from exact retained judge decisions")
 
 
 def _validate_scheduler_report_authority(
@@ -3273,9 +3585,17 @@ def _validate_scheduler_report_authority(
         _read_json_artifact(root, "reproduction-results.json")
     )
     candidate_hashes = _scheduler_candidate_payload_sha256s(candidate_artifact.findings)
-    accepted_authority = _scheduler_accepted_candidate_authority(journal)
-    blind_authority = accepted_authority[SchedulerPassKind.BLIND_SHARD_REVIEW]
-    cross_shard_authority = accepted_authority[SchedulerPassKind.CROSS_SHARD_INTEGRATION]
+    accepted_hash_authority, accepted_candidate_authority = _scheduler_accepted_candidate_authority(
+        journal
+    )
+    blind_candidates = accepted_candidate_authority[SchedulerPassKind.BLIND_SHARD_REVIEW]
+    blind_authority = _scheduler_candidate_payload_sha256s(
+        attach_formal_counterexamples(
+            [blind_candidates[candidate_id] for candidate_id in sorted(blind_candidates)],
+            list(report.formal_runs),
+        )
+    )
+    cross_shard_authority = accepted_hash_authority[SchedulerPassKind.CROSS_SHARD_INTEGRATION]
 
     reduction = _successful_scheduler_host_output(
         journal=journal,
@@ -3353,13 +3673,21 @@ def _validate_scheduler_report_authority(
     if terminal_authority is not None:
         _validate_scheduler_terminal_projection_authority(
             report=report,
+            reproduction_artifact=reproduction_artifact,
             candidate_hashes=candidate_hashes,
             authority=terminal_authority,
+        )
+        _validate_scheduler_prejudgment_evidence_authority(
+            authority=terminal_authority,
+            candidates=tuple(candidate_artifact.findings),
+            reproduction_artifact=reproduction_artifact,
+            journal=journal,
         )
         if retained_judgment is not None:
             _validate_scheduler_terminal_authority_against_judgment(
                 authority=terminal_authority,
                 judgment=retained_judgment,
+                journal=journal,
             )
 
     campaign_complete = journal.summary.status is SchedulerCampaignStatus.COMPLETE

@@ -651,6 +651,11 @@ def test_terminal_report_authority_rejects_each_mismatched_hash_inventory(
             passed=True,
             rationale="Synthetic report-quality authority binding.",
         ),
+        verification_decisions=(),
+        cross_examination_decisions=(),
+        falsification_decisions=(),
+        reproduction_results=(),
+        reproduction_resolutions=(),
     )
     payload = authority.model_dump(mode="json")
     payload[identifier_field] = [f"mismatched-{identifier_field}"]

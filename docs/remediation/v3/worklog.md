@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Client report and forensic evidence bundle
 CURRENT_TICKET: V3-REPORT-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-FIXTURE-001 (COMPLETE)
-NEXT_ACTION: Finish the exact formal-enrichment authority join in detached manifest verification, create the required operator-ledger parent in the affected synthetic integration fixture, rerun both failures and the full scheduler integration file, then continue V3-REPORT-001 gates.
-LAST_COMMAND: `.venv/bin/pytest -q tests/integration/test_scheduler_pipeline.py --tb=short`
-LAST_RESULT: FAIL: 30 passed, 2 failed in 88.77s. One synthetic test omits its required operator-ledger parent directory; one valid formal-counterexample enrichment exposes a detached accepted-candidate authority join that must replay deterministic enrichment before hash comparison.
+NEXT_ACTION: Finish partial pass-seven judge-output authority, strengthen reproduction payload/resolution custody, reject conflicting semantic duplicates, regenerate scheduler schemas, then run focused and full V3-REPORT-001 gates.
+LAST_COMMAND: `.venv/bin/python -m py_compile src/mmaudit/agents/verifier.py src/mmaudit/models/scheduler.py src/mmaudit/orchestration/manifest.py src/mmaudit/orchestration/pipeline.py src/mmaudit/orchestration/scheduler.py src/mmaudit/orchestration/scheduler_runtime.py && git diff --check`
+LAST_RESULT: PASS: the interrupted terminal-evidence authority implementation compiles and the working diff has no whitespace errors; this pause-only check is not ticket acceptance evidence.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -20,6 +20,47 @@ OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
 LAST_CHECKPOINT_COMMIT: 873e266824e2e1ad59acd5f513ec09f821f574c6
+
+## 2026-08-03T23:26:38Z — Graceful operator pause
+
+- **State:** `PAUSED_BY_OPERATOR`; `V3-REPORT-001` remains `IN_PROGRESS`. No ticket,
+  release, or maximum-assurance completion is claimed.
+- **Preserved implementation:** Current scheduler campaigns precommit and retain private authority
+  for public verification, cross-examination, falsification, reproduction, and reproduction-
+  resolution inventories. Successful and failed verifier outputs now share deterministic
+  normalization, and two incomplete-campaign coherent-reseal regressions pass according to the
+  bounded implementation run.
+- **Known unfinished acceptance blockers:** Join successful partial pass-seven judge decisions to
+  retained judge output; replace identity-only reproduction joins with exact payload/resolution
+  custody where produced; reject conflicting records sharing a semantic identity; regenerate the
+  stale scheduler schema and run the broader gates.
+- **Pause integrity:** Affected production modules compile and `git diff --check` passes. Strict
+  mypy on the affected production files and the focused scheduler model/journal and coherent-
+  reseal tests were reported green during the bounded implementation slice; full ticket gates have
+  not run.
+- **Safety/cost:** Every delegated agent is stopped or complete. No model/provider call, public
+  RPC, secret read, target-controlled command, or network operation occurred in this slice.
+- **Exact resume action:** Inspect the checkpoint diff, close the four blockers above without
+  weakening current authority, synchronize generated schemas, and rerun focused through full
+  `V3-REPORT-001` acceptance gates.
+
+## 2026-08-03T22:58:14Z — Resume
+
+- Resumed `V3-REPORT-001` from clean SSH-synchronized pause commit
+  `fa4e1e204e0b7e2bde15b491ecf8bd975f2d9a59`.
+- Work remains bounded to the recorded deterministic enrichment join, the isolated synthetic
+  ledger fixture correction, and the ticket's report/forensic acceptance gates. No provider call
+  is required for this slice.
+- **Recorded-failure closure:** Detached manifest verification now replays formal-counterexample
+  enrichment from exact retained blind candidates plus manifest-bound formal runs, while arbitrary
+  non-formal candidate mutation still fails closed. The synthetic cross-shard fixture creates its
+  private ledger parent rather than weakening ledger validation. Both formerly failing tests passed
+  together (`2 passed in 26.66s`), and the complete scheduler integration file passed `32` tests in
+  `107.30s`.
+- **Additional acceptance gap:** Read-only review found that incomplete pre-pass-seven campaigns
+  still need write-once authority for the public verification, cross-examination, falsification,
+  reproduction, and reproduction-resolution inventories that determine forensic disposition.
+  This exact authority extension and coherent-reseal regression are now the bounded next slice.
 
 ## 2026-08-03T22:55:05Z — Graceful operator pause
 

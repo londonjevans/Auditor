@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -222,6 +222,75 @@ def select_candidate_falsifier_models(config: AuditConfig) -> list[tuple[str, st
         if len(selected) == 2:
             break
     return selected
+
+
+def insufficient_verifications(
+    candidates: Sequence[CandidateFinding],
+) -> VerificationBatch:
+    """Build the deterministic fail-closed verifier result for an unavailable reviewer."""
+
+    return VerificationBatch(
+        decisions=[
+            VerificationDecision(
+                candidate_id=candidate.candidate_id,
+                verdict=VerificationVerdict.INSUFFICIENT_CONTEXT,
+                rationale="Verifier was unavailable",
+                source_to_sink="Not established",
+                reachability="Not established",
+                authentication="Unknown",
+                privilege_requirements="Unknown",
+                environmental_assumptions=[],
+                guards_and_controls=[],
+                false_positive_conditions=candidate.false_positive_conditions,
+                safe_verification_test=VerificationTest(
+                    description="Review the cited code locally in a disposable fixture"
+                ),
+                confidence=0,
+            )
+            for candidate in candidates
+        ]
+    )
+
+
+def normalize_verification_response(
+    candidates: Sequence[CandidateFinding],
+    raw_response: VerificationBatch,
+) -> VerificationBatch:
+    """Normalize one verifier response to the exact submitted candidate inventory."""
+
+    response = VerificationBatch.model_validate(raw_response.model_dump(mode="python"))
+    submitted_ids = {candidate.candidate_id for candidate in candidates}
+    response_ids = [decision.candidate_id for decision in response.decisions]
+    if set(response_ids) - submitted_ids or len(response_ids) != len(set(response_ids)):
+        raise OpenRouterSchemaError("verifier returned unknown or duplicate candidate identifiers")
+    by_id = {decision.candidate_id: decision for decision in response.decisions}
+    normalized: list[VerificationDecision] = []
+    for candidate in candidates:
+        decision = by_id.get(candidate.candidate_id)
+        if decision is None:
+            normalized.append(
+                VerificationDecision(
+                    candidate_id=candidate.candidate_id,
+                    verdict=VerificationVerdict.INSUFFICIENT_CONTEXT,
+                    rationale="Verifier omitted this submitted candidate",
+                    source_to_sink="Not established",
+                    reachability="Not established",
+                    authentication="Unknown",
+                    privilege_requirements="Unknown",
+                    environmental_assumptions=[],
+                    guards_and_controls=[],
+                    false_positive_conditions=candidate.false_positive_conditions,
+                    safe_verification_test=VerificationTest(
+                        description=(
+                            "Review the cited code locally without contacting external systems"
+                        )
+                    ),
+                    confidence=0,
+                )
+            )
+        else:
+            normalized.append(decision)
+    return VerificationBatch(decisions=normalized)
 
 
 def select_validation_falsifier_models(config: AuditConfig) -> list[tuple[str, str]]:
@@ -549,42 +618,11 @@ class VerifierAgent(AgentBase):
             raise OpenRouterSchemaError(
                 "prepared verification workflow differs from submitted verification evidence"
             )
-        response = VerificationBatch.model_validate(raw_response.model_dump(mode="python"))
-        submitted_ids = {candidate.candidate_id for candidate in candidates}
-        response_ids = [decision.candidate_id for decision in response.decisions]
-        if set(response_ids) - submitted_ids or len(response_ids) != len(set(response_ids)):
-            raise OpenRouterSchemaError(
-                "verifier returned unknown or duplicate candidate identifiers"
-            )
-        by_id = {decision.candidate_id: decision for decision in response.decisions}
-        normalized: list[VerificationDecision] = []
-        for candidate in candidates:
-            decision = by_id.get(candidate.candidate_id)
-            if decision is None:
-                normalized.append(
-                    VerificationDecision(
-                        candidate_id=candidate.candidate_id,
-                        verdict=VerificationVerdict.INSUFFICIENT_CONTEXT,
-                        rationale="Verifier omitted this submitted candidate",
-                        source_to_sink="Not established",
-                        reachability="Not established",
-                        authentication="Unknown",
-                        privilege_requirements="Unknown",
-                        environmental_assumptions=[],
-                        guards_and_controls=[],
-                        false_positive_conditions=candidate.false_positive_conditions,
-                        safe_verification_test=VerificationTest(
-                            description="Review the cited code locally without contacting external systems"
-                        ),
-                        confidence=0,
-                    )
-                )
-            else:
-                normalized.append(decision)
+        normalized = normalize_verification_response(candidates, raw_response)
         return ValidatedAgentResult(
-            value=VerificationBatch(decisions=normalized),
+            value=normalized,
             completion_usage=UsageRecord.model_validate(completion_usage.model_dump(mode="python")),
-            raw_response=response,
+            raw_response=VerificationBatch.model_validate(raw_response.model_dump(mode="python")),
         )
 
 

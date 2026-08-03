@@ -657,8 +657,9 @@ def test_current_terminal_authority_is_write_once_resume_exact_and_downgrade_res
         shard_inventory=_inventory(),
         require_terminal_report_authority=True,
     )
-    assert journal.manifest.schema_version == "1.1"
+    assert journal.manifest.schema_version == "1.2"
     assert journal.manifest.terminal_report_authority_required
+    assert journal.manifest.terminal_evidence_authority_required
     _seal_failed_preflight_pass(
         journal,
         _plan(journal, SchedulerPassKind.ORIENTATION),
@@ -670,6 +671,11 @@ def test_current_terminal_authority_is_write_once_resume_exact_and_downgrade_res
         rejected_findings=(),
         filtered_findings=(),
         report_quality_review=None,
+        verification_decisions=(),
+        cross_examination_decisions=(),
+        falsification_decisions=(),
+        reproduction_results=(),
+        reproduction_resolutions=(),
     )
     assert (
         journal.seal_terminal_report_authority(
@@ -679,6 +685,11 @@ def test_current_terminal_authority_is_write_once_resume_exact_and_downgrade_res
             rejected_findings=(),
             filtered_findings=(),
             report_quality_review=None,
+            verification_decisions=(),
+            cross_examination_decisions=(),
+            falsification_decisions=(),
+            reproduction_results=(),
+            reproduction_resolutions=(),
         )
         == authority
     )
@@ -695,6 +706,11 @@ def test_current_terminal_authority_is_write_once_resume_exact_and_downgrade_res
             rejected_findings=(),
             filtered_findings=(),
             report_quality_review=None,
+            verification_decisions=(),
+            cross_examination_decisions=(),
+            falsification_decisions=(),
+            reproduction_results=(),
+            reproduction_resolutions=(),
         )
     journal.close()
 
@@ -713,6 +729,11 @@ def test_current_terminal_authority_is_write_once_resume_exact_and_downgrade_res
             rejected_findings=(),
             filtered_findings=(),
             report_quality_review=None,
+            verification_decisions=(),
+            cross_examination_decisions=(),
+            falsification_decisions=(),
+            reproduction_results=(),
+            reproduction_resolutions=(),
         )
         == authority
     )

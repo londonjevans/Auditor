@@ -59,16 +59,21 @@ from mmaudit.models.scheduler import (
     scheduler_canonical_sha256,
 )
 from mmaudit.models.schemas import (
+    CandidateCrossExaminationDecision,
     CandidateFinding,
+    CandidateReproductionResolution,
     ContextRequestEvidence,
+    FalsificationDecision,
     Finding,
     ModelSurfaceReviewArtifact,
     ModelSurfaceReviewRequest,
     ReportQualityReview,
+    ReproductionResult,
     Severity,
     SpecialistAcceptedOutcome,
     StrictModel,
     UsageRecord,
+    VerificationDecision,
 )
 from mmaudit.models.usage import (
     _issue_trusted_usage_recovery_scope,
@@ -783,6 +788,11 @@ class SchedulerJournal:
         rejected_findings: Iterable[Finding],
         filtered_findings: Iterable[Finding],
         report_quality_review: ReportQualityReview | None,
+        verification_decisions: Iterable[VerificationDecision],
+        cross_examination_decisions: Iterable[CandidateCrossExaminationDecision],
+        falsification_decisions: Iterable[FalsificationDecision],
+        reproduction_results: Iterable[ReproductionResult],
+        reproduction_resolutions: Iterable[CandidateReproductionResolution],
     ) -> SchedulerTerminalReportAuthority:
         """Persist the exact terminal report projection once, or verify an exact resume.
 
@@ -802,6 +812,11 @@ class SchedulerJournal:
             rejected_findings=rejected_findings,
             filtered_findings=filtered_findings,
             report_quality_review=report_quality_review,
+            verification_decisions=verification_decisions,
+            cross_examination_decisions=cross_examination_decisions,
+            falsification_decisions=falsification_decisions,
+            reproduction_results=reproduction_results,
+            reproduction_resolutions=reproduction_resolutions,
         )
         if self._terminal_report_authority is not None:
             if authority != self._terminal_report_authority:
@@ -813,6 +828,8 @@ class SchedulerJournal:
             raise ValueError("scheduler verification journal is read-only")
         if not self.manifest.terminal_report_authority_required:
             raise ValueError("legacy scheduler campaign cannot seal current report authority")
+        if not self.manifest.terminal_evidence_authority_required:
+            raise ValueError("legacy scheduler campaign cannot seal current evidence authority")
 
         # Build the complete projected evidence before the fresh-file commit.  This
         # checks pass-seven judgment/report-quality custody and requires every planned
@@ -1919,6 +1936,10 @@ def resume_scheduler_journal(
             or manifest.terminal_report_authority_required
             is not expected_terminal_report_authority_required
             or (
+                expected_terminal_report_authority_required
+                and not manifest.terminal_evidence_authority_required
+            )
+            or (
                 validated_expected_bindings.cost_ledger_baseline_sha256
                 not in {
                     ABSENT_COST_LEDGER_BASELINE_SHA256,
@@ -2069,6 +2090,7 @@ def open_scheduler_journal_for_verification(
     expected_cost_ledger_baseline: SchedulerCostLedgerBaseline | None = None,
     expected_privacy_evidence_custody: SchedulerPrivacyEvidenceCustody | None = None,
     expected_terminal_report_authority_required: bool = False,
+    expected_terminal_evidence_authority_required: bool | None = None,
 ) -> SchedulerJournal:
     """Open and validate exact journal bytes without performing crash recovery."""
 
@@ -2080,12 +2102,25 @@ def open_scheduler_journal_for_verification(
             if expected_analysis_input_inventory is not None
             else None
         )
-        expected_manifest = SchedulerCampaignManifest.build(
-            bindings=expected_bindings,
-            shard_inventory=expected_shard_inventory,
-            cost_ledger_baseline=expected_cost_ledger_baseline,
-            privacy_evidence_custody=expected_privacy_evidence_custody,
-            require_terminal_report_authority=(expected_terminal_report_authority_required),
+        validated_expected_bindings = SchedulerBindings.model_validate(
+            expected_bindings.model_dump(mode="python")
+        )
+        validated_expected_inventory = SchedulerShardInventory.model_validate(
+            expected_shard_inventory.model_dump(mode="python")
+        )
+        validated_expected_baseline = (
+            SchedulerCostLedgerBaseline.model_validate(
+                expected_cost_ledger_baseline.model_dump(mode="python")
+            )
+            if expected_cost_ledger_baseline is not None
+            else None
+        )
+        validated_expected_privacy = (
+            SchedulerPrivacyEvidenceCustody.model_validate(
+                expected_privacy_evidence_custody.model_dump(mode="python")
+            )
+            if expected_privacy_evidence_custody is not None
+            else None
         )
     except ValueError:
         raise ValueError(
@@ -2124,7 +2159,17 @@ def open_scheduler_journal_for_verification(
             SchedulerAnalysisInputInventory,
         )
         if (
-            manifest != expected_manifest
+            manifest.bindings != validated_expected_bindings
+            or manifest.shard_inventory != validated_expected_inventory
+            or manifest.cost_ledger_baseline != validated_expected_baseline
+            or manifest.privacy_evidence_custody != validated_expected_privacy
+            or manifest.terminal_report_authority_required
+            is not expected_terminal_report_authority_required
+            or (
+                expected_terminal_evidence_authority_required is not None
+                and manifest.terminal_evidence_authority_required
+                is not expected_terminal_evidence_authority_required
+            )
             or (
                 validated_expected_analysis_inputs is not None
                 and analysis_input_inventory != validated_expected_analysis_inputs

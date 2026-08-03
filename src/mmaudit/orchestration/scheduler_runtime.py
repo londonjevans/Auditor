@@ -64,8 +64,11 @@ from mmaudit.models.scheduler import (
 )
 from mmaudit.models.schemas import (
     AuditScopeAssessment,
+    CandidateCrossExaminationDecision,
     CandidateFinding,
+    CandidateReproductionResolution,
     EconomicSimulationPlan,
+    FalsificationDecision,
     Finding,
     FormalToolRun,
     FoundryInvariantHarnessSpec,
@@ -78,6 +81,7 @@ from mmaudit.models.schemas import (
     ReportQualityReview,
     RepositoryMap,
     RepositorySuiteDifferentialRun,
+    ReproductionResult,
     ScannerRun,
     Severity,
     SolidityCompilationResult,
@@ -87,6 +91,7 @@ from mmaudit.models.schemas import (
     SoliditySymbolIndex,
     SpecialistAcceptedOutcome,
     UsageRecord,
+    VerificationDecision,
 )
 from mmaudit.models.sharding import SolidityShardInventory
 from mmaudit.models.usage import is_accountable_usage_record, is_creditable_usage_record
@@ -1744,6 +1749,11 @@ class PipelineScheduler:
         rejected_findings: Iterable[Finding],
         filtered_findings: Iterable[Finding],
         report_quality_review: ReportQualityReview | None,
+        verification_decisions: Iterable[VerificationDecision],
+        cross_examination_decisions: Iterable[CandidateCrossExaminationDecision],
+        falsification_decisions: Iterable[FalsificationDecision],
+        reproduction_results: Iterable[ReproductionResult],
+        reproduction_resolutions: Iterable[CandidateReproductionResolution],
     ) -> SchedulerTerminalReportAuthority:
         """Seal or exactly revalidate the terminal report projection before issuance."""
 
@@ -1756,6 +1766,11 @@ class PipelineScheduler:
             rejected_findings=rejected_findings,
             filtered_findings=filtered_findings,
             report_quality_review=report_quality_review,
+            verification_decisions=verification_decisions,
+            cross_examination_decisions=cross_examination_decisions,
+            falsification_decisions=falsification_decisions,
+            reproduction_results=reproduction_results,
+            reproduction_resolutions=reproduction_resolutions,
         )
 
     def artifact(self) -> SchedulerArtifact:

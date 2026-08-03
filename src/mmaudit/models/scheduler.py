@@ -26,13 +26,16 @@ from pydantic_core import SchemaValidator
 from mmaudit.constants import SEVERITY_ORDER, SPECIALIST_INVESTIGATOR_ROLES
 from mmaudit.models.openrouter import strict_json_schema_sha256
 from mmaudit.models.schemas import (
+    CandidateCrossExaminationDecision,
     CandidateCrossExaminationResponse,
     CandidateFinding,
     CandidateOriginKind,
+    CandidateReproductionResolution,
     CandidateReviewBatch,
     ContextRequestEvidence,
     ExecutionEvidenceKind,
     FalsificationBatch,
+    FalsificationDecision,
     Finding,
     FindingOriginKind,
     FindingStatus,
@@ -53,6 +56,7 @@ from mmaudit.models.schemas import (
     ThreatModel,
     UsageRecord,
     VerificationBatch,
+    VerificationDecision,
 )
 from mmaudit.models.usage import is_structurally_accountable_usage_record
 
@@ -1226,7 +1230,7 @@ class SchedulerCampaignManifest(StrictModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0", "1.1"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
     algorithm_version: Literal["mmaudit.seven-pass-scheduler.v1"] = (
         "mmaudit.seven-pass-scheduler.v1"
     )
@@ -1236,6 +1240,10 @@ class SchedulerCampaignManifest(StrictModel):
     cost_ledger_baseline: SchedulerCostLedgerBaseline | None = None
     privacy_evidence_custody: SchedulerPrivacyEvidenceCustody | None = None
     terminal_report_authority_required: bool = Field(
+        default=False,
+        exclude_if=lambda value: not value,
+    )
+    terminal_evidence_authority_required: bool = Field(
         default=False,
         exclude_if=lambda value: not value,
     )
@@ -1273,7 +1281,7 @@ class SchedulerCampaignManifest(StrictModel):
             else None
         )
         values: dict[str, Any] = {
-            "schema_version": "1.1" if require_terminal_report_authority else "1.0",
+            "schema_version": "1.2" if require_terminal_report_authority else "1.0",
             "algorithm_version": SCHEDULER_ALGORITHM_VERSION,
             "evidence_authority": "comparison_required",
             "bindings": validated_bindings,
@@ -1282,6 +1290,11 @@ class SchedulerCampaignManifest(StrictModel):
             "privacy_evidence_custody": validated_privacy,
             **(
                 {"terminal_report_authority_required": True}
+                if require_terminal_report_authority
+                else {}
+            ),
+            **(
+                {"terminal_evidence_authority_required": True}
                 if require_terminal_report_authority
                 else {}
             ),
@@ -1314,7 +1327,15 @@ class SchedulerCampaignManifest(StrictModel):
 
     @model_validator(mode="after")
     def campaign_identity_is_exact(self) -> Self:
-        if (self.schema_version == "1.1") != self.terminal_report_authority_required:
+        expected_authority_modes = {
+            "1.0": (False, False),
+            "1.1": (True, False),
+            "1.2": (True, True),
+        }[self.schema_version]
+        if (
+            self.terminal_report_authority_required,
+            self.terminal_evidence_authority_required,
+        ) != expected_authority_modes:
             raise ValueError("scheduler campaign terminal-report authority mode is inconsistent")
         if self.mandatory_passes != SCHEDULER_PASS_ORDER:
             raise ValueError("scheduler campaign must retain all seven ordered mandatory passes")
@@ -2697,6 +2718,36 @@ class SchedulerEvidencePayloadBinding(StrictModel):
     record_id: str = Field(pattern=_SHA256_PATTERN)
     subject_id: str = Field(min_length=1, max_length=500)
     payload_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        kind: Literal[
+            "judge",
+            "verification",
+            "cross_examination",
+            "falsification",
+            "reproduction",
+            "reproduction_resolution",
+        ],
+        subject_id: str,
+        payload: BaseModel,
+    ) -> SchedulerEvidencePayloadBinding:
+        """Bind one exact typed payload using the shared scheduler domain."""
+
+        payload_sha256 = scheduler_canonical_sha256(payload.model_dump(mode="json"))
+        return cls(
+            record_id=scheduler_canonical_sha256(
+                {
+                    "kind": kind,
+                    "subject_id": subject_id,
+                    "payload_sha256": payload_sha256,
+                }
+            ),
+            subject_id=subject_id,
+            payload_sha256=payload_sha256,
+        )
 
 
 class SchedulerTerminalFindingBinding(StrictModel):
@@ -4497,11 +4548,12 @@ class SchedulerTerminalReportAuthority(StrictModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.1"
     evidence_authority: Literal["comparison_required"] = "comparison_required"
-    algorithm: Literal["mmaudit.scheduler-terminal-report-authority.v1"] = (
-        "mmaudit.scheduler-terminal-report-authority.v1"
-    )
+    algorithm: Literal[
+        "mmaudit.scheduler-terminal-report-authority.v1",
+        "mmaudit.scheduler-terminal-report-authority.v2",
+    ] = "mmaudit.scheduler-terminal-report-authority.v2"
     campaign_id: str = Field(pattern=r"^scheduler-campaign-[0-9a-f]{64}$")
     manifest_sha256: str = Field(pattern=_SHA256_PATTERN)
     summary_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -4516,6 +4568,31 @@ class SchedulerTerminalReportAuthority(StrictModel):
     rejected_finding_payload_sha256s: dict[str, str] = Field(max_length=100_000)
     filtered_finding_payload_sha256s: dict[str, str] = Field(max_length=100_000)
     report_quality_payload_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
+    verification_decisions: tuple[SchedulerEvidencePayloadBinding, ...] | None = Field(
+        default=None,
+        max_length=100_000,
+        exclude_if=lambda value: value is None,
+    )
+    cross_examination_decisions: tuple[SchedulerEvidencePayloadBinding, ...] | None = Field(
+        default=None,
+        max_length=100_000,
+        exclude_if=lambda value: value is None,
+    )
+    falsification_decisions: tuple[SchedulerEvidencePayloadBinding, ...] | None = Field(
+        default=None,
+        max_length=100_000,
+        exclude_if=lambda value: value is None,
+    )
+    reproduction_results: tuple[SchedulerEvidencePayloadBinding, ...] | None = Field(
+        default=None,
+        max_length=100_000,
+        exclude_if=lambda value: value is None,
+    )
+    reproduction_resolutions: tuple[SchedulerEvidencePayloadBinding, ...] | None = Field(
+        default=None,
+        max_length=100_000,
+        exclude_if=lambda value: value is None,
+    )
     authority_sha256: str = Field(pattern=_SHA256_PATTERN)
 
     @classmethod
@@ -4530,6 +4607,11 @@ class SchedulerTerminalReportAuthority(StrictModel):
         rejected_findings: Iterable[Finding],
         filtered_findings: Iterable[Finding],
         report_quality_review: ReportQualityReview | None,
+        verification_decisions: Iterable[VerificationDecision],
+        cross_examination_decisions: Iterable[CandidateCrossExaminationDecision],
+        falsification_decisions: Iterable[FalsificationDecision],
+        reproduction_results: Iterable[ReproductionResult],
+        reproduction_resolutions: Iterable[CandidateReproductionResolution],
     ) -> SchedulerTerminalReportAuthority:
         validated_manifest = SchedulerCampaignManifest.model_validate(
             manifest.model_dump(mode="python")
@@ -4566,10 +4648,50 @@ class SchedulerTerminalReportAuthority(StrictModel):
             if report_quality_review is not None
             else None
         )
+        canonical_verifications = tuple(
+            VerificationDecision.model_validate(item) for item in verification_decisions
+        )
+        canonical_cross_examinations = tuple(
+            CandidateCrossExaminationDecision.model_validate(item)
+            for item in cross_examination_decisions
+        )
+        canonical_falsifications = tuple(
+            FalsificationDecision.model_validate(item) for item in falsification_decisions
+        )
+        canonical_reproductions = tuple(
+            ReproductionResult.model_validate(item) for item in reproduction_results
+        )
+        canonical_resolutions = tuple(
+            CandidateReproductionResolution.model_validate(item)
+            for item in reproduction_resolutions
+        )
+        cls._require_unique_semantic_keys(
+            ((item.candidate_id,) for item in canonical_verifications),
+            "verification",
+        )
+        cls._require_unique_semantic_keys(
+            (
+                (item.candidate_id, str(item.reviewer_index))
+                for item in canonical_cross_examinations
+            ),
+            "cross-examination",
+        )
+        cls._require_unique_semantic_keys(
+            ((item.candidate_id, item.test_name) for item in canonical_falsifications),
+            "falsification",
+        )
+        cls._require_unique_semantic_keys(
+            ((item.candidate_id, item.test_name) for item in canonical_reproductions),
+            "reproduction",
+        )
+        cls._require_unique_semantic_keys(
+            ((item.candidate_id,) for item in canonical_resolutions),
+            "reproduction resolution",
+        )
         values: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": "1.1",
             "evidence_authority": "comparison_required",
-            "algorithm": "mmaudit.scheduler-terminal-report-authority.v1",
+            "algorithm": "mmaudit.scheduler-terminal-report-authority.v2",
             "campaign_id": validated_manifest.campaign_id,
             "manifest_sha256": validated_manifest.manifest_sha256,
             "summary_sha256": validated_summary.summary_sha256,
@@ -4591,6 +4713,28 @@ class SchedulerTerminalReportAuthority(StrictModel):
                 if report_quality is not None
                 else None
             ),
+            "verification_decisions": cls._evidence_payload_bindings(
+                "verification",
+                ((item.candidate_id, item) for item in canonical_verifications),
+            ),
+            "cross_examination_decisions": cls._evidence_payload_bindings(
+                "cross_examination",
+                (
+                    (item.candidate_id, item) for item in canonical_cross_examinations
+                ),
+            ),
+            "falsification_decisions": cls._evidence_payload_bindings(
+                "falsification",
+                ((item.candidate_id, item) for item in canonical_falsifications),
+            ),
+            "reproduction_results": cls._evidence_payload_bindings(
+                "reproduction",
+                ((item.candidate_id, item) for item in canonical_reproductions),
+            ),
+            "reproduction_resolutions": cls._evidence_payload_bindings(
+                "reproduction_resolution",
+                ((item.candidate_id, item) for item in canonical_resolutions),
+            ),
         }
         return cls(**values, authority_sha256=scheduler_canonical_sha256(values))
 
@@ -4608,6 +4752,44 @@ class SchedulerTerminalReportAuthority(StrictModel):
         return {
             item.id: scheduler_canonical_sha256(item.model_dump(mode="json")) for item in findings
         }
+
+    @staticmethod
+    def _require_unique_semantic_keys(
+        keys: Iterable[tuple[str, ...]],
+        label: str,
+    ) -> None:
+        materialized = tuple(keys)
+        if len(materialized) != len(set(materialized)):
+            raise ValueError(f"scheduler terminal {label} evidence repeats a semantic identity")
+
+    @staticmethod
+    def _evidence_payload_bindings(
+        kind: Literal[
+            "verification",
+            "cross_examination",
+            "falsification",
+            "reproduction",
+            "reproduction_resolution",
+        ],
+        records: Iterable[tuple[str, BaseModel]],
+    ) -> tuple[SchedulerEvidencePayloadBinding, ...]:
+        bindings = tuple(
+            sorted(
+                (
+                    SchedulerEvidencePayloadBinding.build(
+                        kind=kind,
+                        subject_id=subject_id,
+                        payload=payload,
+                    )
+                    for subject_id, payload in records
+                ),
+                key=lambda item: (item.subject_id, item.record_id),
+            )
+        )
+        identities = tuple((item.subject_id, item.record_id) for item in bindings)
+        if len(identities) != len(set(identities)):
+            raise ValueError(f"scheduler terminal {kind} evidence contains an exact duplicate")
+        return bindings
 
     @staticmethod
     def _require_valid_finding_partitions(
@@ -4644,7 +4826,7 @@ class SchedulerTerminalReportAuthority(StrictModel):
     def require_exact_judgment(self, judgment: SchedulerEvidenceCapJudgmentOutput) -> None:
         """Require exact pass-seven terminal/candidate authority when that pass succeeded."""
 
-        if (
+        terminal_projection_differs = (
             self.severity_threshold != judgment.severity_threshold
             or self.candidate_ids != judgment.candidate_ids
             or self.candidate_payload_sha256s != judgment.candidate_payload_sha256s
@@ -4654,11 +4836,43 @@ class SchedulerTerminalReportAuthority(StrictModel):
             or self.final_finding_payload_sha256s != judgment.final_finding_payload_sha256s
             or self.rejected_finding_payload_sha256s != judgment.rejected_finding_payload_sha256s
             or self.filtered_finding_payload_sha256s != judgment.filtered_finding_payload_sha256s
-        ):
+        )
+        evidence_projection_differs = self.schema_version == "1.1" and (
+            self.verification_decisions != judgment.verification_decisions
+            or self.cross_examination_decisions != judgment.cross_examination_decisions
+            or self.falsification_decisions != judgment.falsification_decisions
+            or self.reproduction_results != judgment.reproduction_results
+            or self.reproduction_resolutions != judgment.reproduction_resolutions
+        )
+        if terminal_projection_differs or evidence_projection_differs:
             raise ValueError("scheduler terminal report authority differs from pass-seven judgment")
 
     @model_validator(mode="after")
     def inventories_bind_the_exact_authority_hash(self) -> Self:
+        expected_algorithm = {
+            "1.0": "mmaudit.scheduler-terminal-report-authority.v1",
+            "1.1": "mmaudit.scheduler-terminal-report-authority.v2",
+        }[self.schema_version]
+        evidence_inventories = (
+            ("verification", self.verification_decisions),
+            ("cross_examination", self.cross_examination_decisions),
+            ("falsification", self.falsification_decisions),
+            ("reproduction", self.reproduction_results),
+            ("reproduction_resolution", self.reproduction_resolutions),
+        )
+        has_complete_evidence_authority = all(
+            inventory is not None for _kind, inventory in evidence_inventories
+        )
+        if (
+            self.algorithm != expected_algorithm
+            or (self.schema_version == "1.1") != has_complete_evidence_authority
+        ):
+            raise ValueError("scheduler terminal evidence-authority schema is inconsistent")
+        if self.schema_version == "1.0" and any(
+            inventory is not None for _kind, inventory in evidence_inventories
+        ):
+            raise ValueError("legacy scheduler terminal authority cannot claim decision evidence")
+
         inventories = (
             (
                 self.candidate_ids,
@@ -4698,6 +4912,31 @@ class SchedulerTerminalReportAuthority(StrictModel):
         )
         if len(finding_ids) != len(set(finding_ids)):
             raise ValueError("scheduler terminal finding partitions overlap")
+        candidate_subjects = set(self.candidate_ids)
+        for kind, inventory in evidence_inventories:
+            if inventory is None:
+                continue
+            identities = tuple((item.subject_id, item.record_id) for item in inventory)
+            if identities != tuple(sorted(set(identities))) or any(
+                item.record_id
+                != scheduler_canonical_sha256(
+                    {
+                        "kind": kind,
+                        "subject_id": item.subject_id,
+                        "payload_sha256": item.payload_sha256,
+                    }
+                )
+                for item in inventory
+            ):
+                raise ValueError(f"scheduler terminal {kind} evidence inventory is not canonical")
+            if not {item.subject_id for item in inventory} <= candidate_subjects:
+                raise ValueError(
+                    f"scheduler terminal {kind} evidence references unknown candidates"
+                )
+        if self.reproduction_resolutions is not None and len(
+            {item.subject_id for item in self.reproduction_resolutions}
+        ) != len(self.reproduction_resolutions):
+            raise ValueError("scheduler terminal reproduction resolutions repeat a candidate")
         if self.authority_sha256 != _model_sha256(self, exclude={"authority_sha256"}):
             raise ValueError("scheduler terminal report authority hash is inconsistent")
         return self
@@ -5658,6 +5897,12 @@ def _validate_scheduler_journal_evidence(
         ):
             raise ValueError(
                 "scheduler terminal report authority differs from its campaign summary"
+            )
+        if manifest.terminal_evidence_authority_required != (
+            terminal_report_authority.schema_version == "1.1"
+        ):
+            raise ValueError(
+                "scheduler terminal report authority differs from its evidence-authority mode"
             )
     observed_passes = tuple(plan.pass_kind for plan in plans)
     if observed_passes != SCHEDULER_PASS_ORDER[: len(plans)]:
