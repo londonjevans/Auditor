@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from enum import StrEnum
@@ -20,17 +21,23 @@ from mmaudit.models.schemas import (
     CandidateFinding,
     CandidateReproductionResolution,
     FalsificationDecision,
+    FalsificationVerdict,
     Finding,
     FindingStatus,
     ModelReviewCoverage,
     QualityGateResult,
     ReproductionResolutionKind,
     ReproductionResult,
+    ReproductionState,
     SolidityCoverage,
     StrictModel,
     UsageRecord,
     VerificationDecision,
+    VerificationVerdict,
 )
+from mmaudit.repository.chunking import line_range_hash
+
+_MAX_SOURCE_EXCERPT_EVIDENCE_BYTES = 1_000_000
 
 MANIFEST_BOUND_REPORT_DELIVERABLES = frozenset(
     {
@@ -68,7 +75,7 @@ class SourceExcerptEvidence(StrictModel):
     cited_content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     excerpt_start_line: int = Field(ge=1)
     excerpt_end_line: int = Field(ge=1)
-    content: str = Field(max_length=16_384)
+    content: str = Field(max_length=_MAX_SOURCE_EXCERPT_EVIDENCE_BYTES)
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     omitted_before: bool
     omitted_after: bool
@@ -86,7 +93,25 @@ class SourceExcerptEvidence(StrictModel):
             raise ValueError("source excerpt content hash is inconsistent")
         if len(self.content.splitlines()) != self.excerpt_end_line - self.excerpt_start_line + 1:
             raise ValueError("source excerpt line count is inconsistent")
+        relative_start = self.cited_start_line - self.excerpt_start_line + 1
+        relative_end = self.cited_end_line - self.excerpt_start_line + 1
+        if line_range_hash(self.content, relative_start, relative_end) != self.cited_content_sha256:
+            raise ValueError("source excerpt cited range hash is inconsistent")
+        if self.symbol is not None and not source_symbol_is_present(
+            self.symbol,
+            "".join(self.content.splitlines(keepends=True)[relative_start - 1 : relative_end]),
+        ):
+            raise ValueError("source excerpt symbol is absent from the cited range")
         return self
+
+
+def source_symbol_is_present(symbol: str, content: str) -> bool:
+    """Match a source symbol as an identifier, never as a substring of another symbol."""
+
+    base = symbol.split("(", maxsplit=1)[0].rsplit(".", maxsplit=1)[-1]
+    if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", base) is None:
+        return False
+    return re.search(rf"(?<![A-Za-z0-9_$]){re.escape(base)}(?![A-Za-z0-9_$])", content) is not None
 
 
 class ForensicFindingRecord(StrictModel):
@@ -120,24 +145,80 @@ class ForensicFindingRecord(StrictModel):
         }
         if not linked_ids <= contributor_ids:
             raise ValueError("forensic evidence references a non-contributing candidate")
+        candidate_ids = [candidate.candidate_id for candidate in self.candidate_findings]
+        if len(candidate_ids) != len(set(candidate_ids)):
+            raise ValueError("forensic candidate evidence must be unique")
+        if candidate_ids and set(candidate_ids) != contributor_ids:
+            raise ValueError("forensic candidate evidence does not close the contributor set")
+        unique_keys: tuple[tuple[str, list[object]], ...] = (
+            (
+                "verification decisions",
+                [decision.candidate_id for decision in self.verification_decisions],
+            ),
+            (
+                "cross-examination decisions",
+                [
+                    (
+                        decision.candidate_id,
+                        decision.request_id,
+                        decision.reviewer_index,
+                        decision.root_lineage,
+                    )
+                    for decision in self.cross_examination_decisions
+                ],
+            ),
+            (
+                "falsification decisions",
+                [
+                    (decision.candidate_id, decision.test_name)
+                    for decision in self.falsification_decisions
+                ],
+            ),
+            (
+                "reproductions",
+                [(result.candidate_id, result.test_name) for result in self.reproductions],
+            ),
+            (
+                "reproduction resolutions",
+                [resolution.candidate_id for resolution in self.reproduction_resolutions],
+            ),
+        )
+        for label, keys in unique_keys:
+            if len(keys) != len(set(keys)):
+                raise ValueError(f"forensic {label} must be unique")
         if self.finding.status is FindingStatus.REJECTED:
             if self.disposition is not ForensicDisposition.REJECTED:
                 raise ValueError("rejected finding requires rejected forensic disposition")
-            complete_collections = (
-                self.finding.preconditions,
-                self.finding.locations,
-                self.finding.attack_path,
-                self.finding.evidence,
-                self.finding.false_positive_conditions,
+            retained_rejection_evidence = bool(
+                self.candidate_findings
+                or self.finding.evidence
+                or self.finding.location_validation.errors
+                or self.verification_decisions
+                or self.cross_examination_decisions
+                or self.falsification_decisions
+                or self.reproductions
+                or self.reproduction_resolutions
+                or self.finding.execution_provenance
             )
-            if (
-                any(not value for value in complete_collections)
-                or not self.finding.impact
-                or not self.finding.recommendation
-                or self.finding.verification_test is None
-                or not self.finding.disagreement
-            ):
-                raise ValueError("forensic rejected finding requires complete retained evidence")
+            retained_rejection_rationale = bool(
+                self.finding.disagreement
+                or self.finding.location_validation.errors
+                or any(decision.rationale for decision in self.verification_decisions)
+                or any(decision.rationale for decision in self.cross_examination_decisions)
+                or any(decision.rationale for decision in self.falsification_decisions)
+                or any(resolution.detail for resolution in self.reproduction_resolutions)
+                or any(result.limitations for result in self.reproductions)
+            )
+            if not retained_rejection_rationale or not retained_rejection_evidence:
+                raise ValueError(
+                    "forensic rejected finding requires complete retained evidence "
+                    f"(contributors={len(contributor_ids)}, "
+                    f"candidates={len(self.candidate_findings)}, "
+                    f"evidence={len(self.finding.evidence)}, "
+                    f"location_errors={len(self.finding.location_validation.errors)}, "
+                    f"decisions={len(self.verification_decisions) + len(self.cross_examination_decisions) + len(self.falsification_decisions)}, "
+                    "including an evidence-backed rejection rationale"
+                )
         elif self.disposition is ForensicDisposition.REJECTED:
             raise ValueError("active finding cannot receive rejected forensic disposition")
         return self
@@ -158,15 +239,30 @@ class FindingsArtifact(StrictModel):
 
     @model_validator(mode="after")
     def inventory_is_exact_and_unique(self) -> FindingsArtifact:
-        expected = [*self.findings, *self.rejected_findings]
-        if [record.finding for record in self.records] != expected:
+        expected_findings = [*self.findings, *self.rejected_findings]
+        if [record.finding for record in self.records] != expected_findings:
             raise ValueError("forensic records differ from the final finding inventories")
-        identifiers = [finding.id for finding in expected]
+        identifiers = [finding.id for finding in expected_findings]
         if len(identifiers) != len(set(identifiers)):
             raise ValueError("forensic finding IDs must be unique")
         candidate_ids = [candidate.candidate_id for candidate in self.candidate_findings]
         if len(candidate_ids) != len(set(candidate_ids)):
             raise ValueError("forensic candidate IDs must be unique")
+        candidate_id_set = set(candidate_ids)
+        referenced_candidate_ids = {
+            candidate_id
+            for record in self.records
+            for candidate_id in record.finding.contributing_candidate_ids
+        }
+        if not candidate_id_set <= referenced_candidate_ids:
+            raise ValueError("forensic candidate inventory contains an orphan record")
+        for record in self.records:
+            expected_candidate_ids = (
+                set(record.finding.contributing_candidate_ids) & candidate_id_set
+            )
+            observed = {candidate.candidate_id for candidate in record.candidate_findings}
+            if observed != expected_candidate_ids:
+                raise ValueError("forensic record omits candidate inventory evidence")
         return self
 
 
@@ -235,36 +331,85 @@ def effective_run_status(report: AuditReport) -> AuditRunStatus:
         AuditQualityStatus.TARGET_UNSUPPORTED,
     }:
         return AuditRunStatus.FAILED
-    if not report.completed or report.quality_status is AuditQualityStatus.INCOMPLETE:
-        return AuditRunStatus.INCOMPLETE
-    if report.quality_status is AuditQualityStatus.COMPLETED_WITH_LIMITATIONS:
-        return AuditRunStatus.DEGRADED
-    return AuditRunStatus.COMPLETE
+    # Legacy reports cannot carry the typed minimum-analysis-floor evidence that
+    # current reports require. They remain readable, but a new client deliverable
+    # must never project their historical ``completed`` flag as evidence of COMPLETE.
+    return AuditRunStatus.INCOMPLETE
 
 
 def _disposition(
     finding: Finding,
+    verifications: Sequence[VerificationDecision],
     cross_examinations: Sequence[CandidateCrossExaminationDecision],
+    falsifications: Sequence[FalsificationDecision],
+    reproductions: Sequence[ReproductionResult],
     resolutions: Sequence[CandidateReproductionResolution],
 ) -> ForensicDisposition:
     if finding.status is FindingStatus.REJECTED:
         return ForensicDisposition.REJECTED
     contributor_ids = set(finding.contributing_candidate_ids)
-    if any(
-        decision.candidate_id in contributor_ids
-        and decision.verdict is CandidateCrossExaminationVerdict.DISPUTED
-        for decision in cross_examinations
+    if (
+        any(
+            decision.candidate_id in contributor_ids
+            and decision.verdict is CandidateCrossExaminationVerdict.DISPUTED
+            for decision in cross_examinations
+        )
+        or any(
+            decision.candidate_id in contributor_ids
+            and decision.verdict is VerificationVerdict.REJECTED
+            for decision in verifications
+        )
+        or any(
+            decision.candidate_id in contributor_ids
+            and decision.verdict is FalsificationVerdict.FALSIFIED
+            for decision in falsifications
+        )
+        or any(
+            result.candidate_id in contributor_ids and result.state is ReproductionState.DISPROVEN
+            for result in reproductions
+        )
     ):
         return ForensicDisposition.DISPUTED
-    if any(
-        resolution.candidate_id in contributor_ids
-        and resolution.kind is ReproductionResolutionKind.INCONCLUSIVE
-        for resolution in resolutions
-    ) or finding.status in {
-        FindingStatus.NEEDS_REVIEW,
-        FindingStatus.INSUFFICIENT_CONTEXT,
-        FindingStatus.UNSUPPORTED,
-    }:
+    if (
+        any(
+            resolution.candidate_id in contributor_ids
+            and resolution.kind is ReproductionResolutionKind.INCONCLUSIVE
+            for resolution in resolutions
+        )
+        or any(
+            decision.candidate_id in contributor_ids
+            and decision.verdict is VerificationVerdict.INSUFFICIENT_CONTEXT
+            for decision in verifications
+        )
+        or any(
+            decision.candidate_id in contributor_ids
+            and decision.verdict is CandidateCrossExaminationVerdict.INCONCLUSIVE
+            for decision in cross_examinations
+        )
+        or any(
+            decision.candidate_id in contributor_ids
+            and decision.verdict in {FalsificationVerdict.INCONCLUSIVE, FalsificationVerdict.UNSAFE}
+            for decision in falsifications
+        )
+        or any(
+            result.candidate_id in contributor_ids
+            and result.state
+            in {
+                ReproductionState.GENERATION_FAILED,
+                ReproductionState.COMPILE_FAILED,
+                ReproductionState.ENVIRONMENT_BLOCKED,
+                ReproductionState.NOT_REPRODUCED,
+                ReproductionState.PARTIALLY_REPRODUCED,
+            }
+            for result in reproductions
+        )
+        or finding.status
+        in {
+            FindingStatus.NEEDS_REVIEW,
+            FindingStatus.INSUFFICIENT_CONTEXT,
+            FindingStatus.UNSUPPORTED,
+        }
+    ):
         return ForensicDisposition.INCONCLUSIVE
     if finding.status is FindingStatus.CONFIRMED:
         return ForensicDisposition.CONFIRMED
@@ -286,34 +431,60 @@ def build_findings_artifact(
     records: list[ForensicFindingRecord] = []
     for finding in [*report.findings, *report.rejected_findings]:
         contributor_ids = set(finding.contributing_candidate_ids)
-        linked_candidates = [
-            candidate_by_id[candidate_id]
-            for candidate_id in finding.contributing_candidate_ids
-            if candidate_id in candidate_by_id
-        ]
-        linked_verifications = [
-            item for item in report.verification_decisions if item.candidate_id in contributor_ids
-        ]
-        linked_cross_examinations = [
-            item
-            for item in report.cross_examination_decisions
-            if item.candidate_id in contributor_ids
-        ]
-        linked_falsifications = [
-            item for item in report.falsification_decisions if item.candidate_id in contributor_ids
-        ]
-        linked_reproductions = [
-            item for item in report.reproductions if item.candidate_id in contributor_ids
-        ]
-        linked_resolutions = [
-            item for item in reproduction_resolutions if item.candidate_id in contributor_ids
-        ]
+        linked_candidates = sorted(
+            [
+                candidate_by_id[candidate_id]
+                for candidate_id in finding.contributing_candidate_ids
+                if candidate_id in candidate_by_id
+            ],
+            key=lambda item: item.candidate_id,
+        )
+        linked_verifications = sorted(
+            (
+                item
+                for item in report.verification_decisions
+                if item.candidate_id in contributor_ids
+            ),
+            key=lambda item: item.candidate_id,
+        )
+        linked_cross_examinations = sorted(
+            (
+                item
+                for item in report.cross_examination_decisions
+                if item.candidate_id in contributor_ids
+            ),
+            key=lambda item: (
+                item.candidate_id,
+                item.reviewer_index,
+                item.root_lineage,
+                item.request_id,
+            ),
+        )
+        linked_falsifications = sorted(
+            (
+                item
+                for item in report.falsification_decisions
+                if item.candidate_id in contributor_ids
+            ),
+            key=lambda item: (item.candidate_id, item.test_name),
+        )
+        linked_reproductions = sorted(
+            (item for item in report.reproductions if item.candidate_id in contributor_ids),
+            key=lambda item: (item.candidate_id, item.test_name, item.specification_sha256),
+        )
+        linked_resolutions = sorted(
+            (item for item in reproduction_resolutions if item.candidate_id in contributor_ids),
+            key=lambda item: (item.candidate_id, item.kind.value, item.detail),
+        )
         records.append(
             ForensicFindingRecord(
                 finding_id=finding.id,
                 disposition=_disposition(
                     finding,
+                    linked_verifications,
                     linked_cross_examinations,
+                    linked_falsifications,
+                    linked_reproductions,
                     linked_resolutions,
                 ),
                 finding=finding,
@@ -326,15 +497,16 @@ def build_findings_artifact(
                 reproduction_resolutions=linked_resolutions,
             )
         )
+    run_status = effective_run_status(report)
     return FindingsArtifact(
         run_id=report.run_id,
-        run_status=effective_run_status(report),
+        run_status=run_status,
         quality_status=report.quality_status,
-        completed=report.completed,
+        completed=run_status is AuditRunStatus.COMPLETE,
         findings=list(report.findings),
         rejected_findings=list(report.rejected_findings),
         records=records,
-        candidate_findings=list(candidates),
+        candidate_findings=sorted(candidates, key=lambda item: item.candidate_id),
     )
 
 
@@ -342,10 +514,11 @@ def build_coverage_artifact(report: AuditReport) -> CoverageArtifact:
     """Build the canonical forensic coverage projection."""
 
     report = AuditReport.model_validate(report.model_dump(mode="python"))
+    run_status = effective_run_status(report)
     return CoverageArtifact(
         run_id=report.run_id,
-        run_status=effective_run_status(report),
-        completed=report.completed,
+        run_status=run_status,
+        completed=run_status is AuditRunStatus.COMPLETE,
         scope_assessment=report.scope_assessment,
         solidity_coverage=report.effective_solidity_coverage(),
         model_review_coverage=report.model_review_coverage,
@@ -379,11 +552,22 @@ def build_model_execution_artifact(report: AuditReport) -> ModelExecutionArtifac
 
     report = AuditReport.model_validate(report.model_dump(mode="python"))
     usage = list(report.usage)
-    exact_cost = format(Decimal(str(report.accounted_cost_usd)), "f")
+    exact_cost = sum(
+        (
+            Decimal(record.accounted_cost_usd_exact)
+            if record.accounted_cost_usd_exact is not None
+            else Decimal(str(record.accounted_cost_usd))
+            for record in usage
+        ),
+        start=Decimal("0"),
+    )
+    if not usage:
+        exact_cost = Decimal(str(report.accounted_cost_usd))
+    run_status = effective_run_status(report)
     return ModelExecutionArtifact(
         run_id=report.run_id,
-        run_status=effective_run_status(report),
-        completed=report.completed,
+        run_status=run_status,
+        completed=run_status is AuditRunStatus.COMPLETE,
         configured_models=_string_mapping(report.metadata.get("configured_models")),
         configured_fallbacks=_fallback_mapping(report.metadata.get("configured_fallbacks")),
         requested_models=sorted({record.requested_model for record in usage}),
@@ -411,8 +595,8 @@ def build_model_execution_artifact(report: AuditReport) -> ModelExecutionArtifac
         completion_tokens=sum(record.completion_tokens for record in usage),
         reasoning_tokens=sum(record.reasoning_tokens for record in usage),
         cached_tokens=sum(record.cached_tokens for record in usage),
-        accounted_cost_usd=report.accounted_cost_usd,
-        accounted_cost_usd_exact=exact_cost,
+        accounted_cost_usd=float(exact_cost),
+        accounted_cost_usd_exact=format(exact_cost, "f"),
         budget_usd=report.budget_usd,
         privacy_profile=str(report.privacy.get("profile", "UNKNOWN")),
         source_code_egress_enabled=bool(report.privacy.get("code_egress_enabled", False)),

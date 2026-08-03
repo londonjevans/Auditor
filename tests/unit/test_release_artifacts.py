@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -34,6 +35,7 @@ from mmaudit.orchestration.manifest import (
     canonical_sha256,
     collect_run_artifacts,
     seal_run_evidence_manifest,
+    validate_manifest_artifacts,
     write_run_evidence_manifest,
 )
 from mmaudit.release_artifacts import (
@@ -322,7 +324,7 @@ def test_observer_binds_actual_manifest_inventory_and_traceability(
 
 
 @pytest.mark.parametrize("artifact_name", sorted(MANIFEST_BOUND_REPORT_DELIVERABLES))
-def test_observer_rejects_coherently_resealed_missing_report_deliverable(
+def test_manifest_schema_1_2_rejects_coherently_resealed_missing_report_deliverable(
     tmp_path: Path,
     config_factory,
     artifact_name: str,
@@ -337,12 +339,54 @@ def test_observer_rejects_coherently_resealed_missing_report_deliverable(
     payload["manifest_sha256"] = canonical_sha256(
         {key: value for key, value in payload.items() if key != "manifest_sha256"}
     )
-    write_run_evidence_manifest(
-        run_dir / "run-evidence-manifest.json",
-        RunEvidenceManifest.model_validate(payload),
+    with pytest.raises(
+        ValidationError,
+        match=r"manifest 1\.2 requires report artifact bindings",
+    ):
+        RunEvidenceManifest.model_validate(payload)
+
+
+def test_manifest_schema_1_1_retains_legacy_sarif_only_compatibility(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    run_dir = tmp_path / "run"
+    config = config_factory()
+    current = _write_run(run_dir, config)
+    for artifact_name in MANIFEST_BOUND_REPORT_DELIVERABLES - {"audit-results.sarif"}:
+        (run_dir / artifact_name).unlink()
+    assert current.run_configuration is not None
+    legacy = seal_run_evidence_manifest(
+        run_id=current.run_id,
+        repository_root_name=current.repository_root_name,
+        git_commit=current.git_commit,
+        sources=current.sources,
+        run_configuration=current.run_configuration,
+        bindings=current.bindings,
+        artifacts=collect_run_artifacts(run_dir),
+        schema_version="1.1",
+        tool_version=current.tool_version,
     )
 
-    with pytest.raises(ValueError, match=f"requires emitted artifact: {artifact_name}"):
+    validate_manifest_artifacts(legacy, run_dir)
+
+
+@pytest.mark.parametrize("artifact_name", ["client-report.md", "forensic-report.md"])
+def test_observer_rejects_coherently_resealed_markdown_report_tamper(
+    tmp_path: Path,
+    config_factory,
+    artifact_name: str,
+) -> None:
+    run_dir = tmp_path / "run"
+    config = config_factory()
+    _write_run(run_dir, config)
+    (run_dir / artifact_name).write_text(
+        "# Coherently replaced report\n",
+        encoding="utf-8",
+    )
+    _seal_manifest(run_dir, config)
+
+    with pytest.raises(ValueError, match=rf"{re.escape(artifact_name)} differs"):
         observe_release_artifacts(run_dir, ROOT)
 
 

@@ -69,6 +69,7 @@ from mmaudit.orchestration.verification import (
     RunVerificationStatus,
     verify_run_evidence,
 )
+from mmaudit.reporting.bundle import MANIFEST_BOUND_REPORT_DELIVERABLES
 from tests.identity_fixtures import bind_synthetic_usage_identity, synthetic_token_plan_routing
 from tests.output_evidence_fixtures import synthetic_structured_output_routing
 from tests.unit.test_model_registry import _verified_production_config_and_capability
@@ -1410,11 +1411,24 @@ def test_published_manifest_schema_is_strict_and_bounded() -> None:
         for rule in compatibility
         if set(rule["if"]["properties"]["schema_version"].get("enum", [])) == {"1.1", "1.2"}
     )
+    report_bundle_rule = next(
+        rule
+        for rule in compatibility
+        if rule["if"]["properties"]["schema_version"].get("const") == "1.2"
+    )
     assert legacy_rule["then"]["properties"]["run_configuration"] == {"type": "null"}
     assert "run_configuration" in current_rule["then"]["required"]
     assert current_rule["then"]["properties"]["run_configuration"] == {
         "$ref": "#/$defs/runConfiguration"
     }
+    report_bundle_contracts = report_bundle_rule["then"]["properties"]["artifacts"]["allOf"]
+    assert {
+        contract["contains"]["properties"]["path"]["const"] for contract in report_bundle_contracts
+    } == MANIFEST_BOUND_REPORT_DELIVERABLES
+    assert all(
+        contract["minContains"] == contract["maxContains"] == 1
+        for contract in report_bundle_contracts
+    )
 
 
 def test_manifest_loader_rejects_duplicate_json_keys(tmp_path: Path, config_factory) -> None:

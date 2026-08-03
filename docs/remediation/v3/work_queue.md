@@ -406,9 +406,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   dissent and limitations are prominent; large coverage tables stay forensic.
 - **Dependencies:** `V3-FLOOR-001`.
 - **Status:** `IN_PROGRESS`
-- **Current action:** `PAUSED` after implementing the typed client/forensic split and manifest
-  `1.2` binding. Resume with strict mypy and the broader reporting/release test matrix, then
-  review the final diff and update traceability from actual validation evidence.
+- **Current action:** `PAUSED` with the implementation preserved. Resume by fixing strict REAL
+  invariant/formal/reproduction evidence credit and exact contributing-candidate closure, rerun
+  the adversarial and pipeline suites, then finish quality gates and traceability review.
 
 ## V3-SCOPE-001 — Honest Solidity/EVM product profile
 

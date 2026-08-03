@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED
 CURRENT_MILESTONE: Client report and forensic evidence bundle
 CURRENT_TICKET: V3-REPORT-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-FIXTURE-001 (COMPLETE)
-NEXT_ACTION: Resume V3-REPORT-001 with strict mypy and the broader reporting/release test matrix; fix any failures, review the diff, update traceability, and only then consider the ticket complete.
-LAST_COMMAND: `.venv/bin/ruff check` over the 18 affected Python implementation and test files.
-LAST_RESULT: PASS: Ruff reported `All checks passed!`; the ticket remains intentionally IN_PROGRESS pending strict mypy and broader validation.
+NEXT_ACTION: Resume V3-REPORT-001 by fixing the two exposed adversarial gaps: strict structural qualification for REAL invariant/formal/reproduction credit and exact contributing-candidate closure; rerun the adversarial and pipeline suites, then complete ticket-close gates and traceability.
+LAST_COMMAND: `.venv/bin/pytest -q tests/unit/test_client_forensic_reporting_adversarial.py`.
+LAST_RESULT: DIAGNOSTIC FAIL: `19 passed, 2 failed`; the failures precisely retain the two unfinished report-evidence defects and received no completion credit.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
-LAST_CHECKPOINT_COMMIT: 92f1be4c080f6853b852626c0cf3ea8dd65301cc
+LAST_CHECKPOINT_COMMIT: a1ebb7169c80fb9a44f33b602824a11f0794b756
 
 ## 2026-08-03 — V3-REPORT-001
 
@@ -55,8 +55,31 @@ LAST_CHECKPOINT_COMMIT: 92f1be4c080f6853b852626c0cf3ea8dd65301cc
   comparison-style, and literal-regex cleanup. No paid provider call, network operation, or
   long-running validation was started. Resume with strict mypy and broader reporting/release
   tests; do not mark this ticket complete from the focused evidence alone.
-- **Checkpoint:** Partial implementation and its honest paused state were committed as
-  `92f1be4c080f6853b852626c0cf3ea8dd65301cc`. This is not a ticket-complete or release claim.
+- **Checkpoint:** Partial implementation was committed as
+  `92f1be416bf9269ad42ae4b272b79c4f5c797cf8`, followed by paused-state metadata at
+  `a1ebb7169c80fb9a44f33b602824a11f0794b756`. The first paused-state record expanded the
+  abbreviated implementation hash incorrectly; this transcription defect was identified and
+  corrected immediately on resume before any additional validation credit. Neither commit is a
+  ticket-complete or release claim.
+- **Resume:** At `2026-08-03T17:54:45Z`, persistent-goal continuation resumed from the clean,
+  SSH-pushed metadata checkpoint. Strict mypy is the next validation gate; provider calls remain
+  zero for this ticket.
+- **Validation slice:** Strict mypy passed all `168` source files in `5.8s`. The first broader
+  reporting matrix correctly exposed that full rejected-finding rendering had lost its concise
+  origin marker (`197` tests passed before the failure). The renderer now retains the historical
+  origin marker immediately before the complete rejected record; its focused regression plus all
+  ten client/forensic cases passed `11` tests. The clean 12-file rerun then passed `306` tests in
+  `28.10s` with one explicit hardened-local-isolation integration skip. No paid provider or
+  network operation occurred.
+- **Graceful pause (2026-08-03T18:22:02Z):** The complete pipeline file exposed one stale
+  forensic-lifecycle expectation after `40` passes in `289.84s`; the corrected focused timeout
+  regression passed `1` test in `2.10s`. Generated release schemas verify and the existing
+  client/forensic suite passes `10` tests. A new independent adversarial suite passes `19` cases
+  and intentionally retains two red cases: structurally insufficient REAL engine evidence is
+  still over-credited, and a rejected finding can still omit its complete contributing-candidate
+  inventory. These are the exact resume targets. All delegated agents have finished, no test or
+  provider process remains active, no provider/network call occurred, and this checkpoint is
+  explicitly WIP rather than ticket-complete evidence.
 
 ## 2026-08-03 — V3-FIXTURE-001
 

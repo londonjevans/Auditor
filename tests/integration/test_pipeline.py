@@ -1678,6 +1678,39 @@ async def test_mock_multi_agent_audit_preserves_artifacts_without_false_completi
     with pytest.raises(ValueError, match=r"coverage\.json differs"):
         validate_manifest_artifacts(resealed_manifest, resealed_bundle)
 
+    resealed_excerpt_bundle = tmp_path / "resealed-source-excerpt-mismatch"
+    shutil.copytree(result.run_dir, resealed_excerpt_bundle)
+    findings_path = resealed_excerpt_bundle / "findings.json"
+    changed_findings = json.loads(findings_path.read_text(encoding="utf-8"))
+    excerpt = next(
+        record["source_excerpt"]
+        for record in changed_findings["records"]
+        if record["source_excerpt"] is not None
+    )
+    excerpt_lines = excerpt["content"].splitlines(keepends=True)
+    cited_index = excerpt["cited_start_line"] - excerpt["excerpt_start_line"]
+    excerpt_lines[cited_index] = excerpt_lines[cited_index].rstrip("\r\n") + " /* changed */\n"
+    excerpt["content"] = "".join(excerpt_lines)
+    excerpt["content_sha256"] = hashlib.sha256(excerpt["content"].encode()).hexdigest()
+    write_json(findings_path, changed_findings)
+    excerpt_payload = manifest.model_dump(mode="json")
+    findings_bytes = findings_path.read_bytes()
+    findings_binding = next(
+        binding for binding in excerpt_payload["artifacts"] if binding["path"] == "findings.json"
+    )
+    findings_binding["sha256"] = hashlib.sha256(findings_bytes).hexdigest()
+    findings_binding["size"] = len(findings_bytes)
+    excerpt_payload["manifest_sha256"] = canonical_sha256(
+        {key: value for key, value in excerpt_payload.items() if key != "manifest_sha256"}
+    )
+    excerpt_manifest = RunEvidenceManifest.model_validate(excerpt_payload)
+    write_run_evidence_manifest(
+        resealed_excerpt_bundle / "run-evidence-manifest.json",
+        excerpt_manifest,
+    )
+    with pytest.raises(ValueError, match="cited range hash is inconsistent"):
+        validate_manifest_artifacts(excerpt_manifest, resealed_excerpt_bundle)
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("secondary_role", ["verifier", "judge"])
@@ -4365,6 +4398,15 @@ async def test_one_model_timeout_preserves_partial_candidate_evidence_without_pr
     }
     assert candidate_ids
     assert rejected_candidate_ids == candidate_ids
+    forensic_findings = FindingsArtifact.model_validate_json(
+        (result.run_dir / "findings.json").read_text(encoding="utf-8")
+    )
+    assert {
+        candidate.candidate_id
+        for record in forensic_findings.records
+        for candidate in record.candidate_findings
+    } == candidate_ids
+    assert any(record.reproduction_resolutions for record in forensic_findings.records)
     scheduler_payload = json.loads(
         (result.run_dir / "scheduler-state.json").read_text(encoding="utf-8")
     )

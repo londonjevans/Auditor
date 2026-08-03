@@ -36,6 +36,7 @@ from mmaudit.orchestration.verification import (
 )
 from mmaudit.release_run import ReleaseRunBinding, ReleaseRunBindingPayload
 from mmaudit.release_verification import observe_release_run_verification
+from mmaudit.reporting.bundle import MANIFEST_BOUND_REPORT_DELIVERABLES
 from mmaudit.reporting.json_report import stable_json
 
 
@@ -188,19 +189,22 @@ def _workspace(
     source_path = source / "contracts" / "Synthetic.sol"
     source_path.parent.mkdir()
     source_path.write_bytes(source_bytes)
-    artifact_bytes = b'{"synthetic":"artifact"}\n'
-    artifact_path = run_dir / "synthetic-artifact.json"
-    artifact_path.write_bytes(artifact_bytes)
     source_binding = ManifestFileBinding(
         path="contracts/Synthetic.sol",
         sha256=hashlib.sha256(source_bytes).hexdigest(),
         size=len(source_bytes),
     )
-    artifact_binding = ManifestFileBinding(
-        path=artifact_path.name,
-        sha256=hashlib.sha256(artifact_bytes).hexdigest(),
-        size=len(artifact_bytes),
-    )
+    artifact_bindings: list[ManifestFileBinding] = []
+    for artifact_name in sorted(MANIFEST_BOUND_REPORT_DELIVERABLES):
+        artifact_bytes = f"synthetic release leaf: {artifact_name}\n".encode()
+        (run_dir / artifact_name).write_bytes(artifact_bytes)
+        artifact_bindings.append(
+            ManifestFileBinding(
+                path=artifact_name,
+                sha256=hashlib.sha256(artifact_bytes).hexdigest(),
+                size=len(artifact_bytes),
+            )
+        )
     manifest = seal_run_evidence_manifest(
         run_id="synthetic-run",
         repository_root_name="synthetic-target",
@@ -208,7 +212,7 @@ def _workspace(
         sources=[source_binding],
         run_configuration=_run_configuration(config),
         bindings=_bindings(),
-        artifacts=[artifact_binding],
+        artifacts=artifact_bindings,
         schema_version="1.2",
         tool_version="test",
     )

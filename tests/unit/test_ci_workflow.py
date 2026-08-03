@@ -242,11 +242,39 @@ def test_ci_output_and_public_artifacts_never_use_checkout_wildcards() -> None:
     assert '"$MMAUDIT_OUTPUT_ROOT/runs"' in locate_step
     assert "find .mmaudit" not in locate_step
     assert 'public_root="$RUNNER_TEMP/mmaudit-public-evidence"' in public_stage
-    assert "public_names = (" in public_stage
+    assert "required_public_names = (" in public_stage
+    assert "optional_legacy_public_names = (" in public_stage
     assert "bindings.get(name)" in public_stage
     assert "hashlib.sha256(data).hexdigest() != binding.sha256" in public_stage
     assert "private" not in public_stage
     assert ".mmaudit/runs/*" not in workflow
+
+
+def test_public_staging_requires_canonical_bundle_and_tolerates_absent_legacy_outputs() -> None:
+    workflow = _read(CI_WORKFLOW)
+    scanner_job = _job_block(workflow, "scanner-only")
+    public_stage = _step_block(scanner_job, "Stage exact manifest-bound public evidence")
+
+    required_block, separator, optional_block = public_stage.partition(
+        "optional_legacy_public_names = ("
+    )
+    assert separator
+    for artifact_name in (
+        "audit-results.sarif",
+        "client-report.md",
+        "coverage.json",
+        "findings.json",
+        "forensic-report.md",
+        "model-execution.json",
+    ):
+        assert f'"{artifact_name}"' in required_block
+    for artifact_name in ("audit-report.md", "solidity-coverage.json"):
+        assert f'"{artifact_name}"' not in required_block
+        assert f'"{artifact_name}"' in optional_block
+    assert "for name in required_public_names:" in public_stage
+    assert "for name in optional_legacy_public_names:" in public_stage
+    assert "if name not in bindings:" in public_stage
+    assert "continue" in public_stage
 
 
 def test_provider_workflow_is_separate_and_never_runs_on_pull_requests() -> None:

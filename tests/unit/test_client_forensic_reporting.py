@@ -290,12 +290,12 @@ def test_forensic_report_retains_complete_rejected_finding_evidence() -> None:
     assert rejected.false_positive_conditions[0] in rendered
 
 
-def test_complete_no_findings_report_is_calibrated_without_claiming_security() -> None:
+def test_legacy_completed_flag_cannot_project_a_complete_no_findings_run() -> None:
     rendered = render_client_markdown(_report(), {SOURCE_PATH: SOURCE})
 
-    assert "No reportable findings were identified within the analyses that completed" in rendered
-    assert "does not prove that the repository is secure" in rendered
-    assert "This run is incomplete" not in rendered
+    assert "No reportable findings were identified by the analyses that completed" in rendered
+    assert "This run is incomplete and does not support a conclusion" in rendered
+    assert "> **RUN STATUS: INCOMPLETE**" in rendered
     assert "Completed — zero findings" not in rendered
 
 

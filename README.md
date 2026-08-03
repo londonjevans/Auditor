@@ -482,7 +482,7 @@ Each invocation creates:
 ├── invariant-execution-results.json
 ├── economic-simulation-plan.json
 ├── formal-results.json
-├── solidity-coverage.json
+├── solidity-coverage.json     # legacy coverage compatibility output
 ├── candidate-findings.json
 ├── verification-results.json
 ├── reproduction-results.json
@@ -511,6 +511,12 @@ base configuration for drift. The manifest excludes itself from the artifact lis
 digest is stable. Schema `1.1` remains readable for pre-bundle runs. Legacy schema `1.0` manifests
 remain readable but require an explicit
 configuration for verification, replay, and certification.
+The canonical schema `1.2` public report bundle consists of `client-report.md`,
+`forensic-report.md`, `findings.json`, `audit-results.sarif`, `coverage.json`, and
+`model-execution.json`. CI requires and stages those exact manifest-bound leaves. The older
+`audit-report.md` and `solidity-coverage.json` names remain explicitly allowlisted compatibility
+outputs, but the public staging step copies them only when they are present in the verified manifest;
+they are not additional canonical public-bundle requirements.
 The self-hash provides deterministic integrity and reconciliation, not an external
 signature; retain a trusted manifest digest or release attestation when provenance
 must survive a fully rewritten artifact set.

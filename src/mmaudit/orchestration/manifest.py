@@ -100,7 +100,9 @@ from mmaudit.reporting.bundle import (
     build_findings_artifact,
     build_model_execution_artifact,
 )
+from mmaudit.reporting.client import render_client_markdown_from_artifact
 from mmaudit.reporting.json_report import write_json
+from mmaudit.reporting.markdown import render_forensic_markdown
 from mmaudit.reporting.sarif import generate_sarif
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_name, is_sensitive_workspace_path
@@ -295,6 +297,15 @@ class RunEvidenceManifest(StrictModel):
         artifact_paths = [binding.path for binding in self.artifacts]
         if artifact_paths != sorted(set(artifact_paths)):
             raise ValueError("manifest artifact paths must be unique and sorted")
+        if self.schema_version == "1.2":
+            missing_report_artifacts = sorted(
+                MANIFEST_BOUND_REPORT_DELIVERABLES - set(artifact_paths)
+            )
+            if missing_report_artifacts:
+                raise ValueError(
+                    "manifest 1.2 requires report artifact bindings: "
+                    + ", ".join(missing_report_artifacts)
+                )
         if "run-evidence-manifest.json" in artifact_paths:
             raise ValueError("manifest cannot include itself as an artifact")
         expected_source = canonical_sha256(
@@ -494,7 +505,15 @@ def _build_run_evidence_manifest(
         source_tree_sha256=source_tree_sha256,
         expected_source_classification=run_configuration.run_options.privacy_source_classification,
     )
-    _validate_report_artifact_consistency(root, report)
+    report_bundle_required = all(
+        (root / name).exists() or (root / name).is_symlink() or (root / name).is_junction()
+        for name in MANIFEST_BOUND_REPORT_DELIVERABLES
+    )
+    _validate_report_artifact_consistency(
+        root,
+        report,
+        report_bundle_required=report_bundle_required,
+    )
     _validate_repository_differential_configuration(report, effective_config)
     for artifact_name, report_key in (
         ("privacy-policy.json", "effective_policy"),
@@ -872,6 +891,26 @@ def _validate_report_bundle_artifacts(
     )
     if model_execution != build_model_execution_artifact(report):
         raise ValueError("model-execution.json differs from the final report")
+    expected_client = render_client_markdown_from_artifact(report, findings).encode("utf-8")
+    client_sha256, client_size = _file_sha256(
+        root / "client-report.md",
+        max_bytes=_MAX_JSON_ARTIFACT_BYTES,
+    )
+    if (
+        client_size != len(expected_client)
+        or client_sha256 != hashlib.sha256(expected_client).hexdigest()
+    ):
+        raise ValueError("client-report.md differs from the final report")
+    expected_forensic = render_forensic_markdown(report).encode("utf-8")
+    forensic_sha256, forensic_size = _file_sha256(
+        root / "forensic-report.md",
+        max_bytes=_MAX_JSON_ARTIFACT_BYTES,
+    )
+    if (
+        forensic_size != len(expected_forensic)
+        or forensic_sha256 != hashlib.sha256(expected_forensic).hexdigest()
+    ):
+        raise ValueError("forensic-report.md differs from the final report")
     expected_sarif = generate_sarif(
         report.findings,
         scanner_runs=report.scanner_runs,
@@ -885,7 +924,12 @@ def _validate_report_bundle_artifacts(
         raise ValueError("audit-results.sarif differs from the final report")
 
 
-def _validate_report_artifact_consistency(root: Path, report: AuditReport) -> None:
+def _validate_report_artifact_consistency(
+    root: Path,
+    report: AuditReport,
+    *,
+    report_bundle_required: bool = False,
+) -> None:
     """Require emitted report summaries to agree before sealing their byte hashes."""
 
     metadata = _read_json_artifact(root, "metadata.json")
@@ -921,16 +965,17 @@ def _validate_report_artifact_consistency(root: Path, report: AuditReport) -> No
         if report.schema_version == "1.2"
         else None
     )
-    _validate_report_bundle_artifacts(
-        root,
-        report,
-        candidates=list(candidate_artifact.findings),
-        reproduction_resolutions=(
-            list(reproduction_artifact.candidate_resolutions)
-            if reproduction_artifact is not None
-            else []
-        ),
-    )
+    if report_bundle_required:
+        _validate_report_bundle_artifacts(
+            root,
+            report,
+            candidates=list(candidate_artifact.findings),
+            reproduction_resolutions=(
+                list(reproduction_artifact.candidate_resolutions)
+                if reproduction_artifact is not None
+                else []
+            ),
+        )
     disposition_path = root / "execution-origin-dispositions.json"
     disposition_artifact_present = (
         disposition_path.exists() or disposition_path.is_symlink() or disposition_path.is_junction()
@@ -2376,7 +2421,11 @@ def validate_manifest_artifacts(
             f"private/{SCHEDULER_RETAINED_JOURNAL_REFERENCE_FILENAME}"
         )
         report = AuditReport.model_validate(_read_json_artifact(root, "final-findings.json"))
-        _validate_report_artifact_consistency(root, report)
+        _validate_report_artifact_consistency(
+            root,
+            report,
+            report_bundle_required=manifest.schema_version == "1.2",
+        )
         validate_solidity_shard_artifacts(root, report)
         context_manifest = _validated_context_manifest(root, report)
         if manifest.run_configuration is not None:

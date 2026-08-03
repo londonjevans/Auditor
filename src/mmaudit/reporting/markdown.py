@@ -359,6 +359,23 @@ def _finding(finding: Finding, report: AuditReport) -> list[str]:
         f"Evidence strength: {_inline(finding.evidence_strength.value)} · "
         f"Reproduction: {_inline(finding.reproduction_state.value)}",
         "",
+        "Classifications: "
+        + (
+            "; ".join(
+                part
+                for part in (
+                    "CWE " + ", ".join(_inline(value) for value in finding.cwe)
+                    if finding.cwe
+                    else "",
+                    "OWASP " + ", ".join(_inline(value) for value in finding.owasp)
+                    if finding.owasp
+                    else "",
+                )
+                if part
+            )
+            or "none recorded"
+        ),
+        "",
     ]
     lines.extend(_execution_origin_lines(finding))
     lines.extend(
@@ -418,25 +435,74 @@ def _finding(finding: Finding, report: AuditReport) -> list[str]:
     ]
     if verifier_decisions:
         lines.extend(["", "Independent verifier:", ""])
-        lines.extend(
-            f"- {_inline(decision.candidate_id)}: {_inline(decision.verdict.value)} — "
-            f"{_text(decision.rationale)}"
-            for decision in verifier_decisions
-        )
+        for verifier_decision in verifier_decisions:
+            lines.extend(
+                [
+                    f"- {_inline(verifier_decision.candidate_id)}: "
+                    f"{_inline(verifier_decision.verdict.value)} — "
+                    f"{_text(verifier_decision.rationale)}",
+                    f"  - Source-to-sink: {_text(verifier_decision.source_to_sink)}",
+                    f"  - Reachability: {_text(verifier_decision.reachability)}",
+                    f"  - Authentication: {_text(verifier_decision.authentication)}",
+                    "  - Privilege requirements: "
+                    + _text(verifier_decision.privilege_requirements),
+                    f"  - Confidence: {verifier_decision.confidence:.2f}",
+                    "  - Safe verification: "
+                    + _text(verifier_decision.safe_verification_test.description),
+                ]
+            )
+            lines.extend(
+                f"    - Environmental assumption: {_text(value)}"
+                for value in verifier_decision.environmental_assumptions
+            )
+            lines.extend(
+                f"    - Guard or control: {_text(value)}"
+                for value in verifier_decision.guards_and_controls
+            )
+            lines.extend(
+                f"    - False-positive condition: {_text(value)}"
+                for value in verifier_decision.false_positive_conditions
+            )
     if cross_examination_decisions:
         lines.extend(["", "Anonymized adversarial cross-examination:", ""])
-        lines.extend(
-            f"- reviewer {decision.reviewer_index} / "
-            f"{_inline(decision.root_lineage)}: "
-            f"{_inline(decision.verdict.value)} — {_text(decision.rationale)}"
-            for decision in cross_examination_decisions
-        )
+        for cross_decision in cross_examination_decisions:
+            lines.append(
+                f"- reviewer {cross_decision.reviewer_index} / "
+                f"{_inline(cross_decision.root_lineage)}: "
+                f"{_inline(cross_decision.verdict.value)} — "
+                f"{_text(cross_decision.rationale)}"
+            )
+            lines.extend(
+                f"    - Contradiction: {_text(value)}" for value in cross_decision.contradictions
+            )
+            lines.extend(
+                f"    - Missing evidence: {_text(value)}"
+                for value in cross_decision.missing_evidence
+            )
     if falsifier_decisions:
         lines.extend(["", "Independent falsifier:", ""])
+        for falsifier_decision in falsifier_decisions:
+            lines.extend(
+                [
+                    f"- {_inline(falsifier_decision.candidate_id)} / "
+                    f"{_inline(falsifier_decision.test_name)}: "
+                    f"{_inline(falsifier_decision.verdict.value)} — "
+                    f"{_text(falsifier_decision.rationale)}",
+                    "  - Test matches claim: " + str(falsifier_decision.test_matches_claim).lower(),
+                    "  - Assumptions validated: "
+                    + str(falsifier_decision.assumptions_validated).lower(),
+                ]
+            )
+            lines.extend(
+                f"    - Contradiction: {_text(value)}"
+                for value in falsifier_decision.contradictions
+            )
+    if finding.model_votes:
+        lines.extend(["", "Model votes:", ""])
         lines.extend(
-            f"- {_inline(decision.candidate_id)} / {_inline(decision.test_name)}: "
-            f"{_inline(decision.verdict.value)} — {_text(decision.rationale)}"
-            for decision in falsifier_decisions
+            f"- {_inline(vote.role)} / {_inline(vote.family)}: "
+            f"{_inline(vote.verdict)} — {_text(vote.rationale)}"
+            for vote in finding.model_votes
         )
     if finding.compensating_controls:
         lines.extend(["", "Compensating controls:", ""])
@@ -1539,6 +1605,7 @@ def render_markdown(report: AuditReport) -> str:
         ]
     )
     for finding in report.rejected_findings:
+        lines.extend([f"Rejected candidate origin: [{_text(_origin_label(finding))}]", ""])
         lines.extend(_finding(finding, report))
     lines.extend(
         [
@@ -1574,6 +1641,9 @@ def render_forensic_markdown(report: AuditReport) -> str:
         title,
         "# Corrovera Forensic Evidence Report\n\n"
         "This exhaustive companion retains coverage, execution, dissent, and rejected evidence. "
-        "Use `client-report.md` for the concise client-facing assessment.",
+        "The hash-bound `findings.json` is the canonical complete candidate, verifier, "
+        "cross-examination, falsifier, and reproduction history; this Markdown is its "
+        "human-readable projection. Use `client-report.md` for the concise client-facing "
+        "assessment.",
         1,
     )

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -39,7 +40,12 @@ from mmaudit.release_run import ReleaseRunBinding
 from mmaudit.release_runtime import LocalReleaseGateResult
 from mmaudit.release_static import StaticReleaseEvidence
 from mmaudit.release_verification import ReleaseRunVerificationBinding
-from mmaudit.reporting.bundle import CoverageArtifact, FindingsArtifact, ModelExecutionArtifact
+from mmaudit.reporting.bundle import (
+    MANIFEST_BOUND_REPORT_DELIVERABLES,
+    CoverageArtifact,
+    FindingsArtifact,
+    ModelExecutionArtifact,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_ROOT = ROOT / "schemas"
@@ -102,6 +108,50 @@ TITLE_OVERRIDES = {
     ),
     "semantic_shard_inventory.schema.json": "mmaudit Solidity semantic shard inventory",
 }
+
+
+def run_evidence_manifest_report_bundle_rule() -> dict[str, Any]:
+    """Return the published schema-1.2 contract for every manifest-bound report leaf."""
+
+    return {
+        "if": {
+            "properties": {"schema_version": {"const": "1.2"}},
+            "required": ["schema_version"],
+        },
+        "then": {
+            "properties": {
+                "artifacts": {
+                    "allOf": [
+                        {
+                            "contains": {
+                                "properties": {"path": {"const": name}},
+                                "required": ["path"],
+                            },
+                            "maxContains": 1,
+                            "minContains": 1,
+                        }
+                        for name in sorted(MANIFEST_BOUND_REPORT_DELIVERABLES)
+                    ]
+                }
+            }
+        },
+    }
+
+
+def _run_evidence_manifest_contract_is_current() -> bool:
+    """Verify the hand-authored manifest schema retains the generated 1.2 leaf contract."""
+
+    path = SCHEMA_ROOT / "run_evidence_manifest.schema.json"
+    try:
+        schema = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    rules = [
+        rule
+        for rule in schema.get("allOf", [])
+        if rule.get("if", {}).get("properties", {}).get("schema_version", {}).get("const") == "1.2"
+    ]
+    return rules == [run_evidence_manifest_report_bundle_rule()]
 
 
 def rendered_schema(filename: str, model: type[BaseModel]) -> str:
@@ -167,6 +217,8 @@ def main(argv: list[str] | None = None) -> None:
             continue
         if observed != expected:
             failures.append(f"{filename}: stale")
+    if not _run_evidence_manifest_contract_is_current():
+        failures.append("run_evidence_manifest.schema.json: stale report-bundle contract")
     if failures:
         raise SystemExit("release schema verification failed: " + ", ".join(failures))
 

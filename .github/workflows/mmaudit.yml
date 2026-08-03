@@ -297,8 +297,7 @@ jobs:
 
           source_root = Path(sys.argv[1]).resolve(strict=True)
           destination_root = Path(sys.argv[2])
-          public_names = (
-              "audit-report.md",
+          required_public_names = (
               "audit-results.sarif",
               "client-report.md",
               "coverage.json",
@@ -310,6 +309,9 @@ jobs:
               "model-execution.json",
               "run-evidence-manifest.json",
               "scanner-results.json",
+          )
+          optional_legacy_public_names = (
+              "audit-report.md",
               "solidity-coverage.json",
           )
           manifest = load_run_evidence_manifest(
@@ -348,7 +350,15 @@ jobs:
               return data
 
           copied: dict[str, str] = {}
-          for name in public_names:
+          for name in required_public_names:
+              data = read_exact_bound_file(name)
+              destination = run_destination / name
+              destination.write_bytes(data)
+              destination.chmod(0o600)
+              copied[name] = hashlib.sha256(data).hexdigest()
+          for name in optional_legacy_public_names:
+              if name not in bindings:
+                  continue
               data = read_exact_bound_file(name)
               destination = run_destination / name
               destination.write_bytes(data)

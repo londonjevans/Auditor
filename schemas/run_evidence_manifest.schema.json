@@ -132,6 +132,110 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.2"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "artifacts": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "path": {
+                      "const": "audit-results.sarif"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "path": {
+                      "const": "client-report.md"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "path": {
+                      "const": "coverage.json"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "path": {
+                      "const": "findings.json"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "path": {
+                      "const": "forensic-report.md"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "path": {
+                      "const": "model-execution.json"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 1
+              }
+            ]
+          }
+        }
+      }
     }
   ],
   "$defs": {
