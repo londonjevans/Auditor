@@ -7,6 +7,7 @@ import json
 import math
 import os
 import stat
+import unicodedata
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime, timedelta
@@ -69,6 +70,7 @@ from mmaudit.models.schemas import (
     ReproductionState,
     ScannerFinding,
     ScannerRun,
+    ScannerStatus,
     Severity,
     StrictModel,
 )
@@ -113,6 +115,7 @@ from mmaudit.reporting.sarif import generate_report_sarif
 from mmaudit.reporting.status import effective_report_status, report_status_metadata
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_name, is_sensitive_workspace_path
+from mmaudit.scanners.normalization import validate_real_scanner_normalization_replay
 from mmaudit.scanners.projection import project_scanner_finding
 from mmaudit.solidity.sharding import (
     verify_solidity_shard_projection,
@@ -917,8 +920,7 @@ def _validate_report_bundle_artifacts(
     findings_without_excerpts = findings.model_copy(
         update={
             "records": [
-                record.model_copy(update={"source_excerpt": None})
-                for record in findings.records
+                record.model_copy(update={"source_excerpt": None}) for record in findings.records
             ]
         }
     )
@@ -1089,8 +1091,22 @@ def _validate_scanner_stream_artifact_custody(
 ) -> None:
     """Join scanner stdout/stderr claims to exact manifest-bound local bytes."""
 
+    claims_by_run: dict[
+        int,
+        list[tuple[str, str, str, int, tuple[str, ...]]],
+    ] = {}
+    runs_by_index: dict[int, ScannerRun] = {}
     claimed_paths: set[str] = set()
-    for run in scanner_runs:
+    portable_prefixes: dict[str, tuple[str, str]] = {}
+    for run_index, run in enumerate(scanner_runs):
+        real_success = (
+            run.execution_evidence is ExecutionEvidenceKind.REAL
+            and run.status is ScannerStatus.SUCCESS
+        )
+        if real_success and run.raw_output_path is None:
+            raise ValueError(
+                "current REAL successful scanner lacks retained stdout normalization evidence"
+            )
         streams = (
             ("stdout", run.raw_output_path, run.raw_output_sha256, run.raw_output_bytes),
             (
@@ -1113,34 +1129,420 @@ def _validate_scanner_stream_artifact_custody(
             path_parts = PurePosixPath(normalized).parts
             if (
                 normalized != claimed_path
-                or not path_parts
+                or len(path_parts) < 2
                 or path_parts[0] != run.scanner
                 or normalized in claimed_paths
                 or is_sensitive_workspace_path(normalized)
             ):
                 raise ValueError(f"scanner {stream_name} artifact path is unsafe or repeated")
-            claimed_paths.add(normalized)
-            scanner_output_root = root / "private" / "scanner-output"
-            path = scanner_output_root.joinpath(*PurePosixPath(normalized).parts)
-            cursor = root
-            for part in ("private", "scanner-output", *PurePosixPath(normalized).parts):
-                cursor /= part
-                if cursor.is_symlink() or cursor.is_junction():
-                    raise ValueError(f"scanner {stream_name} artifact may not traverse a link")
-            try:
-                path.resolve(strict=True).relative_to(scanner_output_root.resolve(strict=True))
-            except (OSError, ValueError) as exc:
-                raise ValueError(
-                    f"scanner {stream_name} artifact escaped or is unavailable"
-                ) from exc
-            observed_sha256, observed_size = _file_sha256(
-                path,
-                max_bytes=_MAX_JSON_ARTIFACT_BYTES,
+            if (
+                unicodedata.normalize("NFC", normalized) != normalized
+                or unicodedata.normalize("NFC", run.scanner) != run.scanner
+                or normalize_relative_path(run.scanner) != run.scanner
+                or PurePosixPath(run.scanner).parts != (run.scanner,)
+            ):
+                raise ValueError(f"scanner {stream_name} artifact path is not exact portable NFC")
+            _register_scanner_stream_portable_prefixes(
+                normalized,
+                portable_prefixes,
             )
-            if observed_sha256 != claimed_sha256 or observed_size != claimed_size:
-                raise ValueError(
-                    f"scanner {stream_name} artifact differs from its exact byte custody"
+            claimed_paths.add(normalized)
+            claims_by_run.setdefault(run_index, []).append(
+                (
+                    stream_name,
+                    normalized,
+                    claimed_sha256,
+                    claimed_size,
+                    path_parts,
                 )
+            )
+            runs_by_index[run_index] = run
+
+    if not claims_by_run:
+        return
+
+    absolute_root = Path(os.path.abspath(root))
+    try:
+        resolved_root = absolute_root.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("scanner artifact root is unavailable") from exc
+    if resolved_root != absolute_root or absolute_root.is_symlink() or absolute_root.is_junction():
+        raise ValueError("scanner artifact root must be an exact non-link directory")
+
+    owner_identities: dict[tuple[int, int], str] = {}
+    stream_identities: dict[tuple[int, int], str] = {}
+    with ExitStack() as observations:
+        root_descriptor, _ = observations.enter_context(
+            _open_scanner_custody_directory(absolute_root, label="run root")
+        )
+        private_path = absolute_root / "private"
+        _require_exact_scanner_directory_entry(
+            root_descriptor,
+            absolute_root,
+            "private",
+            label="private artifact directory",
+        )
+        private_descriptor, _ = observations.enter_context(
+            _open_scanner_custody_directory(
+                private_path,
+                label="private artifact directory",
+                parent_descriptor=root_descriptor,
+                component="private",
+            )
+        )
+        scanner_output_root = private_path / "scanner-output"
+        _require_exact_scanner_directory_entry(
+            private_descriptor,
+            private_path,
+            "scanner-output",
+            label="scanner-output directory",
+        )
+        scanner_root_descriptor, _ = observations.enter_context(
+            _open_scanner_custody_directory(
+                scanner_output_root,
+                label="scanner-output directory",
+                parent_descriptor=private_descriptor,
+                component="scanner-output",
+            )
+        )
+        scanner_owner_names = _scanner_directory_entries(
+            scanner_root_descriptor,
+            scanner_output_root,
+            label="scanner-output directory",
+        )
+
+        for run_index, claims in claims_by_run.items():
+            run = runs_by_index[run_index]
+            if run.scanner not in scanner_owner_names:
+                raise ValueError("scanner artifact owner spelling differs from its exact directory")
+            owner_path = scanner_output_root / run.scanner
+            owner_descriptor, owner_metadata = observations.enter_context(
+                _open_scanner_custody_directory(
+                    owner_path,
+                    label=f"scanner {run.scanner} owner directory",
+                    parent_descriptor=scanner_root_descriptor,
+                    component=run.scanner,
+                )
+            )
+            owner_identity = (owner_metadata.st_dev, owner_metadata.st_ino)
+            previous_owner = owner_identities.get(owner_identity)
+            if previous_owner is not None:
+                raise ValueError(
+                    "scanner artifact owner identity is claimed by multiple scanner runs"
+                )
+            owner_identities[owner_identity] = run.scanner
+
+            for stream_name, _normalized, claimed_sha256, claimed_size, path_parts in claims:
+                parent_descriptor = owner_descriptor
+                parent_path = owner_path
+                for component in path_parts[1:-1]:
+                    _require_exact_scanner_directory_entry(
+                        parent_descriptor,
+                        parent_path,
+                        component,
+                        label=f"scanner {stream_name} artifact directory",
+                    )
+                    parent_path /= component
+                    parent_descriptor, _ = observations.enter_context(
+                        _open_scanner_custody_directory(
+                            parent_path,
+                            label=f"scanner {stream_name} artifact directory",
+                            parent_descriptor=parent_descriptor,
+                            component=component,
+                        )
+                    )
+                leaf = path_parts[-1]
+                _require_exact_scanner_directory_entry(
+                    parent_descriptor,
+                    parent_path,
+                    leaf,
+                    label=f"scanner {stream_name} artifact",
+                )
+                with _open_scanner_stream_observation(
+                    parent_path / leaf,
+                    parent_descriptor=parent_descriptor,
+                    component=leaf,
+                    label=f"scanner {stream_name} artifact",
+                ) as (
+                    observed_sha256,
+                    observed_size,
+                    stream_identity,
+                    retained_bytes,
+                ):
+                    previous_stream = stream_identities.get(stream_identity)
+                    if previous_stream is not None:
+                        raise ValueError("scanner stream identity is claimed by multiple artifacts")
+                    stream_identities[stream_identity] = f"{run.scanner}:{stream_name}"
+                    if observed_sha256 != claimed_sha256 or observed_size != claimed_size:
+                        raise ValueError(
+                            f"scanner {stream_name} artifact differs from its exact byte custody"
+                        )
+                    if (
+                        stream_name == "stdout"
+                        and run.execution_evidence is ExecutionEvidenceKind.REAL
+                        and run.status is ScannerStatus.SUCCESS
+                    ):
+                        workspace_path = owner_path / "workspace"
+                        _require_exact_scanner_directory_entry(
+                            owner_descriptor,
+                            owner_path,
+                            "workspace",
+                            label="scanner replay workspace",
+                        )
+                        with _open_scanner_custody_directory(
+                            workspace_path,
+                            label="scanner replay workspace",
+                            parent_descriptor=owner_descriptor,
+                            component="workspace",
+                        ):
+                            validate_real_scanner_normalization_replay(
+                                run=run,
+                                repository_root=workspace_path,
+                                retained_stdout=retained_bytes,
+                            )
+
+
+def _register_scanner_stream_portable_prefixes(
+    path: str,
+    prefixes: dict[str, tuple[str, str]],
+) -> None:
+    """Reject aliases that collide on common case-insensitive NFC filesystems."""
+
+    parts = PurePosixPath(path).parts
+    for index in range(len(parts)):
+        prefix = "/".join(parts[: index + 1])
+        kind = "file" if index == len(parts) - 1 else "directory"
+        portable_key = unicodedata.normalize("NFC", prefix).casefold()
+        prior = prefixes.get(portable_key)
+        if prior is not None and prior != (prefix, kind):
+            raise ValueError("scanner artifact paths contain a portable-name collision")
+        prefixes[portable_key] = (prefix, kind)
+
+
+def _scanner_relative_stat(
+    path: Path,
+    *,
+    parent_descriptor: int | None,
+    component: str | None,
+) -> os.stat_result:
+    if (
+        parent_descriptor is not None
+        and component is not None
+        and os.stat in os.supports_dir_fd
+        and os.stat in os.supports_follow_symlinks
+    ):
+        return os.stat(
+            component,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+    return path.lstat()
+
+
+@contextmanager
+def _open_scanner_custody_directory(
+    path: Path,
+    *,
+    label: str,
+    parent_descriptor: int | None = None,
+    component: str | None = None,
+) -> Iterator[tuple[int, os.stat_result]]:
+    """Hold one exact non-link directory while scanner evidence is consumed."""
+
+    try:
+        before = _scanner_relative_stat(
+            path,
+            parent_descriptor=parent_descriptor,
+            component=component,
+        )
+    except OSError as exc:
+        raise ValueError(f"{label} is unavailable") from exc
+    if (
+        not stat.S_ISDIR(before.st_mode)
+        or stat.S_ISLNK(before.st_mode)
+        or path.is_symlink()
+        or path.is_junction()
+    ):
+        raise ValueError(f"{label} must be a non-link directory")
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        descriptor = (
+            os.open(component, flags, dir_fd=parent_descriptor)
+            if (
+                parent_descriptor is not None
+                and component is not None
+                and os.open in os.supports_dir_fd
+            )
+            else os.open(path, flags)
+        )
+    except OSError as exc:
+        raise ValueError(f"{label} could not be opened safely") from exc
+    try:
+        opened = os.fstat(descriptor)
+        after_open = _scanner_relative_stat(
+            path,
+            parent_descriptor=parent_descriptor,
+            component=component,
+        )
+        if len(
+            {
+                _artifact_stat_identity(before),
+                _artifact_stat_identity(opened),
+                _artifact_stat_identity(after_open),
+            }
+        ) != 1 or not stat.S_ISDIR(opened.st_mode):
+            raise ValueError(f"{label} identity changed while it was opened")
+        yield descriptor, opened
+        finished = os.fstat(descriptor)
+        after_validation = _scanner_relative_stat(
+            path,
+            parent_descriptor=parent_descriptor,
+            component=component,
+        )
+        if (
+            len(
+                {
+                    _artifact_stat_identity(opened),
+                    _artifact_stat_identity(finished),
+                    _artifact_stat_identity(after_validation),
+                }
+            )
+            != 1
+        ):
+            raise ValueError(f"{label} identity changed during validation")
+    except OSError as exc:
+        raise ValueError(f"{label} identity could not be retained") from exc
+    finally:
+        os.close(descriptor)
+
+
+def _scanner_directory_entries(
+    descriptor: int,
+    path: Path,
+    *,
+    label: str,
+) -> frozenset[str]:
+    try:
+        entries = os.listdir(descriptor) if os.listdir in os.supports_fd else os.listdir(path)
+    except OSError as exc:
+        raise ValueError(f"{label} could not be listed safely") from exc
+    if any(not isinstance(entry, str) for entry in entries):
+        raise ValueError(f"{label} contains an unsupported entry name")
+    return frozenset(entries)
+
+
+def _require_exact_scanner_directory_entry(
+    descriptor: int,
+    path: Path,
+    component: str,
+    *,
+    label: str,
+) -> None:
+    if component not in _scanner_directory_entries(descriptor, path, label=label):
+        raise ValueError(f"{label} spelling differs from its exact directory entry")
+
+
+@contextmanager
+def _open_scanner_stream_observation(
+    path: Path,
+    *,
+    parent_descriptor: int,
+    component: str,
+    label: str,
+) -> Iterator[tuple[str, int, tuple[int, int], bytes]]:
+    """Hash one bounded stream through a descriptor held until validation completes."""
+
+    try:
+        before = _scanner_relative_stat(
+            path,
+            parent_descriptor=parent_descriptor,
+            component=component,
+        )
+    except OSError as exc:
+        raise ValueError(f"{label} is unavailable") from exc
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or stat.S_ISLNK(before.st_mode)
+        or before.st_nlink != 1
+        or before.st_size > _MAX_JSON_ARTIFACT_BYTES
+        or path.is_symlink()
+        or path.is_junction()
+    ):
+        raise ValueError(f"{label} must be a bounded unique regular file")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = (
+            os.open(component, flags, dir_fd=parent_descriptor)
+            if os.open in os.supports_dir_fd
+            else os.open(path, flags)
+        )
+    except OSError as exc:
+        raise ValueError(f"{label} could not be opened safely") from exc
+    digest = hashlib.sha256()
+    chunks: list[bytes] = []
+    size = 0
+    try:
+        opened = os.fstat(descriptor)
+        if _artifact_stat_identity(before) != _artifact_stat_identity(opened):
+            raise ValueError(f"{label} identity changed while it was opened")
+        while True:
+            remaining = _MAX_JSON_ARTIFACT_BYTES - size
+            chunk = os.read(descriptor, min(1024 * 1024, remaining + 1))
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > _MAX_JSON_ARTIFACT_BYTES:
+                raise ValueError(f"{label} exceeds its byte limit")
+            chunks.append(chunk)
+            digest.update(chunk)
+        finished = os.fstat(descriptor)
+        after_read = _scanner_relative_stat(
+            path,
+            parent_descriptor=parent_descriptor,
+            component=component,
+        )
+        if (
+            len(
+                {
+                    _artifact_stat_identity(before),
+                    _artifact_stat_identity(opened),
+                    _artifact_stat_identity(finished),
+                    _artifact_stat_identity(after_read),
+                }
+            )
+            != 1
+            or not stat.S_ISREG(finished.st_mode)
+            or finished.st_nlink != 1
+            or finished.st_size != size
+        ):
+            raise ValueError(f"{label} changed while it was read")
+        yield digest.hexdigest(), size, (opened.st_dev, opened.st_ino), b"".join(chunks)
+        descriptor_after = os.fstat(descriptor)
+        path_after = _scanner_relative_stat(
+            path,
+            parent_descriptor=parent_descriptor,
+            component=component,
+        )
+        if (
+            len(
+                {
+                    _artifact_stat_identity(opened),
+                    _artifact_stat_identity(descriptor_after),
+                    _artifact_stat_identity(path_after),
+                }
+            )
+            != 1
+        ):
+            raise ValueError(f"{label} changed during semantic validation")
+    except OSError as exc:
+        raise ValueError(f"{label} could not be read safely") from exc
+    finally:
+        os.close(descriptor)
 
 
 def _validate_static_scanner_finding_projection(

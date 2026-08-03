@@ -161,6 +161,103 @@ def _cross_shard_activation_input(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _judgment_payload(
+    *,
+    group_id: str = "group-a",
+    candidate_id: str = "candidate-a",
+    finding_id: str = "finding-a",
+) -> dict[str, Any]:
+    finding_sha256 = _sha256(f"{finding_id}:complete-finding-payload")
+
+    def evidence_binding(kind: str, subject_id: str, identity: object) -> dict[str, str]:
+        payload_sha256 = scheduler_canonical_sha256(
+            {
+                "kind": kind,
+                "subject_id": subject_id,
+                "identity": identity,
+                "complete_payload": True,
+            }
+        )
+        return {
+            "record_id": scheduler_canonical_sha256(
+                {
+                    "kind": kind,
+                    "subject_id": subject_id,
+                    "payload_sha256": payload_sha256,
+                }
+            ),
+            "subject_id": subject_id,
+            "payload_sha256": payload_sha256,
+        }
+
+    terminal_findings = [
+        {
+            "group_id": group_id,
+            "candidate_ids": [candidate_id],
+            "finding_id": finding_id,
+            "finding_payload_sha256": finding_sha256,
+            "state": "REPORTED_ACTIVE",
+            "finding_status": "needs_review",
+            "finding_severity": "high",
+            "finding_origin_kind": "model_review",
+        }
+    ]
+    body: dict[str, Any] = {
+        "schema_version": "2.0",
+        "algorithm": "mmaudit.evidence-cap-terminal-authority.v2",
+        "severity_threshold": "medium",
+        "group_ids": [group_id],
+        "judge_decision_ids": [group_id],
+        "candidate_ids": [candidate_id],
+        "candidate_payload_sha256s": {
+            candidate_id: _sha256(f"{candidate_id}:complete-candidate-payload")
+        },
+        "candidate_grouping_sha256": scheduler_canonical_sha256(
+            [{"group_id": group_id, "candidate_ids": [candidate_id]}]
+        ),
+        "terminal_findings": terminal_findings,
+        "final_finding_ids": [finding_id],
+        "rejected_finding_ids": [],
+        "filtered_finding_ids": [],
+        "final_finding_payload_sha256s": {finding_id: finding_sha256},
+        "rejected_finding_payload_sha256s": {},
+        "filtered_finding_payload_sha256s": {},
+        "judge_decisions": [evidence_binding("judge", group_id, {"group_id": group_id})],
+        "verification_decisions": [
+            evidence_binding("verification", candidate_id, {"candidate_id": candidate_id})
+        ],
+        "cross_examination_decisions": [
+            evidence_binding(
+                "cross_examination",
+                candidate_id,
+                {"candidate_id": candidate_id, "reviewer_index": 1},
+            )
+        ],
+        "falsification_decisions": [
+            evidence_binding(
+                "falsification",
+                candidate_id,
+                {"candidate_id": candidate_id, "test_name": "negative-control"},
+            )
+        ],
+        "reproduction_results": [
+            evidence_binding(
+                "reproduction",
+                candidate_id,
+                {"candidate_id": candidate_id, "test_name": "local-regression"},
+            )
+        ],
+        "reproduction_resolutions": [
+            evidence_binding(
+                "reproduction_resolution",
+                candidate_id,
+                {"candidate_id": candidate_id},
+            )
+        ],
+    }
+    return {**body, "judgment_sha256": scheduler_canonical_sha256(body)}
+
+
 @pytest.mark.parametrize(
     "model",
     (
@@ -515,12 +612,9 @@ def test_evidence_cap_contract_is_bound_to_judge_partition_and_activation() -> N
         Any,
         SimpleNamespace(tasks=(judge_task, host_task), manifest=_synthetic_manifest(seed)),
     )
-    output = SchedulerEvidenceCapJudgmentOutput(
-        group_ids=("group-a",),
-        judge_decision_ids=("group-a",),
-        final_finding_ids=("finding-a",),
-        rejected_finding_ids=(),
-    ).model_dump(mode="json")
+    output = SchedulerEvidenceCapJudgmentOutput.model_validate(_judgment_payload()).model_dump(
+        mode="json"
+    )
     _parse_scheduler_host_payload(
         plan=plan,
         task=host_task,
@@ -528,7 +622,7 @@ def test_evidence_cap_contract_is_bound_to_judge_partition_and_activation() -> N
         payload=output,
     )
 
-    wrong = {**output, "group_ids": ["group-b"], "judge_decision_ids": ["group-b"]}
+    wrong = _judgment_payload(group_id="group-b")
     with pytest.raises(ValueError, match="judge partition"):
         _parse_scheduler_host_payload(
             plan=plan,
@@ -537,10 +631,128 @@ def test_evidence_cap_contract_is_bound_to_judge_partition_and_activation() -> N
             payload=wrong,
         )
 
-    with pytest.raises(ValidationError):
-        SchedulerEvidenceCapJudgmentOutput(
-            group_ids=("group-a", "group-b"),
-            judge_decision_ids=("group-a",),
-            final_finding_ids=(),
-            rejected_finding_ids=(),
+    changed_payload_sha256 = _sha256("substituted-verification-payload")
+    changed_verification = {
+        **output["verification_decisions"][0],
+        "record_id": scheduler_canonical_sha256(
+            {
+                "kind": "verification",
+                "subject_id": "candidate-a",
+                "payload_sha256": changed_payload_sha256,
+            }
+        ),
+        "payload_sha256": changed_payload_sha256,
+    }
+    changed_evidence = {**output, "verification_decisions": [changed_verification]}
+    changed_evidence["judgment_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in changed_evidence.items() if key != "judgment_sha256"}
+    )
+    with pytest.raises(ValueError, match="activated input"):
+        _parse_scheduler_host_payload(
+            plan=plan,
+            task=host_task,
+            activation=_activation(output),
+            payload=changed_evidence,
         )
+
+    incomplete = {**output, "judge_decision_ids": []}
+    incomplete["judgment_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in incomplete.items() if key != "judgment_sha256"}
+    )
+    with pytest.raises(ValidationError):
+        SchedulerEvidenceCapJudgmentOutput.model_validate(incomplete)
+
+
+def test_evidence_cap_contract_rejects_terminal_partition_and_evidence_drift() -> None:
+    payload = _judgment_payload()
+    SchedulerEvidenceCapJudgmentOutput.model_validate(payload)
+
+    second_payload_sha256 = _sha256("second-independent-verification")
+    second_verification = {
+        "record_id": scheduler_canonical_sha256(
+            {
+                "kind": "verification",
+                "subject_id": "candidate-a",
+                "payload_sha256": second_payload_sha256,
+            }
+        ),
+        "subject_id": "candidate-a",
+        "payload_sha256": second_payload_sha256,
+    }
+    multiple_verifications = {
+        **payload,
+        "verification_decisions": sorted(
+            [*payload["verification_decisions"], second_verification],
+            key=lambda item: (item["subject_id"], item["record_id"]),
+        ),
+    }
+    multiple_verifications["judgment_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in multiple_verifications.items() if key != "judgment_sha256"}
+    )
+    SchedulerEvidenceCapJudgmentOutput.model_validate(multiple_verifications)
+
+    unknown_payload_sha256 = payload["verification_decisions"][0]["payload_sha256"]
+    unknown_subject = {
+        **payload["verification_decisions"][0],
+        "record_id": scheduler_canonical_sha256(
+            {
+                "kind": "verification",
+                "subject_id": "candidate-unknown",
+                "payload_sha256": unknown_payload_sha256,
+            }
+        ),
+        "subject_id": "candidate-unknown",
+    }
+    drifted_evidence = {**payload, "verification_decisions": [unknown_subject]}
+    drifted_evidence["judgment_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in drifted_evidence.items() if key != "judgment_sha256"}
+    )
+    with pytest.raises(ValidationError, match="partitions are inconsistent"):
+        SchedulerEvidenceCapJudgmentOutput.model_validate(drifted_evidence)
+
+    reproduction_payload_sha256 = payload["reproduction_results"][0]["payload_sha256"]
+    unknown_reproduction = {
+        **payload["reproduction_results"][0],
+        "record_id": scheduler_canonical_sha256(
+            {
+                "kind": "reproduction",
+                "subject_id": "candidate-post-judgment",
+                "payload_sha256": reproduction_payload_sha256,
+            }
+        ),
+        "subject_id": "candidate-post-judgment",
+    }
+    reproduction_drift = {**payload, "reproduction_results": [unknown_reproduction]}
+    reproduction_drift["judgment_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in reproduction_drift.items() if key != "judgment_sha256"}
+    )
+    with pytest.raises(ValidationError, match="partitions are inconsistent"):
+        SchedulerEvidenceCapJudgmentOutput.model_validate(reproduction_drift)
+
+    filtered_binding = {
+        **payload["terminal_findings"][0],
+        "state": "FILTERED_BELOW_THRESHOLD",
+    }
+    filtered = {
+        **payload,
+        "terminal_findings": [filtered_binding],
+        "final_finding_ids": [],
+        "filtered_finding_ids": ["finding-a"],
+        "final_finding_payload_sha256s": {},
+        "filtered_finding_payload_sha256s": payload["final_finding_payload_sha256s"],
+    }
+    filtered["judgment_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in filtered.items() if key != "judgment_sha256"}
+    )
+    with pytest.raises(ValidationError, match="violates report threshold"):
+        SchedulerEvidenceCapJudgmentOutput.model_validate(filtered)
+
+    tampered_hash = {
+        **payload,
+        "final_finding_payload_sha256s": {"finding-a": _sha256("changed-finding")},
+    }
+    tampered_hash["judgment_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in tampered_hash.items() if key != "judgment_sha256"}
+    )
+    with pytest.raises(ValidationError, match="hash or disposition"):
+        SchedulerEvidenceCapJudgmentOutput.model_validate(tampered_hash)

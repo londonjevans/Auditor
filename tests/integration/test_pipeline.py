@@ -142,6 +142,7 @@ from mmaudit.scanners.base import (
     scanner_workspace_sha256,
 )
 from mmaudit.scanners.fork_matrix import repository_fork_matrix_timeout_budget_seconds
+from mmaudit.scanners.semgrep import SemgrepScanner
 from mmaudit.solidity.compile import CompilationRun
 from mmaudit.solidity.invariant_execution import FoundryInvariantRunner
 from mmaudit.solidity.reproduction import translate_foundry_test
@@ -254,18 +255,53 @@ class SyntheticValidatedScannerRunner(StaticScannerRunner):
 
     async def run_all(self, *args: Any, **kwargs: Any) -> list[ScannerRun]:
         runs = await super().run_all(*args, **kwargs)
+        root = Path(args[0] if args else kwargs["root"])
         private_dir = Path(args[1] if len(args) > 1 else kwargs["private_dir"])
         raw_output = private_dir / runs[0].scanner / "output.json"
         raw_output.parent.mkdir(parents=True, exist_ok=True)
-        raw_output.write_bytes(b"{}")
+        workspace = raw_output.parent / "workspace"
+        workspace.mkdir()
+        source = root / self.finding_path
+        workspace_source = workspace / self.finding_path
+        workspace_source.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, workspace_source)
+        if runs[0].scanner != "semgrep":
+            raise ValueError("synthetic validated scanner fixture supports only Semgrep")
+        raw_bytes = json.dumps(
+            {
+                "errors": [],
+                "results": [
+                    {
+                        "check_id": "synthetic-sql-injection",
+                        "path": self.finding_path,
+                        "start": {"line": self.finding_line},
+                        "end": {"line": self.finding_line},
+                        "extra": {
+                            "message": "Formatted SQL query",
+                            "severity": "ERROR",
+                            "metadata": {
+                                "cwe": ["CWE-89"],
+                                "shortlink": "Synthetic SQL injection",
+                            },
+                            "engine_kind": None,
+                        },
+                    }
+                ],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        raw_output.write_bytes(raw_bytes)
+        findings = SemgrepScanner().parse(root, raw_bytes.decode(), raw_output.parent)
         run = runs[0].model_copy(
             update={
                 "execution_evidence": ExecutionEvidenceKind.REAL,
                 "command": ["/trusted/synthetic-scanner", "--machine-output"],
                 "executable_sha256": "1" * 64,
+                "findings": findings,
                 "raw_output_path": f"{runs[0].scanner}/output.json",
-                "raw_output_sha256": hashlib.sha256(b"{}").hexdigest(),
-                "raw_output_bytes": 2,
+                "raw_output_sha256": hashlib.sha256(raw_bytes).hexdigest(),
+                "raw_output_bytes": len(raw_bytes),
                 "process_exit_code": 0,
                 "isolation_backend": "bubblewrap",
                 "isolation_attestation_sha256": "2" * 64,
@@ -290,7 +326,9 @@ class SyntheticTwoValidatedScannerRunner(SyntheticValidatedScannerRunner):
         private_dir = Path(args[1] if len(args) > 1 else kwargs["private_dir"])
         raw_output = private_dir / "gitleaks" / "output.json"
         raw_output.parent.mkdir(parents=True, exist_ok=True)
-        raw_output.write_bytes(b"{}")
+        (raw_output.parent / "workspace").mkdir()
+        raw_bytes = b"[]"
+        raw_output.write_bytes(raw_bytes)
         second = runs[0].model_copy(
             update={
                 "scanner": "gitleaks",
@@ -298,6 +336,8 @@ class SyntheticTwoValidatedScannerRunner(SyntheticValidatedScannerRunner):
                 "command": ["/trusted/synthetic-gitleaks", "--machine-output"],
                 "executable_sha256": "3" * 64,
                 "raw_output_path": "gitleaks/output.json",
+                "raw_output_sha256": hashlib.sha256(raw_bytes).hexdigest(),
+                "raw_output_bytes": len(raw_bytes),
                 "execution_observation_sha256": None,
             }
         )

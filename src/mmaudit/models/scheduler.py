@@ -23,7 +23,7 @@ from typing import Any, Literal, Self, cast
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 from pydantic_core import SchemaValidator
 
-from mmaudit.constants import SPECIALIST_INVESTIGATOR_ROLES
+from mmaudit.constants import SEVERITY_ORDER, SPECIALIST_INVESTIGATOR_ROLES
 from mmaudit.models.openrouter import strict_json_schema_sha256
 from mmaudit.models.schemas import (
     CandidateCrossExaminationResponse,
@@ -31,6 +31,8 @@ from mmaudit.models.schemas import (
     ContextRequestEvidence,
     ExecutionEvidenceKind,
     FalsificationBatch,
+    FindingOriginKind,
+    FindingStatus,
     GeneratedFoundryTestBatch,
     GeneratedFoundryTestSpec,
     InvariantReviewBatch,
@@ -41,6 +43,7 @@ from mmaudit.models.schemas import (
     ModelSurfaceReviewStatus,
     ReportQualityReview,
     ReproductionResult,
+    Severity,
     SpecialistAcceptedOutcome,
     SpecialistAcceptedOutcomeKind,
     StrictModel,
@@ -2665,34 +2668,215 @@ class SchedulerReproductionHostOutput(StrictModel):
         return self
 
 
-class SchedulerEvidenceCapJudgmentOutput(StrictModel):
-    """Closed pass-seven host projection after evidence-capped judgment."""
+class SchedulerTerminalFindingState(StrEnum):
+    """Exact client-facing disposition authorized by pass seven."""
 
+    REPORTED_ACTIVE = "REPORTED_ACTIVE"
+    REPORTED_REJECTED = "REPORTED_REJECTED"
+    FILTERED_BELOW_THRESHOLD = "FILTERED_BELOW_THRESHOLD"
+
+
+class SchedulerEvidencePayloadBinding(StrictModel):
+    """Hash one complete typed payload while retaining its authoritative subject."""
+
+    record_id: str = Field(pattern=_SHA256_PATTERN)
+    subject_id: str = Field(min_length=1, max_length=500)
+    payload_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+
+class SchedulerTerminalFindingBinding(StrictModel):
+    """Bind one reduced group to its exact finding payload and terminal disposition."""
+
+    group_id: str = Field(min_length=1, max_length=500)
+    candidate_ids: tuple[str, ...] = Field(min_length=1, max_length=100_000)
+    finding_id: str = Field(min_length=1, max_length=500)
+    finding_payload_sha256: str = Field(pattern=_SHA256_PATTERN)
+    state: SchedulerTerminalFindingState
+    finding_status: FindingStatus
+    finding_severity: Severity
+    finding_origin_kind: FindingOriginKind
+
+    @field_validator("candidate_ids")
+    @classmethod
+    def candidates_are_canonical(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return _canonical_string_inventory(value, "terminal finding candidate")
+
+
+class SchedulerEvidenceCapJudgmentOutput(StrictModel):
+    """Closed pass-seven authority over exact terminal report evidence."""
+
+    schema_version: Literal["2.0"] = "2.0"
+    algorithm: Literal["mmaudit.evidence-cap-terminal-authority.v2"]
+    severity_threshold: Severity
     group_ids: tuple[str, ...] = Field(max_length=100_000)
     judge_decision_ids: tuple[str, ...] = Field(max_length=100_000)
+    candidate_ids: tuple[str, ...] = Field(max_length=100_000)
+    candidate_payload_sha256s: dict[str, str] = Field(max_length=100_000)
+    candidate_grouping_sha256: str = Field(pattern=_SHA256_PATTERN)
+    terminal_findings: tuple[SchedulerTerminalFindingBinding, ...] = Field(max_length=100_000)
     final_finding_ids: tuple[str, ...] = Field(max_length=100_000)
     rejected_finding_ids: tuple[str, ...] = Field(max_length=100_000)
-    filtered_finding_ids: tuple[str, ...] = Field(default=(), max_length=100_000)
+    filtered_finding_ids: tuple[str, ...] = Field(max_length=100_000)
+    final_finding_payload_sha256s: dict[str, str] = Field(max_length=100_000)
+    rejected_finding_payload_sha256s: dict[str, str] = Field(max_length=100_000)
+    filtered_finding_payload_sha256s: dict[str, str] = Field(max_length=100_000)
+    judge_decisions: tuple[SchedulerEvidencePayloadBinding, ...] = Field(max_length=100_000)
+    verification_decisions: tuple[SchedulerEvidencePayloadBinding, ...] = Field(max_length=100_000)
+    cross_examination_decisions: tuple[SchedulerEvidencePayloadBinding, ...] = Field(
+        max_length=100_000
+    )
+    falsification_decisions: tuple[SchedulerEvidencePayloadBinding, ...] = Field(max_length=100_000)
+    reproduction_results: tuple[SchedulerEvidencePayloadBinding, ...] = Field(max_length=100_000)
+    reproduction_resolutions: tuple[SchedulerEvidencePayloadBinding, ...] = Field(
+        max_length=100_000
+    )
+    judgment_sha256: str = Field(pattern=_SHA256_PATTERN)
 
     @model_validator(mode="after")
-    def inventories_are_canonical_and_disjoint(self) -> Self:
+    def inventories_are_canonical_complete_and_hash_bound(self) -> Self:
         groups = _canonical_string_inventory(self.group_ids, "judgment group")
         judges = _canonical_string_inventory(self.judge_decision_ids, "judge decision")
+        candidates = _canonical_string_inventory(self.candidate_ids, "judgment candidate")
         final = _canonical_string_inventory(self.final_finding_ids, "final finding")
         rejected = _canonical_string_inventory(self.rejected_finding_ids, "rejected finding")
         filtered = _canonical_string_inventory(self.filtered_finding_ids, "filtered finding")
-        partitions = (set(final), set(rejected), set(filtered))
-        overlapping = (
-            partitions[0] & partitions[1]
-            or partitions[0] & partitions[2]
-            or partitions[1] & partitions[2]
+
+        def require_payload_hashes(values: dict[str, str], label: str) -> tuple[str, ...]:
+            keys = tuple(values)
+            if keys != tuple(sorted(set(keys))) or any(
+                re.fullmatch(_SHA256_PATTERN, value) is None for value in values.values()
+            ):
+                raise ValueError(f"scheduler {label} payload hashes are not canonical")
+            return keys
+
+        candidate_hash_ids = require_payload_hashes(
+            self.candidate_payload_sha256s,
+            "candidate",
+        )
+        final_hash_ids = require_payload_hashes(
+            self.final_finding_payload_sha256s,
+            "final finding",
+        )
+        rejected_hash_ids = require_payload_hashes(
+            self.rejected_finding_payload_sha256s,
+            "rejected finding",
+        )
+        filtered_hash_ids = require_payload_hashes(
+            self.filtered_finding_payload_sha256s,
+            "filtered finding",
+        )
+
+        terminal_group_ids = tuple(item.group_id for item in self.terminal_findings)
+        terminal_finding_ids = tuple(item.finding_id for item in self.terminal_findings)
+        grouped_candidate_ids = tuple(
+            candidate_id for item in self.terminal_findings for candidate_id in item.candidate_ids
+        )
+        expected_grouping_sha256 = scheduler_canonical_sha256(
+            [
+                {
+                    "group_id": item.group_id,
+                    "candidate_ids": list(item.candidate_ids),
+                }
+                for item in self.terminal_findings
+            ]
+        )
+
+        evidence_inventories = (
+            ("judge", self.judge_decisions),
+            ("verification", self.verification_decisions),
+            ("cross_examination", self.cross_examination_decisions),
+            ("falsification", self.falsification_decisions),
+            ("reproduction", self.reproduction_results),
+            ("reproduction_resolution", self.reproduction_resolutions),
+        )
+        for label, inventory in evidence_inventories:
+            identities = tuple((item.subject_id, item.record_id) for item in inventory)
+            if identities != tuple(sorted(set(identities))) or any(
+                item.record_id
+                != scheduler_canonical_sha256(
+                    {
+                        "kind": label,
+                        "subject_id": item.subject_id,
+                        "payload_sha256": item.payload_sha256,
+                    }
+                )
+                for item in inventory
+            ):
+                raise ValueError(f"scheduler {label} evidence inventory is not canonical")
+
+        judge_subjects = tuple(item.subject_id for item in self.judge_decisions)
+        candidate_evidence_inventories = (
+            self.verification_decisions,
+            self.cross_examination_decisions,
+            self.falsification_decisions,
+            self.reproduction_results,
+            self.reproduction_resolutions,
+        )
+        candidate_subjects = set(candidates)
+        partition_sets = (set(final), set(rejected), set(filtered))
+        overlapping = any(
+            left & right
+            for index, left in enumerate(partition_sets)
+            for right in partition_sets[index + 1 :]
         )
         if (
             judges != groups
+            or candidate_hash_ids != candidates
+            or terminal_group_ids != groups
+            or tuple(sorted(grouped_candidate_ids)) != candidates
+            or len(set(grouped_candidate_ids)) != len(grouped_candidate_ids)
+            or len(set(terminal_finding_ids)) != len(terminal_finding_ids)
+            or self.candidate_grouping_sha256 != expected_grouping_sha256
             or overlapping
-            or sum(len(partition) for partition in partitions) != len(groups)
+            or tuple(sorted(terminal_finding_ids)) != tuple(sorted((*final, *rejected, *filtered)))
+            or final_hash_ids != final
+            or rejected_hash_ids != rejected
+            or filtered_hash_ids != filtered
+            or judge_subjects != groups
+            or any(
+                not {item.subject_id for item in inventory} <= candidate_subjects
+                for inventory in candidate_evidence_inventories
+            )
+            or len({item.subject_id for item in self.reproduction_resolutions})
+            != len(self.reproduction_resolutions)
         ):
             raise ValueError("scheduler evidence-cap judgment partitions are inconsistent")
+
+        finding_hashes_by_state = {
+            SchedulerTerminalFindingState.REPORTED_ACTIVE: self.final_finding_payload_sha256s,
+            SchedulerTerminalFindingState.REPORTED_REJECTED: (
+                self.rejected_finding_payload_sha256s
+            ),
+            SchedulerTerminalFindingState.FILTERED_BELOW_THRESHOLD: (
+                self.filtered_finding_payload_sha256s
+            ),
+        }
+        threshold_rank = SEVERITY_ORDER[self.severity_threshold.value]
+        for item in self.terminal_findings:
+            if finding_hashes_by_state[item.state].get(item.finding_id) != (
+                item.finding_payload_sha256
+            ):
+                raise ValueError("scheduler terminal finding hash or disposition is inconsistent")
+            severity_rank = SEVERITY_ORDER[item.finding_severity.value]
+            if item.state is SchedulerTerminalFindingState.REPORTED_REJECTED:
+                if item.finding_status is not FindingStatus.REJECTED:
+                    raise ValueError("scheduler rejected disposition retains an active finding")
+            elif item.finding_status is FindingStatus.REJECTED:
+                raise ValueError("scheduler active or filtered disposition retains a rejection")
+            elif item.state is SchedulerTerminalFindingState.FILTERED_BELOW_THRESHOLD:
+                if (
+                    item.finding_origin_kind is FindingOriginKind.DETERMINISTIC_EXECUTION
+                    or severity_rank >= threshold_rank
+                ):
+                    raise ValueError("scheduler filtered disposition violates report threshold")
+            elif (
+                item.finding_origin_kind is not FindingOriginKind.DETERMINISTIC_EXECUTION
+                and severity_rank < threshold_rank
+            ):
+                raise ValueError("scheduler active disposition violates report threshold")
+
+        if self.judgment_sha256 != _model_sha256(self, exclude={"judgment_sha256"}):
+            raise ValueError("scheduler evidence-cap judgment hash is inconsistent")
         return self
 
 

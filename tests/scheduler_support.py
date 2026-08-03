@@ -334,12 +334,99 @@ def build_scheduler_test_host_payload(
                 for candidate_id in model_task.candidate_ids
             )
         )
-        return SchedulerEvidenceCapJudgmentOutput(
-            group_ids=group_ids,
-            judge_decision_ids=group_ids,
-            final_finding_ids=group_ids,
-            rejected_finding_ids=(),
+        if group_ids:
+            bound_candidates = candidates or tuple(
+                f"candidate:{group_id}" for group_id in group_ids
+            )
+            if len(bound_candidates) < len(group_ids):
+                bound_candidates = tuple(
+                    sorted(
+                        (
+                            *bound_candidates,
+                            *(
+                                f"candidate:{group_id}"
+                                for group_id in group_ids[len(bound_candidates) :]
+                            ),
+                        )
+                    )
+                )
+            grouped_candidates = {
+                group_id: (
+                    (bound_candidates[index],)
+                    if index < len(group_ids) - 1
+                    else bound_candidates[index:]
+                )
+                for index, group_id in enumerate(group_ids)
+            }
+        else:
+            bound_candidates = ()
+            grouped_candidates = {}
+        candidate_hashes = {
+            candidate_id: scheduler_canonical_sha256({"candidate_id": candidate_id})
+            for candidate_id in bound_candidates
+        }
+        terminal_findings = tuple(
+            {
+                "group_id": group_id,
+                "candidate_ids": grouped_candidates[group_id],
+                "finding_id": group_id,
+                "finding_payload_sha256": scheduler_canonical_sha256({"finding_id": group_id}),
+                "state": "REPORTED_ACTIVE",
+                "finding_status": "needs_review",
+                "finding_severity": "high",
+                "finding_origin_kind": "model_review",
+            }
+            for group_id in group_ids
         )
+        body: dict[str, object] = {
+            "schema_version": "2.0",
+            "algorithm": "mmaudit.evidence-cap-terminal-authority.v2",
+            "severity_threshold": "medium",
+            "group_ids": group_ids,
+            "judge_decision_ids": group_ids,
+            "candidate_ids": bound_candidates,
+            "candidate_payload_sha256s": candidate_hashes,
+            "candidate_grouping_sha256": scheduler_canonical_sha256(
+                [
+                    {
+                        "group_id": item["group_id"],
+                        "candidate_ids": item["candidate_ids"],
+                    }
+                    for item in terminal_findings
+                ]
+            ),
+            "terminal_findings": terminal_findings,
+            "final_finding_ids": group_ids,
+            "rejected_finding_ids": (),
+            "filtered_finding_ids": (),
+            "final_finding_payload_sha256s": {
+                str(item["finding_id"]): str(item["finding_payload_sha256"])
+                for item in terminal_findings
+            },
+            "rejected_finding_payload_sha256s": {},
+            "filtered_finding_payload_sha256s": {},
+            "judge_decisions": tuple(
+                {
+                    "record_id": scheduler_canonical_sha256(
+                        {
+                            "kind": "judge",
+                            "subject_id": group_id,
+                            "payload_sha256": scheduler_canonical_sha256({"group_id": group_id}),
+                        }
+                    ),
+                    "subject_id": group_id,
+                    "payload_sha256": scheduler_canonical_sha256({"group_id": group_id}),
+                }
+                for group_id in group_ids
+            ),
+            "verification_decisions": (),
+            "cross_examination_decisions": (),
+            "falsification_decisions": (),
+            "reproduction_results": (),
+            "reproduction_resolutions": (),
+        }
+        body["judgment_sha256"] = scheduler_canonical_sha256(body)
+        return SchedulerEvidenceCapJudgmentOutput.model_validate(body)
     raise ValueError(f"synthetic scheduler host role lacks a contract: {task.role}")
 
 

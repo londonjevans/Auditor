@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-03T21:19:02Z",
-  "candidate_commit": "d336c5ba056879dd8a1f722c43281afecaa8be64",
-  "autorun_status": "PAUSED_OPERATOR_REQUEST",
+  "updated_at": "2026-08-03T21:36:42Z",
+  "candidate_commit": "7d4ab0040fd272b72fadcf6d58cf5d094262974f",
+  "autorun_status": "PAUSED_BY_OPERATOR",
   "current_milestone": "client_report_and_forensic_bundle",
   "current_ticket": "V3-REPORT-001 (IN_PROGRESS)",
-  "last_checkpoint_commit": "d336c5ba056879dd8a1f722c43281afecaa8be64",
+  "last_checkpoint_commit": "7d4ab0040fd272b72fadcf6d58cf5d094262974f",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,
@@ -23,16 +23,16 @@
     "V3-FORKSUITE-001.hardhat": "Real Hardhat execution requires the process-attested digest-pinned rootless single-loopback runtime and trusted image-baked reporter specified by V3-HARDHAT-001."
   },
   "last_validation": {
-    "command": ".venv/bin/pytest -q tests/unit/test_client_forensic_reporting.py tests/unit/test_client_forensic_reporting_adversarial.py tests/unit/test_report_status_projection.py tests/unit/test_manifest.py tests/unit/test_scheduler_host_contracts.py tests/unit/test_scheduler_models.py tests/integration/test_pipeline.py::test_high_candidate_below_critical_threshold_remains_in_forensic_custody --tb=short",
-    "result": "PASS: 150 passed in 13.32s; affected Ruff and strict mypy passed. Ticket remains IN_PROGRESS pending scanner and scheduler authority bindings."
+    "command": ".venv/bin/pytest -q tests/integration/test_pipeline.py::test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete",
+    "result": "INTERRUPTED_BY_OPERATOR_PAUSE after approximately 96 seconds; no passing or failing result claimed. The process was terminated with SIGINT and no repository validation process remains active."
   },
   "pause_state": {
     "requested_at": "2026-08-03T20:08:17Z",
     "resumed_at": "2026-08-03T20:11:52Z",
-    "result": "Operator requested a graceful pause at 2026-08-03T21:17:45Z. All delegated work stopped; the partial threshold-filtered custody slice is preserved and no validation/provider process remains active.",
-    "requested_at_latest": "2026-08-03T21:17:45Z",
-    "resumed_at_latest": "2026-08-03T21:05:26Z",
-    "resume_action": "Complete threshold-filtered candidate and decision custody, update current-artifact fixtures, repair the three recorded scanner/usage custody regressions, then run integrated V3-REPORT-001 gates."
+    "result": "Paused safely at 2026-08-03T21:36:42Z with V3-REPORT-001 still IN_PROGRESS. All delegated agents and the active focused pytest process were stopped; no completion claim is made.",
+    "requested_at_latest": "2026-08-03T21:36:42Z",
+    "resumed_at_latest": "2026-08-03T21:22:01Z",
+    "resume_action": "Complete scanner semantic/stream custody and scheduler-to-report authority bindings, restore qualified-routing usage tamper coverage, synchronize schemas, then run integrated V3-REPORT-001 gates."
   },
   "scheduler_assurance_validation": {
     "status": "PASS_COMPONENT_FULL_ASSURANCE",

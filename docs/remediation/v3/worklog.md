@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_OPERATOR_REQUEST
+AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Client report and forensic evidence bundle
 CURRENT_TICKET: V3-REPORT-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-FIXTURE-001 (COMPLETE)
-NEXT_ACTION: Resume V3-REPORT-001 at the scanner semantic/stream-ownership and scheduler-to-report authority bindings; restore the qualified-routing usage-tamper regression, regenerate schemas, then run integrated ticket-close gates.
-LAST_COMMAND: `.venv/bin/pytest -q tests/unit/test_client_forensic_reporting.py tests/unit/test_client_forensic_reporting_adversarial.py tests/unit/test_report_status_projection.py tests/unit/test_manifest.py tests/unit/test_scheduler_host_contracts.py tests/unit/test_scheduler_models.py tests/integration/test_pipeline.py::test_high_candidate_below_critical_threshold_remains_in_forensic_custody --tb=short`.
-LAST_RESULT: PASS: `150 passed in 13.32s`; affected Ruff and strict mypy also passed. The ticket remains IN_PROGRESS because scanner and scheduler authority bindings are not implemented.
+NEXT_ACTION: Resume V3-REPORT-001 from the preserved authority-binding WIP: finish scanner replay authority and scheduler terminal-state custody, harden or exclude permissive OSV/Trivy normalization, synchronize schemas, then rerun the interrupted focused integration and integrated ticket-close matrix.
+LAST_COMMAND: `.venv/bin/pytest -q tests/integration/test_pipeline.py::test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete`
+LAST_RESULT: INTERRUPTED_BY_OPERATOR_PAUSE after approximately 96 seconds; no result is claimed. SIGINT stopped the process, all delegated agents are interrupted, and process inspection found no remaining pytest, Ruff, mypy, mmaudit, or repository Python validation process.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
-LAST_CHECKPOINT_COMMIT: d336c5ba056879dd8a1f722c43281afecaa8be64
+LAST_CHECKPOINT_COMMIT: 7d4ab0040fd272b72fadcf6d58cf5d094262974f
 
 ## 2026-08-03T21:01:54Z — Graceful operator pause
 
@@ -74,6 +74,33 @@ LAST_CHECKPOINT_COMMIT: d336c5ba056879dd8a1f722c43281afecaa8be64
   weaken current manifest issuance or count a self-consistent reseal as independent authority.
 - **WIP checkpoint:** The validated partial implementation is preserved at
   `d336c5ba056879dd8a1f722c43281afecaa8be64`; this is not ticket-complete evidence.
+- **Resume (2026-08-03T21:22:01Z):** Persistent-goal continuation resumed from the clean,
+  SSH-synchronized paused-state commit `7d4ab0040fd272b72fadcf6d58cf5d094262974f`.
+  Work remains bounded to the recorded authority and schema gaps; no paid provider call is
+  needed for this slice.
+
+## 2026-08-03T21:36:42Z — Graceful operator pause
+
+- **State:** `PAUSED_BY_OPERATOR`; `V3-REPORT-001` remains `IN_PROGRESS`. No ticket,
+  release, scanner-authority, or scheduler-authority completion is claimed.
+- **Preserved WIP:** Trusted scanner normalization replay, no-follow stream/workspace custody,
+  portable path and inode collision guards, scheduler terminal-finding authority payloads,
+  pipeline pass-seven construction, qualified-routing tamper coverage, and production-shaped
+  Semgrep integration fixtures are present in the working tree.
+- **Known unfinished seams:** Require every credited static-analyzer finding to match the exact
+  replay-authorized scanner fingerprint set; remove the duplicated manifest lookup; harden or
+  exclude permissive OSV/Trivy output from authority; finish scheduler-to-public-artifact binding;
+  synchronize generated schemas; and run focused, static, integration, and broader gates.
+- **Interrupted command:** `.venv/bin/pytest -q
+  tests/integration/test_pipeline.py::test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete`
+  was stopped with SIGINT after approximately `96` seconds. It is recorded only as
+  `INTERRUPTED_BY_OPERATOR_PAUSE`, never as pass or fail.
+- **Safety/cost:** All three delegated agents were interrupted at their current saved-file
+  boundaries. Process inspection found no remaining validation process. No provider call,
+  public RPC, secret read, target-controlled command, or paid operation occurred.
+- **Exact resume action:** Inspect the current diff before editing, re-engage the scanner and
+  scheduler owners on their recorded files, complete the two authority joins, then rerun the
+  interrupted integration test before any ticket-close claim.
 
 ## 2026-08-03 — V3-REPORT-001
 

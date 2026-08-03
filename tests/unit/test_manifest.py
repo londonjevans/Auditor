@@ -91,7 +91,11 @@ from mmaudit.reporting.status import report_status_metadata
 from mmaudit.repository.locations import validate_location
 from mmaudit.scanners.base import scanner_fingerprint
 from mmaudit.scanners.projection import project_scanner_finding
-from tests.identity_fixtures import bind_synthetic_usage_identity, synthetic_token_plan_routing
+from tests.identity_fixtures import (
+    bind_synthetic_usage_identity,
+    reattest_synthetic_real_usage,
+    synthetic_token_plan_routing,
+)
 from tests.output_evidence_fixtures import synthetic_structured_output_routing
 from tests.unit.test_model_registry import _verified_production_config_and_capability
 
@@ -1061,27 +1065,29 @@ def test_current_scanner_stream_custody_binds_production_shaped_bytes_and_owner(
     config = config_factory()
     run_dir = tmp_path / "run"
     scanner_root = run_dir / "private" / "scanner-output"
-    tool_root = scanner_root / "synthetic"
+    tool_root = scanner_root / "semgrep"
     tool_root.mkdir(parents=True)
-    stdout = tool_root / "synthetic.json"
-    stderr = tool_root / "synthetic.stderr.txt"
-    stdout.write_bytes(b"{}")
+    (tool_root / "workspace").mkdir()
+    stdout = tool_root / "semgrep.json"
+    stderr = tool_root / "semgrep.stderr.txt"
+    stdout_bytes = b'{"errors":[],"results":[]}'
+    stdout.write_bytes(stdout_bytes)
     stderr.write_bytes(b"")
     now = datetime(2026, 1, 2, tzinfo=UTC)
     provisional = ScannerRun(
-        scanner="synthetic",
+        scanner="semgrep",
         status=ScannerStatus.SUCCESS,
         execution_evidence=ExecutionEvidenceKind.REAL,
-        version="synthetic-1.0",
+        version="semgrep-1.0",
         executable_sha256="1" * 64,
-        command=["/trusted/synthetic", "--machine-output"],
+        command=["/trusted/semgrep", "--json"],
         started_at=now,
         finished_at=now,
         duration_seconds=0,
-        raw_output_path="synthetic/synthetic.json",
-        raw_output_sha256=hashlib.sha256(b"{}").hexdigest(),
-        raw_output_bytes=2,
-        private_stderr_path="synthetic/synthetic.stderr.txt",
+        raw_output_path="semgrep/semgrep.json",
+        raw_output_sha256=hashlib.sha256(stdout_bytes).hexdigest(),
+        raw_output_bytes=len(stdout_bytes),
+        private_stderr_path="semgrep/semgrep.stderr.txt",
         private_stderr_sha256=hashlib.sha256(b"").hexdigest(),
         private_stderr_bytes=0,
         process_exit_code=0,
@@ -1104,13 +1110,13 @@ def test_current_scanner_stream_custody_binds_production_shaped_bytes_and_owner(
     stdout.write_bytes(b'{"changed":true}')
     with pytest.raises(ValueError, match="differs from its exact byte custody"):
         _validate_scanner_stream_artifact_custody(run_dir, report.scanner_runs)
-    stdout.write_bytes(b"{}")
+    stdout.write_bytes(stdout_bytes)
 
     other_root = scanner_root / "other"
     other_root.mkdir()
-    other = other_root / "synthetic.json"
-    other.write_bytes(b"{}")
-    swapped = scanner_run.model_copy(update={"raw_output_path": "other/synthetic.json"})
+    other = other_root / "semgrep.json"
+    other.write_bytes(stdout_bytes)
+    swapped = scanner_run.model_copy(update={"raw_output_path": "other/semgrep.json"})
     with pytest.raises(ValueError, match="path is unsafe or repeated"):
         _validate_scanner_stream_artifact_custody(run_dir, [swapped])
 
@@ -1642,6 +1648,48 @@ def test_manifest_requires_opaque_authority_before_granting_reasoning_credit() -
     assert bindings["qualification/opaque-authority"].sha256 == qualification.capability_sha256
 
 
+def test_current_manifest_bindings_reject_resealed_qualified_usage_routing_tamper() -> None:
+    config, qualification, observed_at = _verified_production_config_and_capability()
+    validation = ModelRegistry.validate_production_qualification(
+        config,
+        qualification,
+        required=True,
+        now=observed_at,
+    )
+    usage = _qualified_reasoning_usage(
+        config,
+        qualification,
+        observed_at=observed_at,
+    )
+    report = _report(config).model_copy(update={"usage": [usage]})
+    assert any(
+        binding.identifier == "reasoning/qualification/request-qualified-reasoning-manifest"
+        for binding in _model_bindings(
+            config,
+            report,
+            qualification_runtime=validation.as_dict(),
+            production_qualification=qualification,
+        )
+    )
+
+    routing = dict(usage.routing)
+    routing["qualified_provider_name"] = "Resealed Synthetic Provider"
+    tampered_usage = reattest_synthetic_real_usage(
+        usage.model_copy(update={"routing": routing})
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"qualification|opaque production authority|routing differs",
+    ):
+        _model_bindings(
+            config,
+            report.model_copy(update={"usage": [tampered_usage]}),
+            qualification_runtime=validation.as_dict(),
+            production_qualification=qualification,
+        )
+
+
 def test_manifest_rejects_truncated_serialized_reasoning_route_inventory() -> None:
     config, qualification, observed_at = _verified_production_config_and_capability()
     validation = ModelRegistry.validate_production_qualification(
@@ -2084,7 +2132,7 @@ def test_verify_run_checks_sealed_qualified_evidence_without_recreating_authorit
 
 @pytest.mark.parametrize(
     "tamper",
-    ["usage_projection", "qualification_route", "manifest_authority"],
+    ["report_cost_projection", "qualification_route", "manifest_authority"],
 )
 def test_verify_run_rejects_resealed_qualified_evidence_tamper(
     tmp_path: Path,
@@ -2102,7 +2150,7 @@ def test_verify_run_rejects_resealed_qualified_evidence_tamper(
     config, repository, run_dir, manifest, _ = _write_qualified_verifiable_run(tmp_path)
     manifest_payload = manifest.model_dump(mode="json")
 
-    if tamper == "usage_projection":
+    if tamper == "report_cost_projection":
         report_path = run_dir / "final-findings.json"
         report_payload = json.loads(report_path.read_text(encoding="utf-8"))
         report_payload["accounted_cost_usd"] = 1

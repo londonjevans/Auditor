@@ -6127,14 +6127,174 @@ class AuditPipeline:
 
             if not scheduler_halted:
                 assert judgment_host_task is not None
-                judgment_summary = {
+                terminal_findings = [
+                    *(("REPORTED_ACTIVE", finding) for finding in final_findings),
+                    *(("REPORTED_REJECTED", finding) for finding in rejected_findings),
+                    *(("FILTERED_BELOW_THRESHOLD", finding) for finding in filtered_findings),
+                ]
+                terminal_findings_by_group: dict[str, tuple[str, Finding]] = {}
+                for disposition, finding in terminal_findings:
+                    if finding.group_id is None or finding.group_id in terminal_findings_by_group:
+                        raise ValueError(
+                            "evidence-cap judgment requires one terminal finding per group"
+                        )
+                    terminal_findings_by_group[finding.group_id] = (disposition, finding)
+                if set(terminal_findings_by_group) != {group.group_id for group in groups}:
+                    raise ValueError(
+                        "evidence-cap judgment terminal findings differ from reduced groups"
+                    )
+
+                def evidence_payload_binding(
+                    *,
+                    kind: str,
+                    subject_id: str,
+                    payload: Any,
+                ) -> dict[str, str]:
+                    model_payload = payload.model_dump(mode="json")
+                    payload_sha256 = scheduler_canonical_sha256(model_payload)
+                    return {
+                        "record_id": scheduler_canonical_sha256(
+                            {
+                                "kind": kind,
+                                "subject_id": subject_id,
+                                "payload_sha256": payload_sha256,
+                            }
+                        ),
+                        "subject_id": subject_id,
+                        "payload_sha256": payload_sha256,
+                    }
+
+                judgment_reproduction_resolutions = _build_candidate_reproduction_resolutions(
+                    candidates=candidates,
+                    results=reproductions,
+                    forced_candidate_ids=set(post_judge_execution_severity_candidates),
+                )
+                terminal_finding_records = [
+                    {
+                        "group_id": group.group_id,
+                        "candidate_ids": sorted(
+                            candidate.candidate_id for candidate in group.candidates
+                        ),
+                        "finding_id": terminal_findings_by_group[group.group_id][1].id,
+                        "finding_payload_sha256": scheduler_canonical_sha256(
+                            terminal_findings_by_group[group.group_id][1].model_dump(mode="json")
+                        ),
+                        "state": terminal_findings_by_group[group.group_id][0],
+                        "finding_status": (
+                            terminal_findings_by_group[group.group_id][1].status.value
+                        ),
+                        "finding_severity": (
+                            terminal_findings_by_group[group.group_id][1].severity.value
+                        ),
+                        "finding_origin_kind": (
+                            terminal_findings_by_group[group.group_id][1].origin_kind.value
+                        ),
+                    }
+                    for group in sorted(groups, key=lambda item: item.group_id)
+                ]
+                judgment_body: dict[str, Any] = {
+                    "schema_version": "2.0",
+                    "algorithm": "mmaudit.evidence-cap-terminal-authority.v2",
+                    "severity_threshold": severity_threshold.value,
                     "group_ids": sorted(group.group_id for group in groups),
                     "judge_decision_ids": sorted(judge_decisions),
+                    "candidate_ids": sorted(candidate.candidate_id for candidate in candidates),
+                    "candidate_payload_sha256s": _candidate_payload_sha256s(candidates),
+                    "candidate_grouping_sha256": scheduler_canonical_sha256(
+                        [
+                            {
+                                "group_id": record["group_id"],
+                                "candidate_ids": record["candidate_ids"],
+                            }
+                            for record in terminal_finding_records
+                        ]
+                    ),
+                    "terminal_findings": terminal_finding_records,
                     "final_finding_ids": sorted(finding.id for finding in final_findings),
                     "rejected_finding_ids": sorted(finding.id for finding in rejected_findings),
-                    "filtered_finding_ids": sorted(
-                        finding.id for finding in filtered_findings
+                    "filtered_finding_ids": sorted(finding.id for finding in filtered_findings),
+                    "final_finding_payload_sha256s": {
+                        finding.id: scheduler_canonical_sha256(finding.model_dump(mode="json"))
+                        for finding in sorted(final_findings, key=lambda item: item.id)
+                    },
+                    "rejected_finding_payload_sha256s": {
+                        finding.id: scheduler_canonical_sha256(finding.model_dump(mode="json"))
+                        for finding in sorted(rejected_findings, key=lambda item: item.id)
+                    },
+                    "filtered_finding_payload_sha256s": {
+                        finding.id: scheduler_canonical_sha256(finding.model_dump(mode="json"))
+                        for finding in sorted(filtered_findings, key=lambda item: item.id)
+                    },
+                    "judge_decisions": sorted(
+                        (
+                            evidence_payload_binding(
+                                kind="judge",
+                                subject_id=decision.group_id,
+                                payload=decision,
+                            )
+                            for decision in judge_decisions.values()
+                        ),
+                        key=lambda item: (item["subject_id"], item["record_id"]),
                     ),
+                    "verification_decisions": sorted(
+                        (
+                            evidence_payload_binding(
+                                kind="verification",
+                                subject_id=decision.candidate_id,
+                                payload=decision,
+                            )
+                            for decision in verifications.decisions
+                        ),
+                        key=lambda item: (item["subject_id"], item["record_id"]),
+                    ),
+                    "cross_examination_decisions": sorted(
+                        (
+                            evidence_payload_binding(
+                                kind="cross_examination",
+                                subject_id=decision.candidate_id,
+                                payload=decision,
+                            )
+                            for decision in cross_examinations
+                        ),
+                        key=lambda item: (item["subject_id"], item["record_id"]),
+                    ),
+                    "falsification_decisions": sorted(
+                        (
+                            evidence_payload_binding(
+                                kind="falsification",
+                                subject_id=decision.candidate_id,
+                                payload=decision,
+                            )
+                            for decision in falsifications.decisions
+                        ),
+                        key=lambda item: (item["subject_id"], item["record_id"]),
+                    ),
+                    "reproduction_results": sorted(
+                        (
+                            evidence_payload_binding(
+                                kind="reproduction",
+                                subject_id=result.candidate_id,
+                                payload=result,
+                            )
+                            for result in reproductions
+                        ),
+                        key=lambda item: (item["subject_id"], item["record_id"]),
+                    ),
+                    "reproduction_resolutions": sorted(
+                        (
+                            evidence_payload_binding(
+                                kind="reproduction_resolution",
+                                subject_id=resolution.candidate_id,
+                                payload=resolution,
+                            )
+                            for resolution in judgment_reproduction_resolutions
+                        ),
+                        key=lambda item: (item["subject_id"], item["record_id"]),
+                    ),
+                }
+                judgment_summary = {
+                    **judgment_body,
+                    "judgment_sha256": scheduler_canonical_sha256(judgment_body),
                 }
                 if completed_pass_seven is None:
                     scheduler.activate_host(
