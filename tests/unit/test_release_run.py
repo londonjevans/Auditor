@@ -47,6 +47,7 @@ from mmaudit.reporting.client import render_client_markdown
 from mmaudit.reporting.json_report import write_json
 from mmaudit.reporting.markdown import render_forensic_markdown
 from mmaudit.reporting.sarif import generate_report_sarif
+from mmaudit.reporting.status import report_status_metadata
 from mmaudit.traceability import (
     ImplementationStatus,
     build_traceability_matrix,
@@ -164,8 +165,12 @@ def _write_report_artifacts(run_dir: Path, report: AuditReport) -> None:
                 "schema_version": report.schema_version,
                 "run_id": report.run_id,
                 "generated_at": report.generated_at.isoformat(),
-                "completed": report.completed,
-                "incomplete_reasons": report.incomplete_reasons,
+                **report_status_metadata(report),
+                "minimum_analysis_floor": (
+                    report.minimum_analysis_floor.model_dump(mode="json")
+                    if report.minimum_analysis_floor is not None
+                    else None
+                ),
                 "configuration_hash": report.configuration_hash,
                 "model_configuration_hash": report.model_configuration_hash,
                 "privacy": report.privacy,

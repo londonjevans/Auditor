@@ -12,10 +12,12 @@ from mmaudit.models.schemas import (
     CandidateCrossExaminationDecision,
     CandidateCrossExaminationVerdict,
     CandidateFinding,
+    Evidence,
     ExecutionEvidenceKind,
     FalsificationDecision,
     FalsificationVerdict,
     Finding,
+    FindingOriginKind,
     FindingStatus,
     FormalToolRun,
     FormalToolStatus,
@@ -35,7 +37,10 @@ from mmaudit.models.schemas import (
     VerificationVerdict,
 )
 from mmaudit.reporting.bundle import build_findings_artifact
-from mmaudit.reporting.client import render_client_markdown
+from mmaudit.reporting.client import (
+    bind_active_finding_source_locations,
+    render_client_markdown,
+)
 from mmaudit.repository.chunking import line_range_hash
 from tests.unit.test_assurance import _real_formal_run
 from tests.unit.test_client_forensic_reporting import (
@@ -407,8 +412,38 @@ def test_narrative_summary_is_not_relabelled_as_a_violated_property() -> None:
         line for line in rendered.splitlines() if line.startswith("Violated property:")
     )
     assert narrative not in property_line
-    assert "not separately recorded" in property_line
-    assert "narrative finding summary is not a substitute" in rendered
+    assert "Host-derived safety property" in property_line
+    assert finding.title in property_line
+    assert finding.preconditions[0] in property_line
+    assert "not independent deterministic evidence" in rendered
+    assert "not separately recorded" not in property_line
+
+
+def test_bound_formal_property_identity_is_preserved_in_substantive_statement() -> None:
+    finding = _finding(FindingStatus.STRONGLY_SUPPORTED)
+    formal_property_id = "INV-SYNTHETIC-CONSERVATION"
+    finding = finding.model_copy(
+        update={
+            "evidence": [
+                *finding.evidence,
+                Evidence(
+                    type="formal",
+                    source="synthetic-formal-engine",
+                    rule_id=formal_property_id,
+                    description="The retained formal record identifies the checked property.",
+                ),
+            ]
+        }
+    )
+
+    rendered = _render_client(_report(findings=[finding]), {SOURCE_PATH: SOURCE})
+    property_line = next(
+        line for line in rendered.splitlines() if line.startswith("Violated property:")
+    )
+
+    assert formal_property_id in property_line
+    assert "Host-derived safety property" in property_line
+    assert "bound deterministic/formal evidence identity" in rendered
 
 
 def test_completed_analysis_credits_only_structurally_qualifying_real_evidence() -> None:
@@ -548,12 +583,69 @@ def test_near_match_symbol_does_not_validate_against_a_different_identifier() ->
 def test_active_finding_requires_an_authoritative_per_range_source_hash() -> None:
     finding = _finding(FindingStatus.STRONGLY_SUPPORTED)
     unhashed = finding.locations[0].model_copy(update={"content_hash": None})
-    finding = finding.model_copy(update={"locations": [unhashed]})
+    hashless = finding.model_copy(update={"locations": [unhashed]})
+    report = _report(findings=[hashless])
 
     with pytest.raises(ValueError, match=r"source range.*hash|hash.*source range"):
-        _render_client(
+        _render_client(report, {SOURCE_PATH: SOURCE})
+
+    bound = bind_active_finding_source_locations(report, {SOURCE_PATH: SOURCE})
+
+    assert report.findings[0].locations[0].content_hash is None
+    assert bound.findings[0].locations[0].content_hash == line_range_hash(
+        SOURCE,
+        unhashed.start_line,
+        unhashed.end_line,
+    )
+    _render_client(bound, {SOURCE_PATH: SOURCE})
+
+
+def test_active_final_binding_rejects_invalid_location_validation() -> None:
+    finding = _finding(FindingStatus.NEEDS_REVIEW).model_copy(
+        update={
+            "location_validation": LocationValidation(
+                valid=False,
+                errors=["Synthetic source validation failed."],
+                validated_at=NOW,
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match="lacks valid source-location evidence"):
+        bind_active_finding_source_locations(
             _report(findings=[finding]),
             {SOURCE_PATH: SOURCE},
+        )
+
+
+def test_static_analyzer_custody_requires_zero_candidate_records() -> None:
+    base = _finding(FindingStatus.NEEDS_REVIEW)
+    fingerprint = "synthetic-scanner-fingerprint"
+    static_finding = base.model_copy(
+        update={
+            "origin_kind": FindingOriginKind.STATIC_ANALYZER,
+            "evidence": [
+                Evidence(
+                    type="scanner",
+                    source="synthetic-scanner",
+                    rule_id="synthetic-rule",
+                    description="A synthetic local scanner observation.",
+                    fingerprint=fingerprint,
+                )
+            ],
+            "contributing_candidate_ids": [fingerprint],
+        }
+    )
+    report = _report(findings=[static_finding])
+
+    artifact = build_findings_artifact(report)
+
+    assert artifact.candidate_findings == []
+    assert artifact.records[0].candidate_findings == []
+    with pytest.raises(ValueError, match="static-analyzer finding"):
+        build_findings_artifact(
+            report,
+            candidates=[_candidate(fingerprint, base)],
         )
 
 

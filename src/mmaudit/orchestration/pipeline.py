@@ -331,10 +331,15 @@ from mmaudit.reporting.bundle import (
     build_findings_artifact,
     build_model_execution_artifact,
 )
-from mmaudit.reporting.client import build_client_source_excerpts, render_client_markdown
+from mmaudit.reporting.client import (
+    bind_active_finding_source_locations,
+    build_client_source_excerpts,
+    render_client_markdown,
+)
 from mmaudit.reporting.json_report import stable_json, write_json
 from mmaudit.reporting.markdown import render_forensic_markdown, render_markdown
 from mmaudit.reporting.sarif import generate_report_sarif
+from mmaudit.reporting.status import report_status_metadata
 from mmaudit.repository.discovery import (
     DiscoveryResult,
     discover_repository,
@@ -6936,6 +6941,7 @@ class AuditPipeline:
                     ci_baseline.manifest.manifest_sha256 if ci_baseline is not None else None
                 ),
             }
+        audited_source_contents = {item.relative_path: item.content for item in discovery.files}
         report = self._build_report(
             run_id=run_id,
             generated_at=datetime.now(UTC),
@@ -6992,6 +6998,7 @@ class AuditPipeline:
             ci_metadata=ci_metadata,
             scheduler_report_binding=scheduler_report_binding,
         )
+        report = bind_active_finding_source_locations(report, audited_source_contents)
         ci_state: CIRunState | None = None
         if ci_mode:
             assert ci_producer_digest is not None
@@ -7048,7 +7055,7 @@ class AuditPipeline:
         self._write_artifacts(
             run_dir=run_dir,
             report=report,
-            source_contents={item.relative_path: item.content for item in discovery.files},
+            source_contents=audited_source_contents,
             candidates=candidates,
             verifications=verifications,
             cross_examinations=cross_examinations,
@@ -7814,6 +7821,7 @@ class AuditPipeline:
         scheduler_artifact: SchedulerArtifact | None,
         scheduler_runtime_journal: SchedulerJournal | None,
     ) -> None:
+        status_metadata = report_status_metadata(report)
         if scheduler_artifact is not None:
             write_json(run_dir / "scheduler-state.json", scheduler_artifact)
         write_context_manifest(
@@ -7826,15 +7834,12 @@ class AuditPipeline:
                 "schema_version": report.schema_version,
                 "run_id": report.run_id,
                 "generated_at": report.generated_at.isoformat(),
-                "completed": report.completed,
-                "quality_status": report.quality_status.value,
-                "run_status": (report.run_status.value if report.run_status is not None else None),
+                **status_metadata,
                 "minimum_analysis_floor": (
                     report.minimum_analysis_floor.model_dump(mode="json")
                     if report.minimum_analysis_floor is not None
                     else None
                 ),
-                "incomplete_reasons": report.incomplete_reasons,
                 "configuration_hash": report.configuration_hash,
                 "model_configuration_hash": report.model_configuration_hash,
                 "privacy": report.privacy,
@@ -8525,9 +8530,9 @@ def _scanner_findings_for_report(
         validation_results = [validate_location(root, location) for location in scanner.locations]
         errors = [error for result in validation_results for error in result.errors]
         valid_locations = [
-            location
+            location.model_copy(update={"content_hash": result.content_hash})
             for location, result in zip(scanner.locations, validation_results, strict=True)
-            if result.valid
+            if result.valid and result.content_hash is not None
         ]
         hashes = [
             result.content_hash

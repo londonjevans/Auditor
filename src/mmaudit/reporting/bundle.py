@@ -189,6 +189,24 @@ class ForensicFindingRecord(StrictModel):
         for label, keys in unique_keys:
             if len(keys) != len(set(keys)):
                 raise ValueError(f"forensic {label} must be unique")
+        if self.source_excerpt is not None:
+            excerpt = self.source_excerpt
+            matching_locations = [
+                location
+                for location in self.finding.locations
+                if location.path == excerpt.path
+                and location.start_line == excerpt.cited_start_line
+                and location.end_line == excerpt.cited_end_line
+                and location.symbol == excerpt.symbol
+            ]
+            if (
+                len(matching_locations) != 1
+                or matching_locations[0].content_hash is None
+                or matching_locations[0].content_hash != excerpt.cited_content_sha256
+            ):
+                raise ValueError(
+                    "forensic source excerpt differs from its authoritative finding location"
+                )
         if self.finding.status is FindingStatus.REJECTED:
             if self.disposition is not ForensicDisposition.REJECTED:
                 raise ValueError("rejected finding requires rejected forensic disposition")

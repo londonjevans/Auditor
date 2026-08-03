@@ -106,3 +106,17 @@ def effective_report_status(report: AuditReport) -> ReportStatusProjection:
         ],
         limitations=list(dict.fromkeys([limitation, *report.incomplete_reasons])),
     )
+
+
+def report_status_metadata(report: AuditReport) -> dict[str, object]:
+    """Serialize the canonical status projection for manifest-bound run metadata."""
+
+    projection = effective_report_status(report)
+    return {
+        "completed": projection.completed,
+        "quality_status": projection.quality_status.value,
+        "run_status": projection.run_status.value,
+        "incomplete_reasons": list(projection.limitations),
+        "quality_gates": [gate.model_dump(mode="json") for gate in projection.quality_gates],
+        "limitations": list(projection.limitations),
+    }

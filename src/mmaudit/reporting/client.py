@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import json
 from collections.abc import Mapping, Sequence
 
 from mmaudit.models.schemas import (
@@ -45,6 +46,23 @@ _SEVERITY_ORDER = {
 
 def _repository_sources(report: AuditReport) -> dict[str, tuple[str, int]]:
     return {item.path: (item.sha256, item.lines) for item in report.repository.files}
+
+
+def _source_tree_sha256(report: AuditReport) -> str:
+    """Hash the exact sorted source identity projection used by run manifests."""
+
+    projection = [
+        {"path": item.path, "sha256": item.sha256, "size": item.size}
+        for item in sorted(report.repository.files, key=lambda candidate: candidate.path)
+    ]
+    encoded = json.dumps(
+        projection,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _validated_location_hash(
@@ -91,6 +109,10 @@ def _source_excerpt(
         raise ValueError(f"active finding lacks a source location: {finding.id}")
     validated: dict[tuple[str, int, int, str], tuple[str, str, int]] = {}
     for location in finding.locations:
+        if location.content_hash is None:
+            raise ValueError(
+                f"active finding location lacks an authoritative source range hash: {location.path}"
+            )
         key = (
             location.path,
             location.start_line,
@@ -134,6 +156,42 @@ def _source_excerpt(
         content_sha256=hashlib.sha256(excerpt_content.encode()).hexdigest(),
         omitted_before=excerpt_start > 1,
         omitted_after=excerpt_end < total_lines,
+    )
+
+
+def bind_active_finding_source_locations(
+    report: AuditReport,
+    source_contents: Mapping[str, str],
+) -> AuditReport:
+    """Bind active final locations to the immutable audited source snapshot.
+
+    Candidate and scanner observations remain untouched. Only the canonical final
+    finding projection receives host-observed per-range hashes.
+    """
+
+    report = AuditReport.model_validate(report.model_dump(mode="python"))
+    bound_findings: list[Finding] = []
+    for finding in report.findings:
+        if not finding.location_validation.valid:
+            raise ValueError(f"active finding lacks valid source-location evidence: {finding.id}")
+        if not finding.locations:
+            raise ValueError(f"active finding lacks a source location: {finding.id}")
+        bound_locations: list[Location] = []
+        for location in finding.locations:
+            observed_range_hash, _content, _total_lines = _validated_location_hash(
+                report=report,
+                location=location,
+                source_contents=source_contents,
+            )
+            bound_locations.append(
+                location.model_copy(update={"content_hash": observed_range_hash})
+            )
+        bound_findings.append(finding.model_copy(update={"locations": bound_locations}))
+    return AuditReport.model_validate(
+        {
+            **report.model_dump(mode="python"),
+            "findings": [finding.model_dump(mode="python") for finding in bound_findings],
+        }
     )
 
 
@@ -241,10 +299,22 @@ def _affected_component(finding: Finding) -> str:
     return location.symbol or location.path
 
 
-def _violated_property(finding: Finding) -> tuple[str | None, str]:
+def _host_derived_safety_property(finding: Finding) -> str:
+    preconditions = "; ".join(finding.preconditions)
+    return (
+        f"Host-derived safety property: under the recorded preconditions ({preconditions}), "
+        f'the unsafe condition "{finding.title}" must not occur.'
+    )
+
+
+def _violated_property(finding: Finding) -> tuple[str, str]:
+    host_statement = _host_derived_safety_property(finding)
     if finding.execution_provenance:
         identifiers = sorted({item.invariant_id for item in finding.execution_provenance})
-        return ", ".join(identifiers), "deterministic invariant identity"
+        return (
+            f"{host_statement} Bound deterministic invariant ID(s): {', '.join(identifiers)}.",
+            "bound deterministic invariant identity with host-derived explanatory wording",
+        )
     evidence_identifiers = sorted(
         {
             item.rule_id
@@ -253,8 +323,16 @@ def _violated_property(finding: Finding) -> tuple[str | None, str]:
         }
     )
     if evidence_identifiers:
-        return ", ".join(evidence_identifiers), "bound deterministic evidence identifier"
-    return None, "no separate invariant or property identity was recorded"
+        return (
+            f"{host_statement} Bound deterministic/formal property ID(s): "
+            f"{', '.join(evidence_identifiers)}.",
+            "bound deterministic/formal evidence identity with host-derived explanatory wording",
+        )
+    return (
+        host_statement,
+        "host-derived from the unsafe-condition title and recorded preconditions; "
+        "not independent deterministic evidence",
+    )
 
 
 def _detail_items(label: str, items: Sequence[str]) -> list[str]:
@@ -281,23 +359,10 @@ def _finding_detail(record: ForensicFindingRecord) -> list[str]:
         "Exact line range: "
         + _inline(f"{excerpt.path}:{excerpt.cited_start_line}-{excerpt.cited_end_line}"),
         "",
-        (
-            f"Violated property: {_text(property_statement)}"
-            if property_statement is not None
-            else "Violated property: **not separately recorded**"
-        ),
+        f"Violated property: {_text(property_statement)}",
         "",
         f"Property basis: {_text(property_basis)}.",
         "",
-        *(
-            [
-                "**Property limitation:** the narrative finding summary is not a substitute for "
-                "a separately identified invariant or property.",
-                "",
-            ]
-            if property_statement is None
-            else []
-        ),
         *_render_excerpt(excerpt),
         f"Impact: {_text(finding.impact)}",
         "",
@@ -553,6 +618,7 @@ def _render_client_markdown_from_artifact(
             "",
             f"- Repository: {_inline(report.repository.root_name)}",
             f"- Source commit: {_inline(report.repository.git_commit or 'not available')}",
+            f"- Source-tree SHA-256: {_inline(_source_tree_sha256(report))}",
             f"- Run ID: {_inline(report.run_id)}",
             f"- Files mapped: {len(report.repository.files)}",
             f"- Languages: {_text(', '.join(sorted(report.repository.languages)) or 'none')}",

@@ -129,6 +129,44 @@ def write_json_evidence(
     if not serialized or len(serialized) > bound:
         raise ValueError("release evidence JSON exceeds its output bound")
 
+    return _write_file_content(
+        evidence_root=evidence_root,
+        relative_path=normalized,
+        content=serialized,
+        max_bytes=bound,
+    )
+
+
+def write_file_evidence(
+    *,
+    evidence_root: Path,
+    relative_path: str | Path,
+    content: bytes,
+    max_bytes: int = DEFAULT_MAX_EVIDENCE_BYTES,
+) -> ManifestFileBinding:
+    """Write exact bounded bytes to one fresh private file and verify its inode."""
+
+    bound = _validate_max_bytes(max_bytes)
+    normalized = _normalize_evidence_path(relative_path)
+    if not isinstance(content, bytes) or not content or len(content) > bound:
+        raise ValueError("release evidence bytes exceed their output bound")
+    return _write_file_content(
+        evidence_root=evidence_root,
+        relative_path=normalized,
+        content=content,
+        max_bytes=bound,
+    )
+
+
+def _write_file_content(
+    *,
+    evidence_root: Path,
+    relative_path: str,
+    content: bytes,
+    max_bytes: int,
+) -> ManifestFileBinding:
+    """Create, write, and reobserve one exact file beneath a trusted root."""
+
     created_identity: tuple[int, int] | None = None
     completed = False
     try:
@@ -136,7 +174,7 @@ def write_json_evidence(
         parent_descriptor: int | None = None
         descriptor: int | None = None
         try:
-            parent_descriptor, leaf = _open_parent(root, normalized)
+            parent_descriptor, leaf = _open_parent(root, relative_path)
             flags = (
                 os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0) | _NOFOLLOW_FLAG
             )
@@ -160,7 +198,7 @@ def write_json_evidence(
             ):
                 raise ValueError("release evidence output is not a fresh private file")
 
-            view = memoryview(serialized)
+            view = memoryview(content)
             while view:
                 written = os.write(descriptor, view)
                 if written <= 0:
@@ -169,16 +207,16 @@ def write_json_evidence(
             os.fsync(descriptor)
             written_metadata = os.fstat(descriptor)
             os.lseek(descriptor, 0, os.SEEK_SET)
-            readback = _read_descriptor(descriptor, max_bytes=bound)
+            readback = _read_descriptor(descriptor, max_bytes=max_bytes)
             verified_metadata = os.fstat(descriptor)
             entry_metadata = os.stat(leaf, dir_fd=parent_descriptor, follow_symlinks=False)
             if (
-                readback != serialized
+                readback != content
                 or created_identity != (written_metadata.st_dev, written_metadata.st_ino)
                 or _stat_identity(written_metadata) != _stat_identity(verified_metadata)
                 or _stat_identity(verified_metadata) != _stat_identity(entry_metadata)
                 or verified_metadata.st_nlink != 1
-                or verified_metadata.st_size != len(serialized)
+                or verified_metadata.st_size != len(content)
                 or stat.S_IMODE(verified_metadata.st_mode) != 0o600
                 or _is_link_or_reparse(entry_metadata)
             ):
@@ -195,22 +233,22 @@ def write_json_evidence(
 
         observed = _observe_file_twice(
             evidence_root=evidence_root,
-            relative_path=normalized,
-            max_bytes=bound,
+            relative_path=relative_path,
+            max_bytes=max_bytes,
         )
         if (
-            observed.content != serialized
+            observed.content != content
             or created_identity != observed.identity[:2]
             or stat.S_IMODE(observed.identity[2]) != 0o600
         ):
             raise ValueError("release evidence output changed after writing")
         completed = True
-        return _binding(normalized, serialized)
+        return _binding(relative_path, content)
     finally:
         if not completed:
             _unlink_created_file(
                 evidence_root=evidence_root,
-                relative_path=normalized,
+                relative_path=relative_path,
                 created_identity=created_identity,
             )
 

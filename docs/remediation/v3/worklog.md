@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED
+AUTORUN_STATUS: PAUSED_OPERATOR
 CURRENT_MILESTONE: Client report and forensic evidence bundle
 CURRENT_TICKET: V3-REPORT-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-FIXTURE-001 (COMPLETE)
-NEXT_ACTION: Resume V3-REPORT-001 from the WIP checkpoint; finish authoritative per-range source binding and typed static-analyzer custody, run the focused red regressions, then run the complete ticket-close matrix before granting completion credit.
-LAST_COMMAND: `git diff --check`.
-LAST_RESULT: PASS with no whitespace errors; this is a pause-integrity check, not ticket acceptance evidence.
+NEXT_ACTION: Resume V3-REPORT-001 from the paused WIP checkpoint; inspect the interrupted forensic-export helper slice, implement the run-scoped cost-ledger lifecycle projection, resolve the fail-closed scanner diagnostic race, then run the focused and complete ticket-close matrices before granting completion credit.
+LAST_COMMAND: `pgrep -fl 'pytest|mypy|ruff|mmaudit|generate_release_schemas|forge|anvil|slither|echidna|medusa|halmos|kontrol|certora' || true`.
+LAST_RESULT: INCONCLUSIVE process probe: this managed macOS environment denied process-list access (`sysmond service not found` / `Cannot get process list`). All delegated workers were explicitly stopped, no unified command session remains active, and `git diff --check` passed immediately before this pause record.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
-LAST_CHECKPOINT_COMMIT: 4ccb88f00904fd507e6fd01589e50f0ef3b99378
+LAST_CHECKPOINT_COMMIT: 790f202c03c45950fd9c4712bfe8f84d46355518
 
 ## 2026-08-03 — V3-REPORT-001
 
@@ -105,6 +105,22 @@ LAST_CHECKPOINT_COMMIT: 4ccb88f00904fd507e6fd01589e50f0ef3b99378
 - **WIP checkpoint:** The paused shared snapshot is committed at
   `4ccb88f00904fd507e6fd01589e50f0ef3b99378`. It is explicitly not a completed ticket,
   validated release candidate, or maximum-assurance claim.
+- **Resume (2026-08-03T18:52:04Z):** Persistent-goal continuation resumed from clean,
+  SSH-synchronized pause metadata commit `790f202c03c45950fd9c4712bfe8f84d46355518`.
+  Work remains bounded to V3-REPORT-001. The first slice is authoritative per-range source
+  binding and typed static-analyzer evidence custody, followed by the focused and complete
+  acceptance matrices. No provider call is required or authorized for this reporting work.
+- **Graceful pause (2026-08-03T19:16:33Z):** The operator requested another laptop-safe pause.
+  Authoritative per-range source binding, typed static-analyzer custody, canonical status
+  projection, current-manifest verification, client source identity, and host-derived safety
+  properties are preserved in the shared WIP tree. Focused delegated checks passed before the
+  pause; the expanded stable unit matrix stopped at `1 failed, 122 passed` on a fail-closed
+  scanner process-attestation diagnostic race, not an unsafe credit result. The independent
+  cost review found that current artifacts still lack a run-scoped reservation lifecycle joined
+  to exact usage records. The forensic-export worker was interrupted while preparing a bounded
+  byte-writer helper and must be reviewed before continuation. All delegated workers were
+  explicitly stopped; no provider or public-network call occurred. Process-list attestation was
+  unavailable in the managed environment, so no stronger process-absence claim is made.
 
 ## 2026-08-03 — V3-FIXTURE-001
 

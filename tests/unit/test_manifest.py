@@ -69,8 +69,8 @@ from mmaudit.orchestration.verification import (
     RunVerificationStatus,
     verify_run_evidence,
 )
-from mmaudit.reporting.bundle import MANIFEST_BOUND_REPORT_DELIVERABLES
 from mmaudit.reporting.bundle import (
+    MANIFEST_BOUND_REPORT_DELIVERABLES,
     build_coverage_artifact,
     build_findings_artifact,
     build_model_execution_artifact,
@@ -79,6 +79,7 @@ from mmaudit.reporting.client import render_client_markdown
 from mmaudit.reporting.json_report import write_json
 from mmaudit.reporting.markdown import render_forensic_markdown
 from mmaudit.reporting.sarif import generate_report_sarif
+from mmaudit.reporting.status import report_status_metadata
 from tests.identity_fixtures import bind_synthetic_usage_identity, synthetic_token_plan_routing
 from tests.output_evidence_fixtures import synthetic_structured_output_routing
 from tests.unit.test_model_registry import _verified_production_config_and_capability
@@ -365,8 +366,12 @@ def _write_required_artifacts(run_dir: Path, report: AuditReport) -> None:
                 "schema_version": report.schema_version,
                 "run_id": report.run_id,
                 "generated_at": report.generated_at.isoformat(),
-                "completed": report.completed,
-                "incomplete_reasons": report.incomplete_reasons,
+                **report_status_metadata(report),
+                "minimum_analysis_floor": (
+                    report.minimum_analysis_floor.model_dump(mode="json")
+                    if report.minimum_analysis_floor is not None
+                    else None
+                ),
                 "configuration_hash": report.configuration_hash,
                 "model_configuration_hash": report.model_configuration_hash,
                 "privacy": report.privacy,
@@ -437,8 +442,12 @@ def _write_verifiable_run(
                 "schema_version": report.schema_version,
                 "run_id": report.run_id,
                 "generated_at": report.generated_at.isoformat(),
-                "completed": report.completed,
-                "incomplete_reasons": report.incomplete_reasons,
+                **report_status_metadata(report),
+                "minimum_analysis_floor": (
+                    report.minimum_analysis_floor.model_dump(mode="json")
+                    if report.minimum_analysis_floor is not None
+                    else None
+                ),
                 "configuration_hash": report.configuration_hash,
                 "model_configuration_hash": report.model_configuration_hash,
                 "privacy": report.privacy,
@@ -479,6 +488,22 @@ def _rewrite_as_sealed_schema_1_1(
 
     for artifact_name in MANIFEST_BOUND_REPORT_DELIVERABLES - {"audit-results.sarif"}:
         (run_dir / artifact_name).unlink()
+    metadata_path = run_dir / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["completed"] = report.completed
+    metadata["incomplete_reasons"] = report.incomplete_reasons
+    for current_status_field in (
+        "quality_status",
+        "run_status",
+        "quality_gates",
+        "limitations",
+        "minimum_analysis_floor",
+    ):
+        metadata.pop(current_status_field, None)
+    metadata_path.write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     payload = current.model_dump(mode="json")
     payload["schema_version"] = "1.1"
     legacy_coverage = [
@@ -601,7 +626,10 @@ def test_manifest_serialization_and_all_required_bindings_are_stable(
     assert first.schema_version == "1.2"
     assert first.run_configuration is not None
     assert first.run_configuration.requested_profile.value == "standard"
-    assert first.run_configuration.achieved_profile is not None
+    assert first.run_configuration.achieved_profile is None
+    metadata = json.loads((first_run / "metadata.json").read_text(encoding="utf-8"))
+    for field_name, expected_value in report_status_metadata(report).items():
+        assert metadata[field_name] == expected_value
     assert first.run_configuration.effective_config_sha256 == config.stable_hash()
     assert first.run_configuration.model_config_sha256 == config.model_hash()
     assert set(ManifestBindingSet.model_fields) == {
@@ -611,6 +639,34 @@ def test_manifest_serialization_and_all_required_bindings_are_stable(
     assert {binding.path for binding in first.artifacts} == {
         path.name for path in first_run.iterdir()
     }
+
+
+def test_legacy_completed_report_new_issuance_uses_fail_closed_status_projection(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    run_dir = tmp_path / "run"
+    report = _report(config)
+    assert report.schema_version == "1.0"
+    assert report.completed
+    _write_required_artifacts(run_dir, report)
+
+    manifest = build_run_evidence_manifest(
+        run_dir=run_dir,
+        report=report,
+        config=config,
+    )
+    metadata = json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
+
+    assert manifest.schema_version == "1.2"
+    assert manifest.run_configuration is not None
+    assert manifest.run_configuration.achieved_profile is None
+    for field_name, expected_value in report_status_metadata(report).items():
+        assert metadata[field_name] == expected_value
+    assert metadata["completed"] is False
+    assert metadata["quality_status"] == "incomplete"
+    assert metadata["run_status"] == "INCOMPLETE"
 
 
 @pytest.mark.parametrize("retained_report_leaves", [set(), {"audit-results.sarif"}])
@@ -634,6 +690,41 @@ def test_new_manifest_issuance_rejects_zero_or_partial_report_bundle(
         )
 
 
+@pytest.mark.parametrize(
+    ("field_name", "tampered_value"),
+    [
+        ("completed", True),
+        ("quality_status", "completed"),
+        ("run_status", "COMPLETE"),
+        ("incomplete_reasons", []),
+        ("quality_gates", []),
+        ("limitations", []),
+        ("minimum_analysis_floor", {"tampered": True}),
+    ],
+)
+def test_new_manifest_issuance_rejects_metadata_status_drift(
+    tmp_path: Path,
+    config_factory,
+    field_name: str,
+    tampered_value: object,
+) -> None:
+    config = config_factory()
+    run_dir = tmp_path / "run"
+    report = _report(config)
+    _write_required_artifacts(run_dir, report)
+    metadata_path = run_dir / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata[field_name] = tampered_value
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=rf"metadata.json {field_name}"):
+        build_run_evidence_manifest(
+            run_dir=run_dir,
+            report=report,
+            config=config,
+        )
+
+
 def test_public_manifest_sealer_cannot_issue_a_new_schema_1_1_manifest(
     tmp_path: Path,
     config_factory,
@@ -649,7 +740,7 @@ def test_public_manifest_sealer_cannot_issue_a_new_schema_1_1_manifest(
     )
     assert current.run_configuration is not None
 
-    with pytest.raises(ValueError, match="new manifest issuance requires schema 1.2"):
+    with pytest.raises(ValueError, match=r"new manifest issuance requires schema 1\.2"):
         seal_run_evidence_manifest(
             run_id=current.run_id,
             repository_root_name=current.repository_root_name,
@@ -1615,6 +1706,51 @@ def test_verify_run_reconstructs_an_already_sealed_schema_1_1_manifest(
     assert legacy.schema_version == "1.1"
     assert verification.status is RunVerificationStatus.CURRENT
     assert not verification.mismatches
+
+
+def test_legacy_rebuild_requires_the_exact_on_disk_sealed_manifest(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    _repository, run_dir, current, report = _write_verifiable_run(tmp_path, config)
+    legacy = _rewrite_as_sealed_schema_1_1(run_dir, current, report)
+    (run_dir / "run-evidence-manifest.json").unlink()
+
+    with pytest.raises(ValueError, match=r"run-evidence-manifest\.json"):
+        rebuild_run_evidence_manifest_for_verification(
+            run_dir=run_dir,
+            report=report,
+            config=config,
+            sealed_manifest=legacy,
+        )
+
+
+def test_rebuild_rejects_a_different_in_memory_manifest_than_the_sealed_file(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    _repository, run_dir, current, report = _write_verifiable_run(tmp_path, config)
+    assert current.run_configuration is not None
+    different = seal_run_evidence_manifest(
+        run_id=current.run_id,
+        repository_root_name=current.repository_root_name,
+        git_commit=current.git_commit,
+        sources=current.sources,
+        run_configuration=current.run_configuration,
+        bindings=current.bindings,
+        artifacts=current.artifacts,
+        tool_version=f"{current.tool_version}-different",
+    )
+
+    with pytest.raises(ValueError, match="differs from the exact sealed on-disk manifest"):
+        rebuild_run_evidence_manifest_for_verification(
+            run_dir=run_dir,
+            report=report,
+            config=config,
+            sealed_manifest=different,
+        )
 
 
 def test_verify_run_checks_sealed_qualified_evidence_without_recreating_authority(

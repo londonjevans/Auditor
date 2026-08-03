@@ -33,6 +33,7 @@ from mmaudit.orchestration.manifest import (
     validate_solidity_shard_artifacts,
 )
 from mmaudit.reporting.json_report import stable_json
+from mmaudit.reporting.status import report_status_metadata
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_name
 
@@ -685,6 +686,43 @@ def _metadata_artifact_mismatches(
         if run_configuration is not None
         else report.metadata.get("configuration_provenance")
     )
+    if manifest.schema_version == "1.2":
+        status_metadata = report_status_metadata(report)
+        status_comparisons: tuple[
+            tuple[RunVerificationCategory, str, Any, Any],
+            ...,
+        ] = tuple(
+            (
+                RunVerificationCategory.MANIFEST,
+                f"metadata/{field_name.replace('_', '-')}",
+                expected_value,
+                metadata.get(field_name),
+            )
+            for field_name, expected_value in status_metadata.items()
+        )
+        expected_floor = (
+            report.minimum_analysis_floor.model_dump(mode="json")
+            if report.minimum_analysis_floor is not None
+            else None
+        )
+        status_comparisons = (
+            *status_comparisons,
+            (
+                RunVerificationCategory.MANIFEST,
+                "metadata/minimum-analysis-floor",
+                expected_floor,
+                metadata.get("minimum_analysis_floor"),
+            ),
+        )
+    else:
+        status_comparisons = (
+            (
+                RunVerificationCategory.MANIFEST,
+                "metadata/completed",
+                report.completed,
+                metadata.get("completed"),
+            ),
+        )
     comparisons: tuple[
         tuple[RunVerificationCategory, str, Any, Any],
         ...,
@@ -695,12 +733,7 @@ def _metadata_artifact_mismatches(
             manifest.run_id,
             metadata.get("run_id"),
         ),
-        (
-            RunVerificationCategory.MANIFEST,
-            "metadata/completed",
-            report.completed,
-            metadata.get("completed"),
-        ),
+        *status_comparisons,
         (
             RunVerificationCategory.MANIFEST,
             "metadata/privacy",

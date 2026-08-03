@@ -93,6 +93,7 @@ from mmaudit.privacy import (
 from mmaudit.reporting.json_report import stable_json, write_json
 from mmaudit.reporting.markdown import render_markdown
 from mmaudit.reporting.sarif import generate_sarif
+from mmaudit.repository.chunking import line_range_hash
 from mmaudit.scanners.base import (
     ScannerAdapter,
     _darwin_current_uid_process_count,
@@ -975,6 +976,12 @@ def test_real_repository_suite_scanner_strength_survives_report_conversion(
     findings = _scanner_findings_for_report(tmp_path, [scanner])
 
     assert len(findings) == 1
+    assert scanner.locations[0].content_hash is None
+    assert findings[0].locations[0].content_hash == line_range_hash(
+        source.read_text(encoding="utf-8"),
+        1,
+        1,
+    )
     assert findings[0].status is FindingStatus.NEEDS_REVIEW
     assert findings[0].evidence_strength is EvidenceStrength.DETERMINISTIC_ANALYZER
 
@@ -2994,7 +3001,7 @@ def test_markdown_does_not_present_incomplete_empty_run_as_safe(
     assert "The audit produced **0 surviving finding(s)**" not in executive_summary
 
 
-def test_markdown_does_not_present_degraded_empty_run_as_safe() -> None:
+def test_legacy_degraded_label_cannot_bypass_the_typed_minimum_floor() -> None:
     report = _report([]).model_copy(
         update={
             "quality_status": AuditQualityStatus.COMPLETED_WITH_LIMITATIONS,
@@ -3005,7 +3012,9 @@ def test_markdown_does_not_present_degraded_empty_run_as_safe() -> None:
     rendered = render_markdown(report)
     executive_summary = rendered.split("## Status semantics", maxsplit=1)[0]
 
-    assert "> **RUN STATUS: DEGRADED**" in executive_summary
+    assert "> **RUN STATUS: INCOMPLETE**" in executive_summary
+    assert "Quality status: **incomplete**" in executive_summary
+    assert "> **RUN STATUS: DEGRADED**" not in executive_summary
     assert (
         "This run is incomplete and does not support a conclusion about repository safety."
         in executive_summary

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -350,6 +351,43 @@ def test_legacy_completed_flag_cannot_project_a_complete_no_findings_run() -> No
     assert "This run is incomplete and does not support a conclusion" in rendered
     assert "> **RUN STATUS: INCOMPLETE**" in rendered
     assert "Completed — zero findings" not in rendered
+
+
+def test_source_tree_identity_is_deterministic_without_a_git_commit() -> None:
+    additional_content = "contract AdditionalSyntheticSource {}\n"
+    additional = RepositoryFile(
+        path="src/AdditionalSyntheticSource.sol",
+        size=len(additional_content.encode()),
+        lines=1,
+        sha256=hashlib.sha256(additional_content.encode()).hexdigest(),
+        language="Solidity",
+    )
+    repository = _repository().model_copy(
+        update={"git_commit": None, "files": [additional, *_repository().files]}
+    )
+    reversed_repository = repository.model_copy(update={"files": list(reversed(repository.files))})
+    first = _report().model_copy(update={"repository": repository})
+    second = _report().model_copy(update={"repository": reversed_repository})
+    projection = [
+        {"path": item.path, "sha256": item.sha256, "size": item.size}
+        for item in sorted(repository.files, key=lambda candidate: candidate.path)
+    ]
+    expected = hashlib.sha256(
+        json.dumps(
+            projection,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode()
+    ).hexdigest()
+
+    first_rendered = _render_client(first, {})
+    second_rendered = _render_client(second, {})
+
+    assert first_rendered == second_rendered
+    assert "Source commit: `not available`" in first_rendered
+    assert f"Source-tree SHA-256: `{expected}`" in first_rendered
 
 
 def test_incomplete_no_findings_report_uses_required_warning_on_first_screen() -> None:

@@ -1585,8 +1585,21 @@ async def test_mock_multi_agent_audit_preserves_artifacts_without_false_completi
     ):
         assert (result.run_dir / name).is_file()
         assert (tmp_path / "output" / "latest" / name).is_file()
-    AuditReport.model_validate_json(
+    emitted_report = AuditReport.model_validate_json(
         (result.run_dir / "final-findings.json").read_text(encoding="utf-8")
+    )
+    candidate_payload = json.loads(
+        (result.run_dir / "candidate-findings.json").read_text(encoding="utf-8")
+    )
+    assert any(
+        location["content_hash"] is None
+        for candidate in candidate_payload["findings"]
+        for location in candidate["locations"]
+    )
+    assert all(
+        location.content_hash is not None
+        for finding in emitted_report.findings
+        for location in finding.locations
     )
     FindingsArtifact.model_validate_json(
         (result.run_dir / "findings.json").read_text(encoding="utf-8")
@@ -1678,6 +1691,33 @@ async def test_mock_multi_agent_audit_preserves_artifacts_without_false_completi
     )
     with pytest.raises(ValueError, match=r"coverage\.json differs"):
         validate_manifest_artifacts(resealed_manifest, resealed_bundle)
+
+    resealed_metadata_bundle = tmp_path / "resealed-metadata-status-mismatch"
+    shutil.copytree(result.run_dir, resealed_metadata_bundle)
+    metadata_path = resealed_metadata_bundle / "metadata.json"
+    changed_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert changed_metadata["run_status"] == AuditRunStatus.INCOMPLETE.value
+    assert changed_metadata["quality_status"] == AuditQualityStatus.INCOMPLETE.value
+    assert changed_metadata["completed"] is False
+    changed_metadata["quality_status"] = AuditQualityStatus.COMPLETED.value
+    write_json(metadata_path, changed_metadata)
+    metadata_payload = manifest.model_dump(mode="json")
+    metadata_bytes = metadata_path.read_bytes()
+    metadata_binding = next(
+        binding for binding in metadata_payload["artifacts"] if binding["path"] == "metadata.json"
+    )
+    metadata_binding["sha256"] = hashlib.sha256(metadata_bytes).hexdigest()
+    metadata_binding["size"] = len(metadata_bytes)
+    metadata_payload["manifest_sha256"] = canonical_sha256(
+        {key: value for key, value in metadata_payload.items() if key != "manifest_sha256"}
+    )
+    metadata_manifest = RunEvidenceManifest.model_validate(metadata_payload)
+    write_run_evidence_manifest(
+        resealed_metadata_bundle / "run-evidence-manifest.json",
+        metadata_manifest,
+    )
+    with pytest.raises(ValueError, match=r"metadata\.json quality_status differs"):
+        validate_manifest_artifacts(metadata_manifest, resealed_metadata_bundle)
 
     resealed_excerpt_bundle = tmp_path / "resealed-source-excerpt-mismatch"
     shutil.copytree(result.run_dir, resealed_excerpt_bundle)
@@ -4937,6 +4977,10 @@ async def test_scanner_only_findings_are_needs_review_and_in_sarif(
     assert finding.origin_kind is FindingOriginKind.STATIC_ANALYZER
     assert len(finding.locations) == 1
     assert finding.locations[0].content_hash is not None
+    scanner_payload = json.loads(
+        (result.run_dir / "scanner-results.json").read_text(encoding="utf-8")
+    )
+    assert scanner_payload["runs"][0]["findings"][0]["locations"][0]["content_hash"] is None
     findings_payload = json.loads((result.run_dir / "findings.json").read_text(encoding="utf-8"))
     assert findings_payload["candidate_findings"] == []
     record = findings_payload["records"][0]
@@ -4985,18 +5029,12 @@ async def test_scanner_excerpt_rejects_coherent_content_and_manifest_reseal(
     manifest_payload = manifest.model_dump(mode="json")
     findings_bytes = findings_path.read_bytes()
     findings_binding = next(
-        binding
-        for binding in manifest_payload["artifacts"]
-        if binding["path"] == "findings.json"
+        binding for binding in manifest_payload["artifacts"] if binding["path"] == "findings.json"
     )
     findings_binding["sha256"] = hashlib.sha256(findings_bytes).hexdigest()
     findings_binding["size"] = len(findings_bytes)
     manifest_payload["manifest_sha256"] = canonical_sha256(
-        {
-            key: value
-            for key, value in manifest_payload.items()
-            if key != "manifest_sha256"
-        }
+        {key: value for key, value in manifest_payload.items() if key != "manifest_sha256"}
     )
     resealed = RunEvidenceManifest.model_validate(manifest_payload)
     write_run_evidence_manifest(manifest_path, resealed)

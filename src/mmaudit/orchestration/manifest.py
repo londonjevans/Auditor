@@ -104,7 +104,7 @@ from mmaudit.reporting.client import render_client_markdown_from_artifact
 from mmaudit.reporting.json_report import write_json
 from mmaudit.reporting.markdown import render_forensic_markdown
 from mmaudit.reporting.sarif import generate_report_sarif
-from mmaudit.reporting.status import effective_report_status
+from mmaudit.reporting.status import effective_report_status, report_status_metadata
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_name, is_sensitive_workspace_path
 from mmaudit.solidity.sharding import (
@@ -475,18 +475,32 @@ def rebuild_run_evidence_manifest_for_verification(
     manifest or grant fresh reasoning credit.
     """
 
-    return _build_run_evidence_manifest(
-        run_dir=run_dir,
-        report=report,
-        config=config,
-        file_config=file_config,
-        environment_overrides=environment_overrides,
-        cli_overrides=cli_overrides,
-        run_options=run_options,
-        production_qualification=None,
-        scheduler_runtime_journal=None,
-        sealed_verification_manifest=sealed_manifest,
-    )
+    absolute = Path(os.path.abspath(run_dir))
+    try:
+        root = absolute.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("sealed run directory is unavailable") from exc
+    if root != absolute or not root.is_dir() or root.is_symlink() or root.is_junction():
+        raise ValueError("sealed run directory must be canonical and non-linked")
+    with _open_json_artifact_observation(
+        root,
+        "run-evidence-manifest.json",
+    ) as on_disk_payload:
+        on_disk_manifest = RunEvidenceManifest.model_validate(on_disk_payload)
+        if on_disk_manifest != sealed_manifest:
+            raise ValueError("verification manifest differs from the exact sealed on-disk manifest")
+        return _build_run_evidence_manifest(
+            run_dir=root,
+            report=report,
+            config=config,
+            file_config=file_config,
+            environment_overrides=environment_overrides,
+            cli_overrides=cli_overrides,
+            run_options=run_options,
+            production_qualification=None,
+            scheduler_runtime_journal=None,
+            sealed_verification_manifest=on_disk_manifest,
+        )
 
 
 def _build_run_evidence_manifest(
@@ -914,10 +928,8 @@ def _validate_report_bundle_artifacts(
         if (
             len(matching_locations) != 1
             or repository_sources.get(excerpt.path) != excerpt.file_sha256
-            or (
-                matching_locations[0].content_hash is not None
-                and matching_locations[0].content_hash != excerpt.cited_content_sha256
-            )
+            or matching_locations[0].content_hash is None
+            or matching_locations[0].content_hash != excerpt.cited_content_sha256
         ):
             raise ValueError("forensic source excerpt differs from final source evidence")
 
@@ -965,6 +977,19 @@ def _validate_report_artifact_consistency(
     metadata = _read_json_artifact(root, "metadata.json")
     if metadata.get("privacy") != report.privacy:
         raise ValueError("metadata.json privacy differs from the final report")
+    if report_bundle_required:
+        for field_name, expected_value in report_status_metadata(report).items():
+            if metadata.get(field_name) != expected_value:
+                raise ValueError(
+                    f"metadata.json {field_name} differs from the canonical report status"
+                )
+        expected_floor = (
+            report.minimum_analysis_floor.model_dump(mode="json")
+            if report.minimum_analysis_floor is not None
+            else None
+        )
+        if metadata.get("minimum_analysis_floor") != expected_floor:
+            raise ValueError("metadata.json minimum_analysis_floor differs from the final report")
     embedded_metadata = metadata.get("metadata")
     if not isinstance(embedded_metadata, dict):
         raise ValueError("metadata.json lacks typed report metadata")
@@ -1405,7 +1430,7 @@ def _run_configuration_binding(
     if report.metadata.get("configuration_provenance") != expected_provenance:
         raise ValueError("report configuration provenance differs from the sealed invocation")
     achieved_profile: AuditProfile | None = None
-    if report.completed:
+    if effective_report_status(report).completed:
         if effective_config.profile is not AuditProfile.MAXIMUM_ASSURANCE:
             achieved_profile = effective_config.profile
         elif (
@@ -3623,9 +3648,7 @@ def _coverage_bindings(
 ) -> list[ManifestHashBinding]:
     status_projection = effective_report_status(report)
     projected_quality_gates = (
-        list(report.quality_gates)
-        if legacy_schema_1_1
-        else status_projection.quality_gates
+        list(report.quality_gates) if legacy_schema_1_1 else status_projection.quality_gates
     )
     bindings = [
         _binding(
