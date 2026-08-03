@@ -566,7 +566,7 @@ are invisible to source review by construction.
   `src/mmaudit/config.py`, `src/mmaudit/orchestration/pipeline.py`, scanner and finding
   schemas, `mmaudit.example.toml`, unit and local integration regressions.
 - **Dependencies:** `V3-TOKENS-001`.
-- **Status:** `PARTIAL`
+- **Status:** `IN_PROGRESS`
 - **Validated result:** The Foundry path is complete for the bounded pinned-fork
   scope: compiler-backed inherited-test inventory, exact selection, hardened
   loopback-only execution, per-test evidence, typed findings, cumulative output
@@ -1306,8 +1306,11 @@ are invisible to source review by construction.
   fallback indexing, semantic graph construction, and deterministic shard inventory validation.
   The marked 5k/15k/35k sharding regression passed as part of the `155`-test affected matrix and
   the `4062`-test complete suite.
-- **Next action:** None; the remaining real compiler integration stays independently gated by its
-  explicit test prerequisite and is not claimed by this fixture ticket.
+- **Current action:** Revalidate the committed corpus manifests, deterministic regeneration,
+  marked scale tests, and `V3-SHARD-001` consumption evidence against the current tree; close the
+  ticket only if every original fixture acceptance criterion is already satisfied. The optional
+  real compiler integration remains independently prerequisite-gated and receives no fabricated
+  credit.
 
 ## V3-HARDHAT-001 — Hardhat reporter contract and single-loopback backend
 

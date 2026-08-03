@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: RUNNING
-CURRENT_MILESTONE: Deterministic scanner execution
-CURRENT_TICKET: V3-TOOLDIAG-002 (COMPLETE; CHECKPOINT_PENDING)
+AUTORUN_STATUS: PAUSED_BY_OPERATOR
+CURRENT_MILESTONE: Realistic-scale fixture close-out
+CURRENT_TICKET: V3-FIXTURE-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-TOOLDIAG-002 (COMPLETE)
-NEXT_ACTION: Complete final artifact/secret review, create and SSH-push the isolated V3-TOOLDIAG-002 checkpoint, then begin close-out ticket V3-FIXTURE-001.
-LAST_COMMAND: `.venv/bin/pytest -q --cache-clear` with host permission for bounded local listeners and nested isolation
-LAST_RESULT: PASS: exact final tree passed 4501 tests with 11 explicit external-prerequisite/paid-provider skips in 1430.04s (23m50s); repository Ruff format/check, strict mypy over 166 source files, release schemas, and diff integrity also passed.
+NEXT_ACTION: Verify V3-FIXTURE-001 corpus manifests, reproducible generation, marked 5k/15k/35k scale tests, and deterministic shard consumption; then close or retain only the evidenced gap.
+LAST_COMMAND: `git push origin main`
+LAST_RESULT: PASS: SSH origin advanced from b81745d to 94b5234 with V3-TOOLDIAG-002 complete and its exact-final-tree evidence green.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,24 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
-LAST_CHECKPOINT_COMMIT: b81745db8b8a0c621bdfac931e85c1aca892efcc
+LAST_CHECKPOINT_COMMIT: 94b5234e09814daff90c67ffb17910a1fb999fd9
+
+## 2026-08-03 — V3-FIXTURE-001
+
+- **Status:** `IN_PROGRESS` close-out; no new fixture architecture is authorized or required.
+- **Defensive objective:** Verify that the already committed deterministic 5k/15k/35k
+  synthetic Solidity corpus satisfies every original fixture acceptance criterion and that the
+  completed shard implementation actually consumes all three roots.
+- **Starting evidence:** The queue records 4,952/15,116/35,444-line roots, 196 manifest-bound
+  generated files, marked discovery/index/graph/coverage/context tests, a conditional real solc
+  assay, and complete V3-SHARD-001 consumption. These statements must be rechecked against the
+  current tree before changing `PARTIAL` to `COMPLETE`.
+- **Next action:** Inspect generation/manifests and exact test selectors, run the marked scale and
+  sharding regressions, and retain the optional compiler prerequisite as an honest independent
+  skip if unavailable.
+- **Pause:** At `2026-08-03T17:04:13Z`, the operator requested a graceful laptop-safe pause.
+  Delegated read-only work was stopped before validation began. No provider call, test process,
+  or repository mutation is intentionally left running. Resume from the preceding next action.
 
 ## 2026-08-03 — V3-TOOLDIAG-002
 
