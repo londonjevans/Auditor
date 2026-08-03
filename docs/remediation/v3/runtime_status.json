@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-03T18:48:33Z",
-  "candidate_commit": "9c14487ed1587d384f12ca4d99f790b99565b442",
+  "updated_at": "2026-08-03T18:49:56Z",
+  "candidate_commit": "4ccb88f00904fd507e6fd01589e50f0ef3b99378",
   "autorun_status": "PAUSED",
   "current_milestone": "client_report_and_forensic_bundle",
   "current_ticket": "V3-REPORT-001 (IN_PROGRESS)",
-  "last_checkpoint_commit": "9c14487ed1587d384f12ca4d99f790b99565b442",
+  "last_checkpoint_commit": "4ccb88f00904fd507e6fd01589e50f0ef3b99378",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,
@@ -28,7 +28,7 @@
   },
   "pause_state": {
     "requested_at": "2026-08-03T18:48:33Z",
-    "result": "Graceful pause requested; all workers and validation processes stopped, WIP worktree preserved for an SSH checkpoint."
+    "result": "Graceful pause complete; all workers and validation processes stopped, WIP snapshot committed at 4ccb88f00904fd507e6fd01589e50f0ef3b99378 for SSH push."
   },
   "scheduler_assurance_validation": {
     "status": "PASS_COMPONENT_FULL_ASSURANCE",
