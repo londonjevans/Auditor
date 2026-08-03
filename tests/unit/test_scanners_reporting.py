@@ -297,19 +297,88 @@ def test_semgrep_normalization(vulnerable_repo: Path, tmp_path: Path) -> None:
     assert findings[0].cwe == ["CWE-89"]
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        {},
+        {"results": {}},
+        {"results": [None]},
+        {"results": [{}]},
+        {
+            "results": [
+                {
+                    "check_id": "synthetic.rule",
+                    "path": "../outside.py",
+                    "start": {"line": 1},
+                    "end": {"line": 1},
+                    "extra": {"message": "synthetic", "severity": "WARNING"},
+                }
+            ]
+        },
+        {
+            "results": [
+                {
+                    "check_id": "synthetic.rule",
+                    "path": "Synthetic.sol",
+                    "start": {"line": 2},
+                    "end": {"line": 1},
+                    "extra": {"message": "synthetic", "severity": "WARNING"},
+                }
+            ]
+        },
+    ],
+)
+def test_semgrep_rejects_malformed_machine_envelopes(tmp_path: Path, payload: object) -> None:
+    with pytest.raises(ValueError, match="Semgrep"):
+        SemgrepScanner().parse(tmp_path, json.dumps(payload), tmp_path)
+
+
 def test_gitleaks_normalization_never_preserves_value(
     vulnerable_repo: Path, tmp_path: Path
 ) -> None:
-    private = tmp_path / "gitleaks"
-    private.mkdir()
-    (private / "gitleaks-report.json").write_text(
-        (FIXTURES / "scanner_outputs/gitleaks.json").read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
-    findings = GitleaksScanner().parse(vulnerable_repo, "", private)
+    raw = (FIXTURES / "scanner_outputs/gitleaks.json").read_text(encoding="utf-8")
+    findings = GitleaksScanner().parse(vulnerable_repo, raw, tmp_path)
     serialized = stable_json([finding.model_dump(mode="json") for finding in findings])
     assert "REDACTED" not in serialized
     assert findings[0].metadata["redacted"] is True
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        [None],
+        [{"RuleID": "generic-api-key", "File": "config.py", "StartLine": 1}],
+        [
+            {
+                "RuleID": "generic-api-key",
+                "File": "config.py",
+                "StartLine": True,
+                "EndLine": 1,
+            }
+        ],
+        [
+            {
+                "RuleID": "generic-api-key",
+                "File": "../outside.py",
+                "StartLine": 1,
+                "EndLine": 1,
+            }
+        ],
+        [
+            {
+                "RuleID": "generic-api-key",
+                "File": "Synthetic.sol",
+                "StartLine": 2,
+                "EndLine": 1,
+            }
+        ],
+    ],
+)
+def test_gitleaks_rejects_malformed_machine_envelopes(tmp_path: Path, payload: object) -> None:
+    with pytest.raises(ValueError, match="Gitleaks"):
+        GitleaksScanner().parse(tmp_path, json.dumps(payload), tmp_path)
 
 
 def test_trivy_normalizes_vulnerability_and_misconfiguration(
@@ -1112,6 +1181,142 @@ def test_semgrep_stages_exact_bundled_rules_inside_private_directory(tmp_path: P
     assert str(bundled.resolve(strict=True)) not in command
 
 
+def test_gitleaks_stages_exact_bundled_rules_inside_private_directory(tmp_path: Path) -> None:
+    private = tmp_path / "private"
+
+    command = GitleaksScanner().build_command(tmp_path, private)
+
+    config_index = command.index("--config") + 1
+    staged = Path(command[config_index]).resolve(strict=True)
+    staged.relative_to(private.resolve(strict=True))
+    bundled = Path(__file__).parents[2] / "src/mmaudit/scanners/rules/gitleaks.toml"
+    assert staged.read_bytes() == bundled.read_bytes()
+    assert staged.stat().st_mode & 0o777 == 0o600
+    assert str(bundled.resolve(strict=True)) not in command
+    assert command[command.index("--report-path") + 1] == "-"
+
+
+def test_gitleaks_refuses_to_replace_existing_staged_rules(tmp_path: Path) -> None:
+    private = tmp_path / "private"
+    scanner = GitleaksScanner()
+    scanner.build_command(tmp_path, private)
+
+    with pytest.raises(FileExistsError):
+        scanner.build_command(tmp_path, private)
+
+
+@pytest.mark.parametrize(
+    ("scanner", "destination"),
+    [
+        (SemgrepScanner(), "semgrep-security.yml"),
+        (GitleaksScanner(), "gitleaks.toml"),
+    ],
+)
+def test_scanner_revalidates_staged_rule_bytes_before_execution(
+    tmp_path: Path,
+    scanner: SemgrepScanner | GitleaksScanner,
+    destination: str,
+) -> None:
+    private = tmp_path / "private"
+    scanner.build_command(tmp_path, private)
+    staged = private / "trusted-inputs" / destination
+    staged.write_bytes(b"tampered\n")
+
+    with pytest.raises(ValueError, match="exact-byte verification"):
+        scanner.validate_pre_execution_inputs(tmp_path, private)
+
+
+@pytest.mark.parametrize(
+    ("scanner", "destination"),
+    [
+        (SemgrepScanner(), "semgrep-security.yml"),
+        (GitleaksScanner(), "gitleaks.toml"),
+    ],
+)
+def test_scanner_rejects_hardlinked_staged_rule_before_execution(
+    tmp_path: Path,
+    scanner: SemgrepScanner | GitleaksScanner,
+    destination: str,
+) -> None:
+    private = tmp_path / "private"
+    scanner.build_command(tmp_path, private)
+    staged = private / "trusted-inputs" / destination
+    os.link(staged, tmp_path / f"{destination}.alias")
+
+    with pytest.raises(ValueError, match="private-file validation"):
+        scanner.validate_pre_execution_inputs(tmp_path, private)
+
+
+def test_gitleaks_run_attests_the_strict_stdout_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "Synthetic.sol").write_text("contract Synthetic {}\n", encoding="utf-8")
+    trusted_bin = tmp_path / "trusted-bin"
+    trusted_bin.mkdir()
+    executable = trusted_bin / "gitleaks"
+    executable.write_text(
+        "\n".join(
+            (
+                f"#!{sys.executable}",
+                "import sys",
+                "print('gitleaks 8.30.1' if '--version' in sys.argv else '[]')",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", str(trusted_bin))
+    private = tmp_path / "private"
+
+    run = GitleaksScanner().run(target, private, 5, backend=_PassthroughIsolation())
+
+    assert run.status is ScannerStatus.SUCCESS
+    assert run.machine_output_validated
+    assert run.raw_output_bytes == len(b"[]\n")
+    assert (private / "gitleaks.json").read_bytes() == b"[]\n"
+    assert run.command[run.command.index("--report-path") + 1] == "-"
+    staged = Path(run.command[run.command.index("--config") + 1]).resolve(strict=True)
+    staged.relative_to(private.resolve(strict=True))
+
+
+def test_semgrep_run_credits_only_a_validated_stdout_envelope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "Synthetic.sol").write_text("contract Synthetic {}\n", encoding="utf-8")
+    trusted_bin = tmp_path / "trusted-bin"
+    trusted_bin.mkdir()
+    executable = trusted_bin / "semgrep"
+    executable.write_text(
+        "\n".join(
+            (
+                f"#!{sys.executable}",
+                "import sys",
+                "print('semgrep 1.172.0' if '--version' in sys.argv "
+                'else \'{"results":[],"errors":[]}\')',
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", str(trusted_bin))
+    private = tmp_path / "private"
+
+    run = SemgrepScanner().run(target, private, 5, backend=_PassthroughIsolation())
+
+    assert run.status is ScannerStatus.SUCCESS
+    assert run.machine_output_validated
+    assert run.raw_output_bytes > 0
+    assert json.loads((private / "semgrep.json").read_bytes()) == {"errors": [], "results": []}
+
+
 def test_semgrep_refuses_to_replace_existing_staged_rules(tmp_path: Path) -> None:
     private = tmp_path / "private"
     scanner = SemgrepScanner()
@@ -1129,7 +1334,7 @@ def test_semgrep_rejects_oversized_bundled_rules_before_staging(
     rules = package / "rules"
     rules.mkdir(parents=True)
     (rules / "security.yml").write_bytes(b"x" * 1_000_001)
-    monkeypatch.setattr("mmaudit.scanners.semgrep.files", lambda _package: package)
+    monkeypatch.setattr("mmaudit.scanners.trusted_inputs.files", lambda _package: package)
 
     with pytest.raises(ValueError, match="exceeds its fixed bound"):
         SemgrepScanner().build_command(tmp_path, tmp_path / "private")

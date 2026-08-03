@@ -203,6 +203,20 @@ class MacOSSandboxBackend:
                 continue
             if resolved_candidate.is_file():
                 private_command_files.add(resolved_candidate)
+        trusted_inputs = resolved_private / "trusted-inputs"
+        trusted_input_write_denial = ""
+        if trusted_inputs.exists():
+            resolved_trusted_inputs = trusted_inputs.resolve(strict=True)
+            resolved_trusted_inputs.relative_to(resolved_private)
+            if (
+                trusted_inputs.is_symlink()
+                or trusted_inputs.is_junction()
+                or not resolved_trusted_inputs.is_dir()
+            ):
+                raise ValueError("trusted scanner input directory must be a real directory")
+            trusted_input_write_denial = (
+                f'(deny file-write* (subpath "{_sandbox_quote(str(resolved_trusted_inputs))}"))'
+            )
         metadata_paths = sorted(
             {
                 *resolved_private.parents,
@@ -259,6 +273,7 @@ class MacOSSandboxBackend:
                 )
                 + ")",
                 f'(allow file-write* (subpath "{_sandbox_quote(str(resolved_private))}"))',
+                trusted_input_write_denial,
                 network_rule,
             )
         )
@@ -378,12 +393,26 @@ class BubblewrapBackend:
                 "--bind",
                 str(resolved_private),
                 str(resolved_private),
-                "--chdir",
-                str(resolved_workspace),
-                "--",
-                *command,
             ]
         )
+        trusted_inputs = resolved_private / "trusted-inputs"
+        if trusted_inputs.exists():
+            resolved_trusted_inputs = trusted_inputs.resolve(strict=True)
+            resolved_trusted_inputs.relative_to(resolved_private)
+            if (
+                trusted_inputs.is_symlink()
+                or trusted_inputs.is_junction()
+                or not resolved_trusted_inputs.is_dir()
+            ):
+                raise ValueError("trusted scanner input directory must be a real directory")
+            arguments.extend(
+                [
+                    "--ro-bind",
+                    str(resolved_trusted_inputs),
+                    str(resolved_trusted_inputs),
+                ]
+            )
+        arguments.extend(["--chdir", str(resolved_workspace), "--", *command])
         return arguments
 
 

@@ -327,7 +327,7 @@ def configured_scanner_adapters(config: AuditConfig) -> dict[str, ScannerAdapter
             config.scanners.codeql.database_path,
             config.scanners.codeql.query_suite,
         ),
-        "slither": SlitherScanner(),
+        "slither": SlitherScanner(config.smart_contracts),
         "foundry_fork": FoundryForkScanner(
             config.smart_contracts,
             reproduction=config.reproduction,
@@ -497,9 +497,6 @@ class ScannerRunner:
     def required_failures(self, runs: list[ScannerRun]) -> list[str]:
         failures: list[str] = []
         for run in runs:
-            if (
-                self.scanner_config(run.scanner).required
-                and run.status is not ScannerStatus.SUCCESS
-            ):
+            if self.scanner_config(run.scanner).required and run.status.is_failure:
                 failures.append(f"{run.scanner}: {run.status.value}")
         return failures

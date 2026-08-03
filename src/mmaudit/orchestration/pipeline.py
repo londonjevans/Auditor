@@ -7979,6 +7979,7 @@ class AuditPipeline:
             run_dir / "audit-results.sarif",
             generate_sarif(
                 report.findings,
+                scanner_runs=report.scanner_runs,
                 maximum_assurance=report.maximum_assurance,
                 run_status=report.run_status,
                 quality_status=report.quality_status,

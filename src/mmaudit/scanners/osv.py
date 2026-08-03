@@ -5,14 +5,53 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from mmaudit.models.schemas import ScannerFinding
-from mmaudit.scanners.base import ScannerAdapter, make_finding, safe_json, severity_from_text
+from mmaudit.models.schemas import ScannerFinding, ScannerStatus
+from mmaudit.scanners.base import (
+    ScannerAdapter,
+    ScannerExitClassification,
+    make_finding,
+    safe_json,
+    severity_from_text,
+)
+
+_NO_PACKAGE_SOURCE_DIAGNOSTICS = frozenset(
+    {
+        "no package sources found",
+        "no package sources found, --help for usage information",
+    }
+)
 
 
 class OsvScanner(ScannerAdapter):
     name = "osv"
     executable = "osv-scanner"
     finding_exit_codes = frozenset({0, 1})
+
+    def classify_non_success_exit(
+        self,
+        *,
+        return_code: int,
+        stdout: bytes,
+        stderr: bytes,
+    ) -> ScannerExitClassification | None:
+        try:
+            diagnostic = stderr.decode("utf-8", errors="strict").strip().casefold()
+        except UnicodeDecodeError:
+            diagnostic = ""
+        if (
+            return_code == 128
+            and not stdout.strip()
+            and diagnostic.rstrip(".") in _NO_PACKAGE_SOURCE_DIAGNOSTICS
+        ):
+            return ScannerExitClassification(
+                status=ScannerStatus.NOT_APPLICABLE,
+                diagnostic="no supported package sources were present in the audited scope",
+            )
+        return super().classify_non_success_exit(
+            return_code=return_code,
+            stdout=stdout,
+            stderr=stderr,
+        )
 
     def build_command(self, root: Path, private_dir: Path) -> list[str]:
         del root

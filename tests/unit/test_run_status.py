@@ -345,6 +345,43 @@ def test_completed_floor_requires_all_qualifying_evidence() -> None:
     assert gate.state is AnalysisState.DETERMINISTIC
 
 
+def test_not_applicable_scanner_is_neutral_to_the_minimum_analysis_floor() -> None:
+    not_applicable = ScannerRun(
+        scanner="osv",
+        status=ScannerStatus.NOT_APPLICABLE,
+        execution_evidence=ExecutionEvidenceKind.REAL,
+        version="osv-scanner version 2.4.0",
+        executable_sha256="6" * 64,
+        command=["osv-scanner", "scan", "source", "--offline", "."],
+        started_at=NOW,
+        finished_at=NOW,
+        duration_seconds=0,
+        error="no supported package sources were present in the audited scope",
+        raw_output_path="private/scanners/osv.json",
+        raw_output_sha256="7" * 64,
+        private_stderr_path="private/scanners/osv.stderr.txt",
+        private_stderr_sha256="8" * 64,
+        private_stderr_bytes=25,
+        process_exit_code=128,
+        isolation_backend="sandbox-exec",
+        isolation_attestation_sha256="9" * 64,
+    )
+    not_applicable = not_applicable.model_copy(
+        update={
+            "execution_observation_sha256": (not_applicable.expected_execution_observation_sha256())
+        }
+    )
+
+    floor = _assessment(
+        scanner_runs=[_real_scanner(), not_applicable],
+        usage=[_usage("source_audit")],
+    )
+
+    assert floor.run_status is AuditRunStatus.COMPLETE
+    assert floor.qualifying_real_static_scanners == ["slither"]
+    assert floor.minimum_floor_met
+
+
 @pytest.mark.parametrize(
     ("has_real_analysis", "expected"),
     [

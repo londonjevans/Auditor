@@ -19,6 +19,7 @@ from mmaudit.models.schemas import (
     CoverageProvenance,
     EconomicSimulationKind,
     EconomicTemplateExecutionCoverage,
+    ExecutionEvidenceKind,
     InvariantCategory,
     InvariantExecutionStatus,
     InvariantTemplate,
@@ -2296,6 +2297,144 @@ def test_coverage_reports_denominators(
         assert 0 <= metric.confidence <= 1
         if metric.denominator == 0:
             assert bool(metric.not_applicable_evidence) != bool(metric.failures)
+
+
+def test_scanner_completion_excludes_not_applicable_and_retains_typed_failures(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    root = _copy_fixture(tmp_path, "foundry")
+    discovery = discover_repository(root, config_factory().repository, IgnoreMatcher())
+    projects = discover_solidity_projects(discovery, config_factory().smart_contracts)
+    compilation = compile_solidity_projects(
+        root, projects, config_factory().smart_contracts, tmp_path / "private"
+    )
+    build = build_solidity_index(discovery, projects, compilation.artifact_roots)
+    graphs = build_solidity_graphs(discovery, build)
+    now = datetime.now(UTC)
+
+    def typed_exit(
+        scanner: str,
+        status: ScannerStatus,
+        *,
+        preparation: str | None = None,
+    ) -> ScannerRun:
+        return ScannerRun(
+            scanner=scanner,
+            status=status,
+            command=[scanner, "scan"],
+            started_at=now,
+            finished_at=now,
+            duration_seconds=0,
+            error=f"synthetic {status.value} diagnostic",
+            raw_output_path=f"{scanner}/{scanner}.json",
+            raw_output_sha256="1" * 64,
+            private_stderr_path=f"{scanner}/{scanner}.stderr.txt",
+            private_stderr_sha256="2" * 64,
+            private_stderr_bytes=1,
+            operator_preparation_step=preparation,
+            process_exit_code=1,
+        )
+
+    not_applicable = typed_exit("osv", ScannerStatus.NOT_APPLICABLE)
+    unmet = typed_exit(
+        "trivy",
+        ScannerStatus.UNMET_PREREQUISITE,
+        preparation="prepare_trivy_offline_vulnerability_database",
+    )
+    silent = typed_exit("slither", ScannerStatus.SILENT_FAILURE)
+    coverage = build_solidity_coverage(
+        discovery=discovery,
+        projects=projects,
+        compilations=compilation.results,
+        index=build.index,
+        graphs=graphs,
+        scanner_runs=[not_applicable, unmet, silent],
+    )
+
+    scanner_completion = coverage.quality_metrics["scanner_completion"]
+    assert scanner_completion.numerator == 0
+    assert scanner_completion.denominator == 2
+    assert scanner_completion.population == 3
+    assert [exclusion.subject for exclusion in scanner_completion.exclusions] == ["osv[0]"]
+    assert scanner_completion.exclusions[0].provenance is CoverageProvenance.DISCOVERY
+    assert scanner_completion.failures == [
+        "trivy: scanner status unmet_prerequisite",
+        "slither: scanner status silent_failure",
+    ]
+    assert coverage.tools_failed == ["slither"]
+
+    not_applicable_only = build_solidity_coverage(
+        discovery=discovery,
+        projects=projects,
+        compilations=compilation.results,
+        index=build.index,
+        graphs=graphs,
+        scanner_runs=[not_applicable],
+    ).quality_metrics["scanner_completion"]
+    assert not_applicable_only.denominator == 0
+    assert not_applicable_only.population == 1
+    assert len(not_applicable_only.exclusions) == 1
+    assert not not_applicable_only.failures
+    assert not_applicable_only.not_applicable_evidence == [
+        "all inventoried scanners were explicitly skipped or not applicable"
+    ]
+
+    def success_run(
+        scanner: str,
+        *,
+        evidence: ExecutionEvidenceKind,
+        machine_output_validated: bool,
+    ) -> ScannerRun:
+        run = ScannerRun(
+            scanner=scanner,
+            status=ScannerStatus.SUCCESS,
+            execution_evidence=evidence,
+            version="1.0.0",
+            executable_sha256="3" * 64,
+            command=[scanner, "scan"],
+            started_at=now,
+            finished_at=now,
+            duration_seconds=0,
+            raw_output_path=f"{scanner}/{scanner}.json",
+            raw_output_sha256="4" * 64,
+            raw_output_bytes=2,
+            process_exit_code=0,
+            isolation_backend="sandbox-exec",
+            isolation_attestation_sha256="5" * 64,
+            machine_output_validated=machine_output_validated,
+        )
+        return ScannerRun.model_validate(
+            {
+                **run.model_dump(mode="json"),
+                "execution_observation_sha256": run.expected_execution_observation_sha256(),
+            }
+        )
+
+    mock_success = success_run(
+        "semgrep",
+        evidence=ExecutionEvidenceKind.MOCK,
+        machine_output_validated=True,
+    )
+    unvalidated_success = success_run(
+        "trivy",
+        evidence=ExecutionEvidenceKind.REAL,
+        machine_output_validated=False,
+    )
+    unqualified_successes = build_solidity_coverage(
+        discovery=discovery,
+        projects=projects,
+        compilations=compilation.results,
+        index=build.index,
+        graphs=graphs,
+        scanner_runs=[mock_success, unvalidated_success],
+    ).quality_metrics["scanner_completion"]
+    assert unqualified_successes.numerator == 0
+    assert unqualified_successes.denominator == 2
+    assert unqualified_successes.failures == [
+        "semgrep: execution evidence is mock, not real",
+        "trivy: machine output was not strictly validated",
+    ]
 
 
 def test_coverage_metric_rejects_denominator_shrinking() -> None:

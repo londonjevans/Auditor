@@ -62,6 +62,27 @@ digest-pinned approved rootless isolation backend execute with real evidence.
 Unavailable integrations must retain exact non-secret operator installation or
 configuration instructions when their tickets begin.
 
+### Trivy offline vulnerability database
+
+The typed operator preparation step is
+`prepare_trivy_offline_vulnerability_database`. Trivy 0.72.0 exposes this bounded
+one-time network-enabled preparation command:
+
+```text
+trivy image --download-db-only --cache-dir <absolute-operator-controlled-cache-dir> --no-progress
+```
+
+Run that command only in an explicit operator-controlled preparation phase, never
+inside target analysis. The audit phase remains offline.
+
+The current adapter deliberately uses a fresh private per-run cache and does not
+yet expose or stage an approved prepared-cache path. Consequently, running the
+command against an unrelated cache does **not** unblock mmaudit today. Until a
+future typed configuration binds, validates, and stages that exact prepared cache
+read-only into the isolated scanner workspace, Trivy reports
+`UNMET_PREREQUISITE` and does not earn scanner-completion or maximum-assurance
+credit. No operator credential or target-controlled cache is accepted.
+
 ### Hardhat pinned-fork execution
 
 `V3-FORKSUITE-001` cannot credit real Hardhat execution on the current host. A

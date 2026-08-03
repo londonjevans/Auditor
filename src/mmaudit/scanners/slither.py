@@ -2,11 +2,22 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import hashlib
+import os
+import re
+import shutil
+import stat
+from pathlib import Path, PurePosixPath
 from typing import Any
 
+from mmaudit.config import SmartContractsConfig
 from mmaudit.models.schemas import ScannerFinding, Severity
 from mmaudit.scanners.base import ScannerAdapter, make_finding, safe_json, severity_from_text
+
+_MAX_SOLIDITY_SOURCES = 10_000
+_MAX_SOLIDITY_SOURCE_PATH_CHARACTERS = 500
+_MAX_PINNED_COMPILER_BYTES = 500_000_000
+_SAFE_SOLIDITY_SOURCE_PATH = re.compile(r"[A-Za-z0-9_./@+~-]+\Z")
 
 
 class SlitherScanner(ScannerAdapter):
@@ -16,15 +27,55 @@ class SlitherScanner(ScannerAdapter):
     may_execute_repository_code = True
     strict_machine_output = True
 
+    def __init__(self, smart_contracts: SmartContractsConfig | None = None) -> None:
+        self.smart_contracts = smart_contracts
+
     def build_command(self, root: Path, private_dir: Path) -> list[str]:
-        del root, private_dir
+        if not self._uses_pinned_compiler():
+            return self._default_command()
+        assert self.smart_contracts is not None
+        compiler = _stage_pinned_compiler(root, private_dir, self.smart_contracts)
+        entrypoint = _stage_analysis_entrypoint(root, private_dir)
+        return [
+            self.executable,
+            str(entrypoint),
+            "--compile-force-framework",
+            "solc",
+            "--solc",
+            str(compiler),
+            "--solc-working-dir",
+            str(private_dir.resolve(strict=True)),
+            "--solc-args",
+            (
+                f"--base-path {private_dir.resolve(strict=True)} "
+                f"--allow-paths {private_dir.resolve(strict=True)}"
+            ),
+            "--json",
+            "-",
+            "--disable-color",
+            "--fail-none",
+        ]
+
+    def execution_working_directory(self, workspace: Path, private_dir: Path) -> Path:
+        if self._uses_pinned_compiler():
+            return private_dir / "analysis"
+        return workspace
+
+    def _uses_pinned_compiler(self) -> bool:
+        return (
+            self.smart_contracts is not None
+            and self.smart_contracts.solc_version is not None
+            and self.smart_contracts.solc_sha256 is not None
+        )
+
+    def _default_command(self) -> list[str]:
         return [
             self.executable,
             ".",
             "--json",
             "-",
             "--disable-color",
-            "--no-fail",
+            "--fail-none",
         ]
 
     def parse(self, root: Path, stdout: str, private_dir: Path) -> list[ScannerFinding]:
@@ -117,19 +168,22 @@ def _source_mapping(detector: dict[str, Any]) -> dict[str, Any] | None:
         )
         if not filename:
             continue
+        normalized_filename = str(filename)
+        if normalized_filename.startswith("workspace/"):
+            normalized_filename = normalized_filename.removeprefix("workspace/")
         lines = mapping.get("lines", [])
         if isinstance(lines, list) and lines:
             parsed = [max(1, int(line)) for line in lines if str(line).isdigit()]
             if parsed:
                 return {
-                    "path": str(filename),
+                    "path": normalized_filename,
                     "start_line": min(parsed),
                     "end_line": max(parsed),
                 }
         start = mapping.get("start")
         if isinstance(start, int):
             line = max(1, start)
-            return {"path": str(filename), "start_line": line, "end_line": line}
+            return {"path": normalized_filename, "start_line": line, "end_line": line}
     return None
 
 
@@ -147,3 +201,93 @@ def _element_summary(value: Any) -> list[dict[str, str]]:
         if len(summary) == 20:
             break
     return summary
+
+
+def _stage_pinned_compiler(
+    root: Path,
+    private_dir: Path,
+    config: SmartContractsConfig,
+) -> Path:
+    """Copy the exact configured compiler into the private scanner toolchain."""
+
+    if config.solc_sha256 is None:
+        raise ValueError("Slither requires configured Solidity compiler SHA-256")
+    raw_path = os.environ.get(config.solc_executable_env, "")
+    if not raw_path:
+        raise ValueError("configured Solidity compiler executable is unavailable")
+    source = Path(raw_path)
+    try:
+        source_metadata = source.lstat()
+        resolved_source = source.resolve(strict=True)
+        resolved_source.relative_to(root.resolve(strict=True))
+    except ValueError:
+        pass
+    except OSError as exc:
+        raise ValueError("configured Solidity compiler could not be inspected") from exc
+    else:
+        raise ValueError("configured Solidity compiler cannot reside in the audited repository")
+    if (
+        not source.is_absolute()
+        or resolved_source != source
+        or source.is_symlink()
+        or source.is_junction()
+        or not stat.S_ISREG(source_metadata.st_mode)
+        or source_metadata.st_nlink != 1
+        or not 0 < source_metadata.st_size <= _MAX_PINNED_COMPILER_BYTES
+        or not os.access(source, os.X_OK)
+    ):
+        raise ValueError("configured Solidity compiler is not a safe executable")
+    if _sha256_file(source) != config.solc_sha256:
+        raise ValueError("configured Solidity compiler does not match its SHA-256 pin")
+
+    toolchain = private_dir / "toolchain"
+    toolchain.mkdir(mode=0o700)
+    destination = toolchain / "solc"
+    with source.open("rb") as source_handle, destination.open("xb") as destination_handle:
+        shutil.copyfileobj(source_handle, destination_handle, length=1024 * 1024)
+    destination.chmod(0o500)
+    if _sha256_file(destination) != config.solc_sha256:
+        raise ValueError("staged Solidity compiler differs from its SHA-256 pin")
+    return destination.resolve(strict=True)
+
+
+def _stage_analysis_entrypoint(root: Path, private_dir: Path) -> Path:
+    """Create an import-only private entrypoint covering every copied Solidity source."""
+
+    sources: list[str] = []
+    for candidate in sorted(root.rglob("*.sol")):
+        if candidate.is_symlink() or candidate.is_junction() or not candidate.is_file():
+            raise ValueError("Slither source inventory contains an unsupported file")
+        relative = PurePosixPath(candidate.relative_to(root).as_posix()).as_posix()
+        if (
+            not relative
+            or len(relative) > _MAX_SOLIDITY_SOURCE_PATH_CHARACTERS
+            or _SAFE_SOLIDITY_SOURCE_PATH.fullmatch(relative) is None
+        ):
+            raise ValueError("Slither source path cannot be represented safely")
+        sources.append(relative)
+        if len(sources) > _MAX_SOLIDITY_SOURCES:
+            raise ValueError("Slither source inventory exceeds the fixed source limit")
+    if not sources:
+        raise ValueError("Slither requires at least one Solidity source")
+
+    analysis = private_dir / "analysis"
+    analysis.mkdir(mode=0o700)
+    entrypoint = analysis / "slither-entrypoint.sol"
+    lines = ["// SPDX-License-Identifier: UNLICENSED"]
+    lines.extend(f'import "workspace/{source}";' for source in sources)
+    payload = ("\n".join(lines) + "\n").encode()
+    with entrypoint.open("xb") as handle:
+        handle.write(payload)
+    entrypoint.chmod(0o600)
+    if entrypoint.read_bytes() != payload:
+        raise ValueError("Slither analysis entrypoint failed exact-byte validation")
+    return entrypoint
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()

@@ -545,6 +545,36 @@ def positive_line(value: Any, default: int = 1) -> int:
     return max(1, parsed)
 
 
+@dataclass(frozen=True, slots=True)
+class ScannerExitClassification:
+    """Bounded public diagnosis for one observed non-success scanner exit."""
+
+    status: ScannerStatus
+    diagnostic: str
+    operator_preparation_step: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.status not in {
+            ScannerStatus.NOT_APPLICABLE,
+            ScannerStatus.UNMET_PREREQUISITE,
+            ScannerStatus.SILENT_FAILURE,
+        }:
+            raise ValueError("scanner exit classification requires a typed non-success status")
+        if (
+            not self.diagnostic
+            or self.diagnostic != self.diagnostic.strip()
+            or len(self.diagnostic) > 1_000
+            or any(ord(character) < 32 or ord(character) == 127 for character in self.diagnostic)
+        ):
+            raise ValueError("scanner exit classification requires a bounded diagnostic")
+        if (self.status is ScannerStatus.UNMET_PREREQUISITE) != (
+            self.operator_preparation_step is not None
+        ):
+            raise ValueError(
+                "only an unmet scanner prerequisite may name an operator preparation step"
+            )
+
+
 class ScannerAdapter(ABC):
     """A fixed-command adapter; model output can never influence arguments."""
 
@@ -566,6 +596,36 @@ class ScannerAdapter(ABC):
     @abstractmethod
     def parse(self, root: Path, stdout: str, private_dir: Path) -> list[ScannerFinding]:
         """Normalize scanner-specific machine-readable output."""
+
+    def execution_working_directory(self, workspace: Path, private_dir: Path) -> Path:
+        """Return the private execution directory for this fixed adapter command."""
+
+        del private_dir
+        return workspace
+
+    def validate_pre_execution_inputs(self, workspace: Path, private_dir: Path) -> None:
+        """Revalidate adapter-owned trusted inputs immediately before process launch."""
+
+        del workspace, private_dir
+
+    def classify_non_success_exit(
+        self,
+        *,
+        return_code: int,
+        stdout: bytes,
+        stderr: bytes,
+    ) -> ScannerExitClassification | None:
+        """Recognize typed bounded outcomes without publishing untrusted tool output."""
+
+        if return_code != 0 and not stdout and not stderr:
+            return ScannerExitClassification(
+                status=ScannerStatus.SILENT_FAILURE,
+                diagnostic=(
+                    "scanner exited nonzero without machine output or diagnostics; "
+                    "inspect the named private stderr artifact"
+                ),
+            )
+        return None
 
     def run(
         self,
@@ -660,6 +720,10 @@ class ScannerAdapter(ABC):
             raw_output_path: str | None = None,
             attested_output_sha256: str | None = None,
             attested_output_bytes: int = 0,
+            private_stderr_path: str | None = None,
+            private_stderr_sha256: str | None = None,
+            private_stderr_bytes: int = 0,
+            operator_preparation_step: str | None = None,
             process_exit_code: int | None = None,
             machine_output_validated: bool = False,
         ) -> ScannerRun:
@@ -669,13 +733,25 @@ class ScannerAdapter(ABC):
                 raise ValueError("scanner output evidence requires a private relative path")
             if raw_output_path is not None and attested_output_sha256 is None:
                 raise ValueError("scanner output path requires descriptor-attested evidence")
+            if private_stderr_path is None and (
+                private_stderr_sha256 is not None or private_stderr_bytes != 0
+            ):
+                raise ValueError("scanner stderr evidence requires a private relative path")
+            if private_stderr_path is not None and private_stderr_sha256 is None:
+                raise ValueError("scanner stderr path requires descriptor-attested evidence")
             run = ScannerRun(
                 scanner=self.name,
                 status=status,
                 execution_evidence=(
                     isolation_execution_evidence(backend)
                     if (
-                        status is ScannerStatus.SUCCESS
+                        status
+                        in {
+                            ScannerStatus.SUCCESS,
+                            ScannerStatus.NOT_APPLICABLE,
+                            ScannerStatus.UNMET_PREREQUISITE,
+                            ScannerStatus.SILENT_FAILURE,
+                        }
                         and executable_sha256 is not None
                         and bool(command)
                         and raw_output_path is not None
@@ -694,6 +770,10 @@ class ScannerAdapter(ABC):
                 raw_output_path=raw_output_path,
                 raw_output_sha256=attested_output_sha256,
                 raw_output_bytes=attested_output_bytes,
+                private_stderr_path=private_stderr_path,
+                private_stderr_sha256=private_stderr_sha256,
+                private_stderr_bytes=private_stderr_bytes,
+                operator_preparation_step=operator_preparation_step,
                 process_exit_code=process_exit_code,
                 isolation_backend=isolation_backend,
                 isolation_attestation_sha256=isolation_attestation_sha256(backend),
@@ -847,6 +927,12 @@ class ScannerAdapter(ABC):
                 private_dir,
                 environment,
             )
+            self.validate_pre_execution_inputs(workspace, private_dir)
+            execution_cwd = self.execution_working_directory(workspace, private_dir)
+            resolved_execution_cwd = execution_cwd.resolve(strict=True)
+            resolved_execution_cwd.relative_to(private_dir.resolve(strict=True))
+            if execution_cwd.is_symlink() or execution_cwd.is_junction():
+                raise ValueError("scanner execution directory may not be a link")
         except MacOSToolchainResolutionError:
             cleanup_error = _scanner_cleanup_error(backend, private_dir)
             return finish(
@@ -883,7 +969,7 @@ class ScannerAdapter(ABC):
                 error_identity = _private_probe_stream_identity(stderr_handle)
                 process = subprocess.Popen(
                     command,
-                    cwd=workspace,
+                    cwd=resolved_execution_cwd,
                     stdout=stdout_handle,
                     stderr=stderr_handle,
                     env=process_environment,
@@ -959,13 +1045,6 @@ class ScannerAdapter(ABC):
             process_error = f"scanner process failed: {type(exc).__name__}"
             return_code = process.returncode if process is not None else -1
         cleanup_error = _scanner_cleanup_error(backend, private_dir)
-        if process_error or cleanup_error or descendant_error:
-            return finish(
-                ScannerStatus.FAILED,
-                version=version,
-                command=command,
-                error=cleanup_error or descendant_error or process_error,
-            )
         if raw_identity is None or error_identity is None:
             return finish(
                 ScannerStatus.FAILED,
@@ -994,82 +1073,91 @@ class ScannerAdapter(ABC):
             )
         raw_output_sha256 = hashlib.sha256(raw_bytes).hexdigest()
         raw_output_bytes = len(raw_bytes)
-        if memory_monitor_failed or memory_exceeded:
+        private_stderr_sha256 = hashlib.sha256(error_bytes).hexdigest()
+        raw_public_path = str(raw_path.relative_to(private_dir.parent))
+        stderr_public_path = str(error_path.relative_to(private_dir.parent))
+
+        def finish_observed(
+            status: ScannerStatus,
+            *,
+            findings: list[ScannerFinding] | None = None,
+            error: str | None = None,
+            operator_preparation_step: str | None = None,
+            machine_output_validated: bool = False,
+        ) -> ScannerRun:
             return finish(
-                ScannerStatus.FAILED,
+                status,
                 version=version,
                 command=command,
+                findings=findings,
+                error=error,
+                raw_output_path=raw_public_path,
+                attested_output_sha256=raw_output_sha256,
+                attested_output_bytes=raw_output_bytes,
+                private_stderr_path=stderr_public_path,
+                private_stderr_sha256=private_stderr_sha256,
+                private_stderr_bytes=len(error_bytes),
+                operator_preparation_step=operator_preparation_step,
+                process_exit_code=return_code if process is not None else None,
+                machine_output_validated=machine_output_validated,
+            )
+
+        if process_error or cleanup_error or descendant_error:
+            return finish_observed(
+                ScannerStatus.FAILED,
+                error=cleanup_error or descendant_error or process_error,
+            )
+        if memory_monitor_failed or memory_exceeded:
+            return finish_observed(
+                ScannerStatus.FAILED,
                 error=(
                     _SCANNER_MEMORY_MONITOR_DIAGNOSTIC
                     if memory_monitor_failed
                     else _SCANNER_MEMORY_DIAGNOSTIC
                 ),
-                raw_output_path=str(raw_path.relative_to(private_dir.parent)),
-                attested_output_sha256=raw_output_sha256,
-                attested_output_bytes=raw_output_bytes,
-                process_exit_code=return_code,
             )
         if timed_out:
-            return finish(
+            return finish_observed(
                 ScannerStatus.TIMED_OUT,
-                version=version,
-                command=command,
                 error=f"scanner exceeded {timeout_seconds:.0f}s timeout",
-                raw_output_path=str(raw_path.relative_to(private_dir.parent)),
-                attested_output_sha256=raw_output_sha256,
-                attested_output_bytes=raw_output_bytes,
-                process_exit_code=return_code,
             )
         if (
             output_exceeded
             or raw_output_bytes > self.max_stdout_bytes
             or len(error_bytes) > self.max_stderr_bytes
         ):
-            return finish(
+            return finish_observed(
                 ScannerStatus.FAILED,
-                version=version,
-                command=command,
                 error="scanner output exceeded the private output limit",
-                raw_output_path=str(raw_path.relative_to(private_dir.parent)),
-                attested_output_sha256=raw_output_sha256,
-                attested_output_bytes=raw_output_bytes,
-                process_exit_code=return_code,
             )
 
         stdout = raw_bytes.decode("utf-8", errors="replace")
         if return_code not in self.finding_exit_codes:
-            return finish(
+            classification = self.classify_non_success_exit(
+                return_code=return_code,
+                stdout=raw_bytes,
+                stderr=error_bytes,
+            )
+            if classification is not None:
+                return finish_observed(
+                    classification.status,
+                    error=classification.diagnostic,
+                    operator_preparation_step=classification.operator_preparation_step,
+                )
+            return finish_observed(
                 ScannerStatus.FAILED,
-                version=version,
-                command=command,
                 error=f"scanner exited with code {return_code}",
-                raw_output_path=str(raw_path.relative_to(private_dir.parent)),
-                attested_output_sha256=raw_output_sha256,
-                attested_output_bytes=raw_output_bytes,
-                process_exit_code=return_code,
             )
         try:
             findings = self.parse(workspace, stdout, private_dir)
         except (ValueError, TypeError, KeyError, AttributeError, json.JSONDecodeError) as exc:
-            return finish(
+            return finish_observed(
                 ScannerStatus.FAILED,
-                version=version,
-                command=command,
                 error=f"invalid scanner output: {type(exc).__name__}",
-                raw_output_path=str(raw_path.relative_to(private_dir.parent)),
-                attested_output_sha256=raw_output_sha256,
-                attested_output_bytes=raw_output_bytes,
-                process_exit_code=return_code,
             )
-        return finish(
+        return finish_observed(
             ScannerStatus.SUCCESS,
-            version=version,
-            command=command,
             findings=findings,
-            raw_output_path=str(raw_path.relative_to(private_dir.parent)),
-            attested_output_sha256=raw_output_sha256,
-            attested_output_bytes=raw_output_bytes,
-            process_exit_code=return_code,
             machine_output_validated=self.strict_machine_output,
         )
 

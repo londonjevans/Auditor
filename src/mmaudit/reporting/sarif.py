@@ -14,6 +14,8 @@ from mmaudit.models.schemas import (
     Finding,
     FindingStatus,
     MaximumAssuranceAssessment,
+    ScannerRun,
+    ScannerStatus,
     Severity,
 )
 
@@ -58,9 +60,60 @@ def _origin_fingerprint(finding: Finding) -> str:
     ).hexdigest()
 
 
+def _scanner_execution_record(run: ScannerRun) -> dict[str, Any]:
+    """Return a content-free SARIF projection of one typed scanner outcome."""
+
+    return {
+        "scanner": run.scanner,
+        "status": run.status.value,
+        "executionEvidence": run.execution_evidence.value,
+        "version": run.version,
+        "findingCount": len(run.findings),
+        "processExitCode": run.process_exit_code,
+        "machineOutputValidated": run.machine_output_validated,
+        "operatorPreparationStep": run.operator_preparation_step,
+        "privateStderrPath": run.private_stderr_path,
+        "privateStderrSha256": run.private_stderr_sha256,
+        "privateStderrBytes": run.private_stderr_bytes,
+    }
+
+
+def _scanner_execution_notification(run: ScannerRun) -> dict[str, Any] | None:
+    if run.status is ScannerStatus.SUCCESS:
+        return None
+    if run.status is ScannerStatus.NOT_APPLICABLE:
+        message = f"{run.scanner}: scanner was not applicable to the audited scope"
+        level = "note"
+    elif run.status is ScannerStatus.UNMET_PREREQUISITE:
+        message = (
+            f"{run.scanner}: scanner prerequisite is unmet; operator preparation step: "
+            f"{run.operator_preparation_step}"
+        )
+        level = "warning"
+    else:
+        message = f"{run.scanner}: scanner ended with status {run.status.value}"
+        level = (
+            "error"
+            if run.status
+            in {ScannerStatus.FAILED, ScannerStatus.SILENT_FAILURE, ScannerStatus.TIMED_OUT}
+            else "warning"
+        )
+    return {
+        "level": level,
+        "message": {"text": message},
+        "properties": {
+            "scanner": run.scanner,
+            "status": run.status.value,
+            "operatorPreparationStep": run.operator_preparation_step,
+            "privateStderrPath": run.private_stderr_path,
+        },
+    }
+
+
 def generate_sarif(
     findings: list[Finding],
     *,
+    scanner_runs: Sequence[ScannerRun] = (),
     maximum_assurance: MaximumAssuranceAssessment | None = None,
     run_status: AuditRunStatus | None = None,
     quality_status: AuditQualityStatus | None = None,
@@ -173,7 +226,11 @@ def generate_sarif(
     run_properties: dict[str, Any] = {
         "maximumAssurance": (
             maximum_assurance.model_dump(mode="json") if maximum_assurance is not None else None
-        )
+        ),
+        "scannerExecutions": [
+            _scanner_execution_record(run)
+            for run in sorted(scanner_runs, key=lambda item: item.scanner)
+        ],
     }
     if run_status is not None:
         run_properties["runStatus"] = run_status.value
@@ -189,6 +246,7 @@ def generate_sarif(
             quality_status is not None,
             completed is not None,
             bool(incomplete_reasons),
+            bool(scanner_runs),
         )
     )
     if run_evidence_supplied:
@@ -200,7 +258,22 @@ def generate_sarif(
         if completed is not None:
             invocation_properties["completed"] = completed
         invocation = {
-            "executionSuccessful": run_status is AuditRunStatus.COMPLETE,
+            "executionSuccessful": (
+                run_status is AuditRunStatus.COMPLETE
+                if run_status is not None
+                else (
+                    completed
+                    if completed is not None
+                    else (
+                        quality_status is AuditQualityStatus.COMPLETED
+                        if quality_status is not None
+                        else (
+                            any(run.status is ScannerStatus.SUCCESS for run in scanner_runs)
+                            and all(not run.status.is_failure for run in scanner_runs)
+                        )
+                    )
+                )
+            ),
             "properties": invocation_properties,
             "toolExecutionNotifications": [
                 {
@@ -214,6 +287,11 @@ def generate_sarif(
                 for reason in incomplete_reasons
             ],
         }
+        invocation["toolExecutionNotifications"].extend(
+            notification
+            for run in sorted(scanner_runs, key=lambda item: item.scanner)
+            if (notification := _scanner_execution_notification(run)) is not None
+        )
         if maximum_assurance is not None:
             invocation_properties["maximumAssuranceStatus"] = maximum_assurance.status.value
             invocation_properties["downgraded"] = maximum_assurance.downgraded

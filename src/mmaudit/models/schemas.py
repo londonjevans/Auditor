@@ -55,6 +55,26 @@ def _require_public_tool_version(value: str) -> str:
     return value
 
 
+def _require_safe_relative_artifact_path(value: str, *, label: str) -> str:
+    """Reject absolute, linked-name, traversal, control, and ambiguous artifact paths."""
+
+    if (
+        value != value.strip()
+        or value.startswith("/")
+        or "\\" in value
+        or re.match(r"^[A-Za-z]:", value)
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        raise ValueError(f"{label} must be safe and relative")
+    parts = value.split("/")
+    if not parts or any(
+        part in {"", ".", ".."} or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}", part) is None
+        for part in parts
+    ):
+        raise ValueError(f"{label} must be safe and relative")
+    return value
+
+
 class StrictModel(BaseModel):
     """Base model that rejects unknown fields in security-sensitive data."""
 
@@ -542,11 +562,20 @@ class VerificationVerdict(StrEnum):
 
 class ScannerStatus(StrEnum):
     SUCCESS = "success"
+    NOT_APPLICABLE = "not_applicable"
+    UNMET_PREREQUISITE = "unmet_prerequisite"
+    SILENT_FAILURE = "silent_failure"
     UNAVAILABLE = "unavailable"
     INTERPRETER_OR_LOADER_FAILURE = "interpreter_or_loader_failure"
     FAILED = "failed"
     TIMED_OUT = "timed_out"
     SKIPPED = "skipped"
+
+    @property
+    def is_failure(self) -> bool:
+        """Return whether this terminal outcome represents failed scanner coverage."""
+
+        return self not in {ScannerStatus.SUCCESS, ScannerStatus.NOT_APPLICABLE}
 
 
 class RepositoryTestExecutionStatus(StrEnum):
@@ -5521,6 +5550,22 @@ class ScannerRun(StrictModel):
     raw_output_path: str | None = None
     raw_output_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     raw_output_bytes: int = Field(default=0, ge=0)
+    private_stderr_path: str | None = Field(
+        default=None,
+        max_length=1_000,
+        exclude_if=lambda value: value is None,
+    )
+    private_stderr_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        exclude_if=lambda value: value is None,
+    )
+    private_stderr_bytes: int = Field(default=0, ge=0, exclude_if=lambda value: value == 0)
+    operator_preparation_step: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_]{0,63}$",
+        exclude_if=lambda value: value is None,
+    )
     process_exit_code: int | None = None
     isolation_backend: str | None = None
     isolation_attestation_sha256: str | None = Field(
@@ -5563,6 +5608,19 @@ class ScannerRun(StrictModel):
         if value is not None:
             _require_public_tool_version(value)
         return value
+
+    @field_validator("private_stderr_path")
+    @classmethod
+    def private_stderr_path_is_safe_relative_artifact(
+        cls,
+        value: str | None,
+    ) -> str | None:
+        if value is None:
+            return None
+        return _require_safe_relative_artifact_path(
+            value,
+            label="private scanner stderr path",
+        )
 
     def expected_execution_observation_sha256(self) -> str:
         """Bind every scanner observation except the digest itself."""
@@ -5607,6 +5665,43 @@ class ScannerRun(StrictModel):
             ).encode()
         ).hexdigest()
 
+    def expected_pre_typed_outcome_execution_observation_sha256(
+        self,
+        *,
+        pre_scope: bool = False,
+    ) -> str:
+        """Recompute an observation created before typed stderr/outcome evidence existed."""
+
+        excluded = {
+            "execution_observation_sha256",
+            "private_stderr_path",
+            "private_stderr_sha256",
+            "private_stderr_bytes",
+            "operator_preparation_step",
+        }
+        if pre_scope:
+            if (
+                self.repository_test_fork_rpc_scopes
+                or self.repository_suite_workspace_copy is not None
+            ):
+                raise ValueError("scoped scanner runs do not have a pre-scope observation digest")
+            excluded.update(
+                {
+                    "repository_test_fork_rpc_scopes",
+                    "repository_suite_workspace_copy",
+                }
+            )
+        payload = self.model_dump(mode="json", exclude=excluded)
+        return hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
+
     def execution_observation_sha256_is_valid(self) -> bool:
         """Accept current evidence, or the exact empty-scope historical projection."""
 
@@ -5614,11 +5709,31 @@ class ScannerRun(StrictModel):
             return False
         if self.execution_observation_sha256 == self.expected_execution_observation_sha256():
             return True
-        return (
+        if (
             not self.repository_test_fork_rpc_scopes
             and self.repository_suite_workspace_copy is None
             and self.execution_observation_sha256
             == self.expected_legacy_execution_observation_sha256()
+        ):
+            return True
+        typed_outcome_fields_are_default = (
+            self.private_stderr_path is None
+            and self.private_stderr_sha256 is None
+            and self.private_stderr_bytes == 0
+            and self.operator_preparation_step is None
+        )
+        if not typed_outcome_fields_are_default:
+            return False
+        if (
+            self.execution_observation_sha256
+            == self.expected_pre_typed_outcome_execution_observation_sha256()
+        ):
+            return True
+        return (
+            not self.repository_test_fork_rpc_scopes
+            and self.repository_suite_workspace_copy is None
+            and self.execution_observation_sha256
+            == self.expected_pre_typed_outcome_execution_observation_sha256(pre_scope=True)
         )
 
     @model_validator(mode="after")
@@ -5635,6 +5750,35 @@ class ScannerRun(StrictModel):
             raise ValueError("blocked repository code cannot have a successful scanner result")
         if self.raw_output_sha256 is None and self.raw_output_bytes:
             raise ValueError("scanner output bytes require a SHA-256 binding")
+        if self.private_stderr_path is None and (
+            self.private_stderr_sha256 is not None or self.private_stderr_bytes
+        ):
+            raise ValueError("private scanner stderr evidence requires its relative path")
+        if self.private_stderr_path is not None and self.private_stderr_sha256 is None:
+            raise ValueError("private scanner stderr path requires a SHA-256 binding")
+        typed_exit_statuses = {
+            ScannerStatus.NOT_APPLICABLE,
+            ScannerStatus.UNMET_PREREQUISITE,
+            ScannerStatus.SILENT_FAILURE,
+        }
+        if self.status in typed_exit_statuses:
+            if self.process_exit_code in {None, 0}:
+                raise ValueError("typed scanner exit outcome requires an observed nonzero exit")
+            if not self.command or self.raw_output_path is None or self.private_stderr_path is None:
+                raise ValueError("typed scanner exit outcome requires bound process artifacts")
+            _require_safe_relative_artifact_path(
+                self.raw_output_path,
+                label="typed scanner output path",
+            )
+            if self.raw_output_sha256 is None:
+                raise ValueError("typed scanner exit outcome requires a bound stdout digest")
+            if self.findings or self.machine_output_validated:
+                raise ValueError("typed scanner exit outcome cannot claim validated findings")
+        if self.status is ScannerStatus.UNMET_PREREQUISITE:
+            if self.operator_preparation_step is None:
+                raise ValueError("unmet scanner prerequisite requires an operator preparation step")
+        elif self.operator_preparation_step is not None:
+            raise ValueError("operator preparation step requires an unmet scanner prerequisite")
         if self.repository_test_executions and self.repository_suite_selection is None:
             raise ValueError("repository test executions require their selection evidence")
         if (

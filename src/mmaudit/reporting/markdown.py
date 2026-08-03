@@ -470,8 +470,9 @@ def render_markdown(report: AuditReport) -> str:
     counts = Counter(finding.severity.value for finding in report.findings)
     status_counts = Counter(finding.status.value for finding in report.findings)
     origin_counts = Counter(finding.origin_kind.value for finding in report.findings)
-    scanner_failures = [
-        run for run in report.scanner_runs if run.status is not ScannerStatus.SUCCESS
+    scanner_failures = [run for run in report.scanner_runs if run.status.is_failure]
+    scanner_not_applicable = [
+        run for run in report.scanner_runs if run.status is ScannerStatus.NOT_APPLICABLE
     ]
     model_config = report.metadata.get("configured_models", {})
     model_fallbacks = report.metadata.get("configured_fallbacks", {})
@@ -1270,8 +1271,9 @@ def render_markdown(report: AuditReport) -> str:
         [
             "## Scanner execution",
             "",
-            "| Scanner | Status | Version | Repository code | Isolation backend | Findings |",
-            "| --- | --- | --- | --- | --- | ---: |",
+            "| Scanner | Status | Version | Repository code | Isolation backend | Findings | "
+            "Operator action | Private stderr evidence |",
+            "| --- | --- | --- | --- | --- | ---: | --- | --- |",
         ]
     )
     for scanner_run in report.scanner_runs:
@@ -1280,12 +1282,30 @@ def render_markdown(report: AuditReport) -> str:
             f"{_text(scanner_run.version or 'unavailable')} | "
             f"{_text(scanner_run.repository_code_execution.value)} | "
             f"{_text(scanner_run.isolation_backend or 'not applicable')} | "
-            f"{len(scanner_run.findings)} |"
+            f"{len(scanner_run.findings)} | "
+            f"{_text(scanner_run.operator_preparation_step or 'none')} | "
+            f"{_text(scanner_run.private_stderr_path or 'not retained')} |"
+        )
+    if scanner_not_applicable:
+        lines.extend(["", "Scanners not applicable to this scope:", ""])
+        lines.extend(
+            f"- {_text(run.scanner)}: {_text(run.error or run.status.value)}"
+            for run in scanner_not_applicable
         )
     if scanner_failures:
         lines.extend(["", "Scanner limitations/failures:", ""])
         lines.extend(
             f"- {_text(run.scanner)}: {_text(run.error or run.status.value)}"
+            + (
+                f"; operator preparation: {_text(run.operator_preparation_step)}"
+                if run.operator_preparation_step is not None
+                else ""
+            )
+            + (
+                f"; private stderr: {_text(run.private_stderr_path)}"
+                if run.private_stderr_path is not None
+                else ""
+            )
             for run in scanner_failures
         )
     differential = report.repository_suite_differential

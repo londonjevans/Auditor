@@ -3118,6 +3118,45 @@ def test_tampered_pre_scope_scanner_run_rejects_legacy_digest() -> None:
         ScannerRun.model_validate(payload)
 
 
+def test_pre_typed_scanner_defaults_preserve_enclosing_attempt_hash() -> None:
+    descriptor = _descriptor()
+    selection = _selection(descriptor)
+    clean, _ = _states()
+    run = ScannerRun(
+        scanner="foundry_fork",
+        status=ScannerStatus.UNAVAILABLE,
+        started_at=BASE_TIME,
+        finished_at=BASE_TIME,
+        duration_seconds=0,
+        error="synthetic unavailable engine",
+    )
+    attempt = _state_attempt_with_lifecycle(
+        selection,
+        clean,
+        attempt_index=1,
+        workspace_identity_sha256="7" * 64,
+        run=run,
+        lifecycle_status=RepositorySuiteWorkspaceLifecycleStatus.DISPOSED_UNCREDITED,
+    )
+    payload = attempt.model_dump(mode="json")
+    scanner_payload = payload["scanner_run"]
+    assert isinstance(scanner_payload, dict)
+    for field in (
+        "private_stderr_path",
+        "private_stderr_sha256",
+        "private_stderr_bytes",
+        "operator_preparation_step",
+    ):
+        assert field not in scanner_payload
+    payload["attempt_sha256"] = _canonical_sha256(
+        {key: value for key, value in payload.items() if key != "attempt_sha256"}
+    )
+
+    restored = RepositorySuiteStateAttempt.model_validate(payload)
+
+    assert restored.attempt_sha256 == attempt.attempt_sha256
+
+
 def test_pre_scope_egress_accepts_exact_omitted_ledger_legacy_digest() -> None:
     clean, _ = _states()
     evidence = _egress(clean)

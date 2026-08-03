@@ -5,20 +5,54 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from mmaudit.models.schemas import ScannerFinding
+from mmaudit.models.schemas import ScannerFinding, ScannerStatus
 from mmaudit.scanners.base import (
     ScannerAdapter,
+    ScannerExitClassification,
     make_finding,
     positive_line,
     safe_json,
     severity_from_text,
 )
 
+_TRIVY_DATABASE_PREPARATION_STEP = "prepare_trivy_offline_vulnerability_database"
+
 
 class TrivyScanner(ScannerAdapter):
     name = "trivy"
     executable = "trivy"
     finding_exit_codes = frozenset({0})
+
+    def classify_non_success_exit(
+        self,
+        *,
+        return_code: int,
+        stdout: bytes,
+        stderr: bytes,
+    ) -> ScannerExitClassification | None:
+        try:
+            diagnostic = " ".join(stderr.decode("utf-8", errors="strict").casefold().split())
+        except UnicodeDecodeError:
+            diagnostic = ""
+        if (
+            return_code != 0
+            and not stdout.strip()
+            and "[vulndb]" in diagnostic
+            and "the first run cannot skip downloading db" in diagnostic
+        ):
+            return ScannerExitClassification(
+                status=ScannerStatus.UNMET_PREREQUISITE,
+                diagnostic=(
+                    "the approved offline Trivy vulnerability database is unavailable; "
+                    "complete the named operator preparation step before retrying"
+                ),
+                operator_preparation_step=_TRIVY_DATABASE_PREPARATION_STEP,
+            )
+        return super().classify_non_success_exit(
+            return_code=return_code,
+            stdout=stdout,
+            stderr=stderr,
+        )
 
     def build_command(self, root: Path, private_dir: Path) -> list[str]:
         del root

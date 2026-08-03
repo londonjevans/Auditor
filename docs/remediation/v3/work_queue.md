@@ -1726,7 +1726,23 @@ are invisible to source review by construction.
   `src/mmaudit/scanners/osv.py`, `src/mmaudit/scanners/trivy.py`,
   `src/mmaudit/scanners/slither.py`, reporting, `operator_prerequisites.md`, regressions.
 - **Dependencies:** `V3-TOOLDIAG-001` (`COMPLETE`).
-- **Status:** `QUEUED`
+- **Status:** `COMPLETE`
+- **Acceptance evidence:** Semgrep `1.172.0`, Gitleaks `8.30.1`, and Slither `0.11.6` each
+  produced strictly validated nonempty machine output with `REAL` network-denied
+  `sandbox-exec` evidence against committed fixtures. Installed OSV produced a typed
+  `NOT_APPLICABLE` result for the Solidity-only fixture, and installed Trivy produced a typed
+  `UNMET_PREREQUISITE` result naming
+  `prepare_trivy_offline_vulnerability_database`; neither earned false scanner-completion
+  credit. Silent nonzero/empty output, strict report serialization, historical evidence hashes,
+  exact packaged-rule custody, and fail-closed completion denominators have permanent
+  regressions. The final real macOS matrix passed `6` cases in `17.49s`; the exact final tree
+  passed Ruff, strict mypy over `166` source files, schema verification, and `4501` tests with
+  `11` explicit prerequisite/paid-provider skips in `1430.04s`.
+- **Remaining boundary:** Trivy cannot consume an operator-prepared offline database yet and
+  therefore remains an explicit unmet external prerequisite, not a successful scan. Real
+  non-macOS integrations remain conditional on an equivalent approved backend and trusted
+  toolchain.
+- **Next action:** Continue the queue with close-out ticket `V3-FIXTURE-001`.
 
 ## V3-BOOTSTRAP-001 — Separate declared model identity from measured model quality
 
@@ -2010,8 +2026,8 @@ no duplicate, and no ticket scheduled before a declared dependency completes.
    `BLOCKED_TECHNICAL` behind `V3-HARDHAT-001` and its operator container prerequisite.
 3. `V3-BOOTSTRAP-001` — complete. Declared identity can now be measured without prior quality,
    while production selection remains bound to current opaque qualification evidence.
-4. `V3-TOOLDIAG-002` — small; without it a real audit still returns zero static-analyzer
-   findings.
+4. `V3-TOOLDIAG-002` — complete; the real macOS scanner matrix now distinguishes validated
+   success, not-applicable scope, unmet prerequisites, and silent failure without false credit.
 5. `V3-FIXTURE-001` — close-out only. Its sole remaining gap was that `V3-SHARD-001` had to
    consume the scale corpus; `V3-SHARD-001` is `COMPLETE` and its evidence records the
    4,952/15,116/35,444-line corpus passing deterministic sharding. Verify and mark `COMPLETE`.

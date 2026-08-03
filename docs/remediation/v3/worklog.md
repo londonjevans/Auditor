@@ -5,12 +5,12 @@ The objective source has SHA-256
 Do not record credentials, raw private prompts, or raw provider completions here.
 
 AUTORUN_STATUS: RUNNING
-CURRENT_MILESTONE: Model qualification bootstrap
-CURRENT_TICKET: V3-BOOTSTRAP-001 (COMPLETE; CHECKPOINT_PENDING)
-LAST_COMPLETED_TICKET: V3-BOOTSTRAP-001 (COMPLETE)
-NEXT_ACTION: Complete final artifact/secret review, create and push the isolated Bootstrap checkpoint, then begin V3-TOOLDIAG-002.
-LAST_COMMAND: `.venv/bin/ruff format tests/unit/test_token_planning_acceptance.py && .venv/bin/pytest -q tests/unit/test_token_planning_acceptance.py --cache-clear && .venv/bin/ruff format --check . && .venv/bin/ruff check . && .venv/bin/mypy && .venv/bin/python scripts/generate_release_schemas.py && git diff --check`
-LAST_RESULT: PASS: mechanical formatting normalized one test, its 5 focused cases passed in 2.10s, all 419 files are formatted, Ruff passed, strict mypy passed 165 source files, schemas verified, and diff checks passed; the preceding host-policy full suite passed 4452 with 11 explicit skips in 1385.11s.
+CURRENT_MILESTONE: Deterministic scanner execution
+CURRENT_TICKET: V3-TOOLDIAG-002 (COMPLETE; CHECKPOINT_PENDING)
+LAST_COMPLETED_TICKET: V3-TOOLDIAG-002 (COMPLETE)
+NEXT_ACTION: Complete final artifact/secret review, create and SSH-push the isolated V3-TOOLDIAG-002 checkpoint, then begin close-out ticket V3-FIXTURE-001.
+LAST_COMMAND: `.venv/bin/pytest -q --cache-clear` with host permission for bounded local listeners and nested isolation
+LAST_RESULT: PASS: exact final tree passed 4501 tests with 11 explicit external-prerequisite/paid-provider skips in 1430.04s (23m50s); repository Ruff format/check, strict mypy over 166 source files, release schemas, and diff integrity also passed.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,71 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
-LAST_CHECKPOINT_COMMIT: 266646cdf033f0a076872e5152b2785c672176a0
+LAST_CHECKPOINT_COMMIT: b81745db8b8a0c621bdfac931e85c1aca892efcc
+
+## 2026-08-03 — V3-TOOLDIAG-002
+
+- **Status:** `IN_PROGRESS`.
+- **Defensive objective:** Make remaining deterministic scanner outcomes accurate and
+  actionable under bounded macOS isolation: real success only for validated machine output,
+  typed non-applicability and external prerequisites, and a distinct silent-failure diagnosis
+  with retained private evidence paths.
+- **Starting evidence:** The queue records real host reproduction against the committed
+  realistic-scale Solidity fixture: Gitleaks could not read its bundled rules under isolation,
+  OSV correctly found no package sources but was marked failed, Trivy lacked its offline database,
+  and Slither exited non-zero without output. No one of these states is accepted as scanner
+  success.
+- **Next action:** Add focused negative/positive regressions around the shared scanner runner,
+  adapter-specific classification, public report serialization, and exact isolation read grants
+  before rerunning real local tools.
+- **Pause checkpoint (2026-08-03T15:42:09Z):** Paused immediately at the operator's request.
+  Both completed parallel slices remain in the worktree: trusted Semgrep/Gitleaks rule staging
+  and typed scanner outcomes/report serialization. The Slither slice was stopped after its local
+  implementation and tests were written; its diff still requires primary-agent review and final
+  focused validation. No paid provider call, network operation, commit, push, or long-running
+  validation was started during the pause. `git diff --check` passed. Resume without discarding
+  or rewriting the preserved in-progress files.
+- **Resume slice (2026-08-03T15:45:23Z):** Added the missing real-backend Semgrep case against
+  committed `solidity_005k` without replacing its existing normalization canary. The combined
+  focused scanner outcome, Slither, reporting, analysis-floor, and Solidity coverage matrix
+  passed `250` tests in `12.07s`; no provider or network operation occurred.
+- **Independent-review hardening (2026-08-03T15:59:46Z):** Strict Semgrep/Gitleaks parsing now
+  rejects malformed, defaulted, reversed, out-of-root, and non-normalizable finding records;
+  staged package rules are inode/link/mode/owner/byte revalidated before launch and made
+  read-only to the macOS/bubblewrap child boundary; an actual wheel build/import regression
+  proves both bundled rule files ship outside the editable source tree. Typed exit schemas now
+  require safe relative stdout paths and bound empty-output digests. Default new evidence fields
+  remain absent from legacy serialization so enclosing historical attempt hashes round-trip.
+  Scanner completion now requires REAL, strictly validated, nonempty, observation-bound runtime
+  evidence rather than a status string alone. Ruff and focused strict mypy passed; `451` focused
+  tests passed in `18.81s`; the final real macOS matrix passed `4` in `15.58s`. Direct host
+  `semgrep --version` was not retried after a local empty-trust-store diagnostic; Homebrew
+  metadata reports `semgrep 1.172.0`, while the isolated scanner version probe and real analysis
+  succeeded. Gitleaks is `8.30.1`, Slither `0.11.6`, and native solc is
+  `0.8.30+commit.73712a01.Darwin.appleclang`. No paid provider call or public network was used.
+- **Pre-full-suite checkpoint (2026-08-03T16:06:13Z):** The affected pipeline and reporting
+  matrix passed `116` tests in `344.84s`; release-schema verification and the built-wheel
+  resource regression passed `4` in `1.05s`; diff checks passed. The only warnings were inherited
+  best-effort cleanup warnings for stale clean-Anvil temporary directories. The next command is
+  the repository-wide static/full-suite gate; no ticket-complete claim has been made yet.
+- **Exact-host diagnostic closure (2026-08-03T16:34:54Z):** A first expanded real-host matrix
+  produced one useful negative result: OSV `128` emitted the current bounded no-source wording
+  rather than the previously reproduced shorter wording, so it remained generic `FAILED`.
+  The adapter now accepts only those two exact normalized no-source messages. An additional
+  diagnostic suffix still fails classification. Ruff, focused mypy, `16` typed-outcome tests,
+  and the exact real OSV assay passed; the complete real macOS matrix then passed `6` cases in
+  `17.49s`, including REAL OSV `NOT_APPLICABLE` and REAL Trivy `UNMET_PREREQUISITE` evidence.
+  The earlier exact-tree full suite before this narrow closure passed `4497` with `11` explicit
+  skips in `1423.11s`; a second full run is starting because production code changed afterward.
+- **Final result (2026-08-03T16:59:37Z):** `COMPLETE`. The exact final tree passed `4501`
+  tests with `11` explicit external-prerequisite or paid-provider skips in `1430.04s`
+  (`23m50s`). Ruff reported all `423` files formatted and no lint findings; strict mypy passed
+  all `166` source files; release schemas and diff integrity passed. The skipped engines,
+  rootless image, compiler-bound integrations, replay, and paid provider test remain explicit
+  prerequisites and received no credit. No provider request, public network, target secret,
+  wallet material, or additional spend was used. Trivy's prepared-cache consumption remains a
+  later integration boundary and is documented as `UNMET_PREREQUISITE`; it did not prevent the
+  ticket's typed-diagnostic acceptance criteria from completing.
 
 ## 2026-08-03 — V3-BOOTSTRAP-001
 

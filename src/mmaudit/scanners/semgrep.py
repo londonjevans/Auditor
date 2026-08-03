@@ -2,26 +2,39 @@
 
 from __future__ import annotations
 
-import hashlib
-import os
-import stat
-from importlib.resources import files
 from pathlib import Path
 
 from mmaudit.models.schemas import ScannerFinding
 from mmaudit.scanners.base import ScannerAdapter, make_finding, safe_json, severity_from_text
-
-_MAX_BUNDLED_RULE_BYTES = 1_000_000
+from mmaudit.scanners.trusted_inputs import (
+    stage_bundled_scanner_resource,
+    validate_staged_bundled_scanner_resource,
+)
 
 
 class SemgrepScanner(ScannerAdapter):
     name = "semgrep"
     executable = "semgrep"
     finding_exit_codes = frozenset({0, 1})
+    strict_machine_output = True
+
+    def validate_pre_execution_inputs(self, workspace: Path, private_dir: Path) -> None:
+        del workspace
+        validate_staged_bundled_scanner_resource(
+            private_dir,
+            resource_relative_path="rules/security.yml",
+            destination_name="semgrep-security.yml",
+            scanner_label="Semgrep",
+        )
 
     def build_command(self, root: Path, private_dir: Path) -> list[str]:
         del root
-        rules = _stage_bundled_rules(private_dir)
+        rules = stage_bundled_scanner_resource(
+            private_dir,
+            resource_relative_path="rules/security.yml",
+            destination_name="semgrep-security.yml",
+            scanner_label="Semgrep",
+        )
         return [
             self.executable,
             "scan",
@@ -41,80 +54,82 @@ class SemgrepScanner(ScannerAdapter):
     def parse(self, root: Path, stdout: str, private_dir: Path) -> list[ScannerFinding]:
         del private_dir
         payload = safe_json(stdout)
+        if not isinstance(payload, dict):
+            raise ValueError("Semgrep machine output must be a JSON object")
+        results = payload.get("results")
+        if not isinstance(results, list):
+            raise ValueError("Semgrep machine output must contain a results array")
+        if "errors" in payload and not isinstance(payload["errors"], list):
+            raise ValueError("Semgrep machine output errors must be an array")
         findings: list[ScannerFinding] = []
-        for result in payload.get("results", []):
+        for result in results:
             if not isinstance(result, dict):
-                continue
-            extra = result.get("extra", {})
-            metadata = extra.get("metadata", {}) if isinstance(extra, dict) else {}
-            start = result.get("start", {})
-            end = result.get("end", {})
-            rule_id = str(result.get("check_id", "semgrep"))
-            cwe_raw = metadata.get("cwe", []) if isinstance(metadata, dict) else []
-            cwe = [str(cwe_raw)] if isinstance(cwe_raw, str) else [str(v) for v in cwe_raw]
+                raise ValueError("Semgrep result records must be JSON objects")
+            rule_id = _required_string(result, "check_id")
+            path = _required_string(result, "path")
+            start = _required_object(result, "start")
+            end = _required_object(result, "end")
+            start_line = _required_positive_integer(start, "line")
+            end_line = _required_positive_integer(end, "line")
+            if end_line < start_line:
+                raise ValueError("Semgrep result end line precedes its start line")
+            extra = _required_object(result, "extra")
+            message = _required_string(extra, "message")
+            severity = _required_string(extra, "severity")
+            metadata_value = extra.get("metadata", {})
+            if not isinstance(metadata_value, dict):
+                raise ValueError("Semgrep result metadata must be a JSON object")
+            metadata = metadata_value
+            cwe_raw = metadata.get("cwe", [])
+            if isinstance(cwe_raw, str):
+                cwe = [cwe_raw]
+            elif isinstance(cwe_raw, list) and all(
+                isinstance(item, str) and bool(item.strip()) for item in cwe_raw
+            ):
+                cwe = cwe_raw
+            else:
+                raise ValueError("Semgrep result CWE metadata must contain strings")
+            shortlink = metadata.get("shortlink", rule_id)
+            if not isinstance(shortlink, str) or not shortlink.strip():
+                raise ValueError("Semgrep result shortlink must be a non-empty string")
+            engine_kind = extra.get("engine_kind")
+            if engine_kind is not None and not isinstance(engine_kind, str):
+                raise ValueError("Semgrep result engine kind must be a string")
             finding = make_finding(
                 root=root,
                 scanner=self.name,
                 rule_id=rule_id,
-                title=str(metadata.get("shortlink", rule_id)),
-                severity=severity_from_text(str(extra.get("severity", ""))),
-                message=str(extra.get("message", rule_id)),
-                path=str(result.get("path", "")),
-                start_line=int(start.get("line", 1)),
-                end_line=int(end.get("line", start.get("line", 1))),
+                title=shortlink,
+                severity=severity_from_text(severity),
+                message=message,
+                path=path,
+                start_line=start_line,
+                end_line=end_line,
                 cwe=cwe,
-                metadata={"engine_kind": extra.get("engine_kind")},
+                metadata={"engine_kind": engine_kind},
             )
-            if finding:
-                findings.append(finding)
+            if finding is None or finding.locations[0].path == ".":
+                raise ValueError("Semgrep result path is outside the scanned repository")
+            findings.append(finding)
         return findings
 
 
-def _stage_bundled_rules(private_dir: Path) -> Path:
-    """Copy the fixed package rule set into the sandbox-readable private directory."""
+def _required_object(record: dict[object, object], key: str) -> dict[object, object]:
+    value = record.get(key)
+    if not isinstance(value, dict):
+        raise ValueError(f"Semgrep result {key} must be a JSON object")
+    return value
 
-    resource = files("mmaudit.scanners").joinpath("rules/security.yml")
-    if not resource.is_file():
-        raise ValueError("bundled Semgrep rule resource is unavailable")
-    with resource.open("rb") as handle:
-        rule_bytes = handle.read(_MAX_BUNDLED_RULE_BYTES + 1)
-    if not rule_bytes or len(rule_bytes) > _MAX_BUNDLED_RULE_BYTES:
-        raise ValueError("bundled Semgrep rule resource is empty or exceeds its fixed bound")
-    source_sha256 = hashlib.sha256(rule_bytes).hexdigest()
 
-    private_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if private_dir.is_symlink() or private_dir.is_junction():
-        raise ValueError("Semgrep private directory may not be a link")
-    resolved_private = private_dir.resolve(strict=True)
-    private_metadata = resolved_private.stat()
-    current_uid = int(getattr(os, "getuid", lambda: private_metadata.st_uid)())
-    if (
-        not stat.S_ISDIR(private_metadata.st_mode)
-        or stat.S_IMODE(private_metadata.st_mode) != 0o700
-        or private_metadata.st_uid != current_uid
-    ):
-        raise ValueError("Semgrep private directory must be operator-owned with mode 0700")
-    staged_root = resolved_private / "trusted-inputs"
-    staged_root.mkdir(mode=0o700)
-    staged_metadata = staged_root.stat(follow_symlinks=False)
-    if (
-        not stat.S_ISDIR(staged_metadata.st_mode)
-        or stat.S_IMODE(staged_metadata.st_mode) != 0o700
-        or staged_metadata.st_uid != current_uid
-    ):
-        raise ValueError("Semgrep staged-input directory failed private-mode validation")
-    destination = staged_root / "semgrep-security.yml"
-    with destination.open("xb") as handle:
-        handle.write(rule_bytes)
-    destination.chmod(0o600)
-    destination_metadata = destination.stat(follow_symlinks=False)
-    if (
-        not stat.S_ISREG(destination_metadata.st_mode)
-        or stat.S_IMODE(destination_metadata.st_mode) != 0o600
-        or destination_metadata.st_uid != current_uid
-    ):
-        raise ValueError("staged Semgrep rule resource failed private-file validation")
-    staged_bytes = destination.read_bytes()
-    if staged_bytes != rule_bytes or hashlib.sha256(staged_bytes).hexdigest() != source_sha256:
-        raise ValueError("staged Semgrep rule resource failed exact-byte verification")
-    return destination
+def _required_string(record: dict[object, object], key: str) -> str:
+    value = record.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Semgrep result {key} must be a non-empty string")
+    return value
+
+
+def _required_positive_integer(record: dict[object, object], key: str) -> int:
+    value = record.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"Semgrep result {key} must be a positive integer")
+    return value
