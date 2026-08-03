@@ -1460,8 +1460,20 @@ are invisible to source review by construction.
   `docs/remediation/v3/worklog.md`, `docs/remediation/v3/review_traceability.json`, regression.
 - **Dependencies:** None.
 - **Unblocks:** `V3-TARGETSPEC-001`.
-- **Status:** `BLOCKED_TECHNICAL`
-- **Blocker evidence:** On 2026-08-03, the exact digest scan hashed all `918`
+- **Status:** `QUEUED`
+- **Blocker resolved 2026-08-03.** The exact source was recovered from the Codex attachment
+  store at `~/.codex/attachments/6ff75eba-8253-42af-aa8e-968c7adc883f/pasted-text-1.txt`
+  (1,418 lines, 40,779 bytes) and copied byte-for-byte to
+  `docs/remediation/v3/product_completion_goal.txt`. Its SHA-256 was recomputed after the copy
+  and equals `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`. The document
+  begins `AUTHORIZED DEFENSIVE MMAUDIT PRODUCT-COMPLETION GOAL`. A secret scan before placement
+  found no key, token, private-key block, credential assignment, or absolute host path. The
+  file is plain text with no Markdown structure; it must not be reformatted, re-wrapped, or
+  converted, because any such change breaks the hash.
+- **Remaining work for this ticket:** update the digest references in this queue, the worklog,
+  and `review_traceability.json` to name the committed path alongside the hash, and add the
+  regression asserting the committed file still matches it.
+- **Superseded blocker evidence:** On 2026-08-03, the exact digest scan hashed all `918`
   tracked/untracked nonignored repository files and found `0` matches. The digest occurs only as
   a reference in this queue, the worklog, and `review_traceability.json`; no canonical source
   path is recorded. The distinct Corrovera product vision was restored byte-for-byte and hashes
@@ -1683,10 +1695,31 @@ are invisible to source review by construction.
 - **Dependencies:** None.
 - **Unblocks:** `V3-CALIBRATE-001`, `V3-LINEAGE-001`, `V3-MODELREFRESH-001`, and transitively
   `V3-QUALIFY-001` and every real-audit ticket.
-- **Status:** `IN_PROGRESS`
-- **Current action:** Trace the existing identity/quality coupling across configuration,
-  benchmarking, qualification, and production selection; implement the smallest typed split and
-  prove identity-only measurement plus production-selection rejection.
+- **Status:** `COMPLETE`
+- **Implementation:** Declared lineage identity and retention are now independent of one optional,
+  atomic nested measured-quality record. Approved identity-only records work in the deterministic
+  benchmark target/egress path, while audit preflight, ordinary role validation, and verified
+  production selection reject absent quality. A single deterministic promotion function derives
+  quality only from exact, valid, current Tier-A candidate/artifact/verification evidence and does
+  not itself grant runtime selection authority. The candidate/config/promotion relationship is
+  documented, both templates agree, and a generated strict models-configuration schema is
+  committed.
+- **Validation:** Focused registry/benchmark/promotion tests passed `79`; configuration/CLI passed
+  `119`; candidate, calibration, qualification, role, and CLI workflows passed `169`; schema tests
+  passed `2`. Ruff format check passed all `419` files, Ruff check passed, strict mypy passed all
+  `165` source files, schemas verified, both TOML templates parsed, and `.venv/bin/pytest -q
+  --cache-clear` passed `4416` tests with `11` explicit external-prerequisite/opt-in skips in
+  `1293.89s` (`21m33s`). No provider, network, target, or secret was used.
+- **Remaining boundary:** This ticket enables honest measurement and promotion; it does not claim
+  a real provider benchmark or qualified production ensemble. Those remain gated by their own
+  real-integration tickets.
+- **Independent review gap:** The first implementation pass still allowed an ordinary real
+  production audit to rely on a manually populated static quality record without current opaque
+  qualification. The preceding full-suite result applies to that pre-review tree only and is not
+  final acceptance evidence for this ticket.
+- **Next action:** Require current independently verified qualification for every REAL or
+  UNVERIFIED production model path, preserve MOCK-only test execution without REAL credit, then
+  revalidate before checkpointing.
 
 ## V3-MODELREFRESH-001 — Daily catalogue refresh and candidate drift detection
 
@@ -1965,6 +1998,60 @@ model, no qualification, and no provider spend anywhere in the path.
 - A `Dependencies:` field states only what must complete first. Anything a ticket enables
   belongs in a separate `Unblocks:` field, never in the dependency sentence.
 
+
+## Governing documents and precedence
+
+**Recorded operator decision, 2026-08-03.** Two documents govern this work and their
+relationship is now fixed.
+
+| document | sha256 | authority |
+|---|---|---|
+| `docs/remediation/v3/product_completion_goal.txt` | `f77db665…` | the **current phase**: what to build now, in what order, within the USD 250 remediation budget, to reach a credible working engine |
+| `product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.md` | `77e5ab93…` | the **target state**: what the product must ultimately become |
+
+Resolution on conflict: the objective governs sequencing and scope during remediation; the
+vision governs the destination. Neither silently overrides the other, and a ticket must not
+cite whichever document happens to support it.
+
+Specifically, objective section T states "Do not begin a SaaS/service rewrite until the CLI
+audit engine passes the real end-to-end release gates" and treats self-service as one option
+in a later ADR. The operator's stated product aim is a self-serve audit purchased through a
+website. That is a real conflict of sequencing, not of intent. Service-layer tickets
+(`V3-INTAKE-001`, `V3-CONSENT-001`, `V3-SERVICE-001`, `V3-AUTONOMY-001`, `V3-QUOTE-001`,
+`V3-LIFECYCLE-001`, `V3-REVERIFY-001`) therefore remain sequenced after the engine gates
+unless the operator records an explicit override here. Do not infer an override from the
+vision document alone.
+
+### Sufficiency audit result, 2026-08-03
+
+Every one of the objective's twenty-two lettered requirements (A–V) maps to at least one
+ticket; none is unmapped. **The queue is sufficient to satisfy the objective.** By requirement:
+eight complete, five partial, one in progress, eight queued. The largest incomplete cluster is
+requirement L, qualified model selection, at zero of six tickets done — the model track.
+
+Twenty-five of the fifty-five tickets have **no basis in the objective**. They arise from three
+legitimate sources and must be labelled as such rather than treated as objective requirements:
+
+- **Defects found during execution**, which no document predicted: `V3-BOOTSTRAP-001`,
+  `V3-TOOLDIAG-001`, `V3-TOOLDIAG-002`, `V3-OMISSION-001`, `V3-FIXTURE-001`.
+- **Operator product aims**, anchored to the vision: the service-layer tickets above, plus
+  `V3-MODELREFRESH-001`, `V3-POLICYELIG-001`, `V3-TIMESPLIT-001`, `V3-HUMANCMP-001`,
+  `V3-STABILITY-001`.
+- **Quality work** beyond the remediation bar: `V3-EFFORT-001`, `V3-ENSEMBLE-001`,
+  `V3-TAXONOMY-001`, `V3-RETRIEVAL-001`, `V3-HARDHAT-001`.
+
+### Requirements absent from both governing documents
+
+Two capabilities in this queue have no authority in either document and need one:
+
+- **Continuous integration.** Both documents mention CI zero times. The vision covers
+  fork-based validation extensively but not fork execution as a continuous, per-commit
+  capability. `V3-CI-001` therefore rests on operator instruction alone, following the
+  operator's observation that a CI fork-test run surfaced defects nine prior review passes had
+  missed. Anchor it in the vision or record it as a standing operator requirement.
+- **Turnaround and SLA.** Zero mentions in both. The vision claims superiority in "time to
+  completion" without defining it, and a self-serve product cannot be sold without a stated
+  expectation. Tracked in `V3-TARGETSPEC-001`.
 
 ## Operator decisions required
 

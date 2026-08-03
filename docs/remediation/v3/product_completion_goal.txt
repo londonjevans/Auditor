@@ -1,0 +1,1418 @@
+AUTHORIZED DEFENSIVE MMAUDIT PRODUCT-COMPLETION GOAL
+
+Repository: the current local mmaudit/Auditor repository.
+
+PRIMARY OUTCOME
+
+Finish mmaudit as a credible, working, evidence-driven Solidity/EVM security
+auditor.
+
+The completed release must:
+
+1. successfully execute real OpenRouter model calls;
+2. use all independently qualified high-quality frontier models available under
+   the selected privacy policy and the USD 250.00 aggregate budget;
+3. give models enough coherent source context and output space to perform
+   serious reviews;
+4. review repositories through sharded, multi-pass analysis rather than one
+   call per role;
+5. combine model results through deterministic verification, falsification,
+   cross-examination and evidence caps;
+6. emit a concise client-ready report plus a complete forensic evidence bundle;
+7. fail loudly when meaningful analysis did not run;
+8. measure actual audit-discovery performance using completed product reports;
+9. remain honest about privacy, model availability, coverage, uncertainty and
+   release status.
+
+This is authorized defensive engineering.
+
+Do not target live third-party systems.
+Do not sign or broadcast transactions.
+Do not access wallets or private keys.
+Do not weaken existing source-location, evidence, secret-handling, isolation or
+confirmation controls.
+
+Continue autonomously through all safe actionable work.
+
+Do not stop after one ticket or one milestone.
+Do not ask whether to continue.
+Do not claim completion from mocks, placeholder configuration, test counts or
+documentation.
+
+======================================================================
+A. PRESERVE THE EXISTING MOAT
+======================================================================
+
+Do not rebuild or weaken the strong parts identified by the external reviewer:
+
+- exact source-range SHA-256 validation;
+- post-run source-location revalidation;
+- deterministic evidence caps;
+- prohibition on model agreement alone producing confirmed findings;
+- verifier and judge monotonicity;
+- source/sink and path validation;
+- secret filtering;
+- symlink, hardlink and traversal rejection;
+- repository-local binary rejection;
+- sanitized child-process environments;
+- prompt-injection delimiters;
+- read-only/disposable workspace design;
+- detailed per-finding forensic evidence;
+- fail-closed isolation requirements.
+
+Any architectural change must retain these properties and their regression tests.
+
+======================================================================
+B. AUTHORITATIVE CURRENT REVIEW
+======================================================================
+
+Treat the following observations as the current external-review baseline:
+
+1. No real model call has succeeded.
+
+   `docs/remediation/runtime/rem_models_001_provider_attempts.json` records:
+
+   - paid attempts: 2
+   - successes: 0
+   - one REJECTED_TRUNCATED
+   - one REJECTED_UNBOUND_CANONICAL_IDENTITY
+
+   `docs/remediation/final_status.json` records:
+
+   - release_status: NOT_A_RELEASE_CANDIDATE
+   - successful_real_calls: 0
+
+2. Frontier models are currently excluded by architecture.
+
+   Model discovery hardcodes a combination equivalent to:
+
+   - ZDR-only
+   - response-format support required during discovery
+
+   The surviving candidates are mostly mid-tier models and all remain
+   benchmark_status = pending.
+
+3. Model context is divided globally across every role.
+
+   The current 2,000,000-byte total budget divided across approximately
+   thirty-one roles gives each role only a small source slice after metadata,
+   graphs and scanner evidence.
+
+4. Each role receives only one model request.
+
+   There is no repository sharding, map-reduce, continuation pass or
+   cross-shard integration pass.
+
+5. A truncated or malformed surface-review response can discard an otherwise
+   useful finding batch.
+
+6. The current surface-review gate is mathematically infeasible on a
+   medium-sized repository.
+
+7. One verifier can suppress an entire candidate group.
+
+   Cross-examination and falsifier evidence is recorded but is not applied
+   strongly enough by deterministic preliminary classification.
+
+8. The primary report is far too long, dominated by surface-coverage rows, and
+   lacks a concise executive narrative and inline code excerpts.
+
+9. A run can exit successfully with zero scanners and zero completed model
+   roles while presenting a completed/no-findings result.
+
+10. The implemented specialist, invariant, formal and dynamic stack is
+    Solidity/EVM-specific.
+
+11. The benchmark contains synthetic cases but has not scored completed blind
+    product audit reports.
+
+12. The repository currently represents an advanced CLI engine, not a
+    self-service SaaS product.
+
+Create:
+
+- docs/remediation/v3/work_queue.md
+- docs/remediation/v3/worklog.md
+- docs/remediation/v3/review_traceability.json
+- docs/remediation/v3/runtime_status.json
+- docs/remediation/v3/operator_prerequisites.md
+
+Maintain:
+
+AUTORUN_STATUS:
+CURRENT_MILESTONE:
+CURRENT_TICKET:
+LAST_COMPLETED_TICKET:
+NEXT_ACTION:
+LAST_COMMAND:
+LAST_RESULT:
+REAL_MODEL_CALLS_ATTEMPTED:
+REAL_MODEL_CALLS_SUCCEEDED:
+REAL_MODEL_CALLS_REJECTED:
+OPENROUTER_COST_USED_USD:
+OPENROUTER_COST_RESERVED_USD:
+OPENROUTER_BUDGET_REMAINING_USD:
+COMPLETED_REAL_AUDITS:
+BLOCKED_EXTERNAL_ITEMS:
+LAST_CHECKPOINT_COMMIT:
+
+Initialize the OpenRouter budget as:
+
+OPENROUTER_COST_USED_USD: preserve actual previously consumed cost
+OPENROUTER_COST_RESERVED_USD: 0.00
+OPENROUTER_BUDGET_REMAINING_USD: 250.00 minus proven previous cost
+
+The total historical and future spend for this remediation goal must not exceed:
+
+USD 250.00
+
+======================================================================
+C. FIRST RESTORE A CLEAN ENGINEERING BASELINE
+======================================================================
+
+Before changing architecture:
+
+1. Inspect current Git status and diff.
+2. Preserve unrelated operator changes.
+3. Run the full existing suite.
+4. Reproduce the two current release-schema failures.
+5. Fix those failures correctly.
+6. Run:
+
+   .venv/bin/ruff format .
+   .venv/bin/ruff check .
+   .venv/bin/mypy
+   .venv/bin/pytest -q
+
+Do not begin significant paid model qualification while the ordinary suite is
+red.
+
+Record the exact baseline test count and all skips.
+
+A skipped real integration remains skipped or blocked. Do not convert it to a
+pass.
+
+======================================================================
+D. GET ONE REAL MODEL CALL WORKING BEFORE LARGE REFACTORING
+======================================================================
+
+This is the first functional milestone.
+
+Do not spend weeks adding more schemas before achieving one successful,
+identity-bound, non-truncated OpenRouter response.
+
+Use the operator control-plane secret from the Auditor repository's `.env`:
+
+OPENROUTER_API_KEY
+
+Do not display, print, log, hash or persist the key.
+
+Do not load `.env` from the target repository.
+
+Use or finish the explicit operator-secret interface:
+
+--secrets-env-file PATH
+
+or:
+
+MMAUDIT_SECRETS_ENV_FILE
+
+The secret loader must:
+
+- require an explicit path;
+- reject symlinks;
+- reject unsafe permissions;
+- parse dotenv syntax without shell evaluation;
+- allowlist OPENROUTER_API_KEY;
+- keep the value in process memory only;
+- remove it from child scanner, compiler, fuzzer, formal and container
+  environments;
+- redact Authorization headers and provider exceptions.
+
+For the first real call:
+
+- use only a small committed synthetic benchmark fixture;
+- do not send private customer code;
+- use one exact model ID;
+- use one exact approved provider endpoint;
+- disable provider fallbacks;
+- use a small schema;
+- request enough output tokens;
+- retain only non-secret metadata and validated structured output.
+
+A successful real-call artifact must record:
+
+- internal request ID;
+- OpenRouter generation ID;
+- requested canonical model ID;
+- returned model ID;
+- approved endpoint;
+- actual provider name;
+- endpoint-policy snapshot hash;
+- model-metadata snapshot hash;
+- prompt hash;
+- schema hash;
+- finish reason;
+- prompt tokens;
+- output tokens;
+- reasoning tokens where available;
+- actual cost;
+- latency;
+- structured-output validation status;
+- canonical-identity binding status.
+
+It must not contain:
+
+- the API key;
+- Authorization headers;
+- raw `.env`;
+- unnecessary source;
+- raw unredacted provider errors.
+
+Acceptance for this milestone:
+
+- one paid call succeeds;
+- finish reason is not length;
+- structured output validates;
+- canonical model identity is bound;
+- actual provider is within the approved route;
+- actual cost is reconciled;
+- no secret canary appears in any artifact.
+
+Do not proceed to expensive qualification until this milestone passes.
+
+======================================================================
+E. FIX CANONICAL MODEL AND PROVIDER IDENTITY
+======================================================================
+
+The previous real call was rejected as
+REJECTED_UNBOUND_CANONICAL_IDENTITY.
+
+Replace raw string equality with a defensible identity-binding model.
+
+Use OpenRouter's current metadata surfaces:
+
+- list models;
+- lookup one model by canonical slug;
+- list endpoints for a model;
+- fetch generation metadata after a call.
+
+Freeze a metadata snapshot containing:
+
+- requested slug;
+- resolved canonical slug;
+- aliases;
+- model author;
+- model context capacity;
+- model output capacity;
+- supported parameters;
+- endpoint provider slug;
+- endpoint provider name;
+- endpoint policy;
+- endpoint capabilities;
+- pricing;
+- snapshot timestamp;
+- metadata hash.
+
+Define identity strengths:
+
+1. IMMUTABLE_VERSION_BOUND
+2. CANONICAL_MODEL_AND_ENDPOINT_BOUND
+3. UNBOUND
+
+Accept CANONICAL_MODEL_AND_ENDPOINT_BOUND when:
+
+- the requested slug resolves to the frozen canonical slug;
+- the returned generation model resolves to the same canonical model;
+- the actual provider matches the allowed endpoint/provider set;
+- generation metadata matches the recorded request;
+- there is no unapproved model or endpoint substitution.
+
+Do not reject a legitimate call merely because OpenRouter normalized an alias.
+
+Do not pretend a mutable model alias is immutable.
+
+Time-limit certifications for models without immutable provider versions.
+
+When binding fails:
+
+- preserve the valid response separately;
+- classify it as unbound rather than silently counting it;
+- produce an actionable non-secret diagnostic;
+- retry only after correcting identity metadata;
+- never discard evidence without recording why.
+
+Add real and fake-provider tests for:
+
+- exact canonical match;
+- alias resolving to the same canonical model;
+- model mismatch;
+- provider mismatch;
+- endpoint variant mismatch;
+- missing generation metadata;
+- generation metadata retrieved after completion;
+- unapproved fallback;
+- mutable but canonical model;
+- immutable version-bound model.
+
+======================================================================
+F. RESOLVE THE PRIVACY VERSUS FRONTIER-MODEL CONFLICT
+======================================================================
+
+Remove discovery logic that globally requires both:
+
+- ZDR eligibility; and
+- native response-format support
+
+before a model can even become a candidate.
+
+Discover all potentially relevant models first, then construct a capability and
+privacy matrix per endpoint.
+
+Implement explicit privacy profiles:
+
+1. STRICT_ZDR
+
+   - default;
+   - provider.zdr = true;
+   - provider.data_collection = deny;
+   - only ZDR endpoints;
+   - no silent downgrade;
+   - may produce a smaller or non-frontier ensemble;
+   - report must state the resulting model limitation.
+
+2. FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT
+
+   - never selected implicitly;
+   - requires an operator-authored consent artifact before any source is sent;
+   - does not set request-level ZDR when a selected frontier endpoint is not ZDR;
+   - still sets data_collection = deny where supported;
+   - uses exact provider endpoint allowlists;
+   - disables unapproved fallbacks;
+   - records the endpoint's disclosed retention and privacy policy;
+   - records which source scope the operator approved;
+   - expires at a declared time;
+   - never permits secrets or excluded content.
+
+3. SYNTHETIC_BENCHMARK
+
+   - only committed synthetic or already-public benchmark source;
+   - may test frontier endpoints under an explicitly recorded policy;
+   - must not be reused automatically for private customer source.
+
+Create a consent schema containing:
+
+- consent version;
+- selected privacy profile;
+- permitted repository/source hash;
+- permitted providers;
+- permitted models;
+- permitted endpoint policy classes;
+- expiry;
+- operator identity or signature reference;
+- maximum cost;
+- prohibited content;
+- acknowledgement that ZDR is not in force where applicable.
+
+Codex and mmaudit must not create or silently broaden customer consent.
+
+If account-wide or guardrail-level ZDR prevents non-ZDR frontier routes, doctor
+must report that conflict clearly. Do not silently route to mid-tier models and
+call the result a frontier audit.
+
+Release claims:
+
+- STRICT_ZDR may be called maximum-assurance-strict only when its gates pass.
+- It may not claim that all frontier models participated unless they actually
+  did.
+- FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT is the only profile eligible for a
+  "frontier ensemble" claim when non-ZDR frontier endpoints are required.
+
+======================================================================
+G. CAPABILITY-ADAPTIVE STRUCTURED OUTPUT
+======================================================================
+
+Do not require native response_format support as a global model-discovery
+filter.
+
+Implement capability modes:
+
+1. NATIVE_JSON_SCHEMA
+2. JSON_OBJECT
+3. VALIDATED_TEXT_JSON
+
+Use native JSON Schema where the exact endpoint supports it.
+
+Use `provider.require_parameters = true` only for requests that actually depend
+on those native parameters.
+
+For models without native JSON Schema:
+
+- use a strict compact JSON protocol;
+- validate locally;
+- reject extra prose;
+- allow one bounded repair attempt;
+- benchmark schema adherence before qualification.
+
+A model may qualify only if its structured-output reliability meets the
+configured threshold.
+
+Do not use a separate model to rewrite substantive security conclusions.
+
+A repair operation may fix syntax only and must preserve a hash-linked original
+response.
+
+======================================================================
+H. REPLACE FIXED GLOBAL CONTEXT WITH MODEL-AWARE TOKEN BUDGETS
+======================================================================
+
+Remove the architecture in which one global byte budget is divided equally
+across all roles.
+
+Introduce token-based budgets:
+
+- model_context_tokens;
+- reserved_output_tokens;
+- reserved_system_tokens;
+- reserved_schema_tokens;
+- maximum_source_tokens_per_request;
+- global_input_token_budget;
+- global_output_token_budget;
+- global_cost_budget;
+- per-model cost budget;
+- per-role cost budget.
+
+Use endpoint metadata and model-specific limits.
+
+For high-capacity frontier models, permit up to approximately 200,000 input
+tokens and at least 32,000 output tokens where the actual endpoint supports
+those limits.
+
+Do not blindly request more than an endpoint supports.
+
+Target no more than 65–75% of the usable context window for input after
+reserving output and protocol overhead.
+
+The context manifest must report:
+
+- estimated tokens;
+- actual provider-reported prompt tokens;
+- source tokens;
+- metadata tokens;
+- graph tokens;
+- scanner tokens;
+- invariant tokens;
+- reserved output;
+- omitted content;
+- omission reason.
+
+Large metadata tables must not crowd source code out of context.
+
+Prefer compact graph slices and stable IDs over repeating full repository maps.
+
+======================================================================
+I. IMPLEMENT COHERENT REPOSITORY SHARDING
+======================================================================
+
+Replace one-call-per-role with a sharded map-reduce review.
+
+Build deterministic review units from:
+
+- source package boundaries;
+- inheritance clusters;
+- call-graph strongly connected components;
+- proxy/implementation relationships;
+- asset-flow boundaries;
+- privilege boundaries;
+- oracle dependencies;
+- deployment/initialization relationships;
+- cross-chain relationships;
+- shared accounting state.
+
+Each shard must contain:
+
+- primary source files;
+- exact relevant interfaces;
+- inherited modifiers and controls;
+- directly relevant callees/callers;
+- graph slice;
+- invariants;
+- scanner evidence;
+- stable surface IDs;
+- source hashes;
+- explicit omitted dependencies.
+
+Do not shard arbitrary byte ranges in ways that separate a function from its
+security controls.
+
+Required passes:
+
+PASS 1 — WHOLE-PROTOCOL ORIENTATION
+
+Each qualified frontier lineage performs a bounded architecture/threat-model
+pass over a compact whole-repository representation.
+
+PASS 2 — BLIND SHARD REVIEW
+
+Applicable specialist roles independently review each relevant shard.
+
+Do not expose peer findings during this pass.
+
+PASS 3 — SHARD REDUCTION
+
+Deterministically validate locations, merge exact duplicates and build
+cross-shard dependency references.
+
+PASS 4 — CROSS-SHARD INTEGRATION REVIEW
+
+Review candidates and invariants that span shard boundaries.
+
+PASS 5 — ADVERSARIAL CROSS-EXAMINATION
+
+Independent lineages attempt to support or disprove high-value candidates.
+
+PASS 6 — VERIFICATION AND FALSIFICATION
+
+Multiple independent validators assess high/critical candidates.
+
+PASS 7 — EVIDENCE-CAPPED JUDGMENT
+
+The judge ranks and explains but cannot exceed deterministic caps.
+
+Every pass must produce resumable artifacts.
+
+A process interruption must resume from unfinished shards rather than rerunning
+the entire repository.
+
+======================================================================
+J. HANDLE TRUNCATION BY RESHARDING, NOT DISCARDING
+======================================================================
+
+The previous first paid call was REJECTED_TRUNCATED.
+
+Use model and endpoint output limits discovered at runtime.
+
+For every request:
+
+- estimate expected output size from the number of requested surfaces;
+- reserve sufficient completion tokens;
+- reject an infeasible request before spending;
+- shrink the shard when output capacity is insufficient.
+
+On finish_reason = length:
+
+1. persist request and usage metadata;
+2. mark the response TRUNCATED;
+3. retain any individually complete, schema-valid records as provisional;
+4. never count incomplete records as coverage;
+5. divide the shard into smaller deterministic child shards;
+6. retry the child shards through the same approved model/endpoint;
+7. do not retry the same oversized request unchanged;
+8. include all retry costs in the USD 250.00 ledger.
+
+A role must not lose all findings because its surface-coverage appendix was
+truncated or malformed.
+
+Separate:
+
+- finding extraction;
+- review coverage accounting;
+- shard summary.
+
+Coverage failure may invalidate coverage credit. It must not automatically
+delete independently valid findings.
+
+======================================================================
+K. REDESIGN SURFACE REVIEW COVERAGE
+======================================================================
+
+The current exact one-record-per-surface gate is not feasible at scale.
+
+Create deterministic risk tiers:
+
+T0 — CRITICAL SECURITY SURFACES
+
+Examples:
+
+- asset custody and movement;
+- mint/burn;
+- deposit/withdrawal/redemption;
+- privileged state changes;
+- upgrades and initialization;
+- signature verification;
+- nonce/replay handling;
+- oracle consumption;
+- liquidation;
+- bridge message validation;
+- low-level calls;
+- delegatecall;
+- external calls before sensitive state updates;
+- emergency and pause controls.
+
+T1 — HIGH-RISK STATE-CHANGING SURFACES
+
+- public/external state-changing functions;
+- accounting mutations;
+- role-management functions;
+- configuration setters;
+- reward and fee calculations.
+
+T2 — SUPPORTING SURFACES
+
+- internal state transitions;
+- supporting libraries;
+- non-critical helpers.
+
+T3 — LOW-RISK AND READ-ONLY SURFACES
+
+- pure/view functions;
+- events;
+- constants;
+- simple getters.
+
+Default maximum-assurance review requirements:
+
+- every T0 surface: at least 3 independent qualified root lineages;
+- every T1 surface: at least 2 independent qualified root lineages;
+- every T2 surface: at least 1 qualified model review plus deterministic
+  analysis;
+- T3: deterministic review plus risk-based sampling or one generic source pass.
+
+Every public/external function must still be accounted for.
+
+Do not classify most repository surfaces as T0 merely because they are in a
+contract.
+
+Record deterministic reasons for risk-tier assignment.
+
+Before making paid calls, calculate:
+
+- required review assignments;
+- estimated token volume;
+- estimated output volume;
+- estimated cost;
+- estimated calls;
+- whether the configured model and cost budgets can satisfy the gate.
+
+If the gate is mathematically infeasible:
+
+- fail preflight or require an explicit downgrade;
+- do not spend money on a run that cannot complete;
+- do not silently reduce the denominator.
+
+Coverage records must be compact and independently retryable.
+
+A missing coverage record must:
+
+- reduce coverage;
+- generate a retry task;
+- preserve valid findings;
+- never convert the entire specialist response into a discarded batch.
+
+======================================================================
+L. USE QUALIFIED MODELS INTELLIGENTLY
+======================================================================
+
+The requirement is not to run the same prompt thirty-one times.
+
+Discover candidate models at runtime.
+
+Use a qualification funnel within the USD 250.00 total cap:
+
+STAGE 1 — METADATA SCREEN
+
+No paid inference.
+
+Screen for:
+
+- model availability;
+- endpoint availability;
+- context capacity;
+- output capacity;
+- privacy-policy compatibility;
+- required modality;
+- operational status;
+- pricing;
+- model lineage;
+- endpoint identity.
+
+STAGE 2 — SMALL REAL SMOKE
+
+Use a compact synthetic case to test:
+
+- authentication;
+- identity binding;
+- structured-output reliability;
+- truncation behavior;
+- cost accounting.
+
+STAGE 3 — QUALIFICATION SUBSET
+
+Evaluate:
+
+- Solidity reasoning;
+- business logic;
+- accounting;
+- access control;
+- oracle reasoning;
+- upgrade/storage reasoning;
+- exact location accuracy;
+- false-positive rejection;
+- safe-near-miss rejection;
+- schema adherence;
+- prompt-injection resistance;
+- verifier quality;
+- falsifier quality.
+
+STAGE 4 — FULL QUALIFICATION FOR FINALISTS
+
+Freeze results before selecting the production ensemble.
+
+Define Tier A from measured thresholds, not provider marketing.
+
+For the frontier ensemble profile:
+
+- run every qualified Tier A frontier model that fits the selected privacy
+  policy and hard budget;
+- require at least 4 independent frontier root lineages for an initial release;
+- target 6 or more where actually available and affordable;
+- assign at least one whole-protocol pass to every selected frontier lineage;
+- assign specialist shards to the best measured models for each domain;
+- use multiple lineages on every T0 surface;
+- do not count aliases, provider mirrors or repeated calls as independent
+  lineages.
+
+Do not use automatic model routers for certification.
+
+Do not silently substitute a weaker model.
+
+If a selected model is unavailable:
+
+- record the failure;
+- retry the same approved model/endpoint within bounds;
+- use a fallback only when explicitly configured;
+- mark the run downgraded if an unqualified substitute is used.
+
+======================================================================
+M. APPLY THE USD 250.00 BUDGET IN STAGES
+======================================================================
+
+The hard aggregate cap is:
+
+USD 250.00
+
+Preserve already incurred remediation costs in the ledger.
+
+Suggested soft allocations:
+
+- USD 5: connectivity, identity and structured-output smoke tests;
+- USD 30: qualification funnel;
+- USD 40: sharding and retry integration runs;
+- USD 150: completed real maximum-assurance product audits;
+- USD 25: reserve for bounded retries and final verification.
+
+These are soft allocations. The aggregate USD 250.00 limit is hard.
+
+Before every paid request:
+
+- estimate worst-case cost;
+- atomically reserve that amount;
+- reject the request if used + reserved + estimate exceeds USD 250.00.
+
+After every request:
+
+- reconcile actual cost from response usage;
+- verify with generation metadata when necessary;
+- release unused reservation;
+- persist non-secret accounting.
+
+Parallel requests must not race through the limit.
+
+Do not use the entire budget before a successful sharded end-to-end audit path
+exists.
+
+======================================================================
+N. MAKE CONSENSUS AND CROSS-EXAMINATION DETERMINISTIC
+======================================================================
+
+Replace the effective architecture:
+
+N proposers → one verifier → one judge
+
+with:
+
+N proposers
+→ multiple cross-examiners
+→ multiple verifiers/falsifiers
+→ deterministic evidence aggregation
+→ constrained judge
+
+For every high or critical candidate, require:
+
+- at least 2 independent verifier/falsifier lineages;
+- preferably 3 for critical candidates;
+- explicit SUPPORT, DISPUTE or INCONCLUSIVE decisions;
+- exact source evidence;
+- checked assumptions;
+- checked reachability;
+- checked controls;
+- lineage identity.
+
+A single conservative verifier must not silently eliminate a candidate.
+
+One verifier may:
+
+- add a dispute;
+- lower confidence;
+- force manual review;
+- request more evidence.
+
+One verifier alone may not deterministically reject a candidate unless it
+provides decisive source-bound contradictory evidence.
+
+Use a deterministic decision matrix:
+
+1. CONFIRMED
+
+   Requires qualifying deterministic reproduction, formal counterexample or
+   equivalent proof, plus integrity validation.
+
+2. STRONGLY_SUPPORTED
+
+   Requires multiple independent supporting lineages, validated reachability
+   and no unresolved decisive contradiction.
+
+3. NEEDS_MANUAL_REVIEW
+
+   Used when credible independent evidence is split or incomplete.
+
+4. REJECTED
+
+   Requires decisive deterministic contradiction or at least two independent
+   evidence-backed falsifiers with no stronger supporting evidence.
+
+If two independent lineages dispute a high/critical candidate with validated
+evidence:
+
+- the preliminary status must reflect the dispute;
+- it cannot remain silently unaffected until the judge;
+- downgrade to NEEDS_MANUAL_REVIEW or REJECTED according to the evidence
+  matrix.
+
+If cross-examiners support a candidate:
+
+- that may increase review priority and evidence support;
+- it still cannot bypass the confirmation cap.
+
+The judge may only preserve or lower the deterministic cap.
+
+======================================================================
+O. FAIL LOUDLY WHEN ANALYSIS DID NOT RUN
+======================================================================
+
+Create explicit run states:
+
+- COMPLETE
+- DEGRADED
+- INCOMPLETE
+- FAILED
+
+A run must not be COMPLETE merely because the pipeline reached the reporting
+step.
+
+Define a minimum analysis floor.
+
+For a normal Solidity audit, require at least:
+
+- successful source ingestion;
+- successful compilation or a prominently failed compilation state;
+- at least one real applicable static analyzer;
+- the required minimum model discovery/review roles;
+- valid coverage denominators;
+- no unhandled orchestration failure.
+
+For maximum assurance, require every configured mandatory engine and model gate.
+
+If zero scanners ran and zero model roles completed:
+
+- exit non-zero;
+- set run state INCOMPLETE or FAILED;
+- refuse a headline saying completed;
+- refuse an executive conclusion saying no findings;
+- put the limitation on the first screen/page;
+- do not hide it thousands of lines down.
+
+If no findings survive but analysis was incomplete, write:
+
+“No reportable findings were identified by the analyses that completed. This
+run is incomplete and does not support a conclusion about repository safety.”
+
+Do not write:
+
+“Completed — zero findings.”
+
+Add CLI tests for:
+
+- zero scanners and zero model roles;
+- scanners only;
+- models only;
+- partial model failure;
+- all required analysis complete;
+- all models truncated;
+- provider authentication failure;
+- empty report;
+- incomplete coverage.
+
+======================================================================
+P. CREATE A CLIENT-READY REPORT AND A FORENSIC BUNDLE
+======================================================================
+
+Split reporting into two deliverables.
+
+1. CLIENT REPORT
+
+Target an approximately 10–20 page equivalent report containing:
+
+- title and run status;
+- executive risk narrative;
+- scope and source identity;
+- methodology summary;
+- analysis actually completed;
+- prominent limitations;
+- severity-ordered finding summary;
+- priority remediation roadmap;
+- detailed findings;
+- residual risk;
+- conclusion.
+
+For every finding include:
+
+- title;
+- severity;
+- confidence;
+- evidence tier;
+- affected component;
+- exact line range;
+- a small inline code excerpt with line numbers;
+- violated property;
+- impact;
+- preconditions;
+- reachable path;
+- supporting evidence;
+- dispute/falsifier outcome;
+- remediation;
+- safe verification test;
+- residual uncertainty.
+
+Do not include thousands of surface-coverage rows in the client report.
+
+2. FORENSIC BUNDLE
+
+Retain:
+
+- complete model-review coverage;
+- complete surface tables;
+- model execution records;
+- source hashes;
+- graph artifacts;
+- scanner output;
+- candidate history;
+- cross-examination;
+- verifier/falsifier decisions;
+- cost ledger;
+- run manifest;
+- replay artifacts;
+- JSON;
+- SARIF.
+
+Create:
+
+- client-report.md
+- forensic-report.md
+- findings.json
+- audit-results.sarif
+- coverage.json
+- model-execution.json
+- run-evidence-manifest.json
+
+Add report-quality tests with:
+
+- confirmed finding;
+- strongly supported finding;
+- disputed finding;
+- inconclusive finding;
+- rejected finding;
+- no-findings complete run;
+- no-findings incomplete run.
+
+======================================================================
+Q. MAKE PRODUCT SCOPE HONEST
+======================================================================
+
+For the immediate credible release, define mmaudit as a:
+
+“Maximum-assurance Solidity/EVM security auditor.”
+
+Do not claim best-in-class maximum assurance for arbitrary languages.
+
+Add explicit language capability profiles:
+
+1. solidity-evm
+2. generic-source-review
+
+Only solidity-evm may currently qualify for the full maximum-assurance engine,
+invariant, economic, reproduction and formal portfolio.
+
+For a non-Solidity repository:
+
+- detect the mismatch;
+- run generic-source-review only when requested;
+- clearly state the reduced capability;
+- do not apply Solidity coverage gates;
+- do not label the result EVM maximum assurance;
+- do not silently collapse to six generic model calls and preserve the stronger
+  marketing claim.
+
+Create a language-plugin interface for future expansion, but do not delay the
+working Solidity release by attempting to build full first-class support for
+every language now.
+
+Update README and CLI descriptions to match actual capability.
+
+======================================================================
+R. PRODUCE REAL PRODUCT BENCHMARK RESULTS
+======================================================================
+
+The existing direct Foundry harnesses prove property behavior. They do not
+measure audit discovery.
+
+Run mmaudit itself end-to-end against the benchmark repositories.
+
+For each benchmark repository:
+
+1. hide ground truth from the audit process;
+2. execute the complete selected audit profile;
+3. freeze the report;
+4. only then load ground truth;
+5. score findings;
+6. validate source locations;
+7. record cost and runtime.
+
+At minimum produce completed product reports for:
+
+- economic_erc4626;
+- maximum_assurance_protocol.
+
+Measure:
+
+- critical recall;
+- high recall;
+- medium recall;
+- confirmed precision;
+- all-finding precision;
+- false-confirmed critical rate;
+- false-confirmed high rate;
+- safe-near-miss rejection;
+- exact-location accuracy;
+- reachability accuracy;
+- model-review coverage;
+- reproduction success;
+- cost;
+- runtime.
+
+No metric may pass with denominator zero.
+
+Initial release gates:
+
+- 100% recall on the small mandatory critical must-catch suite;
+- at least 90% recall on the mandatory high suite;
+- zero false-confirmed critical findings;
+- zero false-confirmed high findings on mandatory safe controls;
+- 100% source-location validity for final findings;
+- zero model-only confirmed findings;
+- no hidden denominator reduction;
+- no unresolved provider identity mismatch;
+- no unresolved truncated mandatory shard;
+- no COMPLETE result when the minimum analysis floor failed.
+
+Then add a versioned public time-split corpus of disclosed pre-fix Solidity
+contracts where licensing permits.
+
+Do not claim superiority from internal synthetic cases.
+
+Private holdout and professional-comparison evidence remain external
+prerequisites and must stay NOT_EVALUATED until independently supplied.
+
+======================================================================
+S. REQUIRED REAL END-TO-END RELEASE RUNS
+======================================================================
+
+Before release, complete all of the following.
+
+RUN 1 — REAL PROVIDER SMOKE
+
+- synthetic fixture;
+- one exact model;
+- one exact endpoint;
+- valid structured output;
+- bound identity;
+- non-truncated;
+- reconciled cost.
+
+RUN 2 — REAL SHARDED SINGLE-MODEL AUDIT
+
+- medium synthetic or public fixture;
+- multiple coherent shards;
+- resume artifacts;
+- valid findings and coverage;
+- no batch discarded because of coverage formatting.
+
+RUN 3 — REAL MULTI-MODEL AUDIT
+
+- at least 4 independent qualified root lineages;
+- whole-protocol passes;
+- specialist shard passes;
+- cross-examination;
+- multiple validators;
+- deterministic consensus;
+- client report and forensic bundle.
+
+RUN 4 — REAL MAXIMUM-ASSURANCE BENCHMARK AUDIT
+
+- completed reports for required benchmark repositories;
+- benchmark scoring;
+- current benchmark certificate;
+- all required release gates.
+
+RUN 5 — OPERATOR-SUPPLIED REPOSITORY
+
+Run only when:
+
+- the privacy profile is explicit;
+- strict ZDR is satisfied, or an operator-authored retention-consent artifact
+  exists;
+- cost estimate fits the remaining budget;
+- all target secrets are excluded;
+- the target source hash is recorded.
+
+Do not send a private operator repository through a non-ZDR endpoint merely to
+finish a release test.
+
+======================================================================
+T. SERVICE LAYER DECISION
+======================================================================
+
+Do not begin a SaaS/service rewrite until the CLI audit engine passes the real
+end-to-end release gates.
+
+After the engine passes, create an ADR choosing one of:
+
+1. CLI PRODUCT RELEASE
+
+   - supported installation;
+   - single-command configuration;
+   - doctor/preflight;
+   - sensible model discovery;
+   - no hand-edited thirty-one-slot placeholder file;
+   - clear artifact directory;
+   - reproducible run;
+   - supportable operator workflow.
+
+2. SELF-SERVICE SERVICE
+
+   If self-service is an actual release requirement, implement separately:
+
+   - authenticated API;
+   - tenant isolation;
+   - job queue;
+   - worker fleet;
+   - encrypted secret management;
+   - repository upload or connector ingestion;
+   - immutable job scope;
+   - per-tenant budgets;
+   - billing/metering;
+   - artifact storage;
+   - audit status API;
+   - cancellation;
+   - retries;
+   - rate limiting;
+   - data deletion;
+   - audit logging;
+   - admin controls.
+
+Do not describe the current CLI as a self-service SaaS before those components
+exist.
+
+A credible CLI release may ship before the service layer, provided all product
+claims are scoped accordingly.
+
+======================================================================
+U. VALIDATION AND AUTONOMOUS WORK LOOP
+======================================================================
+
+For each ticket:
+
+1. reproduce the issue;
+2. add a failing regression test;
+3. implement the fix;
+4. run focused tests;
+5. run Ruff;
+6. run mypy;
+7. run relevant integration tests;
+8. review the diff;
+9. update traceability;
+10. update the worklog;
+11. create a checkpoint commit when safe;
+12. immediately begin the next ticket.
+
+Periodically run:
+
+.venv/bin/ruff format .
+.venv/bin/ruff check .
+.venv/bin/mypy
+.venv/bin/pytest -q
+
+Paid provider tests must require explicit opt-in:
+
+MMAUDIT_RUN_REAL_PROVIDER_TESTS=1
+
+They must also require:
+
+- explicit secrets file;
+- exact privacy profile;
+- exact model and endpoint allowlist;
+- numeric cost cap;
+- synthetic or explicitly consented source scope.
+
+Normal unit tests must never make paid calls.
+
+If one model or endpoint is blocked:
+
+- record the exact reason;
+- continue with other eligible models;
+- do not silently weaken the claim.
+
+If a task is blocked by an unavailable external prerequisite:
+
+- complete all independent code work;
+- add a conditional real integration test;
+- record the operator action required;
+- continue with other tickets.
+
+Do not repeatedly retry the same provider failure without changing the cause.
+
+======================================================================
+V. RELEASE COMPLETION DEFINITION
+======================================================================
+
+Do not declare the project satisfactorily finished until all of these are true:
+
+ENGINEERING
+
+- full test suite passes;
+- Ruff passes;
+- mypy passes;
+- no unresolved release-schema failures.
+
+REAL MODELS
+
+- at least one real call succeeds;
+- at least one full real audit completes;
+- no mandatory call remains rejected only because of truncation;
+- no mandatory call remains rejected only because of canonical identity
+  binding;
+- all selected model IDs are exact and metadata-bound;
+- provider and model identities are recorded;
+- actual costs reconcile;
+- total cost remains at or below USD 250.00.
+
+PRIVACY
+
+- STRICT_ZDR works and reports its eligible ensemble;
+- frontier consent mode is explicit and cannot activate silently;
+- target `.env` files remain excluded;
+- operator API key does not leak;
+- private code is never sent under a weaker policy without explicit consent.
+
+AUDIT ARCHITECTURE
+
+- coherent sharding is implemented;
+- map-reduce review is implemented;
+- cross-shard review is implemented;
+- truncation triggers resharding;
+- coverage errors do not discard valid findings;
+- surface gates are mathematically feasible and risk-tiered;
+- critical surfaces receive required independent review;
+- multiple validators participate in high/critical decisions;
+- cross-examination affects deterministic preliminary status;
+- a single verifier cannot silently suppress recall.
+
+REPORTING
+
+- concise client report exists;
+- forensic bundle exists;
+- findings include inline code excerpts;
+- limitations are prominent;
+- huge coverage tables are outside the client report;
+- no-analysis runs cannot appear completed.
+
+BENCHMARKS
+
+- actual product reports exist;
+- benchmark denominators are non-zero;
+- critical/high recall is measured;
+- confirmed precision is measured;
+- safe controls are measured;
+- location accuracy is measured;
+- costs and runtimes are measured;
+- a current benchmark certificate exists.
+
+CLAIMS
+
+- README matches actual release scope;
+- Solidity/EVM scope is explicit;
+- no unsupported general-language claim remains;
+- superiority remains NOT_EVALUATED or NOT_DEMONSTRATED until externally proven.
+
+Final output must state:
+
+1. successful real provider calls;
+2. rejected provider calls and reasons;
+3. exact models used;
+4. exact providers/endpoints used;
+5. independent root lineages;
+6. privacy profile used;
+7. source scope sent;
+8. total OpenRouter cost;
+9. sharding statistics;
+10. role and lineage coverage;
+11. benchmark recall and precision;
+12. final client-report path;
+13. forensic-bundle path;
+14. remaining external blockers;
+15. final release status;
+16. superiority status;
+17. candidate commit.
+
+Target final status:
+
+FIT_FOR_PURPOSE: PASS
+
+MAXIMUM_ASSURANCE_IMPLEMENTATION:
+- COMPLETE only when all selected mandatory gates have real evidence;
+- otherwise explicitly DOWNGRADED, FAILED or INCONCLUSIVE.
+
+SUPERIORITY_STATUS:
+- NOT_DEMONSTRATED unless a separate blind, independently adjudicated human
+  comparison establishes otherwise.
+
+Begin now with:
+
+1. restoring the green test baseline;
+2. fixing canonical identity;
+3. completing one successful real synthetic OpenRouter call;
+4. implementing the explicit privacy profiles;
+5. replacing one-shot role calls with sharded review.
+
+Do not begin service-layer work before the real sharded multi-model audit
+completes.
