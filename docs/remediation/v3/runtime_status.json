@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-    "updated_at": "2026-08-04T14:27:18Z",
-  "candidate_commit": "11a80209a5a46084df88cbb10000d1cc0ac3ef94",
-  "autorun_status": "RUNNING",
+  "updated_at": "2026-08-04T14:30:45Z",
+  "candidate_commit": "97f9de051e977fa0c6cd6750fa79df9f3e974f79",
+  "autorun_status": "PAUSED",
   "current_milestone": "M1-DETERMINISTIC-PRODUCT (ACTIVE)",
-  "current_ticket": "V3-TOOLDIAG-002 (COMPLETE; checkpoint pending)",
-  "last_checkpoint_commit": "11a80209a5a46084df88cbb10000d1cc0ac3ef94",
+  "current_ticket": "NONE (V3-TOOLDIAG-002 COMPLETE and checkpointed)",
+  "last_checkpoint_commit": "97f9de051e977fa0c6cd6750fa79df9f3e974f79",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,
@@ -88,7 +88,10 @@
     "requested_at_v3_scope_portfolio_boundary": "2026-08-04T07:23:17Z",
     "result_v3_scope_portfolio_boundary": "Paused with V3-SCOPE-001 IN_PROGRESS. Source-census, non-EVM portfolio, manifest/release coherence, traceability, fixture, and schema work is preserved locally. The post-fix scheduler-manifest result was not retained and receives no credit. All delegated agents are complete; no tracked validation session, provider call, secret access, public RPC, external engine, container, network operation, paid action, or release claim remains active.",
     "resume_action_v3_scope_portfolio_boundary": "Rerun .venv/bin/pytest -q -x tests/unit/test_scheduler_manifest.py, repair only actual failures, then rerun the broader report/manifest matrix, complete pytest suite, schema synchronization, Ruff, mypy, and final diff/secret review before closing V3-SCOPE-001.",
-    "resumed_at_v3_scope_portfolio_boundary": "2026-08-04T07:25:21Z"
+    "resumed_at_v3_scope_portfolio_boundary": "2026-08-04T07:25:21Z",
+    "requested_at_v3_tooldiag_checkpoint": "2026-08-04T14:30:45Z",
+    "result_v3_tooldiag_checkpoint": "Paused at clean ticket boundary after validated implementation commit 97f9de051e977fa0c6cd6750fa79df9f3e974f79 was pushed to origin/main over SSH.",
+    "resume_action_v3_tooldiag_checkpoint": "Begin active M1-DETERMINISTIC-PRODUCT member V3-GRAPHBOUND-001 before any ticket outside the milestone."
   },
   "scheduler_assurance_validation": {
     "status": "PASS_COMPONENT_FULL_ASSURANCE",
