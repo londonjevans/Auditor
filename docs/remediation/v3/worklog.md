@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
-LAST_CHECKPOINT_COMMIT: 493df6dd64a710fb8faa874cc24b5bbe784093f8
+LAST_CHECKPOINT_COMMIT: b39c8b843390e93039a5f178581fb02b17f0ec2b
 
 ## 2026-08-04T06:56:14Z — Operator-requested graceful pause
 
@@ -36,6 +36,7 @@ LAST_CHECKPOINT_COMMIT: 493df6dd64a710fb8faa874cc24b5bbe784093f8
   schema-generator, provider, external-engine, or container process remains active.
 - No provider call, secret access, public RPC, live target, paid action, or release claim occurred.
   The exact resume action is recorded above.
+- WIP implementation checkpoint: `b39c8b843390e93039a5f178581fb02b17f0ec2b`.
 
 ## 2026-08-04T06:30:02Z — Resume V3-SCOPE-001
 

@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
   "updated_at": "2026-08-04T06:56:14Z",
-  "candidate_commit": "493df6dd64a710fb8faa874cc24b5bbe784093f8",
+  "candidate_commit": "b39c8b843390e93039a5f178581fb02b17f0ec2b",
   "autorun_status": "PAUSED",
   "current_milestone": "honest_solidity_evm_product_profile",
   "current_ticket": "V3-SCOPE-001 (IN_PROGRESS)",
-  "last_checkpoint_commit": "493df6dd64a710fb8faa874cc24b5bbe784093f8",
+  "last_checkpoint_commit": "b39c8b843390e93039a5f178581fb02b17f0ec2b",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,
