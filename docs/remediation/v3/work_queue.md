@@ -1113,8 +1113,14 @@ are invisible to source review by construction.
     finding model evolves.
 - **Files expected to change:** new learning-corpus module and schema, orchestration capture
   hooks, `src/mmaudit/orchestration/consensus.py`, benchmark exclusion enforcement, regressions.
-- **Dependencies:** `V3-SINGLE-AUDIT-001`. Phase 1, capture, needs only a completed real audit
-  to record and is the portion scheduled in the execution order.
+- **Dependencies:** None for phase 1, corrected 2026-08-04. Capture is orchestration
+  instrumentation and must exist **before** the run it records: this ticket's own scope note
+  states that evidence not recorded during an audit cannot be recovered later. It is therefore
+  scheduled immediately *ahead* of `V3-SINGLE-AUDIT-001`. The previous entry named
+  `V3-SINGLE-AUDIT-001` as a dependency, which confused capture's *value* — nil until a real
+  audit runs — with its *implementation*, which requires only the existing pipeline. Read as a
+  build dependency it forced phase 1 after step 17, making the first real audit the one run its
+  own rationale named and the one run it could not capture.
 - **Dependencies for completion:** `V3-TIMESPLIT-001`. Only phase 2, application and priming,
   requires a measured baseline to A/B against. Expect this ticket to remain `PARTIAL` from its
   scheduled position until that baseline exists.
@@ -2315,20 +2321,23 @@ status, and full evidence — with no model, qualification, or provider spend an
 14. `V3-POLICYELIG-001` — provider terms and jurisdictional eligibility. A model can pass
    every privacy and technical gate and still be contractually ineligible for commercial use.
 15. `V3-QUALIFY-001` — first qualified models.
-16. `V3-SINGLE-AUDIT-001` — **first real audit.** `completed_real_audits` becomes non-zero.
+16. `V3-LEARNING-001` phase 1 (capture only) — **must precede the first real audit.**
+    Capture cannot be done retroactively; evidence not written during a run is gone. Moved
+    ahead of `V3-SINGLE-AUDIT-001` on 2026-08-04: it previously sat after it, which meant the
+    one run its own rationale named was the one run it could not capture. Phase 2 waits for a
+    measured baseline.
 
-17. `V3-BATCH-001` — cost, not capability. Batch is a routing choice, not a model: `:batch`
+17. `V3-SINGLE-AUDIT-001` — **first real audit.** `completed_real_audits` becomes non-zero.
+
+18. `V3-BATCH-001` — cost, not capability. Batch is a routing choice, not a model: `:batch`
     shares its base model's root lineage and can never supply a second independent opinion.
     Scheduled after the first real audit so the synchronous path is proven before an async
     variant debuts, and before the multi-model work where spend actually bites. The accepted
     trade is that qualification at step 15 does not get the cheaper tariff; qualification
     spend is already ledger-bounded, and it is the wrong place to debut a new routing mode.
 
-18. `V3-TIMESPLIT-001`
+19. `V3-TIMESPLIT-001`
 
-19. `V3-LEARNING-001` phase 1 (capture only) — schedule here so the first real audit is
-   recorded. Capture cannot be done retroactively; evidence not written during a run is
-   gone. Phase 2 waits for a measured baseline.
 ### Phase 4 — orchestration hardening, now provable against real models
 
 20. `V3-TRUNCATION-001`
