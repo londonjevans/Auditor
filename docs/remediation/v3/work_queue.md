@@ -1922,7 +1922,10 @@ are invisible to source review by construction.
   `src/mmaudit/orchestration/manifest.py`, `src/mmaudit/repository/ignore.py`, graph and
   omission schemas, large-repository regression.
 - **Dependencies:** None.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
+- **Next action:** Reproduce the graph-size amplification with a bounded test ceiling, then add
+  generation-time risk-ordered edge selection, typed omission evidence, and configuration-relative
+  ignore handling without weakening manifest or coverage authority.
 
 ## V3-BOOTSTRAP-001 — Separate declared model identity from measured model quality
 
@@ -2061,14 +2064,37 @@ are invisible to source review by construction.
     lineage with an existing selection and silently collapse ensemble independence. Vendor
     prefix is never accepted as evidence of independence, and `-fast`, `:batch`, and
     equivalent variants are recognised as the same model and lineage.
+- **Added scope 2026-08-04 — external benchmark aggregates as a discovery signal.** OpenRouter
+  now publishes a `/benchmarks` endpoint aggregating Artificial Analysis, Design Arena, and its
+  own tau-bench and GPQA evaluations. It is a legitimate input to *discovery and prioritisation*
+  and to nothing else. The additional criteria are:
+  - External benchmark scores are ingested at a **lead-grade evidence tier that no code path can
+    promote to qualification evidence**. A model may never become selectable, and its
+    qualification disposition may never be altered, on the strength of an external score. This
+    is the same rule already applied to `heuristic` and `model_suggested` findings.
+  - The reason is recorded with the tier so it cannot be relitigated casually: none of the
+    aggregated sources measures Solidity or EVM vulnerability discovery — the closest available
+    filter is a generic `coding` task type, Design Arena covers UI, gamedev, 3d, dataviz and
+    media, GPQA is graduate science Q&A, and tau-bench is retail/airline agentic tool use.
+    Separately, these scores originate from the inference vendor and are therefore not
+    independent of the product being measured.
+  - Scores enter the hash-bound discovery snapshot with source, retrieval timestamp, and exact
+    values, so a later change in an external score surfaces as drift rather than silently
+    re-ranking candidates.
+  - Retrieval respects the published limits of 30 requests/minute per key and 500/day per
+    account. Benchmark retrieval failure degrades to catalogue-only discovery and is reported
+    explicitly; it is never presented as "no changes".
+  - **Absence from an external benchmark is never evidence against a model.** A model unlisted
+    by Artificial Analysis or unranked in a Design Arena category is neither deprioritised nor
+    excluded on that basis.
 - **Files expected to change:** `src/mmaudit/models/discovery.py`,
   `src/mmaudit/models/registry.py`, `src/mmaudit/models/qualification_workflow.py`,
   `src/mmaudit/cli.py`, drift-report schema, `.github/workflows/`, documentation, regressions.
 - **Dependencies:** None for the discovery, diffing, and alerting scope, which is the portion
-  scheduled at execution-order step 8 and is useful immediately.
+  scheduled at execution-order step 11 and is useful immediately.
 - **Dependencies for completion:** `V3-CALIBRATE-001` and `V3-LINEAGE-001`. Only the promotion
   path — moving a discovered model to selectable — requires them. Expect this ticket to remain
-  `PARTIAL` from step 8 until step 10.
+  `PARTIAL` from step 11 until step 13.
 - **Status:** `PARTIAL`
 - **Starting scope:** Implement and validate only discovery, immutable snapshotting, deterministic
   drift classification, staleness/production blocking, and the scheduled provider-free test path
@@ -2099,6 +2125,55 @@ are invisible to source review by construction.
   `V3-LINEAGE-001`. Keep production lineages and quality fields fail-closed until real calibration
   and qualification evidence exists; do not make a third authenticated refresh attempt as part of
   this ticket.
+
+## V3-BATCH-001 — Asynchronous batch routing for eligible inference
+
+- **Priority:** Medium, high leverage. Not a correctness dependency, so it must not sit on the
+  critical path to the first real audit. It is scheduled immediately after `V3-SINGLE-AUDIT-001`
+  because that is the point where the synchronous path is proven and cost, not capability,
+  becomes the binding constraint on the multi-model work that follows.
+- **Objective:** Route eligible audit and qualification inference through the OpenRouter Batch
+  API at its roughly half-price tariff, without weakening lineage independence, retention
+  policy, structured-output guarantees, or any fail-closed gate.
+- **Rationale:** A full-assurance run fans a large source corpus across five or more models and
+  several passes; the observed cost of a single five-model review is already material and the
+  qualification corpus multiplies it across candidates. Audits are inherently asynchronous — no
+  client needs a token-streamed security audit — so the latency that makes batch unsuitable for
+  interactive work is close to free here.
+- **The distinction that governs this ticket.** `:batch` is a **routing choice, not a model**.
+  It resolves to the same root lineage as its base model. Batch must never be able to
+  manufacture a second independent opinion out of one lineage, and the cheaper tariff must never
+  become a reason to relax a gate that exists for evidence reasons.
+- **Acceptance criteria:**
+  - Batch eligibility is a per-pass property, never a global switch. Passes with a genuine
+    latency requirement — operator-facing and interactive paths — never batch.
+  - `:batch` and equivalent suffixes resolve to the identical root lineage `sha256:` identifier
+    as the base model. An ensemble requiring N independent lineages still requires N after batch
+    routing, and a run that attempts to satisfy independence with a base/batch pair of one
+    lineage fails closed with that reason named.
+  - ZDR eligibility is verified for the batch endpoint **independently**, not inherited from the
+    synchronous endpoint. If batch retention status is weaker or unknown, batch is refused
+    unless recorded operator consent exists, matching the existing privacy rule.
+  - `supported_parameters` and structured-output mode are verified per endpoint. A batch
+    endpoint that cannot honour the required structured-output mode is not selected for passes
+    that depend on it.
+  - Budget preflight uses the tariff actually applied. A batch that falls back to synchronous
+    re-reserves at synchronous pricing or fails closed; it never completes at an unreserved
+    price. The cumulative cost ledger records the tariff actually charged, not the quoted one.
+  - Submission, polling, retrieval, and partial-failure handling are resumable and idempotent
+    across process restarts. A partially returned batch is an explicit incomplete pass.
+  - Expiry and timeout are fail-closed under `V3-FLOOR-001`: a batch not returned within the
+    configured window makes the pass incomplete and the run incomplete. It is never a pass, and
+    a missing batch response is never treated as an empty-but-valid result.
+  - The run manifest records, per request: endpoint used (batch or synchronous), batch
+    identifier, submission and retrieval timestamps, and the price actually applied — so a run's
+    cost and routing are reproducible from its own record.
+- **Files expected to change:** OpenRouter provider client, cost ledger and budget preflight,
+  run manifest schema, pass scheduler, model registry lineage resolution, regressions.
+- **Dependencies:** None hard. Benefits `V3-QUALIFY-001` and `V3-MULTI-AUDIT-001`; sequenced
+  after `V3-SINGLE-AUDIT-001` so the synchronous path is proven before an async variant is
+  introduced.
+- **Status:** `QUEUED`
 
 ## V3-AUTONOMY-001 — Zero-operator-input managed run profile
 
@@ -2232,7 +2307,7 @@ status, and full evidence — with no model, qualification, or provider spend an
 
 11. `V3-MODELREFRESH-001` — **discovery, diff, and alerting portion only.** Its declared
    dependencies cover the promotion path; the ticket states the discovery portion "can land
-   before either and is useful immediately". Expect it to stay `PARTIAL` until step 10.
+   before either and is useful immediately". Expect it to stay `PARTIAL` until step 13.
 12. `V3-LINEAGE-001` — join the recorded operator authorisation to the refreshed candidate set.
 13. `V3-CALIBRATE-001` — reachable thresholds. Must precede qualification: the frozen
     all-dimension `1.0` policy would otherwise reject every model regardless of capability,
@@ -2242,52 +2317,59 @@ status, and full evidence — with no model, qualification, or provider spend an
 15. `V3-QUALIFY-001` — first qualified models.
 16. `V3-SINGLE-AUDIT-001` — **first real audit.** `completed_real_audits` becomes non-zero.
 
-17. `V3-TIMESPLIT-001`
+17. `V3-BATCH-001` — cost, not capability. Batch is a routing choice, not a model: `:batch`
+    shares its base model's root lineage and can never supply a second independent opinion.
+    Scheduled after the first real audit so the synchronous path is proven before an async
+    variant debuts, and before the multi-model work where spend actually bites. The accepted
+    trade is that qualification at step 15 does not get the cheaper tariff; qualification
+    spend is already ledger-bounded, and it is the wrong place to debut a new routing mode.
 
-18. `V3-LEARNING-001` phase 1 (capture only) — schedule here so the first real audit is
+18. `V3-TIMESPLIT-001`
+
+19. `V3-LEARNING-001` phase 1 (capture only) — schedule here so the first real audit is
    recorded. Capture cannot be done retroactively; evidence not written during a run is
    gone. Phase 2 waits for a measured baseline.
 ### Phase 4 — orchestration hardening, now provable against real models
 
-19. `V3-TRUNCATION-001`
-20. `V3-COVERAGE-001`
-21. `V3-CONSENSUS-001` — must precede the multi-model audit, since it is what prevents a
+20. `V3-TRUNCATION-001`
+21. `V3-COVERAGE-001`
+22. `V3-CONSENSUS-001` — must precede the multi-model audit, since it is what prevents a
     single verifier suppressing a candidate group.
-22. `V3-MULTI-AUDIT-001`
-23. `V3-ENSEMBLE-001` — settle whether the specialist ensemble beats concentrated compute
+23. `V3-MULTI-AUDIT-001`
+24. `V3-ENSEMBLE-001` — settle whether the specialist ensemble beats concentrated compute
     before committing to its cost and latency.
-24. `V3-ACTORMODEL-001` — actor and incentive model as an audit input. Three severity/framing
+25. `V3-ACTORMODEL-001` — actor and incentive model as an audit input. Three severity/framing
    errors in one real engagement traced to reviewers not knowing who holds each role or what
    capital they have at risk.
-25. `V3-TAXONOMY-001`
-26. `V3-RETRIEVAL-001`
-27. `V3-MUTATION-001`
+26. `V3-TAXONOMY-001`
+27. `V3-RETRIEVAL-001`
+28. `V3-MUTATION-001`
 
 ### Phase 5 — evidence and claims
-28. `V3-CONVERGENCE-001` — thresholds derived from the measured discovery curve, not guessed.
-29. `V3-HUMANCMP-001` — the only ticket that can ever substantiate a superiority claim.
-30. `V3-STABILITY-001`
+29. `V3-CONVERGENCE-001` — thresholds derived from the measured discovery curve, not guessed.
+30. `V3-HUMANCMP-001` — the only ticket that can ever substantiate a superiority claim.
+31. `V3-STABILITY-001`
 
 ### Phase 6 — release
 
-31. `V3-BYTECODE-001`
-32. `V3-ENGINES-001`
-33. `V3-BENCHMARK-001`
-34. `V3-CERTIFICATE-001`
-35. `V3-ADR-001`
-36. `V3-RELEASE-001`
+32. `V3-BYTECODE-001`
+33. `V3-ENGINES-001`
+34. `V3-BENCHMARK-001`
+35. `V3-CERTIFICATE-001`
+36. `V3-ADR-001`
+37. `V3-RELEASE-001`
 
 ### Phase 7 — operator-prerequisite and product work
 
-37. `V3-QUOTE-001`
-38. `V3-HARDHAT-001` — resumes only when the digest-pinned rootless image exists.
-39. `V3-CI-001`
-40. `V3-LIFECYCLE-001`
-41. `V3-REVERIFY-001`
-42. `V3-INTAKE-001`
-43. `V3-CONSENT-001`
-44. `V3-SERVICE-001`
-45. `V3-AUTONOMY-001`
+38. `V3-QUOTE-001`
+39. `V3-HARDHAT-001` — resumes only when the digest-pinned rootless image exists.
+40. `V3-CI-001`
+41. `V3-LIFECYCLE-001`
+42. `V3-REVERIFY-001`
+43. `V3-INTAKE-001`
+44. `V3-CONSENT-001`
+45. `V3-SERVICE-001`
+46. `V3-AUTONOMY-001`
 
 ### Named milestone gates
 
