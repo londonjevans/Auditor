@@ -53,6 +53,7 @@ from mmaudit.reporting.bundle import (
 from mmaudit.reporting.client import render_client_markdown
 from mmaudit.reporting.json_report import write_json
 from mmaudit.reporting.markdown import render_forensic_markdown, render_markdown
+from mmaudit.reporting.run_authority import RUN_TERMINAL_REPORT_AUTHORITY_PATH
 from mmaudit.reporting.sarif import generate_report_sarif
 from mmaudit.reporting.status import report_status_metadata
 from mmaudit.traceability import (
@@ -61,6 +62,7 @@ from mmaudit.traceability import (
     write_traceability_artifact,
 )
 from scripts import validate_release_evidence as release_evidence_cli
+from tests.report_authority_fixtures import write_run_terminal_report_authority
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = ROOT / "schemas" / "release_artifact_evidence.schema.json"
@@ -238,8 +240,7 @@ def _write_report_artifacts(run_dir: Path, report: AuditReport) -> None:
         {
             "schema_version": report.schema_version,
             "decisions": [
-                decision.model_dump(mode="json")
-                for decision in report.cross_examination_decisions
+                decision.model_dump(mode="json") for decision in report.cross_examination_decisions
             ],
         },
     )
@@ -285,6 +286,7 @@ def _write_report_artifacts(run_dir: Path, report: AuditReport) -> None:
         render_markdown(report, findings_artifact=findings_artifact),
         encoding="utf-8",
     )
+    write_run_terminal_report_authority(run_dir, report)
 
 
 def _write_run(run_dir: Path, config: AuditConfig) -> RunEvidenceManifest:
@@ -346,7 +348,10 @@ def test_observer_binds_actual_manifest_inventory_and_traceability(
     assert oct(output.stat().st_mode & 0o777) == "0o600"
 
 
-@pytest.mark.parametrize("artifact_name", sorted(MANIFEST_BOUND_REPORT_DELIVERABLES))
+@pytest.mark.parametrize(
+    "artifact_name",
+    sorted(MANIFEST_BOUND_REPORT_DELIVERABLES | {RUN_TERMINAL_REPORT_AUTHORITY_PATH}),
+)
 def test_manifest_schema_1_2_rejects_coherently_resealed_missing_report_deliverable(
     tmp_path: Path,
     config_factory,
@@ -378,6 +383,7 @@ def test_manifest_schema_1_1_retains_legacy_sarif_only_compatibility(
     current = _write_run(run_dir, config)
     for artifact_name in MANIFEST_BOUND_REPORT_DELIVERABLES - {"audit-results.sarif"}:
         (run_dir / artifact_name).unlink()
+    (run_dir / RUN_TERMINAL_REPORT_AUTHORITY_PATH).unlink()
     assert current.run_configuration is not None
     legacy_payload = current.model_dump(mode="json")
     legacy_payload["schema_version"] = "1.1"

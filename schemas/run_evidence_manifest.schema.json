@@ -245,6 +245,20 @@
                 },
                 "maxContains": 1,
                 "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "path": {
+                      "const": "private/run-terminal-report-authority.json"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 1
               }
             ]
           }

@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Client report and forensic evidence bundle
 CURRENT_TICKET: V3-REPORT-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-FIXTURE-001 (COMPLETE)
-NEXT_ACTION: Close the invalid-location/conditional-absence pipeline edge; add coherent-reseal coverage for the private terminal run authority; regenerate release schemas; then run focused, integration, Ruff, mypy, and full V3-REPORT-001 gates.
-LAST_COMMAND: `.venv/bin/python -m py_compile src/mmaudit/models/scheduler.py src/mmaudit/orchestration/manifest.py src/mmaudit/orchestration/pipeline.py src/mmaudit/orchestration/reproduction_resolution.py src/mmaudit/reporting/run_authority.py && git diff --check`
-LAST_RESULT: PASS: all affected production modules compile and the working diff has no whitespace errors; process inspection was unavailable under the sandbox, and all delegated agents are stopped or complete. This is pause-integrity evidence, not ticket acceptance.
+NEXT_ACTION: Rerun the interrupted broader report/release unit matrix with `-x -vv`, fix the first actual regression without weakening authority checks, then run the full scheduler integration, Ruff, mypy, and full V3-REPORT-001 gates.
+LAST_COMMAND: `.venv/bin/pytest -q tests/unit/test_client_forensic_reporting.py tests/unit/test_client_forensic_reporting_adversarial.py tests/unit/test_report_status_projection.py tests/unit/test_forensic_export.py tests/unit/test_scheduler_models.py tests/unit/test_scheduler_journal.py tests/unit/test_scheduler_host_contracts.py tests/unit/test_manifest.py tests/unit/test_release_artifacts.py tests/unit/test_release_run.py tests/unit/test_release_verification.py tests/unit/test_release_schemas.py --tb=short`
+LAST_RESULT: INCOMPLETE: the process exited before pause and progress showed at least two failures, but the final failure output was not retained after the execution session closed. No pass is claimed; `.pytest_cache/v/cache/lastfailed` retains candidate failing node IDs for the exact `-x -vv` resume run.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -20,6 +20,52 @@ OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
 LAST_CHECKPOINT_COMMIT: e9554ec0e55b60350d0c690d26270285b4f3ed20
+
+## 2026-08-04T00:26:04Z — Graceful operator pause
+
+- **State:** `PAUSED_BY_OPERATOR`; `V3-REPORT-001` remains `IN_PROGRESS`. No ticket,
+  release, or maximum-assurance completion is claimed.
+- **Preserved implementation:** Runtime-derived terminal report authority, sealed detached artifact
+  reads, exact typed pass-six conditional absence, current schema generation, and synchronized
+  current-manifest test fixtures are saved in the working tree.
+- **Validated evidence:** The focused terminal-authority integration passed `1` in `12.52s`; the
+  invalid-location conditional-absence integration passed `1` in `5.94s`; three adjacent scheduler
+  integrations passed together in `26.15s`; the current manifest/release fixture matrix passed
+  `154` in `34.76s`; generated schemas and focused Ruff/mypy checks passed.
+- **Unfinished validation:** The broader report/release unit matrix displayed at least two failures,
+  but its final output was not retained after the execution session closed. It must be rerun with
+  `-x -vv`; no result is inferred from the partial output.
+- **Safety/cost:** No provider call, public RPC, secret read, target-controlled command, or paid
+  operation occurred. No test, Ruff, mypy, or mmaudit process remains active. OpenRouter usage
+  remains `0.0033415625` USD.
+- **Exact resume action:** Rerun the recorded broader matrix with `-x -vv`, repair the first actual
+  regression, then execute the full scheduler integration and remaining ticket gates.
+- **Checkpoint:** A scoped WIP pause commit will preserve this state; it is intentionally not
+  ticket-complete or release evidence.
+
+## 2026-08-04T00:15:39Z — Terminal report authority closure slice
+
+- The private terminal run authority now derives completion and achieved profile from the same
+  fail-closed effective report-status projection used by manifest issuance; a legacy report that
+  claims raw completion cannot acquire an achieved profile.
+- Detached manifest validation rechecks both `final-findings.json` and the private terminal
+  authority against their exact sealed byte bindings before semantic comparison.
+- Exact pass-six `NO_VALIDATION_CANDIDATES` evidence now distinguishes producer-owned empty test
+  specifications/results from deterministic terminal high/critical resolution accounting. A deep
+  all-invalid-location campaign passed with one explicit-empty task, zero generated/results, and
+  exact inconclusive resolutions; changed resolution detail remains rejected.
+- Focused evidence: the terminal-status authority integration passed `1` in `12.52s`; the
+  all-invalid conditional-absence integration passed `1` in `5.94s`; the focused authority and
+  host-contract unit cases passed after the deterministic fix. No provider or network call ran.
+- Remaining ticket work is fixture/schema closure and the broader report/release/scheduler gates.
+
+## 2026-08-04T00:01:30Z — Resume
+
+- Resumed `V3-REPORT-001` from clean, SSH-synchronized pause commit
+  `c32d8d3082412e08bfe194196d4caa2109c121f5`.
+- Work remains bounded to the recorded reproduction conditional-absence edge, terminal run
+  authority regressions, schema synchronization, and the ticket acceptance gates. No provider
+  call, secret access, or public-network operation is required for this slice.
 
 ## 2026-08-03T23:57:43Z — Graceful operator pause
 

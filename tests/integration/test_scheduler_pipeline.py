@@ -9,12 +9,15 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
+import mmaudit.orchestration.manifest as manifest_module
 import mmaudit.orchestration.pipeline as pipeline_module
 from mmaudit.config import AuditConfig
 from mmaudit.models.scheduler import (
     SCHEDULER_PASS_ORDER,
+    SchedulerAbsenceReason,
     SchedulerAnalysisInputInventory,
     SchedulerArtifact,
     SchedulerBindings,
@@ -26,6 +29,7 @@ from mmaudit.models.scheduler import (
     SchedulerReproductionHostOutput,
     SchedulerRetainedJournalReference,
     SchedulerTaskActivation,
+    SchedulerTaskKind,
     SchedulerTaskOutput,
     SchedulerTerminalStatus,
     scheduler_canonical_sha256,
@@ -84,12 +88,15 @@ from mmaudit.reporting.bundle import (
     FindingsArtifact,
     ModelExecutionArtifact,
     RunCostLedgerEvidence,
+    build_coverage_artifact,
     build_findings_artifact,
+    build_model_execution_artifact,
 )
 from mmaudit.reporting.client import render_client_markdown_from_artifact
 from mmaudit.reporting.json_report import write_json
 from mmaudit.reporting.markdown import render_forensic_markdown, render_markdown
 from mmaudit.reporting.sarif import generate_report_sarif
+from mmaudit.reporting.status import effective_report_status, report_status_metadata
 from mmaudit.repository.discovery import discover_repository
 from mmaudit.repository.ignore import IgnoreMatcher
 from mmaudit.repository.mapping import build_repository_map
@@ -125,6 +132,30 @@ class _CrashAfterDispatchOpenRouter(FakeOpenRouter):
             self.requests.append(json.loads(request.content))
             raise _SyntheticSchedulerCrash
         return super().handler(request)
+
+
+class _AllInvalidCandidateLocationsOpenRouter(FakeOpenRouter):
+    """Keep valid review envelopes while making every candidate location invalid."""
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        response = super().handler(request)
+        if not request.url.path.endswith("/chat/completions") or response.status_code != 200:
+            return response
+        payload = response.json()
+        try:
+            content = json.loads(payload["choices"][0]["message"]["content"])
+        except (KeyError, TypeError, json.JSONDecodeError):
+            return response
+        for finding in content.get("findings", []):
+            for location in finding.get("locations", []):
+                location["path"] = "missing.py"
+                location["symbol"] = None
+            if finding.get("source") is not None:
+                finding["source"]["path"] = "missing.py"
+            if finding.get("sink") is not None:
+                finding["sink"]["path"] = "missing.py"
+        payload["choices"][0]["message"]["content"] = json.dumps(content, sort_keys=True)
+        return httpx.Response(200, headers=dict(response.headers), json=payload)
 
 
 def _only_scheduler_run(output: Path) -> Path:
@@ -778,6 +809,214 @@ async def test_pipeline_persists_exact_seven_pass_scheduler_evidence(
     )
     with pytest.raises(ValueError, match="scheduler baseline"):
         validate_manifest_artifacts(tampered_manifest, result.run_dir)
+
+
+@pytest.mark.asyncio
+async def test_invalid_candidate_locations_retain_exact_conditional_absence_resolutions(
+    config_factory: Any,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = _deep_scheduler_config(config_factory)
+    fake = _AllInvalidCandidateLocationsOpenRouter(extra_model_ids=["golf/gale-secure"])
+
+    result = await _run(config, vulnerable_repo, tmp_path, fake)
+
+    scheduler_artifact = SchedulerArtifact.model_validate_json(
+        (result.run_dir / "scheduler-state.json").read_text(encoding="utf-8")
+    )
+    validation_pass = scheduler_artifact.summary.pass_results[5]
+    assert validation_pass.plan.pass_kind is (
+        SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION
+    )
+    assert validation_pass.plan.conditional_absence is not None
+    assert validation_pass.plan.conditional_absence.reason is (
+        SchedulerAbsenceReason.NO_VALIDATION_CANDIDATES
+    )
+    assert validation_pass.plan.candidate_workset is not None
+    assert validation_pass.plan.candidate_workset.selected_candidate_ids == ()
+    assert len(validation_pass.plan.tasks) == 1
+    assert validation_pass.plan.tasks[0].task_kind is SchedulerTaskKind.EMPTY_COMPLETION
+    assert len(validation_pass.task_results) == 1
+    assert validation_pass.task_results[0].terminal_status is (
+        SchedulerTerminalStatus.EXPLICIT_EMPTY
+    )
+
+    reproduction_payload = json.loads(
+        (result.run_dir / "reproduction-results.json").read_text(encoding="utf-8")
+    )
+    assert reproduction_payload["test_specifications"] == []
+    assert reproduction_payload["results"] == []
+    candidate_payload = json.loads(
+        (result.run_dir / "candidate-findings.json").read_text(encoding="utf-8")
+    )
+    required_candidate_ids = {
+        candidate["candidate_id"]
+        for candidate in candidate_payload["findings"]
+        if candidate["severity"] in {"high", "critical"}
+    }
+    assert required_candidate_ids
+    assert required_candidate_ids == {
+        resolution["candidate_id"] for resolution in reproduction_payload["candidate_resolutions"]
+    }
+    assert {resolution["kind"] for resolution in reproduction_payload["candidate_resolutions"]} == {
+        "inconclusive"
+    }
+
+    manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    validate_manifest_artifacts(manifest, result.run_dir)
+
+
+@pytest.mark.asyncio
+async def test_manifest_binds_public_terminal_status_and_achieved_profile_to_private_authority(
+    config_factory: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = _deep_scheduler_config(config_factory)
+    result = await _run(
+        config,
+        vulnerable_repo,
+        tmp_path,
+        FakeOpenRouter(extra_model_ids=["golf/gale-secure"]),
+    )
+    manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    validate_manifest_artifacts(manifest, result.run_dir)
+    assert manifest.run_configuration is not None
+    assert manifest.run_configuration.achieved_profile is None
+
+    authority_path = result.run_dir / "private" / "run-terminal-report-authority.json"
+    authority_bytes = authority_path.read_bytes()
+    swapped_authority_path = tmp_path / "swapped-terminal-report-authority.json"
+    swapped_authority_path.write_text("{}\n", encoding="utf-8")
+    original_cost_validation = manifest_module._validate_model_execution_cost_ledger_custody
+    swapped = False
+
+    def swap_authority_after_artifact_hash_validation(*args: Any, **kwargs: Any) -> None:
+        nonlocal swapped
+        original_cost_validation(*args, **kwargs)
+        if not swapped:
+            swapped = True
+            swapped_authority_path.replace(authority_path)
+
+    with monkeypatch.context() as swap_patch:
+        swap_patch.setattr(
+            manifest_module,
+            "_validate_model_execution_cost_ledger_custody",
+            swap_authority_after_artifact_hash_validation,
+        )
+        with pytest.raises(ValueError, match="differs from its sealed binding"):
+            validate_manifest_artifacts(manifest, result.run_dir)
+    assert swapped
+    authority_path.write_bytes(authority_bytes)
+    authority_path.chmod(0o600)
+    validate_manifest_artifacts(manifest, result.run_dir)
+
+    changed_configuration_payload = manifest.run_configuration.model_dump(mode="json")
+    changed_configuration_payload["achieved_profile"] = changed_configuration_payload[
+        "requested_profile"
+    ]
+    changed_configuration_payload["invocation_sha256"] = canonical_sha256(
+        {
+            "environment_overrides_sha256": changed_configuration_payload[
+                "environment_overrides_sha256"
+            ],
+            "cli_overrides_sha256": changed_configuration_payload["cli_overrides_sha256"],
+            "run_options_sha256": changed_configuration_payload["run_options_sha256"],
+            "effective_config_sha256": changed_configuration_payload["effective_config_sha256"],
+            "requested_profile": changed_configuration_payload["requested_profile"],
+            "achieved_profile": changed_configuration_payload["achieved_profile"],
+        }
+    )
+    changed_configuration = type(manifest.run_configuration).model_validate(
+        changed_configuration_payload
+    )
+    changed_configuration_manifest = seal_run_evidence_manifest(
+        run_id=manifest.run_id,
+        repository_root_name=manifest.repository_root_name,
+        git_commit=manifest.git_commit,
+        sources=manifest.sources,
+        run_configuration=changed_configuration,
+        bindings=manifest.bindings,
+        artifacts=collect_run_artifacts(result.run_dir),
+        tool_version=manifest.tool_version,
+    )
+    with pytest.raises(
+        ValueError,
+        match="run achieved profile differs from private terminal report authority",
+    ):
+        validate_manifest_artifacts(changed_configuration_manifest, result.run_dir)
+
+    changed_report = AuditReport.model_validate(
+        {
+            **result.report.model_dump(mode="json"),
+            "incomplete_reasons": [
+                *result.report.incomplete_reasons,
+                "Coherently rewritten public terminal status limitation.",
+            ],
+        }
+    )
+    _rewrite_public_report_bundle(result.run_dir, changed_report)
+    metadata_path = result.run_dir / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata.update(report_status_metadata(changed_report))
+    write_json(metadata_path, metadata)
+    write_json(result.run_dir / "coverage.json", build_coverage_artifact(changed_report))
+    retained_model_execution = ModelExecutionArtifact.model_validate_json(
+        (result.run_dir / "model-execution.json").read_text(encoding="utf-8")
+    )
+    assert isinstance(retained_model_execution.cost_ledger, RunCostLedgerEvidence)
+    write_json(
+        result.run_dir / "model-execution.json",
+        build_model_execution_artifact(
+            changed_report,
+            cost_ledger_evidence=retained_model_execution.cost_ledger,
+            persistent_ledger_configured=True,
+        ),
+    )
+    changed_status = effective_report_status(changed_report)
+    changed_coverage_bindings = [
+        binding.model_copy(
+            update={"sha256": canonical_sha256(changed_status.model_dump(mode="json"))}
+        )
+        if binding.identifier == "report-status/projection"
+        else binding
+        for binding in manifest.bindings.coverage
+    ]
+    changed_bindings = manifest.bindings.model_copy(update={"coverage": changed_coverage_bindings})
+    changed_report_manifest = seal_run_evidence_manifest(
+        run_id=manifest.run_id,
+        repository_root_name=manifest.repository_root_name,
+        git_commit=manifest.git_commit,
+        sources=manifest.sources,
+        run_configuration=manifest.run_configuration,
+        bindings=changed_bindings,
+        artifacts=collect_run_artifacts(result.run_dir),
+        tool_version=manifest.tool_version,
+    )
+    with pytest.raises(
+        ValueError,
+        match="public report differs from private terminal report authority",
+    ):
+        validate_manifest_artifacts(changed_report_manifest, result.run_dir)
+
+    authority_path.unlink()
+    with pytest.raises(ValueError, match="requires report artifact bindings"):
+        seal_run_evidence_manifest(
+            run_id=manifest.run_id,
+            repository_root_name=manifest.repository_root_name,
+            git_commit=manifest.git_commit,
+            sources=manifest.sources,
+            run_configuration=manifest.run_configuration,
+            bindings=changed_bindings,
+            artifacts=collect_run_artifacts(result.run_dir),
+            tool_version=manifest.tool_version,
+        )
 
 
 @pytest.mark.asyncio

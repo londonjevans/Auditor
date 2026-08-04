@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-03T23:57:43Z",
+  "updated_at": "2026-08-04T00:26:04Z",
   "candidate_commit": "e9554ec0e55b60350d0c690d26270285b4f3ed20",
   "autorun_status": "PAUSED_BY_OPERATOR",
   "current_milestone": "client_report_and_forensic_bundle",
@@ -23,8 +23,8 @@
     "V3-FORKSUITE-001.hardhat": "Real Hardhat execution requires the process-attested digest-pinned rootless single-loopback runtime and trusted image-baked reporter specified by V3-HARDHAT-001."
   },
   "last_validation": {
-    "command": ".venv/bin/python -m py_compile src/mmaudit/models/scheduler.py src/mmaudit/orchestration/manifest.py src/mmaudit/orchestration/pipeline.py src/mmaudit/orchestration/reproduction_resolution.py src/mmaudit/reporting/run_authority.py && git diff --check",
-    "result": "PASS: all affected production modules compile and the working diff has no whitespace errors; process inspection was unavailable under the sandbox, and all delegated agents are stopped or complete. This is pause-integrity evidence, not ticket acceptance."
+    "command": ".venv/bin/pytest -q tests/unit/test_client_forensic_reporting.py tests/unit/test_client_forensic_reporting_adversarial.py tests/unit/test_report_status_projection.py tests/unit/test_forensic_export.py tests/unit/test_scheduler_models.py tests/unit/test_scheduler_journal.py tests/unit/test_scheduler_host_contracts.py tests/unit/test_manifest.py tests/unit/test_release_artifacts.py tests/unit/test_release_run.py tests/unit/test_release_verification.py tests/unit/test_release_schemas.py --tb=short",
+    "result": "INCOMPLETE: progress showed at least two failures, but the final output was not retained after the execution session closed; rerun with -x -vv before making any acceptance claim."
   },
   "pause_state": {
     "requested_at": "2026-08-03T20:08:17Z",
@@ -47,7 +47,11 @@
     "resumed_at_latest_final": "2026-08-03T23:29:27Z",
     "requested_at_current_final": "2026-08-03T23:57:43Z",
     "result_current_final": "Paused with exact pass-six reproduction custody, partial pass-seven judge authority, semantic duplicate rejection, and private terminal run authority saved. V3-REPORT-001 remains IN_PROGRESS; no provider call or release claim occurred.",
-    "resume_action_current_final": "Close the invalid-location conditional-absence edge, add coherent-reseal and missing-authority regressions, regenerate schemas, and run focused through full V3-REPORT-001 gates."
+    "resume_action_current_final": "Close the invalid-location conditional-absence edge, add coherent-reseal and missing-authority regressions, regenerate schemas, and run focused through full V3-REPORT-001 gates.",
+    "resumed_at_current_final": "2026-08-04T00:01:30Z",
+    "requested_at_report_authority": "2026-08-04T00:26:04Z",
+    "result_report_authority": "Paused with runtime-derived terminal report authority, exact conditional-absence validation, generated schemas, and synchronized current-manifest fixtures preserved. V3-REPORT-001 remains IN_PROGRESS; the broader unit matrix must be rerun because its final failing output was not retained.",
+    "resume_action_report_authority": "Rerun the recorded broader report/release unit matrix with -x -vv, repair the first actual regression without weakening authority checks, then run scheduler integration, Ruff, mypy, and the remaining V3-REPORT-001 gates."
   },
   "scheduler_assurance_validation": {
     "status": "PASS_COMPONENT_FULL_ASSURANCE",

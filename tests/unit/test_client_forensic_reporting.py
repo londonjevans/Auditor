@@ -263,6 +263,40 @@ def test_terminal_report_authority_binds_the_exact_validated_report() -> None:
         authority.require_exact_report(changed)
 
 
+def test_terminal_report_authority_uses_fail_closed_effective_legacy_status() -> None:
+    report = _report(completed=True)
+    assert report.schema_version == "1.0"
+    assert report.completed
+
+    authority = RunTerminalReportAuthority.build(report)
+
+    assert authority.run_status == "INCOMPLETE"
+    assert authority.quality_status == "incomplete"
+    assert not authority.completed
+    assert authority.achieved_profile is None
+
+
+def test_terminal_report_authority_rejects_report_runtime_status_disagreement() -> None:
+    report = _report(completed=False)
+    status = effective_report_status(report)
+    changed_status = status.model_copy(
+        update={"limitations": [*status.limitations, "Independent runtime disagreement."]}
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="runtime terminal status differs from the validated report",
+    ):
+        RunTerminalReportAuthority.build_from_runtime(
+            report=report,
+            status=changed_status,
+            minimum_analysis_floor=report.minimum_analysis_floor,
+            maximum_assurance=report.maximum_assurance,
+            accounted_cost_usd_exact="0",
+            terminal_exit_code=6,
+        )
+
+
 @pytest.mark.parametrize(
     ("status", "expected_label"),
     [

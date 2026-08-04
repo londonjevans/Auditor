@@ -31,7 +31,10 @@ from mmaudit.models.schemas import (
     AuditProfile,
     AuditReport,
     CandidateReproductionResolution,
+    EvidenceStrength,
     ExecutionEvidenceKind,
+    Finding,
+    FindingStatus,
     ForkActor,
     ForkAssertion,
     ForkCallStep,
@@ -50,6 +53,7 @@ from mmaudit.models.schemas import (
     InvariantRelation,
     InvariantSpec,
     InvariantSuite,
+    LocationValidation,
     RepositoryCodeExecutionState,
     RepositoryDifferentialRunStatus,
     RepositoryFile,
@@ -116,12 +120,14 @@ from mmaudit.scanners.fork_matrix import (
     repository_fork_matrix_timeout_budget_seconds,
 )
 from mmaudit.solidity.properties import build_property_corpus
+from tests.unit.test_manifest import _write_required_artifacts
 from tests.unit.test_repository_fork_differential_schema import (
     _matrix as _repository_differential_matrix,
 )
 
 runner = CliRunner()
 _NOW = datetime(2026, 7, 27, tzinfo=UTC)
+_REPLAY_SCANNER_STDOUT = b"{}"
 
 
 class _LocalScannerRunner:
@@ -369,6 +375,11 @@ def _scanner_run() -> ScannerRun:
         duration_seconds=0,
         findings=[],
         isolation_backend="synthetic-no-network",
+        raw_output_path="synthetic-local/output.json",
+        raw_output_sha256=hashlib.sha256(_REPLAY_SCANNER_STDOUT).hexdigest(),
+        raw_output_bytes=len(_REPLAY_SCANNER_STDOUT),
+        process_exit_code=0,
+        machine_output_validated=True,
     )
 
 
@@ -876,6 +887,9 @@ def _differential_baseline(result: RepositorySuiteDifferentialRun) -> ScannerRun
         update={
             "fork_rpc_egress": None,
             "execution_observation_sha256": None,
+            "raw_output_path": (f"{result.matrix.attempts[0].scanner_run.scanner}/output.json"),
+            "raw_output_sha256": hashlib.sha256(_REPLAY_SCANNER_STDOUT).hexdigest(),
+            "raw_output_bytes": len(_REPLAY_SCANNER_STDOUT),
         }
     )
     return ScannerRun.model_validate(
@@ -1074,7 +1088,40 @@ def _write_replay_run(
     invariant_result = _invariant_result()
     specification = _test_specification()
     reproduction = _reproduction_result()
+    reproduction_resolution = CandidateReproductionResolution(
+        candidate_id=candidate.candidate_id,
+        kind=ReproductionResolutionKind.INCONCLUSIVE,
+        detail="attempted reproduction did not produce a qualifying terminal outcome",
+    )
     property_corpus = build_property_corpus(None, None, [])
+    rejected_finding = Finding(
+        id="finding-replay",
+        group_id="group-replay",
+        title=candidate.title,
+        status=FindingStatus.REJECTED,
+        severity=candidate.severity,
+        confidence=candidate.confidence,
+        cwe=candidate.cwe,
+        owasp=candidate.owasp,
+        summary=candidate.summary,
+        impact=candidate.impact,
+        preconditions=candidate.preconditions,
+        locations=candidate.locations,
+        source=candidate.source,
+        sink=candidate.sink,
+        attack_path=candidate.attack_path,
+        evidence=candidate.evidence,
+        compensating_controls=candidate.compensating_controls,
+        false_positive_conditions=candidate.false_positive_conditions,
+        recommendation=candidate.recommendation,
+        verification_test=candidate.verification_test,
+        model_votes=candidate.model_votes,
+        location_validation=LocationValidation(valid=True, validated_at=_NOW),
+        disagreement="Synthetic replay fixture retains an inconclusive candidate.",
+        contributing_candidate_ids=[candidate.candidate_id],
+        evidence_strength=EvidenceStrength.NONE,
+        reproduction_state=ReproductionState.NOT_REPRODUCED,
+    )
     privacy: dict[str, object] = {"code_egress_enabled": False}
     if differential is not None:
         privacy["fork_rpc_egress"] = RepositoryForkRpcPrivacyEvidence.from_differential(
@@ -1121,7 +1168,7 @@ def _write_replay_run(
         budget_usd=20,
         accounted_cost_usd=0,
         findings=[],
-        rejected_findings=[],
+        rejected_findings=[rejected_finding],
         audit_profile=config.profile,
         metadata={
             "run_options": run_options.model_dump(mode="json"),
@@ -1135,6 +1182,16 @@ def _write_replay_run(
     )
     run_dir = root / "run"
     run_dir.mkdir()
+    assert scanner.raw_output_path is not None
+    scanner_stdout_path = run_dir / "private" / "scanner-output" / scanner.raw_output_path
+    scanner_stdout_path.parent.mkdir(mode=0o700, parents=True)
+    scanner_stdout_path.write_bytes(_REPLAY_SCANNER_STDOUT)
+    (scanner_stdout_path.parent / "workspace").mkdir(mode=0o700)
+    _write_required_artifacts(
+        run_dir,
+        report,
+        candidates=(candidate,),
+    )
     artifacts = {
         "scanner-results.json": {
             "schema_version": "1.0",
@@ -1171,13 +1228,7 @@ def _write_replay_run(
             "schema_version": "1.0",
             "test_specifications": [specification.model_dump(mode="json")],
             "results": [reproduction.model_dump(mode="json")],
-            "candidate_resolutions": [
-                CandidateReproductionResolution(
-                    candidate_id=candidate.candidate_id,
-                    kind=ReproductionResolutionKind.INCONCLUSIVE,
-                    detail="attempted reproduction did not produce a qualifying terminal outcome",
-                ).model_dump(mode="json")
-            ],
+            "candidate_resolutions": [reproduction_resolution.model_dump(mode="json")],
             "falsification_decisions": [],
         },
         "formal-results.json": {"schema_version": "1.0", "runs": []},
@@ -1193,23 +1244,6 @@ def _write_replay_run(
             run_dir / "privacy-fork-rpc-egress.json",
             RepositoryForkRpcPrivacyEvidence.from_differential(differential),
         )
-    write_json(
-        run_dir / "metadata.json",
-        {
-            "schema_version": report.schema_version,
-            "run_id": report.run_id,
-            "generated_at": report.generated_at.isoformat(),
-            "completed": report.completed,
-            "incomplete_reasons": report.incomplete_reasons,
-            "configuration_hash": report.configuration_hash,
-            "model_configuration_hash": report.model_configuration_hash,
-            "privacy": report.privacy,
-            "metadata": report.metadata,
-            "repository_suite_differential": (
-                differential.model_dump(mode="json") if differential is not None else None
-            ),
-        },
-    )
     write_json(run_dir / "final-findings.json", report)
     manifest = build_run_evidence_manifest(
         run_dir=run_dir,

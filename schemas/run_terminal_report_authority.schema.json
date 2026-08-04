@@ -1,0 +1,223 @@
+{
+  "$id": "https://mmaudit.local/schemas/run_terminal_report_authority.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Write-once private comparison authority for public report semantics.",
+  "properties": {
+    "accounted_cost_usd_exact": {
+      "maxLength": 100,
+      "minLength": 1,
+      "title": "Accounted Cost Usd Exact",
+      "type": "string"
+    },
+    "achieved_profile": {
+      "anyOf": [
+        {
+          "maxLength": 100,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Achieved Profile"
+    },
+    "algorithm": {
+      "const": "mmaudit.run-terminal-report-authority.v2",
+      "default": "mmaudit.run-terminal-report-authority.v2",
+      "title": "Algorithm",
+      "type": "string"
+    },
+    "audit_profile": {
+      "maxLength": 100,
+      "minLength": 1,
+      "title": "Audit Profile",
+      "type": "string"
+    },
+    "authority_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Authority Sha256",
+      "type": "string"
+    },
+    "completed": {
+      "title": "Completed",
+      "type": "boolean"
+    },
+    "evidence_authority": {
+      "const": "comparison_required",
+      "default": "comparison_required",
+      "title": "Evidence Authority",
+      "type": "string"
+    },
+    "incomplete_reasons_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Incomplete Reasons Sha256",
+      "type": "string"
+    },
+    "maximum_assurance_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Maximum Assurance Sha256"
+    },
+    "minimum_analysis_floor_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Minimum Analysis Floor Sha256"
+    },
+    "quality_gates_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Quality Gates Sha256",
+      "type": "string"
+    },
+    "quality_status": {
+      "maxLength": 100,
+      "minLength": 1,
+      "title": "Quality Status",
+      "type": "string"
+    },
+    "report_payload_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Report Payload Sha256",
+      "type": "string"
+    },
+    "report_schema_version": {
+      "maxLength": 20,
+      "minLength": 1,
+      "title": "Report Schema Version",
+      "type": "string"
+    },
+    "run_id": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "run_status": {
+      "anyOf": [
+        {
+          "maxLength": 100,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Run Status"
+    },
+    "runtime_assessment_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Runtime Assessment Sha256",
+      "type": "string"
+    },
+    "scheduler_artifact_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Scheduler Artifact Sha256"
+    },
+    "scheduler_campaign_id": {
+      "anyOf": [
+        {
+          "pattern": "^scheduler-campaign-[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Scheduler Campaign Id"
+    },
+    "scheduler_campaign_status": {
+      "anyOf": [
+        {
+          "maxLength": 100,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Scheduler Campaign Status"
+    },
+    "scheduler_manifest_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Scheduler Manifest Sha256"
+    },
+    "scheduler_summary_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Scheduler Summary Sha256"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "terminal_exit_code": {
+      "maximum": 255,
+      "minimum": 0,
+      "title": "Terminal Exit Code",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "run_id",
+    "report_schema_version",
+    "audit_profile",
+    "quality_status",
+    "completed",
+    "quality_gates_sha256",
+    "incomplete_reasons_sha256",
+    "terminal_exit_code",
+    "accounted_cost_usd_exact",
+    "runtime_assessment_sha256",
+    "report_payload_sha256",
+    "authority_sha256"
+  ],
+  "title": "mmaudit private terminal report authority",
+  "type": "object"
+}

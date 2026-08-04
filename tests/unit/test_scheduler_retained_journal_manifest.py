@@ -34,6 +34,7 @@ from mmaudit.orchestration.manifest import (
     validate_scheduler_artifact,
     write_run_evidence_manifest,
 )
+from mmaudit.reporting.run_authority import RUN_TERMINAL_REPORT_AUTHORITY_PATH
 from tests.unit.test_scheduler_manifest import (
     _live_scheduler_journal,
     _non_solidity_report,
@@ -63,7 +64,12 @@ def _copy_public_run(owner: Path, consumer: Path) -> None:
     for source in sorted(owner.iterdir(), key=lambda item: item.name):
         if source.is_file():
             shutil.copy2(source, consumer / source.name)
-    (consumer / "private").mkdir(mode=0o700)
+    private = consumer / "private"
+    private.mkdir(mode=0o700)
+    shutil.copy2(
+        owner / RUN_TERMINAL_REPORT_AUTHORITY_PATH,
+        consumer / RUN_TERMINAL_REPORT_AUTHORITY_PATH,
+    )
 
 
 @pytest.fixture

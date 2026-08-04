@@ -31,8 +31,11 @@ from mmaudit.models.reasoning import (
 )
 from mmaudit.models.registry import ModelRegistry
 from mmaudit.models.runtime import build_reasoning_policy
+from mmaudit.models.scheduler import SchedulerArtifact
 from mmaudit.models.schemas import (
     AuditReport,
+    CandidateFinding,
+    CandidateReproductionResolution,
     ExecutionEvidenceKind,
     Location,
     ModelRequestValidationStatus,
@@ -83,6 +86,7 @@ from mmaudit.reporting.client import (
 )
 from mmaudit.reporting.json_report import write_json
 from mmaudit.reporting.markdown import render_forensic_markdown, render_markdown
+from mmaudit.reporting.run_authority import RUN_TERMINAL_REPORT_AUTHORITY_PATH
 from mmaudit.reporting.sarif import generate_report_sarif
 from mmaudit.reporting.status import report_status_metadata
 from mmaudit.repository.locations import validate_location
@@ -94,6 +98,7 @@ from tests.identity_fixtures import (
     synthetic_token_plan_routing,
 )
 from tests.output_evidence_fixtures import synthetic_structured_output_routing
+from tests.report_authority_fixtures import write_run_terminal_report_authority
 from tests.unit.test_model_registry import _verified_production_config_and_capability
 
 runner = CliRunner()
@@ -317,6 +322,9 @@ def _write_required_artifacts(
     *,
     legacy_model_execution: bool = False,
     source_contents: dict[str, str] | None = None,
+    scheduler_artifact: SchedulerArtifact | None = None,
+    candidates: tuple[CandidateFinding, ...] = (),
+    reproduction_resolutions: tuple[CandidateReproductionResolution, ...] = (),
 ) -> None:
     payloads = {
         "solidity-compilation.json": {"schema_version": "1.0", "results": []},
@@ -341,15 +349,10 @@ def _write_required_artifacts(
         },
         "reproduction-results.json": {
             "schema_version": "1.0",
-            "test_specifications": [{"name": "test_Remediation"}],
-            "results": [
-                {
-                    "candidate_id": "candidate-1",
-                    "state": "not_reproduced",
-                    "specification_sha256": "c" * 64,
-                    "generated_test_sha256": None,
-                }
-            ],
+            "test_specifications": [],
+            "results": [],
+            "candidate_resolutions": [],
+            "falsification_decisions": [],
         },
         "solidity-coverage.json": {"schema_version": "1.0", "coverage": None},
         "model-review-coverage.json": {"schema_version": "1.0", "coverage": None},
@@ -361,8 +364,7 @@ def _write_required_artifacts(
         "verification-results.json": {
             "schema_version": "1.2",
             "decisions": [
-                decision.model_dump(mode="json")
-                for decision in report.verification_decisions
+                decision.model_dump(mode="json") for decision in report.verification_decisions
             ],
             "threat_model": None,
             "threat_model_location_rejections": [],
@@ -370,13 +372,12 @@ def _write_required_artifacts(
         "cross-examination.json": {
             "schema_version": "1.2",
             "decisions": [
-                decision.model_dump(mode="json")
-                for decision in report.cross_examination_decisions
+                decision.model_dump(mode="json") for decision in report.cross_examination_decisions
             ],
         },
         "candidate-findings.json": {
             "schema_version": "1.1",
-            "findings": [],
+            "findings": [candidate.model_dump(mode="json") for candidate in candidates],
         },
     }
     run_dir.mkdir(exist_ok=True)
@@ -428,6 +429,8 @@ def _write_required_artifacts(
     )
     findings_artifact = build_findings_artifact(
         report,
+        candidates=candidates,
+        reproduction_resolutions=reproduction_resolutions,
         source_excerpts=(
             build_client_source_excerpts(report, source_contents)
             if source_contents is not None
@@ -458,6 +461,11 @@ def _write_required_artifacts(
     (run_dir / "audit-report.md").write_text(
         render_markdown(report, findings_artifact=findings_artifact),
         encoding="utf-8",
+    )
+    write_run_terminal_report_authority(
+        run_dir,
+        report,
+        scheduler_artifact=scheduler_artifact,
     )
 
 
@@ -567,6 +575,7 @@ def _rewrite_as_sealed_schema_1_1(
         retained.add("model-execution.json")
     for artifact_name in MANIFEST_BOUND_REPORT_DELIVERABLES - retained:
         (run_dir / artifact_name).unlink()
+    (run_dir / RUN_TERMINAL_REPORT_AUTHORITY_PATH).unlink()
     metadata_path = run_dir / "metadata.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     metadata["completed"] = report.completed
@@ -709,7 +718,7 @@ def test_manifest_serialization_and_all_required_bindings_are_stable(
     }
     assert any(binding.identifier.startswith("seed/") for binding in first.bindings.seeds)
     assert {binding.path for binding in first.artifacts} == {
-        path.name for path in first_run.iterdir()
+        binding.path for binding in collect_run_artifacts(first_run)
     }
 
 
@@ -1747,9 +1756,7 @@ def test_current_manifest_bindings_reject_resealed_qualified_usage_routing_tampe
 
     routing = dict(usage.routing)
     routing["qualified_provider_name"] = "Resealed Synthetic Provider"
-    tampered_usage = reattest_synthetic_real_usage(
-        usage.model_copy(update={"routing": routing})
-    )
+    tampered_usage = reattest_synthetic_real_usage(usage.model_copy(update={"routing": routing}))
 
     with pytest.raises(
         ValueError,
@@ -2027,7 +2034,7 @@ def test_published_manifest_schema_is_strict_and_bounded() -> None:
     report_bundle_contracts = report_bundle_rule["then"]["properties"]["artifacts"]["allOf"]
     assert {
         contract["contains"]["properties"]["path"]["const"] for contract in report_bundle_contracts
-    } == MANIFEST_BOUND_REPORT_DELIVERABLES
+    } == MANIFEST_BOUND_REPORT_DELIVERABLES | {RUN_TERMINAL_REPORT_AUTHORITY_PATH}
     assert all(
         contract["minContains"] == contract["maxContains"] == 1
         for contract in report_bundle_contracts

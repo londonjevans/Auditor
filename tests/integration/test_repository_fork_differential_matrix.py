@@ -74,6 +74,7 @@ from mmaudit.scanners.fork_matrix import (
 from mmaudit.scanners.foundry import FoundryForkScanner
 from mmaudit.scanners.runner import ScannerRunner
 from mmaudit.solidity.reproduction import default_isolation_backend
+from tests.unit.test_manifest import _write_required_artifacts
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _CLEAN_CHAIN_ID = 31_337
@@ -424,6 +425,7 @@ def _write_replay_bundle(
             },
         },
     )
+    _write_required_artifacts(run_dir, report)
     empty_corpus = PropertyCorpus(
         properties=[],
         limitations=[],
@@ -473,21 +475,6 @@ def _write_replay_bundle(
         write_json(run_dir / name, payload)
     write_json(run_dir / "repository-suite-differential.json", differential)
     write_json(run_dir / "privacy-fork-rpc-egress.json", fork_privacy)
-    write_json(
-        run_dir / "metadata.json",
-        {
-            "schema_version": report.schema_version,
-            "run_id": report.run_id,
-            "generated_at": report.generated_at.isoformat(),
-            "completed": report.completed,
-            "incomplete_reasons": report.incomplete_reasons,
-            "configuration_hash": report.configuration_hash,
-            "model_configuration_hash": report.model_configuration_hash,
-            "privacy": report.privacy,
-            "repository_suite_differential": differential.model_dump(mode="json"),
-            "metadata": report.metadata,
-        },
-    )
     write_json(run_dir / "final-findings.json", report)
     manifest = build_run_evidence_manifest(
         run_dir=run_dir,

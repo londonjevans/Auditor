@@ -53,6 +53,7 @@ from mmaudit.traceability import (
     build_traceability_matrix,
     write_traceability_artifact,
 )
+from tests.report_authority_fixtures import write_run_terminal_report_authority
 
 ROOT = Path(__file__).resolve().parents[2]
 COMMIT = "a" * 40
@@ -86,7 +87,7 @@ def _run_configuration(config: AuditConfig) -> RunConfigurationBinding:
         "run_options_sha256": options.stable_hash(),
         "effective_config_sha256": effective.stable_hash(),
         "requested_profile": effective.profile.value,
-        "achieved_profile": effective.profile.value,
+        "achieved_profile": None,
     }
     return RunConfigurationBinding(
         file_configuration_json=canonical_audit_config_json(config),
@@ -102,7 +103,7 @@ def _run_configuration(config: AuditConfig) -> RunConfigurationBinding:
         model_config_sha256=effective.model_hash(),
         invocation_sha256=canonical_sha256(invocation),
         requested_profile=effective.profile,
-        achieved_profile=effective.profile,
+        achieved_profile=None,
     )
 
 
@@ -254,6 +255,7 @@ def _write_report_artifacts(run_dir: Path, report: AuditReport) -> None:
         render_markdown(report, findings_artifact=findings_artifact),
         encoding="utf-8",
     )
+    write_run_terminal_report_authority(run_dir, report)
 
 
 def _write_run(

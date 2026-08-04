@@ -8,6 +8,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from mmaudit.models.scheduler import (
+    SchedulerAbsenceReason,
     SchedulerCampaignSummary,
     SchedulerCrossShardDecision,
     SchedulerCrossShardIntegrationOutput,
@@ -31,6 +32,8 @@ from mmaudit.models.scheduler import (
 )
 from mmaudit.models.schemas import (
     AuditReport,
+    CandidateFinding,
+    CandidateOriginKind,
     CandidateReproductionResolution,
     GeneratedFoundryTestSpec,
     ReproductionResolutionKind,
@@ -43,6 +46,9 @@ from mmaudit.orchestration.manifest import (
     _validate_scheduler_prejudgment_evidence_authority,
 )
 from mmaudit.orchestration.pipeline import _scheduled_reproduction_candidate_ids
+from mmaudit.orchestration.reproduction_resolution import (
+    build_candidate_reproduction_resolutions,
+)
 from tests.scheduler_support import _synthetic_manifest
 
 
@@ -649,7 +655,9 @@ def test_current_manifest_requires_empty_reproduction_evidence_without_successfu
         plan=SimpleNamespace(
             pass_kind=SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
             tasks=(absence_task,),
-            conditional_absence=object(),
+            conditional_absence=SimpleNamespace(
+                reason=SchedulerAbsenceReason.NO_VALIDATION_CANDIDATES
+            ),
         ),
         task_results=(absence_result,),
     )
@@ -691,7 +699,7 @@ def test_current_manifest_requires_empty_reproduction_evidence_without_successfu
     for nonempty_artifact in typed_presence_cases:
         with pytest.raises(
             ValueError,
-            match="reproduction evidence exists without a successful pass-six host",
+            match="terminal reproduction differs from typed pass-six absence",
         ):
             _validate_scheduler_prejudgment_evidence_authority(
                 authority=authority,
@@ -728,7 +736,7 @@ def test_current_manifest_requires_empty_reproduction_evidence_without_successfu
     for nonempty_authority in authority_presence_cases:
         with pytest.raises(
             ValueError,
-            match="reproduction evidence exists without a successful pass-six host",
+            match="terminal reproduction differs from typed pass-six absence",
         ):
             _validate_scheduler_prejudgment_evidence_authority(
                 authority=nonempty_authority,
@@ -737,6 +745,54 @@ def test_current_manifest_requires_empty_reproduction_evidence_without_successfu
                 reproduction_artifact=empty_artifact,
                 journal=absent_host_journal,
             )
+
+    candidate = CandidateFinding.model_construct(
+        candidate_id="candidate-a",
+        severity=Severity.HIGH,
+        origin_kind=CandidateOriginKind.MODEL_REVIEW,
+    )
+    exact_resolutions = build_candidate_reproduction_resolutions(
+        candidates=(candidate,),
+        results=(),
+    )
+    exact_artifact = empty_artifact.model_copy(update={"candidate_resolutions": exact_resolutions})
+    exact_authority = authority.model_copy(
+        update={
+            "reproduction_resolutions": tuple(
+                SchedulerEvidencePayloadBinding.build(
+                    kind="reproduction_resolution",
+                    subject_id=item.candidate_id,
+                    payload=item,
+                )
+                for item in exact_resolutions
+            )
+        }
+    )
+    _validate_scheduler_prejudgment_evidence_authority(
+        authority=exact_authority,
+        report=report,
+        candidates=(candidate,),
+        reproduction_artifact=exact_artifact,
+        journal=absent_host_journal,
+    )
+
+    changed_resolution = exact_resolutions[0].model_copy(
+        update={"detail": "Coherently changed terminal accounting detail."}
+    )
+    changed_artifact = exact_artifact.model_copy(
+        update={"candidate_resolutions": [changed_resolution]}
+    )
+    with pytest.raises(
+        ValueError,
+        match="terminal reproduction differs from typed pass-six absence",
+    ):
+        _validate_scheduler_prejudgment_evidence_authority(
+            authority=exact_authority,
+            report=report,
+            candidates=(candidate,),
+            reproduction_artifact=changed_artifact,
+            journal=absent_host_journal,
+        )
 
 
 def test_evidence_cap_contract_is_bound_to_judge_partition_and_activation() -> None:

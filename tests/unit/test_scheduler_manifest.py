@@ -52,6 +52,8 @@ from mmaudit.models.schemas import (
     RepositoryFile,
     UsageRecord,
 )
+from mmaudit.models.usage import request_token_plan_from_usage
+from mmaudit.orchestration.budgets import AtomicRequestLimitReservationEvidence
 from mmaudit.orchestration.manifest import (
     build_run_evidence_manifest,
     canonical_sha256,
@@ -59,7 +61,6 @@ from mmaudit.orchestration.manifest import (
     validate_scheduler_artifact,
     write_run_evidence_manifest,
 )
-from mmaudit.orchestration.budgets import AtomicRequestLimitReservationEvidence
 from mmaudit.orchestration.scheduler import (
     SchedulerJournal,
     create_scheduler_journal,
@@ -84,12 +85,11 @@ from mmaudit.privacy import (
 )
 from mmaudit.reporting.json_report import stable_json
 from mmaudit.repository.privacy_provenance import PrivacySourceProvenanceEvidence
+from tests.identity_fixtures import synthetic_token_plan_routing
 from tests.scheduler_support import (
     build_scheduler_test_model_payload,
     scheduler_test_response_schema_sha256,
 )
-from mmaudit.models.usage import request_token_plan_from_usage
-from tests.identity_fixtures import synthetic_token_plan_routing
 from tests.unit.test_manifest import _report, _write_required_artifacts
 
 
@@ -591,6 +591,7 @@ def _write_scheduler_run(run_dir: Path, report, artifact: SchedulerArtifact) -> 
         run_dir,
         report,
         legacy_model_execution=bool(report.usage),
+        scheduler_artifact=artifact,
     )
     _write_privacy_artifacts(run_dir, report)
     private = run_dir / "private"
@@ -688,7 +689,7 @@ def test_scheduler_schema_is_generated_strict_and_bounded() -> None:
         "model_requests",
         "summary",
     }
-    assert schema["properties"]["schema_version"]["const"] == "1.0"
+    assert schema["properties"]["schema_version"]["enum"] == ["1.0", "1.1"]
     assert schema["properties"]["evidence_authority"]["const"] == "comparison_required"
     assert (
         schema["$defs"]["SchedulerPassResult"]["properties"]["task_results"]["maxItems"] == 100_000
@@ -1133,7 +1134,7 @@ def test_scheduler_retains_crash_output_as_uncertain_without_provider_credit(
     _write_required_artifacts(run_dir, report, legacy_model_execution=True)
     _write_privacy_artifacts(run_dir, report)
     private = run_dir / "private"
-    private.mkdir(mode=0o700)
+    private.mkdir(exist_ok=True, mode=0o700)
     journal_path.rename(private / "scheduler-journal")
     (run_dir / "scheduler-state.json").write_text(
         artifact.model_dump_json(indent=2) + "\n",

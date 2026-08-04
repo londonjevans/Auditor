@@ -38,6 +38,8 @@ from mmaudit.release_run import ReleaseRunBinding, ReleaseRunBindingPayload
 from mmaudit.release_verification import observe_release_run_verification
 from mmaudit.reporting.bundle import MANIFEST_BOUND_REPORT_DELIVERABLES
 from mmaudit.reporting.json_report import stable_json
+from tests.report_authority_fixtures import write_run_terminal_report_authority
+from tests.unit.test_release_run import _report as _release_report
 
 
 def _sha(value: str) -> str:
@@ -68,7 +70,7 @@ def _run_configuration(config: AuditConfig) -> RunConfigurationBinding:
         "run_options_sha256": options.stable_hash(),
         "effective_config_sha256": effective.stable_hash(),
         "requested_profile": effective.profile.value,
-        "achieved_profile": effective.profile.value,
+        "achieved_profile": None,
     }
     return RunConfigurationBinding(
         file_configuration_json=canonical_audit_config_json(config),
@@ -84,7 +86,7 @@ def _run_configuration(config: AuditConfig) -> RunConfigurationBinding:
         model_config_sha256=effective.model_hash(),
         invocation_sha256=canonical_sha256(invocation),
         requested_profile=effective.profile,
-        achieved_profile=effective.profile,
+        achieved_profile=None,
     )
 
 
@@ -205,6 +207,22 @@ def _workspace(
                 size=len(artifact_bytes),
             )
         )
+    authority_path = write_run_terminal_report_authority(
+        run_dir,
+        _release_report(
+            config,
+            run_id="synthetic-run",
+            commit="1" * 40,
+        ),
+    )
+    authority_bytes = authority_path.read_bytes()
+    artifact_bindings.append(
+        ManifestFileBinding(
+            path=authority_path.relative_to(run_dir).as_posix(),
+            sha256=hashlib.sha256(authority_bytes).hexdigest(),
+            size=len(authority_bytes),
+        )
+    )
     manifest = seal_run_evidence_manifest(
         run_id="synthetic-run",
         repository_root_name="synthetic-target",

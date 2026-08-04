@@ -47,6 +47,10 @@ from mmaudit.reporting.bundle import (
     FindingsArtifact,
     ModelExecutionArtifact,
 )
+from mmaudit.reporting.run_authority import (
+    RUN_TERMINAL_REPORT_AUTHORITY_PATH,
+    RunTerminalReportAuthority,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_ROOT = ROOT / "schemas"
@@ -81,6 +85,7 @@ MODELS: dict[str, type[BaseModel]] = {
     "release_run_binding.schema.json": ReleaseRunBinding,
     "release_run_verification_binding.schema.json": ReleaseRunVerificationBinding,
     "release_static_evidence.schema.json": StaticReleaseEvidence,
+    "run_terminal_report_authority.schema.json": RunTerminalReportAuthority,
     "scheduler_state.schema.json": SchedulerArtifact,
     "scheduler_retained_journal_reference.schema.json": SchedulerRetainedJournalReference,
     "semantic_shard_inventory.schema.json": SolidityShardsArtifact,
@@ -105,6 +110,7 @@ TITLE_OVERRIDES = {
     "model_refresh_snapshot.schema.json": "mmaudit model refresh snapshot",
     "model_refresh_source_evidence.schema.json": "mmaudit model refresh source evidence",
     "model_refresh_workflow_status.schema.json": "mmaudit model refresh workflow status",
+    "run_terminal_report_authority.schema.json": "mmaudit private terminal report authority",
     "scheduler_state.schema.json": "mmaudit seven-pass scheduler state",
     "scheduler_retained_journal_reference.schema.json": (
         "mmaudit retained scheduler journal reference"
@@ -133,7 +139,10 @@ def run_evidence_manifest_report_bundle_rule() -> dict[str, Any]:
                             "maxContains": 1,
                             "minContains": 1,
                         }
-                        for name in sorted(MANIFEST_BOUND_REPORT_DELIVERABLES)
+                        for name in sorted(
+                            MANIFEST_BOUND_REPORT_DELIVERABLES
+                            | {RUN_TERMINAL_REPORT_AUTHORITY_PATH}
+                        )
                     ]
                 }
             }

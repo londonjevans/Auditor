@@ -34,6 +34,7 @@ from mmaudit.config import (
 from mmaudit.constants import ALL_MODEL_ROLES, VERSION
 from mmaudit.models.scheduler import (
     ABSENT_QUALIFICATION_SHA256,
+    SchedulerAbsenceReason,
     SchedulerActivationStatus,
     SchedulerArtifact,
     SchedulerCampaignStatus,
@@ -1099,11 +1100,16 @@ def _validate_run_terminal_report_authority(
     *,
     scheduler_artifact: SchedulerArtifact | None,
     achieved_profile: AuditProfile | None,
+    expected_binding: ManifestFileBinding | None = None,
 ) -> None:
     """Compare public report semantics with the required private terminal authority."""
 
     authority = RunTerminalReportAuthority.model_validate(
-        _read_json_artifact(root, RUN_TERMINAL_REPORT_AUTHORITY_PATH)
+        _read_json_artifact(
+            root,
+            RUN_TERMINAL_REPORT_AUTHORITY_PATH,
+            expected_binding=expected_binding,
+        )
     )
     authority.require_exact_report(report, scheduler_artifact=scheduler_artifact)
     if authority.achieved_profile != (
@@ -3432,12 +3438,15 @@ def _validate_scheduler_prejudgment_evidence_authority(
         raise ValueError("scheduler terminal falsification differs from retained pass six")
 
     reproduction_host = None
+    exact_conditional_absence = False
     if validation_pass is not None:
         if validation_pass.plan.conditional_absence is not None:
+            conditional_absence = validation_pass.plan.conditional_absence
             absence_tasks = validation_pass.plan.tasks
             absence_results = validation_pass.task_results
             if (
-                len(absence_tasks) != 1
+                conditional_absence.reason is not SchedulerAbsenceReason.NO_VALIDATION_CANDIDATES
+                or len(absence_tasks) != 1
                 or absence_tasks[0].role != "host:conditional_absence"
                 or absence_tasks[0].task_kind is not SchedulerTaskKind.EMPTY_COMPLETION
                 or len(absence_results) != 1
@@ -3445,6 +3454,7 @@ def _validate_scheduler_prejudgment_evidence_authority(
                 or absence_results[0].terminal_status is not SchedulerTerminalStatus.EXPLICIT_EMPTY
             ):
                 raise ValueError("scheduler pass-six conditional absence is not exact")
+            exact_conditional_absence = True
         else:
             host_tasks = tuple(
                 task for task in validation_pass.plan.tasks if task.role == "host:reproduction"
@@ -3470,13 +3480,64 @@ def _validate_scheduler_prejudgment_evidence_authority(
                 reproduction_host = SchedulerReproductionHostOutput.model_validate(
                     host_output.payload
                 )
+    public_tests = tuple(
+        sorted(
+            reproduction_artifact.test_specifications,
+            key=lambda item: (item.candidate_id, item.name),
+        )
+    )
+    public_results = tuple(
+        sorted(
+            reproduction_artifact.results,
+            key=lambda item: (item.candidate_id, item.test_name),
+        )
+    )
+    candidate_ids = {candidate.candidate_id for candidate in candidates}
+    execution_candidate_ids = {
+        candidate.candidate_id
+        for candidate in candidates
+        if candidate.origin_kind is CandidateOriginKind.DETERMINISTIC_EXECUTION
+    }
+    forced_candidate_ids = _post_judgment_execution_resolution_ids(
+        report=report,
+        execution_candidate_ids=execution_candidate_ids,
+        pre_judgment_high_critical_ids={
+            candidate.candidate_id
+            for candidate in candidates
+            if candidate.severity in {Severity.HIGH, Severity.CRITICAL}
+        },
+    )
+    if not forced_candidate_ids <= candidate_ids:
+        raise ValueError("post-judgment reproduction resolution references an unknown candidate")
     if reproduction_host is None:
+        if exact_conditional_absence:
+            retained_resolutions = tuple(
+                build_candidate_reproduction_resolutions(
+                    candidates=candidates,
+                    results=(),
+                    forced_candidate_ids=forced_candidate_ids,
+                )
+            )
+            retained_resolution_bindings = _scheduler_evidence_payload_bindings(
+                "reproduction_resolution",
+                ((item.candidate_id, item) for item in retained_resolutions),
+            )
+            if (
+                public_tests
+                or public_results
+                or authority.reproduction_results
+                or tuple(reproduction_artifact.candidate_resolutions) != retained_resolutions
+                or authority.reproduction_resolutions != retained_resolution_bindings
+            ):
+                raise ValueError(
+                    "scheduler terminal reproduction differs from typed pass-six absence"
+                )
+            return
         if (
-            reproduction_artifact.test_specifications
-            or reproduction_artifact.results
+            public_tests
+            or public_results
             or reproduction_artifact.candidate_resolutions
-            or authority.reproduction_results
-            or authority.reproduction_resolutions
+            or (authority.reproduction_results or authority.reproduction_resolutions)
         ):
             raise ValueError(
                 "scheduler reproduction evidence exists without a successful pass-six host"
@@ -3496,39 +3557,10 @@ def _validate_scheduler_prejudgment_evidence_authority(
             key=lambda item: (item.candidate_id, item.test_name),
         )
     )
-    public_tests = tuple(
-        sorted(
-            reproduction_artifact.test_specifications,
-            key=lambda item: (item.candidate_id, item.name),
-        )
-    )
-    public_results = tuple(
-        sorted(
-            reproduction_artifact.results,
-            key=lambda item: (item.candidate_id, item.test_name),
-        )
-    )
     retained_reproduction_bindings = _scheduler_evidence_payload_bindings(
         "reproduction",
         ((item.candidate_id, item) for item in retained_results),
     )
-    candidate_ids = {candidate.candidate_id for candidate in candidates}
-    execution_candidate_ids = {
-        candidate.candidate_id
-        for candidate in candidates
-        if candidate.origin_kind is CandidateOriginKind.DETERMINISTIC_EXECUTION
-    }
-    forced_candidate_ids = _post_judgment_execution_resolution_ids(
-        report=report,
-        execution_candidate_ids=execution_candidate_ids,
-        pre_judgment_high_critical_ids={
-            candidate.candidate_id
-            for candidate in candidates
-            if candidate.severity in {Severity.HIGH, Severity.CRITICAL}
-        },
-    )
-    if not forced_candidate_ids <= candidate_ids:
-        raise ValueError("post-judgment reproduction resolution references an unknown candidate")
     retained_resolutions = tuple(
         build_candidate_reproduction_resolutions(
             candidates=candidates,
@@ -4248,7 +4280,13 @@ def validate_manifest_artifacts(
         scheduler_reference_binding = expected.get(
             f"private/{SCHEDULER_RETAINED_JOURNAL_REFERENCE_FILENAME}"
         )
-        report = AuditReport.model_validate(_read_json_artifact(root, "final-findings.json"))
+        report = AuditReport.model_validate(
+            _read_json_artifact(
+                root,
+                "final-findings.json",
+                expected_binding=expected["final-findings.json"],
+            )
+        )
         _validate_report_artifact_consistency(
             root,
             report,
@@ -4300,6 +4338,7 @@ def validate_manifest_artifacts(
                 report,
                 scheduler_artifact=scheduler_artifact,
                 achieved_profile=manifest.run_configuration.achieved_profile,
+                expected_binding=expected[RUN_TERMINAL_REPORT_AUTHORITY_PATH],
             )
         expected_classification = (
             manifest.run_configuration.run_options.privacy_source_classification
@@ -5645,8 +5684,17 @@ def _artifact_stat_identity(
     )
 
 
-def _read_json_artifact(run_dir: Path, name: str) -> dict[str, Any]:
-    with _open_json_artifact_observation(run_dir, name) as payload:
+def _read_json_artifact(
+    run_dir: Path,
+    name: str,
+    *,
+    expected_binding: ManifestFileBinding | None = None,
+) -> dict[str, Any]:
+    with _open_json_artifact_observation(
+        run_dir,
+        name,
+        expected_binding=expected_binding,
+    ) as payload:
         return payload
 
 

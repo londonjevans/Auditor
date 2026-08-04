@@ -352,7 +352,7 @@ from mmaudit.reporting.run_authority import (
     RunTerminalReportAuthority,
 )
 from mmaudit.reporting.sarif import generate_report_sarif
-from mmaudit.reporting.status import report_status_metadata
+from mmaudit.reporting.status import ReportStatusProjection, report_status_metadata
 from mmaudit.repository.chunking import line_range_hash
 from mmaudit.repository.discovery import (
     DiscoveryResult,
@@ -7412,6 +7412,21 @@ class AuditPipeline:
                     "metadata": report_metadata,
                 }
             )
+        terminal_report_authority = RunTerminalReportAuthority.build_from_runtime(
+            report=report,
+            status=ReportStatusProjection(
+                run_status=minimum_analysis_floor.run_status,
+                quality_status=quality_status,
+                completed=minimum_analysis_floor.run_status is AuditRunStatus.COMPLETE,
+                quality_gates=quality_gates,
+                limitations=list(dict.fromkeys(incomplete)),
+            ),
+            minimum_analysis_floor=minimum_analysis_floor,
+            maximum_assurance=maximum_assurance,
+            accounted_cost_usd_exact=exact_accounted_cost_text,
+            terminal_exit_code=int(terminal_code),
+            scheduler_artifact=scheduler_artifact,
+        )
         log_handler.flush()
         self._write_artifacts(
             run_dir=run_dir,
@@ -7440,6 +7455,7 @@ class AuditPipeline:
             context_manifest=context_manifest,
             ci_state=ci_state,
             scheduler_artifact=scheduler_artifact,
+            terminal_report_authority=terminal_report_authority,
             scheduler_runtime_journal=(
                 self._active_scheduler.journal if self._active_scheduler is not None else None
             ),
@@ -8186,6 +8202,7 @@ class AuditPipeline:
         context_manifest: ContextManifest,
         ci_state: CIRunState | None,
         scheduler_artifact: SchedulerArtifact | None,
+        terminal_report_authority: RunTerminalReportAuthority,
         scheduler_runtime_journal: SchedulerJournal | None,
         cost_ledger: AtomicCostLedger | None,
         cost_ledger_evidence: RunCostLedgerEvidence | None,
@@ -8405,13 +8422,11 @@ class AuditPipeline:
             raise ValueError("run terminal report authority destination already exists")
         terminal_authority_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         terminal_authority_path.parent.chmod(0o700)
-        write_json(
-            terminal_authority_path,
-            RunTerminalReportAuthority.build(
-                report,
-                scheduler_artifact=scheduler_artifact,
-            ),
+        terminal_report_authority.require_exact_report(
+            report,
+            scheduler_artifact=scheduler_artifact,
         )
+        write_json(terminal_authority_path, terminal_report_authority)
         terminal_authority_path.chmod(0o600)
         if ci_state is not None:
             write_json(run_dir / CI_STATE_FILENAME, ci_state)
