@@ -5,7 +5,7 @@
   "autorun_status": "PAUSED_BY_OPERATOR",
   "current_milestone": "client_report_and_forensic_bundle",
   "current_ticket": "V3-REPORT-001 (IN_PROGRESS)",
-  "last_checkpoint_commit": "3916b891967eff4898d8a08621c62595a9765026",
+  "last_checkpoint_commit": "b90e38731d6c149975b90403c3dc0ad8e4f5d194",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,
