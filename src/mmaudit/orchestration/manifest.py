@@ -80,6 +80,7 @@ from mmaudit.models.schemas import (
     InvariantExecutionResult,
     JudgeDecisionBatch,
     LanguageCapabilityProfile,
+    LanguageCapabilityArtifact,
     Location,
     LocationValidation,
     MaximumAssuranceStatus,
@@ -180,6 +181,7 @@ _MAX_SCHEDULER_PRIVACY_EVIDENCE_BYTES = 1_048_576
 _MAX_MANIFEST_FILES = 100_000
 _MAX_MANIFEST_BYTES = 4 * 1024**3
 _MAX_JSON_ARTIFACT_BYTES = 100_000_000
+LANGUAGE_CAPABILITY_ARTIFACT_PATH = "language-capability.json"
 _CURRENT_SCANNER_REPLAY_AUTHORITY = frozenset({"gitleaks", "osv", "semgrep", "slither", "trivy"})
 SCHEDULER_RETAINED_JOURNAL_REFERENCE_FILENAME = "scheduler-journal-reference.json"
 
@@ -311,6 +313,13 @@ class RunConfigurationBinding(StrictModel):
         )
         if self.reduced_language_capability != expected_reduced:
             raise ValueError("run reduced language capability is inconsistent")
+        if self.achieved_profile is AuditProfile.MAXIMUM_ASSURANCE and (
+            self.achieved_language_profile is not LanguageCapabilityProfile.SOLIDITY_EVM
+            or self.reduced_language_capability
+        ):
+            raise ValueError(
+                "achieved maximum assurance requires achieved Solidity/EVM capability"
+            )
         expected_invocation = canonical_sha256(
             {
                 "environment_overrides_sha256": self.environment_overrides_sha256,
@@ -658,13 +667,17 @@ def _build_run_evidence_manifest(
     solidity_coverage = _read_json_artifact(root, "solidity-coverage.json")
     model_coverage = _read_json_artifact(root, "model-review-coverage.json")
     scope_assessment = _read_json_artifact(root, "scope-assessment.json")
-    language_capability = _read_json_artifact(root, "language-capability.json")
-    if set(language_capability) != {"schema_version", "assessment"}:
-        raise ValueError("language capability artifact has an unexpected structure")
-    if report.language_capability is None:
-        raise ValueError("current report lacks source-bound language capability evidence")
-    if language_capability["assessment"] != report.language_capability.model_dump(mode="json"):
-        raise ValueError("language capability artifact differs from the final report")
+    language_artifact_present = (
+        root / LANGUAGE_CAPABILITY_ARTIFACT_PATH
+    ).is_file()
+    if report_bundle_required:
+        _validate_language_capability_artifact(root, report)
+    elif language_artifact_present or report.language_capability is not None:
+        if not language_artifact_present or report.language_capability is None:
+            raise ValueError(
+                "legacy language capability evidence is only valid when report and artifact agree"
+            )
+        _validate_language_capability_artifact(root, report)
     context_manifest = _validated_context_manifest(root, report)
     _validate_context_manifest_configuration(context_manifest, effective_config)
     qualification_path = root / "model-qualification-runtime.json"
@@ -4422,6 +4435,32 @@ def _scheduler_usage_is_creditable(
     )
 
 
+def _validate_language_capability_artifact(
+    root: Path,
+    report: AuditReport,
+    *,
+    expected_binding: ManifestFileBinding | None = None,
+) -> LanguageCapabilityArtifact:
+    """Bind the typed capability artifact to the final report under optional byte custody."""
+
+    try:
+        artifact = LanguageCapabilityArtifact.model_validate(
+            _read_json_artifact(
+                root,
+                LANGUAGE_CAPABILITY_ARTIFACT_PATH,
+                expected_binding=expected_binding,
+            ),
+            strict=True,
+        )
+    except ValueError as exc:
+        raise ValueError("language capability artifact is invalid") from exc
+    if report.language_capability is None:
+        raise ValueError("current report lacks source-bound language capability evidence")
+    if artifact.assessment != report.language_capability:
+        raise ValueError("language capability artifact differs from the final report")
+    return artifact
+
+
 def validate_manifest_artifacts(
     manifest: RunEvidenceManifest,
     run_dir: Path,
@@ -4449,7 +4488,11 @@ def validate_manifest_artifacts(
         required_artifacts = {"final-findings.json", "metadata.json"}
         if manifest.schema_version == "1.2":
             required_artifacts.update(
-                MANIFEST_BOUND_REPORT_DELIVERABLES | {RUN_TERMINAL_REPORT_AUTHORITY_PATH}
+                MANIFEST_BOUND_REPORT_DELIVERABLES
+                | {
+                    RUN_TERMINAL_REPORT_AUTHORITY_PATH,
+                    LANGUAGE_CAPABILITY_ARTIFACT_PATH,
+                }
             )
         for required_artifact in sorted(required_artifacts):
             if required_artifact not in expected:
@@ -4472,6 +4515,21 @@ def validate_manifest_artifacts(
             report,
             report_bundle_required=manifest.schema_version == "1.2",
         )
+        language_artifact_bound = LANGUAGE_CAPABILITY_ARTIFACT_PATH in expected
+        if (
+            manifest.schema_version == "1.2"
+            or language_artifact_bound
+            or report.language_capability is not None
+        ):
+            if not language_artifact_bound or report.language_capability is None:
+                raise ValueError(
+                    "language capability evidence is only valid when report and artifact agree"
+                )
+            _validate_language_capability_artifact(
+                root,
+                report,
+                expected_binding=expected[LANGUAGE_CAPABILITY_ARTIFACT_PATH],
+            )
         validate_solidity_shard_artifacts(root, report)
         context_manifest = _validated_context_manifest(root, report)
         if manifest.run_configuration is not None:
@@ -4557,7 +4615,11 @@ def build_manifest_configuration_bindings(
         ManifestHashBinding(
             identifier="config/full",
             sha256=config.stable_hash(),
-            details={"version": str(config.version), "profile": config.profile.value},
+            details={
+                "version": str(config.version),
+                "profile": config.profile.value,
+                "language_profile": config.language_profile.value,
+            },
         ),
         ManifestHashBinding(
             identifier="config/models",

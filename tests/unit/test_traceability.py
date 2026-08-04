@@ -72,6 +72,20 @@ def test_manifest_traceability_names_effective_configuration_and_replay_evidence
     assert "tests/unit/test_certification.py" in replay.unit_tests
 
 
+def test_language_capability_traceability_names_runtime_and_fail_closed_evidence() -> None:
+    matrix = build_traceability_matrix("test-commit")
+    capability = next(
+        item for item in matrix.requirements if item.requirement_id == "MA-LANGUAGE-CAPABILITY"
+    )
+
+    assert capability.implementation_status is ImplementationStatus.IMPLEMENTED
+    assert "src/mmaudit/language_plugins.py" in capability.implementation_paths
+    assert "src/mmaudit/orchestration/manifest.py" in capability.implementation_paths
+    assert "tests/unit/test_language_plugins.py" in capability.unit_tests
+    assert "tests/integration/test_pipeline.py" in capability.real_integration_tests
+    assert capability.runtime_artifacts == ["language-capability.json"]
+
+
 def test_report_bundle_traceability_names_complete_delivery_and_cost_custody() -> None:
     matrix = build_traceability_matrix("test-commit")
     report = next(item for item in matrix.requirements if item.requirement_id == "MA-REPORT-BUNDLE")

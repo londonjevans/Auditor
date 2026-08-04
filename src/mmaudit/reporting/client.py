@@ -719,7 +719,20 @@ def _render_client_markdown_from_artifact(
         key=lambda item: (-_SEVERITY_ORDER[item.finding.severity], item.finding.id),
     )
     capability = report.language_capability
-    if (
+    if capability is not None and capability.status in {
+        LanguageCapabilityStatus.MISMATCH,
+        LanguageCapabilityStatus.INCONCLUSIVE,
+    }:
+        requested = capability.requested_profile.value
+        risk_narrative = (
+            f"The requested {_text(requested)} capability was not established and the run "
+            f"reached **{status.value}**. No fallback or EVM assurance is claimed."
+        )
+        methodology = (
+            "mmaudit completed bounded source discovery and capability assessment only; the "
+            "requested analysis portfolio was not authorized to execute."
+        )
+    elif (
         capability is not None
         and capability.requested_profile is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
     ):
@@ -733,19 +746,6 @@ def _render_client_markdown_from_artifact(
             "mmaudit combined deterministic source identity and location validation with "
             "applicable static and independent model evidence. The Solidity/EVM compilation, "
             "invariant, economic, reproduction, and formal portfolio was not applied."
-        )
-    elif capability is not None and capability.status in {
-        LanguageCapabilityStatus.MISMATCH,
-        LanguageCapabilityStatus.INCONCLUSIVE,
-    }:
-        risk_narrative = (
-            "The requested Solidity/EVM audit did not establish an applicable Solidity/EVM "
-            f"target and reached **{status.value}**. No generic fallback or EVM assurance is "
-            "claimed."
-        )
-        methodology = (
-            "mmaudit completed bounded source discovery and capability assessment only; the "
-            "requested Solidity/EVM analysis portfolio was not authorized to execute."
         )
     else:
         risk_narrative = (

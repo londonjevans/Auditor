@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "mmaudit"
 version = "0.1.0"
-description = "Corrovera's repository-aware, multi-model defensive source-code security auditor"
+description = "Corrovera's Solidity/EVM security auditor with reduced generic source review"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.12"

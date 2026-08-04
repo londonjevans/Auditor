@@ -73,11 +73,18 @@ def _capability_report_title(report: AuditReport) -> str:
     capability = report.language_capability
     if capability is None:
         return "# Corrovera Security Assurance Report"
+    if capability.status in {
+        LanguageCapabilityStatus.MISMATCH,
+        LanguageCapabilityStatus.INCONCLUSIVE,
+    }:
+        if capability.requested_profile is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW:
+            return "# Corrovera Generic Source Review — Capability Not Established"
+        return "# Corrovera Solidity/EVM Audit — Capability Not Established"
     if capability.requested_profile is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW:
         return "# Corrovera Reduced Generic Source Review"
     if capability.status is LanguageCapabilityStatus.MATCHED:
         return "# Corrovera Solidity/EVM Security Assurance Report"
-    return "# Corrovera Solidity/EVM Audit — Capability Not Established"
+    return "# Corrovera Security Assurance Report"
 
 
 def _capability_report_lines(report: AuditReport) -> list[str]:
@@ -104,11 +111,17 @@ def _capability_report_lines(report: AuditReport) -> list[str]:
         LanguageCapabilityStatus.MISMATCH,
         LanguageCapabilityStatus.INCONCLUSIVE,
     }:
+        requested = capability.requested_profile.value
+        portfolio = (
+            "a qualifying Solidity/EVM target was not established"
+            if capability.requested_profile is LanguageCapabilityProfile.SOLIDITY_EVM
+            else "reviewable source input was not established"
+        )
         lines.extend(
             [
-                "> **PROFILE MISMATCH:** `solidity-evm` was selected, but a qualifying "
-                "Solidity/EVM target was not established. Generic review was not authorized; "
-                "this report cannot claim EVM assurance.",
+                f"> **PROFILE NOT ESTABLISHED:** `{requested}` was selected, but {portfolio}. "
+                "No stronger or fallback capability was inferred; this report cannot claim "
+                "EVM assurance.",
                 "",
                 *[f"- {_text(reason)}" for reason in capability.limitations],
                 "",
@@ -775,13 +788,18 @@ def render_markdown(
         if assurance.status is not MaximumAssuranceStatus.COMPLETE and (
             assurance.requested or assurance.required
         ):
+            failure_reasons = list(assurance.downgrade_reasons) or [
+                requirement.detail
+                for requirement in assurance.requirements
+                if requirement.required and not requirement.passed
+            ]
             lines.extend(
                 [
                     "> **ASSURANCE NOT ACHIEVED:** this run did not satisfy the "
                     "Solidity/EVM maximum-assurance contract and must not be represented as "
                     "maximum assurance.",
                     "",
-                    *[f"- {_text(reason)}" for reason in assurance.downgrade_reasons],
+                    *[f"- {_text(reason)}" for reason in failure_reasons],
                     "",
                 ]
             )

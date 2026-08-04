@@ -81,6 +81,7 @@ from mmaudit.isolation.dependencies import (
 )
 from mmaudit.language_plugins import (
     assess_language_capability,
+    build_language_capability_artifact,
     language_capability_quality_gate,
 )
 from mmaudit.logging import JsonLineHandler, RedactingFilter
@@ -2157,10 +2158,7 @@ class AuditPipeline:
         )
         write_json(
             run_dir / "language-capability.json",
-            {
-                "schema_version": REPORT_SCHEMA_VERSION,
-                "assessment": language_capability.model_dump(mode="json"),
-            },
+            build_language_capability_artifact(language_capability, unfiltered_discovery),
         )
         if language_capability.status in {
             LanguageCapabilityStatus.MISMATCH,

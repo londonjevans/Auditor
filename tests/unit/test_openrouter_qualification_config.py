@@ -15,6 +15,7 @@ from mmaudit.config import (
     model_lineage_index,
 )
 from mmaudit.models.registry import ModelRegistry
+from mmaudit.models.schemas import LanguageCapabilityProfile
 from mmaudit.models.runtime import build_openrouter_runtime_controls
 
 ROOT = Path(__file__).parents[2]
@@ -29,6 +30,7 @@ def test_qualification_runtime_config_loads_without_secrets_or_claims() -> None:
     assert "OPENROUTER_API_KEY" not in raw
     assert "sk-or-" not in raw
     assert config.repository.root == ".."
+    assert config.language_profile is LanguageCapabilityProfile.SOLIDITY_EVM
     assert config.execution.budget_usd == 250.0
     assert config.execution.cost_ledger_path is None
     assert config.execution.max_model_retries == 1

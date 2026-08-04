@@ -39,6 +39,10 @@ from mmaudit.release_verification import observe_release_run_verification
 from mmaudit.reporting.bundle import MANIFEST_BOUND_REPORT_DELIVERABLES
 from mmaudit.reporting.json_report import stable_json
 from tests.report_authority_fixtures import write_run_terminal_report_authority
+from tests.language_capability_support import (
+    empty_language_capability,
+    write_language_capability_artifact,
+)
 from tests.unit.test_release_run import _report as _release_report
 
 
@@ -71,6 +75,9 @@ def _run_configuration(config: AuditConfig) -> RunConfigurationBinding:
         "effective_config_sha256": effective.stable_hash(),
         "requested_profile": effective.profile.value,
         "achieved_profile": None,
+        "requested_language_profile": effective.language_profile.value,
+        "achieved_language_profile": None,
+        "reduced_language_capability": False,
     }
     return RunConfigurationBinding(
         file_configuration_json=canonical_audit_config_json(config),
@@ -87,6 +94,9 @@ def _run_configuration(config: AuditConfig) -> RunConfigurationBinding:
         invocation_sha256=canonical_sha256(invocation),
         requested_profile=effective.profile,
         achieved_profile=None,
+        requested_language_profile=effective.language_profile,
+        achieved_language_profile=None,
+        reduced_language_capability=False,
     )
 
 
@@ -96,6 +106,14 @@ def _run_binding(
 ) -> ReleaseRunBinding:
     run_configuration = manifest.run_configuration
     assert run_configuration is not None
+    language_capability = empty_language_capability(
+        run_configuration.requested_language_profile
+    ).assessment
+    assert language_capability.achieved_profile is run_configuration.achieved_language_profile
+    assert (
+        language_capability.reduced_capability
+        is run_configuration.reduced_language_capability
+    )
     payload = ReleaseRunBindingPayload(
         schema_version="1.0",
         generated_by="mmaudit",
@@ -116,6 +134,13 @@ def _run_binding(
         invocation_sha256=run_configuration.invocation_sha256,
         requested_profile=run_configuration.requested_profile,
         achieved_profile=run_configuration.achieved_profile,
+        requested_language_profile=run_configuration.requested_language_profile,
+        achieved_language_profile=run_configuration.achieved_language_profile,
+        capability_status=language_capability.status,
+        reduced_language_capability=language_capability.reduced_capability,
+        language_capability_sha256=canonical_sha256(
+            language_capability.model_dump(mode="json")
+        ),
         artifact_evidence_file_sha256="c" * 64,
         artifact_evidence_file_size=100,
         artifact_evidence_sha256="d" * 64,
@@ -207,6 +232,16 @@ def _workspace(
                 size=len(artifact_bytes),
             )
         )
+    language_artifact = empty_language_capability(config.effective().language_profile)
+    write_language_capability_artifact(run_dir, language_artifact)
+    language_bytes = (run_dir / "language-capability.json").read_bytes()
+    artifact_bindings.append(
+        ManifestFileBinding(
+            path="language-capability.json",
+            sha256=hashlib.sha256(language_bytes).hexdigest(),
+            size=len(language_bytes),
+        )
+    )
     authority_path = write_run_terminal_report_authority(
         run_dir,
         _release_report(

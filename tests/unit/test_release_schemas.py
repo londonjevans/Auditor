@@ -95,3 +95,13 @@ def test_both_templates_expose_valid_identity_only_and_measured_examples() -> No
         assert measured.aliases == identity.aliases
         assert measured.measured_quality is not None
         assert measured.measured_quality.measurement == "sha256:" + ("0" * 64)
+
+
+def test_operator_templates_select_the_solidity_evm_capability_explicitly() -> None:
+    for path in (
+        ROOT / "mmaudit.example.toml",
+        ROOT / "src" / "mmaudit" / "templates" / "mmaudit.example.toml",
+        ROOT / "config" / "openrouter-qualification.toml",
+    ):
+        payload = tomllib.loads(path.read_text(encoding="utf-8"))
+        assert payload["language_profile"] == "solidity-evm"

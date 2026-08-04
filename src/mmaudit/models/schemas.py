@@ -11227,6 +11227,73 @@ class LanguageCapabilityAssessment(StrictModel):
         return self
 
 
+class LanguageCapabilityFileEvidence(StrictModel):
+    """One canonical retained source observation used for capability classification."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    path: str = Field(min_length=1, max_length=4_096)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size: StrictInt = Field(ge=0)
+    lines: StrictInt = Field(ge=0)
+    language: str = Field(min_length=1, max_length=100)
+
+    @field_validator("path")
+    @classmethod
+    def path_is_normalized_and_local(cls, value: str) -> str:
+        parts = value.split("/")
+        if (
+            value.startswith("/")
+            or "\\" in value
+            or any(part in {"", ".", ".."} for part in parts)
+        ):
+            raise ValueError("language capability source path must be normalized and local")
+        return value
+
+
+class LanguageCapabilityArtifact(StrictModel):
+    """Versioned source inventory and its exact language-capability assessment."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    assessment: LanguageCapabilityAssessment
+    files: tuple[LanguageCapabilityFileEvidence, ...] = Field(max_length=100_000)
+    omitted: tuple[str, ...] = Field(default=(), max_length=100_000)
+
+    @model_validator(mode="after")
+    def inventory_recomputes_the_assessment(self) -> LanguageCapabilityArtifact:
+        paths = tuple(item.path for item in self.files)
+        if paths != tuple(sorted(set(paths))):
+            raise ValueError("language capability source inventory must be unique and sorted")
+        if self.omitted != tuple(sorted(set(self.omitted))):
+            raise ValueError("language capability omissions must be unique and sorted")
+        counts: dict[str, int] = {}
+        for item in self.files:
+            counts[item.language] = counts.get(item.language, 0) + 1
+        counts = dict(sorted(counts.items()))
+        if counts != self.assessment.language_counts:
+            raise ValueError("language capability inventory differs from its language counts")
+        if len(self.files) != self.assessment.discovered_text_file_count:
+            raise ValueError("language capability inventory differs from its file count")
+        payload = {
+            "files": [item.model_dump(mode="json") for item in self.files],
+            "omitted": list(self.omitted),
+        }
+        encoded = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        if hashlib.sha256(encoded).hexdigest() != self.assessment.discovery_inventory_sha256:
+            raise ValueError("language capability inventory hash is inconsistent")
+        if not set(self.assessment.blocking_discovery_omissions) <= set(self.omitted):
+            raise ValueError("language capability blocking omissions lack retained evidence")
+        return self
+
+
 class ContextExcerpt(StrictModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -11564,6 +11631,8 @@ class AuditReport(StrictModel):
             return self
         if self.run_status is None or self.minimum_analysis_floor is None:
             raise ValueError("report schema 1.2 requires typed minimum-floor evidence")
+        if self.language_capability is None:
+            raise ValueError("report schema 1.2 requires typed language capability evidence")
         if self.run_status is not self.minimum_analysis_floor.run_status:
             raise ValueError("report run status conflicts with minimum analysis floor")
         if self.completed != (self.run_status is AuditRunStatus.COMPLETE):
@@ -11608,40 +11677,29 @@ class AuditReport(StrictModel):
                 raise ValueError(
                     "run completion conflicts with the required maximum-assurance assessment"
                 )
+        capability = self.language_capability
+        if capability.status in {
+            LanguageCapabilityStatus.MISMATCH,
+            LanguageCapabilityStatus.INCONCLUSIVE,
+        } and self.run_status is AuditRunStatus.COMPLETE:
+            raise ValueError("unachieved language capability cannot produce a COMPLETE run")
         if (
-            self.audit_profile is AuditProfile.MAXIMUM_ASSURANCE
-            or (
-                self.maximum_assurance is not None
-                and (self.maximum_assurance.requested or self.maximum_assurance.required)
+            capability.achieved_profile is LanguageCapabilityProfile.SOLIDITY_EVM
+            and self.repository.languages.get("Solidity", 0) == 0
+        ):
+            raise ValueError("Solidity/EVM capability lacks Solidity report scope")
+        if (
+            self.maximum_assurance is not None
+            and self.maximum_assurance.status is MaximumAssuranceStatus.COMPLETE
+            and (
+                capability.status is not LanguageCapabilityStatus.MATCHED
+                or capability.achieved_profile is not LanguageCapabilityProfile.SOLIDITY_EVM
+                or not capability.evm_maximum_assurance_eligible
             )
-        ) and self.language_capability is None:
+        ):
             raise ValueError(
-                "maximum-assurance report requires source-bound language capability evidence"
+                "maximum-assurance completion lacks matched Solidity/EVM capability"
             )
-        if self.language_capability is not None:
-            capability = self.language_capability
-            if capability.status in {
-                LanguageCapabilityStatus.MISMATCH,
-                LanguageCapabilityStatus.INCONCLUSIVE,
-            } and self.run_status is AuditRunStatus.COMPLETE:
-                raise ValueError("unachieved language capability cannot produce a COMPLETE run")
-            if (
-                capability.achieved_profile is LanguageCapabilityProfile.SOLIDITY_EVM
-                and self.repository.languages.get("Solidity", 0) == 0
-            ):
-                raise ValueError("Solidity/EVM capability lacks Solidity report scope")
-            if (
-                self.maximum_assurance is not None
-                and self.maximum_assurance.status is MaximumAssuranceStatus.COMPLETE
-                and (
-                    capability.status is not LanguageCapabilityStatus.MATCHED
-                    or capability.achieved_profile is not LanguageCapabilityProfile.SOLIDITY_EVM
-                    or not capability.evm_maximum_assurance_eligible
-                )
-            ):
-                raise ValueError(
-                    "maximum-assurance completion lacks matched Solidity/EVM capability"
-                )
         self._validate_minimum_floor_runtime_bindings(self.minimum_analysis_floor)
         return self
 

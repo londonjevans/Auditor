@@ -1244,6 +1244,17 @@ class MaximumAssuranceContract:
         missing_investigators = set(SPECIALIST_INVESTIGATOR_ROLES) - completed_specialists
         scheduler_errors = _scheduler_assurance_errors(self.config, runtime)
         scheduler_complete = not scheduler_errors
+        language_capability_complete = (
+            runtime.language_capability is not None
+            and runtime.language_capability.requested_profile
+            is LanguageCapabilityProfile.SOLIDITY_EVM
+            and runtime.language_capability.achieved_profile
+            is LanguageCapabilityProfile.SOLIDITY_EVM
+            and runtime.language_capability.status is LanguageCapabilityStatus.MATCHED
+            and runtime.language_capability.evm_portfolio_applicable
+            and runtime.language_capability.evm_maximum_assurance_eligible
+            and "language-capability.json" in runtime.artifacts
+        )
         clauses = [
             _requirement(
                 "seven_pass_scheduler",
@@ -1267,35 +1278,31 @@ class MaximumAssuranceContract:
             ),
             _requirement(
                 "solidity_evm_language_capability",
-                runtime.language_capability is not None
-                and runtime.language_capability.requested_profile
-                is LanguageCapabilityProfile.SOLIDITY_EVM
-                and runtime.language_capability.achieved_profile
-                is LanguageCapabilityProfile.SOLIDITY_EVM
-                and runtime.language_capability.status is LanguageCapabilityStatus.MATCHED
-                and runtime.language_capability.evm_portfolio_applicable
-                and runtime.language_capability.evm_maximum_assurance_eligible,
+                language_capability_complete,
                 (
-                    "source-bound Solidity/EVM language capability matched"
-                    if runtime.language_capability is not None
-                    and runtime.language_capability.status is LanguageCapabilityStatus.MATCHED
-                    and runtime.language_capability.evm_maximum_assurance_eligible
+                    "source-bound Solidity/EVM language capability matched and was serialized"
+                    if language_capability_complete
                     else (
                         "source-bound Solidity/EVM language capability was not achieved"
                         if runtime.language_capability is None
                         else (
-                            f"requested={runtime.language_capability.requested_profile.value}; "
-                            f"status={runtime.language_capability.status.value}; "
-                            "maximum-assurance-eligible="
-                            f"{runtime.language_capability.evm_maximum_assurance_eligible}"
+                            "matched Solidity/EVM language capability artifact was not serialized"
+                            if runtime.language_capability.status
+                            is LanguageCapabilityStatus.MATCHED
+                            and runtime.language_capability.evm_maximum_assurance_eligible
+                            and "language-capability.json" not in runtime.artifacts
+                            else (
+                                f"requested={runtime.language_capability.requested_profile.value}; "
+                                f"status={runtime.language_capability.status.value}; "
+                                "maximum-assurance-eligible="
+                                f"{runtime.language_capability.evm_maximum_assurance_eligible}"
+                            )
                         )
                     )
                 ),
                 state=(
                     AnalysisState.DETERMINISTIC
-                    if runtime.language_capability is not None
-                    and runtime.language_capability.status is LanguageCapabilityStatus.MATCHED
-                    and runtime.language_capability.evm_maximum_assurance_eligible
+                    if language_capability_complete
                     else (
                         AnalysisState.ATTEMPTED_FAILED
                         if runtime.language_capability is not None

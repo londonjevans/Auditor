@@ -26,7 +26,12 @@ from mmaudit.config import (
     require_maximum_assurance_qualification_pins,
     validate_model_independence,
 )
-from mmaudit.models.schemas import AuditProfile, AuditScope, Severity
+from mmaudit.models.schemas import (
+    AuditProfile,
+    AuditScope,
+    LanguageCapabilityProfile,
+    Severity,
+)
 from mmaudit.privacy import PrivacyProfile
 from tests.conftest import base_config_data
 
@@ -35,6 +40,7 @@ def _write_config(path: Path, budget: float = 20.0) -> None:
     data = base_config_data()
     lines = [
         "version = 1",
+        'language_profile = "solidity-evm"',
         "[repository]",
         'root = "."',
         "[privacy]",
@@ -67,6 +73,7 @@ def test_load_configuration_and_defaults(tmp_path: Path) -> None:
     _write_config(path)
     config = load_config(path, environ={})
     assert config.version == 1
+    assert config.language_profile is LanguageCapabilityProfile.SOLIDITY_EVM
     assert config.execution.budget_usd == 20
     assert config.execution.cost_ledger_path is None
     assert config.repository.max_file_bytes == 250_000
@@ -205,6 +212,7 @@ def test_environment_overrides_are_typed(tmp_path: Path) -> None:
             "MMAUDIT_PRIOR_AUDIT_PATH": "audit/prior.json",
             "MMAUDIT_REQUIRE_PRIOR_AUDIT": "true",
             "MMAUDIT_FAIL_ON_MISSED_PRIOR": "true",
+            "MMAUDIT_LANGUAGE_PROFILE": "generic-source-review",
         },
     )
     assert config.execution.budget_usd == 7.5
@@ -218,6 +226,7 @@ def test_environment_overrides_are_typed(tmp_path: Path) -> None:
     assert config.prior_audit.path == "audit/prior.json"
     assert config.prior_audit.required
     assert config.prior_audit.fail_on_missed
+    assert config.language_profile is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
 
 
 def test_environment_profile_override_is_effective(tmp_path: Path) -> None:
@@ -247,6 +256,7 @@ def test_configuration_provenance_replays_only_allowlisted_environment_values(
         path,
         environ={
             "MMAUDIT_PROFILE": "maximum-assurance",
+            "MMAUDIT_LANGUAGE_PROFILE": "solidity-evm",
             "MMAUDIT_CONCURRENCY": "2",
             "OPENROUTER_API_KEY": canary,
             "UNRELATED_CONTROL_VALUE": canary,
@@ -258,6 +268,7 @@ def test_configuration_provenance_replays_only_allowlisted_environment_values(
     assert loaded.environment_overrides.apply(loaded.file_config) == loaded.effective_config
     assert [entry.path for entry in loaded.environment_overrides.entries] == [
         "execution.concurrency",
+        "language_profile",
         "profile",
     ]
     serialized = loaded.environment_overrides.model_dump_json()

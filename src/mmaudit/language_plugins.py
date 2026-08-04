@@ -8,11 +8,13 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Protocol
+from typing import Protocol, TypedDict
 
 from mmaudit.models.schemas import (
     AnalysisState,
     LanguageCapabilityAssessment,
+    LanguageCapabilityArtifact,
+    LanguageCapabilityFileEvidence,
     LanguageCapabilityProfile,
     LanguageCapabilityStatus,
     QualityGateResult,
@@ -32,13 +34,30 @@ _UNKNOWN_PATH_OMISSIONS = frozenset(
 )
 
 
+class _CapabilityEvidence(TypedDict):
+    language_counts: dict[str, int]
+    discovered_text_file_count: int
+    solidity_file_count: int
+    non_solidity_file_count: int
+    solidity_project_count: int
+    discovery_inventory_sha256: str
+    blocking_discovery_omissions: tuple[str, ...]
+
+
 class LanguagePlugin(Protocol):
     """Future-extension seam implemented only by trusted installed mmaudit code."""
 
-    profile: LanguageCapabilityProfile
-    plugin_id: str
-    plugin_version: str
-    supports_evm_maximum_assurance: bool
+    @property
+    def profile(self) -> LanguageCapabilityProfile: ...
+
+    @property
+    def plugin_id(self) -> str: ...
+
+    @property
+    def plugin_version(self) -> str: ...
+
+    @property
+    def supports_evm_maximum_assurance(self) -> bool: ...
 
     def assess(
         self,
@@ -62,7 +81,7 @@ def _discovery_inventory_sha256(discovery: DiscoveryResult) -> str:
             }
             for item in sorted(discovery.files, key=lambda candidate: candidate.relative_path)
         ],
-        "omitted": sorted(discovery.omitted),
+        "omitted": sorted(set(discovery.omitted)),
     }
     encoded = json.dumps(
         payload,
@@ -90,7 +109,7 @@ def _blocking_discovery_omissions(discovery: DiscoveryResult) -> tuple[str, ...]
 def _common_evidence(
     discovery: DiscoveryResult,
     solidity_projects: Sequence[SolidityProjectMetadata],
-) -> dict[str, object]:
+) -> _CapabilityEvidence:
     counts = Counter(item.language for item in discovery.files)
     language_counts = dict(sorted(counts.items()))
     solidity_files = language_counts.get("Solidity", 0)
@@ -122,14 +141,15 @@ class SolidityEvmLanguagePlugin:
         smart_contracts_enabled: bool,
     ) -> LanguageCapabilityAssessment:
         evidence = _common_evidence(discovery, solidity_projects)
-        solidity_file_count = int(evidence["solidity_file_count"])
-        blocking_omissions = tuple(evidence["blocking_discovery_omissions"])
+        solidity_file_count = evidence["solidity_file_count"]
+        blocking_omissions = evidence["blocking_discovery_omissions"]
+        limitations: tuple[str, ...]
         if smart_contracts_enabled and solidity_file_count > 0 and solidity_projects:
             status = LanguageCapabilityStatus.MATCHED
             achieved_profile: LanguageCapabilityProfile | None = self.profile
             applicable = True
             eligible = True
-            limitations: tuple[str, ...] = ()
+            limitations = ()
         elif solidity_file_count == 0 and blocking_omissions:
             status = LanguageCapabilityStatus.INCONCLUSIVE
             achieved_profile = None
@@ -184,8 +204,9 @@ class GenericSourceReviewLanguagePlugin:
     ) -> LanguageCapabilityAssessment:
         del smart_contracts_enabled
         evidence = _common_evidence(discovery, solidity_projects)
-        discovered_count = int(evidence["discovered_text_file_count"])
-        blocking_omissions = tuple(evidence["blocking_discovery_omissions"])
+        discovered_count = evidence["discovered_text_file_count"]
+        blocking_omissions = evidence["blocking_discovery_omissions"]
+        limitations: tuple[str, ...]
         if discovered_count > 0:
             status = LanguageCapabilityStatus.REDUCED
             achieved_profile: LanguageCapabilityProfile | None = self.profile
@@ -252,6 +273,28 @@ def assess_language_capability(
         discovery,
         solidity_projects=solidity_projects,
         smart_contracts_enabled=smart_contracts_enabled,
+    )
+
+
+def build_language_capability_artifact(
+    assessment: LanguageCapabilityAssessment,
+    discovery: DiscoveryResult,
+) -> LanguageCapabilityArtifact:
+    """Retain the exact bounded discovery inventory that produced one assessment."""
+
+    return LanguageCapabilityArtifact(
+        assessment=assessment,
+        files=tuple(
+            LanguageCapabilityFileEvidence(
+                path=item.relative_path,
+                sha256=item.sha256,
+                size=item.size,
+                lines=item.lines,
+                language=item.language,
+            )
+            for item in sorted(discovery.files, key=lambda candidate: candidate.relative_path)
+        ),
+        omitted=tuple(sorted(set(discovery.omitted))),
     )
 
 

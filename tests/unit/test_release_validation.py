@@ -11,7 +11,12 @@ from unittest.mock import Mock, call
 import pytest
 
 import mmaudit.release_validation as validation_module
-from mmaudit.models.schemas import AuditProfile, ExecutionEvidenceKind
+from mmaudit.models.schemas import (
+    AuditProfile,
+    ExecutionEvidenceKind,
+    LanguageCapabilityProfile,
+    LanguageCapabilityStatus,
+)
 from mmaudit.orchestration.manifest import ManifestFileBinding, canonical_sha256
 from mmaudit.release import ReleaseGateId, ReleaseStatus
 from mmaudit.release_candidate import ReleaseCandidateObservation
@@ -116,6 +121,11 @@ def _run(
         invocation_sha256="f" * 64,
         requested_profile=AuditProfile.MAXIMUM_ASSURANCE,
         achieved_profile=achieved_profile,
+        requested_language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
+        achieved_language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
+        capability_status=LanguageCapabilityStatus.MATCHED,
+        reduced_language_capability=False,
+        language_capability_sha256="4" * 64,
         artifact_evidence_file_sha256="0" * 64,
         artifact_evidence_file_size=1_000,
         artifact_evidence_sha256="1" * 64,

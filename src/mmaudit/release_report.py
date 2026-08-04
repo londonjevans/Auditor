@@ -9,7 +9,13 @@ from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 
-from mmaudit.models.schemas import AuditProfile, ExecutionEvidenceKind, StrictModel
+from mmaudit.models.schemas import (
+    AuditProfile,
+    ExecutionEvidenceKind,
+    LanguageCapabilityProfile,
+    LanguageCapabilityStatus,
+    StrictModel,
+)
 from mmaudit.orchestration.manifest import ManifestFileBinding, canonical_sha256
 from mmaudit.release import ReleaseGateId, ReleaseGateStatus, ReleaseStatus
 from mmaudit.release_candidate import ReleaseCandidateObservation
@@ -296,8 +302,16 @@ class ReleaseGateReportPayload(StrictModel):
         if maximum_gate.status is ReleaseGateStatus.PASSED and (
             self.run.requested_profile is not AuditProfile.MAXIMUM_ASSURANCE
             or self.run.achieved_profile is not AuditProfile.MAXIMUM_ASSURANCE
+            or self.run.requested_language_profile
+            is not LanguageCapabilityProfile.SOLIDITY_EVM
+            or self.run.achieved_language_profile
+            is not LanguageCapabilityProfile.SOLIDITY_EVM
+            or self.run.capability_status is not LanguageCapabilityStatus.MATCHED
+            or self.run.reduced_language_capability
         ):
-            raise ValueError("maximum-assurance release gate cannot pass for a non-maximum run")
+            raise ValueError(
+                "maximum-assurance release gate requires matched Solidity/EVM capability"
+            )
 
         blocker_summaries = {
             gate.prerequisite_blocker.summary

@@ -63,6 +63,10 @@ from mmaudit.traceability import (
 )
 from scripts import validate_release_evidence as release_evidence_cli
 from tests.report_authority_fixtures import write_run_terminal_report_authority
+from tests.language_capability_support import (
+    empty_language_capability,
+    write_language_capability_artifact,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = ROOT / "schemas" / "release_artifact_evidence.schema.json"
@@ -100,6 +104,9 @@ def _run_configuration(config: AuditConfig) -> RunConfigurationBinding:
         "effective_config_sha256": effective.stable_hash(),
         "requested_profile": effective.profile.value,
         "achieved_profile": None,
+        "requested_language_profile": effective.language_profile.value,
+        "achieved_language_profile": None,
+        "reduced_language_capability": False,
     }
     return RunConfigurationBinding(
         file_configuration_json=canonical_audit_config_json(config),
@@ -116,6 +123,9 @@ def _run_configuration(config: AuditConfig) -> RunConfigurationBinding:
         invocation_sha256=canonical_sha256(invocation),
         requested_profile=effective.profile,
         achieved_profile=None,
+        requested_language_profile=effective.language_profile,
+        achieved_language_profile=None,
+        reduced_language_capability=False,
     )
 
 
@@ -142,6 +152,7 @@ def _seal_manifest(
 
 def _report(config: AuditConfig, *, commit: str = COMMIT) -> AuditReport:
     effective = config.effective()
+    capability = empty_language_capability(effective.language_profile)
     return AuditReport(
         schema_version="1.0",
         run_id=RUN_ID,
@@ -180,10 +191,15 @@ def _report(config: AuditConfig, *, commit: str = COMMIT) -> AuditReport:
         findings=[],
         rejected_findings=[],
         audit_profile=effective.profile,
+        language_capability=capability.assessment,
     )
 
 
 def _write_report_artifacts(run_dir: Path, report: AuditReport) -> None:
+    assert report.language_capability is not None
+    capability = empty_language_capability(report.language_capability.requested_profile)
+    assert capability.assessment == report.language_capability
+    write_language_capability_artifact(run_dir, capability)
     (run_dir / "final-findings.json").write_text(
         report.model_dump_json(),
         encoding="utf-8",

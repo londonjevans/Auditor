@@ -1,4 +1,6 @@
 version = 1
+# solidity-evm, or the explicitly reduced generic-source-review
+language_profile = "solidity-evm"
 # quick, standard, deep, or maximum-assurance
 profile = "standard"
 

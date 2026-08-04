@@ -15,7 +15,13 @@ from typing import Annotated, Literal
 from pydantic import Field, field_validator, model_validator
 
 import mmaudit
-from mmaudit.models.schemas import AuditProfile, ExecutionEvidenceKind, StrictModel
+from mmaudit.models.schemas import (
+    AuditProfile,
+    ExecutionEvidenceKind,
+    LanguageCapabilityProfile,
+    LanguageCapabilityStatus,
+    StrictModel,
+)
 from mmaudit.orchestration.manifest import ManifestFileBinding, canonical_sha256
 from mmaudit.release import ReleaseGateId, ReleaseGateStatus
 from mmaudit.release_candidate import ReleaseCandidateObservation
@@ -101,6 +107,11 @@ class ManifestSetSubject(StrictModel):
     effective_config_sha256: str = Field(pattern=_SHA256_PATTERN)
     requested_profile: AuditProfile
     achieved_profile: AuditProfile | None
+    requested_language_profile: LanguageCapabilityProfile
+    achieved_language_profile: LanguageCapabilityProfile | None
+    capability_status: LanguageCapabilityStatus
+    reduced_language_capability: bool
+    language_capability_sha256: str = Field(pattern=_SHA256_PATTERN)
     verification_binding_sha256: str = Field(pattern=_SHA256_PATTERN)
     verification_sha256: str = Field(pattern=_SHA256_PATTERN)
     verification_status: Literal["current"]
@@ -570,6 +581,11 @@ def _subject_for_gate(
                 effective_config_sha256=run.effective_config_sha256,
                 requested_profile=run.requested_profile,
                 achieved_profile=run.achieved_profile,
+                requested_language_profile=run.requested_language_profile,
+                achieved_language_profile=run.achieved_language_profile,
+                capability_status=run.capability_status,
+                reduced_language_capability=run.reduced_language_capability,
+                language_capability_sha256=run.language_capability_sha256,
                 verification_binding_sha256=run_verification.binding_sha256,
                 verification_sha256=run_verification.verification_sha256,
                 verification_status="current",
@@ -619,6 +635,10 @@ def _blocker_for_gate(
         if (
             run.requested_profile is AuditProfile.MAXIMUM_ASSURANCE
             and run.achieved_profile is AuditProfile.MAXIMUM_ASSURANCE
+            and run.requested_language_profile is LanguageCapabilityProfile.SOLIDITY_EVM
+            and run.achieved_language_profile is LanguageCapabilityProfile.SOLIDITY_EVM
+            and run.capability_status is LanguageCapabilityStatus.MATCHED
+            and not run.reduced_language_capability
         ):
             code = "maximum_assurance_clause_evidence_unavailable"
             summary = "dedicated maximum-assurance clause validation evidence is unavailable"

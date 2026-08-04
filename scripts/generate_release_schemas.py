@@ -29,9 +29,11 @@ from mmaudit.models.schemas import (
     HardhatReporterExecution,
     HardhatReporterInventory,
     HardhatTestPhaseRequest,
+    LanguageCapabilityArtifact,
 )
 from mmaudit.models.sharding import SolidityShardsArtifact
 from mmaudit.orchestration.context_manifest import ContextManifest
+from mmaudit.orchestration.manifest import LANGUAGE_CAPABILITY_ARTIFACT_PATH
 from mmaudit.privacy import PrivacyRetentionConsent
 from mmaudit.release_candidate import ReleaseCandidateObservation
 from mmaudit.release_gates import ReleaseGateEvidenceBundle
@@ -66,6 +68,7 @@ MODELS: dict[str, type[BaseModel]] = {
     "hardhat_reporter_test.schema.json": HardhatReporterExecution,
     "hardhat_request_inventory.schema.json": HardhatInventoryPhaseRequest,
     "hardhat_request_test.schema.json": HardhatTestPhaseRequest,
+    "language_capability.schema.json": LanguageCapabilityArtifact,
     "model_calibration.schema.json": ModelCalibrationArtifact,
     "model_execution_artifact.schema.json": ModelExecutionArtifact,
     "model_lineage_review.schema.json": ModelLineageReviewArtifact,
@@ -101,6 +104,7 @@ TITLE_OVERRIDES = {
     "hardhat_reporter_test.schema.json": "mmaudit Hardhat test observation",
     "hardhat_request_inventory.schema.json": "mmaudit Hardhat inventory phase request",
     "hardhat_request_test.schema.json": "mmaudit Hardhat test phase request",
+    "language_capability.schema.json": "mmaudit language capability artifact",
     "model_calibration.schema.json": "mmaudit model calibration artifact",
     "model_execution_artifact.schema.json": "mmaudit model execution artifact",
     "model_lineage_review.schema.json": "mmaudit model lineage review artifact",
@@ -144,7 +148,10 @@ def run_evidence_manifest_report_bundle_rule() -> dict[str, Any]:
                         }
                         for name in sorted(
                             MANIFEST_BOUND_REPORT_DELIVERABLES
-                            | {RUN_TERMINAL_REPORT_AUTHORITY_PATH}
+                            | {
+                                LANGUAGE_CAPABILITY_ARTIFACT_PATH,
+                                RUN_TERMINAL_REPORT_AUTHORITY_PATH,
+                            }
                         )
                     ]
                 }

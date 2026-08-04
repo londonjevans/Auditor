@@ -285,6 +285,9 @@ def _require_manifest_run_binding(
         run_configuration.invocation_sha256,
         run_configuration.requested_profile,
         run_configuration.achieved_profile,
+        run_configuration.requested_language_profile,
+        run_configuration.achieved_language_profile,
+        run_configuration.reduced_language_capability,
     )
     supplied = (
         run_binding.run_id,
@@ -303,6 +306,9 @@ def _require_manifest_run_binding(
         run_binding.invocation_sha256,
         run_binding.requested_profile,
         run_binding.achieved_profile,
+        run_binding.requested_language_profile,
+        run_binding.achieved_language_profile,
+        run_binding.reduced_language_capability,
     )
     if supplied != expected:
         raise ValueError("release run binding differs from the exact run manifest")

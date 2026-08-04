@@ -236,6 +236,20 @@
                 "contains": {
                   "properties": {
                     "path": {
+                      "const": "language-capability.json"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "path": {
                       "const": "model-execution.json"
                     }
                   },
@@ -358,6 +372,7 @@
             "privacy.profile",
             "privacy.require_zdr",
             "profile",
+            "language_profile",
             "repository.max_discovery_bytes",
             "repository.max_file_bytes",
             "repository.max_files",
@@ -492,6 +507,7 @@
                 "privacy.maximum_model_retention",
                 "privacy.profile",
                 "profile",
+                "language_profile",
                 "reproduction.rootless_container_image",
                 "reproduction.rootless_container_runtime",
                 "scope.mode",
@@ -517,7 +533,7 @@
       "properties": {
         "entries": {
           "type": "array",
-          "maxItems": 44,
+          "maxItems": 45,
           "items": {
             "$ref": "#/$defs/auditConfigOverride"
           }
@@ -655,7 +671,10 @@
         "model_config_sha256",
         "invocation_sha256",
         "requested_profile",
-        "achieved_profile"
+        "achieved_profile",
+        "requested_language_profile",
+        "achieved_language_profile",
+        "reduced_language_capability"
       ],
       "properties": {
         "file_configuration_json": {
@@ -720,6 +739,28 @@
               "type": "null"
             }
           ]
+        },
+        "requested_language_profile": {
+          "enum": [
+            "solidity-evm",
+            "generic-source-review"
+          ]
+        },
+        "achieved_language_profile": {
+          "anyOf": [
+            {
+              "enum": [
+                "solidity-evm",
+                "generic-source-review"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reduced_language_capability": {
+          "type": "boolean"
         }
       }
     },

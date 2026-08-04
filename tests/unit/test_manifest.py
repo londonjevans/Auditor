@@ -37,6 +37,8 @@ from mmaudit.models.schemas import (
     CandidateFinding,
     CandidateReproductionResolution,
     ExecutionEvidenceKind,
+    LanguageCapabilityArtifact,
+    LanguageCapabilityFileEvidence,
     Location,
     ModelRequestValidationStatus,
     RepositoryDifferentialRunStatus,
@@ -49,6 +51,7 @@ from mmaudit.models.schemas import (
     UsageRecord,
 )
 from mmaudit.orchestration.manifest import (
+    LANGUAGE_CAPABILITY_ARTIFACT_PATH,
     ManifestBindingSet,
     ManifestFileBinding,
     ManifestHashBinding,
@@ -97,6 +100,7 @@ from tests.identity_fixtures import (
     reattest_synthetic_real_usage,
     synthetic_token_plan_routing,
 )
+from tests.language_capability_support import language_capability_for_files
 from tests.output_evidence_fixtures import synthetic_structured_output_routing
 from tests.report_authority_fixtures import write_run_terminal_report_authority
 from tests.unit.test_model_registry import _verified_production_config_and_capability
@@ -107,6 +111,20 @@ runner = CliRunner()
 def _report(config) -> AuditReport:
     empty_overrides = AuditConfigOverrides()
     run_options = AuditRunOptions()
+    capability_files = (
+        LanguageCapabilityFileEvidence(
+            path="src/Vault.sol",
+            size=32,
+            lines=1,
+            sha256="a" * 64,
+            language="Solidity",
+        ),
+    )
+    language_capability = language_capability_for_files(
+        config.language_profile,
+        capability_files,
+        solidity_project_count=1,
+    )
     return AuditReport(
         schema_version="1.0",
         run_id="manifest-test-run",
@@ -146,6 +164,7 @@ def _report(config) -> AuditReport:
         accounted_cost_usd=0,
         findings=[],
         rejected_findings=[],
+        language_capability=language_capability.assessment,
         metadata={
             "run_options": run_options.model_dump(mode="json"),
             "configuration_provenance": {
@@ -326,7 +345,23 @@ def _write_required_artifacts(
     candidates: tuple[CandidateFinding, ...] = (),
     reproduction_resolutions: tuple[CandidateReproductionResolution, ...] = (),
 ) -> None:
+    assert report.language_capability is not None
+    language_artifact = LanguageCapabilityArtifact(
+        assessment=report.language_capability,
+        files=tuple(
+            LanguageCapabilityFileEvidence(
+                path=item.path,
+                sha256=item.sha256,
+                size=item.size,
+                lines=item.lines,
+                language=item.language,
+            )
+            for item in report.repository.files
+        ),
+        omitted=tuple(report.repository.omitted_files),
+    )
     payloads = {
+        "language-capability.json": language_artifact.model_dump(mode="json"),
         "solidity-compilation.json": {"schema_version": "1.0", "results": []},
         "invariant-harness-plan.json": {
             "schema_version": "1.0",
@@ -2034,7 +2069,10 @@ def test_published_manifest_schema_is_strict_and_bounded() -> None:
     report_bundle_contracts = report_bundle_rule["then"]["properties"]["artifacts"]["allOf"]
     assert {
         contract["contains"]["properties"]["path"]["const"] for contract in report_bundle_contracts
-    } == MANIFEST_BOUND_REPORT_DELIVERABLES | {RUN_TERMINAL_REPORT_AUTHORITY_PATH}
+    } == MANIFEST_BOUND_REPORT_DELIVERABLES | {
+        LANGUAGE_CAPABILITY_ARTIFACT_PATH,
+        RUN_TERMINAL_REPORT_AUTHORITY_PATH,
+    }
     assert all(
         contract["minContains"] == contract["maxContains"] == 1
         for contract in report_bundle_contracts

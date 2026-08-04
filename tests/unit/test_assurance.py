@@ -90,6 +90,9 @@ from mmaudit.models.schemas import (
     InvariantSuite,
     InvariantTemplate,
     Location,
+    LanguageCapabilityAssessment,
+    LanguageCapabilityProfile,
+    LanguageCapabilityStatus,
     MaximumAssuranceStatus,
     ModelRequestValidationStatus,
     ModelReviewCoverage,
@@ -420,6 +423,7 @@ def _maximum_config(
         models["reasoning"] = reasoning
     return config_factory(
         profile=AuditProfile.MAXIMUM_ASSURANCE,
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         maximum_assurance={"allow_downgrade": allow_downgrade},
         models=models,
         smart_contracts={
@@ -1875,6 +1879,21 @@ def _complete_runtime(config: AuditConfig | None = None) -> AssuranceRuntime:
             else None
         ),
         repository_execution_sha256="9" * 64,
+        language_capability=LanguageCapabilityAssessment(
+            plugin_id="mmaudit.language.solidity-evm",
+            requested_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
+            achieved_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
+            status=LanguageCapabilityStatus.MATCHED,
+            language_counts={"Solidity": 1},
+            discovered_text_file_count=1,
+            solidity_file_count=1,
+            non_solidity_file_count=0,
+            solidity_project_count=1,
+            discovery_inventory_sha256="8" * 64,
+            evm_portfolio_applicable=True,
+            evm_maximum_assurance_eligible=True,
+            reduced_capability=False,
+        ),
         projects=[project],
         compilations=[
             SolidityCompilationResult(
@@ -2060,6 +2079,7 @@ def _complete_runtime(config: AuditConfig | None = None) -> AssuranceRuntime:
             "offline-replay.json",
             "benchmark-certificate-verification.json",
             "scope-assessment.json",
+            "language-capability.json",
             "scheduler-state.json",
             "maximum_assurance_traceability.json",
         },
@@ -2239,6 +2259,68 @@ def test_maximum_assurance_rejects_missing_scheduler_artifact(config_factory) ->
     )
     assert not scheduler.passed
     assert scheduler.state is AnalysisState.NOT_ANALYZED
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+@pytest.mark.parametrize(
+    "language_capability",
+    [
+        None,
+        LanguageCapabilityAssessment(
+            plugin_id="mmaudit.language.generic-source-review",
+            requested_profile=LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW,
+            achieved_profile=LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW,
+            status=LanguageCapabilityStatus.REDUCED,
+            language_counts={"Python": 1},
+            discovered_text_file_count=1,
+            solidity_file_count=0,
+            non_solidity_file_count=1,
+            solidity_project_count=0,
+            discovery_inventory_sha256="7" * 64,
+            evm_portfolio_applicable=False,
+            evm_maximum_assurance_eligible=False,
+            reduced_capability=True,
+            limitations=("no Solidity/EVM or maximum-assurance claim is authorized",),
+        ),
+    ],
+)
+def test_maximum_assurance_rejects_missing_or_reduced_language_capability(
+    config_factory,
+    language_capability: LanguageCapabilityAssessment | None,
+) -> None:
+    config = _maximum_config(config_factory)
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(_complete_runtime(config), language_capability=language_capability)
+    )
+
+    capability = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "solidity_evm_language_capability"
+    )
+    assert not capability.passed
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_maximum_assurance_rejects_missing_language_capability_artifact(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(
+            runtime,
+            artifacts=runtime.artifacts - {"language-capability.json"},
+        )
+    )
+
+    capability = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "solidity_evm_language_capability"
+    )
+    assert not capability.passed
+    assert "not serialized" in capability.detail
     assert assessment.status is not MaximumAssuranceStatus.COMPLETE
 
 

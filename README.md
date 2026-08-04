@@ -12,11 +12,18 @@
 
 # Corrovera Security — mmaudit
 
-`mmaudit` is Corrovera Security's read-only, repository-aware defensive security audit engine. It
-combines local deterministic scanners and Solidity program modelling with independent base and
-specialist model roles, typed stateful/invariant testing, optional formal engines, an adversarial
-verifier and falsifier, deterministic location and consensus checks, and an evidence-capped final
-judge. It emits branded Markdown, versioned JSON, and SARIF 2.1.0.
+`mmaudit` is Corrovera Security's read-only, evidence-driven Solidity/EVM security auditor. Its
+`solidity-evm` capability profile combines deterministic scanners and Solidity program modelling
+with independent base and specialist model roles, typed stateful/invariant testing, optional formal
+engines, adversarial verification and falsification, deterministic location and consensus checks,
+and an evidence-capped final judge. The full maximum-assurance portfolio is available only for a
+detected Solidity/EVM project and only when every required runtime gate passes.
+
+An explicitly selected `generic-source-review` profile provides reduced source review for other
+repositories. It does not execute or claim the Solidity/EVM compilation, invariant, economic,
+reproduction, or formal portfolio; it can never be reported as EVM maximum assurance. A language
+mismatch fails closed instead of silently selecting this reduced profile. Both profiles emit
+branded Markdown, versioned JSON, and SARIF 2.1.0 with their achieved capability stated explicitly.
 
 The editable identity system, report templates, social imagery, web icons, and production guidance
 are in the [Corrovera brand kit](assets/brand/corrovera/README.md).
@@ -73,15 +80,19 @@ cp operator-secrets.example /absolute/operator/control/mmaudit-secrets.env
 chmod 600 /absolute/operator/control/mmaudit-secrets.env
 cp mmaudit.example.toml mmaudit.toml
 
-mmaudit doctor --secrets-env-file /absolute/operator/control/mmaudit-secrets.env
-mmaudit scan --repo ../..
+mmaudit doctor --language-profile solidity-evm \
+  --secrets-env-file /absolute/operator/control/mmaudit-secrets.env
+mmaudit scan --repo ../.. --language-profile solidity-evm
 mmaudit models init-cost-ledger --cost-ledger /absolute/operator/control/mmaudit-cost-ledger.json
-mmaudit run --repo ../.. --allow-code-egress --budget-usd 20 \
+mmaudit run --repo ../.. --language-profile solidity-evm \
+  --allow-code-egress --budget-usd 20 \
   --secrets-env-file /absolute/operator/control/mmaudit-secrets.env \
   --cost-ledger /absolute/operator/control/mmaudit-cost-ledger.json
 ```
 
-This repository is the auditor itself, so local commands normally use `--repo .`.
+Those commands assume the application repository contains the Solidity/EVM project being audited.
+Reviewing this Python repository itself requires both `--repo .` and the explicitly reduced
+`--language-profile generic-source-review` profile.
 
 ## Scanner installation
 
@@ -157,6 +168,14 @@ hash, routing metadata, usage, cost, and prompt/response hashes.
 Run `mmaudit init` to create `mmaudit.toml` and `.mmauditignore`. Existing files are never replaced
 unless `--force` is supplied. The example documents all fields.
 
+`language_profile` is a separate capability choice from audit depth. The default and production
+profile is `solidity-evm`; it requires a detected Solidity/EVM project before EVM analysis can run.
+Use `generic-source-review` only through explicit configuration or
+`--language-profile generic-source-review`. Generic review is always labelled reduced, does not run
+Solidity-only engines or gates, and cannot satisfy `maximum-assurance`. Selecting `solidity-evm`
+for a repository without an established Solidity project is a configuration failure, not an
+implicit fallback.
+
 `[scope].mode` selects `contracts-only`, `contracts-and-deployment`, or `full-protocol`.
 The pipeline filters out component classes beyond that request and emits `scope-assessment.json`
 with analyzed, missing, and omitted evidence for contracts, deployment material, off-chain
@@ -184,6 +203,7 @@ Useful environment overrides are `MMAUDIT_BUDGET_USD`, `MMAUDIT_CONCURRENCY`,
 `MMAUDIT_PRIOR_AUDIT_PATH`, `MMAUDIT_REQUIRE_PRIOR_AUDIT`,
 `MMAUDIT_FAIL_ON_MISSED_PRIOR`,
 `MMAUDIT_ALLOW_CODE_EGRESS`, `MMAUDIT_REQUIRE_ZDR`, `MMAUDIT_PROFILE`,
+`MMAUDIT_LANGUAGE_PROFILE`,
 `MMAUDIT_FORK_BLOCK_NUMBER`, and `MMAUDIT_FORK_CHAIN_ID`. The API key is accepted only through
 `OPENROUTER_API_KEY`, never a CLI argument.
 
@@ -194,32 +214,36 @@ minutes, model retries to two, JSON repair to one, and total accounted spend to 
 pre-request reservations include the maximum response allowance. A request is refused if its
 worst-case estimate does not fit the remaining run budget.
 
-Audit profiles are explicit: `quick`, `standard`, `deep`, and `maximum-assurance`. The default
-`standard` profile preserves the bounded general-purpose behavior. `maximum-assurance` enables
+Audit-depth profiles are explicit: `quick`, `standard`, `deep`, and `maximum-assurance`. The default
+`standard` depth preserves bounded analysis within the selected language capability.
+`maximum-assurance` is valid only with `solidity-evm` and enables
 isolated Solidity compilation, requires Slither, the full semantic-graph transforms, specialist
 review, invariant discovery and execution, generated local-fork reproduction, verifier/falsifier
-review, evidence-capped judgment, coverage reporting, and optionally a benchmark gate. It never
+review, evidence-capped judgment, coverage reporting, and the current required benchmark gate. It never
 silently downgrades. `--allow-maximum-assurance-downgrade` is the only downgrade path and the result
 is labelled `DOWNGRADED` in Markdown, JSON, and SARIF. Without that flag, a skipped, unavailable,
 failed, timed-out, or under-covered mandatory stage prevents `COMPLETE`.
 
-## Quick start
+## Quick start from a Solidity/EVM repository
 
 ```bash
 mmaudit init
 # Edit exact model IDs and consciously review [privacy].
-mmaudit doctor
-mmaudit scan --repo .
+mmaudit doctor --language-profile solidity-evm
+mmaudit scan --repo . --language-profile solidity-evm
 mmaudit models init-cost-ledger --cost-ledger /absolute/operator/control/mmaudit-cost-ledger.json
-mmaudit run --repo . --allow-code-egress --budget-usd 20 --fail-on high \
+mmaudit run --repo . --language-profile solidity-evm \
+  --allow-code-egress --budget-usd 20 --fail-on high \
   --cost-ledger /absolute/operator/control/mmaudit-cost-ledger.json
 ```
 
-For the stricter Solidity path, configure `[reproduction].targets`, pin the fork block/chain, point
+For the maximum-assurance Solidity/EVM path, configure `[reproduction].targets`, pin the fork
+block/chain, point
 `MMAUDIT_FORK_RPC_URL` at an already-running local fork, then run:
 
 ```bash
 mmaudit run --repo . \
+  --language-profile solidity-evm \
   --profile maximum-assurance \
   --require-maximum-assurance \
   --compile --run-slither \
@@ -232,6 +256,14 @@ mmaudit run --repo . \
 security, test, and dependency context. Other bounded overrides include `--max-files`,
 `--max-file-bytes`, `--max-context-bytes`, `--concurrency`, `--severity-threshold`,
 `--skip-codeql`, and `--require-zdr`.
+
+To review this Python implementation itself, select the reduced profile explicitly:
+
+```bash
+mmaudit scan --repo . --language-profile generic-source-review
+```
+
+That result is a reduced generic source review and carries no Solidity/EVM assurance claim.
 
 ## Solidity smart-contract analysis
 
@@ -317,8 +349,10 @@ and cannot be promoted into tests without a later trusted translation and valida
 When enabled, formal/property adapters inventory and safely invoke supported installed tools:
 Solidity SMTChecker, Mythril, Echidna, Medusa, Foundry invariants, Halmos, and Kontrol. Commands are
 fixed, isolated, bounded, and normalized. `unavailable`, `timeout`, and `unknown` are coverage
-limitations, never evidence of safety. Specific engines become mandatory only through
-`[formal].required_tools`.
+limitations, never evidence of safety. Outside maximum assurance, specific engines become mandatory
+through `[formal].required_tools`. The effective maximum-assurance configuration adds its exact
+required fuzz, symbolic, and formal portfolio automatically; an unavailable required engine fails
+closed.
 
 Echidna additionally requires exact operator-configured `echidna_version` and
 `echidna_sha256` trust pins before the binary is executed. The adapter translates only the
@@ -470,6 +504,7 @@ Each invocation creates:
 .mmaudit/runs/<UTC_TIMESTAMP>-<RUN_SUFFIX>/
 ├── metadata.json
 ├── repository-map.json
+├── language-capability.json # requested/achieved profile and source-bound evidence
 ├── scanner-results.json
 ├── solidity-projects.json
 ├── dependency-preparation.json
@@ -511,6 +546,9 @@ base configuration for drift. The manifest excludes itself from the artifact lis
 digest is stable. Schema `1.1` remains readable for pre-bundle runs. Legacy schema `1.0` manifests
 remain readable but require an explicit
 configuration for verification, replay, and certification.
+For `generic-source-review`, Solidity-only artifact leaves may contain explicit non-applicable
+evidence or be absent according to their typed contract, and Solidity-only quality gates are not
+applied. The language-capability artifact and reduced report banner remain mandatory.
 The canonical schema `1.2` public report bundle consists of `client-report.md`,
 `forensic-report.md`, `findings.json`, `audit-results.sarif`, `coverage.json`, and
 `model-execution.json`. CI requires and stages those exact manifest-bound leaves. The older
@@ -549,7 +587,7 @@ lower deterministic consensus status but cannot raise it or invent findings. SAR
 findings and stable fingerprints; JSON retains votes, evidence, validation, generated reproduction
 results, disputed/rejected groups, cost, and routing metadata.
 
-For maximum assurance, the report also carries a machine-readable contract result:
+For Solidity/EVM maximum assurance, the report also carries a machine-readable contract result:
 
 - `COMPLETE`: every required clause passed;
 - `DOWNGRADED`: missing clauses were accepted only through the explicit downgrade flag;

@@ -136,6 +136,27 @@ def build_traceability_matrix(commit: str | None) -> MaximumAssuranceTraceabilit
             ],
         ),
         _row(
+            "MA-LANGUAGE-CAPABILITY",
+            "The requested language profile is source-bound, explicit, and cannot overclaim the Solidity/EVM portfolio.",
+            ImplementationStatus.IMPLEMENTED,
+            verified,
+            implementation_paths=[
+                "schemas/language_capability.schema.json",
+                "src/mmaudit/config.py",
+                "src/mmaudit/language_plugins.py",
+                "src/mmaudit/orchestration/assurance.py",
+                "src/mmaudit/orchestration/manifest.py",
+                "src/mmaudit/orchestration/pipeline.py",
+            ],
+            unit_tests=[
+                "tests/unit/test_language_plugins.py",
+                "tests/unit/test_assurance.py",
+                "tests/unit/test_cli.py",
+            ],
+            real_integration_tests=["tests/integration/test_pipeline.py"],
+            runtime_artifacts=["language-capability.json"],
+        ),
+        _row(
             "MA-PRIOR-AUDIT",
             "Historical findings are withheld from blind discovery and compared afterward.",
             ImplementationStatus.IMPLEMENTED,

@@ -1,4 +1,5 @@
 version = 1
+language_profile = "solidity-evm"
 profile = "standard"
 
 # Qualification-only runtime configuration. This file contains no credential,

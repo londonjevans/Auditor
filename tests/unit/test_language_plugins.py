@@ -3,10 +3,18 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from mmaudit.config import AuditConfig, SmartContractsConfig
-from mmaudit.language_plugins import assess_language_capability, resolve_language_plugin
+from mmaudit.language_plugins import (
+    assess_language_capability,
+    build_language_capability_artifact,
+    resolve_language_plugin,
+)
 from mmaudit.models.schemas import (
     AuditProfile,
+    LanguageCapabilityArtifact,
     LanguageCapabilityProfile,
     LanguageCapabilityStatus,
 )
@@ -132,6 +140,38 @@ def test_global_discovery_truncation_is_inconclusive_not_a_clean_language_mismat
     assert assessment.achieved_profile is None
     assert assessment.blocking_discovery_omissions == ("repository: max_files reached",)
     assert not assessment.evm_maximum_assurance_eligible
+
+
+def test_language_capability_artifact_recomputes_inventory_hash_and_census(
+    tmp_path: Path,
+) -> None:
+    discovery = _discovery(
+        tmp_path,
+        {
+            "app.py": ("Python", "def main():\n    return 0\n"),
+            "src/SafeFixture.sol": ("Solidity", "contract SafeFixture {}\n"),
+        },
+    )
+    projects = discover_solidity_projects(discovery, SmartContractsConfig(enabled=True))
+    assessment = assess_language_capability(
+        LanguageCapabilityProfile.SOLIDITY_EVM,
+        discovery,
+        solidity_projects=projects,
+        smart_contracts_enabled=True,
+    )
+    artifact = build_language_capability_artifact(assessment, discovery)
+
+    assert LanguageCapabilityArtifact.model_validate_json(artifact.model_dump_json()) == artifact
+
+    digest_tamper = artifact.model_dump(mode="json")
+    digest_tamper["assessment"]["discovery_inventory_sha256"] = "0" * 64
+    with pytest.raises(ValidationError, match="inventory hash"):
+        LanguageCapabilityArtifact.model_validate(digest_tamper)
+
+    census_tamper = artifact.model_dump(mode="json")
+    census_tamper["files"][0]["language"] = "Rust"
+    with pytest.raises(ValidationError, match="language counts"):
+        LanguageCapabilityArtifact.model_validate(census_tamper)
 
 
 def test_maximum_assurance_preflight_requires_solidity_evm_capability_profile() -> None:

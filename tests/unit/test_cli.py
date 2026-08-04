@@ -57,6 +57,7 @@ from mmaudit.models.schemas import (
     AuditProfile,
     AuditQualityStatus,
     AuditRunStatus,
+    LanguageCapabilityProfile,
     ScannerStatus,
 )
 from mmaudit.orchestration.ci import CIJobStatus
@@ -182,6 +183,43 @@ def test_help_lists_required_commands() -> None:
         "replay",
     ):
         assert command in result.stdout
+
+
+def test_cli_and_readme_state_the_explicit_language_capability_boundary() -> None:
+    root_help = runner.invoke(app, ["--help"], env={"COLUMNS": "300"})
+    assert root_help.exit_code == 0
+    assert "Solidity/EVM security auditor" in root_help.stdout
+    assert "reduced generic source-review" in root_help.stdout
+
+    for command in ("doctor", "scan", "run"):
+        help_result = runner.invoke(app, [command, "--help"], env={"COLUMNS": "300"})
+        assert help_result.exit_code == 0
+        assert "--language-profile" in help_result.stdout
+        assert "solidity-evm" in help_result.stdout
+        assert "generic-source-review" in help_result.stdout
+        assert "cannot claim EVM maximum assurance" in help_result.stdout
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "evidence-driven Solidity/EVM security auditor" in readme
+    assert "`solidity-evm`" in readme
+    assert "`generic-source-review`" in readme
+    assert "it can never be reported as EVM maximum assurance" in readme
+
+
+def test_language_profile_override_is_canonical_and_explicit() -> None:
+    overrides = _audit_config_overrides(
+        budget_usd=None,
+        max_files=None,
+        max_file_bytes=None,
+        max_context_bytes=None,
+        concurrency=None,
+        require_zdr=False,
+        language_profile=LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW,
+    )
+
+    assert [entry.model_dump(mode="json") for entry in overrides.entries] == [
+        {"path": "language_profile", "value": "generic-source-review"}
+    ]
 
 
 def test_run_help_lists_fork_aliases() -> None:
@@ -2740,6 +2778,8 @@ def test_scanner_only_cli_never_requires_api_key(
             str(secret_file),
             "--repo",
             str(vulnerable_repo),
+            "--language-profile",
+            "generic-source-review",
             "--output",
             str(output),
             "--skip-codeql",

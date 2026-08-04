@@ -10,6 +10,19 @@
       "title": "Accounted Cost Usd Exact",
       "type": "string"
     },
+    "achieved_capability_profile": {
+      "anyOf": [
+        {
+          "maxLength": 100,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Achieved Capability Profile"
+    },
     "achieved_profile": {
       "anyOf": [
         {
@@ -24,8 +37,8 @@
       "title": "Achieved Profile"
     },
     "algorithm": {
-      "const": "mmaudit.run-terminal-report-authority.v2",
-      "default": "mmaudit.run-terminal-report-authority.v2",
+      "const": "mmaudit.run-terminal-report-authority.v3",
+      "default": "mmaudit.run-terminal-report-authority.v3",
       "title": "Algorithm",
       "type": "string"
     },
@@ -39,6 +52,32 @@
       "pattern": "^[0-9a-f]{64}$",
       "title": "Authority Sha256",
       "type": "string"
+    },
+    "capability_profile": {
+      "anyOf": [
+        {
+          "maxLength": 100,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Capability Profile"
+    },
+    "capability_status": {
+      "anyOf": [
+        {
+          "maxLength": 100,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Capability Status"
     },
     "completed": {
       "title": "Completed",
@@ -54,6 +93,19 @@
       "pattern": "^[0-9a-f]{64}$",
       "title": "Incomplete Reasons Sha256",
       "type": "string"
+    },
+    "language_capability_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Language Capability Sha256"
     },
     "maximum_assurance_sha256": {
       "anyOf": [
@@ -91,6 +143,11 @@
       "minLength": 1,
       "title": "Quality Status",
       "type": "string"
+    },
+    "reduced_capability": {
+      "default": false,
+      "title": "Reduced Capability",
+      "type": "boolean"
     },
     "report_payload_sha256": {
       "pattern": "^[0-9a-f]{64}$",

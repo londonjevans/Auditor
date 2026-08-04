@@ -36,6 +36,7 @@ from mmaudit.orchestration.run_status import (
     minimum_analysis_floor_quality_gate,
 )
 from tests.identity_fixtures import bind_synthetic_usage_identity
+from tests.language_capability_support import matched_solidity_language_capability
 
 NOW = datetime(2026, 7, 29, 12, 0, tzinfo=UTC)
 
@@ -445,6 +446,10 @@ def _typed_report_payload(
         "quality_status": audit_quality_status_for_run_status(floor.run_status),
         "run_status": floor.run_status,
         "minimum_analysis_floor": floor,
+        "language_capability": matched_solidity_language_capability(
+            path="src/Safe.sol",
+            content=b"contract Safe { function run() external {} }\n",
+        ).assessment,
         "quality_gates": [minimum_analysis_floor_quality_gate(floor)],
         "scanner_runs": scanner_runs,
         "usage": usage,
@@ -525,6 +530,7 @@ def test_typed_report_requires_floor_status_quality_and_completion_consistency()
         {**base_incomplete, "minimum_analysis_floor": None},
         {**base_incomplete, "incomplete_reasons": []},
         {key: value for key, value in complete_payload.items() if key != "run_status"},
+        {key: value for key, value in complete_payload.items() if key != "language_capability"},
         {
             **complete_payload,
             "incomplete_reasons": ["synthetic missing mandatory phase"],
@@ -549,3 +555,47 @@ def test_typed_report_requires_floor_status_quality_and_completion_consistency()
     ):
         with pytest.raises(ValidationError):
             AuditReport.model_validate(mutation)
+
+
+def test_current_python_report_cannot_claim_complete_without_language_capability() -> None:
+    scanner = _real_scanner()
+    usage = [_usage(role) for role in ANALYSIS_ROLES]
+    floor = _assessment(
+        scanner_runs=[scanner],
+        usage=usage,
+        required_model_roles=ANALYSIS_ROLES,
+    )
+    payload = _typed_report_payload(
+        floor=floor,
+        scanner_runs=[scanner],
+        usage=usage,
+        coverage=_coverage(),
+    )
+    payload["repository"] = RepositoryMap(
+        root_name="synthetic-python-target",
+        languages={"Python": 1},
+        frameworks=[],
+        manifests=[],
+        entry_points=["app.py"],
+        api_surfaces=[],
+        auth_components=[],
+        data_layers=[],
+        network_clients=[],
+        file_handlers=[],
+        configuration_files=[],
+        sensitive_processing=[],
+        security_tests=[],
+        files=[
+            RepositoryFile(
+                path="app.py",
+                size=10,
+                lines=1,
+                sha256="f" * 64,
+                language="Python",
+            )
+        ],
+    )
+    payload.pop("language_capability")
+
+    with pytest.raises(ValidationError, match="typed language capability"):
+        AuditReport.model_validate(payload)
