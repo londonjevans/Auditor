@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
-LAST_CHECKPOINT_COMMIT: e9554ec0e55b60350d0c690d26270285b4f3ed20
+LAST_CHECKPOINT_COMMIT: 0be34cafe7f4250718ccf5999cd0bffbd15e8e94
 
 ## 2026-08-04T00:26:04Z — Graceful operator pause
 
@@ -40,8 +40,8 @@ LAST_CHECKPOINT_COMMIT: e9554ec0e55b60350d0c690d26270285b4f3ed20
   remains `0.0033415625` USD.
 - **Exact resume action:** Rerun the recorded broader matrix with `-x -vv`, repair the first actual
   regression, then execute the full scheduler integration and remaining ticket gates.
-- **Checkpoint:** A scoped WIP pause commit will preserve this state; it is intentionally not
-  ticket-complete or release evidence.
+- **Checkpoint:** `0be34cafe7f4250718ccf5999cd0bffbd15e8e94` preserves this scoped WIP state;
+  it is intentionally not ticket-complete or release evidence.
 
 ## 2026-08-04T00:15:39Z — Terminal report authority closure slice
 

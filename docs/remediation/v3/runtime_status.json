@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
   "updated_at": "2026-08-04T00:26:04Z",
-  "candidate_commit": "e9554ec0e55b60350d0c690d26270285b4f3ed20",
+  "candidate_commit": "0be34cafe7f4250718ccf5999cd0bffbd15e8e94",
   "autorun_status": "PAUSED_BY_OPERATOR",
   "current_milestone": "client_report_and_forensic_bundle",
   "current_ticket": "V3-REPORT-001 (IN_PROGRESS)",
-  "last_checkpoint_commit": "e9554ec0e55b60350d0c690d26270285b4f3ed20",
+  "last_checkpoint_commit": "0be34cafe7f4250718ccf5999cd0bffbd15e8e94",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,
