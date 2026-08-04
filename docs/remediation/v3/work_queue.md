@@ -1802,6 +1802,57 @@ are invisible to source review by construction.
 - **Next action:** Resolve remaining gap 1. This ticket cannot become `COMPLETE` while any
   acceptance criterion is unmet; see the completion discipline in the execution order.
 
+## V3-GRAPHBOUND-001 — Bound semantic-graph generation before it reaches disk
+
+- **Priority:** Blocking real targets. mmaudit cannot currently complete a run on a real
+  protocol that has dependencies. Discovered 2026-08-04 by running the engine against an
+  actual external repository rather than a fixture.
+- **Objective:** Bound semantic-graph construction at generation time so a large repository
+  degrades with typed evidence instead of writing a multi-gigabyte artifact and then failing.
+- **Observed defect.** A `scan` against `ForestRoadVault/contracts` at commit
+  `d2ef15a5327ce5196666c8d3f7abbb4e90618bc6` indexed 1,111 Solidity files, 2,741 contracts and
+  16,451 functions, wrote `solidity-graphs.json` at **2,332,603,687 bytes (2.33 GB)**, and then
+  terminated with `run JSON artifact is not a bounded unique regular file: solidity-graphs.json`.
+  - The ceiling is `_MAX_JSON_ARTIFACT_BYTES = 100_000_000` in
+    `src/mmaudit/orchestration/manifest.py:187`. The emitted artifact was **23 times** that.
+  - The check runs at **read** time (`manifest.py:6104`), after the file is already on disk.
+    Nothing bounds the graph while it is being produced.
+  - Consequences: the entire run is discarded at its final step after all analysis work is
+    complete; 2.33 GB of disk is consumed and, on a larger target, could be far more; and no
+    partial evidence survives.
+- **This is the same defect class as `V3-OMISSION-001`** — unbounded evidence generation,
+  validated too late — in a different artifact. That one was found because a context package
+  failed; this one only surfaced against a real repository, because every committed fixture is
+  small enough to stay under the ceiling.
+- **Acceptance criteria:**
+  - Graph construction is bounded while producing, against the same ceiling the manifest
+    enforces, so the ceiling can never be exceeded on disk.
+  - Exceeding the bound degrades rather than fails: emit the highest-value edges within budget
+    and record a typed omission stating what was dropped, by graph kind and count. A run over a
+    large repository must complete with honest partial coverage, exactly as context construction
+    now does after `V3-OMISSION-001`.
+  - Selection under pressure is deterministic and risk-ordered — privilege, asset-flow,
+    sensitive-reachability and state-dependency edges are retained ahead of informational ones —
+    not truncated arbitrarily.
+  - Omission evidence is itself bounded and does not consume the budget it documents, per the
+    principle recorded for `V3-OMISSION-001`.
+  - No coverage denominator, gate, or report counts an omitted edge as analysed.
+  - A regression exercises a repository large enough to exceed the ceiling and asserts the run
+    completes with typed partial-coverage evidence and no artifact above the bound. The existing
+    35,444-line scale fixture is insufficient — it stays under the ceiling, which is why this
+    was invisible until an external target was used.
+- **Secondary usability issue found alongside, worth fixing here or recording separately.**
+  `.mmauditignore` is read from the **target repository root**, not from the directory holding
+  the configuration. An operator who places the ignore file beside `mmaudit.toml` gets no
+  exclusions and silently indexes vendored dependencies and build output — which is how the
+  1,111-file scope above arose. Either resolve the ignore file relative to the configuration as
+  well, or state the resolution rule in `mmaudit init` output and the README.
+- **Files expected to change:** `src/mmaudit/solidity/graphs.py`,
+  `src/mmaudit/orchestration/manifest.py`, `src/mmaudit/repository/ignore.py`, graph and
+  omission schemas, large-repository regression.
+- **Dependencies:** None.
+- **Status:** `QUEUED`
+
 ## V3-BOOTSTRAP-001 — Separate declared model identity from measured model quality
 
 - **Priority:** Blocking the entire model track. This is the shared root cause of three
@@ -2086,17 +2137,19 @@ no duplicate, and no ticket scheduled before a declared dependency completes.
    while production selection remains bound to current opaque qualification evidence.
 4. `V3-TOOLDIAG-002` — complete; the real macOS scanner matrix now distinguishes validated
    success, not-applicable scope, unmet prerequisites, and silent failure without false credit.
-5. `V3-FIXTURE-001` — close-out only. Its sole remaining gap was that `V3-SHARD-001` had to
+5. `V3-GRAPHBOUND-001` — blocking real targets: a run against an external protocol wrote a
+   2.33 GB graph artifact and then failed. No real repository can complete a run until this lands.
+6. `V3-FIXTURE-001` — close-out only. Its sole remaining gap was that `V3-SHARD-001` had to
    consume the scale corpus; `V3-SHARD-001` is `COMPLETE` and its evidence records the
    4,952/15,116/35,444-line corpus passing deterministic sharding. Verify and mark `COMPLETE`.
 
 ### Phase 2 — the shippable deterministic product
 
-6. `V3-REPORT-001` — client-facing deliverable. Needed by every product variant.
-7. `V3-SCOPE-001` — claims match capability.
-8. `V3-OBJECTIVE-001` — blocked technical: the exact hash-matching byte stream is absent and
+7. `V3-REPORT-001` — client-facing deliverable. Needed by every product variant.
+8. `V3-SCOPE-001` — claims match capability.
+9. `V3-OBJECTIVE-001` — blocked technical: the exact hash-matching byte stream is absent and
    reconstruction is forbidden. Resume only when the operator supplies it.
-9. `V3-TARGETSPEC-001` — blocked technical on `V3-OBJECTIVE-001`; reconciliation cannot infer
+10. `V3-TARGETSPEC-001` — blocked technical on `V3-OBJECTIVE-001`; reconciliation cannot infer
    the missing objective from its hash.
 
 At this point the deterministic offering is complete and saleable: pinned-fork suite
@@ -2106,61 +2159,61 @@ model, no qualification, and no provider spend anywhere in the path.
 
 ### Phase 3 — real models
 
-10. `V3-MODELREFRESH-001` — **discovery, diff, and alerting portion only.** Its declared
+11. `V3-MODELREFRESH-001` — **discovery, diff, and alerting portion only.** Its declared
    dependencies cover the promotion path; the ticket states the discovery portion "can land
    before either and is useful immediately". Expect it to stay `PARTIAL` until step 10.
-11. `V3-LINEAGE-001` — join the recorded operator authorisation to the refreshed candidate set.
-12. `V3-CALIBRATE-001` — reachable thresholds. Must precede qualification: the frozen
+12. `V3-LINEAGE-001` — join the recorded operator authorisation to the refreshed candidate set.
+13. `V3-CALIBRATE-001` — reachable thresholds. Must precede qualification: the frozen
     all-dimension `1.0` policy would otherwise reject every model regardless of capability,
     after spending real budget. Close the `V3-MODELREFRESH-001` promotion path here.
-13. `V3-POLICYELIG-001` — provider terms and jurisdictional eligibility. A model can pass
+14. `V3-POLICYELIG-001` — provider terms and jurisdictional eligibility. A model can pass
    every privacy and technical gate and still be contractually ineligible for commercial use.
-14. `V3-QUALIFY-001` — first qualified models.
-15. `V3-SINGLE-AUDIT-001` — **first real audit.** `completed_real_audits` becomes non-zero.
+15. `V3-QUALIFY-001` — first qualified models.
+16. `V3-SINGLE-AUDIT-001` — **first real audit.** `completed_real_audits` becomes non-zero.
 
-16. `V3-TIMESPLIT-001`
+17. `V3-TIMESPLIT-001`
 
-17. `V3-LEARNING-001` phase 1 (capture only) — schedule here so the first real audit is
+18. `V3-LEARNING-001` phase 1 (capture only) — schedule here so the first real audit is
    recorded. Capture cannot be done retroactively; evidence not written during a run is
    gone. Phase 2 waits for a measured baseline.
 ### Phase 4 — orchestration hardening, now provable against real models
 
-18. `V3-TRUNCATION-001`
-19. `V3-COVERAGE-001`
-20. `V3-CONSENSUS-001` — must precede the multi-model audit, since it is what prevents a
+19. `V3-TRUNCATION-001`
+20. `V3-COVERAGE-001`
+21. `V3-CONSENSUS-001` — must precede the multi-model audit, since it is what prevents a
     single verifier suppressing a candidate group.
-21. `V3-MULTI-AUDIT-001`
-22. `V3-ENSEMBLE-001` — settle whether the specialist ensemble beats concentrated compute
+22. `V3-MULTI-AUDIT-001`
+23. `V3-ENSEMBLE-001` — settle whether the specialist ensemble beats concentrated compute
     before committing to its cost and latency.
-23. `V3-TAXONOMY-001`
-24. `V3-RETRIEVAL-001`
-25. `V3-MUTATION-001`
+24. `V3-TAXONOMY-001`
+25. `V3-RETRIEVAL-001`
+26. `V3-MUTATION-001`
 
 ### Phase 5 — evidence and claims
-26. `V3-CONVERGENCE-001` — thresholds derived from the measured discovery curve, not guessed.
-27. `V3-HUMANCMP-001` — the only ticket that can ever substantiate a superiority claim.
-28. `V3-STABILITY-001`
+27. `V3-CONVERGENCE-001` — thresholds derived from the measured discovery curve, not guessed.
+28. `V3-HUMANCMP-001` — the only ticket that can ever substantiate a superiority claim.
+29. `V3-STABILITY-001`
 
 ### Phase 6 — release
 
-29. `V3-BYTECODE-001`
-30. `V3-ENGINES-001`
-31. `V3-BENCHMARK-001`
-32. `V3-CERTIFICATE-001`
-33. `V3-ADR-001`
-34. `V3-RELEASE-001`
+30. `V3-BYTECODE-001`
+31. `V3-ENGINES-001`
+32. `V3-BENCHMARK-001`
+33. `V3-CERTIFICATE-001`
+34. `V3-ADR-001`
+35. `V3-RELEASE-001`
 
 ### Phase 7 — operator-prerequisite and product work
 
-35. `V3-QUOTE-001`
-36. `V3-HARDHAT-001` — resumes only when the digest-pinned rootless image exists.
-37. `V3-CI-001`
-38. `V3-LIFECYCLE-001`
-39. `V3-REVERIFY-001`
-40. `V3-INTAKE-001`
-41. `V3-CONSENT-001`
-42. `V3-SERVICE-001`
-43. `V3-AUTONOMY-001`
+36. `V3-QUOTE-001`
+37. `V3-HARDHAT-001` — resumes only when the digest-pinned rootless image exists.
+38. `V3-CI-001`
+39. `V3-LIFECYCLE-001`
+40. `V3-REVERIFY-001`
+41. `V3-INTAKE-001`
+42. `V3-CONSENT-001`
+43. `V3-SERVICE-001`
+44. `V3-AUTONOMY-001`
 
 ### Completion discipline
 
