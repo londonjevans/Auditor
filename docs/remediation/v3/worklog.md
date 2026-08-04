@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Client report and forensic evidence bundle
 CURRENT_TICKET: V3-REPORT-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-FIXTURE-001 (COMPLETE)
-NEXT_ACTION: Rerun the interrupted broader report/release unit matrix with `-x -vv`, fix the first actual regression without weakening authority checks, then run the full scheduler integration, Ruff, mypy, and full V3-REPORT-001 gates.
-LAST_COMMAND: `.venv/bin/pytest -q tests/unit/test_client_forensic_reporting.py tests/unit/test_client_forensic_reporting_adversarial.py tests/unit/test_report_status_projection.py tests/unit/test_forensic_export.py tests/unit/test_scheduler_models.py tests/unit/test_scheduler_journal.py tests/unit/test_scheduler_host_contracts.py tests/unit/test_manifest.py tests/unit/test_release_artifacts.py tests/unit/test_release_run.py tests/unit/test_release_verification.py tests/unit/test_release_schemas.py --tb=short`
-LAST_RESULT: INCOMPLETE: the process exited before pause and progress showed at least two failures, but the final failure output was not retained after the execution session closed. No pass is claimed; `.pytest_cache/v/cache/lastfailed` retains candidate failing node IDs for the exact `-x -vv` resume run.
+NEXT_ACTION: Resume the ignored-lockfile scanner-origin case by deriving exact excerpt/source authority from the trusted frozen scanner observation without adding ignored content to audited/model scope; rerun the remaining four-case pipeline matrix, then restart the complete ticket gates.
+LAST_COMMAND: `.venv/bin/ruff check src/mmaudit/orchestration/manifest.py src/mmaudit/reporting/run_authority.py tests/integration/test_pipeline.py tests/unit/test_scheduler_host_contracts.py` followed by `git diff --check`
+LAST_RESULT: PASS: affected Ruff checks and diff integrity passed after the final style-only manifest correction. This is a pause-boundary check, not ticket or full-suite acceptance.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -20,6 +20,96 @@ OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
 LAST_CHECKPOINT_COMMIT: 0be34cafe7f4250718ccf5999cd0bffbd15e8e94
+
+## 2026-08-04T00:29:43Z — Resume
+
+- Resumed `V3-REPORT-001` from clean, SSH-synchronized pause commit
+  `d93f57ff94f154001153eee0aae2cc79026c67e0`.
+- Re-read the complete 1,417-line objective and reverified SHA-256
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
+- Work remains bounded to reproducing the interrupted report/release matrix, repairing the actual
+  regressions, and executing the ticket gates. No provider call, secret access, or public-network
+  operation is required for this slice.
+
+## 2026-08-04T00:31:51Z — Report/release matrix recovery
+
+- Reproduced the interrupted matrix at its first actual failure: the current schema-`1.2` fixture
+  correctly exported mandatory `private/run-terminal-report-authority.json`, making two legacy
+  private-artifact count expectations stale.
+- Updated only the forensic-export regression expectations. The complete fixture now proves both
+  terminal authority and scanner custody are retained; the minimal current fixture proves the sole
+  private artifact is terminal authority while optional logs/scanner custody remain absent.
+- The two focused cases passed, then the full `337`-test report/release matrix passed in `36.28s`.
+  No exporter or authority check was weakened, and no provider or network call ran.
+
+## 2026-08-04T00:35:10Z — Scheduler integration gate
+
+- The complete scheduler pipeline integration passed `37` tests in `145.09s`, including fresh and
+  resumed campaigns, exact conditional absence, terminal report authority, coherent-reseal
+  rejection, and detached manifest validation.
+- No provider or network call ran. Remaining ticket validation is the representative non-scheduler
+  pipeline matrix, generated schemas, Ruff, strict mypy, and the complete suite.
+
+## 2026-08-04T00:53:07Z — Terminal status and dissent acceptance closure
+
+- Private terminal authority now rejects `COMPLETE` with a nonzero process exit and rejects
+  `INCOMPLETE` or `FAILED` with zero; an explicitly authorized `DEGRADED` run may retain a
+  successful process exit. Builder-time and independently resealed payload regressions pass.
+- The scheduler integration asserts the retained terminal exit equals the actual pipeline result;
+  its focused coherent-reseal case passed `1` in `12.88s`.
+- Cross-examination and falsifier `DISPUTED`/`INCONCLUSIVE` outcomes now have explicit coherence
+  coverage across client, compatibility, forensic, findings, and SARIF projections. The typed
+  complete-no-findings control also exercises client, findings, coverage, forensic, SARIF, and
+  terminal-authority status projections.
+- The representative non-scheduler report/reproduction/maximum-assurance/scanner/no-analysis
+  pipeline matrix passed `7` in `235.67s`; the broadened unit matrix passed `343` in `37.84s`.
+  Focused Ruff, strict mypy, schema verification, and diff integrity passed. No provider or network
+  call ran.
+
+## 2026-08-04T00:54:05Z — Pre-full-suite gate
+
+- Full Ruff formatting changed seven in-scope ticket files; the subsequent format check reports all
+  `440` files formatted and Ruff check passes.
+- Strict mypy passes all `175` source files, generated release schemas are synchronized, and
+  `git diff --check` passes. The complete pytest suite is the remaining validation gate before the
+  final diff and traceability review.
+
+## 2026-08-04T00:56:50Z — Full-suite first-failure recovery
+
+- The first full-suite attempt reached one stale diagnostic expectation in the usage-relabel
+  negative regression. Current manifest validation correctly rejected the report earlier because
+  it differed from exact private scheduler custody; the old test expected the later scheduler hash
+  check.
+- Updated only the expected fail-closed diagnostic. The focused case passed `1` in `1.70s`. The
+  interrupted run (`44` passed, `14` skipped, one expected-diagnostic mismatch) receives no full-
+  suite credit; the complete gate will restart.
+
+## 2026-08-04T01:10:36Z — Graceful operator pause
+
+- **State:** `PAUSED_BY_OPERATOR`; `V3-REPORT-001` remains `IN_PROGRESS`. No ticket,
+  release, or maximum-assurance completion is claimed.
+- **Preserved implementation:** Terminal exit/status coherence, cross-leaf dissent coverage,
+  exact no-successful-pass-six reproduction accounting, current forensic fixture expectations,
+  and the associated integrations are saved in the working tree.
+- **Validated evidence:** The report/release unit matrix passed `343` tests; scheduler integration
+  passed `37`; the representative non-scheduler matrix passed `7`; focused no-pass-six host
+  contracts passed `14`; strict mypy, generated-schema synchronization, and the recorded Ruff/diff
+  checks passed in their respective slices.
+- **Unfinished failure:** The narrowed pipeline matrix currently stops at
+  `test_ignored_lockfile_scanner_finding_stays_local_and_reported`: a retained static-scanner
+  finding cites `requirements.lock`, which is correctly absent from audited/model discovery, but
+  terminal excerpt binding currently has no trusted frozen source bytes for that cited path and
+  raises `source content is unavailable for cited path: requirements.lock`. No elapsed-time result
+  is inferred from the lost execution-session output.
+- **Exact resume action:** Reuse or extend scanner-origin source authority so only the exact retained
+  local scanner citation can bind to validated frozen bytes while the ignored path stays outside
+  audited/model source inventory. Rerun the four-case pipeline matrix, repair any subsequent actual
+  regression, then run Ruff, mypy, generated schemas, and the exact full pytest gate.
+- **Safety/cost:** No provider call, public RPC, secret read, target-controlled command, or paid
+  operation occurred. All delegated reviews are complete and no managed execution session remains
+  active. OpenRouter usage remains `0.0033415625` USD.
+- **Checkpoint:** A scoped WIP checkpoint will be committed and SSH-pushed after this pause record;
+  it must not be used as release evidence.
 
 ## 2026-08-04T00:26:04Z — Graceful operator pause
 

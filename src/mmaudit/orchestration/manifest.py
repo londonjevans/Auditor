@@ -3510,37 +3510,28 @@ def _validate_scheduler_prejudgment_evidence_authority(
     if not forced_candidate_ids <= candidate_ids:
         raise ValueError("post-judgment reproduction resolution references an unknown candidate")
     if reproduction_host is None:
-        if exact_conditional_absence:
-            retained_resolutions = tuple(
-                build_candidate_reproduction_resolutions(
-                    candidates=candidates,
-                    results=(),
-                    forced_candidate_ids=forced_candidate_ids,
-                )
+        retained_resolutions = tuple(
+            build_candidate_reproduction_resolutions(
+                candidates=candidates,
+                results=(),
+                forced_candidate_ids=forced_candidate_ids,
             )
-            retained_resolution_bindings = _scheduler_evidence_payload_bindings(
-                "reproduction_resolution",
-                ((item.candidate_id, item) for item in retained_resolutions),
-            )
-            if (
-                public_tests
-                or public_results
-                or authority.reproduction_results
-                or tuple(reproduction_artifact.candidate_resolutions) != retained_resolutions
-                or authority.reproduction_resolutions != retained_resolution_bindings
-            ):
-                raise ValueError(
-                    "scheduler terminal reproduction differs from typed pass-six absence"
-                )
-            return
+        )
+        retained_resolution_bindings = _scheduler_evidence_payload_bindings(
+            "reproduction_resolution",
+            ((item.candidate_id, item) for item in retained_resolutions),
+        )
         if (
             public_tests
             or public_results
-            or reproduction_artifact.candidate_resolutions
-            or (authority.reproduction_results or authority.reproduction_resolutions)
+            or authority.reproduction_results
+            or tuple(reproduction_artifact.candidate_resolutions) != retained_resolutions
+            or authority.reproduction_resolutions != retained_resolution_bindings
         ):
             raise ValueError(
-                "scheduler reproduction evidence exists without a successful pass-six host"
+                "scheduler terminal reproduction differs from typed pass-six absence"
+                if exact_conditional_absence
+                else "scheduler terminal reproduction differs without a successful pass-six host"
             )
         return
     if reproduction_host.generated_tests is None or reproduction_host.reproduction_results is None:

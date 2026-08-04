@@ -73,9 +73,7 @@ def test_manifest_traceability_names_effective_configuration_and_replay_evidence
 
 def test_report_bundle_traceability_names_complete_delivery_and_cost_custody() -> None:
     matrix = build_traceability_matrix("test-commit")
-    report = next(
-        item for item in matrix.requirements if item.requirement_id == "MA-REPORT-BUNDLE"
-    )
+    report = next(item for item in matrix.requirements if item.requirement_id == "MA-REPORT-BUNDLE")
 
     assert "src/mmaudit/forensic_export.py" in report.implementation_paths
     assert "src/mmaudit/release_io.py" in report.implementation_paths

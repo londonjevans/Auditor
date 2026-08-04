@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-04T00:26:04Z",
-  "candidate_commit": "0be34cafe7f4250718ccf5999cd0bffbd15e8e94",
+  "updated_at": "2026-08-04T01:10:36Z",
+  "candidate_commit": "d93f57ff94f154001153eee0aae2cc79026c67e0",
   "autorun_status": "PAUSED_BY_OPERATOR",
   "current_milestone": "client_report_and_forensic_bundle",
   "current_ticket": "V3-REPORT-001 (IN_PROGRESS)",
@@ -23,8 +23,8 @@
     "V3-FORKSUITE-001.hardhat": "Real Hardhat execution requires the process-attested digest-pinned rootless single-loopback runtime and trusted image-baked reporter specified by V3-HARDHAT-001."
   },
   "last_validation": {
-    "command": ".venv/bin/pytest -q tests/unit/test_client_forensic_reporting.py tests/unit/test_client_forensic_reporting_adversarial.py tests/unit/test_report_status_projection.py tests/unit/test_forensic_export.py tests/unit/test_scheduler_models.py tests/unit/test_scheduler_journal.py tests/unit/test_scheduler_host_contracts.py tests/unit/test_manifest.py tests/unit/test_release_artifacts.py tests/unit/test_release_run.py tests/unit/test_release_verification.py tests/unit/test_release_schemas.py --tb=short",
-    "result": "INCOMPLETE: progress showed at least two failures, but the final output was not retained after the execution session closed; rerun with -x -vv before making any acceptance claim."
+    "command": ".venv/bin/ruff check src/mmaudit/orchestration/manifest.py src/mmaudit/reporting/run_authority.py tests/integration/test_pipeline.py tests/unit/test_scheduler_host_contracts.py; git diff --check",
+    "result": "PASS: affected Ruff checks and diff integrity passed after the final style-only manifest correction; pause-boundary evidence only, not ticket or full-suite acceptance."
   },
   "pause_state": {
     "requested_at": "2026-08-03T20:08:17Z",
@@ -51,7 +51,11 @@
     "resumed_at_current_final": "2026-08-04T00:01:30Z",
     "requested_at_report_authority": "2026-08-04T00:26:04Z",
     "result_report_authority": "Paused with runtime-derived terminal report authority, exact conditional-absence validation, generated schemas, and synchronized current-manifest fixtures preserved. V3-REPORT-001 remains IN_PROGRESS; the broader unit matrix must be rerun because its final failing output was not retained.",
-    "resume_action_report_authority": "Rerun the recorded broader report/release unit matrix with -x -vv, repair the first actual regression without weakening authority checks, then run scheduler integration, Ruff, mypy, and the remaining V3-REPORT-001 gates."
+    "resume_action_report_authority": "Rerun the recorded broader report/release unit matrix with -x -vv, repair the first actual regression without weakening authority checks, then run scheduler integration, Ruff, mypy, and the remaining V3-REPORT-001 gates.",
+    "resumed_at_report_authority": "2026-08-04T00:29:43Z",
+    "requested_at_scanner_source_authority": "2026-08-04T01:10:36Z",
+    "result_scanner_source_authority": "Paused with V3-REPORT-001 still IN_PROGRESS after preserving terminal status coherence, cross-leaf dissent coverage, and exact no-pass-six reproduction accounting. The narrowed pipeline matrix remains red at the ignored local scanner-source excerpt binding seam; no release claim occurred.",
+    "resume_action_scanner_source_authority": "Bind the exact retained scanner-origin citation to trusted frozen local source bytes without adding ignored content to audited/model inventory; rerun the remaining four-case pipeline matrix, then all ticket and complete-suite gates."
   },
   "scheduler_assurance_validation": {
     "status": "PASS_COMPONENT_FULL_ASSURANCE",

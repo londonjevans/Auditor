@@ -372,13 +372,9 @@ class FindingsArtifact(ReportStatusProjection):
     filtered_findings: list[Finding]
     records: list[ForensicFindingRecord]
     candidate_findings: list[CandidateFinding] = Field(max_length=100_000)
-    terminal_candidate_dispositions: list[CandidateTerminalDisposition] = Field(
-        max_length=100_000
-    )
+    terminal_candidate_dispositions: list[CandidateTerminalDisposition] = Field(max_length=100_000)
     verification_decisions: list[VerificationDecision] = Field(max_length=100_000)
-    cross_examination_decisions: list[CandidateCrossExaminationDecision] = Field(
-        max_length=100_000
-    )
+    cross_examination_decisions: list[CandidateCrossExaminationDecision] = Field(max_length=100_000)
     falsification_decisions: list[FalsificationDecision] = Field(max_length=100_000)
     reproductions: list[ReproductionResult] = Field(max_length=100_000)
     reproduction_resolutions: list[CandidateReproductionResolution] = Field(max_length=100_000)
@@ -429,8 +425,7 @@ class FindingsArtifact(ReportStatusProjection):
         if any(
             finding.status is FindingStatus.REJECTED
             or finding.origin_kind is FindingOriginKind.DETERMINISTIC_EXECUTION
-            or severity_rank[finding.severity]
-            >= severity_rank[self.reporting_severity_threshold]
+            or severity_rank[finding.severity] >= severity_rank[self.reporting_severity_threshold]
             for finding in self.filtered_findings
         ):
             raise ValueError(
@@ -438,8 +433,7 @@ class FindingsArtifact(ReportStatusProjection):
             )
         if any(
             finding.origin_kind is not FindingOriginKind.DETERMINISTIC_EXECUTION
-            and severity_rank[finding.severity]
-            < severity_rank[self.reporting_severity_threshold]
+            and severity_rank[finding.severity] < severity_rank[self.reporting_severity_threshold]
             for finding in self.findings
         ):
             raise ValueError("active finding falls below its exact reporting threshold")
@@ -500,10 +494,7 @@ class FindingsArtifact(ReportStatusProjection):
             ),
             (
                 "falsification decisions",
-                [
-                    (item.candidate_id, item.test_name)
-                    for item in self.falsification_decisions
-                ],
+                [(item.candidate_id, item.test_name) for item in self.falsification_decisions],
                 [item.candidate_id for item in self.falsification_decisions],
             ),
             (
@@ -538,11 +529,7 @@ class FindingsArtifact(ReportStatusProjection):
                 "cross-examination decisions",
                 self.cross_examination_decisions,
                 _sorted_cross_examinations(
-                    [
-                        item
-                        for record in self.records
-                        for item in record.cross_examination_decisions
-                    ]
+                    [item for record in self.records for item in record.cross_examination_decisions]
                 ),
             ),
             (
@@ -1234,9 +1221,7 @@ def build_findings_artifact(
             key=lambda item: item.candidate_id,
         )
         linked_verifications = _sorted_verifications(
-            item
-            for item in report.verification_decisions
-            if item.candidate_id in contributor_ids
+            item for item in report.verification_decisions if item.candidate_id in contributor_ids
         )
         linked_cross_examinations = _sorted_cross_examinations(
             item
@@ -1244,9 +1229,7 @@ def build_findings_artifact(
             if item.candidate_id in contributor_ids
         )
         linked_falsifications = _sorted_falsifications(
-            item
-            for item in report.falsification_decisions
-            if item.candidate_id in contributor_ids
+            item for item in report.falsification_decisions if item.candidate_id in contributor_ids
         )
         linked_reproductions = _sorted_reproductions(
             item for item in report.reproductions if item.candidate_id in contributor_ids
@@ -1317,14 +1300,10 @@ def build_findings_artifact(
         candidate_findings=sorted(candidates, key=lambda item: item.candidate_id),
         terminal_candidate_dispositions=terminal_dispositions,
         verification_decisions=_sorted_verifications(report.verification_decisions),
-        cross_examination_decisions=_sorted_cross_examinations(
-            report.cross_examination_decisions
-        ),
+        cross_examination_decisions=_sorted_cross_examinations(report.cross_examination_decisions),
         falsification_decisions=_sorted_falsifications(report.falsification_decisions),
         reproductions=_sorted_reproductions(report.reproductions),
-        reproduction_resolutions=_sorted_reproduction_resolutions(
-            reproduction_resolutions
-        ),
+        reproduction_resolutions=_sorted_reproduction_resolutions(reproduction_resolutions),
     )
 
 

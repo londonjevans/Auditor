@@ -11529,9 +11529,7 @@ class AuditReport(StrictModel):
         if self.filtered_findings:
             raw_threshold = self.metadata.get("severity_threshold")
             if not isinstance(raw_threshold, str):
-                raise ValueError(
-                    "reporting-filtered findings require a typed severity threshold"
-                )
+                raise ValueError("reporting-filtered findings require a typed severity threshold")
             try:
                 threshold = Severity(raw_threshold)
             except ValueError:

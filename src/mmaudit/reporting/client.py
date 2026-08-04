@@ -170,6 +170,7 @@ def bind_active_finding_source_locations(
     """
 
     report = AuditReport.model_validate(report.model_dump(mode="python"))
+
     def bind(findings: Sequence[Finding], *, label: str) -> list[Finding]:
         bound: list[Finding] = []
         for finding in findings:

@@ -9,6 +9,7 @@ import pytest
 from mmaudit.constants import ANALYSIS_ROLES
 from mmaudit.models.schemas import (
     AuditReport,
+    AuditRunStatus,
     CandidateCrossExaminationDecision,
     CandidateCrossExaminationVerdict,
     CandidateFinding,
@@ -36,11 +37,15 @@ from mmaudit.models.schemas import (
     VerificationTest,
     VerificationVerdict,
 )
-from mmaudit.reporting.bundle import build_findings_artifact
+from mmaudit.reporting.bundle import build_coverage_artifact, build_findings_artifact
 from mmaudit.reporting.client import (
     bind_active_finding_source_locations,
     render_client_markdown,
 )
+from mmaudit.reporting.markdown import render_forensic_markdown
+from mmaudit.reporting.run_authority import RunTerminalReportAuthority
+from mmaudit.reporting.sarif import generate_report_sarif
+from mmaudit.reporting.status import effective_report_status
 from mmaudit.repository.chunking import line_range_hash
 from tests.unit.test_assurance import _real_formal_run
 from tests.unit.test_client_forensic_reporting import (
@@ -295,10 +300,65 @@ def test_typed_complete_floor_can_render_calibrated_complete_no_findings() -> No
     )
 
     rendered = _render_client(report, {})
+    findings_artifact = build_findings_artifact(report)
+    coverage_artifact = build_coverage_artifact(report)
+    forensic = render_forensic_markdown(report, findings_artifact=findings_artifact)
+    sarif = generate_report_sarif(report, findings_artifact=findings_artifact)
+    authority = RunTerminalReportAuthority.build(report)
 
     assert "> **RUN STATUS: COMPLETE**" in rendered
     assert "No reportable findings were identified within the analyses that completed" in rendered
     assert "This does not prove that the repository is secure" in rendered
+    for artifact in (findings_artifact, coverage_artifact):
+        assert artifact.run_status is AuditRunStatus.COMPLETE
+        assert artifact.completed
+        assert artifact.limitations == []
+    assert "> **RUN STATUS: COMPLETE**" in forensic
+    assert "No surviving findings met the configured scope" in forensic
+    assert sarif["runs"][0]["properties"]["runStatus"] == AuditRunStatus.COMPLETE.value
+    assert sarif["runs"][0]["properties"]["completed"] is True
+    assert authority.run_status == AuditRunStatus.COMPLETE.value
+    assert authority.terminal_exit_code == 0
+    accounted_cost = authority.accounted_cost_usd_exact
+
+    with pytest.raises(
+        ValueError,
+        match="runtime terminal exit code conflicts with the effective run status",
+    ):
+        RunTerminalReportAuthority.build_from_runtime(
+            report=report,
+            status=effective_report_status(report),
+            minimum_analysis_floor=report.minimum_analysis_floor,
+            maximum_assurance=report.maximum_assurance,
+            accounted_cost_usd_exact=accounted_cost,
+            terminal_exit_code=6,
+        )
+
+
+def test_pre_authorized_degraded_report_authority_retains_successful_process_exit() -> None:
+    usage = [_usage(role) for role in ANALYSIS_ROLES]
+    coverage = _coverage()
+    floor = _assessment(
+        usage=usage,
+        coverage=coverage,
+        explicit_downgrade_reason="operator accepted the unavailable static analyzer",
+        required_model_roles=ANALYSIS_ROLES,
+    )
+    assert floor.run_status is AuditRunStatus.DEGRADED
+    report = AuditReport.model_validate(
+        _typed_report_payload(
+            floor=floor,
+            scanner_runs=[],
+            usage=usage,
+            coverage=coverage,
+        )
+    )
+
+    authority = RunTerminalReportAuthority.build(report)
+
+    assert authority.run_status == AuditRunStatus.DEGRADED.value
+    assert not authority.completed
+    assert authority.terminal_exit_code == 0
 
 
 @pytest.mark.parametrize(
@@ -344,6 +404,7 @@ def test_verifier_dissent_limits_strong_or_confirmed_projection(
         decision.safe_verification_test.description,
     ):
         assert retained in rendered
+    assert rendered.count(f"Confidence: {decision.confidence:.2f}") == 1
 
 
 @pytest.mark.parametrize(

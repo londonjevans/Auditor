@@ -406,10 +406,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   dissent and limitations are prominent; large coverage tables stay forensic.
 - **Dependencies:** `V3-FLOOR-001`.
 - **Status:** `IN_PROGRESS`
-- **Current action:** Complete the remaining acceptance-review obligations: cross-artifact status
-  coherence, fail-closed current manifest issuance, authoritative scanner-origin excerpt binding,
-  self-contained forensic delivery, and representative client size bounds; then run all ticket
-  quality gates and close traceability only from actual evidence.
+- **Current action:** Resume from the operator pause by binding a retained scanner-origin finding
+  on an ignored local source path to trusted frozen source bytes without adding that path to the
+  audited/model source inventory; rerun the remaining four-case pipeline matrix, then the complete
+  ticket gates and close traceability only from actual evidence.
 
 ## V3-SCOPE-001 — Honest Solidity/EVM product profile
 

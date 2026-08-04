@@ -775,6 +775,38 @@ def test_current_manifest_requires_empty_reproduction_evidence_without_successfu
         reproduction_artifact=exact_artifact,
         journal=absent_host_journal,
     )
+    no_pass_journal = cast(Any, SimpleNamespace(pass_results=()))
+    _validate_scheduler_prejudgment_evidence_authority(
+        authority=exact_authority,
+        report=report,
+        candidates=(candidate,),
+        reproduction_artifact=exact_artifact,
+        journal=no_pass_journal,
+    )
+    for producer_evidence in (
+        exact_artifact.model_copy(
+            update={
+                "test_specifications": [
+                    GeneratedFoundryTestSpec.model_construct(
+                        candidate_id="candidate-a",
+                        name="SyntheticReplay",
+                    )
+                ]
+            }
+        ),
+        exact_artifact.model_copy(update={"results": [result]}),
+    ):
+        with pytest.raises(
+            ValueError,
+            match="terminal reproduction differs without a successful pass-six host",
+        ):
+            _validate_scheduler_prejudgment_evidence_authority(
+                authority=exact_authority,
+                report=report,
+                candidates=(candidate,),
+                reproduction_artifact=producer_evidence,
+                journal=no_pass_journal,
+            )
 
     changed_resolution = exact_resolutions[0].model_copy(
         update={"detail": "Coherently changed terminal accounting detail."}
@@ -792,6 +824,17 @@ def test_current_manifest_requires_empty_reproduction_evidence_without_successfu
             candidates=(candidate,),
             reproduction_artifact=changed_artifact,
             journal=absent_host_journal,
+        )
+    with pytest.raises(
+        ValueError,
+        match="terminal reproduction differs without a successful pass-six host",
+    ):
+        _validate_scheduler_prejudgment_evidence_authority(
+            authority=exact_authority,
+            report=report,
+            candidates=(candidate,),
+            reproduction_artifact=changed_artifact,
+            journal=no_pass_journal,
         )
 
 

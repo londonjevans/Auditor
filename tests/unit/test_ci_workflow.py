@@ -54,7 +54,7 @@ def _public_staging_python() -> str:
     workflow = _read(CI_WORKFLOW)
     scanner_job = _job_block(workflow, "scanner-only")
     step = _step_block(scanner_job, "Stage exact manifest-bound public evidence")
-    marker = "python - \"$MMAUDIT_RUN_DIR\" \"$public_root\" <<'PY'\n"
+    marker = 'python - "$MMAUDIT_RUN_DIR" "$public_root" <<\'PY\'\n'
     _, separator, remainder = step.partition(marker)
     assert separator
     script, terminator, _ = remainder.partition("\n          PY")
@@ -452,9 +452,7 @@ def test_public_staging_excludes_prohibited_manifest_artifacts(
     assert completed.returncode == 0, completed.stderr
     run = destination / "run"
     assert not (run / prefix).exists()
-    subset = json.loads(
-        (run / "public-evidence-subset-manifest.json").read_text(encoding="utf-8")
-    )
+    subset = json.loads((run / "public-evidence-subset-manifest.json").read_text(encoding="utf-8"))
     assert prohibited_name not in {entry["path"] for entry in subset["artifacts"]}
     assert subset["omitted_prohibited_artifact_count"] == 1
 

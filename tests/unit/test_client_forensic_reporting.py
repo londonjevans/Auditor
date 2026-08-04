@@ -279,6 +279,7 @@ def test_terminal_report_authority_uses_fail_closed_effective_legacy_status() ->
 def test_terminal_report_authority_rejects_report_runtime_status_disagreement() -> None:
     report = _report(completed=False)
     status = effective_report_status(report)
+    accounted_cost = RunTerminalReportAuthority.build(report).accounted_cost_usd_exact
     changed_status = status.model_copy(
         update={"limitations": [*status.limitations, "Independent runtime disagreement."]}
     )
@@ -292,9 +293,68 @@ def test_terminal_report_authority_rejects_report_runtime_status_disagreement() 
             status=changed_status,
             minimum_analysis_floor=report.minimum_analysis_floor,
             maximum_assurance=report.maximum_assurance,
-            accounted_cost_usd_exact="0",
+            accounted_cost_usd_exact=accounted_cost,
             terminal_exit_code=6,
         )
+
+
+def test_terminal_report_authority_rejects_zero_exit_for_incomplete_runtime() -> None:
+    report = _report(completed=False)
+    status = effective_report_status(report)
+    accounted_cost = RunTerminalReportAuthority.build(report).accounted_cost_usd_exact
+
+    with pytest.raises(
+        ValueError,
+        match="runtime terminal exit code conflicts with the effective run status",
+    ):
+        RunTerminalReportAuthority.build_from_runtime(
+            report=report,
+            status=status,
+            minimum_analysis_floor=report.minimum_analysis_floor,
+            maximum_assurance=report.maximum_assurance,
+            accounted_cost_usd_exact=accounted_cost,
+            terminal_exit_code=0,
+        )
+
+
+def test_terminal_report_authority_rejects_resealed_incomplete_zero_exit() -> None:
+    authority = RunTerminalReportAuthority.build(_report(completed=False))
+    payload = authority.model_dump(mode="json")
+    payload["terminal_exit_code"] = 0
+    runtime_values = {
+        key: value
+        for key, value in payload.items()
+        if key
+        not in {
+            "runtime_assessment_sha256",
+            "report_payload_sha256",
+            "authority_sha256",
+        }
+    }
+    payload["runtime_assessment_sha256"] = hashlib.sha256(
+        json.dumps(
+            runtime_values,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    payload["authority_sha256"] = hashlib.sha256(
+        json.dumps(
+            {key: value for key, value in payload.items() if key != "authority_sha256"},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    with pytest.raises(
+        ValueError,
+        match="runtime terminal exit code conflicts with the effective run status",
+    ):
+        RunTerminalReportAuthority.model_validate(payload)
 
 
 @pytest.mark.parametrize(

@@ -95,6 +95,7 @@ from mmaudit.reporting.bundle import (
 from mmaudit.reporting.client import render_client_markdown_from_artifact
 from mmaudit.reporting.json_report import write_json
 from mmaudit.reporting.markdown import render_forensic_markdown, render_markdown
+from mmaudit.reporting.run_authority import RunTerminalReportAuthority
 from mmaudit.reporting.sarif import generate_report_sarif
 from mmaudit.reporting.status import effective_report_status, report_status_metadata
 from mmaudit.repository.discovery import discover_repository
@@ -892,6 +893,8 @@ async def test_manifest_binds_public_terminal_status_and_achieved_profile_to_pri
 
     authority_path = result.run_dir / "private" / "run-terminal-report-authority.json"
     authority_bytes = authority_path.read_bytes()
+    authority = RunTerminalReportAuthority.model_validate_json(authority_bytes)
+    assert authority.terminal_exit_code == int(result.exit_code)
     swapped_authority_path = tmp_path / "swapped-terminal-report-authority.json"
     swapped_authority_path.write_text("{}\n", encoding="utf-8")
     original_cost_validation = manifest_module._validate_model_execution_cost_ledger_custody

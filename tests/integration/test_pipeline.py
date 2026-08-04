@@ -1137,7 +1137,10 @@ async def test_mock_provider_session_rejects_usage_relabelled_as_real(
         scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
     )
     try:
-        with pytest.raises(ValueError, match="scheduler usage hash"):
+        with pytest.raises(
+            ValueError,
+            match="final report usage differs from exact retained scheduler custody",
+        ):
             await pipeline.run(allow_code_egress=True)
     finally:
         await http_client.aclose()
@@ -1232,6 +1235,8 @@ async def _run(
     severity_threshold: Severity = Severity.INFORMATIONAL,
 ):
     if cost_ledger is None:
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        tmp_path.chmod(0o700)
         ledger_index = sum(1 for path in tmp_path.glob("test-cost-ledger-*.json") if path.is_file())
         cost_ledger = AtomicCostLedger.initialize(
             tmp_path / f"test-cost-ledger-{ledger_index}.json",

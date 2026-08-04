@@ -58,7 +58,7 @@ def test_export_retains_exact_private_logs_and_is_portable_without_original(
     )
     assert descriptor.private_evidence_included
     assert descriptor.logs_included
-    assert descriptor.private_artifact_count == 1
+    assert descriptor.private_artifact_count == 2
     assert descriptor.log_artifact_count == 2
     observed_inventory = sorted(
         path.relative_to(destination).as_posix()
@@ -70,6 +70,7 @@ def test_export_retains_exact_private_logs_and_is_portable_without_original(
     assert (exported_run / "private" / "scanner-output" / "raw-output.bin").read_bytes() == (
         source / "private" / "scanner-output" / "raw-output.bin"
     ).read_bytes()
+    assert (exported_run / "private" / "run-terminal-report-authority.json").is_file()
     assert (exported_run / "logs" / "engine" / "empty.log").read_bytes() == b""
     assert not (destination / "INCOMPLETE_FORENSIC_EXPORT").exists()
     assert CANARY.decode() not in (destination / "forensic-delivery.json").read_text(
@@ -92,7 +93,7 @@ def test_export_retains_exact_private_logs_and_is_portable_without_original(
     )
 
 
-def test_descriptor_does_not_overclaim_absent_sensitive_classes(
+def test_descriptor_counts_required_private_authority_without_overclaiming_optional_classes(
     tmp_path: Path,
     config_factory,
 ) -> None:
@@ -105,10 +106,13 @@ def test_descriptor_does_not_overclaim_absent_sensitive_classes(
         acknowledge_sensitive_evidence=True,
     )
 
-    assert not descriptor.private_evidence_included
+    assert descriptor.private_evidence_included
     assert not descriptor.logs_included
-    assert descriptor.private_artifact_count == 0
+    assert descriptor.private_artifact_count == 1
     assert descriptor.log_artifact_count == 0
+    assert [artifact.path for artifact in descriptor.artifacts if "/private/" in artifact.path] == [
+        "runs/run-without-sensitive-classes/private/run-terminal-report-authority.json"
+    ]
 
 
 def test_export_requires_acknowledgement_before_creating_destination(

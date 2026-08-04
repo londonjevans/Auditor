@@ -9,6 +9,7 @@ from mmaudit.models.schemas import (
     AuditReport,
     AuditRunStatus,
     Evidence,
+    FalsificationVerdict,
     FindingOriginKind,
     FindingStatus,
     QualityGateResult,
@@ -39,7 +40,11 @@ from tests.unit.test_client_forensic_reporting import (
     _render_client,
     _report,
 )
-from tests.unit.test_client_forensic_reporting_adversarial import _verification
+from tests.unit.test_client_forensic_reporting_adversarial import (
+    _cross_examination,
+    _falsification,
+    _verification,
+)
 from tests.unit.test_run_status import (
     _assessment,
     _coverage,
@@ -171,6 +176,49 @@ def test_effective_finding_disposition_is_coherent_across_every_rendered_leaf(
     assert rule["properties"]["status"] == expected_disposition.value.lower()
     assert f"disposition/{expected_disposition.value.lower()}" in rule["properties"]["tags"]
     assert "status/confirmed" not in rule["properties"]["tags"]
+
+
+@pytest.mark.parametrize(
+    ("decision_kind", "expected_disposition", "expected_level"),
+    [
+        ("cross_examination", ForensicDisposition.INCONCLUSIVE, "note"),
+        ("falsified", ForensicDisposition.DISPUTED, "warning"),
+        ("falsifier_inconclusive", ForensicDisposition.INCONCLUSIVE, "note"),
+    ],
+)
+def test_cross_exam_and_falsifier_dissent_is_coherent_across_every_rendered_leaf(
+    decision_kind: str,
+    expected_disposition: ForensicDisposition,
+    expected_level: str,
+) -> None:
+    finding = _finding(FindingStatus.CONFIRMED)
+    updates: dict[str, object]
+    if decision_kind == "cross_examination":
+        updates = {"cross_examination_decisions": [_cross_examination()]}
+    else:
+        verdict = (
+            FalsificationVerdict.FALSIFIED
+            if decision_kind == "falsified"
+            else FalsificationVerdict.INCONCLUSIVE
+        )
+        updates = {"falsification_decisions": [_falsification(verdict)]}
+    report = _report(findings=[finding]).model_copy(update=updates)
+    artifact = build_findings_artifact(report, candidates=[_candidate(finding)])
+
+    client = _render_client(report, {SOURCE_PATH: SOURCE})
+    compatibility = render_markdown(report, findings_artifact=artifact)
+    forensic = render_forensic_markdown(report, findings_artifact=artifact)
+    sarif = generate_report_sarif(report, findings_artifact=artifact)
+    result = sarif["runs"][0]["results"][0]
+
+    assert artifact.records[0].disposition is expected_disposition
+    assert f"> **{expected_disposition.value}**" in client
+    for rendered in (compatibility, forensic):
+        assert f"**{expected_disposition.value.title()} finding" in rendered
+        assert "**Confirmed finding**" not in rendered
+    assert result["level"] == expected_level
+    assert result["properties"]["effectiveDisposition"] == expected_disposition.value
+    assert result["properties"]["rawFindingStatus"] == FindingStatus.CONFIRMED.value
 
 
 def test_artifact_aware_outputs_preserve_rejected_finding_handling() -> None:

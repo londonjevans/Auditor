@@ -13,6 +13,7 @@ from mmaudit.models.scheduler import SchedulerArtifact
 from mmaudit.models.schemas import (
     AuditProfile,
     AuditReport,
+    AuditRunStatus,
     MaximumAssuranceAssessment,
     MaximumAssuranceStatus,
     MinimumAnalysisFloor,
@@ -74,6 +75,26 @@ def _scheduler_values(scheduler: SchedulerArtifact | None) -> dict[str, str | No
     }
 
 
+def _require_coherent_terminal_exit_code(
+    run_status: AuditRunStatus | str | None,
+    terminal_exit_code: int,
+) -> None:
+    """Reject terminal process outcomes that contradict the effective run state."""
+
+    normalized = run_status.value if isinstance(run_status, AuditRunStatus) else run_status
+    if normalized == AuditRunStatus.COMPLETE.value and terminal_exit_code != 0:
+        raise ValueError("runtime terminal exit code conflicts with the effective run status")
+    if (
+        normalized
+        in {
+            AuditRunStatus.INCOMPLETE.value,
+            AuditRunStatus.FAILED.value,
+        }
+        and terminal_exit_code == 0
+    ):
+        raise ValueError("runtime terminal exit code conflicts with the effective run status")
+
+
 class RunTerminalReportAuthority(StrictModel):
     """Write-once private comparison authority for public report semantics."""
 
@@ -127,7 +148,9 @@ class RunTerminalReportAuthority(StrictModel):
             minimum_analysis_floor=validated.minimum_analysis_floor,
             maximum_assurance=validated.maximum_assurance,
             accounted_cost_usd_exact=_exact_report_cost(validated),
-            terminal_exit_code=0 if status.completed else 6,
+            terminal_exit_code=(
+                0 if status.run_status in {AuditRunStatus.COMPLETE, AuditRunStatus.DEGRADED} else 6
+            ),
             scheduler_artifact=scheduler_artifact,
         )
 
@@ -170,6 +193,7 @@ class RunTerminalReportAuthority(StrictModel):
             raise ValueError("runtime maximum assurance differs from the validated report")
         if _exact_report_cost(validated) != accounted_cost_usd_exact:
             raise ValueError("runtime accounted cost differs from the validated report")
+        _require_coherent_terminal_exit_code(validated_status.run_status, terminal_exit_code)
         payload = validated.model_dump(mode="json")
         achieved_profile = _achieved_profile(validated, validated_status)
         runtime_values: dict[str, Any] = {
@@ -270,6 +294,7 @@ class RunTerminalReportAuthority(StrictModel):
             value is not None for value in scheduler_fields
         ):
             raise ValueError("run terminal report scheduler authority is incomplete")
+        _require_coherent_terminal_exit_code(self.run_status, self.terminal_exit_code)
         runtime_values = self.model_dump(
             mode="json",
             exclude={
