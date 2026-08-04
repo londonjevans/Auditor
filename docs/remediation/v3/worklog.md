@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
-LAST_CHECKPOINT_COMMIT: 0be34cafe7f4250718ccf5999cd0bffbd15e8e94
+LAST_CHECKPOINT_COMMIT: f970c2ceddb8bdc0f4ae167e5578bb019a335793
 
 ## 2026-08-04T00:29:43Z — Resume
 
@@ -108,8 +108,9 @@ LAST_CHECKPOINT_COMMIT: 0be34cafe7f4250718ccf5999cd0bffbd15e8e94
 - **Safety/cost:** No provider call, public RPC, secret read, target-controlled command, or paid
   operation occurred. All delegated reviews are complete and no managed execution session remains
   active. OpenRouter usage remains `0.0033415625` USD.
-- **Checkpoint:** A scoped WIP checkpoint will be committed and SSH-pushed after this pause record;
-  it must not be used as release evidence.
+- **Checkpoint:** `f970c2ceddb8bdc0f4ae167e5578bb019a335793` preserves the scoped WIP state;
+  it must not be used as release evidence. The following metadata-only commit records that
+  checkpoint before both commits are SSH-pushed.
 
 ## 2026-08-04T00:26:04Z — Graceful operator pause
 
