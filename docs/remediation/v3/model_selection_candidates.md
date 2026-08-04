@@ -47,6 +47,7 @@ All rows below are ZDR-eligible with structured output and reasoning support.
 | xAI | `x-ai/grok-4.5` | 500,000 | 2.00 | 6.00 |
 | xAI | `x-ai/grok-4.20` | 2,000,000 | 1.25 | 2.50 |
 | Moonshot | `moonshotai/kimi-k3` | 1,048,576 | 3.00 | 15.00 |
+| DeepSeek | `deepseek/deepseek-v4-flash-0731` | 1,048,576 | 0.09 | 0.18 |
 | DeepSeek | `deepseek/deepseek-v4-pro` | 1,048,576 | 0.43 | 0.87 |
 | Z-AI / Zhipu | `z-ai/glm-5.2` | 1,048,576 | 0.68 | 2.13 |
 | MiniMax | `minimax/minimax-m3` | 1,048,576 | 0.30 | 1.20 |
@@ -54,6 +55,30 @@ All rows below are ZDR-eligible with structured output and reasoning support.
 That is **eight distinct root lineages**, against a maximum-assurance requirement of at least
 five independent families and at least eight unique high-quality slots. The requirement is
 satisfiable entirely within the ZDR set.
+
+## Operator model preference, recorded 2026-08-04
+
+The operator asked to use the latest Moonshot and DeepSeek models. Re-observed on 2026-08-04
+against the live catalogue:
+
+| lineage | exact model | context | ZDR | $/M in | $/M out | note |
+|---|---|---:|---|---:|---:|---|
+| Moonshot | `moonshotai/kimi-k3` | 1,048,576 | yes | 3.00 | 15.00 | newest and strongest Moonshot |
+| DeepSeek | `deepseek/deepseek-v4-pro` | 1,048,576 | yes | 0.43 | 0.87 | pro tier |
+| DeepSeek | `deepseek/deepseek-v4-flash-0731` | 1,048,576 | yes | 0.09 | 0.18 | newest by date, flash tier |
+
+**Newest is not necessarily best for auditing.** `deepseek-v4-flash-0731` is the most recently
+released DeepSeek model, but the flash tier is optimised for latency and cost; the `-pro` tier is
+the stronger reasoning model at roughly five times the price and still inexpensive. For security
+review the recommendation is `deepseek-v4-pro`, with the flash variants reserved for cheap
+mechanical passes such as classification or deduplication if a role split is later measured to
+justify it. Only the qualification benchmark decides this; the note records the tier distinction
+so it is not lost in a "use the newest" selection.
+
+Both lineages — `moonshotai` and `deepseek` — are already authorised in
+`docs/remediation/v3/model_lineage_review.md`, so no further lineage decision is needed for
+either. They also count as two distinct root lineages, against a maximum-assurance requirement
+of at least five independent families, so they cannot satisfy the ensemble requirement alone.
 
 ## Observed as NOT ZDR-eligible
 
