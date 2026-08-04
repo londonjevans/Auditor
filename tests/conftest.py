@@ -63,6 +63,7 @@ def base_config_data() -> dict[str, Any]:
     registry = [model_registry_entry(model_id) for model_id in MODEL_IDS.values()]
     return {
         "version": 1,
+        "language_profile": "generic-source-review",
         "repository": {
             "root": ".",
             "ignore_file": ".mmauditignore",

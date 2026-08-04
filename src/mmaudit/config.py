@@ -28,6 +28,7 @@ from mmaudit.models.schemas import (
     AuditScope,
     CrossChainMessageCapability,
     FoundryInvariantHarnessSpec,
+    LanguageCapabilityProfile,
     LocalInvariantDeployment,
     OracleInfluenceCapability,
     Severity,
@@ -1423,6 +1424,7 @@ class ReportingConfig(ConfigModel):
 class AuditConfig(ConfigModel):
     version: Literal[1] = 1
     profile: AuditProfile = AuditProfile.STANDARD
+    language_profile: LanguageCapabilityProfile = LanguageCapabilityProfile.SOLIDITY_EVM
     scope: ScopeConfig = Field(default_factory=ScopeConfig)
     prior_audit: PriorAuditConfig = Field(default_factory=PriorAuditConfig)
     repository: RepositoryConfig = Field(default_factory=RepositoryConfig)
@@ -1649,6 +1651,7 @@ _AUDIT_OVERRIDE_VALUE_TYPES: dict[str, tuple[type[object], ...]] = {
     "execution.concurrency": (int,),
     "execution.cost_ledger_path": (str,),
     "execution.max_request_bytes": (int,),
+    "language_profile": (str,),
     "maximum_assurance.allow_downgrade": (bool,),
     "maximum_assurance.benchmark_gate": (bool,),
     "maximum_assurance.minimum_model_families": (int,),
@@ -2151,6 +2154,7 @@ _ENVIRONMENT_OVERRIDE_MAPPINGS: dict[str, tuple[str, type[Any]]] = {
     "MMAUDIT_SOLIDITY_ALLOW_NETWORK": ("smart_contracts.allow_network", bool),
     "MMAUDIT_SOLIDITY_PROJECT_ROOT": ("smart_contracts.project_root", str),
     "MMAUDIT_PROFILE": ("profile", str),
+    "MMAUDIT_LANGUAGE_PROFILE": ("language_profile", str),
     "MMAUDIT_SCOPE": ("scope.mode", str),
     "MMAUDIT_REQUIRE_COMPLETE_SCOPE": ("scope.require_complete", bool),
     "MMAUDIT_PRIOR_AUDIT_PATH": ("prior_audit.path", str),

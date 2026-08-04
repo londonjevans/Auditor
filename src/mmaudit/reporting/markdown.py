@@ -16,6 +16,9 @@ from mmaudit.models.schemas import (
     ExecutionOriginDispositionKind,
     Finding,
     FindingStatus,
+    LanguageCapabilityProfile,
+    LanguageCapabilityStatus,
+    MaximumAssuranceStatus,
     ReproductionIntegrityStatus,
     ReproductionState,
     ScannerStatus,
@@ -64,6 +67,54 @@ def _text(value: str) -> str:
 
 def _inline(value: str) -> str:
     return "`" + _clean(value).replace("`", "'").replace("|", "\\|") + "`"
+
+
+def _capability_report_title(report: AuditReport) -> str:
+    capability = report.language_capability
+    if capability is None:
+        return "# Corrovera Security Assurance Report"
+    if capability.requested_profile is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW:
+        return "# Corrovera Reduced Generic Source Review"
+    if capability.status is LanguageCapabilityStatus.MATCHED:
+        return "# Corrovera Solidity/EVM Security Assurance Report"
+    return "# Corrovera Solidity/EVM Audit — Capability Not Established"
+
+
+def _capability_report_lines(report: AuditReport) -> list[str]:
+    capability = report.language_capability
+    if capability is None:
+        return []
+    achieved = capability.achieved_profile.value if capability.achieved_profile else "none"
+    lines = [
+        f"Capability profile: **{_text(capability.requested_profile.value)}**. "
+        f"Achieved capability: **{_text(achieved)}**. "
+        f"Capability status: **{_text(capability.status.value)}**.",
+        "",
+    ]
+    if capability.status is LanguageCapabilityStatus.REDUCED:
+        lines.extend(
+            [
+                "> **REDUCED CAPABILITY:** `generic-source-review` was explicitly selected. "
+                "Solidity/EVM compilation, semantic coverage, invariant, economic, "
+                "reproduction, and formal gates were not applied; no EVM assurance is claimed.",
+                "",
+            ]
+        )
+    elif capability.status in {
+        LanguageCapabilityStatus.MISMATCH,
+        LanguageCapabilityStatus.INCONCLUSIVE,
+    }:
+        lines.extend(
+            [
+                "> **PROFILE MISMATCH:** `solidity-evm` was selected, but a qualifying "
+                "Solidity/EVM target was not established. Generic review was not authorized; "
+                "this report cannot claim EVM assurance.",
+                "",
+                *[f"- {_text(reason)}" for reason in capability.limitations],
+                "",
+            ]
+        )
+    return lines
 
 
 def _economic_metrics_summary(metrics: EconomicMetrics | None) -> str:
@@ -691,7 +742,7 @@ def render_markdown(
             f"{status_counts[FindingStatus.NEEDS_REVIEW.value]} needing human review."
         )
     lines = [
-        "# Corrovera Security Assurance Report",
+        _capability_report_title(report),
         "",
         "*Independent minds. Corroborated truth.*",
         "",
@@ -703,9 +754,10 @@ def render_markdown(
         "",
         f"> **RUN STATUS: {_text(run_status.value)}**",
         "",
-        f"Audit profile: **{_text(report.audit_profile.value)}**. "
+        f"Requested analysis depth: **{_text(report.audit_profile.value)}**. "
         f"Quality status: **{_text(projection.quality_status.value)}**.",
         "",
+        *_capability_report_lines(report),
         "Finding discovery origins: "
         f"deterministic execution={origin_counts['deterministic_execution']}, "
         f"model review={origin_counts['model_review']}, "
@@ -720,11 +772,14 @@ def render_markdown(
                 "",
             ]
         )
-        if assurance.downgraded:
+        if assurance.status is not MaximumAssuranceStatus.COMPLETE and (
+            assurance.requested or assurance.required
+        ):
             lines.extend(
                 [
-                    "> **DOWNGRADED:** this run did not satisfy the maximum-assurance "
-                    "contract and must not be represented as maximum assurance.",
+                    "> **ASSURANCE NOT ACHIEVED:** this run did not satisfy the "
+                    "Solidity/EVM maximum-assurance contract and must not be represented as "
+                    "maximum assurance.",
                     "",
                     *[f"- {_text(reason)}" for reason in assurance.downgrade_reasons],
                     "",
@@ -754,10 +809,18 @@ def render_markdown(
             "- **Needs review:** a surviving hypothesis, not an established vulnerability.",
             "- **Rejected:** unsupported or contradicted; retained only for auditability.",
             "",
-            "For Solidity findings, model agreement alone cannot produce `confirmed`; "
-            "confirmation requires a replay-confirmed deterministic invariant counterexample, "
-            "local reproduction, formal proof/counterexample, or strong deterministic analyzer "
-            "evidence plus verifier acceptance.",
+            (
+                "For Solidity findings, model agreement alone cannot produce `confirmed`; "
+                "confirmation requires a replay-confirmed deterministic invariant "
+                "counterexample, local reproduction, formal proof/counterexample, or strong "
+                "deterministic analyzer evidence plus verifier acceptance."
+                if report.language_capability is None
+                or report.language_capability.evm_portfolio_applicable
+                else (
+                    "This reduced generic source review does not apply the Solidity/EVM "
+                    "confirmation portfolio and makes no EVM assurance claim."
+                )
+            ),
             "",
             "Discovery origin is independent of later model adjudication. Model roles cannot "
             "create, suppress, or relocate an execution-originated finding; their contribution "
@@ -778,7 +841,9 @@ def render_markdown(
             f"- Discovery omissions/limits: {len(report.repository.omitted_files)}",
             "- Reporting severity threshold: "
             f"{_inline(str(report.metadata.get('severity_threshold', 'informational')))}",
-            f"- Audit profile: {_inline(report.audit_profile.value)}",
+            f"- Requested analysis depth: {_inline(report.audit_profile.value)}",
+            f"- Capability profile: {_inline(report.language_capability.requested_profile.value) if report.language_capability else 'not recorded'}",
+            f"- Achieved capability: {_inline(report.language_capability.achieved_profile.value) if report.language_capability and report.language_capability.achieved_profile else 'none'}",
             f"- Quality status: {_inline(projection.quality_status.value)}",
             f"- Languages: {_text(', '.join(report.repository.languages) or 'none detected')}",
             f"- Frameworks: {_text(', '.join(report.repository.frameworks) or 'none detected')}",
@@ -1011,7 +1076,19 @@ def render_markdown(
                 )
             lines.append("")
     else:
-        lines.extend(["No Solidity project was detected or analyzed.", ""])
+        lines.extend(
+            [
+                (
+                    "The Solidity/EVM portfolio was not applicable under the selected "
+                    "capability profile."
+                    if report.language_capability is not None
+                    and report.language_capability.requested_profile
+                    is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
+                    else "No Solidity project was detected or analyzed."
+                ),
+                "",
+            ]
+        )
     dependency_rows = (
         dependency_preparation.get("results", [])
         if isinstance(dependency_preparation, dict)
@@ -1778,7 +1855,7 @@ def render_forensic_markdown(
     """Render the exhaustive evidence-oriented report separately from the client summary."""
 
     rendered = render_markdown(report, findings_artifact=findings_artifact)
-    title = "# Corrovera Security Assurance Report"
+    title = _capability_report_title(report)
     if not rendered.startswith(title):
         raise ValueError("forensic report source has an unexpected title")
     return rendered.replace(

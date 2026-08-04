@@ -158,6 +158,7 @@ from mmaudit.models.schemas import (
     AuditScope,
     ExecutionEvidenceKind,
     Finding,
+    LanguageCapabilityProfile,
     MaximumAssuranceStatus,
     Severity,
 )
@@ -212,7 +213,9 @@ from mmaudit.solidity.reproduction import default_isolation_backend
 
 app = typer.Typer(
     name="mmaudit",
-    help="Defensive repository-aware multi-model security auditor.",
+    help=(
+        "Solidity/EVM security auditor with an explicit reduced generic source-review mode."
+    ),
     no_args_is_help=True,
     pretty_exceptions_enable=False,
 )
@@ -261,7 +264,7 @@ def main(
         typer.Option("--version", callback=_version, is_eager=True, help="Show version."),
     ] = False,
 ) -> None:
-    """Run bounded scanners and independently configured model review roles."""
+    """Run Solidity/EVM assurance or an explicitly reduced generic source review."""
 
 
 @app.command("init")
@@ -349,7 +352,24 @@ def doctor_command(
     ] = None,
     profile: Annotated[
         AuditProfile | None,
-        typer.Option("--profile", help="Audit profile override for diagnostics."),
+        typer.Option(
+            "--profile",
+            help=(
+                "Assurance-depth override; maximum-assurance is valid only with "
+                "solidity-evm."
+            ),
+        ),
+    ] = None,
+    language_profile: Annotated[
+        LanguageCapabilityProfile | None,
+        typer.Option(
+            "--language-profile",
+            "--capability-profile",
+            help=(
+                "solidity-evm enables the EVM portfolio; generic-source-review is reduced "
+                "and cannot claim EVM maximum assurance."
+            ),
+        ),
     ] = None,
     no_color: Annotated[bool, typer.Option("--no-color")] = False,
 ) -> None:
@@ -366,6 +386,7 @@ def doctor_command(
             concurrency=None,
             require_zdr=False,
             profile=profile,
+            language_profile=language_profile,
             fork_rpc_url_env=fork_rpc_url_env,
         ).apply(config)
     except ConfigError as exc:
@@ -2025,7 +2046,24 @@ def scan_command(
     changed_since: Annotated[str | None, typer.Option("--changed-since")] = None,
     profile: Annotated[
         AuditProfile | None,
-        typer.Option("--profile", help="Audit profile override."),
+        typer.Option(
+            "--profile",
+            help=(
+                "Assurance-depth override; maximum-assurance is valid only with "
+                "solidity-evm."
+            ),
+        ),
+    ] = None,
+    language_profile: Annotated[
+        LanguageCapabilityProfile | None,
+        typer.Option(
+            "--language-profile",
+            "--capability-profile",
+            help=(
+                "solidity-evm enables the EVM portfolio; generic-source-review is reduced "
+                "and cannot claim EVM maximum assurance."
+            ),
+        ),
     ] = None,
     scope: Annotated[
         AuditScope | None,
@@ -2039,7 +2077,10 @@ def scan_command(
         bool,
         typer.Option(
             "--require-maximum-assurance",
-            help="Fail unless every maximum-assurance contract clause passes.",
+            help=(
+                "Require every Solidity/EVM maximum-assurance clause; incompatible with "
+                "generic-source-review."
+            ),
         ),
     ] = False,
     allow_maximum_assurance_downgrade: Annotated[
@@ -2095,7 +2136,13 @@ def scan_command(
     ] = None,
     solidity: Annotated[
         bool | None,
-        typer.Option("--solidity/--no-solidity", help="Enable or disable Solidity discovery."),
+        typer.Option(
+            "--solidity/--no-solidity",
+            help=(
+                "Control Solidity discovery within the selected capability; this does not "
+                "authorize generic review."
+            ),
+        ),
     ] = None,
     compile_solidity: Annotated[
         bool | None,
@@ -2135,7 +2182,7 @@ def scan_command(
     verbose: Annotated[bool, typer.Option("--verbose")] = False,
     no_color: Annotated[bool, typer.Option("--no-color")] = False,
 ) -> None:
-    """Run deterministic scanners only and emit JSON plus SARIF."""
+    """Run applicable deterministic scanners under an explicit capability profile."""
 
     _execute_audit(
         config_path=config_path,
@@ -2164,6 +2211,7 @@ def scan_command(
         retention_consent=None,
         privacy_source_classification=PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
         profile=profile,
+        language_profile=language_profile,
         scope=scope,
         require_complete_scope=require_complete_scope,
         require_maximum_assurance=require_maximum_assurance,
@@ -2250,6 +2298,7 @@ def ci_command(
         retention_consent=None,
         privacy_source_classification=PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
         profile=None,
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         scope=None,
         require_complete_scope=None,
         require_maximum_assurance=False,
@@ -2369,7 +2418,24 @@ def run_command(
     ] = PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
     profile: Annotated[
         AuditProfile | None,
-        typer.Option("--profile", help="Audit profile override."),
+        typer.Option(
+            "--profile",
+            help=(
+                "Assurance-depth override; maximum-assurance is valid only with "
+                "solidity-evm."
+            ),
+        ),
+    ] = None,
+    language_profile: Annotated[
+        LanguageCapabilityProfile | None,
+        typer.Option(
+            "--language-profile",
+            "--capability-profile",
+            help=(
+                "solidity-evm enables the EVM portfolio; generic-source-review is reduced "
+                "and cannot claim EVM maximum assurance."
+            ),
+        ),
     ] = None,
     scope: Annotated[
         AuditScope | None,
@@ -2383,7 +2449,10 @@ def run_command(
         bool,
         typer.Option(
             "--require-maximum-assurance",
-            help="Fail unless every maximum-assurance contract clause passes.",
+            help=(
+                "Require every Solidity/EVM maximum-assurance clause; incompatible with "
+                "generic-source-review."
+            ),
         ),
     ] = False,
     allow_maximum_assurance_downgrade: Annotated[
@@ -2439,7 +2508,13 @@ def run_command(
     ] = None,
     solidity: Annotated[
         bool | None,
-        typer.Option("--solidity/--no-solidity", help="Enable or disable Solidity discovery."),
+        typer.Option(
+            "--solidity/--no-solidity",
+            help=(
+                "Control Solidity discovery within the selected capability; this does not "
+                "authorize generic review."
+            ),
+        ),
     ] = None,
     compile_solidity: Annotated[
         bool | None,
@@ -2480,7 +2555,7 @@ def run_command(
     verbose: Annotated[bool, typer.Option("--verbose")] = False,
     no_color: Annotated[bool, typer.Option("--no-color")] = False,
 ) -> None:
-    """Run scanners, configured independent roles, verification, and evidence-capped judgment."""
+    """Run Solidity/EVM assurance or explicitly reduced generic source review."""
 
     _execute_audit(
         config_path=config_path,
@@ -2509,6 +2584,7 @@ def run_command(
         retention_consent=retention_consent,
         privacy_source_classification=privacy_source_classification,
         profile=profile,
+        language_profile=language_profile,
         scope=scope,
         require_complete_scope=require_complete_scope,
         require_maximum_assurance=require_maximum_assurance,
@@ -3137,6 +3213,7 @@ def _execute_audit(
     retention_consent: Path | None,
     privacy_source_classification: PrivacySourceClassification,
     profile: AuditProfile | None,
+    language_profile: LanguageCapabilityProfile | None,
     scope: AuditScope | None,
     require_complete_scope: bool | None,
     require_maximum_assurance: bool,
@@ -3198,6 +3275,7 @@ def _execute_audit(
             require_zdr=require_zdr,
             privacy_profile=privacy_profile,
             profile=profile,
+            language_profile=language_profile,
             scope=scope,
             require_complete_scope=require_complete_scope,
             require_maximum_assurance=require_maximum_assurance,
@@ -3437,6 +3515,7 @@ def _audit_config_overrides(
     require_zdr: bool,
     privacy_profile: PrivacyProfile | None = None,
     profile: AuditProfile | None = None,
+    language_profile: LanguageCapabilityProfile | None = None,
     scope: AuditScope | None = None,
     require_complete_scope: bool | None = None,
     require_maximum_assurance: bool = False,
@@ -3488,6 +3567,9 @@ def _audit_config_overrides(
             "zero" if require_zdr or privacy_profile is PrivacyProfile.STRICT_ZDR else None
         ),
         "profile": profile.value if profile is not None else None,
+        "language_profile": (
+            language_profile.value if language_profile is not None else None
+        ),
         "scope.mode": scope.value if scope is not None else None,
         "scope.require_complete": require_complete_scope,
         "maximum_assurance.minimum_model_families": min_model_families,

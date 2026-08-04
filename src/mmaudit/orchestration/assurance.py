@@ -60,6 +60,9 @@ from mmaudit.models.schemas import (
     InvariantExecutionResult,
     InvariantExecutionStatus,
     InvariantSuite,
+    LanguageCapabilityAssessment,
+    LanguageCapabilityProfile,
+    LanguageCapabilityStatus,
     MaximumAssuranceAssessment,
     MaximumAssuranceRequirement,
     MaximumAssuranceStatus,
@@ -247,6 +250,7 @@ class AssuranceRuntime:
     model_usage: list[UsageRecord] = field(default_factory=list)
     provider_session: ProviderSessionProvenance | None = None
     production_qualification: VerifiedProductionQualification | None = None
+    language_capability: LanguageCapabilityAssessment | None = None
     scope_assessment: AuditScopeAssessment | None = None
     benchmark_verification: BenchmarkCertificateVerification | None = None
     benchmark_repository_git_commit: str | None = None
@@ -617,6 +621,18 @@ class MaximumAssuranceContract:
                 ),
                 state=(
                     AnalysisState.DETERMINISTIC if self.requested else AnalysisState.NOT_ANALYZED
+                ),
+            ),
+            _requirement(
+                "solidity_evm_capability_profile",
+                self.config.language_profile is LanguageCapabilityProfile.SOLIDITY_EVM,
+                (
+                    "solidity-evm capability profile selected"
+                    if self.config.language_profile is LanguageCapabilityProfile.SOLIDITY_EVM
+                    else (
+                        "generic-source-review cannot satisfy the Solidity/EVM "
+                        "maximum-assurance contract"
+                    )
                 ),
             ),
             _requirement(
@@ -1248,6 +1264,45 @@ class MaximumAssuranceContract:
                     )
                 ),
                 artifacts=_present(runtime.artifacts, "scheduler-state.json"),
+            ),
+            _requirement(
+                "solidity_evm_language_capability",
+                runtime.language_capability is not None
+                and runtime.language_capability.requested_profile
+                is LanguageCapabilityProfile.SOLIDITY_EVM
+                and runtime.language_capability.achieved_profile
+                is LanguageCapabilityProfile.SOLIDITY_EVM
+                and runtime.language_capability.status is LanguageCapabilityStatus.MATCHED
+                and runtime.language_capability.evm_portfolio_applicable
+                and runtime.language_capability.evm_maximum_assurance_eligible,
+                (
+                    "source-bound Solidity/EVM language capability matched"
+                    if runtime.language_capability is not None
+                    and runtime.language_capability.status is LanguageCapabilityStatus.MATCHED
+                    and runtime.language_capability.evm_maximum_assurance_eligible
+                    else (
+                        "source-bound Solidity/EVM language capability was not achieved"
+                        if runtime.language_capability is None
+                        else (
+                            f"requested={runtime.language_capability.requested_profile.value}; "
+                            f"status={runtime.language_capability.status.value}; "
+                            "maximum-assurance-eligible="
+                            f"{runtime.language_capability.evm_maximum_assurance_eligible}"
+                        )
+                    )
+                ),
+                state=(
+                    AnalysisState.DETERMINISTIC
+                    if runtime.language_capability is not None
+                    and runtime.language_capability.status is LanguageCapabilityStatus.MATCHED
+                    and runtime.language_capability.evm_maximum_assurance_eligible
+                    else (
+                        AnalysisState.ATTEMPTED_FAILED
+                        if runtime.language_capability is not None
+                        else AnalysisState.NOT_ANALYZED
+                    )
+                ),
+                artifacts=_present(runtime.artifacts, "language-capability.json"),
             ),
             _requirement(
                 "full_protocol_scope",

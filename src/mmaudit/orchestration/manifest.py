@@ -79,6 +79,7 @@ from mmaudit.models.schemas import (
     InvariantExecutionOriginDispositionArtifact,
     InvariantExecutionResult,
     JudgeDecisionBatch,
+    LanguageCapabilityProfile,
     Location,
     LocationValidation,
     MaximumAssuranceStatus,
@@ -266,6 +267,9 @@ class RunConfigurationBinding(StrictModel):
     invocation_sha256: str = Field(pattern=_SHA256_PATTERN)
     requested_profile: AuditProfile
     achieved_profile: AuditProfile | None = None
+    requested_language_profile: LanguageCapabilityProfile
+    achieved_language_profile: LanguageCapabilityProfile | None = None
+    reduced_language_capability: bool
 
     @model_validator(mode="after")
     def configuration_layers_reconcile(self) -> RunConfigurationBinding:
@@ -287,11 +291,26 @@ class RunConfigurationBinding(StrictModel):
             raise ValueError("run model-configuration hash is inconsistent")
         if effective.profile is not self.requested_profile:
             raise ValueError("run requested profile differs from the effective configuration")
+        if effective.language_profile is not self.requested_language_profile:
+            raise ValueError(
+                "run requested language profile differs from the effective configuration"
+            )
         if (
             self.achieved_profile is not None
             and self.achieved_profile is not self.requested_profile
         ):
             raise ValueError("run cannot claim an unrequested achieved profile")
+        if (
+            self.achieved_language_profile is not None
+            and self.achieved_language_profile is not self.requested_language_profile
+        ):
+            raise ValueError("run cannot claim an unrequested achieved language profile")
+        expected_reduced = (
+            self.achieved_language_profile
+            is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
+        )
+        if self.reduced_language_capability != expected_reduced:
+            raise ValueError("run reduced language capability is inconsistent")
         expected_invocation = canonical_sha256(
             {
                 "environment_overrides_sha256": self.environment_overrides_sha256,
@@ -302,6 +321,13 @@ class RunConfigurationBinding(StrictModel):
                 "achieved_profile": (
                     self.achieved_profile.value if self.achieved_profile is not None else None
                 ),
+                "requested_language_profile": self.requested_language_profile.value,
+                "achieved_language_profile": (
+                    self.achieved_language_profile.value
+                    if self.achieved_language_profile is not None
+                    else None
+                ),
+                "reduced_language_capability": self.reduced_language_capability,
             }
         )
         if self.invocation_sha256 != expected_invocation:
@@ -632,6 +658,13 @@ def _build_run_evidence_manifest(
     solidity_coverage = _read_json_artifact(root, "solidity-coverage.json")
     model_coverage = _read_json_artifact(root, "model-review-coverage.json")
     scope_assessment = _read_json_artifact(root, "scope-assessment.json")
+    language_capability = _read_json_artifact(root, "language-capability.json")
+    if set(language_capability) != {"schema_version", "assessment"}:
+        raise ValueError("language capability artifact has an unexpected structure")
+    if report.language_capability is None:
+        raise ValueError("current report lacks source-bound language capability evidence")
+    if language_capability["assessment"] != report.language_capability.model_dump(mode="json"):
+        raise ValueError("language capability artifact differs from the final report")
     context_manifest = _validated_context_manifest(root, report)
     _validate_context_manifest_configuration(context_manifest, effective_config)
     qualification_path = root / "model-qualification-runtime.json"
@@ -2302,6 +2335,10 @@ def _run_configuration_binding(
         raise ValueError("report model-configuration hash differs from the effective config")
     if report.audit_profile is not effective_config.profile:
         raise ValueError("report audit profile differs from the effective config")
+    if report.language_capability is None:
+        raise ValueError("report lacks source-bound language capability evidence")
+    if report.language_capability.requested_profile is not effective_config.language_profile:
+        raise ValueError("report language profile differs from the effective config")
     if report.metadata.get("run_options") != run_options.model_dump(mode="json"):
         raise ValueError("report run options differ from the sealed invocation")
     expected_provenance = {
@@ -2333,6 +2370,13 @@ def _run_configuration_binding(
         "effective_config_sha256": effective_hash,
         "requested_profile": effective_config.profile.value,
         "achieved_profile": achieved_profile.value if achieved_profile is not None else None,
+        "requested_language_profile": effective_config.language_profile.value,
+        "achieved_language_profile": (
+            report.language_capability.achieved_profile.value
+            if report.language_capability.achieved_profile is not None
+            else None
+        ),
+        "reduced_language_capability": report.language_capability.reduced_capability,
     }
     return RunConfigurationBinding(
         file_configuration_json=canonical_audit_config_json(file_config),
@@ -2349,6 +2393,9 @@ def _run_configuration_binding(
         invocation_sha256=canonical_sha256(invocation),
         requested_profile=effective_config.profile,
         achieved_profile=achieved_profile,
+        requested_language_profile=effective_config.language_profile,
+        achieved_language_profile=report.language_capability.achieved_profile,
+        reduced_language_capability=report.language_capability.reduced_capability,
     )
 
 

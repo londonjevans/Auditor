@@ -79,6 +79,10 @@ from mmaudit.isolation.dependencies import (
     DependencyPreparationRun,
     prepare_dependencies,
 )
+from mmaudit.language_plugins import (
+    assess_language_capability,
+    language_capability_quality_gate,
+)
 from mmaudit.logging import JsonLineHandler, RedactingFilter
 from mmaudit.models.discovery import (
     DiscoveryCandidateRoute,
@@ -168,6 +172,8 @@ from mmaudit.models.schemas import (
     InvariantSuite,
     JudgeDecision,
     JudgeDecisionBatch,
+    LanguageCapabilityAssessment,
+    LanguageCapabilityStatus,
     Location,
     LocationValidation,
     MaximumAssuranceAssessment,
@@ -390,7 +396,7 @@ from mmaudit.scanners.runner import ScannerRunner
 from mmaudit.scanners.runtime_evidence import (
     validated_scanner_run_location_annotation_preserving_runtime_authority,
 )
-from mmaudit.solidity.compile import compile_solidity_projects
+from mmaudit.solidity.compile import CompilationRun, compile_solidity_projects
 from mmaudit.solidity.coverage import (
     build_solidity_coverage,
     with_invariant_review_coverage,
@@ -1986,6 +1992,7 @@ class AuditPipeline:
         threat_location_rejections: list[str] = []
         context_withheld_files = 0
         solidity_projects: list[SolidityProjectMetadata] = []
+        language_capability: LanguageCapabilityAssessment | None = None
         scope_assessment: AuditScopeAssessment | None = None
         prior_audit_comparison: PriorAuditComparison | None = None
         prior_material_withheld_from_discovery = False
@@ -2142,10 +2149,50 @@ class AuditPipeline:
             unfiltered_discovery,
             self.config.smart_contracts,
         )
-        discovery = filter_discovery_for_scope(
+        language_capability = assess_language_capability(
+            self.config.language_profile,
             unfiltered_discovery,
-            scope_projects,
-            self.config.scope.mode,
+            solidity_projects=scope_projects,
+            smart_contracts_enabled=self.config.smart_contracts.enabled,
+        )
+        write_json(
+            run_dir / "language-capability.json",
+            {
+                "schema_version": REPORT_SCHEMA_VERSION,
+                "assessment": language_capability.model_dump(mode="json"),
+            },
+        )
+        if language_capability.status in {
+            LanguageCapabilityStatus.MISMATCH,
+            LanguageCapabilityStatus.INCONCLUSIVE,
+        }:
+            incomplete.append(
+                "language capability preflight failed: "
+                f"requested={language_capability.requested_profile.value}; "
+                f"status={language_capability.status.value}: "
+                + "; ".join(language_capability.limitations)
+            )
+            preflight_blocked = True
+            terminal_code = ExitCode.CONFIGURATION
+        discovery = (
+            filter_discovery_for_scope(
+                unfiltered_discovery,
+                scope_projects,
+                self.config.scope.mode,
+            )
+            if language_capability.evm_portfolio_applicable
+            else unfiltered_discovery
+        )
+        solidity_analysis_discovery = (
+            discovery
+            if language_capability.evm_portfolio_applicable
+            else DiscoveryResult(
+                root=discovery.root,
+                files=(),
+                omitted=discovery.omitted,
+                changed_paths=frozenset(),
+                git_commit=discovery.git_commit,
+            )
         )
         solidity_source_contents_by_path = {
             item.relative_path: item.content
@@ -2312,15 +2359,16 @@ class AuditPipeline:
 
         try:
             solidity_projects = discover_solidity_projects(
-                discovery,
+                solidity_analysis_discovery,
                 self.config.smart_contracts,
             )
-            dependency_preparation = prepare_dependencies(
-                discovery.root,
-                solidity_projects,
-                self.config.dependency_preparation,
-                run_dir / "private" / "dependency-preparation",
-            )
+            if language_capability.evm_portfolio_applicable:
+                dependency_preparation = prepare_dependencies(
+                    discovery.root,
+                    solidity_projects,
+                    self.config.dependency_preparation,
+                    run_dir / "private" / "dependency-preparation",
+                )
             dependency_failures = [
                 result
                 for result in dependency_preparation.results
@@ -2354,33 +2402,37 @@ class AuditPipeline:
                     "require_prepared_dependencies": True,
                     "excluded_repository_paths": (snapshot_parent_relative,),
                 }
-            compilation_run = compile_solidity_projects(
-                discovery.root,
-                solidity_projects,
-                compilation_config,
-                run_dir / "private" / "solidity-compile",
-                backend=getattr(self.reproduction_runner, "backend", None),
-                **dependency_arguments,
+            compilation_run = (
+                compile_solidity_projects(
+                    discovery.root,
+                    solidity_projects,
+                    compilation_config,
+                    run_dir / "private" / "solidity-compile",
+                    backend=getattr(self.reproduction_runner, "backend", None),
+                    **dependency_arguments,
+                )
+                if language_capability.evm_portfolio_applicable
+                else CompilationRun(results=[], artifact_roots=[])
             )
             solidity_compilations = compilation_run.results
             index_build = build_solidity_index(
-                discovery,
+                solidity_analysis_discovery,
                 solidity_projects,
                 compilation_run.artifact_roots,
             )
             solidity_index = index_build.index
-            solidity_graphs = build_solidity_graphs(discovery, index_build)
-            if any(item.language == "Solidity" for item in discovery.files):
+            solidity_graphs = build_solidity_graphs(solidity_analysis_discovery, index_build)
+            if any(item.language == "Solidity" for item in solidity_analysis_discovery.files):
                 shard_policy = SolidityShardPolicy.build()
                 solidity_shards = build_solidity_shard_inventory(
-                    discovery,
+                    solidity_analysis_discovery,
                     solidity_index,
                     solidity_graphs,
                     policy=shard_policy,
                 )
                 solidity_shard_binding = SolidityShardReportBinding.from_inventory(solidity_shards)
                 verify_solidity_shard_inventory(
-                    discovery=discovery,
+                    discovery=solidity_analysis_discovery,
                     index=solidity_index,
                     graphs=solidity_graphs,
                     inventory=solidity_shards,
@@ -2388,7 +2440,7 @@ class AuditPipeline:
                     report_binding=solidity_shard_binding,
                 )
             solidity_invariants = discover_invariants(
-                discovery,
+                solidity_analysis_discovery,
                 solidity_index,
                 solidity_graphs,
                 self.config.invariants,
@@ -6659,6 +6711,7 @@ class AuditPipeline:
             scanner_runs=scanner_runs,
             coverage=solidity_coverage,
             model_review_coverage=model_review_coverage,
+            language_capability=language_capability,
             scope_assessment=scope_assessment,
             prior_audit_comparison=prior_audit_comparison,
             invariant_executions=invariant_executions,
@@ -7108,6 +7161,7 @@ class AuditPipeline:
             scanner_runs=scanner_runs,
             coverage=solidity_coverage,
             model_review_coverage=model_review_coverage,
+            language_capability=language_capability,
             scope_assessment=scope_assessment,
             prior_audit_comparison=prior_audit_comparison,
             invariant_executions=invariant_executions,
@@ -7149,6 +7203,7 @@ class AuditPipeline:
             "cross-examination.json",
             "specialist-execution.json",
             "model-review-coverage.json",
+            "language-capability.json",
             "scope-assessment.json",
             "prior-audit-comparison.json",
             "maximum_assurance_traceability.json",
@@ -7216,6 +7271,7 @@ class AuditPipeline:
                 model_usage=usage.records,
                 provider_session=provider_session,
                 production_qualification=self.production_qualification,
+                language_capability=language_capability,
                 scope_assessment=scope_assessment,
                 benchmark_verification=benchmark_verification,
                 benchmark_repository_git_commit=benchmark_repository_git_commit,
@@ -7397,6 +7453,7 @@ class AuditPipeline:
         if "." in exact_accounted_cost_text:
             exact_accounted_cost_text = exact_accounted_cost_text.rstrip("0").rstrip(".")
         exact_accounted_cost_text = exact_accounted_cost_text or "0"
+        assert language_capability is not None
         report = self._build_report(
             run_id=run_id,
             generated_at=datetime.now(UTC),
@@ -7437,6 +7494,7 @@ class AuditPipeline:
             formal_runs=formal_runs,
             solidity_coverage=solidity_coverage,
             model_review_coverage=model_review_coverage,
+            language_capability=language_capability,
             scope_assessment=scope_assessment,
             prior_audit_comparison=prior_audit_comparison,
             generated_tests=generated_tests,
@@ -7988,6 +8046,7 @@ class AuditPipeline:
         formal_runs: list[FormalToolRun],
         solidity_coverage: SolidityCoverage | None,
         model_review_coverage: ModelReviewCoverage,
+        language_capability: LanguageCapabilityAssessment,
         scope_assessment: AuditScopeAssessment,
         prior_audit_comparison: PriorAuditComparison,
         generated_tests: list[GeneratedFoundryTestSpec],
@@ -8057,6 +8116,7 @@ class AuditPipeline:
             run_status=run_status,
             minimum_analysis_floor=minimum_analysis_floor,
             quality_gates=quality_gates,
+            language_capability=language_capability,
             scope_assessment=scope_assessment,
             prior_audit_comparison=prior_audit_comparison,
             maximum_assurance=maximum_assurance,
@@ -8598,6 +8658,7 @@ class AuditPipeline:
         for filename in (
             "metadata.json",
             "repository-map.json",
+            "language-capability.json",
             "privacy-source-provenance.json",
             "privacy-policy.json",
             "privacy-fork-rpc-egress.json",
@@ -9527,6 +9588,7 @@ def _evaluate_quality_gates(
     scanner_runs: list[ScannerRun],
     coverage: SolidityCoverage | None,
     model_review_coverage: ModelReviewCoverage | None,
+    language_capability: LanguageCapabilityAssessment | None,
     scope_assessment: AuditScopeAssessment | None,
     prior_audit_comparison: PriorAuditComparison | None,
     invariant_executions: list[InvariantExecutionResult],
@@ -9538,6 +9600,7 @@ def _evaluate_quality_gates(
     repository_execution_sha256: str | None,
 ) -> list[QualityGateResult]:
     base_gates = [
+        language_capability_quality_gate(language_capability),
         scope_quality_gate(scope_assessment),
         model_surface_assignment_gate,
     ]

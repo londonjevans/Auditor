@@ -441,6 +441,22 @@ class AuditProfile(StrEnum):
     MAXIMUM_ASSURANCE = "maximum-assurance"
 
 
+class LanguageCapabilityProfile(StrEnum):
+    """Explicit product capability selected independently of analysis depth."""
+
+    SOLIDITY_EVM = "solidity-evm"
+    GENERIC_SOURCE_REVIEW = "generic-source-review"
+
+
+class LanguageCapabilityStatus(StrEnum):
+    """Evidence-derived relationship between requested capability and audited source."""
+
+    MATCHED = "MATCHED"
+    REDUCED = "REDUCED"
+    MISMATCH = "MISMATCH"
+    INCONCLUSIVE = "INCONCLUSIVE"
+
+
 class AuditScope(StrEnum):
     CONTRACTS_ONLY = "contracts-only"
     CONTRACTS_AND_DEPLOYMENT = "contracts-and-deployment"
@@ -11112,6 +11128,105 @@ class RepositoryMap(StrictModel):
     omitted_files: list[str] = Field(default_factory=list)
 
 
+class LanguageCapabilityAssessment(StrictModel):
+    """Deterministic, source-bound authority for the product capability actually available."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    plugin_id: str = Field(pattern=r"^mmaudit\.language\.[a-z0-9-]{3,64}$")
+    plugin_version: Literal["1.0"] = "1.0"
+    requested_profile: LanguageCapabilityProfile
+    achieved_profile: LanguageCapabilityProfile | None = None
+    status: LanguageCapabilityStatus
+    language_counts: dict[str, StrictInt] = Field(default_factory=dict, max_length=128)
+    discovered_text_file_count: StrictInt = Field(ge=0)
+    solidity_file_count: StrictInt = Field(ge=0)
+    non_solidity_file_count: StrictInt = Field(ge=0)
+    solidity_project_count: StrictInt = Field(ge=0)
+    discovery_inventory_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    blocking_discovery_omissions: tuple[str, ...] = Field(default=(), max_length=1_000)
+    evm_portfolio_applicable: bool
+    evm_maximum_assurance_eligible: bool
+    reduced_capability: bool
+    limitations: tuple[str, ...] = Field(default=(), max_length=100)
+
+    @model_validator(mode="after")
+    def capability_evidence_is_consistent(self) -> LanguageCapabilityAssessment:
+        expected_plugin = {
+            LanguageCapabilityProfile.SOLIDITY_EVM: "mmaudit.language.solidity-evm",
+            LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW: (
+                "mmaudit.language.generic-source-review"
+            ),
+        }[self.requested_profile]
+        if self.plugin_id != expected_plugin:
+            raise ValueError("language capability plugin differs from the requested profile")
+        if list(self.language_counts) != sorted(self.language_counts):
+            raise ValueError("language capability counts must be canonically ordered")
+        if any(not language or count <= 0 for language, count in self.language_counts.items()):
+            raise ValueError("language capability counts require positive named populations")
+        if sum(self.language_counts.values()) != self.discovered_text_file_count:
+            raise ValueError("language capability counts differ from discovered files")
+        if self.language_counts.get("Solidity", 0) != self.solidity_file_count:
+            raise ValueError("language capability Solidity count is inconsistent")
+        if (
+            self.discovered_text_file_count - self.solidity_file_count
+            != self.non_solidity_file_count
+        ):
+            raise ValueError("language capability non-Solidity count is inconsistent")
+        if self.solidity_project_count > self.solidity_file_count:
+            raise ValueError("language capability has more projects than Solidity files")
+        if self.blocking_discovery_omissions != tuple(
+            sorted(set(self.blocking_discovery_omissions))
+        ):
+            raise ValueError("blocking discovery omissions must be unique and sorted")
+        if self.limitations != tuple(sorted(set(self.limitations))):
+            raise ValueError("language capability limitations must be unique and sorted")
+        if self.evm_maximum_assurance_eligible and not self.evm_portfolio_applicable:
+            raise ValueError("EVM maximum-assurance eligibility requires the EVM portfolio")
+
+        if self.status is LanguageCapabilityStatus.MATCHED:
+            if (
+                self.requested_profile is not LanguageCapabilityProfile.SOLIDITY_EVM
+                or self.achieved_profile is not LanguageCapabilityProfile.SOLIDITY_EVM
+                or self.solidity_file_count == 0
+                or self.solidity_project_count == 0
+                or not self.evm_portfolio_applicable
+                or not self.evm_maximum_assurance_eligible
+                or self.reduced_capability
+            ):
+                raise ValueError("matched language capability lacks complete Solidity/EVM evidence")
+        elif self.status is LanguageCapabilityStatus.REDUCED:
+            if (
+                self.requested_profile is not LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
+                or self.achieved_profile is not LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
+                or self.discovered_text_file_count == 0
+                or self.evm_portfolio_applicable
+                or self.evm_maximum_assurance_eligible
+                or not self.reduced_capability
+                or not self.limitations
+            ):
+                raise ValueError("reduced generic-source-review evidence is inconsistent")
+        elif self.status in {
+            LanguageCapabilityStatus.MISMATCH,
+            LanguageCapabilityStatus.INCONCLUSIVE,
+        }:
+            if (
+                self.achieved_profile is not None
+                or self.evm_portfolio_applicable
+                or self.evm_maximum_assurance_eligible
+                or self.reduced_capability
+                or not self.limitations
+            ):
+                raise ValueError("unachieved language capability evidence is inconsistent")
+            if (
+                self.status is LanguageCapabilityStatus.INCONCLUSIVE
+                and not self.blocking_discovery_omissions
+            ):
+                raise ValueError("inconclusive language capability requires blocking omissions")
+        return self
+
+
 class ContextExcerpt(StrictModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -11408,6 +11523,7 @@ class AuditReport(StrictModel):
     run_status: AuditRunStatus | None = None
     minimum_analysis_floor: MinimumAnalysisFloor | None = None
     quality_gates: list[QualityGateResult] = Field(default_factory=list)
+    language_capability: LanguageCapabilityAssessment | None = None
     scope_assessment: AuditScopeAssessment | None = None
     prior_audit_comparison: PriorAuditComparison | None = None
     maximum_assurance: MaximumAssuranceAssessment | None = None
@@ -11491,6 +11607,40 @@ class AuditReport(StrictModel):
             ):
                 raise ValueError(
                     "run completion conflicts with the required maximum-assurance assessment"
+                )
+        if (
+            self.audit_profile is AuditProfile.MAXIMUM_ASSURANCE
+            or (
+                self.maximum_assurance is not None
+                and (self.maximum_assurance.requested or self.maximum_assurance.required)
+            )
+        ) and self.language_capability is None:
+            raise ValueError(
+                "maximum-assurance report requires source-bound language capability evidence"
+            )
+        if self.language_capability is not None:
+            capability = self.language_capability
+            if capability.status in {
+                LanguageCapabilityStatus.MISMATCH,
+                LanguageCapabilityStatus.INCONCLUSIVE,
+            } and self.run_status is AuditRunStatus.COMPLETE:
+                raise ValueError("unachieved language capability cannot produce a COMPLETE run")
+            if (
+                capability.achieved_profile is LanguageCapabilityProfile.SOLIDITY_EVM
+                and self.repository.languages.get("Solidity", 0) == 0
+            ):
+                raise ValueError("Solidity/EVM capability lacks Solidity report scope")
+            if (
+                self.maximum_assurance is not None
+                and self.maximum_assurance.status is MaximumAssuranceStatus.COMPLETE
+                and (
+                    capability.status is not LanguageCapabilityStatus.MATCHED
+                    or capability.achieved_profile is not LanguageCapabilityProfile.SOLIDITY_EVM
+                    or not capability.evm_maximum_assurance_eligible
+                )
+            ):
+                raise ValueError(
+                    "maximum-assurance completion lacks matched Solidity/EVM capability"
                 )
         self._validate_minimum_floor_runtime_bindings(self.minimum_analysis_floor)
         return self

@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED
+AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Honest Solidity/EVM product profile
 CURRENT_TICKET: V3-SCOPE-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-REPORT-001 (COMPLETE)
-NEXT_ACTION: Resume V3-SCOPE-001 from the clean SSH-synchronized checkpoint; inspect language detection, capability/profile configuration, plugin boundaries, CLI descriptions, README claims, and existing tests before editing.
-LAST_COMMAND: `git status --short && git rev-parse HEAD && git rev-parse @{upstream}`
-LAST_RESULT: PASS_PAUSE_BOUNDARY: worktree was clean and local HEAD matched upstream at `b2396f954a1bf359930a9bb3fe9a3b1696a48268`; all active scope-review subagents were interrupted before new implementation began.
+NEXT_ACTION: Resume V3-SCOPE-001 from the paused checkpoint; finish CLI and README scope claims, bind capability evidence through schemas and traceability, update assurance/release fixtures, then run the focused and broader validation gates before claiming completion.
+LAST_COMMAND: `.venv/bin/python -m py_compile src/mmaudit/cli.py src/mmaudit/config.py src/mmaudit/models/schemas.py src/mmaudit/language_plugins.py src/mmaudit/orchestration/assurance.py src/mmaudit/orchestration/manifest.py src/mmaudit/orchestration/pipeline.py src/mmaudit/reporting/client.py src/mmaudit/reporting/markdown.py src/mmaudit/reporting/run_authority.py src/mmaudit/reporting/sarif.py src/mmaudit/scanners/runner.py`
+LAST_RESULT: PASS — the complete in-progress V3-SCOPE-001 Python implementation slice compiled without syntax errors; focused capability boundary tests passed 5/5, the fail-closed Python-target mismatch integration passed 1/1, and the reduced generic mocked-audit integration passed 1/1. Broader ticket gates remain pending.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,40 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
-LAST_CHECKPOINT_COMMIT: 487041a58431119ae2f52ae704dddd6b9b91170c
+LAST_CHECKPOINT_COMMIT: 3a3dc8d7ba677e90434973c3763dc4749e393c39
+
+## 2026-08-04T05:56:26Z — Operator-requested graceful pause
+
+- Paused `V3-SCOPE-001` while it remains `IN_PROGRESS`; no completion or release claim is made.
+- Preserved the typed language-capability boundary, early mismatch rejection, reduced generic mode,
+  report/SARIF/manifest propagation, focused regressions, and partially updated CLI wording.
+- Focused evidence already obtained: language-plugin unit tests passed `5/5`; the fail-closed
+  non-Solidity mismatch integration passed `1/1`; the reduced generic mocked-audit integration
+  passed `1/1`; the full changed Python slice passed `py_compile` immediately before pausing.
+- Remaining work is explicit in `NEXT_ACTION`; README/config/schema/traceability and dependent
+  assurance/release fixtures have not yet been completed or broadly validated.
+- All review subagents are complete. No provider call, secret access, public RPC, live target,
+  external engine, container, or paid action occurred in this slice.
+
+## 2026-08-04T05:28:50Z — Resume V3-SCOPE-001
+
+- Resumed from the clean SSH-synchronized pause checkpoint
+  `3a3dc8d7ba677e90434973c3763dc4749e393c39` and re-read the authoritative 1,417-line
+  product objective, active V3 queue, worklog, runtime status, and repository state.
+- Continue only the bounded scope-honesty ticket: first reproduce the claim/gating defect, then
+  implement the typed Solidity/EVM versus reduced generic-source-review capability boundary and
+  validate its CLI, report, manifest, and assurance projections.
+- No provider call, secret access, public RPC, live target, external scanner, compiler, container,
+  or paid action is required for this ticket.
+
+## 2026-08-04T05:31:42Z — V3-SCOPE-001 red regression
+
+- Added five focused regressions covering a matched Solidity/EVM profile, a non-Solidity mismatch
+  without silent generic fallback, explicitly reduced generic-source-review semantics, fail-closed
+  inconclusive discovery truncation, and the maximum-assurance Solidity/EVM capability preflight.
+- Exact command: `.venv/bin/pytest -q tests/unit/test_language_plugins.py`.
+- Expected pre-fix result: collection failed with `ModuleNotFoundError` for the absent trusted
+  `mmaudit.language_plugins` boundary. No test received implementation credit from this red run.
 
 ## 2026-08-04T02:11:31Z — Resume
 

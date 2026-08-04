@@ -70,6 +70,8 @@ from mmaudit.models.schemas import (
     GeneratedFoundryTestSpec,
     InvariantExecutionResult,
     InvariantExecutionStatus,
+    LanguageCapabilityProfile,
+    LanguageCapabilityStatus,
     LocalInvariantDeployment,
     LocalInvariantDeploymentArgument,
     Location,
@@ -556,6 +558,49 @@ class EvidenceMismatchingUsageLedger(UsageLedger):
                 update={"execution_evidence": ExecutionEvidenceKind.REAL},
             )
         )
+
+
+@pytest.mark.asyncio
+async def test_solidity_profile_rejects_python_before_compiler_scanner_or_model_analysis(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = config_factory(language_profile=LanguageCapabilityProfile.SOLIDITY_EVM)
+    scanner = StaticScannerRunner()
+
+    def forbidden_compilation(*_args: Any, **_kwargs: Any) -> None:
+        pytest.fail("language mismatch reached the Solidity compiler boundary")
+
+    monkeypatch.setattr(
+        "mmaudit.orchestration.pipeline.compile_solidity_projects",
+        forbidden_compilation,
+    )
+    result = await AuditPipeline(
+        config,
+        repo=vulnerable_repo,
+        output=tmp_path / "language-mismatch-output",
+        scanner_runner=scanner,  # type: ignore[arg-type]
+    ).run(scanner_only=True)
+
+    assert result.exit_code is ExitCode.CONFIGURATION
+    assert scanner.calls == 0
+    assert result.report.usage == []
+    assert result.report.language_capability is not None
+    assert result.report.language_capability.status is LanguageCapabilityStatus.MISMATCH
+    assert result.report.language_capability.achieved_profile is None
+    assert not result.report.language_capability.evm_maximum_assurance_eligible
+    capability_artifact = json.loads(
+        (result.run_dir / "language-capability.json").read_text(encoding="utf-8")
+    )
+    assert capability_artifact["assessment"] == result.report.language_capability.model_dump(
+        mode="json"
+    )
+    compilation_artifact = json.loads(
+        (result.run_dir / "solidity-compilation.json").read_text(encoding="utf-8")
+    )
+    assert compilation_artifact["results"] == []
 
 
 @pytest.mark.asyncio
@@ -1668,6 +1713,7 @@ async def test_mock_multi_agent_audit_preserves_artifacts_without_false_completi
     for name in (
         "metadata.json",
         "repository-map.json",
+        "language-capability.json",
         "scanner-results.json",
         "candidate-findings.json",
         "verification-results.json",
@@ -1714,11 +1760,26 @@ async def test_mock_multi_agent_audit_preserves_artifacts_without_false_completi
     )
     client_report = (result.run_dir / "client-report.md").read_text(encoding="utf-8")
     forensic_report = (result.run_dir / "forensic-report.md").read_text(encoding="utf-8")
+    assert result.report.language_capability is not None
+    assert result.report.language_capability.status is LanguageCapabilityStatus.REDUCED
+    assert (
+        result.report.language_capability.achieved_profile
+        is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
+    )
+    assert not result.report.language_capability.evm_portfolio_applicable
+    assert "# Corrovera Reduced Generic Source Review" in client_report
+    assert "REDUCED CAPABILITY" in client_report
+    assert "no EVM assurance is claimed" in client_report
     assert "Forensic bundle index" in client_report
     assert "Complete model-review surface coverage" not in client_report
     assert "Corrovera Forensic Evidence Report" in forensic_report
     sarif = json.loads((result.run_dir / "audit-results.sarif").read_text(encoding="utf-8"))
     assert sarif["version"] == "2.1.0"
+    sarif_properties = sarif["runs"][0]["properties"]
+    assert sarif_properties["capabilityProfile"] == "generic-source-review"
+    assert sarif_properties["achievedCapabilityProfile"] == "generic-source-review"
+    assert sarif_properties["capabilityStatus"] == "REDUCED"
+    assert sarif_properties["reducedCapability"]
     traceability = MaximumAssuranceTraceability.model_validate_json(
         (result.run_dir / "maximum_assurance_traceability.json").read_text(encoding="utf-8")
     )
@@ -1731,6 +1792,22 @@ async def test_mock_multi_agent_audit_preserves_artifacts_without_false_completi
         (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
     )
     assert manifest.schema_version == "1.2"
+    assert manifest.run_configuration is not None
+    assert (
+        manifest.run_configuration.requested_language_profile
+        is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
+    )
+    assert (
+        manifest.run_configuration.achieved_language_profile
+        is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
+    )
+    assert manifest.run_configuration.reduced_language_capability
+    assert not {
+        "compilation",
+        "slither",
+        "foundry_fork",
+        "candidate_reproduction",
+    } & {gate.gate for gate in result.report.quality_gates}
     validate_manifest_artifacts(manifest, result.run_dir)
     context_manifest = load_context_manifest(result.run_dir / "context-manifest.json")
     validate_context_manifest_against_usage(

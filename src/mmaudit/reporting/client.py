@@ -14,7 +14,10 @@ from mmaudit.models.schemas import (
     CandidateReproductionResolution,
     Finding,
     FindingStatus,
+    LanguageCapabilityProfile,
+    LanguageCapabilityStatus,
     Location,
+    MaximumAssuranceStatus,
     Severity,
 )
 from mmaudit.models.usage import is_structurally_creditable_usage_record
@@ -30,7 +33,13 @@ from mmaudit.reporting.bundle import (
     scanner_source_authority,
     source_symbol_is_present,
 )
-from mmaudit.reporting.markdown import _inline, _neutralize_untrusted_controls, _text
+from mmaudit.reporting.markdown import (
+    _capability_report_lines,
+    _capability_report_title,
+    _inline,
+    _neutralize_untrusted_controls,
+    _text,
+)
 from mmaudit.reporting.status import effective_report_status
 from mmaudit.repository.chunking import line_range_hash
 from mmaudit.scanners.base import ScannerWorkspaceTextRecord
@@ -709,8 +718,49 @@ def _render_client_markdown_from_artifact(
         active_records,
         key=lambda item: (-_SEVERITY_ORDER[item.finding.severity], item.finding.id),
     )
+    capability = report.language_capability
+    if (
+        capability is not None
+        and capability.requested_profile is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
+    ):
+        risk_narrative = (
+            "This explicitly reduced generic source review reached "
+            f"**{status.value}** with {len(report.findings)} reportable and "
+            f"{len(report.rejected_findings)} rejected finding record(s). It makes no "
+            "Solidity/EVM or maximum-assurance claim."
+        )
+        methodology = (
+            "mmaudit combined deterministic source identity and location validation with "
+            "applicable static and independent model evidence. The Solidity/EVM compilation, "
+            "invariant, economic, reproduction, and formal portfolio was not applied."
+        )
+    elif capability is not None and capability.status in {
+        LanguageCapabilityStatus.MISMATCH,
+        LanguageCapabilityStatus.INCONCLUSIVE,
+    }:
+        risk_narrative = (
+            "The requested Solidity/EVM audit did not establish an applicable Solidity/EVM "
+            f"target and reached **{status.value}**. No generic fallback or EVM assurance is "
+            "claimed."
+        )
+        methodology = (
+            "mmaudit completed bounded source discovery and capability assessment only; the "
+            "requested Solidity/EVM analysis portfolio was not authorized to execute."
+        )
+    else:
+        risk_narrative = (
+            f"This evidence-derived {_text(report.audit_profile.value)} Solidity/EVM audit "
+            f"reached **{status.value}** with {len(report.findings)} reportable and "
+            f"{len(report.rejected_findings)} rejected finding record(s)."
+        )
+        methodology = (
+            "mmaudit combines deterministic source identity and location validation with "
+            "bounded static, dynamic, formal, and independent model evidence. Model agreement "
+            "cannot by itself create a confirmed finding, and the report preserves material "
+            "dissent."
+        )
     lines = [
-        "# Corrovera Security Assurance Report",
+        _capability_report_title(report),
         "",
         "*Independent minds. Corroborated truth.*",
         "",
@@ -722,15 +772,28 @@ def _render_client_markdown_from_artifact(
         "",
         f"Quality status: **{projection.quality_status.value}**.",
         "",
+        f"Requested analysis depth: **{_text(report.audit_profile.value)}**.",
+        "",
+        *_capability_report_lines(report),
         _executive_summary(report, status),
         "",
         "## Executive risk narrative",
         "",
-        f"This evidence-derived {_text(report.audit_profile.value)} audit reached "
-        f"**{status.value}** with {len(report.findings)} reportable and "
-        f"{len(report.rejected_findings)} rejected finding record(s).",
+        risk_narrative,
         "",
     ]
+    if (
+        report.maximum_assurance is not None
+        and report.maximum_assurance.status is not MaximumAssuranceStatus.COMPLETE
+        and (report.maximum_assurance.requested or report.maximum_assurance.required)
+    ):
+        lines.extend(
+            [
+                "> **ASSURANCE NOT ACHIEVED:** this run did not satisfy the Solidity/EVM "
+                "maximum-assurance contract and must not be represented as maximum assurance.",
+                "",
+            ]
+        )
     if status is not AuditRunStatus.COMPLETE:
         lines.extend(
             [
@@ -754,9 +817,7 @@ def _render_client_markdown_from_artifact(
             "",
             "## Methodology summary",
             "",
-            "mmaudit combines deterministic source identity and location validation with bounded "
-            "static, dynamic, formal, and independent model evidence. Model agreement cannot by "
-            "itself create a confirmed finding, and the report preserves material dissent.",
+            methodology,
             "",
             "## Analysis actually completed",
             "",

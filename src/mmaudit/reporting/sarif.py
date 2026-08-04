@@ -14,6 +14,8 @@ from mmaudit.models.schemas import (
     AuditRunStatus,
     Finding,
     FindingStatus,
+    LanguageCapabilityAssessment,
+    LanguageCapabilityStatus,
     MaximumAssuranceAssessment,
     QualityGateResult,
     ScannerRun,
@@ -167,6 +169,7 @@ def generate_sarif(
     findings_artifact: FindingsArtifact | None = None,
     scanner_runs: Sequence[ScannerRun] = (),
     maximum_assurance: MaximumAssuranceAssessment | None = None,
+    language_capability: LanguageCapabilityAssessment | None = None,
     run_status: AuditRunStatus | None = None,
     quality_status: AuditQualityStatus | None = None,
     completed: bool | None = None,
@@ -319,6 +322,20 @@ def generate_sarif(
             for run in sorted(scanner_runs, key=lambda item: item.scanner)
         ],
     }
+    if language_capability is not None:
+        run_properties.update(
+            {
+                "languageCapability": language_capability.model_dump(mode="json"),
+                "capabilityProfile": language_capability.requested_profile.value,
+                "achievedCapabilityProfile": (
+                    language_capability.achieved_profile.value
+                    if language_capability.achieved_profile is not None
+                    else None
+                ),
+                "capabilityStatus": language_capability.status.value,
+                "reducedCapability": language_capability.reduced_capability,
+            }
+        )
     if run_status is not None:
         run_properties["runStatus"] = run_status.value
     if quality_status is not None:
@@ -339,6 +356,7 @@ def generate_sarif(
             bool(incomplete_reasons),
             bool(quality_gates),
             bool(scanner_runs),
+            language_capability is not None,
         )
     )
     if run_evidence_supplied:
@@ -349,6 +367,19 @@ def generate_sarif(
             invocation_properties["qualityStatus"] = quality_status.value
         if completed is not None:
             invocation_properties["completed"] = completed
+        if language_capability is not None:
+            invocation_properties.update(
+                {
+                    "capabilityProfile": language_capability.requested_profile.value,
+                    "achievedCapabilityProfile": (
+                        language_capability.achieved_profile.value
+                        if language_capability.achieved_profile is not None
+                        else None
+                    ),
+                    "capabilityStatus": language_capability.status.value,
+                    "reducedCapability": language_capability.reduced_capability,
+                }
+            )
         invocation = {
             "executionSuccessful": (
                 run_status is AuditRunStatus.COMPLETE
@@ -384,6 +415,21 @@ def generate_sarif(
             for run in sorted(scanner_runs, key=lambda item: item.scanner)
             if (notification := _scanner_execution_notification(run)) is not None
         )
+        if language_capability is not None and language_capability.status in {
+            LanguageCapabilityStatus.MISMATCH,
+            LanguageCapabilityStatus.INCONCLUSIVE,
+        }:
+            invocation["toolExecutionNotifications"].append(
+                {
+                    "level": "error",
+                    "message": {
+                        "text": (
+                            "Requested language capability was not established; no EVM "
+                            "assurance is claimed."
+                        )
+                    },
+                }
+            )
         if maximum_assurance is not None:
             invocation_properties["maximumAssuranceStatus"] = maximum_assurance.status.value
             invocation_properties["downgraded"] = maximum_assurance.downgraded
@@ -456,6 +502,7 @@ def generate_report_sarif(
         findings_artifact=findings_artifact,
         scanner_runs=report.scanner_runs,
         maximum_assurance=report.maximum_assurance,
+        language_capability=report.language_capability,
         run_status=projection.run_status,
         quality_status=projection.quality_status,
         completed=projection.completed,

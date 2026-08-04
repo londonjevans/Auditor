@@ -100,8 +100,8 @@ class RunTerminalReportAuthority(StrictModel):
 
     schema_version: Literal["1.0"] = "1.0"
     evidence_authority: Literal["comparison_required"] = "comparison_required"
-    algorithm: Literal["mmaudit.run-terminal-report-authority.v2"] = (
-        "mmaudit.run-terminal-report-authority.v2"
+    algorithm: Literal["mmaudit.run-terminal-report-authority.v3"] = (
+        "mmaudit.run-terminal-report-authority.v3"
     )
     run_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
     scheduler_campaign_id: str | None = Field(
@@ -115,6 +115,11 @@ class RunTerminalReportAuthority(StrictModel):
     report_schema_version: str = Field(min_length=1, max_length=20)
     audit_profile: str = Field(min_length=1, max_length=100)
     achieved_profile: str | None = Field(default=None, max_length=100)
+    capability_profile: str | None = Field(default=None, max_length=100)
+    achieved_capability_profile: str | None = Field(default=None, max_length=100)
+    capability_status: str | None = Field(default=None, max_length=100)
+    reduced_capability: bool = False
+    language_capability_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
     run_status: str | None = Field(default=None, max_length=100)
     quality_status: str = Field(min_length=1, max_length=100)
     completed: bool
@@ -199,12 +204,38 @@ class RunTerminalReportAuthority(StrictModel):
         runtime_values: dict[str, Any] = {
             "schema_version": "1.0",
             "evidence_authority": "comparison_required",
-            "algorithm": "mmaudit.run-terminal-report-authority.v2",
+            "algorithm": "mmaudit.run-terminal-report-authority.v3",
             "run_id": validated.run_id,
             **_scheduler_values(validated_scheduler),
             "report_schema_version": validated.schema_version,
             "audit_profile": validated.audit_profile.value,
             "achieved_profile": (achieved_profile.value if achieved_profile is not None else None),
+            "capability_profile": (
+                validated.language_capability.requested_profile.value
+                if validated.language_capability is not None
+                else None
+            ),
+            "achieved_capability_profile": (
+                validated.language_capability.achieved_profile.value
+                if validated.language_capability is not None
+                and validated.language_capability.achieved_profile is not None
+                else None
+            ),
+            "capability_status": (
+                validated.language_capability.status.value
+                if validated.language_capability is not None
+                else None
+            ),
+            "reduced_capability": (
+                validated.language_capability.reduced_capability
+                if validated.language_capability is not None
+                else False
+            ),
+            "language_capability_sha256": (
+                _canonical_sha256(validated.language_capability.model_dump(mode="json"))
+                if validated.language_capability is not None
+                else None
+            ),
             "run_status": validated_status.run_status.value,
             "quality_status": validated_status.quality_status.value,
             "completed": validated_status.completed,
@@ -256,6 +287,32 @@ class RunTerminalReportAuthority(StrictModel):
             "achieved_profile": (
                 achieved.value
                 if (achieved := _achieved_profile(validated, status)) is not None
+                else None
+            ),
+            "capability_profile": (
+                validated.language_capability.requested_profile.value
+                if validated.language_capability is not None
+                else None
+            ),
+            "achieved_capability_profile": (
+                validated.language_capability.achieved_profile.value
+                if validated.language_capability is not None
+                and validated.language_capability.achieved_profile is not None
+                else None
+            ),
+            "capability_status": (
+                validated.language_capability.status.value
+                if validated.language_capability is not None
+                else None
+            ),
+            "reduced_capability": (
+                validated.language_capability.reduced_capability
+                if validated.language_capability is not None
+                else False
+            ),
+            "language_capability_sha256": (
+                _canonical_sha256(payload["language_capability"])
+                if payload["language_capability"] is not None
                 else None
             ),
             "run_status": status.run_status.value,

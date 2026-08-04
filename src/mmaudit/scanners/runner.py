@@ -15,6 +15,7 @@ from mmaudit.config import AuditConfig, ScannerConfig
 from mmaudit.isolation.container import RepositoryJavaScriptIsolationBackend
 from mmaudit.isolation.repository_code import contains_hardhat_repository_code
 from mmaudit.models.schemas import (
+    LanguageCapabilityProfile,
     RepositoryCodeExecutionState,
     ScannerRun,
     ScannerStatus,
@@ -438,7 +439,16 @@ class ScannerRunner:
 
             for name, adapter in self.adapters.items():
                 scanner_config = self.scanner_config(name)
-                if not scanner_config.enabled or (name == "codeql" and skip_codeql):
+                evm_scanner_outside_capability = (
+                    self.config.language_profile
+                    is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
+                    and name in {"slither", "foundry_fork", "hardhat_fork"}
+                )
+                if (
+                    not scanner_config.enabled
+                    or (name == "codeql" and skip_codeql)
+                    or evm_scanner_outside_capability
+                ):
                     now = datetime.now(UTC)
                     results.append(
                         ScannerRun(
@@ -447,7 +457,11 @@ class ScannerRunner:
                             started_at=now,
                             finished_at=now,
                             duration_seconds=0,
-                            error="disabled by configuration or command line",
+                            error=(
+                                "not applicable to generic-source-review capability"
+                                if evm_scanner_outside_capability
+                                else "disabled by configuration or command line"
+                            ),
                             repository_code_execution=(
                                 RepositoryCodeExecutionState.DISABLED
                                 if (
