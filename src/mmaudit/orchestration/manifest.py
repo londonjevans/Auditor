@@ -79,6 +79,7 @@ from mmaudit.models.schemas import (
     InvariantExecutionOriginDispositionArtifact,
     InvariantExecutionResult,
     JudgeDecisionBatch,
+    Location,
     LocationValidation,
     MaximumAssuranceStatus,
     ModelIdentityStrength,
@@ -125,16 +126,26 @@ from mmaudit.orchestration.reproduction_resolution import (
 )
 from mmaudit.reporting.bundle import (
     MANIFEST_BOUND_REPORT_DELIVERABLES,
+    SCANNER_SOURCE_EVIDENCE_PATH,
     CostLedgerAbsenceEvidence,
     CoverageArtifact,
     FindingsArtifact,
     ModelExecutionArtifact,
     RunCostLedgerEvidence,
+    ScannerSourceAuthority,
+    ScannerSourceEvidenceArtifact,
+    ScannerSourceEvidenceRecord,
+    SourceExcerptEvidence,
     build_coverage_artifact,
     build_findings_artifact,
     build_model_execution_artifact,
+    build_scanner_source_evidence_artifact,
+    scanner_source_authority,
 )
-from mmaudit.reporting.client import render_client_markdown_from_artifact
+from mmaudit.reporting.client import (
+    build_source_excerpt_evidence,
+    render_client_markdown_from_artifact,
+)
 from mmaudit.reporting.json_report import write_json
 from mmaudit.reporting.markdown import render_forensic_markdown, render_markdown
 from mmaudit.reporting.run_authority import (
@@ -145,6 +156,7 @@ from mmaudit.reporting.sarif import generate_report_sarif
 from mmaudit.reporting.status import effective_report_status, report_status_metadata
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_name, is_sensitive_workspace_path
+from mmaudit.scanners.base import ScannerWorkspaceTextRecord, observe_scanner_workspace_texts
 from mmaudit.scanners.normalization import validate_real_scanner_normalization_replay
 from mmaudit.scanners.projection import project_scanner_finding
 from mmaudit.solidity.sharding import (
@@ -961,6 +973,121 @@ def _validate_reproduction_candidate_obligations(
         raise ValueError("candidate reproduction resolutions differ from deterministic replay")
 
 
+def _scanner_source_record_key(
+    finding_id: str,
+    location: Location | SourceExcerptEvidence,
+) -> tuple[str, str, int, int, str]:
+    start_line = (
+        location.cited_start_line
+        if isinstance(location, SourceExcerptEvidence)
+        else location.start_line
+    )
+    end_line = (
+        location.cited_end_line
+        if isinstance(location, SourceExcerptEvidence)
+        else location.end_line
+    )
+    return (
+        finding_id,
+        location.path,
+        start_line,
+        end_line,
+        location.symbol or "",
+    )
+
+
+def _validate_scanner_source_evidence_artifact(
+    root: Path,
+    report: AuditReport,
+    *,
+    replay_authorized_scanner_fingerprints: frozenset[str],
+) -> dict[tuple[str, str, int, int, str], ScannerSourceEvidenceRecord]:
+    """Rebuild every supplemental scanner excerpt from bound private workspace bytes."""
+
+    repository_paths = {item.path for item in report.repository.files}
+    required: list[tuple[Finding, Location, ScannerSourceAuthority]] = []
+    for finding in [*report.findings, *report.filtered_findings]:
+        for location in finding.locations:
+            if location.path in repository_paths:
+                continue
+            authority = scanner_source_authority(report, finding, location)
+            if authority.scanner_finding.fingerprint not in replay_authorized_scanner_fingerprints:
+                raise ValueError(
+                    "scanner source evidence lacks exact normalization replay authority"
+                )
+            required.append((finding, location, authority))
+
+    evidence_path = root / SCANNER_SOURCE_EVIDENCE_PATH
+    present = evidence_path.exists() or evidence_path.is_symlink() or evidence_path.is_junction()
+    if present != bool(required):
+        raise ValueError(
+            "scanner source evidence presence differs from supplemental final locations"
+        )
+    if not required:
+        return {}
+
+    artifact = ScannerSourceEvidenceArtifact.model_validate(
+        _read_json_artifact(root, SCANNER_SOURCE_EVIDENCE_PATH)
+    )
+    reported_inventory = report.metadata.get("scanner_source_inventory_sha256")
+    if (
+        not isinstance(reported_inventory, str)
+        or artifact.scanner_source_inventory_sha256 != reported_inventory
+    ):
+        raise ValueError("scanner source evidence differs from the frozen report inventory")
+
+    required_by_scanner: dict[str, set[str]] = {}
+    for _finding, location, authority in required:
+        required_by_scanner.setdefault(authority.scanner_run.scanner, set()).add(location.path)
+    observed_by_scanner: dict[str, dict[str, ScannerWorkspaceTextRecord]] = {}
+    for scanner, relative_paths in sorted(required_by_scanner.items()):
+        workspace = root / "private" / "scanner-output" / scanner / "workspace"
+        observed_texts = observe_scanner_workspace_texts(
+            workspace,
+            tuple(sorted(relative_paths)),
+            expected_inventory_sha256=artifact.scanner_source_inventory_sha256,
+        )
+        observed_by_scanner[scanner] = {item.relative_path: item for item in observed_texts}
+
+    expected_records: list[ScannerSourceEvidenceRecord] = []
+    for finding, location, authority in required:
+        scanner = authority.scanner_run.scanner
+        observed_record = observed_by_scanner[scanner].get(location.path)
+        if observed_record is None:
+            raise ValueError("scanner source workspace lacks an exact cited path")
+        excerpt = build_source_excerpt_evidence(
+            report,
+            finding,
+            location,
+            {location.path: observed_record.content},
+        )
+        observation_sha256 = authority.scanner_run.execution_observation_sha256
+        if observation_sha256 is None:
+            raise ValueError("scanner source authority lacks an execution observation")
+        expected_records.append(
+            ScannerSourceEvidenceRecord(
+                finding_id=finding.id,
+                scanner=scanner,
+                scanner_fingerprint=authority.scanner_finding.fingerprint,
+                scanner_execution_observation_sha256=observation_sha256,
+                source_size=observed_record.size,
+                source_line_count=observed_record.lines,
+                location=location,
+                source_excerpt=excerpt,
+            )
+        )
+    expected_artifact = build_scanner_source_evidence_artifact(
+        scanner_source_inventory_sha256=artifact.scanner_source_inventory_sha256,
+        records=expected_records,
+    )
+    if artifact != expected_artifact:
+        raise ValueError("scanner source evidence differs from exact private workspace bytes")
+    return {
+        _scanner_source_record_key(record.finding_id, record.location): record
+        for record in artifact.records
+    }
+
+
 def _validate_report_bundle_artifacts(
     root: Path,
     report: AuditReport,
@@ -968,6 +1095,7 @@ def _validate_report_bundle_artifacts(
     candidates: list[CandidateFinding],
     reproduction_resolutions: list[CandidateReproductionResolution],
     current_model_execution_required: bool,
+    replay_authorized_scanner_fingerprints: frozenset[str],
 ) -> None:
     """Cross-check every canonical client/forensic leaf against the final report."""
 
@@ -998,6 +1126,11 @@ def _validate_report_bundle_artifacts(
     )
     if findings_without_excerpts != expected_findings:
         raise ValueError("findings.json differs from the final report")
+    scanner_source_records = _validate_scanner_source_evidence_artifact(
+        root,
+        report,
+        replay_authorized_scanner_fingerprints=replay_authorized_scanner_fingerprints,
+    )
     repository_sources = {item.path: item.sha256 for item in report.repository.files}
     for observed, expected in zip(findings.records, expected_findings.records, strict=True):
         if observed.model_copy(update={"source_excerpt": None}) != expected:
@@ -1015,9 +1148,17 @@ def _validate_report_bundle_artifacts(
             and location.end_line == excerpt.cited_end_line
             and location.symbol == excerpt.symbol
         ]
+        supplemental_record = scanner_source_records.get(
+            _scanner_source_record_key(observed.finding.id, excerpt)
+        )
+        exact_source_binding = (
+            repository_sources.get(excerpt.path) == excerpt.file_sha256
+            if excerpt.path in repository_sources
+            else supplemental_record is not None and supplemental_record.source_excerpt == excerpt
+        )
         if (
             len(matching_locations) != 1
-            or repository_sources.get(excerpt.path) != excerpt.file_sha256
+            or not exact_source_binding
             or matching_locations[0].content_hash is None
             or matching_locations[0].content_hash != excerpt.cited_content_sha256
         ):
@@ -1754,6 +1895,7 @@ def _validate_report_artifact_consistency(
                 else []
             ),
             current_model_execution_required=report_bundle_required,
+            replay_authorized_scanner_fingerprints=(replay_authorized_scanner_fingerprints),
         )
     disposition_path = root / "execution-origin-dispositions.json"
     disposition_artifact_present = (

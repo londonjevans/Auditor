@@ -184,6 +184,17 @@ class ScannerWorkspaceFileRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class ScannerWorkspaceTextRecord:
+    """Descriptor-observed UTF-8 text bound to the full scanner source inventory."""
+
+    relative_path: str
+    raw_sha256: str
+    size: int
+    content: str
+    lines: int
+
+
+@dataclass(frozen=True, slots=True)
 class ScannerWorkspaceCopyObservation:
     """Path-free facts observed while retaining both source-root descriptors."""
 
@@ -1390,6 +1401,109 @@ def scanner_workspace_file_sha256(
     raise ValueError("scanner workspace file is absent from the audited inventory")
 
 
+def observe_scanner_workspace_texts(
+    root: Path,
+    relative_paths: Sequence[str | Path | PurePosixPath],
+    *,
+    expected_inventory_sha256: str,
+    private_dir: Path | None = None,
+    allow_custom_private_exclusion: bool = False,
+    maximum_file_bytes: int = _MAX_WORKSPACE_FILE_BYTES,
+    maximum_total_bytes: int = _MAX_WORKSPACE_BYTES,
+) -> tuple[ScannerWorkspaceTextRecord, ...]:
+    """Read exact source texts while retaining and revalidating scanner-tree custody."""
+
+    if re.fullmatch(r"[0-9a-f]{64}", expected_inventory_sha256) is None:
+        raise ValueError("expected scanner workspace inventory hash must be lowercase SHA-256")
+    if not 1 <= maximum_file_bytes <= _MAX_WORKSPACE_FILE_BYTES:
+        raise ValueError("scanner workspace text per-file byte bound is invalid")
+    if not 1 <= maximum_total_bytes <= _MAX_WORKSPACE_BYTES:
+        raise ValueError("scanner workspace text total byte bound is invalid")
+
+    require_audited_workspace_paths_included(relative_paths)
+    requested_paths = _normalized_audited_workspace_paths(relative_paths)
+    if not requested_paths:
+        raise ValueError("scanner workspace text observation requires at least one source path")
+
+    source_root, source_identity = _openable_workspace_root(root)
+    source_fd = _open_workspace_directory(source_root)
+    try:
+        _require_workspace_identity(os.fstat(source_fd), source_identity)
+        exclusion_root = private_dir if private_dir is not None else source_root / ".mmaudit"
+        source_before = _build_scanner_workspace_inventory_from_descriptor(
+            source_root,
+            source_fd,
+            exclusion_root,
+            allow_custom_private_exclusion=allow_custom_private_exclusion,
+        )
+        if source_before.sha256() != expected_inventory_sha256:
+            raise ValueError("scanner workspace source inventory differs from the expected hash")
+        _require_audited_paths_in_inventory(source_before, requested_paths)
+
+        files_by_path = {item.relative_path: item for item in source_before.files}
+        directory_identities = {
+            item.relative_path: item.identity for item in source_before.directories
+        }
+        observed: list[ScannerWorkspaceTextRecord] = []
+        total_bytes = 0
+        for relative_path in requested_paths:
+            item = files_by_path[relative_path]
+            if item.identity.size > maximum_file_bytes:
+                raise ValueError(
+                    "scanner workspace observed source exceeds the per-file byte bound"
+                )
+            total_bytes += item.identity.size
+            if total_bytes > maximum_total_bytes:
+                raise ValueError("scanner workspace observed sources exceed the total byte bound")
+            raw = _read_scanner_workspace_file_bytes(
+                source_fd,
+                item,
+                directory_identities,
+            )
+            if _scanner_workspace_text_is_binary(raw):
+                raise ValueError("scanner workspace observed source is binary")
+            try:
+                content = raw.decode("utf-8", errors="strict")
+            except UnicodeDecodeError as exc:
+                raise ValueError("scanner workspace observed source is not strict UTF-8") from exc
+            observed.append(
+                ScannerWorkspaceTextRecord(
+                    relative_path=relative_path,
+                    raw_sha256=item.sha256,
+                    size=item.identity.size,
+                    content=content,
+                    lines=len(content.splitlines()),
+                )
+            )
+
+        _require_retained_workspace_root(
+            source_root,
+            source_fd,
+            source_before.root_identity,
+            label="source",
+        )
+        source_after = _build_scanner_workspace_inventory_from_descriptor(
+            source_root,
+            source_fd,
+            exclusion_root,
+            allow_custom_private_exclusion=allow_custom_private_exclusion,
+        )
+        _require_retained_workspace_root(
+            source_root,
+            source_fd,
+            source_before.root_identity,
+            label="source",
+        )
+        if (
+            source_after.sha256() != expected_inventory_sha256
+            or not _workspace_inventory_identity_stable(source_before, source_after)
+        ):
+            raise ValueError("scanner workspace source inventory changed during text observation")
+        return tuple(observed)
+    finally:
+        os.close(source_fd)
+
+
 def _normalized_audited_workspace_paths(
     relative_paths: Sequence[str | Path | PurePosixPath],
 ) -> tuple[str, ...]:
@@ -1815,6 +1929,63 @@ def _hash_workspace_file(
         return digest.hexdigest()
     finally:
         os.close(file_fd)
+
+
+def _read_scanner_workspace_file_bytes(
+    root_fd: int,
+    item: _WorkspaceFile,
+    directory_identities: dict[str, _WorkspaceIdentity],
+) -> bytes:
+    """Read one inventoried file exactly through descriptor-relative no-follow access."""
+
+    parts = PurePosixPath(item.relative_path).parts
+    parent_fd = _open_workspace_relative_directory(
+        root_fd,
+        parts[:-1],
+        directory_identities,
+    )
+    file_fd = -1
+    try:
+        _require_workspace_identity(
+            os.stat(parts[-1], dir_fd=parent_fd, follow_symlinks=False),
+            item.identity,
+        )
+        file_fd = os.open(parts[-1], _workspace_file_flags(), dir_fd=parent_fd)
+        _require_workspace_identity(os.fstat(file_fd), item.identity)
+        raw = bytearray()
+        remaining = item.identity.size
+        digest = hashlib.sha256()
+        while remaining:
+            chunk = os.read(file_fd, min(_WORKSPACE_READ_BYTES, remaining))
+            if not chunk:
+                raise ValueError("scanner workspace observed source changed while it was read")
+            raw.extend(chunk)
+            digest.update(chunk)
+            remaining -= len(chunk)
+        if os.read(file_fd, 1):
+            raise ValueError("scanner workspace observed source changed while it was read")
+        if len(raw) != item.identity.size or digest.hexdigest() != item.sha256:
+            raise ValueError("scanner workspace observed source bytes differ from its inventory")
+        _require_workspace_identity(os.fstat(file_fd), item.identity)
+        _require_workspace_identity(
+            os.stat(parts[-1], dir_fd=parent_fd, follow_symlinks=False),
+            item.identity,
+        )
+        return bytes(raw)
+    finally:
+        if file_fd >= 0:
+            os.close(file_fd)
+        os.close(parent_fd)
+
+
+def _scanner_workspace_text_is_binary(raw: bytes) -> bool:
+    if b"\x00" in raw:
+        return True
+    sample = raw[:8_192]
+    if not sample:
+        return False
+    control_bytes = sum(byte < 9 or 13 < byte < 32 for byte in sample)
+    return control_bytes / len(sample) > 0.15
 
 
 def _open_workspace_relative_directory(

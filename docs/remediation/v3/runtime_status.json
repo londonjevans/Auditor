@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-04T01:36:29Z",
-  "candidate_commit": "eddd2ae4f883be18c6f321b939163e87c6c88690",
+  "updated_at": "2026-08-04T02:07:41Z",
+  "candidate_commit": "de5d0baac32bc8b17701eac6b03d41cc9e614a67",
   "autorun_status": "PAUSED_BY_OPERATOR",
   "current_milestone": "client_report_and_forensic_bundle",
   "current_ticket": "V3-REPORT-001 (IN_PROGRESS)",
@@ -23,8 +23,8 @@
     "V3-FORKSUITE-001.hardhat": "Real Hardhat execution requires the process-attested digest-pinned rootless single-loopback runtime and trusted image-baked reporter specified by V3-HARDHAT-001."
   },
   "last_validation": {
-    "command": ".venv/bin/pytest -x -vv tests/integration/test_pipeline.py::test_ignored_lockfile_scanner_finding_stays_local_and_reported --tb=short",
-    "result": "EXPECTED RED: exact ignored scanner-origin source-authority seam reproduced; requirements.lock is correctly outside discovery/audited/model contents and terminal binding failed closed because separately trusted scanner-source evidence is not implemented yet (1 failed in 1.20s)."
+    "command": "Affected Ruff and strict mypy; focused scanner-source authority/observation, release-schema, ignored-path, model-exclusion, conditional-presence, and coherent-reseal pytest matrix",
+    "result": "PASS: Ruff and mypy passed; 33 focused tests passed in 8.01s. REAL ignored-path evidence stayed outside audited/model scope and validated detached; unverified/model-origin authority and coherent evidence tampering failed closed. No provider or network call ran."
   },
   "pause_state": {
     "requested_at": "2026-08-03T20:08:17Z",
@@ -59,7 +59,11 @@
     "resumed_at_scanner_source_authority": "2026-08-04T01:14:40Z",
     "requested_at_scanner_source_authority_followup": "2026-08-04T01:36:29Z",
     "result_scanner_source_authority_followup": "Paused before implementation with V3-REPORT-001 still IN_PROGRESS. The exact ignored scanner-origin authority failure was reproduced, and the fail-closed descriptor-retained private-evidence design was recorded. No production/test code, provider state, secret state, or release claim changed.",
-    "resume_action_scanner_source_authority_followup": "Implement exact frozen scanner-tree cited-source observation for REAL machine-validated static findings, bind private scanner-source evidence into detached manifest verification without broadening audited/model scope, add positive and adversarial regressions, then rerun the remaining pipeline matrix and all V3-REPORT-001 gates."
+    "resume_action_scanner_source_authority_followup": "Implement exact frozen scanner-tree cited-source observation for REAL machine-validated static findings, bind private scanner-source evidence into detached manifest verification without broadening audited/model scope, add positive and adversarial regressions, then rerun the remaining pipeline matrix and all V3-REPORT-001 gates.",
+    "resumed_at_scanner_source_authority_followup": "2026-08-04T01:39:19Z",
+    "requested_at_scanner_source_evidence": "2026-08-04T02:07:41Z",
+    "result_scanner_source_evidence": "Paused at a focused-green, incomplete V3-REPORT-001 boundary. Descriptor-retained scanner-source evidence and adversarial regressions are preserved; the broader and complete-suite gates remain pending. No provider call, secret access, network operation, release claim, or ticket-complete claim occurred.",
+    "resume_action_scanner_source_evidence": "Run the broader report/release unit matrix, affected and representative pipeline integrations, scheduler integration, schema verification, Ruff, strict mypy, and the complete pytest suite; fix actual regressions and close V3-REPORT-001 only from recorded evidence."
   },
   "scheduler_assurance_validation": {
     "status": "PASS_COMPONENT_FULL_ASSURANCE",

@@ -333,17 +333,20 @@ from mmaudit.privacy import (
     validate_trusted_privacy_authorization,
 )
 from mmaudit.reporting.bundle import (
+    SCANNER_SOURCE_EVIDENCE_PATH,
     RunCostLedgerEvidence,
     build_coverage_artifact,
     build_findings_artifact,
     build_model_execution_artifact,
     build_run_cost_ledger_evidence,
+    scanner_source_authority_from_runs,
     source_symbol_is_present,
 )
 from mmaudit.reporting.client import (
     bind_active_finding_source_locations,
     build_client_source_excerpts,
-    render_client_markdown,
+    build_scanner_source_evidence_for_report,
+    render_client_markdown_from_artifact,
 )
 from mmaudit.reporting.json_report import stable_json, write_json
 from mmaudit.reporting.markdown import render_forensic_markdown, render_markdown
@@ -370,7 +373,12 @@ from mmaudit.repository.privacy_provenance import (
 )
 from mmaudit.repository.redaction import SecretSafetyError
 from mmaudit.repository.workspace import audited_workspace_exclusion_root
-from mmaudit.scanners.base import ScannerSourceIntegrityError, scanner_workspace_sha256
+from mmaudit.scanners.base import (
+    ScannerSourceIntegrityError,
+    ScannerWorkspaceTextRecord,
+    observe_scanner_workspace_texts,
+    scanner_workspace_sha256,
+)
 from mmaudit.scanners.clean_chain import TrustedCleanAnvilLauncher
 from mmaudit.scanners.fork_matrix import (
     ForkMatrixDependencies,
@@ -757,6 +765,8 @@ def _bind_terminal_finding_source_ranges(
     findings: list[Finding],
     *,
     source_contents: dict[str, str],
+    audited_source_paths: frozenset[str],
+    scanner_runs: Sequence[ScannerRun],
     label: str,
 ) -> list[Finding]:
     """Bind terminal findings before pass seven seals their exact public payloads."""
@@ -769,6 +779,8 @@ def _bind_terminal_finding_source_ranges(
             raise ValueError(f"{label} finding lacks a source location: {finding.id}")
         bound_locations: list[Location] = []
         for location in finding.locations:
+            if location.path not in audited_source_paths:
+                scanner_source_authority_from_runs(scanner_runs, finding, location)
             try:
                 content = source_contents[location.path]
             except KeyError:
@@ -804,6 +816,61 @@ def _bind_terminal_finding_source_ranges(
             )
         bound.append(finding.model_copy(update={"locations": bound_locations}))
     return bound
+
+
+def _supplemental_scanner_source_paths(
+    findings: Sequence[Finding],
+    scanner_runs: Sequence[ScannerRun],
+    *,
+    audited_source_paths: frozenset[str],
+) -> tuple[str, ...]:
+    """Resolve ignored paths cited by actual terminal static-scanner findings only."""
+
+    paths: set[str] = set()
+    for finding in findings:
+        for location in finding.locations:
+            if location.path in audited_source_paths:
+                continue
+            scanner_source_authority_from_runs(scanner_runs, finding, location)
+            paths.add(location.path)
+    return tuple(sorted(paths))
+
+
+def _terminal_report_source_snapshot(
+    findings: Sequence[Finding],
+    *,
+    audited_source_contents: dict[str, str],
+    scanner_runs: Sequence[ScannerRun],
+    repository_root: Path,
+    scanner_source_inventory_sha256: str | None,
+    scanner_source_exclusion_root: Path,
+    allow_custom_repository_exclusion: bool,
+    maximum_file_bytes: int,
+) -> tuple[dict[str, str], dict[str, ScannerWorkspaceTextRecord]]:
+    """Capture only exact supplemental sources required by terminal report evidence."""
+
+    audited_source_paths = frozenset(audited_source_contents)
+    supplemental_paths = _supplemental_scanner_source_paths(
+        findings,
+        scanner_runs,
+        audited_source_paths=audited_source_paths,
+    )
+    source_contents = dict(audited_source_contents)
+    if not supplemental_paths:
+        return source_contents, {}
+    if scanner_source_inventory_sha256 is None:
+        raise ValueError("scanner-origin source evidence lacks the frozen scanner inventory")
+    observed = observe_scanner_workspace_texts(
+        repository_root,
+        supplemental_paths,
+        expected_inventory_sha256=scanner_source_inventory_sha256,
+        private_dir=scanner_source_exclusion_root,
+        allow_custom_private_exclusion=allow_custom_repository_exclusion,
+        maximum_file_bytes=maximum_file_bytes,
+    )
+    records = {record.relative_path: record for record in observed}
+    source_contents.update({record.relative_path: record.content for record in observed})
+    return source_contents, records
 
 
 def _finding_reduction_activation_input(
@@ -2086,6 +2153,10 @@ class AuditPipeline:
             if item.language == "Solidity"
         }
         audited_scanner_paths = tuple(item.relative_path for item in discovery.files)
+        audited_source_paths = frozenset(audited_scanner_paths)
+        audited_source_contents = {item.relative_path: item.content for item in discovery.files}
+        report_source_contents = dict(audited_source_contents)
+        scanner_source_text_records: dict[str, ScannerWorkspaceTextRecord] = {}
         scanner_source_inventory_valid = True
         try:
             scanner_source_sha256 = scanner_workspace_sha256(
@@ -6225,17 +6296,30 @@ class AuditPipeline:
                     raise ValueError(
                         "evidence-cap judgment cannot precede deterministic candidate integration"
                     )
-                terminal_source_contents = {
-                    item.relative_path: item.content for item in discovery.files
-                }
+                report_source_contents, scanner_source_text_records = (
+                    _terminal_report_source_snapshot(
+                        [*final_findings, *filtered_findings],
+                        audited_source_contents=audited_source_contents,
+                        scanner_runs=scanner_runs,
+                        repository_root=discovery.root,
+                        scanner_source_inventory_sha256=scanner_source_sha256,
+                        scanner_source_exclusion_root=scanner_source_exclusion_root,
+                        allow_custom_repository_exclusion=allow_custom_repository_exclusion,
+                        maximum_file_bytes=self.config.repository.max_file_bytes,
+                    )
+                )
                 final_findings = _bind_terminal_finding_source_ranges(
                     final_findings,
-                    source_contents=terminal_source_contents,
+                    source_contents=report_source_contents,
+                    audited_source_paths=audited_source_paths,
+                    scanner_runs=scanner_runs,
                     label="active",
                 )
                 filtered_findings = _bind_terminal_finding_source_ranges(
                     filtered_findings,
-                    source_contents=terminal_source_contents,
+                    source_contents=report_source_contents,
+                    audited_source_paths=audited_source_paths,
+                    scanner_runs=scanner_runs,
                     label="reporting-filtered",
                 )
                 terminal_findings = [
@@ -6752,15 +6836,28 @@ class AuditPipeline:
                 conclude_scheduler_pass()
             else:
                 conclude_scheduler_result(completed_pass_seven)
-        terminal_source_contents = {item.relative_path: item.content for item in discovery.files}
+        report_source_contents, scanner_source_text_records = _terminal_report_source_snapshot(
+            [*final_findings, *filtered_findings],
+            audited_source_contents=audited_source_contents,
+            scanner_runs=scanner_runs,
+            repository_root=discovery.root,
+            scanner_source_inventory_sha256=scanner_source_sha256,
+            scanner_source_exclusion_root=scanner_source_exclusion_root,
+            allow_custom_repository_exclusion=allow_custom_repository_exclusion,
+            maximum_file_bytes=self.config.repository.max_file_bytes,
+        )
         final_findings = _bind_terminal_finding_source_ranges(
             final_findings,
-            source_contents=terminal_source_contents,
+            source_contents=report_source_contents,
+            audited_source_paths=audited_source_paths,
+            scanner_runs=scanner_runs,
             label="active",
         )
         filtered_findings = _bind_terminal_finding_source_ranges(
             filtered_findings,
-            source_contents=terminal_source_contents,
+            source_contents=report_source_contents,
+            audited_source_paths=audited_source_paths,
+            scanner_runs=scanner_runs,
             label="reporting-filtered",
         )
         public_candidate_projection = [
@@ -7269,7 +7366,6 @@ class AuditPipeline:
                     ci_baseline.manifest.manifest_sha256 if ci_baseline is not None else None
                 ),
             }
-        audited_source_contents = {item.relative_path: item.content for item in discovery.files}
         cost_ledger_evidence: RunCostLedgerEvidence | None = None
         if scheduler_cost_ledger_baseline is not None:
             if scheduler_artifact is None:
@@ -7358,8 +7454,11 @@ class AuditPipeline:
             ci_metadata=ci_metadata,
             scheduler_report_binding=scheduler_report_binding,
             accounted_cost_usd_exact=exact_accounted_cost_text,
+            scanner_source_inventory_sha256=(
+                scanner_source_sha256 if scanner_source_text_records else None
+            ),
         )
-        report = bind_active_finding_source_locations(report, audited_source_contents)
+        report = bind_active_finding_source_locations(report, report_source_contents)
         ci_state: CIRunState | None = None
         if ci_mode:
             assert ci_producer_digest is not None
@@ -7431,7 +7530,9 @@ class AuditPipeline:
         self._write_artifacts(
             run_dir=run_dir,
             report=report,
-            source_contents=audited_source_contents,
+            source_contents=report_source_contents,
+            scanner_source_text_records=scanner_source_text_records,
+            scanner_source_inventory_sha256=scanner_source_sha256,
             candidate_projection=public_candidate_projection,
             verifications=verifications,
             cross_examinations=cross_examinations,
@@ -7904,6 +8005,7 @@ class AuditPipeline:
         ci_metadata: dict[str, Any] | None,
         scheduler_report_binding: dict[str, Any] | None,
         accounted_cost_usd_exact: str,
+        scanner_source_inventory_sha256: str | None,
     ) -> AuditReport:
         fork_probing_enabled = self.config.smart_contracts.enabled and (
             self.config.smart_contracts.allow_fork_probing or allow_fork_probing
@@ -7979,6 +8081,11 @@ class AuditPipeline:
                 "python": platform.python_version(),
                 "platform": platform.system(),
                 "scanner_only": scanner_only,
+                **(
+                    {"scanner_source_inventory_sha256": (scanner_source_inventory_sha256)}
+                    if scanner_source_inventory_sha256 is not None
+                    else {}
+                ),
                 "run_options": run_options.model_dump(mode="json"),
                 "configuration_provenance": {
                     "file_config_sha256": self.file_config.stable_hash(),
@@ -8179,6 +8286,8 @@ class AuditPipeline:
         run_dir: Path,
         report: AuditReport,
         source_contents: dict[str, str],
+        scanner_source_text_records: dict[str, ScannerWorkspaceTextRecord],
+        scanner_source_inventory_sha256: str | None,
         candidate_projection: list[CandidateFinding],
         verifications: VerificationBatch,
         cross_examinations: list[CandidateCrossExaminationDecision],
@@ -8374,6 +8483,30 @@ class AuditPipeline:
                 ],
             },
         )
+        scanner_source_evidence = build_scanner_source_evidence_for_report(
+            report,
+            source_contents,
+            scanner_source_text_records,
+            scanner_source_inventory_sha256=scanner_source_inventory_sha256,
+        )
+        scanner_source_evidence_path = run_dir / SCANNER_SOURCE_EVIDENCE_PATH
+        if scanner_source_evidence is not None:
+            if (
+                scanner_source_evidence_path.exists()
+                or scanner_source_evidence_path.is_symlink()
+                or scanner_source_evidence_path.is_junction()
+            ):
+                raise ValueError("scanner source evidence destination already exists")
+            scanner_source_evidence_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            scanner_source_evidence_path.parent.chmod(0o700)
+            write_json(scanner_source_evidence_path, scanner_source_evidence)
+            scanner_source_evidence_path.chmod(0o600)
+        elif (
+            scanner_source_evidence_path.exists()
+            or scanner_source_evidence_path.is_symlink()
+            or scanner_source_evidence_path.is_junction()
+        ):
+            raise ValueError("unexpected scanner source evidence destination exists")
         source_excerpts = build_client_source_excerpts(report, source_contents)
         findings_artifact = build_findings_artifact(
             report,
@@ -8393,12 +8526,7 @@ class AuditPipeline:
             ),
         )
         (run_dir / "client-report.md").write_text(
-            render_client_markdown(
-                report,
-                source_contents,
-                candidates=candidate_projection,
-                reproduction_resolutions=reproduction_resolutions,
-            ),
+            render_client_markdown_from_artifact(report, findings_artifact),
             encoding="utf-8",
         )
         (run_dir / "forensic-report.md").write_text(

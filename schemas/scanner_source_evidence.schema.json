@@ -1,0 +1,233 @@
+{
+  "$defs": {
+    "Location": {
+      "additionalProperties": false,
+      "properties": {
+        "content_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Hash"
+        },
+        "end_line": {
+          "minimum": 1,
+          "title": "End Line",
+          "type": "integer"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "start_line": {
+          "minimum": 1,
+          "title": "Start Line",
+          "type": "integer"
+        },
+        "symbol": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Symbol"
+        }
+      },
+      "required": [
+        "path",
+        "start_line",
+        "end_line"
+      ],
+      "title": "Location",
+      "type": "object"
+    },
+    "ScannerSourceEvidenceRecord": {
+      "additionalProperties": false,
+      "description": "Private source evidence for one scanner-origin final finding location.",
+      "properties": {
+        "finding_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Finding Id",
+          "type": "string"
+        },
+        "location": {
+          "$ref": "#/$defs/Location"
+        },
+        "scanner": {
+          "maxLength": 160,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$",
+          "title": "Scanner",
+          "type": "string"
+        },
+        "scanner_execution_observation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Scanner Execution Observation Sha256",
+          "type": "string"
+        },
+        "scanner_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Scanner Fingerprint",
+          "type": "string"
+        },
+        "source_excerpt": {
+          "$ref": "#/$defs/SourceExcerptEvidence"
+        },
+        "source_line_count": {
+          "maximum": 100000000,
+          "minimum": 1,
+          "title": "Source Line Count",
+          "type": "integer"
+        },
+        "source_size": {
+          "maximum": 100000000,
+          "minimum": 1,
+          "title": "Source Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "finding_id",
+        "scanner",
+        "scanner_fingerprint",
+        "scanner_execution_observation_sha256",
+        "source_size",
+        "source_line_count",
+        "location",
+        "source_excerpt"
+      ],
+      "title": "ScannerSourceEvidenceRecord",
+      "type": "object"
+    },
+    "SourceExcerptEvidence": {
+      "additionalProperties": false,
+      "description": "A small source excerpt bound to the discovered file and cited range.",
+      "properties": {
+        "cited_content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Cited Content Sha256",
+          "type": "string"
+        },
+        "cited_end_line": {
+          "minimum": 1,
+          "title": "Cited End Line",
+          "type": "integer"
+        },
+        "cited_start_line": {
+          "minimum": 1,
+          "title": "Cited Start Line",
+          "type": "integer"
+        },
+        "content": {
+          "maxLength": 1000000,
+          "title": "Content",
+          "type": "string"
+        },
+        "content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "excerpt_end_line": {
+          "minimum": 1,
+          "title": "Excerpt End Line",
+          "type": "integer"
+        },
+        "excerpt_start_line": {
+          "minimum": 1,
+          "title": "Excerpt Start Line",
+          "type": "integer"
+        },
+        "file_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "File Sha256",
+          "type": "string"
+        },
+        "omitted_after": {
+          "title": "Omitted After",
+          "type": "boolean"
+        },
+        "omitted_before": {
+          "title": "Omitted Before",
+          "type": "boolean"
+        },
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "symbol": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Symbol"
+        }
+      },
+      "required": [
+        "path",
+        "file_sha256",
+        "cited_start_line",
+        "cited_end_line",
+        "cited_content_sha256",
+        "excerpt_start_line",
+        "excerpt_end_line",
+        "content",
+        "content_sha256",
+        "omitted_before",
+        "omitted_after"
+      ],
+      "title": "SourceExcerptEvidence",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/scanner_source_evidence.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Versioned private inventory for scanner-only source outside discovery scope.",
+  "properties": {
+    "records": {
+      "items": {
+        "$ref": "#/$defs/ScannerSourceEvidenceRecord"
+      },
+      "maxItems": 100000,
+      "minItems": 1,
+      "title": "Records",
+      "type": "array"
+    },
+    "scanner_source_inventory_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Scanner Source Inventory Sha256",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "scanner_source_inventory_sha256",
+    "records"
+  ],
+  "title": "mmaudit private scanner source evidence",
+  "type": "object"
+}

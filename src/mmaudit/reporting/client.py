@@ -22,13 +22,18 @@ from mmaudit.reporting.bundle import (
     FindingsArtifact,
     ForensicDisposition,
     ForensicFindingRecord,
+    ScannerSourceEvidenceArtifact,
+    ScannerSourceEvidenceRecord,
     SourceExcerptEvidence,
     build_findings_artifact,
+    build_scanner_source_evidence_artifact,
+    scanner_source_authority,
     source_symbol_is_present,
 )
 from mmaudit.reporting.markdown import _inline, _text
 from mmaudit.reporting.status import effective_report_status
 from mmaudit.repository.chunking import line_range_hash
+from mmaudit.scanners.base import ScannerWorkspaceTextRecord
 
 _MAX_RENDERED_EXCERPT_LINES = 24
 _MAX_RENDERED_CODE_LINE_CHARACTERS = 1_000
@@ -68,19 +73,20 @@ def _source_tree_sha256(report: AuditReport) -> str:
 def _validated_location_hash(
     *,
     report: AuditReport,
+    finding: Finding,
     location: Location,
     source_contents: Mapping[str, str],
-) -> tuple[str, str, int]:
+) -> tuple[str, str, int, str]:
     repository_sources = _repository_sources(report)
     source_binding = repository_sources.get(location.path)
     if source_binding is None:
-        raise ValueError(f"source path is absent from the audited repository map: {location.path}")
+        scanner_source_authority(report, finding, location)
     try:
         content = source_contents[location.path]
     except KeyError:
         raise ValueError(f"source content is unavailable for cited path: {location.path}") from None
     file_sha256 = hashlib.sha256(content.encode()).hexdigest()
-    if file_sha256 != source_binding[0]:
+    if source_binding is not None and file_sha256 != source_binding[0]:
         raise ValueError(f"source hash differs from the audited repository map: {location.path}")
     lines = content.splitlines(keepends=True)
     if (
@@ -95,7 +101,55 @@ def _validated_location_hash(
     selected = "".join(lines[location.start_line - 1 : location.end_line])
     if location.symbol is not None and not source_symbol_is_present(location.symbol, selected):
         raise ValueError(f"source symbol is absent from the final cited range: {location.path}")
-    return observed_range_hash, content, len(lines)
+    return observed_range_hash, content, len(lines), file_sha256
+
+
+def build_source_excerpt_evidence(
+    report: AuditReport,
+    finding: Finding,
+    location: Location,
+    source_contents: Mapping[str, str],
+) -> SourceExcerptEvidence:
+    """Build one exact bounded excerpt from audited or scanner-origin source authority."""
+
+    if not finding.location_validation.valid:
+        raise ValueError(f"active finding lacks valid source-location evidence: {finding.id}")
+    if sum(item == location for item in finding.locations) != 1:
+        raise ValueError("source excerpt requires one exact final finding location")
+    if location.content_hash is None:
+        raise ValueError(
+            f"active finding location lacks an authoritative source range hash: {location.path}"
+        )
+    cited_sha256, content, total_lines, file_sha256 = _validated_location_hash(
+        report=report,
+        finding=finding,
+        location=location,
+        source_contents=source_contents,
+    )
+    excerpt_start = max(1, location.start_line - _EXCERPT_CONTEXT_LINES)
+    excerpt_end = min(total_lines, location.end_line + _EXCERPT_CONTEXT_LINES)
+    lines = content.splitlines(keepends=True)
+    excerpt_content = "".join(lines[excerpt_start - 1 : excerpt_end])
+    if len(excerpt_content.encode()) > _MAX_EXCERPT_EVIDENCE_BYTES:
+        excerpt_start = location.start_line
+        excerpt_end = location.end_line
+        excerpt_content = "".join(lines[excerpt_start - 1 : excerpt_end])
+    if len(excerpt_content.encode()) > _MAX_EXCERPT_EVIDENCE_BYTES:
+        raise ValueError(f"cited source range exceeds the forensic evidence limit: {finding.id}")
+    return SourceExcerptEvidence(
+        path=location.path,
+        symbol=location.symbol,
+        file_sha256=file_sha256,
+        cited_start_line=location.start_line,
+        cited_end_line=location.end_line,
+        cited_content_sha256=cited_sha256,
+        excerpt_start_line=excerpt_start,
+        excerpt_end_line=excerpt_end,
+        content=excerpt_content,
+        content_sha256=hashlib.sha256(excerpt_content.encode()).hexdigest(),
+        omitted_before=excerpt_start > 1,
+        omitted_after=excerpt_end < total_lines,
+    )
 
 
 def _source_excerpt(
@@ -107,56 +161,23 @@ def _source_excerpt(
         raise ValueError(f"active finding lacks valid source-location evidence: {finding.id}")
     if not finding.locations:
         raise ValueError(f"active finding lacks a source location: {finding.id}")
-    validated: dict[tuple[str, int, int, str], tuple[str, str, int]] = {}
     for location in finding.locations:
         if location.content_hash is None:
             raise ValueError(
                 f"active finding location lacks an authoritative source range hash: {location.path}"
             )
-        key = (
-            location.path,
-            location.start_line,
-            location.end_line,
-            location.symbol or "",
-        )
-        observed = _validated_location_hash(
+        _validated_location_hash(
             report=report,
+            finding=finding,
             location=location,
             source_contents=source_contents,
         )
-        validated[key] = observed
 
     primary = min(
         finding.locations,
         key=lambda item: (item.path, item.start_line, item.end_line, item.symbol or ""),
     )
-    key = (primary.path, primary.start_line, primary.end_line, primary.symbol or "")
-    cited_sha256, content, total_lines = validated[key]
-    excerpt_start = max(1, primary.start_line - _EXCERPT_CONTEXT_LINES)
-    excerpt_end = min(total_lines, primary.end_line + _EXCERPT_CONTEXT_LINES)
-    lines = content.splitlines(keepends=True)
-    excerpt_content = "".join(lines[excerpt_start - 1 : excerpt_end])
-    if len(excerpt_content.encode()) > _MAX_EXCERPT_EVIDENCE_BYTES:
-        excerpt_start = primary.start_line
-        excerpt_end = primary.end_line
-        excerpt_content = "".join(lines[excerpt_start - 1 : excerpt_end])
-    if len(excerpt_content.encode()) > _MAX_EXCERPT_EVIDENCE_BYTES:
-        raise ValueError(f"cited source range exceeds the forensic evidence limit: {finding.id}")
-    file_sha256 = _repository_sources(report)[primary.path][0]
-    return SourceExcerptEvidence(
-        path=primary.path,
-        symbol=primary.symbol,
-        file_sha256=file_sha256,
-        cited_start_line=primary.start_line,
-        cited_end_line=primary.end_line,
-        cited_content_sha256=cited_sha256,
-        excerpt_start_line=excerpt_start,
-        excerpt_end_line=excerpt_end,
-        content=excerpt_content,
-        content_sha256=hashlib.sha256(excerpt_content.encode()).hexdigest(),
-        omitted_before=excerpt_start > 1,
-        omitted_after=excerpt_end < total_lines,
-    )
+    return build_source_excerpt_evidence(report, finding, primary, source_contents)
 
 
 def bind_active_finding_source_locations(
@@ -182,10 +203,13 @@ def bind_active_finding_source_locations(
                 raise ValueError(f"{label} finding lacks a source location: {finding.id}")
             bound_locations: list[Location] = []
             for location in finding.locations:
-                observed_range_hash, _content, _total_lines = _validated_location_hash(
-                    report=report,
-                    location=location,
-                    source_contents=source_contents,
+                observed_range_hash, _content, _total_lines, _file_sha256 = (
+                    _validated_location_hash(
+                        report=report,
+                        finding=finding,
+                        location=location,
+                        source_contents=source_contents,
+                    )
                 )
                 bound_locations.append(
                     location.model_copy(update={"content_hash": observed_range_hash})
@@ -220,6 +244,82 @@ def build_client_source_excerpts(
     for finding in [*report.findings, *report.filtered_findings]:
         excerpts[finding.id] = _source_excerpt(report, finding, source_contents)
     return excerpts
+
+
+def build_scanner_source_evidence_for_report(
+    report: AuditReport,
+    source_contents: Mapping[str, str],
+    scanner_source_records: Mapping[str, ScannerWorkspaceTextRecord],
+    *,
+    scanner_source_inventory_sha256: str | None,
+) -> ScannerSourceEvidenceArtifact | None:
+    """Build private authority for every retained location outside audited/model scope."""
+
+    canonical_report = AuditReport.model_validate(report.model_dump(mode="python"))
+    repository_paths = set(_repository_sources(canonical_report))
+    records: list[ScannerSourceEvidenceRecord] = []
+    for finding in [*canonical_report.findings, *canonical_report.filtered_findings]:
+        for location in sorted(
+            finding.locations,
+            key=lambda item: (
+                item.path,
+                item.start_line,
+                item.end_line,
+                item.symbol or "",
+            ),
+        ):
+            if location.path in repository_paths:
+                continue
+            authority = scanner_source_authority(canonical_report, finding, location)
+            observed = scanner_source_records.get(location.path)
+            if observed is None:
+                raise ValueError(
+                    f"scanner source observation is unavailable for cited path: {location.path}"
+                )
+            try:
+                source_content = source_contents[location.path]
+            except KeyError:
+                raise ValueError(
+                    f"source content is unavailable for cited path: {location.path}"
+                ) from None
+            excerpt = build_source_excerpt_evidence(
+                canonical_report,
+                finding,
+                location,
+                source_contents,
+            )
+            if (
+                observed.content != source_content
+                or observed.raw_sha256 != excerpt.file_sha256
+                or observed.size != len(source_content.encode())
+                or observed.lines != len(source_content.splitlines())
+            ):
+                raise ValueError(
+                    f"scanner source observation differs from cited source: {location.path}"
+                )
+            observation_sha256 = authority.scanner_run.execution_observation_sha256
+            if observation_sha256 is None:
+                raise ValueError("scanner source authority lacks an execution observation")
+            records.append(
+                ScannerSourceEvidenceRecord(
+                    finding_id=finding.id,
+                    scanner=authority.scanner_run.scanner,
+                    scanner_fingerprint=authority.scanner_finding.fingerprint,
+                    scanner_execution_observation_sha256=observation_sha256,
+                    source_size=observed.size,
+                    source_line_count=observed.lines,
+                    location=location,
+                    source_excerpt=excerpt,
+                )
+            )
+    if not records:
+        return None
+    if scanner_source_inventory_sha256 is None:
+        raise ValueError("scanner source evidence lacks the frozen source inventory")
+    return build_scanner_source_evidence_artifact(
+        scanner_source_inventory_sha256=scanner_source_inventory_sha256,
+        records=records,
+    )
 
 
 def _code_line(value: str) -> str:

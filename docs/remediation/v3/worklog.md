@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Client report and forensic evidence bundle
 CURRENT_TICKET: V3-REPORT-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-FIXTURE-001 (COMPLETE)
-NEXT_ACTION: Implement descriptor-retained, fail-closed scanner-origin source observation for REAL machine-validated static findings only; keep ignored files outside audited/model scope, bind a private scanner-source evidence artifact into detached manifest validation, add authority/tamper regressions, then rerun the remaining four-case pipeline matrix and complete ticket gates.
-LAST_COMMAND: `.venv/bin/pytest -x -vv tests/integration/test_pipeline.py::test_ignored_lockfile_scanner_finding_stays_local_and_reported --tb=short`
-LAST_RESULT: EXPECTED RED: the ignored scanner-origin finding reached terminal source binding, which rejected `requirements.lock` because discovery-only source contents do not contain it (`ValueError: source content is unavailable for cited path: requirements.lock`; 1 failed in 1.20s). This reproduces the exact seam; no implementation change or provider call occurred.
+NEXT_ACTION: Run the broader report/release and representative pipeline matrices against the descriptor-retained scanner-source implementation; repair actual regressions, complete schema/static/full-suite gates, independently review the final diff, then close V3-REPORT-001 traceability only from recorded evidence.
+LAST_COMMAND: `.venv/bin/ruff check` on the affected implementation/tests, affected strict `.venv/bin/mypy`, then `.venv/bin/pytest -q` over scanner-source authority/observation, release-schema, ignored-path, model-exclusion, conditional-presence, and coherent-reseal cases.
+LAST_RESULT: PASS: affected Ruff and strict mypy passed; all 33 focused tests passed in 8.01s. The REAL ignored-path finding retained exact report evidence while remaining absent from RepositoryMap, manifest sources, and model requests; unverified/model-origin authority, conditional private-artifact drift, and coherently resealed context tampering failed closed. No provider or network call ran.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -20,6 +20,48 @@ OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
 LAST_CHECKPOINT_COMMIT: f970c2ceddb8bdc0f4ae167e5578bb019a335793
+
+## 2026-08-04T02:07:41Z — Operator-requested pause
+
+- Paused `V3-REPORT-001` at a focused-green, incomplete checkpoint so the laptop can be
+  stopped safely. The ticket remains `IN_PROGRESS`; no maximum-assurance, release, or
+  fit-for-purpose completion claim was made.
+- Preserved the descriptor-retained scanner-source observer, exact REAL scanner authority,
+  conditional private evidence artifact, detached validation, generated schema, and positive and
+  adversarial regressions. No provider call, secret access, network operation, public RPC, or live
+  target operation occurred.
+- Resume by running the broader report/release and representative pipeline matrices, repairing any
+  actual regressions, then running schema, Ruff, strict mypy, and complete-suite gates before
+  closing `V3-REPORT-001`.
+
+## 2026-08-04T02:04:58Z — Trusted ignored scanner-source evidence slice
+
+- Added descriptor-retained strict-UTF-8 source observation tied to the full frozen scanner
+  inventory before and after each bounded read. Sensitive, linked, hardlinked, special, binary,
+  oversized, changed, and hash-mismatched sources fail closed.
+- Added exact current REAL machine-output scanner authority and a conditional private typed
+  `scanner-source-evidence.json` artifact. Every active/filtered location outside discovery scope
+  binds the scanner fingerprint, current execution observation, frozen tree, raw file identity,
+  exact range, line count, byte size, and bounded excerpt.
+- Pipeline capture occurs only after terminal findings exist. Ignored source never enters
+  RepositoryMap, privacy scope, sharding, or model context. Detached validation replays scanner
+  normalization and independently rebuilds the private evidence from each bound scanner workspace.
+- The REAL ignored-lockfile case and its detached manifest now pass. Unverified runtime authority,
+  model-origin confusion, missing/unexpected private evidence, source mutation, and coherently
+  resealed non-cited context changes fail closed. Generated schema verification is synchronized.
+- Focused result: `33 passed in 8.01s`; affected Ruff and strict mypy passed. Two inherited pytest
+  cleanup warnings were non-failing. No provider call, secret access, public RPC, or live target
+  operation occurred.
+
+## 2026-08-04T01:39:19Z — Resume
+
+- Resumed `V3-REPORT-001` from clean SSH-synchronized pause checkpoint
+  `de5d0baac32bc8b17701eac6b03d41cc9e614a67`.
+- Re-read the complete 1,417-line objective, repository instructions, active queue, runtime status,
+  and current worktree. Objective SHA-256 remains
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
+- The worktree was clean. Work resumes only at the fail-closed ignored scanner-origin source
+  authority seam; no provider call, secret access, public RPC, or live target is required.
 
 ## 2026-08-04T01:36:29Z — Operator-requested pause
 

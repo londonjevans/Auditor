@@ -24,15 +24,21 @@ from mmaudit.models.schemas import (
     CandidateCrossExaminationVerdict,
     CandidateFinding,
     CandidateReproductionResolution,
+    ExecutionEvidenceKind,
     FalsificationDecision,
     FalsificationVerdict,
     Finding,
     FindingOriginKind,
     FindingStatus,
+    Location,
+    LocationValidation,
     ModelReviewCoverage,
     ReproductionResolutionKind,
     ReproductionResult,
     ReproductionState,
+    ScannerFinding,
+    ScannerRun,
+    ScannerStatus,
     Severity,
     SolidityCoverage,
     StrictModel,
@@ -50,10 +56,13 @@ from mmaudit.orchestration.cost_ledger import (
 )
 from mmaudit.reporting.status import ReportStatusProjection, effective_report_status
 from mmaudit.repository.chunking import line_range_hash
+from mmaudit.scanners.projection import project_scanner_finding
 
 _MAX_SOURCE_EXCERPT_EVIDENCE_BYTES = 1_000_000
 _USD_EXACT_PATTERN = r"^(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,18})?$"
 _SCHEDULER_REQUEST_PATTERN = r"^scheduler-request-[0-9a-f]{64}$"
+
+SCANNER_SOURCE_EVIDENCE_PATH = "private/scanner-source-evidence.json"
 
 MANIFEST_BOUND_REPORT_DELIVERABLES = frozenset(
     {
@@ -219,6 +228,229 @@ class SourceExcerptEvidence(StrictModel):
         ):
             raise ValueError("source excerpt symbol is absent from the cited range")
         return self
+
+
+class ScannerSourceAuthority(StrictModel):
+    """Exact runtime authority for one static-analyzer source location."""
+
+    scanner_run: ScannerRun
+    scanner_finding: ScannerFinding
+    location_validation: LocationValidation
+
+
+class ScannerSourceEvidenceRecord(StrictModel):
+    """Private source evidence for one scanner-origin final finding location."""
+
+    finding_id: str = Field(min_length=1, max_length=500)
+    scanner: str = Field(
+        min_length=1,
+        max_length=160,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$",
+    )
+    scanner_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    scanner_execution_observation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_size: int = Field(ge=1, le=100_000_000)
+    source_line_count: int = Field(ge=1, le=100_000_000)
+    location: Location
+    source_excerpt: SourceExcerptEvidence
+
+    @property
+    def canonical_key(self) -> tuple[str, str, str, str, int, int, str]:
+        """Return the authority/location identity used for ordering and uniqueness."""
+
+        return (
+            self.finding_id,
+            self.scanner,
+            self.scanner_fingerprint,
+            self.location.path,
+            self.location.start_line,
+            self.location.end_line,
+            self.location.symbol or "",
+        )
+
+    @model_validator(mode="after")
+    def excerpt_is_bound_to_exact_location(self) -> ScannerSourceEvidenceRecord:
+        excerpt = self.source_excerpt
+        excerpt_size = len(excerpt.content.encode())
+        if (
+            self.location.content_hash is None
+            or self.location.content_hash != excerpt.cited_content_sha256
+            or self.location.path != excerpt.path
+            or self.location.start_line != excerpt.cited_start_line
+            or self.location.end_line != excerpt.cited_end_line
+            or self.location.symbol != excerpt.symbol
+        ):
+            raise ValueError("scanner source excerpt differs from its exact cited location")
+        if (
+            self.source_size < excerpt_size
+            or self.source_line_count < excerpt.excerpt_end_line
+            or excerpt.omitted_before != (excerpt.excerpt_start_line > 1)
+            or excerpt.omitted_after != (excerpt.excerpt_end_line < self.source_line_count)
+        ):
+            raise ValueError("scanner source size or line count differs from its excerpt bounds")
+        if (
+            not excerpt.omitted_before
+            and not excerpt.omitted_after
+            and (self.source_size != excerpt_size or excerpt.file_sha256 != excerpt.content_sha256)
+        ):
+            raise ValueError("complete scanner source excerpt differs from its raw file identity")
+        return self
+
+
+class ScannerSourceEvidenceArtifact(StrictModel):
+    """Versioned private inventory for scanner-only source outside discovery scope."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    scanner_source_inventory_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    records: list[ScannerSourceEvidenceRecord] = Field(
+        min_length=1,
+        max_length=100_000,
+    )
+
+    @model_validator(mode="after")
+    def records_are_unique_and_canonically_sorted(self) -> ScannerSourceEvidenceArtifact:
+        keys = [record.canonical_key for record in self.records]
+        if keys != sorted(set(keys)):
+            raise ValueError("scanner source evidence records must be unique and sorted")
+        return self
+
+
+def build_scanner_source_evidence_artifact(
+    *,
+    scanner_source_inventory_sha256: str,
+    records: Sequence[ScannerSourceEvidenceRecord],
+) -> ScannerSourceEvidenceArtifact:
+    """Build a canonical private scanner-source artifact without changing authority."""
+
+    normalized = [
+        ScannerSourceEvidenceRecord.model_validate(record.model_dump(mode="python"))
+        for record in records
+    ]
+    return ScannerSourceEvidenceArtifact(
+        scanner_source_inventory_sha256=scanner_source_inventory_sha256,
+        records=sorted(normalized, key=lambda record: record.canonical_key),
+    )
+
+
+def scanner_source_authority(
+    report: AuditReport,
+    finding: Finding,
+    location: Location,
+) -> ScannerSourceAuthority:
+    """Resolve one active/filtered report location through the shared scanner predicate."""
+
+    canonical_report = AuditReport.model_validate(report.model_dump(mode="python"))
+    canonical_finding = Finding.model_validate(finding.model_dump(mode="python"))
+    canonical_location = Location.model_validate(location.model_dump(mode="python"))
+
+    final_inventory = [
+        *canonical_report.findings,
+        *canonical_report.rejected_findings,
+        *canonical_report.filtered_findings,
+    ]
+    inventory_matches = [item for item in final_inventory if item.id == canonical_finding.id]
+    if len(inventory_matches) != 1 or inventory_matches[0] != canonical_finding:
+        raise ValueError("scanner source authority requires one exact final finding")
+    if not any(
+        item == canonical_finding
+        for item in [*canonical_report.findings, *canonical_report.filtered_findings]
+    ):
+        raise ValueError("scanner source authority is limited to active or filtered findings")
+
+    return scanner_source_authority_from_runs(
+        canonical_report.scanner_runs,
+        canonical_finding,
+        canonical_location,
+    )
+
+
+def scanner_source_authority_from_runs(
+    scanner_runs: Sequence[ScannerRun],
+    finding: Finding,
+    location: Location,
+) -> ScannerSourceAuthority:
+    """Resolve a location only from exact successful REAL scanner runtime evidence."""
+
+    canonical_runs = tuple(
+        ScannerRun.model_validate(run.model_dump(mode="python")) for run in scanner_runs
+    )
+    canonical_finding = Finding.model_validate(finding.model_dump(mode="python"))
+    canonical_location = Location.model_validate(location.model_dump(mode="python"))
+
+    if canonical_finding.origin_kind is not FindingOriginKind.STATIC_ANALYZER:
+        raise ValueError("scanner source authority requires a static-analyzer finding")
+    if canonical_finding.status is FindingStatus.REJECTED:
+        raise ValueError("rejected findings cannot receive scanner source authority")
+    if sum(item == canonical_location for item in canonical_finding.locations) != 1:
+        raise ValueError("scanner source authority requires one exact final finding location")
+
+    fingerprints = canonical_finding.contributing_candidate_ids
+    if len(fingerprints) != 1 or len(set(fingerprints)) != 1:
+        raise ValueError("scanner source authority requires exactly one contributing fingerprint")
+    fingerprint = fingerprints[0]
+    scanner_matches = [
+        (run, scanner_finding)
+        for run in canonical_runs
+        for scanner_finding in run.findings
+        if scanner_finding.fingerprint == fingerprint
+    ]
+    if len(scanner_matches) != 1:
+        raise ValueError("scanner source authority requires one exact scanner finding")
+    scanner_run, scanner_finding = scanner_matches[0]
+    if scanner_run.scanner != scanner_finding.scanner:
+        raise ValueError("scanner source authority has inconsistent scanner identities")
+    if (
+        scanner_run.execution_evidence is not ExecutionEvidenceKind.REAL
+        or scanner_run.status is not ScannerStatus.SUCCESS
+        or not scanner_run.machine_output_validated
+        or scanner_run.execution_observation_sha256 is None
+        or scanner_run.execution_observation_sha256
+        != scanner_run.expected_execution_observation_sha256()
+    ):
+        raise ValueError(
+            "scanner source authority requires successful machine-validated REAL execution"
+        )
+
+    raw_validations = scanner_finding.metadata.get("location_validation")
+    if not isinstance(raw_validations, list) or len(raw_validations) != len(
+        scanner_finding.locations
+    ):
+        raise ValueError("scanner source authority lacks exact host location validation")
+    try:
+        validations = [LocationValidation.model_validate(item) for item in raw_validations]
+    except ValueError as exc:
+        raise ValueError("scanner source authority has invalid host location validation") from exc
+
+    try:
+        projected = project_scanner_finding(
+            scanner_finding,
+            validations,
+            validated_at=canonical_finding.location_validation.validated_at,
+        )
+    except ValueError as exc:
+        raise ValueError("scanner source authority has invalid scanner projection") from exc
+    if projected != canonical_finding:
+        raise ValueError("scanner source authority differs from the exact scanner projection")
+
+    matching_validations = [
+        validation
+        for scanner_location, validation in zip(
+            scanner_finding.locations,
+            validations,
+            strict=True,
+        )
+        if validation.valid
+        and validation.content_hash is not None
+        and scanner_location.model_copy(update={"content_hash": validation.content_hash})
+        == canonical_location
+    ]
+    if len(matching_validations) != 1:
+        raise ValueError("scanner source authority lacks one exact validated range hash")
+    return ScannerSourceAuthority(
+        scanner_run=scanner_run,
+        scanner_finding=scanner_finding,
+        location_validation=matching_validations[0],
+    )
 
 
 def source_symbol_is_present(symbol: str, content: str) -> bool:

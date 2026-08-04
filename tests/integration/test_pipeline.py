@@ -145,11 +145,23 @@ from mmaudit.privacy import (
     PrivacySourceClassification,
     load_privacy_retention_consent,
 )
-from mmaudit.reporting.bundle import CoverageArtifact, FindingsArtifact, ModelExecutionArtifact
+from mmaudit.reporting.bundle import (
+    SCANNER_SOURCE_EVIDENCE_PATH,
+    CoverageArtifact,
+    FindingsArtifact,
+    ModelExecutionArtifact,
+    ScannerSourceEvidenceArtifact,
+)
+from mmaudit.reporting.client import (
+    bind_active_finding_source_locations,
+    render_client_markdown_from_artifact,
+)
 from mmaudit.reporting.json_report import write_json
-from mmaudit.repository.chunking import line_range_hash
+from mmaudit.reporting.markdown import render_forensic_markdown, render_markdown
+from mmaudit.reporting.sarif import generate_report_sarif
 from mmaudit.scanners.base import (
     ScannerSourceIntegrityError,
+    copy_scanner_workspace,
     scanner_fingerprint,
     scanner_workspace_sha256,
 )
@@ -272,11 +284,17 @@ class SyntheticValidatedScannerRunner(StaticScannerRunner):
         raw_output = private_dir / runs[0].scanner / "output.json"
         raw_output.parent.mkdir(parents=True, exist_ok=True)
         workspace = raw_output.parent / "workspace"
-        workspace.mkdir()
-        source = root / self.finding_path
-        workspace_source = workspace / self.finding_path
-        workspace_source.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, workspace_source)
+        copy_scanner_workspace(
+            root,
+            workspace,
+            Path(
+                kwargs.get("repository_exclusion_root") or kwargs.get("private_dir") or private_dir
+            ),
+            audited_relative_paths=kwargs.get("audited_relative_paths", ()),
+            allow_custom_private_exclusion=bool(
+                kwargs.get("allow_custom_repository_exclusion", False)
+            ),
+        )
         if runs[0].scanner != "semgrep":
             raise ValueError("synthetic validated scanner fixture supports only Semgrep")
         raw_bytes = json.dumps(
@@ -5286,6 +5304,30 @@ async def test_scanner_only_findings_are_needs_review_and_in_sarif(
     sarif = json.loads((result.run_dir / "audit-results.sarif").read_text(encoding="utf-8"))
     assert len(sarif["runs"][0]["results"]) == 1
 
+    unexpected_private = tmp_path / "unexpected-scanner-source-evidence"
+    shutil.copytree(result.run_dir, unexpected_private)
+    unexpected_path = unexpected_private / SCANNER_SOURCE_EVIDENCE_PATH
+    unexpected_path.write_bytes(b"{}\n")
+    manifest_path = unexpected_private / "run-evidence-manifest.json"
+    manifest = RunEvidenceManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+    payload = manifest.model_dump(mode="json")
+    unexpected_bytes = unexpected_path.read_bytes()
+    payload["artifacts"].append(
+        {
+            "path": SCANNER_SOURCE_EVIDENCE_PATH,
+            "sha256": hashlib.sha256(unexpected_bytes).hexdigest(),
+            "size": len(unexpected_bytes),
+        }
+    )
+    payload["artifacts"] = sorted(payload["artifacts"], key=lambda item: item["path"])
+    payload["manifest_sha256"] = canonical_sha256(
+        {key: value for key, value in payload.items() if key != "manifest_sha256"}
+    )
+    unexpected_manifest = RunEvidenceManifest.model_validate(payload)
+    write_run_evidence_manifest(manifest_path, unexpected_manifest)
+    with pytest.raises(ValueError, match="source evidence presence differs"):
+        validate_manifest_artifacts(unexpected_manifest, unexpected_private)
+
 
 @pytest.mark.asyncio
 async def test_scanner_excerpt_rejects_coherent_content_and_manifest_reseal(
@@ -5293,12 +5335,24 @@ async def test_scanner_excerpt_rejects_coherent_content_and_manifest_reseal(
     vulnerable_repo: Path,
     tmp_path: Path,
 ) -> None:
+    ignored_source = vulnerable_repo / "requirements.lock"
+    ignored_source.write_text(
+        "# retained context before\n"
+        "# second context line\n"
+        "synthetic-package==0.0\n"
+        "# retained context after\n"
+        "# final context line\n",
+        encoding="utf-8",
+    )
     config = config_factory()
     result = await AuditPipeline(
         config,
         repo=vulnerable_repo,
         output=tmp_path / "scanner-excerpt-output",
-        scanner_runner=SyntheticValidatedScannerRunner(),  # type: ignore[arg-type]
+        scanner_runner=SyntheticValidatedScannerRunner(  # type: ignore[arg-type]
+            finding_path="requirements.lock",
+            finding_line=3,
+        ),
     ).run(scanner_only=True)
     tampered = tmp_path / "scanner-excerpt-tampered"
     shutil.copytree(result.run_dir, tampered)
@@ -5307,36 +5361,53 @@ async def test_scanner_excerpt_rejects_coherent_content_and_manifest_reseal(
     excerpt = findings_payload["records"][0]["source_excerpt"]
     excerpt_lines = excerpt["content"].splitlines(keepends=True)
     cited_index = excerpt["cited_start_line"] - excerpt["excerpt_start_line"]
-    line = excerpt_lines[cited_index]
+    context_index = 0 if cited_index != 0 else len(excerpt_lines) - 1
+    assert context_index != cited_index
+    line = excerpt_lines[context_index]
     newline = "\n" if line.endswith("\n") else ""
-    excerpt_lines[cited_index] = line.rstrip("\r\n") + " # coherently changed" + newline
+    excerpt_lines[context_index] = line.rstrip("\r\n") + " # coherently changed context" + newline
     excerpt["content"] = "".join(excerpt_lines)
     excerpt["content_sha256"] = hashlib.sha256(excerpt["content"].encode()).hexdigest()
-    relative_start = excerpt["cited_start_line"] - excerpt["excerpt_start_line"] + 1
-    relative_end = excerpt["cited_end_line"] - excerpt["excerpt_start_line"] + 1
-    excerpt["cited_content_sha256"] = line_range_hash(
-        excerpt["content"],
-        relative_start,
-        relative_end,
+    changed_findings = FindingsArtifact.model_validate(findings_payload)
+    write_json(findings_path, changed_findings)
+    (tampered / "client-report.md").write_text(
+        render_client_markdown_from_artifact(result.report, changed_findings),
+        encoding="utf-8",
     )
-    write_json(findings_path, findings_payload)
+    (tampered / "forensic-report.md").write_text(
+        render_forensic_markdown(result.report, findings_artifact=changed_findings),
+        encoding="utf-8",
+    )
+    (tampered / "audit-report.md").write_text(
+        render_markdown(result.report, findings_artifact=changed_findings),
+        encoding="utf-8",
+    )
+    write_json(
+        tampered / "audit-results.sarif",
+        generate_report_sarif(result.report, findings_artifact=changed_findings),
+    )
 
     manifest_path = tampered / "run-evidence-manifest.json"
     manifest = RunEvidenceManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
     manifest_payload = manifest.model_dump(mode="json")
-    findings_bytes = findings_path.read_bytes()
-    findings_binding = next(
-        binding for binding in manifest_payload["artifacts"] if binding["path"] == "findings.json"
-    )
-    findings_binding["sha256"] = hashlib.sha256(findings_bytes).hexdigest()
-    findings_binding["size"] = len(findings_bytes)
+    for name in (
+        "findings.json",
+        "client-report.md",
+        "forensic-report.md",
+        "audit-report.md",
+        "audit-results.sarif",
+    ):
+        changed_bytes = (tampered / name).read_bytes()
+        binding = next(item for item in manifest_payload["artifacts"] if item["path"] == name)
+        binding["sha256"] = hashlib.sha256(changed_bytes).hexdigest()
+        binding["size"] = len(changed_bytes)
     manifest_payload["manifest_sha256"] = canonical_sha256(
         {key: value for key, value in manifest_payload.items() if key != "manifest_sha256"}
     )
     resealed = RunEvidenceManifest.model_validate(manifest_payload)
     write_run_evidence_manifest(manifest_path, resealed)
 
-    with pytest.raises(ValueError, match=r"source excerpt|source evidence|source range"):
+    with pytest.raises(ValueError, match=r"scanner source evidence|source excerpt"):
         validate_manifest_artifacts(resealed, tampered)
 
 
@@ -5494,7 +5565,7 @@ async def test_ignored_lockfile_scanner_finding_stays_local_and_reported(
         repo=vulnerable_repo,
         output=tmp_path / "output",
         client=client,
-        scanner_runner=StaticScannerRunner(  # type: ignore[arg-type]
+        scanner_runner=SyntheticValidatedScannerRunner(  # type: ignore[arg-type]
             finding_path="requirements.lock",
             finding_line=1,
         ),
@@ -5507,7 +5578,108 @@ async def test_ignored_lockfile_scanner_finding_stays_local_and_reported(
     assert "requirements.lock" not in {file.path for file in result.report.repository.files}
     assert result.report.scanner_runs[0].findings[0].locations[0].path == "requirements.lock"
     assert result.report.findings[0].status is FindingStatus.NEEDS_REVIEW
+    assert result.report.metadata["scanner_source_inventory_sha256"]
+    manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    assert "requirements.lock" not in {source.path for source in manifest.sources}
+    validate_manifest_artifacts(manifest, result.run_dir)
+    source_evidence = ScannerSourceEvidenceArtifact.model_validate_json(
+        (result.run_dir / SCANNER_SOURCE_EVIDENCE_PATH).read_text(encoding="utf-8")
+    )
+    assert source_evidence.records[0].location.path == "requirements.lock"
+    assert source_evidence.records[0].source_excerpt.content == "synthetic-package==0.0\n"
+    findings = FindingsArtifact.model_validate_json(
+        (result.run_dir / "findings.json").read_text(encoding="utf-8")
+    )
+    assert findings.records[0].source_excerpt == source_evidence.records[0].source_excerpt
+    forged_finding = result.report.findings[0].model_copy(
+        update={"origin_kind": FindingOriginKind.MODEL_REVIEW}
+    )
+    forged_report = result.report.model_copy(update={"findings": [forged_finding]})
+    with pytest.raises(ValueError, match="static-analyzer finding"):
+        bind_active_finding_source_locations(
+            forged_report,
+            {"requirements.lock": "synthetic-package==0.0\n"},
+        )
+
+    missing_private = tmp_path / "missing-scanner-source-evidence"
+    shutil.copytree(result.run_dir, missing_private)
+    (missing_private / SCANNER_SOURCE_EVIDENCE_PATH).unlink()
+    missing_payload = manifest.model_dump(mode="json")
+    missing_payload["artifacts"] = [
+        binding
+        for binding in missing_payload["artifacts"]
+        if binding["path"] != SCANNER_SOURCE_EVIDENCE_PATH
+    ]
+    missing_payload["manifest_sha256"] = canonical_sha256(
+        {key: value for key, value in missing_payload.items() if key != "manifest_sha256"}
+    )
+    missing_manifest = RunEvidenceManifest.model_validate(missing_payload)
+    write_run_evidence_manifest(
+        missing_private / "run-evidence-manifest.json",
+        missing_manifest,
+    )
+    with pytest.raises(ValueError, match="source evidence presence differs"):
+        validate_manifest_artifacts(missing_manifest, missing_private)
     assert fake.chat_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_ignored_scanner_source_is_never_delivered_to_model_context(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    canary = "IGNORED_SCANNER_SOURCE_CANARY_72A1"
+    (vulnerable_repo / "requirements.lock").write_text(canary + "\n", encoding="utf-8")
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    fake = FakeOpenRouter()
+
+    result = await _run(
+        config,
+        vulnerable_repo,
+        tmp_path,
+        fake,
+        scanner_runner=SyntheticValidatedScannerRunner(
+            finding_path="requirements.lock",
+            finding_line=1,
+        ),
+    )
+
+    assert fake.requests
+    rendered_requests = json.dumps(fake.requests, sort_keys=True)
+    assert "requirements.lock" not in rendered_requests
+    assert canary not in rendered_requests
+    assert "requirements.lock" not in {item.path for item in result.report.repository.files}
+    assert not (result.run_dir / SCANNER_SOURCE_EVIDENCE_PATH).exists()
+
+
+@pytest.mark.asyncio
+async def test_ignored_scanner_source_rejects_unverified_runtime_authority(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    (vulnerable_repo / "requirements.lock").write_text(
+        "synthetic-package==0.0\n",
+        encoding="utf-8",
+    )
+    pipeline = AuditPipeline(
+        config_factory(),
+        repo=vulnerable_repo,
+        output=tmp_path / "unverified-ignored-output",
+        scanner_runner=StaticScannerRunner(  # type: ignore[arg-type]
+            finding_path="requirements.lock",
+            finding_line=1,
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="successful machine-validated REAL execution",
+    ):
+        await pipeline.run(scanner_only=True)
 
 
 @pytest.mark.asyncio
