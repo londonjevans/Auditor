@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Client report and forensic evidence bundle
 CURRENT_TICKET: V3-REPORT-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-FIXTURE-001 (COMPLETE)
-NEXT_ACTION: Resume the ignored-lockfile scanner-origin case by deriving exact excerpt/source authority from the trusted frozen scanner observation without adding ignored content to audited/model scope; rerun the remaining four-case pipeline matrix, then restart the complete ticket gates.
-LAST_COMMAND: `.venv/bin/ruff check src/mmaudit/orchestration/manifest.py src/mmaudit/reporting/run_authority.py tests/integration/test_pipeline.py tests/unit/test_scheduler_host_contracts.py` followed by `git diff --check`
-LAST_RESULT: PASS: affected Ruff checks and diff integrity passed after the final style-only manifest correction. This is a pause-boundary check, not ticket or full-suite acceptance.
+NEXT_ACTION: Implement descriptor-retained, fail-closed scanner-origin source observation for REAL machine-validated static findings only; keep ignored files outside audited/model scope, bind a private scanner-source evidence artifact into detached manifest validation, add authority/tamper regressions, then rerun the remaining four-case pipeline matrix and complete ticket gates.
+LAST_COMMAND: `.venv/bin/pytest -x -vv tests/integration/test_pipeline.py::test_ignored_lockfile_scanner_finding_stays_local_and_reported --tb=short`
+LAST_RESULT: EXPECTED RED: the ignored scanner-origin finding reached terminal source binding, which rejected `requirements.lock` because discovery-only source contents do not contain it (`ValueError: source content is unavailable for cited path: requirements.lock`; 1 failed in 1.20s). This reproduces the exact seam; no implementation change or provider call occurred.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -20,6 +20,31 @@ OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
 LAST_CHECKPOINT_COMMIT: f970c2ceddb8bdc0f4ae167e5578bb019a335793
+
+## 2026-08-04T01:36:29Z — Operator-requested pause
+
+- Paused `V3-REPORT-001` without advancing or weakening the ticket. The worktree contains only
+  this resume/pause metadata; no production or test implementation was changed in this slice.
+- Reproduced the exact ignored scanner-origin source-authority seam with the focused integration
+  test: `requirements.lock` remains correctly absent from discovery/audited/model inventory, while
+  the report path currently has no separately bound trusted source bytes.
+- Completed a read-only architecture review. The resume design is to capture only cited paths from
+  the frozen original scanner tree through retained descriptors, require REAL machine-validated
+  static-scanner provenance, store exact private source evidence, and verify it against the bound
+  private scanner workspace during detached manifest validation. Unverified, model-origin, missing,
+  changed, linked, non-UTF-8, or otherwise untrusted sources must fail closed.
+- No OpenRouter call, secret access, public RPC, live target access, or target-controlled command
+  occurred. Real-model and cost-ledger counts are unchanged.
+
+## 2026-08-04T01:14:40Z — Resume
+
+- Resumed `V3-REPORT-001` from clean SSH-synchronized pause metadata commit
+  `eddd2ae4f883be18c6f321b939163e87c6c88690`.
+- Re-read the complete 1,417-line objective and reverified SHA-256
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
+- Work remains bounded to the retained scanner-origin source-authority seam and the remaining
+  report ticket gates. No provider call, secret access, public RPC, or target-controlled command
+  is required for this slice.
 
 ## 2026-08-04T00:29:43Z — Resume
 
