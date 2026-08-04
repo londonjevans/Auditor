@@ -5,12 +5,12 @@ The objective source has SHA-256
 Do not record credentials, raw private prompts, or raw provider completions here.
 
 AUTORUN_STATUS: RUNNING
-CURRENT_MILESTONE: Honest Solidity/EVM product profile
-CURRENT_TICKET: V3-SCOPE-001 (COMPLETE; checkpoint pending)
-LAST_COMPLETED_TICKET: V3-SCOPE-001 (COMPLETE)
-NEXT_ACTION: Create and push the isolated V3-SCOPE-001 checkpoint via SSH, then immediately mark V3-TOOLDIAG-002 gap 1 IN_PROGRESS and provision Slither's pinned compiler inside the isolation boundary.
-LAST_COMMAND: `.venv/bin/pytest -q`; final `git diff --check`, changed-file secret-pattern, sensitive-filename, generated-artifact, and independent diff reviews.
-LAST_RESULT: PASS — 4846 passed, 11 explicit prerequisite skips in 1635.54s; final integrity/secret/artifact scans and independent closure review passed with no blocker.
+CURRENT_MILESTONE: M1-DETERMINISTIC-PRODUCT (ACTIVE)
+CURRENT_TICKET: V3-TOOLDIAG-002 (COMPLETE; checkpoint pending)
+LAST_COMPLETED_TICKET: V3-TOOLDIAG-002 (COMPLETE)
+NEXT_ACTION: Create and push the isolated V3-TOOLDIAG-002 checkpoint over SSH, then begin active-milestone member V3-GRAPHBOUND-001.
+LAST_COMMAND: `.venv/bin/ruff format .`; `.venv/bin/ruff check .`; `.venv/bin/mypy`; `.venv/bin/python scripts/generate_release_schemas.py`; `.venv/bin/pytest -q --basetemp /private/tmp/mmaudit-v3-tooldiag-full`; final diff/JSON/secret/artifact review.
+LAST_RESULT: PASS — Ruff left 446 files unchanged, Ruff check passed, strict mypy passed 177 source files, schemas verified, and 4849 tests passed with 11 explicit prerequisite skips in 1659.95s; final integrity review passed.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,101 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
-LAST_CHECKPOINT_COMMIT: b39c8b843390e93039a5f178581fb02b17f0ec2b
+LAST_CHECKPOINT_COMMIT: 11a80209a5a46084df88cbb10000d1cc0ac3ef94
+
+## 2026-08-04T14:27:18Z — V3-TOOLDIAG-002 COMPLETE
+
+- The unfragmented repository suite passed `4849 passed, 11 skipped in 1659.95s`. Skips remain
+  explicit unavailable engine/rootless/compiler/provider prerequisites and earned no execution
+  credit. The real macOS Slither CLI regression was not skipped.
+- Repository-wide Ruff formatting changed no files (`446 files left unchanged`), Ruff check passed,
+  strict mypy passed all `177` source files, and release-schema verification passed.
+- Final `git diff --check`, runtime-status JSON parsing, tracked/untracked review, and bounded
+  changed-file secret-pattern scan passed. No unexpected generated artifact or untracked file is
+  present. The two edited example-template comments are synchronized; unrelated historical
+  differences between the root and package templates were preserved.
+- V3-TOOLDIAG-002 satisfies every acceptance criterion and is `COMPLETE`. mmaudit produced exactly
+  213 validated Slither findings through the production CLI, using a hash-pinned compiler copied
+  into the private toolchain plus empty owner-private solc-select state. Environment scrubbing,
+  network denial, hardened isolation, and sandbox scope were not weakened.
+- `M1-DETERMINISTIC-PRODUCT` remains `ACTIVE`, not `REACHED`, because later-discovered member
+  `V3-GRAPHBOUND-001` is queued. Its checkpoint/push is next, then that active-milestone member.
+
+## 2026-08-04T13:57:37Z — V3-TOOLDIAG-002 terminal validation preflight
+
+- The post-review hardened CLI rerun passed `1 passed, 5 deselected in 27.64s` and again emitted
+  exactly 213 REAL validated Slither findings under network-denied `sandbox-exec`.
+- The queue now contains the requested named milestone gate. Stable ticket IDs define membership;
+  any actionable `PARTIAL` member of the active milestone is the next action and prevents
+  `REACHED`. The later-discovered `V3-GRAPHBOUND-001` is included because its existing evidence
+  explicitly says real dependency-bearing targets cannot complete without it.
+- Repository-wide Ruff format/check, strict mypy, release-schema verification, and one
+  unfragmented full suite are starting. The ticket remains `IN_PROGRESS` until they pass.
+
+## 2026-08-04T13:54:43Z — V3-TOOLDIAG-002 independent review hardening
+
+- The complete real macOS matrix passed all six cases in `38.50s`; the Slither CLI path again
+  produced 213 validated findings while Semgrep/Gitleaks succeeded and OSV/Trivy retained their
+  honest not-applicable/unmet-prerequisite classifications.
+- Independent read-only acceptance review found no production-path blocker and independently
+  verified that no canary, original compiler path, ambient HOME, or original target path occurred
+  anywhere in the emitted output tree.
+- The review noted that immediate prelaunch validation could make its already prepared HOME mode
+  and empty artifacts assertions explicit. It now requires mode `0700` for HOME as well as both
+  solc-select directories, and rejects any artifact added between preparation and launch. The new
+  tamper regression passes with the complete six-test Slither unit file.
+- A final focused real Slither CLI rerun is starting from that hardened tree before closure.
+
+## 2026-08-04T13:50:41Z — V3-TOOLDIAG-002 real scanner matrix preflight
+
+- The affected scanner, normalization-replay, source-custody, stream-custody, typed-outcome,
+  run-status, manifest, release-schema, and CLI matrix passed `451 passed in 30.68s`.
+- Ruff format/check passed, strict mypy passed the changed Slither source, release-schema byte
+  verification passed, and `git diff --check` passed.
+- The complete six-case real macOS scanner module is starting with the explicit canonical local
+  Solidity compiler. It remains offline, uses only committed synthetic fixtures, and retains the
+  unchanged process-attested `sandbox-exec` boundary.
+
+## 2026-08-04T13:46:57Z — V3-TOOLDIAG-002 Slither parity achieved
+
+- Configured Slither now fails closed instead of falling back to ambient compiler selection when
+  exact `solc_version`/`solc_sha256` pins are absent. The configured canonical compiler remains
+  outside the audited repository, is copied into `private/scanner-output/slither/toolchain/solc`,
+  re-hashed, mode-bound to `0500`, and revalidated immediately before launch.
+- mmaudit now creates an empty, owner-private `HOME/.solc-select/artifacts` layout inside the
+  scanner directory before Slither's unconditional solc-select import. It does not copy a compiler
+  or `global-version` there and does not propagate ambient `HOME`, `VIRTUAL_ENV`, `SOLC_VERSION`, or
+  control-plane credentials.
+- Unit regressions passed `5 passed in 1.16s`, covering explicit compiler staging, private state,
+  hostile ambient compiler selection, missing pins, linked state rejection, and the existing
+  silent-failure diagnosis.
+- The first permanent CLI assay reached the required 213 findings but failed one test-only
+  assertion that incorrectly compared a cited range hash to a whole-file hash. The product result
+  itself was successful. The assertion now uses the production exact-location validator; the
+  materially corrected rerun passed `1 passed, 5 deselected in 28.02s`.
+- The sealed runtime record reports Slither `0.11.6`, executable SHA-256
+  `be44f3a09492241f703ed883ded84228591ea5bb5dc10e5c2fe47fd4088ada16`, `REAL` execution,
+  `sandbox-exec`, process exit `0`, validated machine output, and **213 normalized findings**:
+  46 Medium, 165 Low, and 2 Informational. The Markdown static-analyzer count, SARIF count,
+  final report, exact source locations, raw-output hash, scanner observation hash, and complete
+  run manifest all validated current.
+- The sandbox policy still contains no network allowance and exactly one write allowance rooted at
+  the Slither private directory. The staged command and policy contain neither the audited source
+  path, original compiler path, ambient solc-select path, nor environment canaries. Environment
+  scrubbing, isolation selection, and resolved-toolchain read scope were not weakened.
+- Next is the broader affected regression/static matrix and independent closure review before the
+  ticket status changes.
+
+## 2026-08-04T13:14:21Z — V3-TOOLDIAG-002 gap 1 IN_PROGRESS
+
+- V3-SCOPE-001 checkpoint `11a80209a5a46084df88cbb10000d1cc0ac3ef94` was pushed over
+  the configured SSH remote together with the three preceding local checkpoints.
+- The queue's contradictory historical Slither success claim and execution-order `complete`
+  marker were corrected before implementation. The ticket is `IN_PROGRESS`; its recorded
+  standalone `213` versus isolated mmaudit `0` diagnosis remains authoritative.
+- Next is a bounded inspection of existing Slither, compiler, toolchain, private-HOME, and sandbox
+  provisioning paths. Environment scrubbing, isolation, network denial, and resolved-prefix scope
+  are fixed constraints, not candidate fixes.
 
 ## 2026-08-04T13:12:13Z — V3-SCOPE-001 COMPLETE
 

@@ -86,7 +86,7 @@ framework = "auto"
 # project_root = "packages/contracts"
 compilation_timeout_seconds = 600
 keep_artifacts = false
-# Maximum-assurance execution also requires exact solc_version/solc_sha256 pins.
+# Isolated Slither and maximum-assurance execution require exact compiler pins.
 # solc_version = "0.8.30"
 # solc_sha256 = "<sha256>"
 solc_executable_env = "MMAUDIT_SOLC_EXECUTABLE"

@@ -1834,10 +1834,10 @@ are invisible to source review by construction.
   `src/mmaudit/scanners/osv.py`, `src/mmaudit/scanners/trivy.py`,
   `src/mmaudit/scanners/slither.py`, reporting, `operator_prerequisites.md`, regressions.
 - **Dependencies:** `V3-TOOLDIAG-001` (`COMPLETE`).
-- **Status:** `PARTIAL`
-- **Acceptance evidence:** Semgrep `1.172.0`, Gitleaks `8.30.1`, and Slither `0.11.6` each
-  produced strictly validated nonempty machine output with `REAL` network-denied
-  `sandbox-exec` evidence against committed fixtures. Installed OSV produced a typed
+- **Status:** `COMPLETE`
+- **Acceptance evidence:** Semgrep `1.172.0` and Gitleaks `8.30.1` each produced strictly
+  validated nonempty machine output with `REAL` network-denied `sandbox-exec` evidence against
+  committed fixtures. Installed OSV produced a typed
   `NOT_APPLICABLE` result for the Solidity-only fixture, and installed Trivy produced a typed
   `UNMET_PREREQUISITE` result naming
   `prepare_trivy_offline_vulnerability_database`; neither earned false scanner-completion
@@ -1846,6 +1846,16 @@ are invisible to source review by construction.
   regressions. The final real macOS matrix passed `6` cases in `17.49s`; the exact final tree
   passed Ruff, strict mypy over `166` source files, schema verification, and `4501` tests with
   `11` explicit prerequisite/paid-provider skips in `1430.04s`.
+- **Slither closure evidence, 2026-08-04:** The production CLI path now requires paired exact
+  compiler pins, copies the canonical hash-matching compiler into the private scanner toolchain,
+  prepares empty owner-private solc-select state under the scrubbed private HOME, and revalidates
+  both immediately before launch. The committed 4,952-line fixture produced **213** normalized
+  findings through mmaudit — 46 Medium, 165 Low, and 2 Informational — exactly matching the
+  standalone count. The record is `REAL`, Slither `0.11.6`, network-denied `sandbox-exec`, exit
+  `0`, with validated machine output and current JSON, Markdown, SARIF, location, and manifest
+  evidence. The complete real macOS matrix passed all `6` cases in `38.50s`; the hardened focused
+  rerun passed in `27.64s` with the same count. No environment scrubbing, isolation selection,
+  network control, or sandbox read/write scope was weakened.
 - **Reopened 2026-08-04. Closed against an unmet acceptance criterion.** The ticket was
   marked `COMPLETE` while its own criterion — "At least `semgrep`, `gitleaks`, and `slither`
   produce validated non-empty machine output against a committed Solidity fixture under the
@@ -1853,18 +1863,15 @@ are invisible to source review by construction.
   ticket showed it unmet. The previous remaining-limitation note disclosed only trivy and did
   not mention slither at all, so the single defect blocking a working deterministic audit was
   recorded as resolved.
-- **Remaining gap 1 — slither, blocking.** Verified again on 2026-08-04 against
-  `tests/fixtures/solidity/realistic_scale/solidity_005k`: slither reports `silent_failure`
-  with zero findings and the run reports `static analyzer=0`, while the identical fixture
-  yields 213 detectors standalone. The diagnosis, probable cause, prohibited shortcuts, and
-  verification requirement are recorded above and are unchanged. This is the only remaining
-  blocker to a deterministic audit that produces findings.
+- **Closed gap 1 — slither.** The previous `silent_failure`, zero-finding result is retained above
+  as historical defect evidence. The configured production CLI path now yields all 213 detectors
+  under the existing isolation boundary, with the exact closure evidence recorded above.
 - **Remaining boundary:** Trivy cannot consume an operator-prepared offline database yet and
   therefore remains an explicit unmet external prerequisite, not a successful scan. Real
   non-macOS integrations remain conditional on an equivalent approved backend and trusted
   toolchain.
-- **Next action:** Resolve remaining gap 1. This ticket cannot become `COMPLETE` while any
-  acceptance criterion is unmet; see the completion discipline in the execution order.
+- **Next action:** None; continue the active deterministic-product milestone with
+  `V3-GRAPHBOUND-001`.
 
 ## V3-GRAPHBOUND-001 — Bound semantic-graph generation before it reaches disk
 
@@ -2199,8 +2206,8 @@ no duplicate, and no ticket scheduled before a declared dependency completes.
    `BLOCKED_TECHNICAL` behind `V3-HARDHAT-001` and its operator container prerequisite.
 3. `V3-BOOTSTRAP-001` — complete. Declared identity can now be measured without prior quality,
    while production selection remains bound to current opaque qualification evidence.
-4. `V3-TOOLDIAG-002` — complete; the real macOS scanner matrix now distinguishes validated
-   success, not-applicable scope, unmet prerequisites, and silent failure without false credit.
+4. `V3-TOOLDIAG-002` — complete; the real macOS matrix distinguishes honest scanner outcomes and
+   Slither produces the full 213-finding reference set inside the unchanged isolation boundary.
 5. `V3-GRAPHBOUND-001` — blocking real targets: a run against an external protocol wrote a
    2.33 GB graph artifact and then failed. No real repository can complete a run until this lands.
 6. `V3-FIXTURE-001` — close-out only. Its sole remaining gap was that `V3-SHARD-001` had to
@@ -2216,10 +2223,10 @@ no duplicate, and no ticket scheduled before a declared dependency completes.
 10. `V3-TARGETSPEC-001` — blocked technical on `V3-OBJECTIVE-001`; reconciliation cannot infer
    the missing objective from its hash.
 
-At this point the deterministic offering is complete and saleable: pinned-fork suite
-execution, local-versus-fork divergence, execution-originated findings, audited-suite
-coverage and assertion strength, honest fail-closed status, and full evidence — with no
-model, no qualification, and no provider spend anywhere in the path.
+Only when `M1-DETERMINISTIC-PRODUCT` is `REACHED` may the deterministic offering be described as
+complete and saleable: pinned-fork suite execution, local-versus-fork divergence,
+execution-originated findings, audited-suite coverage and assertion strength, honest fail-closed
+status, and full evidence — with no model, qualification, or provider spend anywhere in the path.
 
 ### Phase 3 — real models
 
@@ -2282,6 +2289,27 @@ model, no qualification, and no provider spend anywhere in the path.
 44. `V3-SERVICE-001`
 45. `V3-AUTONOMY-001`
 
+### Named milestone gates
+
+Milestones are binding scheduling and claim gates over stable ticket IDs. Numbered positions are
+descriptive and do not change membership when tickets are inserted. A milestone is `REACHED` only
+when every member ticket is `COMPLETE`. `QUEUED`, `IN_PROGRESS`, or `PARTIAL` keeps it `ACTIVE`;
+`BLOCKED_TECHNICAL` or `BLOCKED_SAFETY` keeps it unreached with the external blocker recorded. No
+narrative summary or aggregate evidence may override a member status.
+
+While a milestone is active, finish any member already `IN_PROGRESS`; otherwise its earliest
+actionable `PARTIAL` member in execution order is the next action, ahead of queued members and every
+ticket outside the milestone. A `PARTIAL` member may be passed only after it becomes `COMPLETE` or
+is accurately reclassified as `BLOCKED_TECHNICAL` or `BLOCKED_SAFETY`; a blocked member still
+prevents `REACHED`. Re-evaluate the milestone whenever any member status changes.
+
+- **`M1-DETERMINISTIC-PRODUCT`.** Members are the operator-defined original steps 4–7:
+  `V3-TOOLDIAG-002`, `V3-FIXTURE-001`, `V3-REPORT-001`, and `V3-SCOPE-001`. The subsequently
+  inserted `V3-GRAPHBOUND-001` is also a member because its recorded evidence establishes that
+  real dependency-bearing targets cannot complete without it. State: `ACTIVE`; the next action is
+  `V3-GRAPHBOUND-001`. The milestone may be marked `REACHED` only when all five members are
+  `COMPLETE`.
+
 ### Completion discipline
 
 **A ticket may not be marked `COMPLETE` while any of its acceptance criteria is unmet.** It goes
@@ -2303,6 +2331,8 @@ Concretely:
   while omitting another is worse than no note, because it reads as a complete disclosure.
 - Where a criterion requires a measured result, the measurement must be reproduced at closure,
   not inherited from an earlier checkpoint.
+- A `PARTIAL` ticket inside an active milestone is a blocking engineering gap and therefore the
+  next action under the named-milestone rule; it is never scheduling-equivalent to `COMPLETE`.
 - Reopening a ticket is normal and costs nothing. Closing one that is not finished removes it
   from view permanently.
 

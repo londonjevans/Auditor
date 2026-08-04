@@ -116,8 +116,11 @@ For Solidity projects, install Foundry separately if you want opt-in local Found
 Hardhat compilation and any scanner path that can load Hardhat configuration instead require the
 configured digest-pinned rootless toolchain image; repository JavaScript is never loaded by a host
 audit process. Install Slither separately for repositories that cannot load Hardhat configuration,
-then enable it with `[scanners.slither].enabled = true` or `--run-slither`. Missing Solidity tools or
-isolation are reported as unavailable; their absence is not treated as proof that contracts are safe.
+configure exact `smart_contracts.solc_version` and `smart_contracts.solc_sha256` pins, expose the
+canonical compiler path through the configured `solc_executable_env`, then enable Slither with
+`[scanners.slither].enabled = true` or `--run-slither`. mmaudit copies that exact compiler into the
+private scanner boundary and does not inherit ambient solc-select state. Missing pins, Solidity
+tools, or isolation fail closed; their absence is not treated as proof that contracts are safe.
 
 Missing optional scanners are reported and skipped. Set `required = true` for a scanner whose absence
 must terminate the audit.

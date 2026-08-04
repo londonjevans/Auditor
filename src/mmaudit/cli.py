@@ -2144,7 +2144,10 @@ def scan_command(
     ] = None,
     run_slither: Annotated[
         bool,
-        typer.Option("--run-slither", help="Run Slither when installed."),
+        typer.Option(
+            "--run-slither",
+            help="Run isolated Slither with the configured hash-pinned Solidity compiler.",
+        ),
     ] = False,
     allow_network: Annotated[
         bool,
@@ -2513,7 +2516,10 @@ def run_command(
     ] = None,
     run_slither: Annotated[
         bool,
-        typer.Option("--run-slither", help="Run Slither when installed."),
+        typer.Option(
+            "--run-slither",
+            help="Run isolated Slither with the configured hash-pinned Solidity compiler.",
+        ),
     ] = False,
     allow_network: Annotated[
         bool,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import re
@@ -31,9 +32,11 @@ class SlitherScanner(ScannerAdapter):
         self.smart_contracts = smart_contracts
 
     def build_command(self, root: Path, private_dir: Path) -> list[str]:
-        if not self._uses_pinned_compiler():
+        if self.smart_contracts is None:
             return self._default_command()
-        assert self.smart_contracts is not None
+        if not self._uses_pinned_compiler():
+            raise ValueError("configured Slither requires exact solc_version and solc_sha256 pins")
+        _prepare_private_solc_select_state(private_dir)
         compiler = _stage_pinned_compiler(root, private_dir, self.smart_contracts)
         entrypoint = _stage_analysis_entrypoint(root, private_dir)
         return [
@@ -60,6 +63,16 @@ class SlitherScanner(ScannerAdapter):
         if self._uses_pinned_compiler():
             return private_dir / "analysis"
         return workspace
+
+    def validate_pre_execution_inputs(self, workspace: Path, private_dir: Path) -> None:
+        """Revalidate the isolated compiler and solc-select state before launch."""
+
+        del workspace
+        if not self._uses_pinned_compiler():
+            return
+        assert self.smart_contracts is not None
+        _validate_private_solc_select_state(private_dir)
+        _validate_staged_compiler(private_dir, self.smart_contracts)
 
     def _uses_pinned_compiler(self) -> bool:
         return (
@@ -249,6 +262,133 @@ def _stage_pinned_compiler(
     if _sha256_file(destination) != config.solc_sha256:
         raise ValueError("staged Solidity compiler differs from its SHA-256 pin")
     return destination.resolve(strict=True)
+
+
+def _prepare_private_solc_select_state(private_dir: Path) -> Path:
+    """Create only the empty private state imported by Slither's solc-select dependency."""
+
+    private_root = private_dir.resolve(strict=True)
+    home = private_dir / "home"
+    _require_private_state_directory(
+        home,
+        private_root=private_root,
+        label="Slither private HOME",
+        exact_mode=None,
+    )
+    home.chmod(0o700)
+    _require_private_state_directory(
+        home,
+        private_root=private_root,
+        label="Slither private HOME",
+        exact_mode=0o700,
+    )
+    solc_select = home / ".solc-select"
+    artifacts = solc_select / "artifacts"
+    for path, label in (
+        (solc_select, "Slither private solc-select directory"),
+        (artifacts, "Slither private solc-select artifacts directory"),
+    ):
+        with contextlib.suppress(FileExistsError):
+            path.mkdir(mode=0o700)
+        _require_private_state_directory(
+            path,
+            private_root=private_root,
+            label=label,
+            exact_mode=None,
+        )
+        path.chmod(0o700)
+        _require_private_state_directory(
+            path,
+            private_root=private_root,
+            label=label,
+            exact_mode=0o700,
+        )
+    return artifacts
+
+
+def _validate_private_solc_select_state(private_dir: Path) -> None:
+    private_root = private_dir.resolve(strict=True)
+    home = private_dir / "home"
+    for path, label, exact_mode in (
+        (home, "Slither private HOME", 0o700),
+        (home / ".solc-select", "Slither private solc-select directory", 0o700),
+        (
+            home / ".solc-select" / "artifacts",
+            "Slither private solc-select artifacts directory",
+            0o700,
+        ),
+    ):
+        _require_private_state_directory(
+            path,
+            private_root=private_root,
+            label=label,
+            exact_mode=exact_mode,
+        )
+    try:
+        (home / ".solc-select" / "global-version").lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise ValueError("Slither private solc-select state must not select an ambient compiler")
+    try:
+        next((home / ".solc-select" / "artifacts").iterdir())
+    except StopIteration:
+        pass
+    except OSError as exc:
+        raise ValueError("Slither private solc-select artifacts could not be inspected") from exc
+    else:
+        raise ValueError("Slither private solc-select artifacts must remain empty")
+
+
+def _require_private_state_directory(
+    path: Path,
+    *,
+    private_root: Path,
+    label: str,
+    exact_mode: int | None,
+) -> None:
+    try:
+        metadata = path.lstat()
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(private_root)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"{label} is unavailable inside the private boundary") from exc
+    current_uid = os.geteuid() if hasattr(os, "geteuid") else None
+    if (
+        path.is_symlink()
+        or path.is_junction()
+        or not stat.S_ISDIR(metadata.st_mode)
+        or (current_uid is not None and metadata.st_uid != current_uid)
+        or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        or (exact_mode is not None and stat.S_IMODE(metadata.st_mode) != exact_mode)
+    ):
+        raise ValueError(f"{label} is not an owner-private non-link directory")
+
+
+def _validate_staged_compiler(private_dir: Path, config: SmartContractsConfig) -> Path:
+    if config.solc_sha256 is None:
+        raise ValueError("Slither requires configured Solidity compiler SHA-256")
+    private_root = private_dir.resolve(strict=True)
+    compiler = private_dir / "toolchain" / "solc"
+    try:
+        metadata = compiler.lstat()
+        resolved = compiler.resolve(strict=True)
+        resolved.relative_to(private_root)
+    except (OSError, ValueError) as exc:
+        raise ValueError("staged Solidity compiler is unavailable") from exc
+    if (
+        compiler.is_symlink()
+        or compiler.is_junction()
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or not 0 < metadata.st_size <= _MAX_PINNED_COMPILER_BYTES
+        or stat.S_IMODE(metadata.st_mode) != 0o500
+        or not os.access(compiler, os.X_OK)
+    ):
+        raise ValueError("staged Solidity compiler is not a private executable")
+    if _sha256_file(compiler) != config.solc_sha256:
+        raise ValueError("staged Solidity compiler differs from its SHA-256 pin")
+    return resolved
 
 
 def _stage_analysis_entrypoint(root: Path, private_dir: Path) -> Path:
