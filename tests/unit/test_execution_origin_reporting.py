@@ -26,12 +26,17 @@ from mmaudit.models.schemas import (
     InvariantExecutionOriginDisposition,
     InvariantExecutionResult,
     InvariantSuite,
+    LanguageCapabilityFileEvidence,
+    LanguageCapabilityProfile,
     Location,
     LocationValidation,
     ModelVote,
+    RepositoryFile,
     RepositoryMap,
     ScannerFinding,
     Severity,
+    SolidityProjectMetadata,
+    SolidityProjectType,
     VerificationTest,
     execution_origin_location_validation_sha256,
 )
@@ -48,6 +53,7 @@ from mmaudit.orchestration.run_status import (
 from mmaudit.reporting.markdown import render_markdown
 from mmaudit.reporting.sarif import generate_sarif
 from mmaudit.scanners.base import scanner_fingerprint
+from tests.language_capability_support import language_capability_for_files
 from tests.unit.test_execution_candidates import (
     _build as _build_execution_candidates,
 )
@@ -376,7 +382,37 @@ def _current_execution_report(
     invariant_executions: list[InvariantExecutionResult] | None = None,
     dispositions: list[InvariantExecutionOriginDisposition] | None = None,
 ) -> AuditReport:
-    repository = _report([]).repository
+    source_inventory = (
+        LanguageCapabilityFileEvidence(
+            path="src/ReviewTarget.sol",
+            sha256="c" * 64,
+            size=1_024,
+            lines=64,
+            language="Solidity",
+        ),
+        LanguageCapabilityFileEvidence(
+            path="src/SyntheticVault.sol",
+            sha256="d" * 64,
+            size=1_024,
+            lines=64,
+            language="Solidity",
+        ),
+    )
+    repository = _report([]).repository.model_copy(
+        update={
+            "files": [RepositoryFile.model_validate(item.model_dump()) for item in source_inventory]
+        }
+    )
+    project = SolidityProjectMetadata(
+        project_type=SolidityProjectType.FOUNDRY,
+        project_root=".",
+        source_directories=["src"],
+    )
+    language_capability = language_capability_for_files(
+        LanguageCapabilityProfile.SOLIDITY_EVM,
+        source_inventory,
+        solidity_project_count=1,
+    ).assessment
     floor = assess_minimum_analysis_floor(
         repository=repository,
         compilations=[],
@@ -384,7 +420,7 @@ def _current_execution_report(
         usage=[],
         required_model_roles=[],
         coverage_metrics={},
-        solidity_applicable=False,
+        solidity_applicable=True,
         static_analysis_applicable=True,
         model_review_applicable=False,
         scanner_only=True,
@@ -433,9 +469,10 @@ def _current_execution_report(
         accounted_cost_usd=0,
         findings=findings,
         rejected_findings=rejected_findings or [],
-        quality_status=AuditQualityStatus.FAILED,
+        quality_status=AuditQualityStatus.INCOMPLETE,
         run_status=floor.run_status,
         minimum_analysis_floor=floor,
+        language_capability=language_capability,
         quality_gates=[minimum_analysis_floor_quality_gate(floor)],
         invariants=invariants,
         invariant_executions=invariant_executions or [],
@@ -443,7 +480,10 @@ def _current_execution_report(
         metadata={
             "configured_models": {},
             "scanner_only": True,
-            "solidity": {"projects": [], "compilation": []},
+            "solidity": {
+                "projects": [project.model_dump(mode="json")],
+                "compilation": [],
+            },
         },
     )
 

@@ -2385,6 +2385,7 @@ def test_scanner_completion_excludes_not_applicable_and_retains_typed_failures(
         *,
         evidence: ExecutionEvidenceKind,
         machine_output_validated: bool,
+        isolation_backend: str = "sandbox-exec",
     ) -> ScannerRun:
         run = ScannerRun(
             scanner=scanner,
@@ -2400,7 +2401,7 @@ def test_scanner_completion_excludes_not_applicable_and_retains_typed_failures(
             raw_output_sha256="4" * 64,
             raw_output_bytes=2,
             process_exit_code=0,
-            isolation_backend="sandbox-exec",
+            isolation_backend=isolation_backend,
             isolation_attestation_sha256="5" * 64,
             machine_output_validated=machine_output_validated,
         )
@@ -2421,19 +2422,26 @@ def test_scanner_completion_excludes_not_applicable_and_retains_typed_failures(
         evidence=ExecutionEvidenceKind.REAL,
         machine_output_validated=False,
     )
+    uncertified_isolation = success_run(
+        "codeql",
+        evidence=ExecutionEvidenceKind.REAL,
+        machine_output_validated=True,
+        isolation_backend="synthetic-untrusted-backend",
+    )
     unqualified_successes = build_solidity_coverage(
         discovery=discovery,
         projects=projects,
         compilations=compilation.results,
         index=build.index,
         graphs=graphs,
-        scanner_runs=[mock_success, unvalidated_success],
+        scanner_runs=[mock_success, unvalidated_success, uncertified_isolation],
     ).quality_metrics["scanner_completion"]
     assert unqualified_successes.numerator == 0
-    assert unqualified_successes.denominator == 2
+    assert unqualified_successes.denominator == 3
     assert unqualified_successes.failures == [
         "semgrep: execution evidence is mock, not real",
         "trivy: machine output was not strictly validated",
+        "codeql: isolation backend is not certified",
     ]
 
 

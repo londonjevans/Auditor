@@ -470,7 +470,7 @@ def test_audited_suite_denominators_exclude_test_harnesses_and_emit_exact_gaps(
 ) -> None:
     root = tmp_path / "foundry"
     shutil.copytree(FIXTURE, root)
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     discovery = discover_repository(root, config.repository, IgnoreMatcher())
     projects = discover_solidity_projects(discovery, config.smart_contracts)
     build = build_solidity_index(discovery, projects, [root / "out"])
@@ -611,7 +611,7 @@ def test_auxiliary_graph_nodes_do_not_invalidate_critical_source_classification(
 ) -> None:
     root = tmp_path / "foundry"
     shutil.copytree(FIXTURE, root)
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     discovery = discover_repository(root, config.repository, IgnoreMatcher())
     projects = discover_solidity_projects(discovery, config.smart_contracts)
     build = build_solidity_index(discovery, projects, [root / "out"])
@@ -663,7 +663,7 @@ def test_symbolic_invariant_and_applicable_economic_plan_require_exact_audited_b
 ) -> None:
     root = tmp_path / "foundry"
     shutil.copytree(FIXTURE, root)
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     discovery = discover_repository(root, config.repository, IgnoreMatcher())
     projects = discover_solidity_projects(discovery, config.smart_contracts)
     build = build_solidity_index(discovery, projects, [root / "out"])
@@ -757,7 +757,7 @@ def test_invariant_location_binding_rejects_missing_or_stale_current_evidence(
 ) -> None:
     root = tmp_path / "foundry"
     shutil.copytree(FIXTURE, root)
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     discovery = discover_repository(root, config.repository, IgnoreMatcher())
     projects = discover_solidity_projects(discovery, config.smart_contracts)
     build = build_solidity_index(discovery, projects, [root / "out"])
@@ -810,7 +810,7 @@ def test_critical_graph_edge_requires_current_contained_hash_bound_source_range(
 ) -> None:
     root = tmp_path / "foundry"
     shutil.copytree(FIXTURE, root)
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     discovery = discover_repository(root, config.repository, IgnoreMatcher())
     projects = discover_solidity_projects(discovery, config.smart_contracts)
     build = build_solidity_index(discovery, projects, [root / "out"])
@@ -857,7 +857,7 @@ def test_contract_state_and_location_invariants_share_exact_critical_contracts(
 ) -> None:
     root = tmp_path / "foundry"
     shutil.copytree(FIXTURE, root)
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     discovery = discover_repository(root, config.repository, IgnoreMatcher())
     projects = discover_solidity_projects(discovery, config.smart_contracts)
     build = build_solidity_index(discovery, projects, [root / "out"])
@@ -999,7 +999,7 @@ def test_mixed_source_and_test_invariant_fails_priority_classification_closed(
 ) -> None:
     root = tmp_path / "foundry"
     shutil.copytree(FIXTURE, root)
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     discovery = discover_repository(root, config.repository, IgnoreMatcher())
     projects = discover_solidity_projects(discovery, config.smart_contracts)
     build = build_solidity_index(discovery, projects, [root / "out"])
@@ -1091,7 +1091,7 @@ def test_self_authored_statement_artifacts_never_earn_runtime_credit(
 ) -> None:
     root = tmp_path / "foundry"
     shutil.copytree(FIXTURE, root)
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     discovery = discover_repository(root, config.repository, IgnoreMatcher())
     projects = discover_solidity_projects(discovery, config.smart_contracts)
     build = build_solidity_index(discovery, projects, [root / "out"])
@@ -1236,7 +1236,7 @@ def test_statement_evidence_rejects_vacuous_or_inconsistent_denominators(
 ) -> None:
     root = tmp_path / "foundry"
     shutil.copytree(FIXTURE, root)
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     discovery = discover_repository(root, config.repository, IgnoreMatcher())
     projects = discover_solidity_projects(discovery, config.smart_contracts)
     build = build_solidity_index(discovery, projects, [root / "out"])
@@ -1286,7 +1286,7 @@ def test_self_authored_incomplete_repository_test_attempts_earn_no_runtime_credi
 ) -> None:
     root = tmp_path / "foundry"
     shutil.copytree(FIXTURE, root)
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     discovery = discover_repository(root, config.repository, IgnoreMatcher())
     projects = discover_solidity_projects(discovery, config.smart_contracts)
     build = build_solidity_index(discovery, projects, [root / "out"])
@@ -1317,7 +1317,7 @@ async def test_repeated_runtime_outcomes_use_one_logical_test_identity_and_fail_
 ) -> None:
     root = tmp_path / "foundry"
     shutil.copytree(FIXTURE, root)
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     discovery = discover_repository(root, config.repository, IgnoreMatcher())
     projects = discover_solidity_projects(discovery, config.smart_contracts)
     build = build_solidity_index(discovery, projects, [root / "out"])
@@ -1509,7 +1509,7 @@ async def test_runner_observed_mutation_campaign_is_inconclusive_and_gap_evidenc
 ) -> None:
     root = tmp_path / "foundry"
     shutil.copytree(FIXTURE, root)
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     discovery = discover_repository(root, config.repository, IgnoreMatcher())
     projects = discover_solidity_projects(discovery, config.smart_contracts)
     build = build_solidity_index(discovery, projects, [root / "out"])
@@ -1592,7 +1592,7 @@ async def test_mutation_binding_revalidates_every_hash_and_source_join(
 ) -> None:
     root = tmp_path / "foundry"
     shutil.copytree(FIXTURE, root)
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     discovery = discover_repository(root, config.repository, IgnoreMatcher())
     projects = discover_solidity_projects(discovery, config.smart_contracts)
     build = build_solidity_index(discovery, projects, [root / "out"])
@@ -1757,7 +1757,7 @@ def test_missing_source_and_critical_classification_fail_closed(
 ) -> None:
     root = tmp_path / "foundry"
     shutil.copytree(FIXTURE, root)
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     discovery = discover_repository(root, config.repository, IgnoreMatcher())
     projects = discover_solidity_projects(discovery, config.smart_contracts)
     build = build_solidity_index(discovery, projects, [root / "out"])
@@ -1829,7 +1829,7 @@ def test_audited_suite_schema_requires_explicit_classification_and_bounded_count
 ) -> None:
     root = tmp_path / "foundry"
     shutil.copytree(FIXTURE, root)
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     discovery = discover_repository(root, config.repository, IgnoreMatcher())
     projects = discover_solidity_projects(discovery, config.smart_contracts)
     build = build_solidity_index(discovery, projects, [root / "out"])
@@ -1868,7 +1868,7 @@ def test_conventional_test_paths_remain_excluded_when_metadata_is_incomplete(
 ) -> None:
     root = tmp_path / "foundry"
     shutil.copytree(FIXTURE, root)
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     discovery = discover_repository(root, config.repository, IgnoreMatcher())
     projects = discover_solidity_projects(discovery, config.smart_contracts)
     build = build_solidity_index(discovery, projects, [root / "out"])

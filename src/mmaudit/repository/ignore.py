@@ -69,6 +69,14 @@ class IgnoreMatcher:
                 rules.append(line)
         return cls(rules)
 
+    @classmethod
+    def from_effective_rules(cls, rules: tuple[str, ...]) -> IgnoreMatcher:
+        """Reconstruct an already-expanded, evidence-bound rule sequence exactly."""
+
+        matcher = cls()
+        matcher.rules = list(rules)
+        return matcher
+
     def ignored(self, path: str | Path, *, is_dir: bool = False) -> bool:
         normalized = normalize_relative_path(path)
         if is_sensitive_workspace_path(normalized, is_dir=is_dir):

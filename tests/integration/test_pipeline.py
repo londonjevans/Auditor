@@ -16,7 +16,6 @@ from typing import Any
 
 import httpx
 import pytest
-from pydantic import ValidationError
 
 from mmaudit.agents.specialists import build_specialist_execution_records
 from mmaudit.benchmark.certificate import (
@@ -121,6 +120,7 @@ from mmaudit.orchestration.manifest import (
     _ManifestReproductionArtifact,
     _validate_scheduler_prejudgment_evidence_authority,
     canonical_sha256,
+    rebuild_run_evidence_manifest_for_verification,
     validate_manifest_artifacts,
     validate_report_privacy_consistency,
     validate_solidity_shard_artifacts,
@@ -171,6 +171,7 @@ from mmaudit.scanners.fork_matrix import repository_fork_matrix_timeout_budget_s
 from mmaudit.scanners.semgrep import SemgrepScanner
 from mmaudit.solidity.compile import CompilationRun
 from mmaudit.solidity.invariant_execution import FoundryInvariantRunner
+from mmaudit.solidity.properties import build_property_corpus
 from mmaudit.solidity.reproduction import translate_foundry_test
 from mmaudit.solidity.reproduction_integrity import reproduction_repository_sha256
 from mmaudit.traceability import (
@@ -449,6 +450,30 @@ def _replace_manifest_bound_report(run_dir: Path, report: AuditReport) -> None:
     )
 
 
+def _replace_manifest_bound_artifact(
+    run_dir: Path,
+    artifact_name: str,
+    artifact_payload: dict[str, Any],
+) -> RunEvidenceManifest:
+    """Replace one public artifact and coherently reseal only its manifest binding."""
+
+    artifact_path = run_dir / artifact_name
+    write_json(artifact_path, artifact_payload)
+    manifest_path = run_dir / "run-evidence-manifest.json"
+    manifest = RunEvidenceManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+    payload = manifest.model_dump(mode="json")
+    artifact_bytes = artifact_path.read_bytes()
+    binding = next(item for item in payload["artifacts"] if item["path"] == artifact_name)
+    binding["sha256"] = hashlib.sha256(artifact_bytes).hexdigest()
+    binding["size"] = len(artifact_bytes)
+    payload["manifest_sha256"] = canonical_sha256(
+        {key: value for key, value in payload.items() if key != "manifest_sha256"}
+    )
+    resealed = RunEvidenceManifest.model_validate(payload)
+    write_run_evidence_manifest(manifest_path, resealed)
+    return resealed
+
+
 def _copy_ci_public_bundle(run_dir: Path, destination: Path) -> Path:
     destination.mkdir()
     for name in (
@@ -591,6 +616,15 @@ async def test_solidity_profile_rejects_python_before_compiler_scanner_or_model_
     assert result.report.language_capability.status is LanguageCapabilityStatus.MISMATCH
     assert result.report.language_capability.achieved_profile is None
     assert not result.report.language_capability.evm_maximum_assurance_eligible
+    assert result.report.invariants is None
+    assert result.report.invariant_review is None
+    assert not result.report.invariant_executions
+    assert not result.report.economic_simulations
+    assert not result.report.formal_runs
+    assert not result.report.reproductions
+    assert result.report.solidity_coverage is not None
+    assert not result.report.solidity_coverage.quality_metrics
+    assert result.report.solidity_coverage.graph_analysis_state is AnalysisState.NOT_ANALYZED
     capability_artifact = json.loads(
         (result.run_dir / "language-capability.json").read_text(encoding="utf-8")
     )
@@ -1661,6 +1695,7 @@ def _dependency_repo(tmp_path: Path) -> tuple[Path, str]:
 
 def _solidity_reproduction_config(config_factory):
     return config_factory(
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         privacy={"fail_on_detected_secret": False},
         smart_contracts={
             "enabled": True,
@@ -1749,13 +1784,13 @@ async def test_mock_multi_agent_audit_preserves_artifacts_without_false_completi
         for finding in emitted_report.findings
         for location in finding.locations
     )
-    FindingsArtifact.model_validate_json(
+    findings_artifact = FindingsArtifact.model_validate_json(
         (result.run_dir / "findings.json").read_text(encoding="utf-8")
     )
-    CoverageArtifact.model_validate_json(
+    coverage_artifact = CoverageArtifact.model_validate_json(
         (result.run_dir / "coverage.json").read_text(encoding="utf-8")
     )
-    ModelExecutionArtifact.model_validate_json(
+    model_execution_artifact = ModelExecutionArtifact.model_validate_json(
         (result.run_dir / "model-execution.json").read_text(encoding="utf-8")
     )
     client_report = (result.run_dir / "client-report.md").read_text(encoding="utf-8")
@@ -1767,6 +1802,34 @@ async def test_mock_multi_agent_audit_preserves_artifacts_without_false_completi
         is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
     )
     assert not result.report.language_capability.evm_portfolio_applicable
+    for artifact in (findings_artifact, coverage_artifact, model_execution_artifact):
+        assert artifact.language_capability == result.report.language_capability
+        assert artifact.language_capability.status is LanguageCapabilityStatus.REDUCED
+        assert not artifact.language_capability.evm_portfolio_applicable
+        assert not artifact.language_capability.evm_maximum_assurance_eligible
+    assert coverage_artifact.schema_version == "1.1"
+    assert not coverage_artifact.scanner_only
+    assert coverage_artifact.generic_source_coverage is not None
+    assert coverage_artifact.generic_source_coverage == (
+        result.report.effective_minimum_floor_coverage_metrics()
+    )
+    assert set(coverage_artifact.generic_source_coverage) == {
+        "generic_source_files_ingested",
+    }
+    coverage_payload = coverage_artifact.model_dump(mode="python")
+    with pytest.raises(ValueError, match="requires typed generic source coverage"):
+        CoverageArtifact.model_validate({**coverage_payload, "generic_source_coverage": None})
+    with pytest.raises(ValueError, match="effective run mode"):
+        CoverageArtifact.model_validate({**coverage_payload, "scanner_only": True})
+    assert result.report.invariants is None
+    assert result.report.invariant_review is None
+    assert not result.report.invariant_executions
+    assert not result.report.economic_simulations
+    assert not result.report.formal_runs
+    assert not result.report.reproductions
+    assert result.report.solidity_coverage is not None
+    assert not result.report.solidity_coverage.quality_metrics
+    assert result.report.solidity_coverage.graph_analysis_state is AnalysisState.NOT_ANALYZED
     assert "# Corrovera Reduced Generic Source Review" in client_report
     assert "REDUCED CAPABILITY" in client_report
     assert "no EVM assurance is claimed" in client_report
@@ -1808,6 +1871,46 @@ async def test_mock_multi_agent_audit_preserves_artifacts_without_false_completi
         "foundry_fork",
         "candidate_reproduction",
     } & {gate.gate for gate in result.report.quality_gates}
+    property_payload = json.loads(
+        (result.run_dir / "property-corpus.json").read_text(encoding="utf-8")
+    )
+    property_payload["corpus"]["properties"] = [{"forged": True}]
+    tampered_artifacts = (
+        (
+            "solidity-compilation.json",
+            {"schema_version": "1.0", "results": [{"forged": True}]},
+            "solidity-compilation.json differs",
+        ),
+        (
+            "formal-results.json",
+            {
+                "schema_version": "1.0",
+                "runs": [{"forged": True}],
+                "dynamic_engine_comparisons": [],
+            },
+            "formal-results.json differs",
+        ),
+        (
+            "invariant-harness-plan.json",
+            {"schema_version": "1.0", "harnesses": [{"forged": True}], "limitations": []},
+            "non-EVM report retains invariant or property execution evidence",
+        ),
+        (
+            "property-corpus.json",
+            property_payload,
+            "non-EVM report retains invariant or property execution evidence",
+        ),
+    )
+    for index, (artifact_name, artifact_payload, error) in enumerate(tampered_artifacts):
+        tampered_run = tmp_path / f"generic-resealed-evm-artifact-{index}"
+        shutil.copytree(result.run_dir, tampered_run)
+        resealed = _replace_manifest_bound_artifact(
+            tampered_run,
+            artifact_name,
+            artifact_payload,
+        )
+        with pytest.raises(ValueError, match=error):
+            validate_manifest_artifacts(resealed, tampered_run)
     validate_manifest_artifacts(manifest, result.run_dir)
     context_manifest = load_context_manifest(result.run_dir / "context-manifest.json")
     validate_context_manifest_against_usage(
@@ -1840,7 +1943,6 @@ async def test_mock_multi_agent_audit_preserves_artifacts_without_false_completi
         getattr(manifest.bindings, category)
         for category in manifest.bindings.__class__.model_fields
     )
-
     missing_bundle = tmp_path / "missing-client-report"
     shutil.copytree(result.run_dir, missing_bundle)
     (missing_bundle / "client-report.md").unlink()
@@ -1930,6 +2032,73 @@ async def test_mock_multi_agent_audit_preserves_artifacts_without_false_completi
     )
     with pytest.raises(ValueError, match="cited range hash is inconsistent"):
         validate_manifest_artifacts(excerpt_manifest, resealed_excerpt_bundle)
+
+
+@pytest.mark.asyncio
+async def test_generic_profile_with_solidity_source_never_runs_evm_portfolio(
+    config_factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = _foundry_repo(tmp_path, patched=True)
+    calls = {"compilation": 0, "invariant": 0, "formal": 0, "fork_matrix": 0}
+
+    def compilation_must_not_run(*_args: Any, **_kwargs: Any) -> Any:
+        calls["compilation"] += 1
+        raise AssertionError("generic-source-review invoked Solidity compilation")
+
+    class EvmRunnerMustNotRun:
+        isolation_available = True
+
+        def __init__(self, label: str) -> None:
+            self.label = label
+
+        def run(self, *_args: Any, **_kwargs: Any) -> Any:
+            calls[self.label] += 1
+            raise AssertionError(f"generic-source-review invoked {self.label}")
+
+    monkeypatch.setattr(
+        "mmaudit.orchestration.pipeline.compile_solidity_projects",
+        compilation_must_not_run,
+    )
+    config = config_factory(
+        language_profile=LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW,
+        privacy={"fail_on_detected_secret": False},
+        scanners={"foundry_fork": {"enabled": True, "required": False}},
+        smart_contracts=_repository_fork_matrix_config_override(),
+        reproduction={"enabled": True, "required_for_solidity": True},
+        invariants={"execute_generated": True},
+        formal={"enabled": True},
+    )
+    result = await AuditPipeline(
+        config,
+        repo=repository,
+        output=tmp_path / "generic-solidity-output",
+        scanner_runner=StaticScannerRunner(emit_finding=False),  # type: ignore[arg-type]
+        invariant_runner=EvmRunnerMustNotRun("invariant"),  # type: ignore[arg-type]
+        formal_runner=EvmRunnerMustNotRun("formal"),  # type: ignore[arg-type]
+        repository_fork_matrix_runner=EvmRunnerMustNotRun("fork_matrix"),  # type: ignore[arg-type]
+    ).run(scanner_only=True)
+
+    assert calls == {"compilation": 0, "invariant": 0, "formal": 0, "fork_matrix": 0}
+    assert result.report.language_capability is not None
+    assert result.report.language_capability.status is LanguageCapabilityStatus.REDUCED
+    assert not result.report.language_capability.evm_portfolio_applicable
+    assert result.report.repository.languages.get("Solidity", 0) > 0
+    assert result.report.invariants is None
+    assert result.report.invariant_review is None
+    assert not result.report.invariant_executions
+    assert not result.report.economic_simulations
+    assert not result.report.formal_runs
+    assert not result.report.reproductions
+    assert result.report.repository_suite_differential is None
+    assert [run.scanner for run in result.report.scanner_runs] == ["semgrep"]
+    assert not {
+        "compilation",
+        "slither",
+        "foundry_fork",
+        "candidate_reproduction",
+    } & {gate.gate for gate in result.report.quality_gates}
 
 
 @pytest.mark.asyncio
@@ -2883,6 +3052,7 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
     registry = [*base_registry, *specialist_registry]
     config = config_factory(
         profile=AuditProfile.MAXIMUM_ASSURANCE,
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         privacy={
             "fail_on_detected_secret": False,
             "approved_model_lineages": [entry["root_lineage"] for entry in registry],
@@ -3396,6 +3566,7 @@ async def test_erc4626_generated_harness_executes_locally_and_is_counted_separat
         ),
     ]
     config = config_factory(
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         privacy={"fail_on_detected_secret": False},
         smart_contracts={"enabled": True, "compile": True},
         reproduction={
@@ -3522,6 +3693,46 @@ async def test_erc4626_generated_harness_executes_locally_and_is_counted_separat
     assert "1 counterexample, 1 passed" in markdown
     assert "| 2 | 1 counterexample, 1 passed | 2 | 1 |" in markdown
 
+    sealed_manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    assert sealed_manifest.run_configuration is not None
+    effective_config = sealed_manifest.run_configuration.reconstruct_effective_config()
+
+    harness_mismatch_run = tmp_path / "erc4626-resealed-harness-mismatch"
+    shutil.copytree(result.run_dir, harness_mismatch_run)
+    planned_path = harness_mismatch_run / "invariant-harness-plan.json"
+    planned_payload = json.loads(planned_path.read_text(encoding="utf-8"))
+    planned_payload["harnesses"][0]["name"] = "ForgedHarnessName"
+    write_json(planned_path, planned_payload)
+    execution_path = harness_mismatch_run / "invariant-execution-results.json"
+    execution_payload = json.loads(execution_path.read_text(encoding="utf-8"))
+    execution_payload["harnesses"][0]["name"] = "ForgedHarnessName"
+    write_json(execution_path, execution_payload)
+    with pytest.raises(ValueError, match="harness plan"):
+        rebuild_run_evidence_manifest_for_verification(
+            run_dir=harness_mismatch_run,
+            report=serialized_report,
+            config=effective_config,
+            sealed_manifest=sealed_manifest,
+            run_options=sealed_manifest.run_configuration.run_options,
+        )
+
+    corpus_mismatch_run = tmp_path / "erc4626-resealed-corpus-mismatch"
+    shutil.copytree(result.run_dir, corpus_mismatch_run)
+    corpus_path = corpus_mismatch_run / "property-corpus.json"
+    corpus_payload = json.loads(corpus_path.read_text(encoding="utf-8"))
+    corpus_payload["corpus"] = build_property_corpus(None, None, []).model_dump(mode="json")
+    write_json(corpus_path, corpus_payload)
+    with pytest.raises(ValueError, match="invariant suite, index, and harness plan"):
+        rebuild_run_evidence_manifest_for_verification(
+            run_dir=corpus_mismatch_run,
+            report=serialized_report,
+            config=effective_config,
+            sealed_manifest=sealed_manifest,
+            run_options=sealed_manifest.run_configuration.run_options,
+        )
+
 
 @pytest.mark.asyncio
 async def test_mocked_runtime_post_judge_severity_fails_closed_across_pipeline_artifacts(
@@ -3533,6 +3744,7 @@ async def test_mocked_runtime_post_judge_severity_fails_closed_across_pipeline_a
         tmp_path / "execution-origin-inputs"
     )
     config = config_factory(
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         privacy={"fail_on_detected_secret": False},
         smart_contracts={
             "enabled": True,
@@ -3768,6 +3980,7 @@ async def test_temporary_liquidity_harness_replays_settled_unsafe_and_safe_varia
             )
         )
     config = config_factory(
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         privacy={"fail_on_detected_secret": False},
         smart_contracts={"enabled": True, "compile": True},
         reproduction={
@@ -3959,6 +4172,7 @@ async def test_amm_reserve_harness_replays_unsafe_spot_and_safe_protected_pricin
             )
         )
     config = config_factory(
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         privacy={"fail_on_detected_secret": False},
         smart_contracts={"enabled": True, "compile": True},
         reproduction={
@@ -4147,6 +4361,7 @@ async def test_liquidation_harness_replays_unsafe_health_boundary_and_safe_guard
             )
         )
     config = config_factory(
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         privacy={"fail_on_detected_secret": False},
         smart_contracts={"enabled": True, "compile": True},
         reproduction={
@@ -4355,6 +4570,7 @@ async def test_share_price_harness_replays_reported_asset_excess_and_observed_as
             )
         )
     config = config_factory(
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         privacy={"fail_on_detected_secret": False},
         smart_contracts={"enabled": True, "compile": True},
         reproduction={
@@ -4542,6 +4758,7 @@ async def test_state_ordering_harness_persists_seed_sequence_and_removal_trials(
     targets = {name: f"0x{index + 2:040x}" for index, name in enumerate(contract_names)}
     source_path = "src/StateOrdering.sol"
     config = config_factory(
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         privacy={"fail_on_detected_secret": False},
         smart_contracts={"enabled": True, "compile": True},
         reproduction={
@@ -5122,6 +5339,7 @@ async def test_dependency_preparation_emits_validated_artifacts_without_discover
 ) -> None:
     repository, snapshot_sha256 = _dependency_repo(tmp_path)
     config = config_factory(
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         privacy={"fail_on_detected_secret": False},
         dependency_preparation={
             "enabled": True,
@@ -5179,6 +5397,7 @@ async def test_required_deployment_scope_is_incomplete_when_evidence_is_missing(
         encoding="utf-8",
     )
     config = config_factory(
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         scope={
             "mode": AuditScope.CONTRACTS_AND_DEPLOYMENT,
             "require_complete": True,
@@ -5231,6 +5450,7 @@ async def test_required_infeasible_scope_blocks_provider_spend(
         encoding="utf-8",
     )
     config = config_factory(
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         scope={
             "mode": AuditScope.CONTRACTS_AND_DEPLOYMENT,
             "require_complete": True,
@@ -5275,6 +5495,7 @@ async def test_infeasible_model_surface_assignments_block_provider_spend(
 ) -> None:
     repository = _foundry_repo(tmp_path, patched=True)
     config = config_factory(
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         privacy={"fail_on_detected_secret": False},
         smart_contracts={"compile": False},
         reproduction={"required_for_solidity": False},
@@ -5320,6 +5541,7 @@ async def test_formal_adapter_failure_prevents_complete_and_provider_spend(
 
     repository = _foundry_repo(tmp_path, patched=True)
     config = config_factory(
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         privacy={"fail_on_detected_secret": False},
         smart_contracts={"compile": False},
         reproduction={"required_for_solidity": False},
@@ -5343,6 +5565,17 @@ async def test_formal_adapter_failure_prevents_complete_and_provider_spend(
         reason == "formal adapter layer failed safely: RuntimeError"
         for reason in result.report.incomplete_reasons
     )
+    tampered_run = tmp_path / "resealed-formal-engine-comparison"
+    shutil.copytree(result.run_dir, tampered_run)
+    formal_payload = json.loads((tampered_run / "formal-results.json").read_text(encoding="utf-8"))
+    formal_payload["dynamic_engine_comparisons"] = [{"forged": True}]
+    resealed = _replace_manifest_bound_artifact(
+        tampered_run,
+        "formal-results.json",
+        formal_payload,
+    )
+    with pytest.raises(ValueError, match="dynamic engine comparisons differ"):
+        validate_manifest_artifacts(resealed, tampered_run)
 
 
 @pytest.mark.asyncio
@@ -5364,9 +5597,29 @@ async def test_scanner_only_findings_are_needs_review_and_in_sarif(
     finally:
         await http_client.aclose()
     assert [finding.status.value for finding in result.report.findings] == ["needs_review"]
-    assert result.exit_for_findings(Severity.HIGH) is ExitCode.INCOMPLETE
+    assert result.exit_for_findings(Severity.HIGH) is ExitCode.FINDINGS
     assert not result.report.completed
-    assert result.report.run_status is AuditRunStatus.INCOMPLETE
+    assert result.report.run_status is AuditRunStatus.DEGRADED
+    coverage_artifact = CoverageArtifact.model_validate_json(
+        (result.run_dir / "coverage.json").read_text(encoding="utf-8")
+    )
+    assert coverage_artifact.schema_version == "1.1"
+    assert coverage_artifact.scanner_only
+    assert coverage_artifact.generic_source_coverage is not None
+    assert coverage_artifact.generic_source_coverage == (
+        result.report.effective_minimum_floor_coverage_metrics()
+    )
+    assert set(coverage_artifact.generic_source_coverage) == {
+        "generic_source_files_ingested",
+        "scanner_completion",
+    }
+    with pytest.raises(ValueError, match="requires typed generic source coverage"):
+        CoverageArtifact.model_validate(
+            {
+                **coverage_artifact.model_dump(mode="python"),
+                "generic_source_coverage": None,
+            }
+        )
     finding = result.report.findings[0]
     assert finding.origin_kind is FindingOriginKind.STATIC_ANALYZER
     assert len(finding.locations) == 1
@@ -5544,9 +5797,9 @@ async def test_scanner_only_prior_match_satisfies_required_missed_finding_gate(
 
     result = await pipeline.run(scanner_only=True)
 
-    assert result.exit_code is ExitCode.INCOMPLETE
+    assert result.exit_code is ExitCode.SUCCESS
     assert not result.report.completed
-    assert result.report.run_status is AuditRunStatus.INCOMPLETE
+    assert result.report.run_status is AuditRunStatus.DEGRADED
     comparison = result.report.prior_audit_comparison
     assert comparison is not None
     assert comparison.model_request_count_before_load == 0
@@ -5908,6 +6161,39 @@ async def test_pipeline_excludes_custom_in_repository_output_from_frozen_scanner
     discovered_paths = {item["path"] for item in repository_map["files"]}
     assert "src/custom-audit-output/keep.py" in discovered_paths
     assert not any(path.startswith("custom-audit-output/") for path in discovered_paths)
+    capability = json.loads(
+        (result.run_dir / "language-capability.json").read_text(encoding="utf-8")
+    )
+    assert capability["runtime_output_exclusion_root"] == "custom-audit-output"
+    assert "/custom-audit-output/" not in capability["effective_ignore_rules"]
+    verification = verify_run_evidence(
+        manifest_path=result.run_dir / "run-evidence-manifest.json",
+        run_dir=result.run_dir,
+        repository_root=vulnerable_repo,
+        config=config,
+    )
+    assert verification.status is RunVerificationStatus.CURRENT, verification.mismatches
+
+    moved_parent = vulnerable_repo.parent / "moved-custom-output"
+    moved_parent.mkdir()
+    moved_run = moved_parent / result.run_dir.name
+    shutil.copytree(result.run_dir, moved_run)
+    shutil.rmtree(output)
+    output.mkdir()
+    replacement = output / "NewSource.sol"
+    replacement.write_text("contract NewSource {}\n", encoding="utf-8")
+    moved_verification = verify_run_evidence(
+        manifest_path=moved_run / "run-evidence-manifest.json",
+        run_dir=moved_run,
+        repository_root=vulnerable_repo,
+        config=config,
+    )
+    assert moved_verification.status is RunVerificationStatus.STALE
+    assert any(
+        mismatch.identifier == "language-capability/custom-audit-output/NewSource.sol"
+        and mismatch.kind.value == "unexpected"
+        for mismatch in moved_verification.mismatches
+    ), [(mismatch.identifier, mismatch.kind.value) for mismatch in moved_verification.mismatches]
 
 
 @pytest.mark.asyncio
@@ -5931,18 +6217,29 @@ async def test_pipeline_rejects_preexisting_custom_output_as_a_source_exclusion(
         scanner_runner=scanner_runner,  # type: ignore[arg-type]
     )
 
-    result = await pipeline.run(scanner_only=True)
+    with pytest.raises(ValueError, match="custom in-repository output must be absent"):
+        await pipeline.run(scanner_only=True)
 
     assert scanner_runner.calls == 0
-    assert result.exit_code is ExitCode.INCOMPLETE
-    assert any(
-        "repository execution source identity could not be frozen before discovery" in limitation
-        for limitation in result.report.incomplete_reasons
+
+
+@pytest.mark.asyncio
+async def test_pipeline_rejects_ambiguous_in_repository_output_spelling(
+    config_factory,
+    vulnerable_repo: Path,
+) -> None:
+    output = vulnerable_repo / "ambiguous\\output"
+    pipeline = AuditPipeline(
+        config_factory(),
+        repo=vulnerable_repo,
+        output=output,
+        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
     )
-    assert any(
-        "audited source inventory is incompatible with scanner execution workspaces" in limitation
-        for limitation in result.report.incomplete_reasons
-    )
+
+    with pytest.raises(ValueError, match="unambiguous normalized spelling"):
+        await pipeline.run(scanner_only=True)
+
+    assert not output.exists()
 
 
 @pytest.mark.asyncio
@@ -6006,20 +6303,20 @@ async def test_pipeline_blocks_scanners_when_discovery_reincludes_excluded_sourc
 @pytest.mark.asyncio
 async def test_pipeline_freezes_scanner_source_before_discovery(
     config_factory,
-    vulnerable_repo: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from mmaudit.orchestration import pipeline as pipeline_module
 
+    repository = _foundry_repo(tmp_path, patched=True)
     output = tmp_path / "frozen-source-output"
-    expected_before_discovery = scanner_workspace_sha256(vulnerable_repo, output)
+    expected_before_discovery = scanner_workspace_sha256(repository, output)
     scanner_runner = StaticScannerRunner()
     original_discover = pipeline_module.discover_repository
 
     def discover_then_add_source(*args: Any, **kwargs: Any):
         discovery = original_discover(*args, **kwargs)
-        (vulnerable_repo / "late-added.sol").write_text(
+        (repository / "late-added.sol").write_text(
             "contract LateAdded {}\n",
             encoding="utf-8",
         )
@@ -6027,11 +6324,12 @@ async def test_pipeline_freezes_scanner_source_before_discovery(
 
     monkeypatch.setattr(pipeline_module, "discover_repository", discover_then_add_source)
     config = config_factory(
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         scanners={"foundry_fork": {"enabled": True, "required": False}},
     )
     pipeline = AuditPipeline(
         config,
-        repo=vulnerable_repo,
+        repo=repository,
         output=output,
         scanner_runner=scanner_runner,  # type: ignore[arg-type]
     )
@@ -6042,7 +6340,7 @@ async def test_pipeline_freezes_scanner_source_before_discovery(
     assert scanner_runner.calls == 0
     assert scanner_runner.expected_repository_sha256 is None
     assert scanner_runner.repository_exclusion_root is None
-    assert scanner_workspace_sha256(vulnerable_repo, output) != expected_before_discovery
+    assert scanner_workspace_sha256(repository, output) != expected_before_discovery
     assert any(
         "repository execution source changed during discovery" in limitation
         for limitation in result.report.incomplete_reasons
@@ -6113,12 +6411,16 @@ async def test_pipeline_converts_scanner_source_custody_failure_to_incomplete(
 @pytest.mark.asyncio
 async def test_pipeline_persists_configured_repository_fork_matrix_failure(
     config_factory,
-    vulnerable_repo: Path,
     tmp_path: Path,
 ) -> None:
+    repository = _foundry_repo(tmp_path, patched=True)
     config = config_factory(
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         scanners={"foundry_fork": {"enabled": True, "required": False}},
-        smart_contracts=_repository_fork_matrix_config_override(),
+        smart_contracts={
+            **_repository_fork_matrix_config_override(),
+            "compile": False,
+        },
     )
     matrix_runner = StaticRepositoryForkMatrixRunner(
         configuration_sha256=config.smart_contracts.repository_suite.stable_hash()
@@ -6127,7 +6429,7 @@ async def test_pipeline_persists_configured_repository_fork_matrix_failure(
     scanner_runner.backend = object()  # type: ignore[attr-defined]
     pipeline = AuditPipeline(
         config,
-        repo=vulnerable_repo,
+        repo=repository,
         output=tmp_path / "matrix-output",
         scanner_runner=scanner_runner,  # type: ignore[arg-type]
         repository_fork_matrix_runner=matrix_runner,  # type: ignore[arg-type]
@@ -6140,7 +6442,7 @@ async def test_pipeline_persists_configured_repository_fork_matrix_failure(
     assert result.exit_code is ExitCode.INCOMPLETE
     assert len(matrix_runner.calls) == 1
     call = matrix_runner.calls[0]
-    assert call["root"] == vulnerable_repo.resolve(strict=True)
+    assert call["root"] == repository.resolve(strict=True)
     assert call["baseline_run"].scanner == "foundry_fork"
     assert call["repository_sha256"] == scanner_runner.expected_repository_sha256
     assert call["repository_exclusion_root"] == scanner_runner.repository_exclusion_root
@@ -6172,16 +6474,20 @@ async def test_pipeline_persists_configured_repository_fork_matrix_failure(
 @pytest.mark.asyncio
 async def test_pipeline_revalidates_frozen_source_after_repository_fork_matrix(
     config_factory,
-    vulnerable_repo: Path,
     tmp_path: Path,
 ) -> None:
+    repository = _foundry_repo(tmp_path, patched=True)
     config = config_factory(
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         scanners={"foundry_fork": {"enabled": True, "required": False}},
-        smart_contracts=_repository_fork_matrix_config_override(),
+        smart_contracts={
+            **_repository_fork_matrix_config_override(),
+            "compile": False,
+        },
     )
 
     def mutate_repository() -> None:
-        (vulnerable_repo / "matrix-added.sol").write_text(
+        (repository / "matrix-added.sol").write_text(
             "contract MatrixAdded {}\n",
             encoding="utf-8",
         )
@@ -6194,7 +6500,7 @@ async def test_pipeline_revalidates_frozen_source_after_repository_fork_matrix(
     scanner_runner.backend = object()  # type: ignore[attr-defined]
     pipeline = AuditPipeline(
         config,
-        repo=vulnerable_repo,
+        repo=repository,
         output=tmp_path / "matrix-mutation-output",
         scanner_runner=scanner_runner,  # type: ignore[arg-type]
         repository_fork_matrix_runner=matrix_runner,  # type: ignore[arg-type]
@@ -6210,7 +6516,7 @@ async def test_pipeline_revalidates_frozen_source_after_repository_fork_matrix(
     )
     assert (
         scanner_workspace_sha256(
-            vulnerable_repo,
+            repository,
             scanner_runner.repository_exclusion_root,
         )
         != matrix_runner.calls[0]["repository_sha256"]
@@ -6315,14 +6621,14 @@ async def test_latest_report_refresh_does_not_follow_hardlink(
         scanner_runner=SyntheticValidatedScannerRunner(),  # type: ignore[arg-type]
     )
     result = await pipeline.run(scanner_only=True)
-    assert result.exit_code is ExitCode.INCOMPLETE
+    assert result.exit_code is ExitCode.SUCCESS
     assert not result.report.completed
-    assert result.report.run_status is AuditRunStatus.INCOMPLETE
+    assert result.report.run_status is AuditRunStatus.DEGRADED
     assert outside.read_text(encoding="utf-8") == "sentinel\n"
     assert (
         (latest / "audit-report.md")
         .read_text(encoding="utf-8")
-        .startswith("# Corrovera Security Assurance Report")
+        .startswith("# Corrovera Reduced Generic Source Review")
     )
 
 
@@ -6350,9 +6656,9 @@ async def test_scanner_only_latest_refresh_removes_stale_provider_privacy_artifa
     )
     result = await pipeline.run(scanner_only=True)
 
-    assert result.exit_code is ExitCode.INCOMPLETE
+    assert result.exit_code is ExitCode.SUCCESS
     assert not result.report.completed
-    assert result.report.run_status is AuditRunStatus.INCOMPLETE
+    assert result.report.run_status is AuditRunStatus.DEGRADED
     for name in stale_names:
         assert not (result.run_dir / name).exists()
         assert not (latest / name).exists()
@@ -6424,6 +6730,12 @@ async def test_ci_pipeline_emits_manifest_bound_state_that_round_trips(
 
     assert result.ci_state is not None
     assert result.ci_state.job_status is CIJobStatus.NEW_FINDINGS
+    assert [item.metric_id for item in result.ci_state.evidence.coverage] == [
+        "generic_source_files_ingested",
+        "scanner_completion",
+    ]
+    assert result.report.solidity_coverage is not None
+    assert not result.report.solidity_coverage.quality_metrics
     persisted = CIRunState.model_validate_json(
         (result.run_dir / "ci-state.json").read_text(encoding="utf-8")
     )
@@ -6552,6 +6864,9 @@ async def test_ci_public_bundle_rejects_resealed_manifest_projection_mismatch(
                 "effective_config_sha256": run_configuration["effective_config_sha256"],
                 "requested_profile": run_configuration["requested_profile"],
                 "achieved_profile": run_configuration["achieved_profile"],
+                "requested_language_profile": run_configuration["requested_language_profile"],
+                "achieved_language_profile": run_configuration["achieved_language_profile"],
+                "reduced_language_capability": run_configuration["reduced_language_capability"],
             }
         )
     elif variant == "repository_root":
@@ -6772,13 +7087,6 @@ async def test_ci_report_or_baseline_rejects_resealed_state_projection_mismatch(
         **result.report.model_dump(mode="python"),
         "metadata": metadata,
     }
-    if field == "enabled":
-        with pytest.raises(
-            ValidationError,
-            match="minimum-floor coverage claims conflict",
-        ):
-            AuditReport.model_validate(report_payload)
-        return
     tampered_report = AuditReport.model_validate(report_payload)
     _replace_manifest_bound_report(result.run_dir, tampered_report)
     resealed_manifest = RunEvidenceManifest.model_validate_json(
@@ -6972,6 +7280,7 @@ async def test_ci_pipeline_fails_closed_when_applicable_repository_suite_is_unav
     )
     pipeline = AuditPipeline(
         config_factory(
+            language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
             scanners={
                 "semgrep": {"enabled": True, "required": True},
                 "foundry_fork": {"enabled": True, "required": False},

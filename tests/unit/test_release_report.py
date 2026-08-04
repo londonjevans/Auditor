@@ -87,6 +87,7 @@ def _run(
         achieved_language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         capability_status=LanguageCapabilityStatus.MATCHED,
         reduced_language_capability=False,
+        blocking_discovery_omissions=(),
         language_capability_sha256="4" * 64,
         artifact_evidence_file_sha256="0" * 64,
         artifact_evidence_file_size=1_000,
@@ -392,6 +393,14 @@ def test_reduced_release_capability_requires_achieved_generic_review() -> None:
     )
 
     with pytest.raises(ValidationError, match="achieved generic source review"):
+        ReleaseRunBindingPayload.model_validate(payload)
+
+
+def test_maximum_release_run_rejects_blocking_discovery_omission() -> None:
+    payload = _run().model_dump(mode="json", exclude={"binding_sha256"})
+    payload["blocking_discovery_omissions"] = ["repository: max_files reached"]
+
+    with pytest.raises(ValidationError, match="matched Solidity/EVM capability"):
         ReleaseRunBindingPayload.model_validate(payload)
 
 

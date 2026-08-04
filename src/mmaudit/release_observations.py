@@ -111,10 +111,63 @@ class ManifestSetSubject(StrictModel):
     achieved_language_profile: LanguageCapabilityProfile | None
     capability_status: LanguageCapabilityStatus
     reduced_language_capability: bool
+    blocking_discovery_omissions: tuple[str, ...] = Field(max_length=1_000)
     language_capability_sha256: str = Field(pattern=_SHA256_PATTERN)
     verification_binding_sha256: str = Field(pattern=_SHA256_PATTERN)
     verification_sha256: str = Field(pattern=_SHA256_PATTERN)
     verification_status: Literal["current"]
+
+    @model_validator(mode="after")
+    def profiles_are_consistent(self) -> ManifestSetSubject:
+        """Reject a manifest projection that could not come from its bound release run."""
+
+        if (
+            self.achieved_profile is not None
+            and self.achieved_profile is not self.requested_profile
+        ):
+            raise ValueError("manifest subject cannot claim an unrequested achieved profile")
+        if (
+            self.achieved_language_profile is not None
+            and self.achieved_language_profile is not self.requested_language_profile
+        ):
+            raise ValueError("manifest subject cannot claim an unrequested language capability")
+        expected_reduced = (
+            self.capability_status is LanguageCapabilityStatus.REDUCED
+            and self.achieved_language_profile is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
+        )
+        if self.reduced_language_capability is not expected_reduced:
+            raise ValueError("manifest subject reduced language capability is inconsistent")
+        if self.capability_status is LanguageCapabilityStatus.REDUCED and (
+            self.requested_language_profile is not LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
+            or self.achieved_language_profile is not LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
+            or not self.reduced_language_capability
+        ):
+            raise ValueError("reduced manifest capability must be achieved generic source review")
+        if self.capability_status is LanguageCapabilityStatus.MATCHED and (
+            self.achieved_language_profile is not LanguageCapabilityProfile.SOLIDITY_EVM
+            or self.reduced_language_capability
+        ):
+            raise ValueError("matched manifest capability must be Solidity/EVM")
+        if (
+            self.capability_status
+            in {
+                LanguageCapabilityStatus.MISMATCH,
+                LanguageCapabilityStatus.INCONCLUSIVE,
+            }
+            and self.achieved_language_profile is not None
+        ):
+            raise ValueError("unachieved manifest capability cannot name an achieved profile")
+        if self.achieved_profile is AuditProfile.MAXIMUM_ASSURANCE and (
+            self.capability_status is not LanguageCapabilityStatus.MATCHED
+            or self.requested_language_profile is not LanguageCapabilityProfile.SOLIDITY_EVM
+            or self.achieved_language_profile is not LanguageCapabilityProfile.SOLIDITY_EVM
+            or self.reduced_language_capability
+            or bool(self.blocking_discovery_omissions)
+        ):
+            raise ValueError(
+                "maximum-assurance manifest subject requires matched Solidity/EVM capability"
+            )
+        return self
 
 
 class SchemaSetSubject(StrictModel):
@@ -585,6 +638,7 @@ def _subject_for_gate(
                 achieved_language_profile=run.achieved_language_profile,
                 capability_status=run.capability_status,
                 reduced_language_capability=run.reduced_language_capability,
+                blocking_discovery_omissions=run.blocking_discovery_omissions,
                 language_capability_sha256=run.language_capability_sha256,
                 verification_binding_sha256=run_verification.binding_sha256,
                 verification_sha256=run_verification.verification_sha256,
@@ -639,6 +693,7 @@ def _blocker_for_gate(
             and run.achieved_language_profile is LanguageCapabilityProfile.SOLIDITY_EVM
             and run.capability_status is LanguageCapabilityStatus.MATCHED
             and not run.reduced_language_capability
+            and not run.blocking_discovery_omissions
         ):
             code = "maximum_assurance_clause_evidence_unavailable"
             summary = "dedicated maximum-assurance clause validation evidence is unavailable"

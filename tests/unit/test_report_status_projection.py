@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from mmaudit.constants import ANALYSIS_ROLES
 from mmaudit.models.schemas import (
     AnalysisState,
+    AuditProfile,
     AuditQualityStatus,
     AuditReport,
     AuditRunStatus,
@@ -12,14 +14,24 @@ from mmaudit.models.schemas import (
     FalsificationVerdict,
     FindingOriginKind,
     FindingStatus,
+    LanguageCapabilityAssessment,
+    LanguageCapabilityFileEvidence,
+    LanguageCapabilityProfile,
+    LanguageCapabilityStatus,
+    MaximumAssuranceAssessment,
+    MaximumAssuranceRequirement,
+    MaximumAssuranceStatus,
     QualityGateResult,
     Severity,
     VerificationVerdict,
 )
+from mmaudit.orchestration.coverage import generic_source_ingestion_coverage_metric
 from mmaudit.reporting.bundle import (
     CandidateTerminalState,
+    CoverageArtifact,
     FindingsArtifact,
     ForensicDisposition,
+    ModelExecutionArtifact,
     build_coverage_artifact,
     build_findings_artifact,
     build_model_execution_artifact,
@@ -31,6 +43,11 @@ from mmaudit.reporting.status import (
     LEGACY_MINIMUM_FLOOR_LIMITATION,
     ReportStatusProjection,
     effective_report_status,
+)
+from tests.language_capability_support import (
+    empty_language_capability,
+    language_capability_for_files,
+    matched_solidity_language_capability,
 )
 from tests.unit.test_client_forensic_reporting import (
     SOURCE,
@@ -52,6 +69,165 @@ from tests.unit.test_run_status import (
 )
 
 
+def _legacy_report_with_recorded_complete_assurance() -> AuditReport:
+    assurance = MaximumAssuranceAssessment(
+        requested=True,
+        required=True,
+        downgrade_allowed=False,
+        downgraded=False,
+        status=MaximumAssuranceStatus.COMPLETE,
+        requirements=[
+            MaximumAssuranceRequirement(
+                engine="synthetic_legacy_clause",
+                required=True,
+                passed=True,
+                blocking=False,
+                state=AnalysisState.DETERMINISTIC,
+                detail="The pre-capability record marked this synthetic clause as passing.",
+            )
+        ],
+    )
+    return _report().model_copy(
+        update={
+            "audit_profile": AuditProfile.MAXIMUM_ASSURANCE,
+            "maximum_assurance": assurance,
+        }
+    )
+
+
+def _reduced_generic_language_capability() -> LanguageCapabilityAssessment:
+    return language_capability_for_files(
+        LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW,
+        (
+            LanguageCapabilityFileEvidence(
+                path="app.py",
+                sha256="a" * 64,
+                size=10,
+                lines=1,
+                language="Python",
+            ),
+        ),
+    ).assessment
+
+
+def _inconclusive_solidity_language_capability() -> LanguageCapabilityAssessment:
+    return LanguageCapabilityAssessment(
+        plugin_id="mmaudit.language.solidity-evm",
+        requested_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
+        status=LanguageCapabilityStatus.INCONCLUSIVE,
+        language_counts={},
+        discovered_text_file_count=0,
+        solidity_file_count=0,
+        non_solidity_file_count=0,
+        solidity_project_count=0,
+        discovery_inventory_sha256="b" * 64,
+        blocking_discovery_omissions=("repository: max_files reached",),
+        evm_portfolio_applicable=False,
+        evm_maximum_assurance_eligible=False,
+        reduced_capability=False,
+        limitations=("bounded discovery did not establish the requested capability",),
+    )
+
+
+def test_findings_artifact_versions_bind_language_capability_presence() -> None:
+    finding = _finding(FindingStatus.CONFIRMED)
+    capability = matched_solidity_language_capability(
+        path=SOURCE_PATH,
+        content=SOURCE.encode("utf-8"),
+    ).assessment
+    report = _report(findings=[finding]).model_copy(update={"language_capability": capability})
+
+    current = build_findings_artifact(report, candidates=[_candidate(finding)])
+    assert current.schema_version == "1.2"
+    assert current.language_capability == capability
+    missing_current = current.model_dump(mode="json")
+    missing_current.pop("language_capability")
+    with pytest.raises(ValidationError, match="requires typed language capability"):
+        FindingsArtifact.model_validate(missing_current)
+
+    legacy = build_findings_artifact(
+        report,
+        candidates=[_candidate(finding)],
+        schema_version="1.1",
+    )
+    legacy_payload = legacy.model_dump(mode="json")
+    assert "language_capability" not in legacy_payload
+    assert FindingsArtifact.model_validate(legacy_payload) == legacy
+    legacy_payload["language_capability"] = capability.model_dump(mode="json")
+    with pytest.raises(ValidationError, match="legacy artifact cannot carry"):
+        FindingsArtifact.model_validate(legacy_payload)
+
+
+def test_model_execution_artifact_versions_bind_language_capability_presence() -> None:
+    capability = matched_solidity_language_capability(
+        path=SOURCE_PATH,
+        content=SOURCE.encode("utf-8"),
+    ).assessment
+    report = _report().model_copy(update={"language_capability": capability})
+
+    current = build_model_execution_artifact(report)
+    assert current.schema_version == "1.2"
+    assert current.language_capability == capability
+    missing_current = current.model_dump(mode="json")
+    missing_current.pop("language_capability")
+    with pytest.raises(ValidationError, match="requires typed language capability"):
+        ModelExecutionArtifact.model_validate(missing_current)
+
+    legacy = build_model_execution_artifact(report, schema_version="1.1")
+    legacy_payload = legacy.model_dump(mode="json")
+    assert "language_capability" not in legacy_payload
+    assert ModelExecutionArtifact.model_validate(legacy_payload) == legacy
+    legacy_payload["language_capability"] = capability.model_dump(mode="json")
+    with pytest.raises(ValidationError, match="legacy artifact cannot carry"):
+        ModelExecutionArtifact.model_validate(legacy_payload)
+
+
+def _detached_coverage_payload(
+    capability: LanguageCapabilityAssessment | None,
+    *,
+    run_status: AuditRunStatus = AuditRunStatus.COMPLETE,
+) -> dict[str, object]:
+    completed = run_status is AuditRunStatus.COMPLETE
+    reduced_generic = bool(
+        capability is not None and capability.status is LanguageCapabilityStatus.REDUCED
+    )
+    return {
+        "schema_version": "1.1",
+        "run_id": "synthetic-detached-status",
+        "scanner_only": False,
+        "run_status": run_status,
+        "quality_status": (
+            AuditQualityStatus.COMPLETED
+            if completed
+            else AuditQualityStatus.COMPLETED_WITH_LIMITATIONS
+        ),
+        "completed": completed,
+        "quality_gates": [
+            QualityGateResult(
+                gate="minimum_analysis_floor",
+                required=True,
+                passed=True,
+                detail="synthetic minimum floor passed",
+                state=AnalysisState.DETERMINISTIC,
+            )
+        ],
+        "limitations": [] if completed else ["explicit reduced generic capability"],
+        "language_capability": capability,
+        "scope_assessment": None,
+        "solidity_coverage": None,
+        "model_review_coverage": None,
+        "generic_source_coverage": (
+            {
+                "generic_source_files_ingested": generic_source_ingestion_coverage_metric(
+                    capability.discovered_text_file_count
+                )
+            }
+            if reduced_generic and capability is not None
+            else None
+        ),
+    }
+
+
 def test_legacy_no_floor_status_is_identical_across_every_canonical_report_leaf() -> None:
     report = _report()
     projection = effective_report_status(report)
@@ -68,12 +244,14 @@ def test_legacy_no_floor_status_is_identical_across_every_canonical_report_leaf(
     assert projection.quality_status is AuditQualityStatus.INCOMPLETE
     assert not projection.completed
     assert projection.limitations == [LEGACY_MINIMUM_FLOOR_LIMITATION]
+    assert projection.language_capability is None
     for artifact in (findings, coverage, model_execution):
         assert artifact.run_status is projection.run_status
         assert artifact.quality_status is projection.quality_status
         assert artifact.completed is projection.completed
         assert artifact.quality_gates == projection.quality_gates
         assert artifact.limitations == projection.limitations
+        assert artifact.language_capability is projection.language_capability
     for markdown in (client, forensic):
         assert "> **RUN STATUS: INCOMPLETE**" in markdown
         assert "Quality status: **incomplete**" in markdown
@@ -92,10 +270,147 @@ def test_legacy_no_floor_status_is_identical_across_every_canonical_report_leaf(
     invocation = sarif["runs"][0]["invocations"][0]
     assert invocation["properties"]["capabilityStatus"] == "NOT_RECORDED"
     assert any(
-        "Language capability evidence was not recorded"
-        in notification["message"]["text"]
+        "Language capability evidence was not recorded" in notification["message"]["text"]
         for notification in invocation["toolExecutionNotifications"]
     )
+
+
+def test_legacy_complete_assurance_is_rendered_only_as_unverified_in_markdown() -> None:
+    report = _legacy_report_with_recorded_complete_assurance()
+
+    client = render_client_markdown(report, {})
+    compatibility = render_markdown(report)
+    forensic = render_forensic_markdown(report)
+
+    for rendered in (client, compatibility, forensic):
+        assert "Maximum-assurance contract status: **COMPLETE**" not in rendered
+        assert "ASSURANCE NOT ACHIEVED" in rendered
+        assert "RUN STATUS: INCOMPLETE" in rendered
+    for rendered in (compatibility, forensic):
+        assert "Maximum-assurance evidence status: **UNVERIFIED LEGACY RECORD**" in rendered
+        assert "Recorded legacy contract status (not an achieved claim): **COMPLETE**" in rendered
+        assert "Effective report status: **INCOMPLETE**" in rendered
+        assert "Unverified legacy maximum-assurance evidence" in rendered
+
+
+def test_legacy_complete_assurance_is_wrapped_as_unverified_in_sarif() -> None:
+    report = _legacy_report_with_recorded_complete_assurance()
+
+    sarif = generate_report_sarif(report)
+    run = sarif["runs"][0]
+    assurance = run["properties"]["maximumAssurance"]
+    invocation = run["invocations"][0]
+
+    assert assurance["evidenceStatus"] == "UNVERIFIED_LEGACY"
+    assert assurance["achieved"] is False
+    assert assurance["effectiveRunStatus"] == "INCOMPLETE"
+    assert assurance["recordedLegacyEvidence"]["status"] == "COMPLETE"
+    assert invocation["executionSuccessful"] is False
+    assert invocation["properties"]["maximumAssuranceStatus"] == "UNVERIFIED_LEGACY"
+    assert invocation["properties"]["maximumAssuranceAchieved"] is False
+    assert invocation["properties"]["recordedLegacyMaximumAssuranceStatus"] == "COMPLETE"
+    assert any(
+        "legacy maximum-assurance evidence is unverified" in notification["message"]["text"]
+        for notification in invocation["toolExecutionNotifications"]
+    )
+    with pytest.raises(ValueError, match="lacks matched Solidity/EVM capability"):
+        generate_sarif([], maximum_assurance=report.maximum_assurance)
+
+
+def test_sarif_rejects_complete_assurance_with_blocking_source_omission() -> None:
+    report = _legacy_report_with_recorded_complete_assurance()
+    assert report.maximum_assurance is not None
+    capability = matched_solidity_language_capability().assessment.model_copy(
+        update={"blocking_discovery_omissions": ("repository: max_files reached",)}
+    )
+
+    with pytest.raises(ValueError, match="lacks matched Solidity/EVM capability"):
+        generate_sarif(
+            [],
+            maximum_assurance=report.maximum_assurance,
+            language_capability=capability,
+        )
+
+
+@pytest.mark.parametrize(
+    ("case", "capability", "expected_error"),
+    [
+        (
+            "absent",
+            None,
+            "COMPLETE report projection requires coherent achieved language capability",
+        ),
+        (
+            "mismatched",
+            empty_language_capability(LanguageCapabilityProfile.SOLIDITY_EVM).assessment,
+            "COMPLETE report projection requires coherent achieved language capability",
+        ),
+        (
+            "inconclusive",
+            _inconclusive_solidity_language_capability(),
+            "COMPLETE report projection requires coherent achieved language capability",
+        ),
+        (
+            "blocking-discovery-omission",
+            matched_solidity_language_capability().assessment.model_copy(
+                update={"blocking_discovery_omissions": ("repository: max_files reached",)}
+            ),
+            "COMPLETE report projection requires coherent achieved language capability",
+        ),
+        (
+            "contradictory-achieved-capability",
+            _reduced_generic_language_capability().model_copy(
+                update={"achieved_profile": LanguageCapabilityProfile.SOLIDITY_EVM}
+            ),
+            "reduced generic-source-review evidence is inconsistent",
+        ),
+    ],
+    ids=lambda value: value if isinstance(value, str) else None,
+)
+def test_detached_complete_artifact_requires_coherent_achieved_language_capability(
+    case: str,
+    capability: LanguageCapabilityAssessment | None,
+    expected_error: str,
+) -> None:
+    del case
+
+    with pytest.raises(ValidationError, match=expected_error):
+        CoverageArtifact.model_validate(_detached_coverage_payload(capability))
+
+
+def test_detached_complete_artifact_accepts_matched_solidity_evm_capability() -> None:
+    capability = matched_solidity_language_capability().assessment
+
+    artifact = CoverageArtifact.model_validate(_detached_coverage_payload(capability))
+
+    assert artifact.run_status is AuditRunStatus.COMPLETE
+    assert artifact.completed
+    assert artifact.language_capability == capability
+
+
+def test_detached_complete_artifact_accepts_reduced_generic_capability() -> None:
+    capability = _reduced_generic_language_capability()
+
+    artifact = CoverageArtifact.model_validate(_detached_coverage_payload(capability))
+
+    assert artifact.run_status is AuditRunStatus.COMPLETE
+    assert artifact.completed
+    assert artifact.language_capability == capability
+    assert artifact.language_capability.reduced_capability
+    assert not artifact.language_capability.evm_portfolio_applicable
+    assert not artifact.language_capability.evm_maximum_assurance_eligible
+
+
+def test_detached_degraded_artifact_preserves_reduced_generic_capability() -> None:
+    capability = _reduced_generic_language_capability()
+
+    artifact = CoverageArtifact.model_validate(
+        _detached_coverage_payload(capability, run_status=AuditRunStatus.DEGRADED)
+    )
+
+    assert artifact.run_status is AuditRunStatus.DEGRADED
+    assert not artifact.completed
+    assert artifact.language_capability == capability
 
 
 def test_degraded_projection_preserves_a_passing_minimum_floor() -> None:
@@ -113,6 +428,7 @@ def test_degraded_projection_preserves_a_passing_minimum_floor() -> None:
         completed=False,
         quality_gates=[floor],
         limitations=["a separate required integration remained unavailable"],
+        language_capability=None,
     )
 
     assert projection.quality_gates == [floor]

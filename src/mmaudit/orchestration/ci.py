@@ -1293,9 +1293,8 @@ def build_ci_evidence_from_report(
         sources,
         reusable_scanners=reusable_scanners,
     )
-    solidity_coverage = report.effective_solidity_coverage()
     deterministic_coverage = deterministic_ci_coverage_metrics(
-        solidity_coverage.quality_metrics if solidity_coverage is not None else {}
+        report.effective_minimum_floor_coverage_metrics()
     )
     coverage = tuple(
         ci_coverage_evidence(metric_id, metric)
@@ -1611,9 +1610,8 @@ def _validate_loaded_ci_state(
         raise ValueError("CI baseline findings differ from the final report")
     if evidence.finding_validation_failures != expected_finding_failures:
         raise ValueError("CI baseline finding failures differ from the final report")
-    solidity_coverage = report.effective_solidity_coverage()
     deterministic_coverage = deterministic_ci_coverage_metrics(
-        solidity_coverage.quality_metrics if solidity_coverage is not None else {}
+        report.effective_minimum_floor_coverage_metrics()
     )
     expected_coverage = tuple(
         ci_coverage_evidence(metric_id, metric)

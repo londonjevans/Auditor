@@ -306,10 +306,10 @@ class ReleaseGateReportPayload(StrictModel):
             raise ValueError("non-maximum run cannot pass the maximum-assurance release gate")
         if maximum_gate.status is ReleaseGateStatus.PASSED and (
             self.run.requested_language_profile is not LanguageCapabilityProfile.SOLIDITY_EVM
-            or self.run.achieved_language_profile
-            is not LanguageCapabilityProfile.SOLIDITY_EVM
+            or self.run.achieved_language_profile is not LanguageCapabilityProfile.SOLIDITY_EVM
             or self.run.capability_status is not LanguageCapabilityStatus.MATCHED
             or self.run.reduced_language_capability
+            or bool(self.run.blocking_discovery_omissions)
         ):
             raise ValueError(
                 "maximum-assurance release gate requires matched Solidity/EVM capability"

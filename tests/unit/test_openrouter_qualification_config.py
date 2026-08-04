@@ -15,8 +15,8 @@ from mmaudit.config import (
     model_lineage_index,
 )
 from mmaudit.models.registry import ModelRegistry
-from mmaudit.models.schemas import LanguageCapabilityProfile
 from mmaudit.models.runtime import build_openrouter_runtime_controls
+from mmaudit.models.schemas import LanguageCapabilityProfile
 
 ROOT = Path(__file__).parents[2]
 QUALIFICATION_CONFIG = ROOT / "config" / "openrouter-qualification.toml"

@@ -321,6 +321,18 @@ def test_typed_complete_floor_can_render_calibrated_complete_no_findings() -> No
         assert artifact.run_status is AuditRunStatus.COMPLETE
         assert artifact.completed
         assert artifact.limitations == []
+    assert coverage_artifact.schema_version == "1.1"
+    assert not coverage_artifact.scanner_only
+    assert coverage_artifact.generic_source_coverage is None
+    with pytest.raises(ValueError, match="requires achieved reduced generic capability"):
+        type(coverage_artifact).model_validate(
+            {
+                **coverage_artifact.model_dump(mode="python"),
+                "generic_source_coverage": {
+                    "generic_source_files_ingested": next(iter(coverage.values()))
+                },
+            }
+        )
     assert "> **RUN STATUS: COMPLETE**" in forensic
     assert "No surviving findings met the configured scope" in forensic
     assert "Resolve any incomplete analysis prerequisites" not in rendered

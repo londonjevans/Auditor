@@ -8,7 +8,7 @@ import math
 import os
 import stat
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 from pydantic import Field, field_validator, model_validator
@@ -35,10 +35,11 @@ from mmaudit.orchestration.manifest import (
     resolve_run_evidence_config,
     validate_solidity_shard_artifacts,
 )
+from mmaudit.orchestration.prior_audit import withhold_prior_audit_from_discovery
 from mmaudit.reporting.json_report import stable_json
 from mmaudit.reporting.status import report_status_metadata
-from mmaudit.repository.discovery import source_language_for_path
-from mmaudit.repository.ignore import normalize_relative_path
+from mmaudit.repository.discovery import discover_repository, source_language_for_path
+from mmaudit.repository.ignore import IgnoreMatcher, normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_name
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -187,6 +188,7 @@ def verify_run_evidence(
             manifest=manifest,
             run_dir=root,
             repository_root=source_root,
+            config=resolved_config,
         )
     )
 
@@ -417,62 +419,110 @@ def _source_binding_mismatches(
     mismatches: list[RunVerificationMismatch] = []
     for expected in expected_sources:
         identifier = f"{identifier_prefix}{expected.path}"
-        candidate = repository_root / normalize_relative_path(expected.path)
-        if candidate.is_symlink() or candidate.is_junction():
-            mismatches.append(
-                RunVerificationMismatch(
-                    category=RunVerificationCategory.SOURCE,
-                    identifier=identifier,
-                    kind=RunVerificationMismatchKind.UNSAFE,
-                    expected_sha256=expected.sha256,
-                    expected_size=expected.size,
-                )
-            )
-            continue
-        try:
-            resolved = candidate.resolve(strict=True)
-            resolved.relative_to(repository_root)
-        except (OSError, ValueError):
-            mismatches.append(
-                RunVerificationMismatch(
-                    category=RunVerificationCategory.SOURCE,
-                    identifier=identifier,
-                    kind=RunVerificationMismatchKind.MISSING,
-                    expected_sha256=expected.sha256,
-                    expected_size=expected.size,
-                )
-            )
-            continue
-        metadata = resolved.stat()
-        if not resolved.is_file() or metadata.st_nlink != 1:
-            mismatches.append(
-                RunVerificationMismatch(
-                    category=RunVerificationCategory.SOURCE,
-                    identifier=identifier,
-                    kind=RunVerificationMismatchKind.UNSAFE,
-                    expected_sha256=expected.sha256,
-                    expected_size=expected.size,
-                )
-            )
-            continue
-        observed = ManifestFileBinding(
-            path=expected.path,
-            sha256=_file_sha256(resolved),
-            size=metadata.st_size,
+        kind, observed_sha256, observed_size = _observe_source_binding(
+            repository_root,
+            expected.path,
         )
-        if observed.sha256 != expected.sha256 or observed.size != expected.size:
+        if kind is not None:
+            mismatches.append(
+                RunVerificationMismatch(
+                    category=RunVerificationCategory.SOURCE,
+                    identifier=identifier,
+                    kind=kind,
+                    expected_sha256=expected.sha256,
+                    observed_sha256=(
+                        observed_sha256 if kind is RunVerificationMismatchKind.CHANGED else None
+                    ),
+                    expected_size=expected.size,
+                    observed_size=(
+                        observed_size if kind is RunVerificationMismatchKind.CHANGED else None
+                    ),
+                )
+            )
+            continue
+        assert observed_sha256 is not None
+        assert observed_size is not None
+        if observed_sha256 != expected.sha256 or observed_size != expected.size:
             mismatches.append(
                 RunVerificationMismatch(
                     category=RunVerificationCategory.SOURCE,
                     identifier=identifier,
                     kind=RunVerificationMismatchKind.CHANGED,
                     expected_sha256=expected.sha256,
-                    observed_sha256=observed.sha256,
+                    observed_sha256=observed_sha256,
                     expected_size=expected.size,
-                    observed_size=observed.size,
+                    observed_size=observed_size,
                 )
             )
     return mismatches
+
+
+def _observe_source_binding(
+    repository_root: Path,
+    relative_path: str,
+) -> tuple[RunVerificationMismatchKind | None, str | None, int | None]:
+    """Read one source through no-follow directory descriptors with stable identity custody."""
+
+    parts = PurePosixPath(normalize_relative_path(relative_path)).parts
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    file_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    directory_descriptors: list[int] = []
+    file_descriptor: int | None = None
+    try:
+        current_descriptor = os.open(repository_root, directory_flags)
+        directory_descriptors.append(current_descriptor)
+        for part in parts[:-1]:
+            current_descriptor = os.open(
+                part,
+                directory_flags,
+                dir_fd=current_descriptor,
+            )
+            directory_descriptors.append(current_descriptor)
+            if not stat.S_ISDIR(os.fstat(current_descriptor).st_mode):
+                return RunVerificationMismatchKind.UNSAFE, None, None
+        before = os.stat(parts[-1], dir_fd=current_descriptor, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or before.st_size > _MAX_REPORT_BYTES
+        ):
+            return RunVerificationMismatchKind.UNSAFE, None, None
+        file_descriptor = os.open(parts[-1], file_flags, dir_fd=current_descriptor)
+        opened = os.fstat(file_descriptor)
+        chunks: list[bytes] = []
+        remaining = before.st_size + 1
+        while remaining > 0:
+            chunk = os.read(file_descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        finished = os.fstat(file_descriptor)
+        after = os.stat(parts[-1], dir_fd=current_descriptor, follow_symlinks=False)
+        identities = {
+            _stat_identity(before),
+            _stat_identity(opened),
+            _stat_identity(finished),
+            _stat_identity(after),
+        }
+        data = b"".join(chunks)
+        if len(identities) != 1 or len(data) != before.st_size:
+            return RunVerificationMismatchKind.UNSAFE, None, None
+        return None, hashlib.sha256(data).hexdigest(), len(data)
+    except FileNotFoundError:
+        return RunVerificationMismatchKind.MISSING, None, None
+    except OSError:
+        return RunVerificationMismatchKind.UNSAFE, None, None
+    finally:
+        if file_descriptor is not None:
+            os.close(file_descriptor)
+        for descriptor in reversed(directory_descriptors):
+            os.close(descriptor)
 
 
 def _language_capability_source_mismatches(
@@ -480,13 +530,10 @@ def _language_capability_source_mismatches(
     manifest: RunEvidenceManifest,
     run_dir: Path,
     repository_root: Path,
+    config: AuditConfig | None,
 ) -> list[RunVerificationMismatch]:
     binding = next(
-        (
-            item
-            for item in manifest.artifacts
-            if item.path == LANGUAGE_CAPABILITY_ARTIFACT_PATH
-        ),
+        (item for item in manifest.artifacts if item.path == LANGUAGE_CAPABILITY_ARTIFACT_PATH),
         None,
     )
     if binding is None:
@@ -539,6 +586,107 @@ def _language_capability_source_mismatches(
                     expected_size=item.size,
                 )
             )
+    if config is None:
+        mismatches.append(
+            RunVerificationMismatch(
+                category=RunVerificationCategory.SOURCE,
+                identifier="language-capability/source-inventory/reconstruction",
+                kind=RunVerificationMismatchKind.UNVERIFIABLE,
+            )
+        )
+        return mismatches
+
+    try:
+        matcher = IgnoreMatcher.from_effective_rules(artifact.effective_ignore_rules)
+        output_exclusion = artifact.runtime_output_exclusion_root
+        if output_exclusion is not None:
+            try:
+                current_run_relative = run_dir.resolve(strict=True).relative_to(
+                    repository_root.resolve(strict=True)
+                )
+            except (OSError, ValueError):
+                current_run_relative = None
+            output_parts = PurePosixPath(output_exclusion).parts
+            if (
+                current_run_relative is not None
+                and current_run_relative.parts[: len(output_parts)] == output_parts
+            ):
+                matcher.rules.append("/" + output_exclusion + "/")
+        observed_discovery = discover_repository(
+            repository_root,
+            config.repository,
+            matcher,
+        )
+        observed_discovery, _withheld = withhold_prior_audit_from_discovery(
+            observed_discovery,
+            config.prior_audit.path,
+        )
+    except (OSError, ValueError):
+        mismatches.append(
+            RunVerificationMismatch(
+                category=RunVerificationCategory.SOURCE,
+                identifier="language-capability/source-inventory/reconstruction",
+                kind=RunVerificationMismatchKind.UNVERIFIABLE,
+            )
+        )
+        return mismatches
+
+    expected_by_path = {item.path: item for item in artifact.files}
+    observed_by_path = {item.relative_path: item for item in observed_discovery.files}
+    existing_mismatch_ids = {item.identifier for item in mismatches}
+    for expected_path, expected in expected_by_path.items():
+        identifier = f"language-capability/{expected_path}"
+        observed = observed_by_path.get(expected_path)
+        if observed is None and identifier not in existing_mismatch_ids:
+            mismatches.append(
+                RunVerificationMismatch(
+                    category=RunVerificationCategory.SOURCE,
+                    identifier=identifier,
+                    kind=RunVerificationMismatchKind.MISSING,
+                    expected_sha256=expected.sha256,
+                    expected_size=expected.size,
+                )
+            )
+        elif (
+            observed is not None
+            and identifier not in existing_mismatch_ids
+            and (observed.sha256 != expected.sha256 or observed.size != expected.size)
+        ):
+            mismatches.append(
+                RunVerificationMismatch(
+                    category=RunVerificationCategory.SOURCE,
+                    identifier=identifier,
+                    kind=RunVerificationMismatchKind.CHANGED,
+                    expected_sha256=expected.sha256,
+                    observed_sha256=observed.sha256,
+                    expected_size=expected.size,
+                    observed_size=observed.size,
+                )
+            )
+    for observed in observed_discovery.files:
+        if observed.relative_path not in expected_by_path:
+            mismatches.append(
+                RunVerificationMismatch(
+                    category=RunVerificationCategory.SOURCE,
+                    identifier=f"language-capability/{observed.relative_path}",
+                    kind=RunVerificationMismatchKind.UNEXPECTED,
+                    observed_sha256=observed.sha256,
+                    observed_size=observed.size,
+                )
+            )
+    observed_omitted = tuple(sorted(set(observed_discovery.omitted)))
+    if observed_omitted != artifact.omitted:
+        mismatches.append(
+            RunVerificationMismatch(
+                category=RunVerificationCategory.SOURCE,
+                identifier="language-capability/omissions",
+                kind=RunVerificationMismatchKind.CHANGED,
+                expected_sha256=canonical_sha256(list(artifact.omitted)),
+                observed_sha256=canonical_sha256(list(observed_omitted)),
+                expected_size=len(artifact.omitted),
+                observed_size=len(observed_omitted),
+            )
+        )
     return mismatches
 
 
@@ -1070,11 +1218,3 @@ def _safe_directory(path: Path, label: str) -> Path:
     if not resolved.is_dir():
         raise ValueError(f"run verification {label} root must be a directory")
     return resolved
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()

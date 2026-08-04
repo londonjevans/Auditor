@@ -88,6 +88,14 @@
       "title": "Binding Sha256",
       "type": "string"
     },
+    "blocking_discovery_omissions": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 1000,
+      "title": "Blocking Discovery Omissions",
+      "type": "array"
+    },
     "capability_status": {
       "$ref": "#/$defs/LanguageCapabilityStatus"
     },
@@ -234,6 +242,7 @@
     "achieved_language_profile",
     "capability_status",
     "reduced_language_capability",
+    "blocking_discovery_omissions",
     "language_capability_sha256",
     "artifact_evidence_file_sha256",
     "artifact_evidence_file_size",

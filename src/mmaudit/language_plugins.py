@@ -12,8 +12,8 @@ from typing import Any, Protocol, TypedDict
 
 from mmaudit.models.schemas import (
     AnalysisState,
-    LanguageCapabilityAssessment,
     LanguageCapabilityArtifact,
+    LanguageCapabilityAssessment,
     LanguageCapabilityFileEvidence,
     LanguageCapabilityProfile,
     LanguageCapabilityStatus,
@@ -22,6 +22,7 @@ from mmaudit.models.schemas import (
     language_capability_blocking_omissions,
 )
 from mmaudit.repository.discovery import DiscoveryResult
+
 
 class _CapabilityEvidence(TypedDict):
     language_counts: dict[str, int]
@@ -259,8 +260,11 @@ def assess_language_capability(
 def build_language_capability_artifact(
     assessment: LanguageCapabilityAssessment,
     discovery: DiscoveryResult,
+    *,
+    effective_ignore_rules: Sequence[str],
+    runtime_output_exclusion_root: str | None,
 ) -> LanguageCapabilityArtifact:
-    """Retain the exact bounded discovery inventory that produced one assessment."""
+    """Retain the exact bounded discovery inventory and policy used for one assessment."""
 
     return LanguageCapabilityArtifact(
         assessment=assessment,
@@ -275,6 +279,8 @@ def build_language_capability_artifact(
             for item in sorted(discovery.files, key=lambda candidate: candidate.relative_path)
         ),
         omitted=tuple(sorted(set(discovery.omitted))),
+        effective_ignore_rules=tuple(effective_ignore_rules),
+        runtime_output_exclusion_root=runtime_output_exclusion_root,
     )
 
 

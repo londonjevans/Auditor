@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from mmaudit.config import RepositoryConfig, SmartContractsConfig
 from mmaudit.constants import ANALYSIS_ROLES
 from mmaudit.models.schemas import (
     AuditReport,
@@ -44,6 +45,11 @@ from mmaudit.orchestration.reproduction_resolution import (
     build_candidate_reproduction_resolutions,
 )
 from mmaudit.reporting.json_report import write_json
+from mmaudit.repository.discovery import discover_repository
+from mmaudit.repository.ignore import IgnoreMatcher
+from mmaudit.solidity.index import build_solidity_index
+from mmaudit.solidity.projects import discover_solidity_projects
+from tests.language_capability_support import matched_solidity_language_capability
 from tests.unit import test_run_status as run_status_fixtures
 from tests.unit.test_execution_candidate_schema import (
     _execution_candidate,
@@ -195,6 +201,7 @@ def _report_shell(
     invariant_executions: list[InvariantExecutionResult] | None = None,
     execution_origin_dispositions: list[InvariantExecutionOriginDisposition] | None = None,
     incomplete_reasons: list[str] | None = None,
+    property_corpus: PropertyCorpus | None = None,
 ) -> AuditReport:
     """Build only the typed fields exercised by the manifest consistency gate."""
 
@@ -224,7 +231,21 @@ def _report_shell(
         configuration_hash="a" * 64,
         model_configuration_hash="b" * 64,
         privacy={},
-        metadata={},
+        metadata={
+            "solidity": {
+                "projects": [],
+                "compilation": [],
+                "property_corpus_summary": (
+                    {
+                        "properties": len(property_corpus.properties),
+                        "limitations": len(property_corpus.limitations),
+                        "corpus_hash": property_corpus.corpus_hash,
+                    }
+                    if property_corpus is not None
+                    else None
+                ),
+            }
+        },
         repository_suite_differential=None,
         scanner_runs=[],
         usage=[],
@@ -232,6 +253,7 @@ def _report_shell(
         accounted_cost_usd=0,
         findings=findings or [],
         rejected_findings=rejected_findings or [],
+        language_capability=matched_solidity_language_capability().assessment,
         invariants=invariants,
         invariant_executions=invariant_executions or [],
         execution_origin_dispositions=execution_origin_dispositions or [],
@@ -263,6 +285,17 @@ def _write_manifest_inputs(
         },
     )
     write_json(root / "scanner-results.json", {"runs": []})
+    write_json(root / "solidity-projects.json", {"schema_version": "1.0", "projects": []})
+    write_json(root / "solidity-compilation.json", {"schema_version": "1.0", "results": []})
+    write_json(
+        root / "formal-results.json",
+        {"schema_version": "1.0", "runs": [], "dynamic_engine_comparisons": []},
+    )
+    write_json(root / "invariant-review.json", {"schema_version": "1.0", "review": None})
+    write_json(
+        root / "economic-simulation-plan.json",
+        {"schema_version": "1.0", "templates": []},
+    )
     write_json(
         root / "candidate-findings.json",
         {
@@ -290,6 +323,16 @@ def _write_manifest_inputs(
     )
     if execution_runtime is not None:
         suite, harness, corpus, execution = execution_runtime
+        repository = root / "repository"
+        discovery = discover_repository(repository, RepositoryConfig(), IgnoreMatcher())
+        projects = discover_solidity_projects(discovery, SmartContractsConfig())
+        index = build_solidity_index(discovery, projects, []).index.model_copy(
+            update={"projects": []}
+        )
+        write_json(
+            root / "solidity-index.json",
+            {"schema_version": "1.0", "index": index.model_dump(mode="json")},
+        )
         write_json(
             root / "solidity-invariants.json",
             {
@@ -350,6 +393,7 @@ def _manifest_execution_fixture(
         invariants=suite,
         invariant_executions=[execution],
         execution_origin_dispositions=list(build.dispositions),
+        property_corpus=corpus,
     )
     return root, report, candidate, provenance
 
@@ -937,7 +981,7 @@ def test_manifest_requires_exact_report_reproduction_results(tmp_path: Path) -> 
         _validate_report_artifact_consistency(root, tampered_report)
 
 
-def test_manifest_allows_incomplete_harness_rejection_without_candidate(
+def test_manifest_rejects_incomplete_harness_mismatch_even_without_candidate(
     tmp_path: Path,
 ) -> None:
     repository, suite, harness, corpus, execution = _inputs(tmp_path)
@@ -960,12 +1004,17 @@ def test_manifest_allows_incomplete_harness_rejection_without_candidate(
         invariant_executions=[execution],
         execution_origin_dispositions=list(build.dispositions),
         incomplete_reasons=[required_reason],
+        property_corpus=corpus,
     )
 
-    _validate_report_artifact_consistency(root, report)
+    with pytest.raises(
+        ValueError,
+        match="invariant execution result differs from its exact harness specification",
+    ):
+        _validate_report_artifact_consistency(root, report)
 
 
-def test_manifest_allows_incomplete_current_source_rejection_without_candidate(
+def test_manifest_rejects_stale_property_corpus_after_source_rejection(
     tmp_path: Path,
 ) -> None:
     repository, suite, harness, corpus, execution = _inputs(tmp_path)
@@ -995,9 +1044,14 @@ def test_manifest_allows_incomplete_current_source_rejection_without_candidate(
         invariant_executions=[execution],
         execution_origin_dispositions=list(build.dispositions),
         incomplete_reasons=[required_reason],
+        property_corpus=corpus,
     )
 
-    _validate_report_artifact_consistency(root, report)
+    with pytest.raises(
+        ValueError,
+        match=r"property-corpus\.json differs from the invariant suite, index, and harness plan",
+    ):
+        _validate_report_artifact_consistency(root, report)
 
 
 def test_manifest_rejects_tampered_execution_disposition_artifact(tmp_path: Path) -> None:
@@ -1021,11 +1075,7 @@ def test_manifest_rejects_execution_candidate_omitted_from_final_findings(
     tmp_path: Path,
 ) -> None:
     root, report, _candidate, _provenance_record = _manifest_execution_fixture(tmp_path)
-    report = _report_shell(
-        invariants=report.invariants,
-        invariant_executions=report.invariant_executions,
-        execution_origin_dispositions=report.execution_origin_dispositions,
-    )
+    report = report.model_copy(update={"findings": [], "rejected_findings": []})
 
     with pytest.raises(ValueError, match="omitted from final report evidence"):
         _validate_report_artifact_consistency(root, report)
@@ -1043,6 +1093,7 @@ def test_manifest_rejects_qualifying_runtime_omitted_from_candidate_inventory(
     report = _report_shell(
         invariants=suite,
         invariant_executions=[execution],
+        property_corpus=corpus,
     )
 
     with pytest.raises(
@@ -1061,7 +1112,7 @@ def test_manifest_rejects_emitted_runtime_omitted_from_report_and_candidates(
         candidates=[],
         execution_runtime=(suite, harness, corpus, execution),
     )
-    report = _report_shell(invariants=suite)
+    report = _report_shell(invariants=suite, property_corpus=corpus)
 
     with pytest.raises(
         ValueError,

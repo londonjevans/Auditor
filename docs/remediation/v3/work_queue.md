@@ -424,11 +424,17 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Acceptance criteria:** Language mismatch is detected; non-Solidity runs cannot
   claim EVM assurance; README and CLI claims match actual capability.
 - **Dependencies:** `V3-REPORT-001`.
-- **Status:** `IN_PROGRESS`
-- **Current action:** Inspect language detection, capability/profile configuration, plugin
-  boundaries, CLI descriptions, README claims, and existing tests; reproduce any path that lets a
-  non-Solidity repository retain Solidity/EVM maximum-assurance claims before implementing one
-  cohesive scope-honesty correction.
+- **Status:** `COMPLETE`
+- **Evidence:** The source-bound language-capability artifact, exact inventory/drift custody,
+  reduced generic plugin boundary, EVM-stage suppression, fail-closed detached/public artifact
+  projections, typed generic coverage, current/legacy schema contracts, CLI/README claims, and
+  manifest/release verification are implemented and independently reviewed. The terminal
+  repository suite passed `4846 passed, 11 skipped in 1635.54s`; Ruff, strict mypy over `177`
+  source files, generated schema verification, diff integrity, and secret/artifact scans passed.
+- **Remaining limitation:** The explicit skips remain non-crediting external prerequisites; this
+  ticket establishes honest capability scope and does not claim those engines executed.
+- **Next action:** Checkpoint this ticket, then resume `V3-TOOLDIAG-002` remaining gap 1 (isolated
+  Slither compiler provisioning) per the operator-priority correction.
 
 ## V3-QUALIFY-001 — Real staged model qualification
 

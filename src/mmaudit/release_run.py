@@ -69,6 +69,7 @@ class ReleaseRunBindingPayload(StrictModel):
     achieved_language_profile: LanguageCapabilityProfile | None
     capability_status: LanguageCapabilityStatus
     reduced_language_capability: bool
+    blocking_discovery_omissions: tuple[str, ...] = Field(max_length=1_000)
     language_capability_sha256: str = Field(pattern=_SHA256_PATTERN)
     artifact_evidence_file_sha256: str = Field(pattern=_SHA256_PATTERN)
     artifact_evidence_file_size: int = Field(ge=1, le=_MAX_EVIDENCE_BYTES)
@@ -99,16 +100,13 @@ class ReleaseRunBindingPayload(StrictModel):
             raise ValueError("release run cannot claim an unrequested language capability")
         expected_reduced = (
             self.capability_status is LanguageCapabilityStatus.REDUCED
-            and self.achieved_language_profile
-            is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
+            and self.achieved_language_profile is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
         )
         if self.reduced_language_capability is not expected_reduced:
             raise ValueError("release run reduced language capability is inconsistent")
         if self.capability_status is LanguageCapabilityStatus.REDUCED and (
-            self.requested_language_profile
-            is not LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
-            or self.achieved_language_profile
-            is not LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
+            self.requested_language_profile is not LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
+            or self.achieved_language_profile is not LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
             or not self.reduced_language_capability
         ):
             raise ValueError("reduced release capability must be achieved generic source review")
@@ -117,16 +115,21 @@ class ReleaseRunBindingPayload(StrictModel):
             or self.reduced_language_capability
         ):
             raise ValueError("matched release capability must be Solidity/EVM")
-        if self.capability_status in {
-            LanguageCapabilityStatus.MISMATCH,
-            LanguageCapabilityStatus.INCONCLUSIVE,
-        } and self.achieved_language_profile is not None:
+        if (
+            self.capability_status
+            in {
+                LanguageCapabilityStatus.MISMATCH,
+                LanguageCapabilityStatus.INCONCLUSIVE,
+            }
+            and self.achieved_language_profile is not None
+        ):
             raise ValueError("unachieved release capability cannot name an achieved profile")
         if self.achieved_profile is AuditProfile.MAXIMUM_ASSURANCE and (
             self.capability_status is not LanguageCapabilityStatus.MATCHED
             or self.requested_language_profile is not LanguageCapabilityProfile.SOLIDITY_EVM
             or self.achieved_language_profile is not LanguageCapabilityProfile.SOLIDITY_EVM
             or self.reduced_language_capability
+            or bool(self.blocking_discovery_omissions)
         ):
             raise ValueError(
                 "maximum-assurance release run requires matched Solidity/EVM capability"
@@ -186,11 +189,7 @@ def observe_release_run_binding(
 
     run_configuration = manifest.run_configuration
     capability_binding = next(
-        (
-            item
-            for item in manifest.artifacts
-            if item.path == LANGUAGE_CAPABILITY_ARTIFACT_PATH
-        ),
+        (item for item in manifest.artifacts if item.path == LANGUAGE_CAPABILITY_ARTIFACT_PATH),
         None,
     )
     if capability_binding is None:
@@ -209,10 +208,8 @@ def observe_release_run_binding(
         _decode_json_object(capability_bytes, label="language capability artifact")
     ).assessment
     if (
-        language_capability.requested_profile
-        is not run_configuration.requested_language_profile
-        or language_capability.achieved_profile
-        is not run_configuration.achieved_language_profile
+        language_capability.requested_profile is not run_configuration.requested_language_profile
+        or language_capability.achieved_profile is not run_configuration.achieved_language_profile
         or language_capability.reduced_capability
         is not run_configuration.reduced_language_capability
     ):
@@ -241,9 +238,8 @@ def observe_release_run_binding(
         achieved_language_profile=run_configuration.achieved_language_profile,
         capability_status=language_capability.status,
         reduced_language_capability=language_capability.reduced_capability,
-        language_capability_sha256=canonical_sha256(
-            language_capability.model_dump(mode="json")
-        ),
+        blocking_discovery_omissions=language_capability.blocking_discovery_omissions,
+        language_capability_sha256=canonical_sha256(language_capability.model_dump(mode="json")),
         artifact_evidence_file_sha256=hashlib.sha256(evidence_bytes).hexdigest(),
         artifact_evidence_file_size=len(evidence_bytes),
         artifact_evidence_sha256=evidence.evidence_sha256,

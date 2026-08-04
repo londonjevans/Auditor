@@ -189,6 +189,15 @@
     "assessment": {
       "$ref": "#/$defs/LanguageCapabilityAssessment"
     },
+    "effective_ignore_rules": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 100000,
+      "minItems": 1,
+      "title": "Effective Ignore Rules",
+      "type": "array"
+    },
     "files": {
       "items": {
         "$ref": "#/$defs/LanguageCapabilityFileEvidence"
@@ -206,16 +215,29 @@
       "title": "Omitted",
       "type": "array"
     },
+    "runtime_output_exclusion_root": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Runtime Output Exclusion Root"
+    },
     "schema_version": {
-      "const": "1.0",
-      "default": "1.0",
+      "const": "1.1",
+      "default": "1.1",
       "title": "Schema Version",
       "type": "string"
     }
   },
   "required": [
     "assessment",
-    "files"
+    "files",
+    "effective_ignore_rules",
+    "runtime_output_exclusion_root"
   ],
   "title": "mmaudit language capability artifact",
   "type": "object"

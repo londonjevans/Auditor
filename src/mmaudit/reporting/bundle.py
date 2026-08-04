@@ -8,15 +8,16 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
 
 from mmaudit.models.scheduler import (
     SchedulerCostLedgerBaseline,
     scheduler_canonical_sha256,
 )
 from mmaudit.models.schemas import (
+    AnalysisState,
     AuditReport,
     AuditRunStatus,
     AuditScopeAssessment,
@@ -24,12 +25,16 @@ from mmaudit.models.schemas import (
     CandidateCrossExaminationVerdict,
     CandidateFinding,
     CandidateReproductionResolution,
+    CoverageMetric,
+    CoverageProvenance,
     ExecutionEvidenceKind,
     FalsificationDecision,
     FalsificationVerdict,
     Finding,
     FindingOriginKind,
     FindingStatus,
+    LanguageCapabilityAssessment,
+    LanguageCapabilityStatus,
     Location,
     LocationValidation,
     ModelReviewCoverage,
@@ -78,6 +83,54 @@ MANIFEST_BOUND_REPORT_DELIVERABLES = frozenset(
 REQUIRED_REPORT_DELIVERABLES = frozenset(
     {*MANIFEST_BOUND_REPORT_DELIVERABLES, "run-evidence-manifest.json"}
 )
+
+
+def _language_capability_schema_contract(
+    *,
+    current_version: str,
+    legacy_versions: tuple[str, ...],
+) -> dict[str, Any]:
+    """Describe the exact field-presence contract for versioned public artifacts."""
+
+    return {
+        "allOf": [
+            {
+                "if": {
+                    "properties": {"schema_version": {"const": current_version}},
+                },
+                "then": {
+                    "properties": {"language_capability": {"not": {"type": "null"}}},
+                    "required": ["language_capability"],
+                },
+            },
+            {
+                "if": {
+                    "properties": {"schema_version": {"enum": list(legacy_versions)}},
+                    "required": ["schema_version"],
+                },
+                "then": {"not": {"required": ["language_capability"]}},
+            },
+        ]
+    }
+
+
+def _validate_versioned_language_capability_payload(
+    value: object,
+    *,
+    current_version: str,
+    legacy_versions: frozenset[str],
+) -> object:
+    """Reject omitted current evidence and retroactive fields on legacy versions."""
+
+    if not isinstance(value, Mapping):
+        return value
+    schema_version = value.get("schema_version", current_version)
+    has_language_capability = "language_capability" in value
+    if schema_version == current_version and not has_language_capability:
+        raise ValueError("current artifact requires typed language capability evidence")
+    if schema_version in legacy_versions and has_language_capability:
+        raise ValueError("legacy artifact cannot carry language capability evidence")
+    return value
 
 
 def _money_text(value: Decimal) -> str:
@@ -596,7 +649,19 @@ class ForensicFindingRecord(StrictModel):
 class FindingsArtifact(ReportStatusProjection):
     """Complete final/candidate finding history for the forensic bundle."""
 
-    schema_version: Literal["1.1"] = "1.1"
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra=_language_capability_schema_contract(
+            current_version="1.2",
+            legacy_versions=("1.1",),
+        ),
+    )
+
+    schema_version: Literal["1.1", "1.2"] = "1.2"
+    language_capability: LanguageCapabilityAssessment | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     run_id: str = Field(min_length=1, max_length=160)
     reporting_severity_threshold: Severity
     findings: list[Finding]
@@ -610,6 +675,21 @@ class FindingsArtifact(ReportStatusProjection):
     falsification_decisions: list[FalsificationDecision] = Field(max_length=100_000)
     reproductions: list[ReproductionResult] = Field(max_length=100_000)
     reproduction_resolutions: list[CandidateReproductionResolution] = Field(max_length=100_000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def language_capability_is_versioned(cls, value: object) -> object:
+        return _validate_versioned_language_capability_payload(
+            value,
+            current_version="1.2",
+            legacy_versions=frozenset({"1.1"}),
+        )
+
+    @model_validator(mode="after")
+    def current_language_capability_is_non_null(self) -> FindingsArtifact:
+        if self.schema_version == "1.2" and self.language_capability is None:
+            raise ValueError("current artifact requires non-null language capability evidence")
+        return self
 
     @model_validator(mode="after")
     def inventory_is_exact_and_unique(self) -> FindingsArtifact:
@@ -795,11 +875,70 @@ class FindingsArtifact(ReportStatusProjection):
 class CoverageArtifact(ReportStatusProjection):
     """Compact typed coverage projection with full typed coverage bodies retained."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.1"] = "1.1"
     run_id: str = Field(min_length=1, max_length=160)
+    scanner_only: bool
     scope_assessment: AuditScopeAssessment | None
     solidity_coverage: SolidityCoverage | None
     model_review_coverage: ModelReviewCoverage | None
+    generic_source_coverage: dict[str, CoverageMetric] | None
+
+    @model_validator(mode="after")
+    def generic_coverage_matches_capability(self) -> CoverageArtifact:
+        """Retain generic metrics only for an achieved reduced generic capability."""
+
+        capability = self.language_capability
+        reduced_generic = bool(
+            capability is not None and capability.status is LanguageCapabilityStatus.REDUCED
+        )
+        if not reduced_generic:
+            if self.generic_source_coverage is not None:
+                raise ValueError(
+                    "generic source coverage requires achieved reduced generic capability"
+                )
+            return self
+        if self.generic_source_coverage is None:
+            raise ValueError("reduced generic capability requires typed generic source coverage")
+
+        expected_ids = {"generic_source_files_ingested"}
+        if self.scanner_only:
+            expected_ids.add("scanner_completion")
+        observed_ids = list(self.generic_source_coverage)
+        if observed_ids != sorted(expected_ids):
+            raise ValueError(
+                "generic source coverage metric inventory differs from the effective run mode"
+            )
+
+        assert capability is not None
+        from mmaudit.orchestration.coverage import (
+            generic_source_ingestion_coverage_metric,
+        )
+
+        expected_ingestion = generic_source_ingestion_coverage_metric(
+            capability.discovered_text_file_count
+        )
+        if self.generic_source_coverage["generic_source_files_ingested"] != expected_ingestion:
+            raise ValueError(
+                "generic source ingestion coverage differs from language capability evidence"
+            )
+
+        scanner_metric = self.generic_source_coverage.get("scanner_completion")
+        if scanner_metric is not None:
+            expected_state = (
+                AnalysisState.SCANNER_SUPPORTED
+                if scanner_metric.denominator
+                else AnalysisState.NOT_ANALYZED
+            )
+            if (
+                scanner_metric.confidence != 1
+                or scanner_metric.provenance
+                != [CoverageProvenance.CONFIGURATION, CoverageProvenance.STATIC_TOOL]
+                or scanner_metric.state is not expected_state
+                or scanner_metric.detail
+                != "Requested deterministic scanners that completed successfully"
+            ):
+                raise ValueError("generic scanner completion coverage is not canonical")
+        return self
 
 
 class CostLedgerAbsenceEvidence(StrictModel):
@@ -1281,7 +1420,19 @@ def build_run_cost_ledger_evidence(
 class ModelExecutionArtifact(ReportStatusProjection):
     """Non-secret model execution and cost evidence for the forensic bundle."""
 
-    schema_version: Literal["1.0", "1.1"] = "1.1"
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra=_language_capability_schema_contract(
+            current_version="1.2",
+            legacy_versions=("1.0", "1.1"),
+        ),
+    )
+
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.2"
+    language_capability: LanguageCapabilityAssessment | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     run_id: str = Field(min_length=1, max_length=160)
     configured_models: dict[str, str]
     configured_fallbacks: dict[str, list[str]]
@@ -1302,8 +1453,19 @@ class ModelExecutionArtifact(ReportStatusProjection):
     raw_responses_retained: bool
     cost_ledger: CostLedgerForensicEvidence | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def language_capability_is_versioned(cls, value: object) -> object:
+        return _validate_versioned_language_capability_payload(
+            value,
+            current_version="1.2",
+            legacy_versions=frozenset({"1.0", "1.1"}),
+        )
+
     @model_validator(mode="after")
     def totals_are_exact(self) -> ModelExecutionArtifact:
+        if self.schema_version == "1.2" and self.language_capability is None:
+            raise ValueError("current artifact requires non-null language capability evidence")
         if self.prompt_tokens != sum(record.prompt_tokens for record in self.usage):
             raise ValueError("model execution prompt-token total is inconsistent")
         if self.completion_tokens != sum(record.completion_tokens for record in self.usage):
@@ -1426,6 +1588,7 @@ def build_findings_artifact(
     candidates: Sequence[CandidateFinding] = (),
     reproduction_resolutions: Sequence[CandidateReproductionResolution] = (),
     source_excerpts: Mapping[str, SourceExcerptEvidence] | None = None,
+    schema_version: Literal["1.1", "1.2"] | None = None,
 ) -> FindingsArtifact:
     """Build an exact candidate-linked forensic finding inventory."""
 
@@ -1521,8 +1684,15 @@ def build_findings_artifact(
         )
     terminal_dispositions.sort(key=lambda item: item.candidate_id)
     projection = effective_report_status(report)
+    resolved_schema_version: Literal["1.1", "1.2"] = schema_version or (
+        "1.2" if projection.language_capability is not None else "1.1"
+    )
+    projection_payload = projection.model_dump(mode="python")
+    if resolved_schema_version == "1.1":
+        projection_payload.pop("language_capability", None)
     return FindingsArtifact(
-        **projection.model_dump(mode="python"),
+        **projection_payload,
+        schema_version=resolved_schema_version,
         run_id=report.run_id,
         reporting_severity_threshold=reporting_threshold,
         findings=list(report.findings),
@@ -1544,12 +1714,21 @@ def build_coverage_artifact(report: AuditReport) -> CoverageArtifact:
 
     report = AuditReport.model_validate(report.model_dump(mode="python"))
     projection = effective_report_status(report)
+    scanner_only = report.metadata.get("scanner_only") is True
+    generic_source_coverage = (
+        report.effective_minimum_floor_coverage_metrics()
+        if report.language_capability is not None
+        and report.language_capability.status is LanguageCapabilityStatus.REDUCED
+        else None
+    )
     return CoverageArtifact(
         **projection.model_dump(mode="python"),
         run_id=report.run_id,
+        scanner_only=scanner_only,
         scope_assessment=report.scope_assessment,
         solidity_coverage=report.effective_solidity_coverage(),
         model_review_coverage=report.model_review_coverage,
+        generic_source_coverage=generic_source_coverage,
     )
 
 
@@ -1578,13 +1757,17 @@ def build_model_execution_artifact(
     *,
     cost_ledger_evidence: RunCostLedgerEvidence | None = None,
     persistent_ledger_configured: bool = False,
-    legacy_schema_1_0: bool = False,
+    schema_version: Literal["1.0", "1.1", "1.2"] | None = None,
 ) -> ModelExecutionArtifact:
     """Build non-secret model evidence, requiring custody for every current usage record."""
 
     report = AuditReport.model_validate(report.model_dump(mode="python"))
     usage = list(report.usage)
-    if legacy_schema_1_0:
+    projection = effective_report_status(report)
+    resolved_schema_version: Literal["1.0", "1.1", "1.2"] = schema_version or (
+        "1.2" if projection.language_capability is not None else "1.1"
+    )
+    if resolved_schema_version == "1.0":
         if cost_ledger_evidence is not None or persistent_ledger_configured:
             raise ValueError("legacy model-execution projection cannot claim cost custody")
         cost_evidence: CostLedgerForensicEvidence | None = None
@@ -1622,10 +1805,12 @@ def build_model_execution_artifact(
         exact_cost = report_exact_cost
     else:
         exact_cost = usage_exact_cost
-    projection = effective_report_status(report)
+    projection_payload = projection.model_dump(mode="python")
+    if resolved_schema_version != "1.2":
+        projection_payload.pop("language_capability", None)
     return ModelExecutionArtifact(
-        **projection.model_dump(mode="python"),
-        schema_version="1.0" if legacy_schema_1_0 else "1.1",
+        **projection_payload,
+        schema_version=resolved_schema_version,
         run_id=report.run_id,
         configured_models=_string_mapping(report.metadata.get("configured_models")),
         configured_fallbacks=_fallback_mapping(report.metadata.get("configured_fallbacks")),

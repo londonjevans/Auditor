@@ -22,6 +22,7 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.orchestration.assurance import MaximumAssuranceContract
 from mmaudit.repository.discovery import DiscoveredFile, DiscoveryResult
+from mmaudit.repository.ignore import IgnoreMatcher
 from mmaudit.solidity.projects import discover_solidity_projects
 from tests.conftest import base_config_data
 
@@ -119,7 +120,10 @@ def test_explicit_generic_source_review_is_reduced_and_never_evm_assurance(
     assert assessment.reduced_capability
     assert not assessment.evm_portfolio_applicable
     assert not assessment.evm_maximum_assurance_eligible
-    assert resolve_language_plugin(assessment.requested_profile).profile is assessment.requested_profile
+    assert (
+        resolve_language_plugin(assessment.requested_profile).profile
+        is assessment.requested_profile
+    )
 
 
 def test_global_discovery_truncation_is_inconclusive_not_a_clean_language_mismatch(
@@ -161,7 +165,12 @@ def test_language_capability_artifact_recomputes_inventory_hash_and_census(
         solidity_projects=projects,
         smart_contracts_enabled=True,
     )
-    artifact = build_language_capability_artifact(assessment, discovery)
+    artifact = build_language_capability_artifact(
+        assessment,
+        discovery,
+        effective_ignore_rules=IgnoreMatcher().rules,
+        runtime_output_exclusion_root=None,
+    )
 
     assert LanguageCapabilityArtifact.model_validate_json(artifact.model_dump_json()) == artifact
     assert parse_language_capability_payload(artifact.model_dump(mode="json")) == artifact

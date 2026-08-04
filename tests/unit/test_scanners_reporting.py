@@ -52,11 +52,11 @@ from mmaudit.models.schemas import (
     InvariantExecutionRemovalTrial,
     InvariantExecutionResult,
     InvariantExecutionStatus,
+    LanguageCapabilityFileEvidence,
+    LanguageCapabilityProfile,
     LendingBoundaryEvidence,
     Location,
     LocationValidation,
-    LanguageCapabilityFileEvidence,
-    LanguageCapabilityProfile,
     MinimumAnalysisFloor,
     ModelReviewCoverage,
     ModelReviewSurfaceKind,
@@ -3146,7 +3146,7 @@ def test_markdown_does_not_present_incomplete_empty_run_as_safe(
         model_review_required=False,
         scanner_only=True,
         model_review_satisfied=True,
-        coverage_metric_ids=[],
+        coverage_metric_ids=["generic_source_files_ingested", "scanner_completion"],
         coverage_denominators_valid=False,
         surface_analysis_feasible=True,
         minimum_floor_met=False,
@@ -3179,9 +3179,7 @@ def test_markdown_does_not_present_incomplete_empty_run_as_safe(
             ),
         ).assessment
         if source_ingestion_succeeded
-        else empty_language_capability(
-            LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
-        ).assessment
+        else empty_language_capability(LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW).assessment
     )
     payload = _report([]).model_dump(mode="python")
     payload.update(
@@ -3194,7 +3192,12 @@ def test_markdown_does_not_present_incomplete_empty_run_as_safe(
             "completed": False,
             "incomplete_reasons": ["no real scanner or model review completed"],
             "language_capability": language_capability,
-            "repository": _report([]).repository.model_copy(update={"files": report_files}),
+            "repository": _report([]).repository.model_copy(
+                update={
+                    "files": report_files,
+                    "languages": {"Python": 1} if report_files else {},
+                }
+            ),
             "metadata": {
                 "scanner_only": True,
                 "solidity": {"projects": [], "compilation": []},
@@ -4421,9 +4424,7 @@ def test_sarif_marks_only_complete_run_status_successful() -> None:
 
 
 def test_sarif_rejects_complete_run_with_unachieved_language_capability() -> None:
-    mismatch = empty_language_capability(
-        LanguageCapabilityProfile.SOLIDITY_EVM
-    ).assessment
+    mismatch = empty_language_capability(LanguageCapabilityProfile.SOLIDITY_EVM).assessment
 
     with pytest.raises(ValueError, match="unachieved language capability"):
         generate_sarif(

@@ -11,6 +11,7 @@ from mmaudit.models.schemas import (
     LanguageCapabilityProfile,
     LanguageCapabilityStatus,
 )
+from mmaudit.repository.ignore import IgnoreMatcher
 
 
 def _inventory_sha256(
@@ -38,9 +39,7 @@ def empty_language_capability(
 
     plugin_id = {
         LanguageCapabilityProfile.SOLIDITY_EVM: "mmaudit.language.solidity-evm",
-        LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW: (
-            "mmaudit.language.generic-source-review"
-        ),
+        LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW: ("mmaudit.language.generic-source-review"),
     }[profile]
     files: tuple[LanguageCapabilityFileEvidence, ...] = ()
     assessment = LanguageCapabilityAssessment(
@@ -58,7 +57,12 @@ def empty_language_capability(
         reduced_capability=False,
         limitations=("no reviewable text source was detected within the audited scope",),
     )
-    return LanguageCapabilityArtifact(assessment=assessment, files=files)
+    return LanguageCapabilityArtifact(
+        assessment=assessment,
+        files=files,
+        effective_ignore_rules=tuple(IgnoreMatcher().rules),
+        runtime_output_exclusion_root=None,
+    )
 
 
 def matched_solidity_language_capability(
@@ -132,7 +136,12 @@ def language_capability_for_files(
         reduced_capability=reduced,
         limitations=limitations,
     )
-    return LanguageCapabilityArtifact(assessment=assessment, files=ordered)
+    return LanguageCapabilityArtifact(
+        assessment=assessment,
+        files=ordered,
+        effective_ignore_rules=tuple(IgnoreMatcher().rules),
+        runtime_output_exclusion_root=None,
+    )
 
 
 def write_language_capability_artifact(

@@ -62,11 +62,11 @@ from mmaudit.traceability import (
     write_traceability_artifact,
 )
 from scripts import validate_release_evidence as release_evidence_cli
-from tests.report_authority_fixtures import write_run_terminal_report_authority
 from tests.language_capability_support import (
     empty_language_capability,
     write_language_capability_artifact,
 )
+from tests.report_authority_fixtures import write_run_terminal_report_authority
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = ROOT / "schemas" / "release_artifact_evidence.schema.json"
@@ -455,6 +455,31 @@ def test_observer_rejects_coherently_resealed_findings_status_evidence_tamper(
     _seal_manifest(run_dir, config)
 
     with pytest.raises(ValueError, match=r"findings\.json differs"):
+        observe_release_artifacts(run_dir, ROOT)
+
+
+@pytest.mark.parametrize(
+    "artifact_name",
+    ["findings.json", "coverage.json", "model-execution.json"],
+)
+def test_observer_rejects_coherently_resealed_capability_tamper_in_each_json_leaf(
+    tmp_path: Path,
+    config_factory,
+    artifact_name: str,
+) -> None:
+    run_dir = tmp_path / "run"
+    config = config_factory()
+    _write_run(run_dir, config)
+    artifact_path = run_dir / artifact_name
+    payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    payload["language_capability"] = None
+    artifact_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    _seal_manifest(run_dir, config)
+
+    with pytest.raises(ValueError, match=rf"{re.escape(artifact_name)} differs"):
         observe_release_artifacts(run_dir, ROOT)
 
 

@@ -163,7 +163,7 @@ def test_current_model_execution_fails_without_nonempty_cost_closure() -> None:
     with pytest.raises(ValueError, match="run-scoped cost-ledger closure"):
         build_model_execution_artifact(report)
 
-    legacy = build_model_execution_artifact(report, legacy_schema_1_0=True)
+    legacy = build_model_execution_artifact(report, schema_version="1.0")
     assert legacy.schema_version == "1.0"
     assert legacy.cost_ledger is None
 

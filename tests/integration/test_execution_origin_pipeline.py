@@ -25,6 +25,7 @@ from mmaudit.models.schemas import (
     FindingStatus,
     InvariantExecutionResult,
     InvariantExecutionStatus,
+    LanguageCapabilityProfile,
     LocalInvariantDeployment,
     LocalInvariantDeploymentArgument,
     ScannerRun,
@@ -169,6 +170,7 @@ async def test_real_counterexample_originates_pipeline_finding_but_safe_control_
     repository = tmp_path / "execution-origin-erc4626"
     shutil.copytree(FIXTURES / "solidity" / "economic_erc4626", repository)
     config = config_factory(
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         privacy={"fail_on_detected_secret": False},
         smart_contracts={"enabled": True, "compile": False},
         reproduction={

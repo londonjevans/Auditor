@@ -10,10 +10,12 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from mmaudit.language_plugins import assess_language_capability
 from mmaudit.models.schemas import (
     AuditQualityStatus,
     AuditReport,
     AuditRunStatus,
+    LanguageCapabilityProfile,
     MinimumAnalysisFloor,
     RepositoryMap,
     SolidityEntity,
@@ -1260,7 +1262,7 @@ def test_verify_run_records_manifest_bound_shard_cross_artifact_mismatch(
 ) -> None:
     from tests.unit.test_manifest import _report, _write_required_artifacts
 
-    config = config_factory()
+    config = config_factory(language_profile=LanguageCapabilityProfile.SOLIDITY_EVM)
     inputs = _shard_inputs(tmp_path, config_factory)
     inventory = _inventory(inputs)
     shard_report = _report_for_shards(
@@ -1269,18 +1271,25 @@ def test_verify_run_records_manifest_bound_shard_cross_artifact_mismatch(
         graphs=inputs.graphs,
         inventory=inventory,
     )
+    language_capability = assess_language_capability(
+        LanguageCapabilityProfile.SOLIDITY_EVM,
+        inputs.discovery,
+        solidity_projects=inputs.index.projects,
+        smart_contracts_enabled=True,
+    )
     base_report = _report(config)
     report = AuditReport.model_validate(
         {
             **base_report.model_dump(mode="python"),
             "repository": shard_report.repository,
+            "language_capability": language_capability,
             "metadata": {
                 **base_report.metadata,
                 "solidity": shard_report.metadata["solidity"],
             },
         }
     )
-    run_dir = tmp_path / "manifest-bound-cross-artifact"
+    run_dir = tmp_path / report.run_id
     _write_required_artifacts(run_dir, report)
     _write_shard_artifacts(
         run_dir,
@@ -1352,7 +1361,7 @@ def test_current_report_and_verify_run_reject_erased_solidity_metadata_with_shar
 ) -> None:
     from tests.unit.test_manifest import _report, _write_required_artifacts
 
-    config = config_factory()
+    config = config_factory(language_profile=LanguageCapabilityProfile.SOLIDITY_EVM)
     inputs = _shard_inputs(tmp_path, config_factory)
     inventory = _inventory(inputs)
     shard_report = _report_for_shards(
@@ -1360,6 +1369,12 @@ def test_current_report_and_verify_run_reject_erased_solidity_metadata_with_shar
         index=inputs.index,
         graphs=inputs.graphs,
         inventory=inventory,
+    )
+    language_capability = assess_language_capability(
+        LanguageCapabilityProfile.SOLIDITY_EVM,
+        inputs.discovery,
+        solidity_projects=inputs.index.projects,
+        smart_contracts_enabled=True,
     )
     limitation = "Synthetic incomplete current report for shard metadata validation."
     floor = MinimumAnalysisFloor(
@@ -1393,6 +1408,7 @@ def test_current_report_and_verify_run_reject_erased_solidity_metadata_with_shar
             "completed": False,
             "incomplete_reasons": [limitation],
             "repository": shard_report.repository,
+            "language_capability": language_capability,
             "quality_status": AuditQualityStatus.INCOMPLETE,
             "run_status": AuditRunStatus.INCOMPLETE,
             "minimum_analysis_floor": floor,
@@ -1408,13 +1424,14 @@ def test_current_report_and_verify_run_reject_erased_solidity_metadata_with_shar
         {
             **base_report.model_dump(mode="python"),
             "repository": shard_report.repository,
+            "language_capability": language_capability,
             "metadata": {
                 **base_report.metadata,
                 "solidity": shard_report.metadata["solidity"],
             },
         }
     )
-    run_dir = tmp_path / "current-report-erased-solidity-metadata"
+    run_dir = tmp_path / manifest_report.run_id
     _write_required_artifacts(run_dir, manifest_report)
     _write_shard_artifacts(
         run_dir,

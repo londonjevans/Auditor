@@ -38,11 +38,11 @@ from mmaudit.release_run import ReleaseRunBinding, ReleaseRunBindingPayload
 from mmaudit.release_verification import observe_release_run_verification
 from mmaudit.reporting.bundle import MANIFEST_BOUND_REPORT_DELIVERABLES
 from mmaudit.reporting.json_report import stable_json
-from tests.report_authority_fixtures import write_run_terminal_report_authority
 from tests.language_capability_support import (
     empty_language_capability,
     write_language_capability_artifact,
 )
+from tests.report_authority_fixtures import write_run_terminal_report_authority
 from tests.unit.test_release_run import _report as _release_report
 
 
@@ -110,10 +110,7 @@ def _run_binding(
         run_configuration.requested_language_profile
     ).assessment
     assert language_capability.achieved_profile is run_configuration.achieved_language_profile
-    assert (
-        language_capability.reduced_capability
-        is run_configuration.reduced_language_capability
-    )
+    assert language_capability.reduced_capability is run_configuration.reduced_language_capability
     payload = ReleaseRunBindingPayload(
         schema_version="1.0",
         generated_by="mmaudit",
@@ -138,9 +135,8 @@ def _run_binding(
         achieved_language_profile=run_configuration.achieved_language_profile,
         capability_status=language_capability.status,
         reduced_language_capability=language_capability.reduced_capability,
-        language_capability_sha256=canonical_sha256(
-            language_capability.model_dump(mode="json")
-        ),
+        blocking_discovery_omissions=language_capability.blocking_discovery_omissions,
+        language_capability_sha256=canonical_sha256(language_capability.model_dump(mode="json")),
         artifact_evidence_file_sha256="c" * 64,
         artifact_evidence_file_size=100,
         artifact_evidence_sha256="d" * 64,

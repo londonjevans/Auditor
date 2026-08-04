@@ -791,7 +791,10 @@ def _render_client_markdown_from_artifact(
     ]
     if (
         report.maximum_assurance is not None
-        and report.maximum_assurance.status is not MaximumAssuranceStatus.COMPLETE
+        and (
+            report.language_capability is None
+            or report.maximum_assurance.status is not MaximumAssuranceStatus.COMPLETE
+        )
         and (report.maximum_assurance.requested or report.maximum_assurance.required)
     ):
         lines.extend(

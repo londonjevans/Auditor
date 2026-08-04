@@ -174,6 +174,7 @@ from mmaudit.models.schemas import (
     JudgeDecision,
     JudgeDecisionBatch,
     LanguageCapabilityAssessment,
+    LanguageCapabilityProfile,
     LanguageCapabilityStatus,
     Location,
     LocationValidation,
@@ -277,6 +278,7 @@ from mmaudit.orchestration.context_manifest import (
     write_context_manifest,
 )
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
+from mmaudit.orchestration.coverage import generic_source_coverage_metrics
 from mmaudit.orchestration.execution_candidates import (
     ExecutionCandidateBuildResult,
     build_invariant_execution_candidates,
@@ -312,6 +314,7 @@ from mmaudit.orchestration.reproduction_resolution import (
 from mmaudit.orchestration.run_status import (
     assess_minimum_analysis_floor,
     audit_quality_status_for_run_status,
+    canonicalize_runtime_messages,
     minimum_analysis_floor_quality_gate,
 )
 from mmaudit.orchestration.scheduler import (
@@ -1938,12 +1941,24 @@ class AuditPipeline:
             )
         except ValueError:
             output_relative_to_repo = None
+        if output_relative_to_repo is not None:
+            output_relative_text = output_relative_to_repo.as_posix()
+            if normalize_relative_path(output_relative_text) != output_relative_text:
+                raise ValueError(
+                    "in-repository output path must have an unambiguous normalized spelling"
+                )
         if output_relative_to_repo is not None and not output_relative_to_repo.parts:
             raise ValueError("output directory cannot be the repository root")
         allow_custom_repository_exclusion = False
-        if (
+        custom_repository_output = bool(
             output_relative_to_repo is not None
             and audited_workspace_exclusion_root(output_relative_to_repo) is None
+        )
+        if custom_repository_output and self.output.exists():
+            raise ValueError("custom in-repository output must be absent before discovery")
+        if (
+            custom_repository_output
+            and output_relative_to_repo is not None
             and not self.output.exists()
         ):
             self.output.mkdir(parents=True, exist_ok=False, mode=0o700)
@@ -2084,17 +2099,25 @@ class AuditPipeline:
             self.config.repository.ignore_file,
         )
         matcher = IgnoreMatcher.from_file(ignore_path)
+        retained_ignore_rules = list(matcher.rules)
+        runtime_output_exclusion_root: str | None = None
         if output_relative_to_repo is not None:
-            matcher.rules.append("/" + output_relative_to_repo.as_posix().rstrip("/") + "/")
+            runtime_output_exclusion_root = output_relative_to_repo.as_posix().rstrip("/")
+            matcher.rules.append("/" + runtime_output_exclusion_root + "/")
         if self.config.prior_audit.path is not None:
-            matcher.rules.append("/" + normalize_relative_path(self.config.prior_audit.path))
+            prior_audit_rule = "/" + normalize_relative_path(self.config.prior_audit.path)
+            matcher.rules.append(prior_audit_rule)
+            retained_ignore_rules.append(prior_audit_rule)
         if self.config.dependency_preparation.offline_snapshot_path is not None:
             snapshot_parent = PurePosixPath(
                 normalize_relative_path(self.config.dependency_preparation.offline_snapshot_path)
             ).parent
-            matcher.rules.append("/" + snapshot_parent.as_posix().rstrip("/") + "/")
+            snapshot_rule = "/" + snapshot_parent.as_posix().rstrip("/") + "/"
+            matcher.rules.append(snapshot_rule)
+            retained_ignore_rules.append(snapshot_rule)
         repository_suite_identity_required = bool(
-            self.config.scanners.foundry_fork.enabled
+            self.config.language_profile is LanguageCapabilityProfile.SOLIDITY_EVM
+            and self.config.scanners.foundry_fork.enabled
             and self.config.smart_contracts.enabled
             and self.config.smart_contracts.repository_suite.foundry_include_paths
             and self.config.smart_contracts.repository_suite.foundry_include_tests
@@ -2158,7 +2181,12 @@ class AuditPipeline:
         )
         write_json(
             run_dir / "language-capability.json",
-            build_language_capability_artifact(language_capability, unfiltered_discovery),
+            build_language_capability_artifact(
+                language_capability,
+                unfiltered_discovery,
+                effective_ignore_rules=retained_ignore_rules,
+                runtime_output_exclusion_root=runtime_output_exclusion_root,
+            ),
         )
         if language_capability.status in {
             LanguageCapabilityStatus.MISMATCH,
@@ -2443,12 +2471,23 @@ class AuditPipeline:
                 solidity_graphs,
                 self.config.invariants,
             )
-            economic_simulations = plan_economic_simulations(
-                solidity_invariants,
-                solidity_graphs,
+            economic_simulations = (
+                plan_economic_simulations(
+                    solidity_invariants,
+                    solidity_graphs,
+                )
+                if language_capability.evm_portfolio_applicable
+                else []
             )
-            invariant_harnesses = list(self.config.invariants.harnesses)
-            if self.config.invariants.generate_foundry_templates:
+            invariant_harnesses = (
+                list(self.config.invariants.harnesses)
+                if language_capability.evm_portfolio_applicable
+                else []
+            )
+            if (
+                language_capability.evm_portfolio_applicable
+                and self.config.invariants.generate_foundry_templates
+            ):
                 generated = generate_invariant_harnesses(
                     solidity_invariants,
                     solidity_index,
@@ -2532,7 +2571,8 @@ class AuditPipeline:
                 )
                 terminal_code = ExitCode.INCOMPLETE
         if (
-            self.config.formal.enabled
+            language_capability.evm_portfolio_applicable
+            and self.config.formal.enabled
             and not preflight_blocked
             and solidity_index is not None
             and solidity_invariants is not None
@@ -2659,6 +2699,7 @@ class AuditPipeline:
                     terminal_code = ExitCode.INCOMPLETE
         if (
             scanner_source_inventory_valid
+            and language_capability.evm_portfolio_applicable
             and self.config.smart_contracts.repository_suite.fork_matrix_states
         ):
             repository_suite_differential = await self._execute_repository_fork_matrix(
@@ -2723,17 +2764,26 @@ class AuditPipeline:
         if required_scanner_failures:
             incomplete.extend(required_scanner_failures)
             terminal_code = ExitCode.SCANNER_FAILURE
-        solidity_coverage = build_solidity_coverage(
-            discovery=discovery,
-            projects=solidity_projects,
-            compilations=solidity_compilations,
-            index=solidity_index,
-            graphs=solidity_graphs,
-            scanner_runs=scanner_runs,
-            invariants=solidity_invariants,
-            economic_simulations=economic_simulations,
-            formal_runs=formal_runs,
-            expected_repository_sha256=repository_execution_sha256,
+        solidity_coverage = (
+            build_solidity_coverage(
+                discovery=discovery,
+                projects=solidity_projects,
+                compilations=solidity_compilations,
+                index=solidity_index,
+                graphs=solidity_graphs,
+                scanner_runs=scanner_runs,
+                invariants=solidity_invariants,
+                economic_simulations=economic_simulations,
+                formal_runs=formal_runs,
+                expected_repository_sha256=repository_execution_sha256,
+            )
+            if language_capability.evm_portfolio_applicable
+            else SolidityCoverage(
+                context_limitations=[
+                    "Solidity/EVM coverage is not applicable because the EVM portfolio "
+                    "was not achieved."
+                ]
+            )
         )
         write_json(
             run_dir / "solidity-coverage.json",
@@ -2744,15 +2794,19 @@ class AuditPipeline:
         )
 
         fork_acknowledged = self.config.smart_contracts.allow_fork_probing or allow_fork_probing
-        invariant_executions = await self._execute_invariant_harnesses(
-            discovery=discovery,
-            projects=solidity_projects,
-            index=solidity_index,
-            suite=solidity_invariants,
-            economic_simulations=economic_simulations,
-            harnesses=invariant_harnesses,
-            run_dir=run_dir,
-            fork_acknowledged=fork_acknowledged,
+        invariant_executions = (
+            await self._execute_invariant_harnesses(
+                discovery=discovery,
+                projects=solidity_projects,
+                index=solidity_index,
+                suite=solidity_invariants,
+                economic_simulations=economic_simulations,
+                harnesses=invariant_harnesses,
+                run_dir=run_dir,
+                fork_acknowledged=fork_acknowledged,
+            )
+            if language_capability.evm_portfolio_applicable
+            else []
         )
         write_json(
             run_dir / "invariant-execution-results.json",
@@ -4448,6 +4502,7 @@ class AuditPipeline:
             if (
                 not scheduler_halted
                 and not budget_halted
+                and language_capability.evm_portfolio_applicable
                 and self.config.profile in {AuditProfile.DEEP, AuditProfile.MAXIMUM_ASSURANCE}
                 and "invariant_review" in self.config.models.specialists
             ):
@@ -6649,7 +6704,7 @@ class AuditPipeline:
         if not unchanged:
             incomplete.append("audited source changed during the run")
             terminal_code = ExitCode.SCANNER_FAILURE
-        if solidity_coverage is not None:
+        if solidity_coverage is not None and language_capability.evm_portfolio_applicable:
             solidity_coverage = with_invariant_review_coverage(
                 solidity_coverage,
                 invariant_review,
@@ -6695,7 +6750,7 @@ class AuditPipeline:
             audited_suite_coverage=solidity_coverage.audited_suite_coverage,
             source_contents_by_path=solidity_source_contents_by_path,
         )
-        if solidity_coverage is not None:
+        if solidity_coverage is not None and language_capability.evm_portfolio_applicable:
             solidity_coverage = with_model_review_coverage(
                 solidity_coverage,
                 solidity_index,
@@ -7029,7 +7084,7 @@ class AuditPipeline:
             audited_suite_coverage=solidity_coverage.audited_suite_coverage,
             source_contents_by_path=solidity_source_contents_by_path,
         )
-        if solidity_coverage is not None:
+        if solidity_coverage is not None and language_capability.evm_portfolio_applicable:
             solidity_coverage = with_model_review_coverage(
                 solidity_coverage,
                 solidity_index,
@@ -7081,7 +7136,7 @@ class AuditPipeline:
                 or specialist_role in successful_specialist_roles
             )
         }
-        if solidity_coverage is not None:
+        if solidity_coverage is not None and language_capability.evm_portfolio_applicable:
             high_critical_candidate_ids = {
                 candidate.candidate_id for candidate in assurance_high_critical_candidates
             }
@@ -7352,6 +7407,7 @@ class AuditPipeline:
             or (maximum_downgrade_authorized and lower_profile_surface_gate.passed)
         )
         model_review_applicable = not scanner_only
+        incomplete = canonicalize_runtime_messages(incomplete)
         minimum_analysis_floor = assess_minimum_analysis_floor(
             repository=repository_map,
             compilations=solidity_compilations,
@@ -7359,9 +7415,17 @@ class AuditPipeline:
             usage=model_credit_usage,
             required_model_roles=(ANALYSIS_ROLES if model_review_applicable else ()),
             coverage_metrics=(
-                deterministic_ci_coverage_metrics(solidity_coverage.quality_metrics)
-                if ci_mode and solidity_coverage is not None
-                else (solidity_coverage.quality_metrics if solidity_coverage is not None else {})
+                (
+                    deterministic_ci_coverage_metrics(solidity_coverage.quality_metrics)
+                    if ci_mode
+                    else solidity_coverage.quality_metrics
+                )
+                if language_capability.evm_portfolio_applicable and solidity_coverage is not None
+                else generic_source_coverage_metrics(
+                    repository_map,
+                    scanner_runs,
+                    require_scanner_completion=scanner_only,
+                )
             ),
             solidity_applicable=bool(solidity_projects),
             static_analysis_applicable=bool(solidity_projects) or scanner_only,
@@ -7575,6 +7639,7 @@ class AuditPipeline:
                 completed=minimum_analysis_floor.run_status is AuditRunStatus.COMPLETE,
                 quality_gates=quality_gates,
                 limitations=list(dict.fromkeys(incomplete)),
+                language_capability=report.language_capability,
             ),
             minimum_analysis_floor=minimum_analysis_floor,
             maximum_assurance=maximum_assurance,
@@ -7596,11 +7661,11 @@ class AuditPipeline:
             threat_location_rejections=threat_location_rejections,
             solidity_index=solidity_index,
             solidity_graphs=solidity_graphs,
-            solidity_invariants=solidity_invariants,
-            invariant_review=invariant_review,
-            invariant_executions=invariant_executions,
-            formal_runs=formal_runs,
-            solidity_coverage=solidity_coverage,
+            solidity_invariants=report.invariants,
+            invariant_review=report.invariant_review,
+            invariant_executions=report.invariant_executions,
+            formal_runs=report.formal_runs,
+            solidity_coverage=report.solidity_coverage,
             model_review_coverage=model_review_coverage,
             scope_assessment=scope_assessment,
             prior_audit_comparison=prior_audit_comparison,
@@ -8122,8 +8187,12 @@ class AuditPipeline:
             cross_examination_decisions=cross_examinations,
             falsification_decisions=falsifications.decisions,
             reproductions=reproductions,
-            invariants=solidity_invariants,
-            invariant_review=invariant_review,
+            invariants=(
+                solidity_invariants if language_capability.evm_portfolio_applicable else None
+            ),
+            invariant_review=(
+                invariant_review if language_capability.evm_portfolio_applicable else None
+            ),
             invariant_executions=invariant_executions,
             execution_origin_dispositions=list(execution_candidate_build.dispositions),
             economic_simulations=economic_simulations,

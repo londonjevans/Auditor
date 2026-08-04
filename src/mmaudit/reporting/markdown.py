@@ -730,6 +730,9 @@ def render_markdown(
     )
     solidity_compilation = solidity.get("compilation", []) if isinstance(solidity, dict) else []
     run_status = projection.run_status
+    unverified_legacy_assurance = (
+        report.language_capability is None and report.maximum_assurance is not None
+    )
     incomplete_empty_run = not report.findings and run_status in {
         AuditRunStatus.DEGRADED,
         AuditRunStatus.INCOMPLETE,
@@ -783,30 +786,52 @@ def render_markdown(
     ]
     if report.maximum_assurance is not None:
         assurance = report.maximum_assurance
-        lines.extend(
-            [
-                f"Maximum-assurance contract status: **{_text(assurance.status.value)}**.",
-                "",
-            ]
-        )
-        if assurance.status is not MaximumAssuranceStatus.COMPLETE and (
-            assurance.requested or assurance.required
-        ):
+        if unverified_legacy_assurance:
             failure_reasons = list(assurance.downgrade_reasons) or [
-                requirement.detail
-                for requirement in assurance.requirements
-                if requirement.required and not requirement.passed
+                "typed language-capability evidence is absent from this legacy report"
             ]
             lines.extend(
                 [
-                    "> **ASSURANCE NOT ACHIEVED:** this run did not satisfy the "
-                    "Solidity/EVM maximum-assurance contract and must not be represented as "
-                    "maximum assurance.",
+                    "Maximum-assurance evidence status: **UNVERIFIED LEGACY RECORD**.",
+                    "",
+                    "Recorded legacy contract status (not an achieved claim): "
+                    f"**{_text(assurance.status.value)}**.",
+                    "",
+                    f"Effective report status: **{_text(projection.run_status.value)}**.",
+                    "",
+                    "> **ASSURANCE NOT ACHIEVED:** the recorded legacy contract result lacks "
+                    "typed language-capability evidence and cannot establish Solidity/EVM "
+                    "maximum assurance; it must not be represented as maximum assurance.",
                     "",
                     *[f"- {_text(reason)}" for reason in failure_reasons],
                     "",
                 ]
             )
+        else:
+            lines.extend(
+                [
+                    f"Maximum-assurance contract status: **{_text(assurance.status.value)}**.",
+                    "",
+                ]
+            )
+            if assurance.status is not MaximumAssuranceStatus.COMPLETE and (
+                assurance.requested or assurance.required
+            ):
+                failure_reasons = list(assurance.downgrade_reasons) or [
+                    requirement.detail
+                    for requirement in assurance.requirements
+                    if requirement.required and not requirement.passed
+                ]
+                lines.extend(
+                    [
+                        "> **ASSURANCE NOT ACHIEVED:** this run did not satisfy the "
+                        "Solidity/EVM maximum-assurance contract and must not be represented as "
+                        "maximum assurance.",
+                        "",
+                        *[f"- {_text(reason)}" for reason in failure_reasons],
+                        "",
+                    ]
+                )
     if not projection.completed:
         lines.extend(
             [
@@ -1235,8 +1260,21 @@ def render_markdown(
     if report.maximum_assurance is not None and report.maximum_assurance.requirements:
         lines.extend(
             [
-                "## Maximum-assurance contract",
+                (
+                    "## Unverified legacy maximum-assurance evidence"
+                    if unverified_legacy_assurance
+                    else "## Maximum-assurance contract"
+                ),
                 "",
+                *(
+                    [
+                        "The rows below preserve the recorded legacy evidence only. They do not "
+                        "override the effective incomplete status or establish achieved assurance.",
+                        "",
+                    ]
+                    if unverified_legacy_assurance
+                    else []
+                ),
                 "| Engine | Required | State | Passed | Detail |",
                 "| --- | --- | --- | --- | --- |",
             ]

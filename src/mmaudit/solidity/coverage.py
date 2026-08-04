@@ -56,6 +56,7 @@ from mmaudit.models.schemas import (
     SolidityProjectMetadata,
     SoliditySymbolIndex,
 )
+from mmaudit.orchestration.coverage import scanner_completion_coverage_metric
 from mmaudit.repository.chunking import line_range_hash
 from mmaudit.repository.discovery import DiscoveryResult
 from mmaudit.scanners.runtime_evidence import (
@@ -103,32 +104,6 @@ class _AuditedFunctionPopulation:
     exclusions: tuple[CoverageExclusion, ...]
     classification_complete: bool
     limitations: tuple[str, ...]
-
-
-def _scanner_completion_failure(run: ScannerRun) -> str | None:
-    """Return why one requested scanner lacks qualifying deterministic runtime evidence."""
-
-    if run.status is not ScannerStatus.SUCCESS:
-        return f"scanner status {run.status.value}"
-    if run.execution_evidence is not ExecutionEvidenceKind.REAL:
-        return f"execution evidence is {run.execution_evidence.value}, not real"
-    if not run.machine_output_validated:
-        return "machine output was not strictly validated"
-    if (
-        not run.version
-        or run.executable_sha256 is None
-        or not run.command
-        or run.raw_output_path is None
-        or run.raw_output_sha256 is None
-        or run.raw_output_bytes <= 0
-        or run.process_exit_code is None
-        or run.isolation_backend is None
-        or run.isolation_attestation_sha256 is None
-    ):
-        return "runtime evidence is incomplete"
-    if not run.execution_observation_sha256_is_valid():
-        return "execution observation digest is absent or invalid"
-    return None
 
 
 def partition_audited_source_entities(
@@ -853,36 +828,6 @@ def build_solidity_coverage(
     ]
     asset_flow_summary = summarize_asset_flows(graphs)
     control_dependency_summary = summarize_control_dependencies(graphs)
-    excluded_scanner_statuses = {
-        ScannerStatus.SKIPPED,
-        ScannerStatus.NOT_APPLICABLE,
-    }
-    requested_scanners = [
-        run for run in scanner_runs if run.status not in excluded_scanner_statuses
-    ]
-    successful_scanners = [
-        run for run in requested_scanners if _scanner_completion_failure(run) is None
-    ]
-    scanner_exclusions = [
-        CoverageExclusion(
-            subject=f"{run.scanner}[{position}]",
-            reason=(
-                run.error
-                or (
-                    "scanner was not applicable to the audited scope"
-                    if run.status is ScannerStatus.NOT_APPLICABLE
-                    else "scanner was explicitly skipped"
-                )
-            ),
-            provenance=(
-                CoverageProvenance.DISCOVERY
-                if run.status is ScannerStatus.NOT_APPLICABLE
-                else CoverageProvenance.CONFIGURATION
-            ),
-        )
-        for position, run in enumerate(scanner_runs)
-        if run.status in excluded_scanner_statuses
-    ]
     dependency_exclusions = [
         CoverageExclusion(
             subject=project_root,
@@ -1230,33 +1175,7 @@ def build_solidity_coverage(
                 ["invariant suite was not produced"] if invariants is None else invariant_failures
             ),
         ),
-        "scanner_completion": _metric(
-            len(successful_scanners),
-            len(requested_scanners),
-            (AnalysisState.SCANNER_SUPPORTED if requested_scanners else AnalysisState.NOT_ANALYZED),
-            "Requested deterministic scanners that completed successfully",
-            population=len(scanner_runs),
-            exclusions=scanner_exclusions,
-            not_applicable_evidence=(
-                ["all inventoried scanners were explicitly skipped or not applicable"]
-                if scanner_runs and not requested_scanners
-                else []
-            ),
-            confidence=1,
-            provenance=[
-                CoverageProvenance.CONFIGURATION,
-                CoverageProvenance.STATIC_TOOL,
-            ],
-            failures=(
-                [
-                    f"{run.scanner}: {failure}"
-                    for run in requested_scanners
-                    if (failure := _scanner_completion_failure(run)) is not None
-                ]
-                if requested_scanners
-                else (["scanner inventory was not produced"] if not scanner_runs else [])
-            ),
-        ),
+        "scanner_completion": scanner_completion_coverage_metric(scanner_runs),
         "compilation_completion": _metric(
             compilation_successes,
             len(project_roots),

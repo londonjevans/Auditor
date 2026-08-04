@@ -48,6 +48,7 @@ from mmaudit.models.schemas import (
     AuditReport,
     ContextRequestEvidence,
     ExecutionEvidenceKind,
+    LanguageCapabilityProfile,
     ModelRequestValidationStatus,
     RepositoryFile,
     UsageRecord,
@@ -90,7 +91,11 @@ from tests.scheduler_support import (
     build_scheduler_test_model_payload,
     scheduler_test_response_schema_sha256,
 )
-from tests.unit.test_manifest import _report, _write_required_artifacts
+from tests.unit.test_manifest import (
+    _report,
+    _with_repository_capability,
+    _write_required_artifacts,
+)
 
 
 def _analysis_inventory() -> SchedulerAnalysisInputInventory:
@@ -552,7 +557,7 @@ def _non_solidity_report(config):
             ],
         }
     )
-    return report.model_copy(update={"repository": repository})
+    return _with_repository_capability(report, repository, config)
 
 
 def _with_scheduler(report, artifact: SchedulerArtifact):
@@ -1156,6 +1161,7 @@ def test_scheduler_reconstructs_exact_mixed_semantic_and_repository_inventory(
         _write_shard_artifacts,
     )
 
+    config = config_factory(language_profile=LanguageCapabilityProfile.SOLIDITY_EVM)
     inputs = _shard_inputs(tmp_path, config_factory)
     semantic_inventory = _inventory(inputs)
     repository = build_repository_map(inputs.discovery)
@@ -1170,6 +1176,7 @@ def test_scheduler_reconstructs_exact_mixed_semantic_and_repository_inventory(
         graphs=inputs.graphs,
         inventory=semantic_inventory,
     )
+    report = _with_repository_capability(report, repository, config)
     artifact, _request = _scheduler_artifact(
         report,
         shard_inventory=exact_inventory,
@@ -1299,9 +1306,8 @@ def test_verify_run_is_stale_after_scheduler_artifact_tampering(
             "sha256": hashlib.sha256(source_contents).hexdigest(),
         }
     )
-    report = report.model_copy(
-        update={"repository": report.repository.model_copy(update={"files": [source_file]})}
-    )
+    repository_map = report.repository.model_copy(update={"files": [source_file]})
+    report = _with_repository_capability(report, repository_map, config)
     artifact, _request = _scheduler_artifact(
         report,
         config=config,
@@ -1349,9 +1355,8 @@ def test_verify_run_cli_fails_closed_after_scheduler_artifact_tampering(
             "sha256": hashlib.sha256(source_contents).hexdigest(),
         }
     )
-    report = report.model_copy(
-        update={"repository": report.repository.model_copy(update={"files": [source_file]})}
-    )
+    repository_map = report.repository.model_copy(update={"files": [source_file]})
+    report = _with_repository_capability(report, repository_map, config)
     artifact, _request = _scheduler_artifact(
         report,
         config=config,

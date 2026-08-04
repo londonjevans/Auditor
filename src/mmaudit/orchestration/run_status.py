@@ -51,10 +51,10 @@ def assess_minimum_analysis_floor(
 ) -> MinimumAnalysisFloor:
     """Derive the terminal status from qualifying runtime evidence only."""
 
-    scanner_names = _canonical_text(applicable_static_scanner_names)
-    roles_required = _canonical_text(required_model_roles)
-    surface_reasons = _canonical_text(surface_feasibility_reasons)
-    orchestration_errors = _canonical_text(orchestration_failures)
+    scanner_names = canonicalize_runtime_messages(applicable_static_scanner_names)
+    roles_required = canonicalize_runtime_messages(required_model_roles)
+    surface_reasons = canonicalize_runtime_messages(surface_feasibility_reasons)
+    orchestration_errors = canonicalize_runtime_messages(orchestration_failures)
     downgrade_reason = (
         explicit_downgrade_reason.strip() if explicit_downgrade_reason is not None else None
     )
@@ -256,5 +256,16 @@ def _is_applicable_source_file(path: str, language: str, solidity_applicable: bo
     return bool(path and language)
 
 
-def _canonical_text(values: Collection[str] | Sequence[str]) -> list[str]:
-    return sorted({value.strip() for value in values if value.strip()})
+def canonicalize_runtime_messages(values: Collection[str] | Sequence[str]) -> list[str]:
+    """Return deterministic bounded single-line evidence safe for public status artifacts."""
+
+    normalized: set[str] = set()
+    for value in values:
+        printable = "".join(
+            " " if ord(character) < 32 or ord(character) == 127 else character
+            for character in value
+        )
+        bounded = " ".join(printable.split())[:2_000].rstrip()
+        if bounded:
+            normalized.add(bounded)
+    return sorted(normalized)

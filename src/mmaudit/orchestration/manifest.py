@@ -163,6 +163,8 @@ from mmaudit.repository.secrets import is_sensitive_workspace_name, is_sensitive
 from mmaudit.scanners.base import ScannerWorkspaceTextRecord, observe_scanner_workspace_texts
 from mmaudit.scanners.normalization import validate_real_scanner_normalization_replay
 from mmaudit.scanners.projection import project_scanner_finding
+from mmaudit.solidity.formal import compare_dynamic_engine_outcomes
+from mmaudit.solidity.properties import build_property_corpus
 from mmaudit.solidity.sharding import (
     verify_solidity_shard_projection,
     verify_solidity_shard_repository_projection,
@@ -310,8 +312,7 @@ class RunConfigurationBinding(StrictModel):
         ):
             raise ValueError("run cannot claim an unrequested achieved language profile")
         expected_reduced = (
-            self.achieved_language_profile
-            is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
+            self.achieved_language_profile is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
         )
         if self.reduced_language_capability != expected_reduced:
             raise ValueError("run reduced language capability is inconsistent")
@@ -319,9 +320,7 @@ class RunConfigurationBinding(StrictModel):
             self.achieved_language_profile is not LanguageCapabilityProfile.SOLIDITY_EVM
             or self.reduced_language_capability
         ):
-            raise ValueError(
-                "achieved maximum assurance requires achieved Solidity/EVM capability"
-            )
+            raise ValueError("achieved maximum assurance requires achieved Solidity/EVM capability")
         expected_invocation = canonical_sha256(
             {
                 "environment_overrides_sha256": self.environment_overrides_sha256,
@@ -675,9 +674,7 @@ def _build_run_evidence_manifest(
     solidity_coverage = _read_json_artifact(root, "solidity-coverage.json")
     model_coverage = _read_json_artifact(root, "model-review-coverage.json")
     scope_assessment = _read_json_artifact(root, "scope-assessment.json")
-    language_artifact_present = (
-        root / LANGUAGE_CAPABILITY_ARTIFACT_PATH
-    ).is_file()
+    language_artifact_present = (root / LANGUAGE_CAPABILITY_ARTIFACT_PATH).is_file()
     if report_bundle_required:
         _validate_language_capability_artifact(root, report)
     elif language_artifact_present or report.language_capability is not None:
@@ -1163,13 +1160,19 @@ def _validate_report_bundle_artifacts(
         raise ValueError("client/forensic report bundle is incomplete: " + ", ".join(missing))
 
     raw_findings = _read_json_artifact(root, "findings.json")
-    if current_model_execution_required and raw_findings.get("schema_version") != "1.1":
+    if current_model_execution_required and raw_findings.get("schema_version") != "1.2":
         raise ValueError("current manifest requires current typed findings custody")
+    if (
+        raw_findings.get("schema_version") == "1.2"
+        and raw_findings.get("language_capability") is None
+    ):
+        raise ValueError("findings.json differs from the final report")
     findings = FindingsArtifact.model_validate(raw_findings)
     expected_findings = build_findings_artifact(
         report,
         candidates=candidates,
         reproduction_resolutions=reproduction_resolutions,
+        schema_version=findings.schema_version,
     )
     findings_without_excerpts = findings.model_copy(
         update={
@@ -1221,10 +1224,14 @@ def _validate_report_bundle_artifacts(
     coverage = CoverageArtifact.model_validate(_read_json_artifact(root, "coverage.json"))
     if coverage != build_coverage_artifact(report):
         raise ValueError("coverage.json differs from the final report")
-    model_execution = ModelExecutionArtifact.model_validate(
-        _read_json_artifact(root, "model-execution.json")
-    )
-    if current_model_execution_required and model_execution.schema_version != "1.1":
+    raw_model_execution = _read_json_artifact(root, "model-execution.json")
+    if (
+        raw_model_execution.get("schema_version") == "1.2"
+        and raw_model_execution.get("language_capability") is None
+    ):
+        raise ValueError("model-execution.json differs from the final report")
+    model_execution = ModelExecutionArtifact.model_validate(raw_model_execution)
+    if current_model_execution_required and model_execution.schema_version != "1.2":
         raise ValueError("current manifest requires current typed model-execution custody")
     if (
         current_model_execution_required
@@ -1244,7 +1251,7 @@ def _validate_report_bundle_artifacts(
             if isinstance(model_execution.cost_ledger, CostLedgerAbsenceEvidence)
             else False
         ),
-        legacy_schema_1_0=model_execution.schema_version == "1.0",
+        schema_version=model_execution.schema_version,
     )
     if model_execution != expected_model_execution:
         raise ValueError("model-execution.json differs from the final report")
@@ -1325,7 +1332,7 @@ def _validate_model_execution_cost_ledger_custody(
     model_execution = ModelExecutionArtifact.model_validate(
         _read_json_artifact(root, "model-execution.json")
     )
-    if current_model_execution_required and model_execution.schema_version != "1.1":
+    if current_model_execution_required and model_execution.schema_version != "1.2":
         raise ValueError("current manifest requires current typed model-execution custody")
     evidence = model_execution.cost_ledger
     baseline = (
@@ -1913,6 +1920,48 @@ def _validate_report_artifact_consistency(
     scanner_results = _read_json_artifact(root, "scanner-results.json")
     if scanner_results.get("runs") != [run.model_dump(mode="json") for run in report.scanner_runs]:
         raise ValueError("scanner-results.json differs from the final report")
+    if report.schema_version == "1.2":
+        solidity_metadata = report.metadata.get("solidity")
+        if not isinstance(solidity_metadata, dict):
+            raise ValueError("current report lacks typed Solidity runtime metadata")
+        projects = _read_json_artifact(root, "solidity-projects.json")
+        if projects.get("projects") != solidity_metadata.get("projects"):
+            raise ValueError("solidity-projects.json differs from the final report")
+        compilation = _read_json_artifact(root, "solidity-compilation.json")
+        if compilation.get("results") != solidity_metadata.get("compilation"):
+            raise ValueError("solidity-compilation.json differs from the final report")
+        formal_results = _read_json_artifact(root, "formal-results.json")
+        if formal_results.get("runs") != [
+            run.model_dump(mode="json") for run in report.formal_runs
+        ]:
+            raise ValueError("formal-results.json differs from the final report")
+        expected_dynamic_comparisons = [
+            comparison.model_dump(mode="json")
+            for comparison in compare_dynamic_engine_outcomes(report.formal_runs)
+        ]
+        if formal_results.get("dynamic_engine_comparisons") != expected_dynamic_comparisons:
+            raise ValueError(
+                "formal-results.json dynamic engine comparisons differ from formal runs"
+            )
+        invariant_review = _read_json_artifact(root, "invariant-review.json")
+        serialized_invariant_review = (
+            report.invariant_review.model_dump(mode="json")
+            if report.invariant_review is not None
+            else None
+        )
+        if invariant_review.get("review") != serialized_invariant_review:
+            raise ValueError("invariant-review.json differs from the final report")
+        economic_plan = _read_json_artifact(root, "economic-simulation-plan.json")
+        if economic_plan.get("templates") != [
+            plan.model_dump(mode="json") for plan in report.economic_simulations
+        ]:
+            raise ValueError("economic-simulation-plan.json differs from the final report")
+        if (
+            report.language_capability is not None
+            and not report.language_capability.evm_portfolio_applicable
+            and formal_results.get("dynamic_engine_comparisons")
+        ):
+            raise ValueError("non-EVM report retains formal engine comparison evidence")
     replay_authorized_scanner_fingerprints: frozenset[str] = frozenset()
     if report_bundle_required:
         verification_results = _read_json_artifact(root, "verification-results.json")
@@ -2038,6 +2087,17 @@ def _validate_report_artifact_consistency(
             or not isinstance(raw_corpus, dict)
         ):
             raise ValueError("emitted invariant runtime artifacts differ or are incomplete")
+        if (
+            report.language_capability is not None
+            and not report.language_capability.evm_portfolio_applicable
+            and (
+                raw_planned_harnesses
+                or raw_execution_harnesses
+                or raw_results
+                or raw_corpus.get("properties")
+            )
+        ):
+            raise ValueError("non-EVM report retains invariant or property execution evidence")
         planned_harnesses = [
             FoundryInvariantHarnessSpec.model_validate(item) for item in raw_planned_harnesses
         ]
@@ -2065,7 +2125,57 @@ def _validate_report_artifact_consistency(
             raise ValueError(
                 "invariant-execution-results.json differs from the final report runtime evidence"
             )
+        results_by_key = {
+            (result.invariant_id, result.harness_name): result for result in typed_results
+        }
+        if len(results_by_key) != len(typed_results) or set(results_by_key) != set(planned_by_key):
+            raise ValueError("invariant execution result inventory differs from its harness plan")
+        for key, harness in {
+            (item.invariant_id, item.name): item for item in planned_harnesses
+        }.items():
+            result = results_by_key[key]
+            if (
+                result.harness_spec_sha256 != harness.specification_sha256()
+                or result.runs != harness.runs
+                or result.depth != harness.depth
+                or result.seed != harness.seed
+                or result.economic_template is not harness.economic_template
+                or result.required_transaction_ordering is not harness.required_transaction_ordering
+            ):
+                raise ValueError(
+                    "invariant execution result differs from its exact harness specification"
+                )
         typed_corpus = PropertyCorpus.model_validate(raw_corpus)
+        index_artifact = SolidityIndexArtifact.model_validate(
+            _read_json_artifact(root, "solidity-index.json")
+        )
+        evm_portfolio_applicable = bool(
+            report.language_capability is not None
+            and report.language_capability.evm_portfolio_applicable
+        )
+        if evm_portfolio_applicable:
+            expected_corpus = build_property_corpus(
+                report.invariants,
+                index_artifact.index,
+                planned_harnesses,
+            )
+            if typed_corpus != expected_corpus:
+                raise ValueError(
+                    "property-corpus.json differs from the invariant suite, index, and harness plan"
+                )
+        elif typed_corpus.properties or typed_corpus.limitations:
+            raise ValueError("non-EVM property corpus must be the canonical empty corpus")
+        solidity_metadata = report.metadata.get("solidity")
+        expected_corpus_summary = {
+            "properties": len(typed_corpus.properties),
+            "limitations": len(typed_corpus.limitations),
+            "corpus_hash": typed_corpus.corpus_hash,
+        }
+        if (
+            not isinstance(solidity_metadata, dict)
+            or solidity_metadata.get("property_corpus_summary") != expected_corpus_summary
+        ):
+            raise ValueError("property corpus report summary differs from its typed artifact")
         for candidate in candidates:
             if candidate.origin_kind is not CandidateOriginKind.DETERMINISTIC_EXECUTION:
                 continue
@@ -2185,7 +2295,16 @@ def _validate_repository_differential_configuration(
 
     suite = config.smart_contracts.repository_suite
     differential = report.repository_suite_differential
-    configured = bool(suite.fork_matrix_states)
+    report_capability_allows_evm = (
+        report.language_capability.evm_portfolio_applicable
+        if report.language_capability is not None
+        else report.schema_version != "1.2"
+    )
+    configured = bool(
+        config.language_profile is LanguageCapabilityProfile.SOLIDITY_EVM
+        and report_capability_allows_evm
+        and suite.fork_matrix_states
+    )
     if configured != (differential is not None):
         raise ValueError(
             "repository differential result presence differs from effective configuration"
@@ -4484,15 +4603,9 @@ def _validate_language_capability_artifact(
             or capability_file.lines != report_file.lines
             or capability_file.language != report_file.language
         ):
-            raise ValueError(
-                "final report source differs from the language capability inventory"
-            )
-    if (
-        artifact.assessment.status is LanguageCapabilityStatus.MATCHED
-        and not any(
-            capability_by_path[item.path].language == "Solidity"
-            for item in report.repository.files
-        )
+            raise ValueError("final report source differs from the language capability inventory")
+    if artifact.assessment.status is LanguageCapabilityStatus.MATCHED and not any(
+        capability_by_path[item.path].language == "Solidity" for item in report.repository.files
     ):
         raise ValueError("matched Solidity/EVM capability lacks an audited Solidity source")
     return artifact

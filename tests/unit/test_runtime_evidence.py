@@ -404,7 +404,10 @@ async def _synthetic_runner_authority(
 
     authority = _install_synthetic_runtime_authority(monkeypatch)
     authority.result = run
-    config = config_factory(scanners={"foundry_fork": {"enabled": True, "required": False}})
+    config = config_factory(
+        language_profile="solidity-evm",
+        scanners={"foundry_fork": {"enabled": True, "required": False}},
+    )
     runner = ScannerRunner(
         config,
         adapters={"foundry_fork": FoundryForkScanner(config.smart_contracts)},
@@ -526,7 +529,10 @@ async def test_rebinding_foundry_run_cannot_mint_runtime_authority(
         "isolation_attestation_sha256",
         rebound_attestation,
     )
-    config = config_factory(scanners={"foundry_fork": {"enabled": True, "required": False}})
+    config = config_factory(
+        language_profile="solidity-evm",
+        scanners={"foundry_fork": {"enabled": True, "required": False}},
+    )
     runner = ScannerRunner(
         config,
         adapters={"foundry_fork": FoundryForkScanner(config.smart_contracts)},
@@ -656,7 +662,10 @@ async def test_exact_foundry_result_without_live_sealed_backend_has_no_authority
     tmp_path: Path,
     config_factory: Callable[..., AuditConfig],
 ) -> None:
-    config = config_factory(scanners={"foundry_fork": {"enabled": True, "required": False}})
+    config = config_factory(
+        language_profile="solidity-evm",
+        scanners={"foundry_fork": {"enabled": True, "required": False}},
+    )
     runner = ScannerRunner(
         config,
         adapters={"foundry_fork": FoundryForkScanner(config.smart_contracts)},
@@ -680,7 +689,10 @@ async def test_scanner_runner_rejects_named_impostor_adapter_authority(
     config_factory: Callable[..., AuditConfig],
 ) -> None:
     self_authored = _repository_suite_run()
-    config = config_factory(scanners={"foundry_fork": {"enabled": True, "required": False}})
+    config = config_factory(
+        language_profile="solidity-evm",
+        scanners={"foundry_fork": {"enabled": True, "required": False}},
+    )
     runner = ScannerRunner(
         config,
         adapters={"foundry_fork": _ImpostorFoundryAdapter(self_authored)},
@@ -707,7 +719,10 @@ async def test_scanner_runner_rejects_excluded_audited_source_before_adapter_tas
     source.parent.mkdir()
     source.write_text("contract ExplicitlyAudited {}\n", encoding="utf-8")
     adapter = _ImpostorFoundryAdapter(_repository_suite_run())
-    config = config_factory(scanners={"foundry_fork": {"enabled": True, "required": False}})
+    config = config_factory(
+        language_profile="solidity-evm",
+        scanners={"foundry_fork": {"enabled": True, "required": False}},
+    )
     runner = ScannerRunner(
         config,
         adapters={"foundry_fork": adapter},

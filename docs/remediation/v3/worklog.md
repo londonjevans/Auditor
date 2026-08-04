@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED
+AUTORUN_STATUS: RUNNING
 CURRENT_MILESTONE: Honest Solidity/EVM product profile
-CURRENT_TICKET: V3-SCOPE-001 (IN_PROGRESS)
-LAST_COMPLETED_TICKET: V3-REPORT-001 (COMPLETE)
-NEXT_ACTION: Resume V3-SCOPE-001 by inspecting the new language-capability source revalidation helper, add its drift regression plus ManifestSetSubject language-state coherence, repair the remaining current-schema fixtures, regenerate schemas, then run focused language/report/manifest/release/assurance matrices before broader validation.
-LAST_COMMAND: `git status --short --branch && .venv/bin/python -m py_compile src/mmaudit/orchestration/verification.py src/mmaudit/repository/discovery.py`; process check for pytest/mypy/Ruff/mmaudit/schema generation
-LAST_RESULT: PASS — the latest source-revalidation slice compiled, the worktree contains only the preserved V3-SCOPE-001 WIP, all review agents are complete, and no matching validation or product process remains running. Ticket acceptance and broad validation remain pending.
+CURRENT_TICKET: V3-SCOPE-001 (COMPLETE; checkpoint pending)
+LAST_COMPLETED_TICKET: V3-SCOPE-001 (COMPLETE)
+NEXT_ACTION: Create and push the isolated V3-SCOPE-001 checkpoint via SSH, then immediately mark V3-TOOLDIAG-002 gap 1 IN_PROGRESS and provision Slither's pinned compiler inside the isolation boundary.
+LAST_COMMAND: `.venv/bin/pytest -q`; final `git diff --check`, changed-file secret-pattern, sensitive-filename, generated-artifact, and independent diff reviews.
+LAST_RESULT: PASS — 4846 passed, 11 explicit prerequisite skips in 1635.54s; final integrity/secret/artifact scans and independent closure review passed with no blocker.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -20,6 +20,547 @@ OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
 LAST_CHECKPOINT_COMMIT: b39c8b843390e93039a5f178581fb02b17f0ec2b
+
+## 2026-08-04T13:12:13Z — V3-SCOPE-001 COMPLETE
+
+- The terminal post-correction suite passed: `4846 passed, 11 skipped in 1635.54s`. Skips remain
+  explicit, unavailable prerequisites and earned no real-integration or maximum-assurance credit.
+- Independent closure review confirmed the language/profile boundary, generic coverage custody,
+  current/legacy artifact contracts, and manifest cross-leaf validation fail closed with no
+  release-blocking regression.
+- `git diff --check` passed. Changed tracked and untracked source contained no configured secret
+  pattern; changed paths contained no sensitive filename; the only untracked file is the intended
+  typed language-neutral coverage module. No generated junk was found.
+- V3-SCOPE-001 is complete. Its isolated checkpoint and SSH push are next, followed immediately by
+  V3-TOOLDIAG-002 remaining gap 1. No provider call, secret access, public RPC, external target,
+  live contract, or paid action occurred.
+
+## 2026-08-04T12:41:42Z — V3-SCOPE-001 manifest normalization narrowed
+
+- The next suite rerun was stopped cleanly after its first failure (`1 failed, 63 passed, 5
+  skipped in 177.69s`) because terminal full-suite success was no longer possible. The interrupted
+  run receives no complete-suite credit.
+- The failure proved that catching every findings validation error hid the precise source-excerpt
+  range-hash diagnostic expected by forensic tamper evidence. Normalization is now limited to an
+  explicitly current schema whose language-capability value is null; all other typed validation
+  errors retain their exact evidence.
+- The three null-capability leaves and the complete mocked pipeline/forensic reseal regression pass
+  together: `4 passed in 9.24s`. Focused Ruff, strict mypy, and diff checks pass. A final complete
+  suite is starting from this narrowed implementation; no provider call, secret access, public
+  RPC, external target, or paid action occurred.
+
+## 2026-08-04T12:36:54Z — V3-SCOPE-001 full-suite regression repaired
+
+- The post-review unfragmented suite completed with `2 failed, 4844 passed, 11 skipped in
+  1654.97s`. Both failures were existing coherent-reseal tests: the new current findings/model
+  validators correctly rejected null capability evidence but exposed raw Pydantic text instead of
+  the manifest boundary's canonical `<artifact> differs from the final report` error.
+- Manifest validation now preserves the fail-closed rejection while normalizing invalid current
+  findings and model-execution payloads to their canonical artifact mismatch errors.
+- The exact three-case tamper assay passes, followed by the complete release-artifact, manifest,
+  and detached-status matrix: `120 passed in 21.28s`. Focused Ruff, strict mypy, and diff checks
+  pass. One unfragmented suite rerun is next; no provider call, secret access, public RPC,
+  external target, or paid action occurred.
+
+## 2026-08-04T12:07:51Z — V3-SCOPE-001 post-review full-suite gate starting
+
+- The consolidated detached-status, current/legacy schema, typed generic coverage, manifest,
+  forensic-reporting, run-status, and affected pipeline matrix passed: `386 passed in 39.45s`.
+- Repository-wide Ruff formatting changed no files (`446 files left unchanged`), Ruff check passed,
+  strict mypy passed over `177` source files, release-schema byte verification passed, and
+  `git diff --check` passed.
+- One unfragmented post-correction suite is starting under the bounded host policy used solely for
+  ephemeral loopback listeners. Paid-provider opt-in remains disabled; no public endpoint, target
+  secret, RPC, external contract, or paid action is involved.
+
+## 2026-08-04T12:05:53Z — V3-SCOPE-001 independent-review corrections ready for consolidation
+
+- Independent acceptance review confirmed the language mismatch boundary, reduced generic/EVM
+  separation, source custody, and README/CLI claims. Independent diff review found three
+  serialization/versioning gaps before closure.
+- Detached public status projections now reject absent, mismatched, inconclusive, blocking, or
+  internally contradictory capability evidence. A coherent reduced generic COMPLETE projection
+  remains explicitly reduced and cannot imply Solidity/EVM assurance.
+- Coverage schema `1.1` now retains typed generic source-ingestion and scanner-completion metrics;
+  inconsistent profile, metric inventory, or canonical metric evidence fails validation.
+- Findings schema `1.2` and model-execution schema `1.2` bind current typed capability evidence;
+  explicit older versions remain separately validated and cannot silently inherit that evidence.
+- The three focused slices passed `285`, `95`, and their dedicated coverage regression tests,
+  along with affected Ruff, strict mypy, schema-generation, and diff checks. A single consolidated
+  matrix and complete post-correction gates are next; no provider call, credential access, public
+  RPC, external target, or paid action occurred.
+
+## 2026-08-04T11:45:28Z — V3-SCOPE-001 unfragmented complete suite green
+
+- The required unfragmented repository-wide suite passed under the bounded local-listener host
+  policy: `4834 passed, 11 skipped in 1683.73s`.
+- Skips are explicit unavailable prerequisites: rootless image, Echidna, Halmos, Medusa, pinned
+  local compiler/replay inputs, and paid-provider opt-in. They earned no real-integration credit.
+- The run used only local fixtures and ephemeral loopback listeners. No provider call, secret
+  access, public RPC, external target, live contract, or paid action occurred.
+- Final diff, accidental-artifact/secret-pattern, and independent acceptance reviews are underway
+  before ticket closure and checkpoint creation.
+
+## 2026-08-04T11:16:16Z — V3-SCOPE-001 final unfragmented suite preflight
+
+- Ruff format/check, release-schema regeneration, strict mypy over `177` source files, four schema
+  tests, and `git diff --check` passed after all focused and segmented unit repairs.
+- One complete repository-wide suite is starting under the bounded host policy needed only for
+  ephemeral local-listener fixtures. Paid-provider opt-in remains disabled and no external target,
+  public RPC, credential, or model call is involved.
+
+## 2026-08-04T11:15:36Z — V3-SCOPE-001 complete unit coverage by terminal segments
+
+- The final 33-file unit tail passed under the bounded host policy: `880 passed in 47.50s`.
+- Together with the initial `1017` passes, the repaired 47-test execution-origin module, the next
+  `2691` passes, the repaired 19-test runtime-authority module, and this final tail, every unit
+  test is covered by a terminal passing segment. Overlap is not counted as a single-suite result.
+- Final static/schema gates and one unfragmented repository-wide host-policy suite remain required
+  before V3-SCOPE-001 can close.
+
+## 2026-08-04T11:13:46Z — V3-SCOPE-001 runtime-authority unit correction
+
+- The host-policy unit tail stopped fail-fast at one Foundry runtime-authority test after
+  `2691 passed in 290.21s`. Its runner configuration inherited the generic profile, so the
+  Foundry adapter correctly returned a skipped non-applicable result.
+- All five Foundry runner configurations in `test_runtime_evidence.py` now explicitly request
+  `solidity-evm`; the complete module passes `19 passed in 0.74s`.
+- The remaining 33 lexically subsequent unit files are next. No runtime-authority predicate or
+  production scanner behavior changed.
+
+## 2026-08-04T11:08:01Z — V3-SCOPE-001 local-listener unit boundary
+
+- The post-execution-origin unit tail reached `396 passed` before the managed sandbox denied an
+  ephemeral `127.0.0.1` bind in the Hardhat isolation wrapper fixture. This was an environment
+  error, not a product assertion failure, and the interrupted tail receives no terminal credit.
+- The exact test passed under the bounded host policy (`1 passed in 0.68s`). No public endpoint,
+  provider, RPC, credential, or external target was used.
+- The same 135-file unit tail will rerun under that local-listener-capable policy to a terminal
+  result.
+
+## 2026-08-04T11:06:45Z — V3-SCOPE-001 execution-origin artifact module green
+
+- The complete unit suite stopped fail-fast at one stale current-schema execution-origin shell:
+  `1 failed, 1017 passed in 476.39s`. It receives no complete-unit-suite credit.
+- The fixture now emits typed empty projects/compilation/formal/review/economic evidence and an
+  exact Solidity index when invariant runtime exists. Its report carries matched EVM capability
+  and the exact property-corpus summary. Deliberately mismatched harness and stale-source corpus
+  cases now assert fail-closed rejection rather than acceptance.
+- The full affected module passes: `47 passed in 2.37s`. The remaining 135 lexically subsequent
+  unit files will run next without repeating the already-green slow prefix.
+
+## 2026-08-04T10:55:00Z — V3-SCOPE-001 affected Solidity unit matrix green
+
+- The expanded repository-suite configuration, Solidity indexing/coverage, dependency,
+  economics, manifest, context, certification, sharding, invariant-review, Echidna, and audited
+  suite matrix passed: `346 passed in 19.41s`.
+- This found no additional production or fixture regression. The complete unit suite is the next
+  fail-fast gate before one more repository-wide run.
+
+## 2026-08-04T10:53:59Z — V3-SCOPE-001 audited-suite module green
+
+- The complete audited-suite coverage module passed after explicit Solidity/EVM configuration:
+  `19 passed in 1.43s`; Ruff format/check also passed.
+- A read-only scan of remaining test modules that combine bare `config_factory()` calls with
+  Solidity analysis is underway before the next costly complete-suite attempt. Any correction will
+  remain limited to test premises; production capability enforcement stays unchanged.
+
+## 2026-08-04T10:53:03Z — V3-SCOPE-001 audited-suite fixture correction
+
+- The fifth complete-suite attempt was stopped after three audited-suite coverage failures became
+  visible: `3 failed, 718 passed, 21 skipped in 1255.98s`. It receives no complete-suite credit.
+- The failing REAL repository-suite observations were excluded because their EVM-only module
+  inherited `generic-source-review`. All sixteen configuration sites in that module now explicitly
+  request `solidity-evm`; its fixture root is uniformly the synthetic Foundry corpus.
+- No coverage denominator, REAL-evidence predicate, isolation rule, or mutation join was changed.
+  The complete affected unit module is the next validation.
+
+## 2026-08-04T10:31:17Z — V3-SCOPE-001 complete-suite restart preflight
+
+- Ruff format/check, release-schema regeneration, strict mypy over `177` source files, four
+  schema-synchronization tests, and `git diff --check` passed after the 37-test scheduler run.
+- The repository-wide suite is restarting from this exact frozen tree. Paid-provider opt-in is
+  disabled; no provider call, secret access, or external target is part of the run.
+
+## 2026-08-04T10:30:48Z — V3-SCOPE-001 scheduler integration green
+
+- The complete scheduler integration file passed: `37 passed in 163.66s`.
+- The run covers generic and Solidity capability profiles, semantic cross-shard accounting,
+  maximum-assurance review scheduling, resume/authority/privacy custody, formal ordering, and
+  mandatory-pass failure behavior under the corrected explicit fixture profiles.
+- Only inherited stale temporary-directory cleanup warnings were emitted. Final static gates and
+  then the repository-wide suite will restart from this stable tree.
+
+## 2026-08-04T10:27:24Z — V3-SCOPE-001 formal scheduler fixture correction
+
+- The complete scheduler file reached `34` passing tests before the last Solidity fixture inherited
+  the generic helper profile (`1 failed, 34 passed in 137.48s`). Its scheduler campaign correctly
+  declined to start, leaving no scheduler artifact.
+- The formal-ordering fixture now explicitly requests `solidity-evm`; its focused regression passes
+  (`1 passed in 14.31s`). This was the only remaining direct Solidity fixture using the generic
+  helper, as confirmed by a file-wide fixture/config audit.
+- The complete scheduler integration file is restarting. Production code and gates are unchanged.
+
+## 2026-08-04T10:23:57Z — V3-SCOPE-001 scheduler profile split
+
+- The first complete scheduler-file rerun stopped after one generic repository test received an
+  over-broad Solidity/EVM helper profile (`1 failed, 4 passed in 2.05s`).
+- The shared deep-scheduler helper remains generic; only the semantic Solidity helper and direct
+  maximum-assurance Solidity fixture opt into `solidity-evm`. The representative generic,
+  semantic Solidity, and maximum Solidity tests now pass together: `3 passed in 30.66s`.
+- This preserves both sides of the language boundary without weakening production validation.
+  The complete scheduler integration file is restarting from this split.
+
+## 2026-08-04T10:22:37Z — V3-SCOPE-001 focused scheduler regressions green
+
+- Both scheduler cases that failed in the complete suite now pass with explicit Solidity/EVM
+  fixture configuration: `2 passed in 26.57s`.
+- Ruff formatting/checking of the affected integration file passed. The complete scheduler
+  integration file is starting next; no provider call or external network operation is enabled.
+
+## 2026-08-04T10:21:38Z — V3-SCOPE-001 scheduler fixture correction
+
+- The fourth repository-wide attempt was stopped immediately after two scheduler integration
+  failures became visible: `2 failed, 174 passed, 20 skipped in 662.31s`. The interrupted run
+  receives no complete-suite credit.
+- Both tests exercise Solidity/EVM semantic shards but inherited the deliberately generic test
+  default. The product correctly rejected their EVM graph metadata under a non-EVM capability.
+  The shared deep-scheduler configuration and the direct maximum-assurance fixture now request
+  `solidity-evm` explicitly; the read-only overlap-context helper was synchronized as well.
+- No production validator or capability boundary changed. The two focused regressions and then
+  the complete scheduler integration file are next.
+
+## 2026-08-04T10:09:31Z — V3-SCOPE-001 final suite restart
+
+- Ruff format/check, release-schema regeneration, strict mypy over `177` source files, four
+  schema-synchronization tests, and `git diff --check` passed after the replay repair.
+- The repository-wide `.venv/bin/pytest -q` gate is starting from this exact tree. Paid-provider
+  opt-in remains disabled; no provider call or network target is part of this validation.
+
+## 2026-08-04T10:08:58Z — V3-SCOPE-001 replay suite green
+
+- The complete replay unit file passed: `51 passed in 8.87s`.
+- Replay evidence now uses an explicit Solidity/EVM configuration, a run-directory identity that
+  matches its manifest, exact harness/result bindings, a recomputed property corpus, and the
+  required null shard-artifact triplet for this intentionally incomplete schema-1.0 fixture.
+- These are fixture-premise repairs for stricter production custody checks. No production check,
+  environment boundary, provider path, secret boundary, or acceptance threshold was relaxed.
+- Final static preflight and the repository-wide suite are next.
+
+## 2026-08-04T10:06:07Z — V3-SCOPE-001 complete-suite replay-fixture repair
+
+- The third repository-wide suite attempt stopped at one stale manual invocation-hash fixture:
+  `1 failed, 154 passed, 20 skipped in 578.26s`. Its focused scheduler regression passed after
+  adding the three exact language-capability fields to the reconstructed invocation payload:
+  `1 passed in 12.94s`.
+- A complete search found three equivalent replay-test reconstructions; all now bind the same nine
+  fields as production. Running them exposed older replay evidence that predated required language,
+  harness-specification, Solidity-index, and property-corpus joins. The fixture is now explicitly
+  Solidity/EVM and its first focused negative regression passes (`1 passed in 0.95s`).
+- No production validator, threshold, isolation control, provider configuration, or acceptance
+  gate was weakened. No provider call, secret access, live target, public RPC, or paid action
+  occurred. The complete replay file is the next bounded validation.
+
+## 2026-08-04T09:50:44Z — V3-SCOPE-001 final complete-suite preflight
+
+- After the 120-test pipeline integration pass, final Ruff format/check, schema regeneration,
+  strict mypy over `177` source files, four schema synchronization tests, and `git diff --check`
+  all passed.
+- The repository-wide `.venv/bin/pytest -q` gate is starting from this exact tree. No paid-provider
+  opt-in is enabled.
+
+## 2026-08-04T09:50:01Z — V3-SCOPE-001 complete pipeline integration green
+
+- The entire pipeline integration file passed on the stable repaired tree:
+  `120 passed in 437.53s`.
+- This covers language mismatch, reduced generic review, Solidity/EVM gating, source custody,
+  scanner evidence, model/report artifacts, invariant/economic/formal joins, prior-audit behavior,
+  CI state/baseline custody, latest-output safety, and explicit downgraded scanner-only status.
+- Only inherited stale temporary-directory cleanup warnings were emitted; no test failed or
+  skipped in this file. No provider call, secret access, live target, or network action occurred.
+
+## 2026-08-04T09:41:50Z — V3-SCOPE-001 pipeline-file continuation
+
+- The complete pipeline-file run stopped at one stale scanner-only privacy-refresh assertion:
+  `1 failed, 86 passed in 457.29s`. The case now expects the same explicit `DEGRADED` status as
+  the other valid generic scanner-only paths; its focused regression passes.
+- A broad text replacement briefly touched the unrelated model-driven fixture; that assertion was
+  restored immediately and both fixtures passed together (`2 passed in 10.37s`). No production
+  behavior or gate changed in this slice.
+- The full pipeline file will restart before the repository-wide suite.
+
+## 2026-08-04T09:32:11Z — V3-SCOPE-001 scanner-only status fixture closure
+
+- The second complete-suite attempt was stopped at `2 failed, 94 passed, 14 skipped in 512.00s`
+  when two additional generic scanner-only fixtures retained pre-coverage `INCOMPLETE`
+  expectations. The interrupted run receives no complete-suite credit.
+- With exact source/scanner denominators now available, an explicitly selected scanner-only run is
+  honestly `DEGRADED`; a threshold-matching finding still returns `FINDINGS`. Both corrected
+  focused cases passed in `3.98s`.
+- The entire pipeline integration file will run before the next repository-wide attempt. No
+  threshold, custody, isolation, capability, or findings gate was weakened.
+
+## 2026-08-04T09:22:27Z — V3-SCOPE-001 repaired pre-suite gates
+
+- Two remaining manually constructed generic-report fixtures were synchronized with the exact
+  capability-neutral floor metrics; their focused regressions passed. This changes test premises,
+  not product thresholds.
+- The expanded 17-file language, manifest, status, reporting, CI-coverage, Solidity-coverage,
+  release, scheduler, sharding, traceability, and schema matrix passed:
+  `557 passed in 44.81s`.
+- Ruff format/check, schema generation, strict mypy over `177` source files, four schema tests, and
+  `git diff --check` passed. The full suite will now be restarted from this stable tree.
+
+## 2026-08-04T09:18:01Z — V3-SCOPE-001 full-suite regression matrix green
+
+- Six failures were stale tests: EVM-only cases inherited the deliberately generic default, one
+  report title predated the reduced profile, and two CI reseal cases omitted current invocation
+  fields or relied on an incidental validator. Their premises now match the claimed capability and
+  authoritative rejection path; no production gate was weakened.
+- Two failures exposed a real non-EVM CI accounting defect. A language-neutral coverage helper now
+  derives `generic_source_files_ingested` and `scanner_completion` only from retained repository
+  and scanner evidence. Scanner credit reuses the canonical qualifying-REAL predicate and requires
+  certified isolation. Non-EVM `SolidityCoverage` remains empty, so no EVM claim was restored.
+- The combined repair matrix passed `27` tests in `24.78s`; the full CI pipeline slice separately
+  passed `32` cases. No provider call, secret access, public RPC, live target, or paid action
+  occurred.
+
+## 2026-08-04T09:05:44Z — V3-SCOPE-001 complete-suite regression repair
+
+- The definitive `.venv/bin/pytest -q` run was stopped as soon as clustered failures became
+  visible: `8 failed, 134 passed, 14 skipped in 540.52s`. It receives no complete-suite credit.
+- Four failures are pipeline artifact-join/source/fork/latest-output cases; four are CI
+  baseline/projection fixtures. The failures are being reproduced in focused isolation and will
+  be repaired without weakening the new language, runtime-artifact, manifest, or CI authority
+  checks.
+- No provider call, secret access, public RPC, live target, or paid action occurred.
+
+## 2026-08-04T08:55:27Z — V3-SCOPE-001 pre-complete-suite gates
+
+- The final 16-file language, manifest, status, release, reporting, scheduler, sharding,
+  traceability, and schema unit matrix passed: `507 passed in 51.34s`.
+- `.venv/bin/ruff format .` formatted one affected file; schema generation completed; Ruff check
+  passed; strict mypy passed all `176` source files; the generated-schema suite passed `4` tests;
+  and `git diff --check` passed.
+- The exact complete suite is the next long-running gate. Paid-provider integration remains
+  opt-in and is not enabled; no provider call, credential read, public RPC, or live target is in
+  scope.
+
+## 2026-08-04T08:53:18Z — V3-SCOPE-001 stabilized affected integration matrix
+
+- The exact 24-node language mismatch, reduced-profile, full Solidity/EVM, runtime-artifact,
+  execution-origin, economic-invariant, source-custody, formal-failure, and CI matrix passed:
+  `24 passed, 1 skipped in 339.23s`.
+- The sole skip is explicit and honest: the real execution-origin regression requires hardened
+  local isolation that is unavailable in this test environment. It earned no real-integration
+  credit. The terminal run was performed without concurrent source edits.
+- Pytest emitted only stale temporary-directory cleanup warnings for prior private toolchain
+  directories. No provider call, secret access, network target, public RPC, or paid action
+  occurred.
+
+## 2026-08-04T08:46:05Z — V3-SCOPE-001 canonical JSON capability closure
+
+- The shared public status projection now retains the report's exact typed language-capability
+  assessment. `findings.json`, `coverage.json`, and `model-execution.json` therefore state the
+  requested and achieved profile, reduced-capability status, and EVM eligibility explicitly.
+- Detached manifest reconstruction rejects a coherently resealed capability mismatch in each
+  canonical leaf. Generic reduced-profile positive and three negative cases are permanent.
+- Focused validation passed `24` tests in `9.50s`; repository Ruff, strict mypy over 176 source
+  files, generated-schema synchronization, and `git diff --check` passed. No isolation,
+  environment-scrubbing, sandbox-scope, provider, secret, or paid-action boundary changed.
+
+## 2026-08-04T08:39:48Z — V3-SCOPE-001 post-join focused matrix
+
+- Exact dynamic/formal, invariant-harness/result, property-corpus, generic-claim, and manifest
+  custody regressions passed: `75 passed in 20.93s`.
+- Final acceptance review found one remaining claim-honesty defect: canonical JSON evidence leaves
+  projected terminal status without the achieved language/capability boundary. A shared typed
+  projection and detached-tamper validation are being added before the affected and complete
+  suites run. No provider call, secret access, network target, isolation change, or paid action
+  occurred.
+
+## 2026-08-04T08:32:06Z — V3-SCOPE-001 final runtime-artifact joins
+
+- Independent coherent-reseal review found that `formal-results.json` could retain invented
+  dynamic-engine comparisons even while its typed formal runs matched the final report.
+  Manifest validation now recomputes the exact comparison projection from the typed report runs;
+  the focused negative regression passed: `1 passed in 1.59s`.
+- Exact invariant-harness/result/property-corpus joins and their coherent-reseal regressions are
+  being completed before repository-wide validation. No provider call, secret access, network
+  target, isolation change, external engine, or paid action occurred.
+
+## 2026-08-04T08:22:25Z — V3-SCOPE-001 post-review broad matrix green
+
+- The final 15-file language/report/manifest/release/status/traceability matrix passed:
+  `500 passed in 44.63s`.
+- A separate final read-only recheck is running while repository-wide static and complete-suite
+  gates proceed. No provider call, secret access, network target, paid action, or scope expansion
+  occurred.
+
+## 2026-08-04T08:20:37Z — V3-SCOPE-001 final independent custody closure
+
+- Stopped the repaired complete-suite rerun after `4 passed, 2 skipped in 42.41s` because an
+  independent read-only review found additional scope-ticket defects; the interrupted run
+  receives no complete-suite credit.
+- Cross-phase verification now compares every rediscovered source SHA-256 and size to its sealed
+  capability evidence, closing a deterministic same-path mutation between descriptor reading and
+  inventory reconstruction. The same-size negative regression reports `CHANGED`.
+- Runtime output exclusions are separately typed from persistent ignore rules and apply only while
+  the verified run remains physically under the exact retained output root. A relocated run cannot
+  hide a new source created at the old output path. Ambiguously normalized in-repository output
+  names fail before output creation.
+- SARIF maximum-assurance projection now rejects blocking discovery omissions. Reduced generic
+  reports reject contradictory EVM summary metadata, and manifest validation binds compilation,
+  formal, invariant-review, economic-plan, harness, and property evidence to the typed report and
+  non-EVM boundary.
+- Focused evidence: SARIF/metadata/source/schema matrix `9 passed`; generic coherently resealed
+  compilation/formal/harness/property negatives `1 passed`; current/moved/ambiguous output custody
+  `2 passed`. Generated schemas are synchronized. No analysis credit or isolation boundary was
+  weakened.
+
+## 2026-08-04T08:07:42Z — V3-SCOPE-001 complete-suite repaired rerun
+
+- Interrupted the prior full run immediately after its first failure; it receives no
+  complete-suite credit: `1 failed, 65 passed, 5 skipped in 190.86s`.
+- A generic-profile Unicode-source case surfaced multiline Pydantic exception text in raw
+  orchestration failures. Minimum-floor evidence correctly rejected control characters, but the
+  pipeline had not normalized the corresponding report reasons. Runtime failure messages are now
+  deterministically single-line, deduplicated, sorted, and bounded to 2,000 characters before
+  both evidence projections are built. This changes no analysis credit or failure status.
+- Ruff and focused strict mypy passed; the unit plus Unicode pipeline regressions passed
+  (`2 passed in 1.56s`). Restarted the exact complete-suite command.
+
+## 2026-08-04T08:01:59Z — V3-SCOPE-001 complete-suite gate started
+
+- Repository-wide Ruff formatting left `445` files unchanged, Ruff check passed, strict mypy
+  passed all `176` source files, release-schema verification passed, and `git diff --check`
+  passed.
+- Started `.venv/bin/pytest -q` under the approved local hardened-test policy. No partial or
+  interrupted run receives complete-suite credit.
+- Paid-provider tests remain opt-in and no provider call, public RPC, live target, credential,
+  or network action is authorized by this command.
+
+## 2026-08-04T08:01:19Z — V3-SCOPE-001 broad evidence matrix green
+
+- The 15-file language, manifest, status, release, reporting, scheduler, sharding, and
+  traceability matrix passed: `497 passed in 43.22s`.
+- The first attempt stopped after `1 failed, 26 passed in 2.84s`: a legacy differential unit
+  fixture still used the generic test default. The fixture now explicitly requests
+  `solidity-evm`; its focused regression passed (`1 passed in 1.31s`). Current schema-1.2
+  generic reports remain prohibited from carrying EVM-only differential evidence.
+- Generated schemas are synchronized. Repository-wide static validation and the complete suite
+  remain required before closure.
+
+## 2026-08-04T07:58:38Z — V3-SCOPE-001 sealed discovery-policy replay
+
+- Final review found that source rediscovery trusted the target's current `.mmauditignore` and
+  derived an incomplete output exclusion from the live run directory. A target could therefore
+  add a source and an ignore rule that hid both changes; a custom in-repository output could also
+  verify stale without any source change.
+- `language-capability.json` schema `1.1` now retains the exact expanded ignore-rule sequence used
+  by discovery, including the exact automatic output-root exclusion. `verify-run` reconstructs
+  only that sealed sequence and never rereads the mutable ignore policy.
+- The canary regression changes `.mmauditignore` to hide itself and a newly added Solidity file;
+  verification still reports the new source as `UNEXPECTED`. Parent-directory links remain
+  `UNSAFE`, and unchanged custom in-repository output verifies `CURRENT`.
+- Focused evidence: language and source-custody matrix `10 passed in 2.51s`; affected pipeline
+  matrix `8 passed, 1 skipped in 24.86s`; custom-output replay `1 passed in 1.69s`; Ruff and
+  focused strict mypy passed. The skip is only the local sandbox's unavailable hardened
+  execution backend and receives no real-integration credit.
+- No isolation control, environment scrubbing, sandbox scope, provider state, secret, network
+  target, or paid action changed.
+
+## 2026-08-04T07:50:06Z — V3-SCOPE-001 post-suite regression closure
+
+- The prior complete-suite run terminated at the first failure and receives no complete-suite
+  credit: `1 failed, 32 passed, 3 skipped in 106.64s`.
+- The failure was a Solidity execution-origin integration inheriting the deliberately generic
+  test default. The fixture now explicitly requests `solidity-evm`; its real local Foundry case
+  passed (`1 passed in 17.61s`). Two reproduction cases passed (`2 passed in 20.78s`).
+- Independent final review identified added-source verification, parent-component descriptor
+  custody, reduced-profile EVM evidence, blocking discovery omissions, and legacy claim
+  projection gaps. Narrow corrections and regressions are present and now enter focused
+  validation; no ticket or release completion is claimed.
+- Per the operator's priority correction, after this ticket closes the next action is
+  `V3-TOOLDIAG-002` remaining gap 1 (isolated Slither), before any objective or model ticket.
+- No provider call, secret access, public RPC, live target, network operation, paid action, or
+  release claim occurred.
+
+## 2026-08-04T07:30:44Z — V3-SCOPE-001 complete-suite gate started
+
+- The eleven-file client/report/manifest/release/traceability matrix passed:
+  `480 passed in 45.18s`.
+- Release schemas generated and verified in sync. Ruff formatting left all 445 files unchanged,
+  Ruff check passed, and strict mypy passed all 176 source files.
+- Started `.venv/bin/pytest -q` as the required complete-suite gate. No partial or interrupted run
+  will receive complete-suite credit.
+- No provider call, secret access, public RPC, live target, paid action, or release claim occurred.
+
+## 2026-08-04T07:28:55Z — V3-SCOPE-001 broader validation started
+
+- The previously uncredited scheduler-manifest file was rerun to a terminal result:
+  `14 passed in 4.64s`.
+- Repaired only current-schema test construction: the mixed semantic/repository fixture now binds
+  the exact Solidity capability, and two source-byte variants recompute the generic capability
+  inventory after changing repository source hashes.
+- Started the exact eleven-file client/report/manifest/release/traceability regression matrix.
+  No provider call, secret access, network action, paid action, or release claim is involved.
+
+## 2026-08-04T07:25:21Z — Resume V3-SCOPE-001 portfolio-boundary validation
+
+- Resumed from the explicit operator-pause record after rereading the complete authoritative
+  objective (1,417 lines; SHA-256
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`), repository
+  instructions, active queue ticket, worklog, runtime status, Git status, and current diff.
+- First action is the exact uncredited scheduler-manifest rerun. Broader and complete-suite credit
+  remains pending until terminal results are recorded.
+- No provider, secret, public RPC, external-engine, container, network, or paid action is required
+  for this bounded ticket.
+
+## 2026-08-04T07:23:17Z — Operator-requested graceful pause
+
+- Paused `V3-SCOPE-001` while it remains `IN_PROGRESS`; no ticket, maximum-assurance,
+  release, fitness, or superiority completion claim is made.
+- Preserved all current source-census, non-EVM portfolio, manifest/release coherence,
+  traceability, fixture, and generated-schema work in the local worktree.
+- The post-fix scheduler-manifest test result was not retained and receives no validation credit.
+  Resume by rerunning that exact file before the broader matrix or complete suite.
+- All delegated review agents are complete and no tracked Codex validation session remains active.
+  No provider call, secret access, public RPC, live target, external engine, container, network,
+  or paid action occurred during this slice.
+- Last durable implementation checkpoint remains
+  `b39c8b843390e93039a5f178581fb02b17f0ec2b`; later cohesive work is preserved but uncommitted.
+
+## 2026-08-04T07:19:51Z — V3-SCOPE-001 source and claim authority closure
+
+- Revalidated every file retained by the unfiltered language-capability inventory during
+  `verify-run`; a source outside the report subset now makes the run `STALE` when its bytes drift.
+- Bound current report language census to exact retained report files and prohibited generic,
+  mismatched, or inconclusive reports from retaining substantive Solidity invariant, economic,
+  formal, reproduction, execution-origin, or coverage evidence.
+- The pipeline now skips EVM-only invariant/formal/runtime paths when the EVM portfolio is not
+  applicable and emits an explicit non-applicable Solidity coverage artifact instead of an empty
+  pseudo-analysis. Manifest report artifacts remain exact projections of that reduced result.
+- Added fail-closed manifest-set release coherence, repaired current-schema report/semantic-shard
+  fixtures, and expanded `MA-LANGUAGE-CAPABILITY` traceability through report, manifest,
+  verification, release, schema, and runtime leaves.
+- Focused evidence: `4 passed` for the new source/census/portfolio regressions; `2 passed` for
+  mismatch and reduced-generic pipeline integrations; `64 passed` for repaired report fixtures;
+  `175 passed` for release/manifest; `362 passed` for language/config/CLI/report/status; selected
+  assurance `5 passed`; release schema generation, Ruff, and strict mypy passed.
+- No provider call, secret access, public RPC, live target, external engine, container, or paid
+  action occurred. Broader/full-suite acceptance remains pending.
+
+## 2026-08-04T07:00:02Z — Resume V3-SCOPE-001 source-bound capability closure
+
+- Resumed from clean SSH-synchronized pause commit
+  `bb0167bd1ae7809d1465911d3521469a415c7d30` and re-read the complete objective,
+  repository instructions, current ticket, worklog handoff, and legacy completed state.
+- Continue only the bounded scope-honesty ticket through source-drift verification,
+  language-state coherence, report/fixture/traceability closure, schema regeneration, and
+  focused-to-full validation.
+- No provider call, secret access, public RPC, live target, external engine, container, or paid
+  action is required for this ticket.
 
 ## 2026-08-04T06:56:14Z — Operator-requested graceful pause
 

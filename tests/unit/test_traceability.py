@@ -79,11 +79,60 @@ def test_language_capability_traceability_names_runtime_and_fail_closed_evidence
     )
 
     assert capability.implementation_status is ImplementationStatus.IMPLEMENTED
-    assert "src/mmaudit/language_plugins.py" in capability.implementation_paths
-    assert "src/mmaudit/orchestration/manifest.py" in capability.implementation_paths
-    assert "tests/unit/test_language_plugins.py" in capability.unit_tests
+    assert set(capability.implementation_paths) == {
+        "schemas/language_capability.schema.json",
+        "schemas/release_bound_gate_result.schema.json",
+        "schemas/release_gate_report.schema.json",
+        "schemas/release_run_binding.schema.json",
+        "schemas/run_evidence_manifest.schema.json",
+        "schemas/run_terminal_report_authority.schema.json",
+        "scripts/generate_release_schemas.py",
+        "src/mmaudit/cli.py",
+        "src/mmaudit/config.py",
+        "src/mmaudit/language_plugins.py",
+        "src/mmaudit/models/schemas.py",
+        "src/mmaudit/orchestration/assurance.py",
+        "src/mmaudit/orchestration/manifest.py",
+        "src/mmaudit/orchestration/pipeline.py",
+        "src/mmaudit/orchestration/verification.py",
+        "src/mmaudit/release_observations.py",
+        "src/mmaudit/release_report.py",
+        "src/mmaudit/release_run.py",
+        "src/mmaudit/release_validation.py",
+        "src/mmaudit/release_verification.py",
+        "src/mmaudit/reporting/client.py",
+        "src/mmaudit/reporting/markdown.py",
+        "src/mmaudit/reporting/run_authority.py",
+        "src/mmaudit/reporting/sarif.py",
+        "src/mmaudit/repository/discovery.py",
+    }
+    assert set(capability.unit_tests) == {
+        "tests/unit/test_assurance.py",
+        "tests/unit/test_cli.py",
+        "tests/unit/test_config.py",
+        "tests/unit/test_language_plugins.py",
+        "tests/unit/test_manifest.py",
+        "tests/unit/test_openrouter_qualification_config.py",
+        "tests/unit/test_release_artifacts.py",
+        "tests/unit/test_release_observations.py",
+        "tests/unit/test_release_report.py",
+        "tests/unit/test_release_run.py",
+        "tests/unit/test_release_schemas.py",
+        "tests/unit/test_release_validation.py",
+        "tests/unit/test_release_verification.py",
+        "tests/unit/test_report_status_projection.py",
+        "tests/unit/test_run_status.py",
+        "tests/unit/test_scanners_reporting.py",
+    }
     assert "tests/integration/test_pipeline.py" in capability.real_integration_tests
-    assert capability.runtime_artifacts == ["language-capability.json"]
+    assert set(capability.runtime_artifacts) == {
+        "audit-results.sarif",
+        "client-report.md",
+        "final-findings.json",
+        "forensic-report.md",
+        "language-capability.json",
+        "run-evidence-manifest.json",
+    }
 
 
 def test_report_bundle_traceability_names_complete_delivery_and_cost_custody() -> None:

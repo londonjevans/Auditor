@@ -165,6 +165,25 @@ def _scanner_execution_notification(run: ScannerRun) -> dict[str, Any] | None:
     }
 
 
+def _is_unverified_legacy_assurance_projection(
+    *,
+    maximum_assurance: MaximumAssuranceAssessment | None,
+    language_capability: LanguageCapabilityAssessment | None,
+    run_status: AuditRunStatus | None,
+    quality_status: AuditQualityStatus | None,
+    completed: bool | None,
+) -> bool:
+    """Identify an explicitly fail-closed projection of pre-capability evidence."""
+
+    if (
+        maximum_assurance is None
+        or language_capability is not None
+        or run_status not in {AuditRunStatus.INCOMPLETE, AuditRunStatus.FAILED}
+    ):
+        return False
+    return completed is False and quality_status is quality_status_for_run_status(run_status)
+
+
 def generate_sarif(
     findings: list[Finding],
     *,
@@ -209,29 +228,40 @@ def generate_sarif(
         completed_quality = quality_status is AuditQualityStatus.COMPLETED
         if completed != completed_quality:
             raise ValueError("SARIF completion conflicts with the quality status")
-    if language_capability is not None and language_capability.status in {
-        LanguageCapabilityStatus.MISMATCH,
-        LanguageCapabilityStatus.INCONCLUSIVE,
-    } and (
-        run_status is AuditRunStatus.COMPLETE
-        or completed is True
-        or quality_status is AuditQualityStatus.COMPLETED
+    if (
+        language_capability is not None
+        and language_capability.status
+        in {
+            LanguageCapabilityStatus.MISMATCH,
+            LanguageCapabilityStatus.INCONCLUSIVE,
+        }
+        and (
+            run_status is AuditRunStatus.COMPLETE
+            or completed is True
+            or quality_status is AuditQualityStatus.COMPLETED
+        )
     ):
         raise ValueError("SARIF completion conflicts with unachieved language capability")
+    unverified_legacy_assurance = _is_unverified_legacy_assurance_projection(
+        maximum_assurance=maximum_assurance,
+        language_capability=language_capability,
+        run_status=run_status,
+        quality_status=quality_status,
+        completed=completed,
+    )
     if (
         maximum_assurance is not None
         and maximum_assurance.status is MaximumAssuranceStatus.COMPLETE
         and (
             language_capability is None
             or language_capability.status is not LanguageCapabilityStatus.MATCHED
-            or language_capability.achieved_profile
-            is not LanguageCapabilityProfile.SOLIDITY_EVM
+            or language_capability.achieved_profile is not LanguageCapabilityProfile.SOLIDITY_EVM
             or not language_capability.evm_maximum_assurance_eligible
+            or bool(language_capability.blocking_discovery_omissions)
         )
+        and not unverified_legacy_assurance
     ):
-        raise ValueError(
-            "SARIF maximum-assurance completion lacks matched Solidity/EVM capability"
-        )
+        raise ValueError("SARIF maximum-assurance completion lacks matched Solidity/EVM capability")
 
     included = []
     for finding in findings:
@@ -338,10 +368,21 @@ def generate_sarif(
                 "properties": result_properties,
             }
         )
+    maximum_assurance_properties: dict[str, Any] | None
+    if maximum_assurance is None:
+        maximum_assurance_properties = None
+    elif unverified_legacy_assurance:
+        assert run_status is not None
+        maximum_assurance_properties = {
+            "evidenceStatus": "UNVERIFIED_LEGACY",
+            "achieved": False,
+            "effectiveRunStatus": run_status.value,
+            "recordedLegacyEvidence": maximum_assurance.model_dump(mode="json"),
+        }
+    else:
+        maximum_assurance_properties = maximum_assurance.model_dump(mode="json")
     run_properties: dict[str, Any] = {
-        "maximumAssurance": (
-            maximum_assurance.model_dump(mode="json") if maximum_assurance is not None else None
-        ),
+        "maximumAssurance": maximum_assurance_properties,
         "scannerExecutions": [
             _scanner_execution_record(run)
             for run in sorted(scanner_runs, key=lambda item: item.scanner)
@@ -456,15 +497,37 @@ def generate_sarif(
                 }
             )
         if maximum_assurance is not None:
-            invocation_properties["maximumAssuranceStatus"] = maximum_assurance.status.value
-            invocation_properties["downgraded"] = maximum_assurance.downgraded
-            invocation["toolExecutionNotifications"].extend(
-                {
-                    "level": "warning",
-                    "message": {"text": reason},
-                }
-                for reason in maximum_assurance.downgrade_reasons
-            )
+            if unverified_legacy_assurance:
+                assert run_status is not None
+                invocation_properties.update(
+                    {
+                        "maximumAssuranceStatus": "UNVERIFIED_LEGACY",
+                        "maximumAssuranceAchieved": False,
+                        "recordedLegacyMaximumAssuranceStatus": (maximum_assurance.status.value),
+                    }
+                )
+                invocation["toolExecutionNotifications"].append(
+                    {
+                        "level": "warning",
+                        "message": {
+                            "text": (
+                                "Recorded legacy maximum-assurance evidence is unverified; "
+                                f"effective run status is {run_status.value}, and no "
+                                "maximum assurance is achieved."
+                            )
+                        },
+                    }
+                )
+            else:
+                invocation_properties["maximumAssuranceStatus"] = maximum_assurance.status.value
+                invocation_properties["downgraded"] = maximum_assurance.downgraded
+                invocation["toolExecutionNotifications"].extend(
+                    {
+                        "level": "warning",
+                        "message": {"text": reason},
+                    }
+                    for reason in maximum_assurance.downgrade_reasons
+                )
     elif maximum_assurance is not None:
         invocation = {
             "executionSuccessful": maximum_assurance.status.value == "COMPLETE",

@@ -53,6 +53,7 @@ from mmaudit.models.schemas import (
     InvariantRelation,
     InvariantSpec,
     InvariantSuite,
+    LanguageCapabilityFileEvidence,
     LocationValidation,
     RepositoryCodeExecutionState,
     RepositoryDifferentialRunStatus,
@@ -120,6 +121,7 @@ from mmaudit.scanners.fork_matrix import (
     repository_fork_matrix_timeout_budget_seconds,
 )
 from mmaudit.solidity.properties import build_property_corpus
+from tests.language_capability_support import language_capability_for_files
 from tests.unit.test_manifest import _write_required_artifacts
 from tests.unit.test_repository_fork_differential_schema import (
     _matrix as _repository_differential_matrix,
@@ -941,6 +943,7 @@ def _invariant_result(
     return InvariantExecutionResult(
         invariant_id="inv-replay-counterexample",
         harness_name="ReplayCounterexample",
+        harness_spec_sha256=_harness().specification_sha256(),
         status=status,
         source_sha256="2" * 64,
         runs=2,
@@ -1071,6 +1074,19 @@ def _write_replay_run(
     source_text = "contract Vault { uint256 public state; function touch() external {} }\n"
     source.write_text(source_text, encoding="utf-8")
     source_hash = hashlib.sha256(source_text.encode()).hexdigest()
+    language_capability = language_capability_for_files(
+        config.language_profile,
+        (
+            LanguageCapabilityFileEvidence(
+                path="src/Vault.sol",
+                size=len(source_text.encode()),
+                lines=1,
+                sha256=source_hash,
+                language="Solidity",
+            ),
+        ),
+        solidity_project_count=1,
+    )
     project = SolidityProjectMetadata(
         project_type=SolidityProjectType.FOUNDRY,
         project_root=".",
@@ -1093,7 +1109,8 @@ def _write_replay_run(
         kind=ReproductionResolutionKind.INCONCLUSIVE,
         detail="attempted reproduction did not produce a qualifying terminal outcome",
     )
-    property_corpus = build_property_corpus(None, None, [])
+    invariant_suite = _invariant_suite(source_hash)
+    property_corpus = build_property_corpus(invariant_suite, None, [harness])
     rejected_finding = Finding(
         id="finding-replay",
         group_id="group-replay",
@@ -1131,8 +1148,8 @@ def _write_replay_run(
         schema_version="1.0",
         run_id="offline-replay-test",
         generated_at=_NOW,
-        completed=True,
-        incomplete_reasons=[],
+        completed=False,
+        incomplete_reasons=["synthetic replay fixture retains an inconclusive candidate"],
         repository=RepositoryMap(
             root_name=repository.name,
             languages={"Solidity": 1},
@@ -1162,16 +1179,27 @@ def _write_replay_run(
         privacy=privacy,
         scanner_runs=[scanner],
         repository_suite_differential=differential,
-        invariants=_invariant_suite(source_hash),
+        invariants=invariant_suite,
         invariant_executions=[invariant_result],
         usage=[],
         budget_usd=20,
         accounted_cost_usd=0,
         findings=[],
         rejected_findings=[rejected_finding],
+        language_capability=language_capability.assessment,
         audit_profile=config.profile,
         metadata={
             "run_options": run_options.model_dump(mode="json"),
+            "solidity": {
+                "index_summary": {"entities": 0, "ast_sources": 0, "fallback_sources": 0},
+                "graph_summary": {"edges": 0, "warnings": 0},
+                "shard_summary": None,
+                "property_corpus_summary": {
+                    "properties": len(property_corpus.properties),
+                    "limitations": len(property_corpus.limitations),
+                    "corpus_hash": property_corpus.corpus_hash,
+                },
+            },
             "configuration_provenance": {
                 "file_config_sha256": base_config.stable_hash(),
                 "environment_overrides_sha256": environment_overrides.stable_hash(),
@@ -1180,7 +1208,7 @@ def _write_replay_run(
             },
         },
     )
-    run_dir = root / "run"
+    run_dir = root / report.run_id
     run_dir.mkdir()
     assert scanner.raw_output_path is not None
     scanner_stdout_path = run_dir / "private" / "scanner-output" / scanner.raw_output_path
@@ -1202,9 +1230,12 @@ def _write_replay_run(
             "projects": [project.model_dump(mode="json")],
         },
         "solidity-compilation.json": {"schema_version": "1.0", "results": []},
+        "solidity-index.json": {"schema_version": "1.0", "index": None},
+        "solidity-graphs.json": {"schema_version": "1.0", "graphs": None},
+        "solidity-shards.json": {"schema_version": "1.0", "inventory": None},
         "solidity-invariants.json": {
             "schema_version": "1.0",
-            "invariants": _invariant_suite(source_hash).model_dump(mode="json"),
+            "invariants": invariant_suite.model_dump(mode="json"),
         },
         "invariant-harness-plan.json": {
             "schema_version": "1.0",
@@ -1519,7 +1550,7 @@ async def test_repository_differential_replays_as_a_separate_offline_component(
     candidate_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = _config_with_repository_differential(config_factory())
+    config = _config_with_repository_differential(config_factory(language_profile="solidity-evm"))
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",
@@ -1614,7 +1645,9 @@ async def test_rootless_configured_replay_fails_closed_when_exact_backend_is_una
     candidate_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = _rootless_repository_differential_config(config_factory())
+    config = _rootless_repository_differential_config(
+        config_factory(language_profile="solidity-evm")
+    )
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",
@@ -1686,7 +1719,9 @@ async def test_stale_manifest_refuses_backend_resolution_and_default_runner_cons
     candidate_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = _rootless_repository_differential_config(config_factory())
+    config = _rootless_repository_differential_config(
+        config_factory(language_profile="solidity-evm")
+    )
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",
@@ -1756,7 +1791,9 @@ async def test_rootless_configured_replay_shares_one_exact_backend_across_defaul
     candidate_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = _rootless_repository_differential_config(config_factory())
+    config = _rootless_repository_differential_config(
+        config_factory(language_profile="solidity-evm")
+    )
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",
@@ -1880,7 +1917,9 @@ async def test_profile_overridden_replay_builds_default_backend_bound_differenti
     candidate_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    base_config = _config_with_repository_differential(config_factory())
+    base_config = _config_with_repository_differential(
+        config_factory(language_profile="solidity-evm")
+    )
     cli_overrides = audit_config_overrides({"profile": AuditProfile.DEEP.value})
     effective_config = cli_overrides.apply(base_config)
     candidate = candidate_factory(
@@ -1958,7 +1997,7 @@ async def test_default_differential_replay_reserves_each_attempt_full_policy_tim
     candidate_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = _config_with_repository_differential(config_factory())
+    config = _config_with_repository_differential(config_factory(language_profile="solidity-evm"))
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",
@@ -2048,7 +2087,7 @@ async def test_failed_repository_differential_replay_cannot_match(
     config_factory,
     candidate_factory,
 ) -> None:
-    config = _config_with_repository_differential(config_factory())
+    config = _config_with_repository_differential(config_factory(language_profile="solidity-evm"))
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",
@@ -2102,7 +2141,7 @@ async def test_missing_configured_repository_differential_is_blocked_without_exe
     config_factory,
     candidate_factory,
 ) -> None:
-    base_config = config_factory()
+    base_config = config_factory(language_profile="solidity-evm")
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",
@@ -2147,7 +2186,7 @@ async def test_missing_configured_repository_differential_is_blocked_without_exe
 def test_repository_differential_projection_excludes_volatility_and_endpoints(
     config_factory,
 ) -> None:
-    config = _config_with_repository_differential(config_factory())
+    config = _config_with_repository_differential(config_factory(language_profile="solidity-evm"))
     expected = _differential_result(config, "9" * 64)
     volatile = expected.model_copy(deep=True)
     assert volatile.matrix is not None
@@ -2416,7 +2455,7 @@ def test_repository_differential_projection_excludes_volatility_and_endpoints(
 def test_repository_test_execution_projection_uses_semantic_inventory_references(
     config_factory,
 ) -> None:
-    config = _config_with_repository_differential(config_factory())
+    config = _config_with_repository_differential(config_factory(language_profile="solidity-evm"))
     result = _differential_result(config, "9" * 64)
     assert result.matrix is not None
     execution = result.matrix.attempts[0].scanner_run.repository_test_executions[0]
@@ -2469,7 +2508,7 @@ def test_repository_differential_projection_retains_rpc_error_accounting(
     config_factory,
     counter: str,
 ) -> None:
-    config = _config_with_repository_differential(config_factory())
+    config = _config_with_repository_differential(config_factory(language_profile="solidity-evm"))
     expected = _differential_result(config, "9" * 64)
     drifted = expected.model_copy(deep=True)
     assert drifted.matrix is not None
@@ -2485,7 +2524,7 @@ def test_repository_differential_projection_retains_rpc_error_accounting(
 def test_repository_differential_projection_retains_security_and_result_semantics(
     config_factory,
 ) -> None:
-    config = _config_with_repository_differential(config_factory())
+    config = _config_with_repository_differential(config_factory(language_profile="solidity-evm"))
     expected = _differential_result(config, "9" * 64)
     expected_projection = _repository_differential_projection(expected)
 
@@ -2536,7 +2575,7 @@ def test_repository_differential_projection_retains_security_and_result_semantic
 def test_repository_differential_projection_retains_cleanup_minima_and_safety_facts(
     config_factory,
 ) -> None:
-    config = _config_with_repository_differential(config_factory())
+    config = _config_with_repository_differential(config_factory(language_profile="solidity-evm"))
     expected = _differential_result(config, "9" * 64)
     expected_projection = _repository_differential_projection(expected)
 
@@ -2576,7 +2615,7 @@ def test_repository_differential_projection_retains_cleanup_minima_and_safety_fa
 def test_repository_differential_qualification_requires_copy_and_lifecycle_evidence(
     config_factory,
 ) -> None:
-    config = _config_with_repository_differential(config_factory())
+    config = _config_with_repository_differential(config_factory(language_profile="solidity-evm"))
     expected = _differential_result(config, "9" * 64)
 
     missing_copy = expected.model_copy(deep=True)
@@ -2705,7 +2744,7 @@ def test_replay_loads_pipeline_candidate_resolution_as_typed_evidence(
     config_factory,
     candidate_factory,
 ) -> None:
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",
@@ -2730,7 +2769,7 @@ def test_replay_rejects_high_candidate_without_test_result_or_resolution(
     config_factory,
     candidate_factory,
 ) -> None:
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",
@@ -2757,7 +2796,7 @@ def test_replay_accepts_inconclusive_high_candidate_without_generated_test(
     config_factory,
     candidate_factory,
 ) -> None:
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",
@@ -2787,7 +2826,7 @@ def test_replay_rejects_resolution_for_non_obligated_model_candidate(
     config_factory,
     candidate_factory,
 ) -> None:
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",
@@ -2850,7 +2889,7 @@ def test_replay_rejects_unjoined_or_ambiguous_candidate_resolutions(
     tamper: str,
     expected_error: str,
 ) -> None:
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",
@@ -2889,7 +2928,7 @@ async def test_local_fixture_replays_scanner_saved_test_and_counterexample_offli
     candidate_factory,
     monkeypatch,
 ) -> None:
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",
@@ -2941,7 +2980,7 @@ async def test_v11_replay_reconstructs_embedded_profile_override(
     config_factory,
     candidate_factory,
 ) -> None:
-    base_config = config_factory()
+    base_config = config_factory(language_profile="solidity-evm")
     cli_overrides = audit_config_overrides({"profile": AuditProfile.DEEP.value})
     effective_config = cli_overrides.apply(base_config)
     candidate = candidate_factory(
@@ -2978,7 +3017,7 @@ def test_verify_run_cli_reconstructs_embedded_maximum_profile_without_config(
     config_factory,
     candidate_factory,
 ) -> None:
-    base_config = config_factory()
+    base_config = config_factory(language_profile="solidity-evm")
     cli_overrides = audit_config_overrides({"profile": AuditProfile.MAXIMUM_ASSURANCE.value})
     effective_config = cli_overrides.apply(base_config)
     candidate = candidate_factory(
@@ -3028,7 +3067,7 @@ async def test_v11_replay_reapplies_profile_override_to_explicit_base_config(
     config_factory,
     candidate_factory,
 ) -> None:
-    base_config = config_factory()
+    base_config = config_factory(language_profile="solidity-evm")
     cli_overrides = audit_config_overrides({"profile": AuditProfile.DEEP.value})
     effective_config = cli_overrides.apply(base_config)
     candidate = candidate_factory(
@@ -3073,7 +3112,7 @@ async def test_v11_replay_rejects_changed_base_masked_by_profile_override(
     config_factory,
     candidate_factory,
 ) -> None:
-    base_config = config_factory()
+    base_config = config_factory(language_profile="solidity-evm")
     cli_overrides = audit_config_overrides({"profile": AuditProfile.DEEP.value})
     effective_config = cli_overrides.apply(base_config)
     candidate = candidate_factory(
@@ -3117,7 +3156,7 @@ async def test_v10_replay_requires_explicit_config(
     config_factory,
     candidate_factory,
 ) -> None:
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",
@@ -3166,7 +3205,7 @@ def test_verify_run_rejects_self_consistent_run_options_manifest_tamper(
     config_factory,
     candidate_factory,
 ) -> None:
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",
@@ -3191,6 +3230,9 @@ def test_verify_run_rejects_self_consistent_run_options_manifest_tamper(
             "effective_config_sha256": run_configuration["effective_config_sha256"],
             "requested_profile": run_configuration["requested_profile"],
             "achieved_profile": run_configuration["achieved_profile"],
+            "requested_language_profile": run_configuration["requested_language_profile"],
+            "achieved_language_profile": run_configuration["achieved_language_profile"],
+            "reduced_language_capability": run_configuration["reduced_language_capability"],
         }
     )
     _reseal_manifest_payload(manifest_path, payload)
@@ -3213,7 +3255,7 @@ def test_verify_run_rejects_manifest_and_report_tamper_against_emitted_metadata(
     config_factory,
     candidate_factory,
 ) -> None:
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",
@@ -3238,6 +3280,9 @@ def test_verify_run_rejects_manifest_and_report_tamper_against_emitted_metadata(
             "effective_config_sha256": run_configuration["effective_config_sha256"],
             "requested_profile": run_configuration["requested_profile"],
             "achieved_profile": run_configuration["achieved_profile"],
+            "requested_language_profile": run_configuration["requested_language_profile"],
+            "achieved_language_profile": run_configuration["achieved_language_profile"],
+            "reduced_language_capability": run_configuration["reduced_language_capability"],
         }
     )
 
@@ -3282,7 +3327,7 @@ def test_verify_run_rejects_v11_missing_metadata_when_binding_is_removed(
     config_factory,
     candidate_factory,
 ) -> None:
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",
@@ -3317,7 +3362,7 @@ def test_verify_run_rejects_type_confused_metadata_boolean(
     config_factory,
     candidate_factory,
 ) -> None:
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",
@@ -3355,7 +3400,7 @@ def test_verify_run_normalizes_nonfinite_metadata_to_stale(
     candidate_factory,
     nonfinite_json: str,
 ) -> None:
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",
@@ -3393,7 +3438,7 @@ def test_verify_run_rejects_override_layer_reclassification(
     config_factory,
     candidate_factory,
 ) -> None:
-    base_config = config_factory()
+    base_config = config_factory(language_profile="solidity-evm")
     cli_overrides = audit_config_overrides({"profile": AuditProfile.DEEP.value})
     effective_config = cli_overrides.apply(base_config)
     candidate = candidate_factory(
@@ -3426,6 +3471,9 @@ def test_verify_run_rejects_override_layer_reclassification(
             "effective_config_sha256": run_configuration["effective_config_sha256"],
             "requested_profile": run_configuration["requested_profile"],
             "achieved_profile": run_configuration["achieved_profile"],
+            "requested_language_profile": run_configuration["requested_language_profile"],
+            "achieved_language_profile": run_configuration["achieved_language_profile"],
+            "reduced_language_capability": run_configuration["reduced_language_capability"],
         }
     )
     _reseal_manifest_payload(manifest_path, payload)
@@ -3448,7 +3496,7 @@ async def test_replay_detects_semantic_drift_and_verifies_before_execution(
     config_factory,
     candidate_factory,
 ) -> None:
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",
@@ -3497,7 +3545,7 @@ def test_replay_cli_and_published_schema(
     candidate_factory,
     monkeypatch,
 ) -> None:
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",
@@ -3554,7 +3602,7 @@ def test_verify_run_cli_uses_embedded_v11_configuration(
     config_factory,
     candidate_factory,
 ) -> None:
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",
@@ -3590,7 +3638,7 @@ def test_replay_writer_rejects_links(
     config_factory,
     candidate_factory,
 ) -> None:
-    config = config_factory()
+    config = config_factory(language_profile="solidity-evm")
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",

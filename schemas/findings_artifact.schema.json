@@ -1136,6 +1136,144 @@
       "title": "InvariantExecutionCandidateProvenance",
       "type": "object"
     },
+    "LanguageCapabilityAssessment": {
+      "additionalProperties": false,
+      "description": "Deterministic, source-bound authority for the product capability actually available.",
+      "properties": {
+        "achieved_profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LanguageCapabilityProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "blocking_discovery_omissions": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "title": "Blocking Discovery Omissions",
+          "type": "array"
+        },
+        "discovered_text_file_count": {
+          "minimum": 0,
+          "title": "Discovered Text File Count",
+          "type": "integer"
+        },
+        "discovery_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Discovery Inventory Sha256",
+          "type": "string"
+        },
+        "evm_maximum_assurance_eligible": {
+          "title": "Evm Maximum Assurance Eligible",
+          "type": "boolean"
+        },
+        "evm_portfolio_applicable": {
+          "title": "Evm Portfolio Applicable",
+          "type": "boolean"
+        },
+        "language_counts": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "maxProperties": 128,
+          "title": "Language Counts",
+          "type": "object"
+        },
+        "limitations": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "non_solidity_file_count": {
+          "minimum": 0,
+          "title": "Non Solidity File Count",
+          "type": "integer"
+        },
+        "plugin_id": {
+          "pattern": "^mmaudit\\.language\\.[a-z0-9-]{3,64}$",
+          "title": "Plugin Id",
+          "type": "string"
+        },
+        "plugin_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Plugin Version",
+          "type": "string"
+        },
+        "reduced_capability": {
+          "title": "Reduced Capability",
+          "type": "boolean"
+        },
+        "requested_profile": {
+          "$ref": "#/$defs/LanguageCapabilityProfile"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "solidity_file_count": {
+          "minimum": 0,
+          "title": "Solidity File Count",
+          "type": "integer"
+        },
+        "solidity_project_count": {
+          "minimum": 0,
+          "title": "Solidity Project Count",
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/$defs/LanguageCapabilityStatus"
+        }
+      },
+      "required": [
+        "plugin_id",
+        "requested_profile",
+        "status",
+        "discovered_text_file_count",
+        "solidity_file_count",
+        "non_solidity_file_count",
+        "solidity_project_count",
+        "discovery_inventory_sha256",
+        "evm_portfolio_applicable",
+        "evm_maximum_assurance_eligible",
+        "reduced_capability"
+      ],
+      "title": "LanguageCapabilityAssessment",
+      "type": "object"
+    },
+    "LanguageCapabilityProfile": {
+      "description": "Explicit product capability selected independently of analysis depth.",
+      "enum": [
+        "solidity-evm",
+        "generic-source-review"
+      ],
+      "title": "LanguageCapabilityProfile",
+      "type": "string"
+    },
+    "LanguageCapabilityStatus": {
+      "description": "Evidence-derived relationship between requested capability and audited source.",
+      "enum": [
+        "MATCHED",
+        "REDUCED",
+        "MISMATCH",
+        "INCONCLUSIVE"
+      ],
+      "title": "LanguageCapabilityStatus",
+      "type": "string"
+    },
     "Location": {
       "additionalProperties": false,
       "properties": {
@@ -2276,6 +2414,50 @@
   "$id": "https://mmaudit.local/schemas/findings_artifact.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.2"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "language_capability": {
+            "not": {
+              "type": "null"
+            }
+          }
+        },
+        "required": [
+          "language_capability"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "enum": [
+              "1.1"
+            ]
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "not": {
+          "required": [
+            "language_capability"
+          ]
+        }
+      }
+    }
+  ],
   "description": "Complete final/candidate finding history for the forensic bundle.",
   "properties": {
     "candidate_findings": {
@@ -2319,6 +2501,17 @@
       },
       "title": "Findings",
       "type": "array"
+    },
+    "language_capability": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LanguageCapabilityAssessment"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "limitations": {
       "items": {
@@ -2380,8 +2573,11 @@
       "$ref": "#/$defs/AuditRunStatus"
     },
     "schema_version": {
-      "const": "1.1",
-      "default": "1.1",
+      "default": "1.2",
+      "enum": [
+        "1.1",
+        "1.2"
+      ],
       "title": "Schema Version",
       "type": "string"
     },

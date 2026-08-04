@@ -213,9 +213,7 @@ from mmaudit.solidity.reproduction import default_isolation_backend
 
 app = typer.Typer(
     name="mmaudit",
-    help=(
-        "Solidity/EVM security auditor with an explicit reduced generic source-review mode."
-    ),
+    help=("Solidity/EVM security auditor with an explicit reduced generic source-review mode."),
     no_args_is_help=True,
     pretty_exceptions_enable=False,
 )
@@ -354,10 +352,7 @@ def doctor_command(
         AuditProfile | None,
         typer.Option(
             "--profile",
-            help=(
-                "Assurance-depth override; maximum-assurance is valid only with "
-                "solidity-evm."
-            ),
+            help=("Assurance-depth override; maximum-assurance is valid only with solidity-evm."),
         ),
     ] = None,
     language_profile: Annotated[
@@ -2048,10 +2043,7 @@ def scan_command(
         AuditProfile | None,
         typer.Option(
             "--profile",
-            help=(
-                "Assurance-depth override; maximum-assurance is valid only with "
-                "solidity-evm."
-            ),
+            help=("Assurance-depth override; maximum-assurance is valid only with solidity-evm."),
         ),
     ] = None,
     language_profile: Annotated[
@@ -2420,10 +2412,7 @@ def run_command(
         AuditProfile | None,
         typer.Option(
             "--profile",
-            help=(
-                "Assurance-depth override; maximum-assurance is valid only with "
-                "solidity-evm."
-            ),
+            help=("Assurance-depth override; maximum-assurance is valid only with solidity-evm."),
         ),
     ] = None,
     language_profile: Annotated[
@@ -3567,9 +3556,7 @@ def _audit_config_overrides(
             "zero" if require_zdr or privacy_profile is PrivacyProfile.STRICT_ZDR else None
         ),
         "profile": profile.value if profile is not None else None,
-        "language_profile": (
-            language_profile.value if language_profile is not None else None
-        ),
+        "language_profile": (language_profile.value if language_profile is not None else None),
         "scope.mode": scope.value if scope is not None else None,
         "scope.require_complete": require_complete_scope,
         "maximum_assurance.minimum_model_families": min_model_families,

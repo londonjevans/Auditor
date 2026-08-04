@@ -16,12 +16,17 @@ from mmaudit.models.schemas import (
     CoverageMetric,
     CoverageProvenance,
     ExecutionEvidenceKind,
+    InvariantSuite,
+    LanguageCapabilityFileEvidence,
+    LanguageCapabilityProfile,
     MaximumAssuranceAssessment,
     MaximumAssuranceRequirement,
     MaximumAssuranceStatus,
     ModelRequestValidationStatus,
+    RepositoryDifferentialRunStatus,
     RepositoryFile,
     RepositoryMap,
+    RepositorySuiteDifferentialRun,
     ScannerRun,
     ScannerStatus,
     SolidityCompilationResult,
@@ -30,13 +35,17 @@ from mmaudit.models.schemas import (
     SolidityProjectType,
     UsageRecord,
 )
+from mmaudit.orchestration.coverage import generic_source_coverage_metrics
 from mmaudit.orchestration.run_status import (
     assess_minimum_analysis_floor,
     audit_quality_status_for_run_status,
     minimum_analysis_floor_quality_gate,
 )
 from tests.identity_fixtures import bind_synthetic_usage_identity
-from tests.language_capability_support import matched_solidity_language_capability
+from tests.language_capability_support import (
+    language_capability_for_files,
+    matched_solidity_language_capability,
+)
 
 NOW = datetime(2026, 7, 29, 12, 0, tzinfo=UTC)
 
@@ -403,6 +412,18 @@ def test_orchestration_failure_preserves_partial_real_analysis(
     assert not floor.minimum_floor_met
 
 
+def test_orchestration_failure_text_is_bounded_and_single_line() -> None:
+    floor = _assessment(
+        orchestration_failures=("provider validation failed:\n\tinvalid response" + "x" * 3_000,),
+    )
+
+    assert floor.run_status is AuditRunStatus.FAILED
+    assert len(floor.orchestration_failures) == 1
+    assert len(floor.orchestration_failures[0]) == 2_000
+    assert "\n" not in floor.orchestration_failures[0]
+    assert "\t" not in floor.orchestration_failures[0]
+
+
 def _report_payload() -> dict[str, object]:
     return {
         "schema_version": "1.0",
@@ -557,6 +578,55 @@ def test_typed_report_requires_floor_status_quality_and_completion_consistency()
             AuditReport.model_validate(mutation)
 
 
+def test_maximum_complete_report_rejects_blocking_language_inventory_omission() -> None:
+    scanner = _real_scanner()
+    usage = [_usage(role) for role in ANALYSIS_ROLES]
+    floor = _assessment(
+        scanner_runs=[scanner],
+        usage=usage,
+        required_model_roles=ANALYSIS_ROLES,
+    )
+    payload = _typed_report_payload(
+        floor=floor,
+        scanner_runs=[scanner],
+        usage=usage,
+        coverage=_coverage(),
+    )
+    blocked_capability = matched_solidity_language_capability(
+        path="src/Safe.sol",
+        content=b"contract Safe { function run() external {} }\n",
+    ).assessment.model_copy(
+        update={"blocking_discovery_omissions": ("repository: max_files reached",)}
+    )
+    maximum = MaximumAssuranceAssessment(
+        requested=True,
+        required=True,
+        downgrade_allowed=False,
+        downgraded=False,
+        status=MaximumAssuranceStatus.COMPLETE,
+        requirements=[
+            MaximumAssuranceRequirement(
+                engine="language_capability_profile",
+                required=True,
+                passed=True,
+                blocking=False,
+                state=AnalysisState.DETERMINISTIC,
+                detail="Synthetic clause would pass without the blocking inventory omission.",
+            )
+        ],
+    )
+
+    with pytest.raises(ValidationError, match="matched Solidity/EVM capability"):
+        AuditReport.model_validate(
+            {
+                **payload,
+                "audit_profile": AuditProfile.MAXIMUM_ASSURANCE,
+                "maximum_assurance": maximum,
+                "language_capability": blocked_capability,
+            }
+        )
+
+
 def test_current_python_report_cannot_claim_complete_without_language_capability() -> None:
     scanner = _real_scanner()
     usage = [_usage(role) for role in ANALYSIS_ROLES]
@@ -625,5 +695,155 @@ def test_matched_solidity_capability_cannot_complete_without_applicable_runtime(
         "solidity": {"projects": [], "compilation": []},
     }
 
-    with pytest.raises(ValidationError, match="capability conflicts.*Solidity applicability"):
+    with pytest.raises(ValidationError, match=r"capability conflicts.*Solidity applicability"):
         AuditReport.model_validate(payload)
+
+
+def test_current_report_language_census_must_match_retained_source_inventory() -> None:
+    scanner = _real_scanner()
+    usage = [_usage(role) for role in ANALYSIS_ROLES]
+    floor = _assessment(
+        scanner_runs=[scanner],
+        usage=usage,
+        required_model_roles=ANALYSIS_ROLES,
+    )
+    payload = _typed_report_payload(
+        floor=floor,
+        scanner_runs=[scanner],
+        usage=usage,
+        coverage=_coverage(),
+    )
+    payload["repository"] = _repository().model_copy(update={"languages": {"Solidity": 2}})
+
+    with pytest.raises(ValidationError, match="language census"):
+        AuditReport.model_validate(payload)
+
+
+def test_reduced_generic_report_rejects_substantive_solidity_portfolio_evidence() -> None:
+    repository = RepositoryMap(
+        root_name="synthetic-python-target",
+        languages={"Python": 1},
+        frameworks=[],
+        manifests=[],
+        entry_points=["app.py"],
+        api_surfaces=[],
+        auth_components=[],
+        data_layers=[],
+        network_clients=[],
+        file_handlers=[],
+        configuration_files=[],
+        sensitive_processing=[],
+        security_tests=[],
+        files=[
+            RepositoryFile(
+                path="app.py",
+                size=10,
+                lines=1,
+                sha256="f" * 64,
+                language="Python",
+            )
+        ],
+    )
+    usage = [_usage(role) for role in ANALYSIS_ROLES]
+    floor = assess_minimum_analysis_floor(
+        repository=repository,
+        compilations=[],
+        scanner_runs=[],
+        usage=usage,
+        required_model_roles=ANALYSIS_ROLES,
+        coverage_metrics=generic_source_coverage_metrics(
+            repository,
+            [],
+            require_scanner_completion=False,
+        ),
+        solidity_applicable=False,
+        static_analysis_applicable=False,
+    )
+    capability = language_capability_for_files(
+        LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW,
+        (
+            LanguageCapabilityFileEvidence(
+                path="app.py",
+                size=10,
+                lines=1,
+                sha256="f" * 64,
+                language="Python",
+            ),
+        ),
+    )
+    payload = _typed_report_payload(
+        floor=floor,
+        scanner_runs=[],
+        usage=usage,
+        coverage={},
+    )
+    payload.update(
+        {
+            "repository": repository,
+            "language_capability": capability.assessment,
+            "solidity_coverage": SolidityCoverage(
+                context_limitations=[
+                    "Solidity/EVM coverage is not applicable to generic-source-review."
+                ]
+            ),
+            "metadata": {
+                "scanner_only": False,
+                "solidity": {"projects": [], "compilation": []},
+            },
+        }
+    )
+    assert AuditReport.model_validate(payload).run_status is AuditRunStatus.COMPLETE
+
+    with pytest.raises(ValidationError, match="Solidity/EVM portfolio evidence"):
+        AuditReport.model_validate(
+            {
+                **payload,
+                "solidity_coverage": SolidityCoverage(
+                    projects_discovered=1,
+                    context_limitations=[
+                        "Solidity/EVM coverage is not applicable to generic-source-review."
+                    ],
+                ),
+            }
+        )
+    with pytest.raises(ValidationError, match="Solidity/EVM portfolio evidence"):
+        AuditReport.model_validate({**payload, "invariants": InvariantSuite()})
+    with pytest.raises(ValidationError, match="scanner_runs:slither"):
+        AuditReport.model_validate({**payload, "scanner_runs": [_real_scanner()]})
+    differential = RepositorySuiteDifferentialRun.sealed(
+        status=RepositoryDifferentialRunStatus.FAILED,
+        configuration_sha256="f" * 64,
+        requested_state_ids=("clean-local", "pinned-state"),
+        required_repetitions=2,
+        matrix=None,
+        limitations=("Synthetic repository differential is not applicable.",),
+    )
+    with pytest.raises(ValidationError, match="repository_suite_differential"):
+        AuditReport.model_validate({**payload, "repository_suite_differential": differential})
+    contradictory_property_metadata = {
+        "scanner_only": False,
+        "solidity": {
+            "projects": [],
+            "compilation": [],
+            "property_corpus_summary": {
+                "properties": 1,
+                "limitations": 0,
+                "corpus_hash": "f" * 64,
+            },
+        },
+    }
+    with pytest.raises(ValidationError, match=r"metadata\.solidity"):
+        AuditReport.model_validate({**payload, "metadata": contradictory_property_metadata})
+    contradictory_metadata = {
+        "scanner_only": False,
+        "solidity": {
+            "projects": [],
+            "compilation": [],
+            "invariant_summary": {"executed": 99},
+            "formal_summary": {"runs": 99, "statuses": {"formal": "proved"}},
+            "generated_test_specifications": 99,
+            "reproduction_results": 99,
+        },
+    }
+    with pytest.raises(ValidationError, match=r"metadata\.solidity"):
+        AuditReport.model_validate({**payload, "metadata": contradictory_metadata})

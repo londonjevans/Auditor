@@ -9520,6 +9520,7 @@ CI_DETERMINISTIC_COVERAGE_METRIC_IDS: frozenset[str] = frozenset(
         "compiler_contracts_indexed",
         "dependency_resolution",
         "external_calls_classified",
+        "generic_source_files_ingested",
         "scanner_completion",
         "solidity_files_indexed",
         "storage_variables_modelled",
@@ -11271,11 +11272,7 @@ class LanguageCapabilityFileEvidence(StrictModel):
     @classmethod
     def path_is_normalized_and_local(cls, value: str) -> str:
         parts = value.split("/")
-        if (
-            value.startswith("/")
-            or "\\" in value
-            or any(part in {"", ".", ".."} for part in parts)
-        ):
+        if value.startswith("/") or "\\" in value or any(part in {"", ".", ".."} for part in parts):
             raise ValueError("language capability source path must be normalized and local")
         return value
 
@@ -11285,10 +11282,47 @@ class LanguageCapabilityArtifact(StrictModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.1"] = "1.1"
     assessment: LanguageCapabilityAssessment
     files: tuple[LanguageCapabilityFileEvidence, ...] = Field(max_length=100_000)
     omitted: tuple[str, ...] = Field(default=(), max_length=100_000)
+    effective_ignore_rules: tuple[str, ...] = Field(min_length=1, max_length=100_000)
+    runtime_output_exclusion_root: str | None
+
+    @field_validator("effective_ignore_rules")
+    @classmethod
+    def ignore_rules_are_bounded_and_printable(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if any(
+            not rule
+            or len(rule.encode("utf-8", errors="surrogatepass")) > 4_096
+            or any(
+                ord(character) == 127 or unicodedata.category(character) in {"Cc", "Cs"}
+                for character in rule
+            )
+            for rule in value
+        ):
+            raise ValueError("effective discovery ignore rules must be nonempty bounded text")
+        return value
+
+    @field_validator("runtime_output_exclusion_root")
+    @classmethod
+    def output_root_is_unambiguous_and_local(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parts = value.split("/")
+        if (
+            not value
+            or value.startswith("/")
+            or "\\" in value
+            or any(part in {"", ".", ".."} for part in parts)
+            or len(value.encode("utf-8", errors="surrogatepass")) > 4_096
+            or any(
+                ord(character) == 127 or unicodedata.category(character) in {"Cc", "Cs"}
+                for character in value
+            )
+        ):
+            raise ValueError("runtime output exclusion root must be normalized and local")
+        return value
 
     @model_validator(mode="after")
     def inventory_recomputes_the_assessment(self) -> LanguageCapabilityArtifact:
@@ -11663,6 +11697,7 @@ class AuditReport(StrictModel):
             raise ValueError("report schema 1.2 requires typed minimum-floor evidence")
         if self.language_capability is None:
             raise ValueError("report schema 1.2 requires typed language capability evidence")
+        self._validate_current_repository_language_census()
         if self.run_status is not self.minimum_analysis_floor.run_status:
             raise ValueError("report run status conflicts with minimum analysis floor")
         if self.completed != (self.run_status is AuditRunStatus.COMPLETE):
@@ -11708,14 +11743,21 @@ class AuditReport(StrictModel):
                     "run completion conflicts with the required maximum-assurance assessment"
                 )
         capability = self.language_capability
-        if capability.evm_portfolio_applicable is not self.minimum_analysis_floor.solidity_applicable:
+        if (
+            capability.evm_portfolio_applicable
+            is not self.minimum_analysis_floor.solidity_applicable
+        ):
             raise ValueError(
                 "language capability conflicts with minimum-floor Solidity applicability"
             )
-        if capability.status in {
-            LanguageCapabilityStatus.MISMATCH,
-            LanguageCapabilityStatus.INCONCLUSIVE,
-        } and self.run_status is AuditRunStatus.COMPLETE:
+        if (
+            capability.status
+            in {
+                LanguageCapabilityStatus.MISMATCH,
+                LanguageCapabilityStatus.INCONCLUSIVE,
+            }
+            and self.run_status is AuditRunStatus.COMPLETE
+        ):
             raise ValueError("unachieved language capability cannot produce a COMPLETE run")
         if (
             capability.achieved_profile is LanguageCapabilityProfile.SOLIDITY_EVM
@@ -11729,13 +11771,129 @@ class AuditReport(StrictModel):
                 capability.status is not LanguageCapabilityStatus.MATCHED
                 or capability.achieved_profile is not LanguageCapabilityProfile.SOLIDITY_EVM
                 or not capability.evm_maximum_assurance_eligible
+                or bool(capability.blocking_discovery_omissions)
             )
         ):
-            raise ValueError(
-                "maximum-assurance completion lacks matched Solidity/EVM capability"
-            )
+            raise ValueError("maximum-assurance completion lacks matched Solidity/EVM capability")
+        self._validate_language_portfolio_boundary(capability)
         self._validate_minimum_floor_runtime_bindings(self.minimum_analysis_floor)
         return self
+
+    def _validate_current_repository_language_census(self) -> None:
+        counts: dict[str, int] = {}
+        for source in self.repository.files:
+            counts[source.language] = counts.get(source.language, 0) + 1
+        if self.repository.languages != dict(sorted(counts.items())):
+            raise ValueError(
+                "current report repository language census differs from retained source files"
+            )
+
+    def _validate_language_portfolio_boundary(
+        self,
+        capability: LanguageCapabilityAssessment,
+    ) -> None:
+        if capability.evm_portfolio_applicable:
+            return
+        prohibited: list[str] = []
+        if self.invariants is not None:
+            prohibited.append("invariants")
+        if self.invariant_review is not None:
+            prohibited.append("invariant_review")
+        if self.repository_suite_differential is not None:
+            prohibited.append("repository_suite_differential")
+        executed_evm_scanners = sorted(
+            {
+                run.scanner
+                for run in self.scanner_runs
+                if run.scanner in {"foundry_fork", "hardhat_fork", "slither"}
+                and run.status is not ScannerStatus.SKIPPED
+            }
+        )
+        if executed_evm_scanners:
+            prohibited.append("scanner_runs:" + ",".join(executed_evm_scanners))
+        for name, evidence in (
+            ("invariant_executions", self.invariant_executions),
+            ("execution_origin_dispositions", self.execution_origin_dispositions),
+            ("economic_simulations", self.economic_simulations),
+            ("formal_runs", self.formal_runs),
+            ("reproductions", self.reproductions),
+        ):
+            if evidence:
+                prohibited.append(name)
+        if self.solidity_coverage is not None:
+            observed = self.solidity_coverage.model_dump(
+                mode="json",
+                exclude={"context_limitations"},
+            )
+            empty = SolidityCoverage().model_dump(
+                mode="json",
+                exclude={"context_limitations"},
+            )
+            limitations = " ".join(self.solidity_coverage.context_limitations).casefold()
+            if (
+                observed != empty
+                or "solidity/evm" not in limitations
+                or "not applicable" not in limitations
+            ):
+                prohibited.append("solidity_coverage")
+        solidity_metadata = self.metadata.get("solidity")
+        if isinstance(solidity_metadata, dict):
+            summary_fields = {
+                "index_summary": ("entities", "ast_sources", "fallback_sources"),
+                "graph_summary": ("edges", "warnings"),
+                "invariant_summary": (
+                    "discovered",
+                    "executable",
+                    "executed",
+                    "protocol_profiles",
+                    "model_review_proposals",
+                    "model_review_rejections",
+                ),
+                "execution_origin_summary": (
+                    "originated_candidates",
+                    "rejected_counterexamples",
+                ),
+                "property_corpus_summary": ("properties", "limitations"),
+                "economic_simulation_summary": (
+                    "planned",
+                    "executed",
+                    "replayed",
+                    "counterexamples_minimized",
+                    "by_template",
+                ),
+                "formal_summary": ("runs", "statuses"),
+            }
+            claimed_summaries: list[str] = []
+
+            def is_neutral(value: object) -> bool:
+                return (
+                    value is None
+                    or value is False
+                    or value == 0
+                    or value == ()
+                    or value == []
+                    or value == {}
+                )
+
+            for summary_name, fields in summary_fields.items():
+                summary = solidity_metadata.get(summary_name)
+                if summary is not None and (
+                    not isinstance(summary, dict)
+                    or any(not is_neutral(summary.get(field)) for field in fields)
+                ):
+                    claimed_summaries.append(summary_name)
+            for field in ("generated_test_specifications", "reproduction_results"):
+                if not is_neutral(solidity_metadata.get(field)):
+                    claimed_summaries.append(field)
+            if solidity_metadata.get("shard_summary") is not None:
+                claimed_summaries.append("shard_summary")
+            if claimed_summaries:
+                prohibited.append("metadata.solidity:" + ",".join(sorted(claimed_summaries)))
+        if prohibited:
+            raise ValueError(
+                "non-EVM capability retains Solidity/EVM portfolio evidence: "
+                + ", ".join(sorted(prohibited))
+            )
 
     def _validate_current_finding_inventories(self) -> None:
         """Keep current active, rejected, and reporting-filtered inventories disjoint."""
@@ -12042,15 +12200,7 @@ class AuditReport(StrictModel):
         ):
             raise ValueError("minimum-floor required model roles conflict with run mode")
 
-        coverage = self.effective_solidity_coverage()
-        coverage_metrics = coverage.quality_metrics if coverage is not None else {}
-        ci_metadata = self.metadata.get("ci")
-        if scanner_only and isinstance(ci_metadata, dict) and ci_metadata.get("enabled") is True:
-            coverage_metrics = {
-                metric_id: metric
-                for metric_id, metric in coverage_metrics.items()
-                if metric_id in CI_DETERMINISTIC_COVERAGE_METRIC_IDS
-            }
+        coverage_metrics = self.effective_minimum_floor_coverage_metrics()
         coverage_ids = sorted(coverage_metrics)
         coverage_valid = bool(coverage_ids) and all(
             not metric.failures and (metric.denominator > 0 or bool(metric.not_applicable_evidence))
@@ -12116,6 +12266,30 @@ class AuditReport(StrictModel):
         if self.solidity_coverage is not None:
             return self.solidity_coverage
         return self._legacy_solidity_coverage()
+
+    def effective_minimum_floor_coverage_metrics(self) -> dict[str, CoverageMetric]:
+        """Return capability-appropriate coverage without implying an EVM portfolio."""
+
+        capability = self.language_capability
+        scanner_only = self.metadata.get("scanner_only") is True
+        if capability is not None and not capability.evm_portfolio_applicable:
+            from mmaudit.orchestration.coverage import generic_source_coverage_metrics
+
+            return generic_source_coverage_metrics(
+                self.repository,
+                self.scanner_runs,
+                require_scanner_completion=scanner_only,
+            )
+        coverage = self.effective_solidity_coverage()
+        metrics = dict(coverage.quality_metrics) if coverage is not None else {}
+        ci_metadata = self.metadata.get("ci")
+        if scanner_only and isinstance(ci_metadata, dict) and ci_metadata.get("enabled") is True:
+            return {
+                metric_id: metric
+                for metric_id, metric in metrics.items()
+                if metric_id in CI_DETERMINISTIC_COVERAGE_METRIC_IDS
+            }
+        return metrics
 
     def _legacy_solidity_coverage(self) -> SolidityCoverage | None:
         solidity = self.metadata.get("solidity")

@@ -125,6 +125,7 @@ def _run(
         achieved_language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         capability_status=LanguageCapabilityStatus.MATCHED,
         reduced_language_capability=False,
+        blocking_discovery_omissions=(),
         language_capability_sha256="4" * 64,
         artifact_evidence_file_sha256="0" * 64,
         artifact_evidence_file_size=1_000,

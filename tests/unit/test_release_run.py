@@ -53,11 +53,11 @@ from mmaudit.traceability import (
     build_traceability_matrix,
     write_traceability_artifact,
 )
-from tests.report_authority_fixtures import write_run_terminal_report_authority
 from tests.language_capability_support import (
     empty_language_capability,
     write_language_capability_artifact,
 )
+from tests.report_authority_fixtures import write_run_terminal_report_authority
 
 ROOT = Path(__file__).resolve().parents[2]
 COMMIT = "a" * 40

@@ -440,8 +440,7 @@ class ScannerRunner:
             for name, adapter in self.adapters.items():
                 scanner_config = self.scanner_config(name)
                 evm_scanner_outside_capability = (
-                    self.config.language_profile
-                    is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
+                    self.config.language_profile is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
                     and name in {"slither", "foundry_fork", "hardhat_fork"}
                 )
                 if (

@@ -134,12 +134,11 @@ def validate_release_report_integrity(
     if report.status is ReleaseStatus.COMPLETE and (
         report.run.requested_profile is not AuditProfile.MAXIMUM_ASSURANCE
         or report.run.achieved_profile is not AuditProfile.MAXIMUM_ASSURANCE
-        or report.run.requested_language_profile
-        is not LanguageCapabilityProfile.SOLIDITY_EVM
-        or report.run.achieved_language_profile
-        is not LanguageCapabilityProfile.SOLIDITY_EVM
+        or report.run.requested_language_profile is not LanguageCapabilityProfile.SOLIDITY_EVM
+        or report.run.achieved_language_profile is not LanguageCapabilityProfile.SOLIDITY_EVM
         or report.run.capability_status is not LanguageCapabilityStatus.MATCHED
         or report.run.reduced_language_capability
+        or bool(report.run.blocking_discovery_omissions)
         or report.limitations
     ):
         raise ValueError("complete release report has not achieved unqualified maximum assurance")
@@ -416,12 +415,11 @@ def require_complete_release_report(report: ReleaseGateReport) -> ReleaseGateRep
         or validated.failed_gates
         or validated.run.requested_profile is not AuditProfile.MAXIMUM_ASSURANCE
         or validated.run.achieved_profile is not AuditProfile.MAXIMUM_ASSURANCE
-        or validated.run.requested_language_profile
-        is not LanguageCapabilityProfile.SOLIDITY_EVM
-        or validated.run.achieved_language_profile
-        is not LanguageCapabilityProfile.SOLIDITY_EVM
+        or validated.run.requested_language_profile is not LanguageCapabilityProfile.SOLIDITY_EVM
+        or validated.run.achieved_language_profile is not LanguageCapabilityProfile.SOLIDITY_EVM
         or validated.run.capability_status is not LanguageCapabilityStatus.MATCHED
         or validated.run.reduced_language_capability
+        or bool(validated.run.blocking_discovery_omissions)
         or validated.limitations
         or any(
             gate.status is not ReleaseGateStatus.PASSED

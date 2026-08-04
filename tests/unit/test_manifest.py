@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 import mmaudit.orchestration.manifest as manifest_module
+import mmaudit.orchestration.verification as verification_module
 from mmaudit.cli import app
 from mmaudit.config import (
     _AUDIT_OVERRIDE_PATHS,
@@ -22,7 +23,7 @@ from mmaudit.config import (
     AuditRunOptions,
     LoadedAuditConfig,
 )
-from mmaudit.constants import ExitCode
+from mmaudit.constants import DEFAULT_EXCLUSIONS, ExitCode
 from mmaudit.models.qualification import VerifiedProductionQualification
 from mmaudit.models.reasoning import (
     ReasoningExecutionEvidence,
@@ -39,6 +40,7 @@ from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     LanguageCapabilityArtifact,
     LanguageCapabilityFileEvidence,
+    LanguageCapabilityProfile,
     Location,
     ModelRequestValidationStatus,
     RepositoryDifferentialRunStatus,
@@ -367,6 +369,7 @@ def _write_required_artifacts(
     run_dir: Path,
     report: AuditReport,
     *,
+    language_artifact: LanguageCapabilityArtifact | None = None,
     legacy_model_execution: bool = False,
     source_contents: dict[str, str] | None = None,
     scheduler_artifact: SchedulerArtifact | None = None,
@@ -374,20 +377,25 @@ def _write_required_artifacts(
     reproduction_resolutions: tuple[CandidateReproductionResolution, ...] = (),
 ) -> None:
     assert report.language_capability is not None
-    language_artifact = LanguageCapabilityArtifact(
-        assessment=report.language_capability,
-        files=tuple(
-            LanguageCapabilityFileEvidence(
-                path=item.path,
-                sha256=item.sha256,
-                size=item.size,
-                lines=item.lines,
-                language=item.language,
-            )
-            for item in report.repository.files
-        ),
-        omitted=tuple(report.repository.omitted_files),
-    )
+    if language_artifact is None:
+        language_artifact = LanguageCapabilityArtifact(
+            assessment=report.language_capability,
+            files=tuple(
+                LanguageCapabilityFileEvidence(
+                    path=item.path,
+                    sha256=item.sha256,
+                    size=item.size,
+                    lines=item.lines,
+                    language=item.language,
+                )
+                for item in report.repository.files
+            ),
+            omitted=tuple(report.repository.omitted_files),
+            effective_ignore_rules=DEFAULT_EXCLUSIONS,
+            runtime_output_exclusion_root=None,
+        )
+    elif language_artifact.assessment != report.language_capability:
+        raise ValueError("supplied language capability differs from the report")
     payloads = {
         "language-capability.json": language_artifact.model_dump(mode="json"),
         "solidity-compilation.json": {"schema_version": "1.0", "results": []},
@@ -506,7 +514,7 @@ def _write_required_artifacts(
         run_dir / "model-execution.json",
         build_model_execution_artifact(
             report,
-            legacy_schema_1_0=legacy_model_execution,
+            schema_version="1.0" if legacy_model_execution else None,
         ),
     )
     write_json(
@@ -560,7 +568,7 @@ def _write_verifiable_run(
         ),
         config,
     )
-    run_dir = root / "run"
+    run_dir = root / report.run_id
     _write_required_artifacts(run_dir, report)
     (run_dir / "metadata.json").write_text(
         json.dumps(
@@ -726,7 +734,7 @@ def _write_qualified_verifiable_run(
         ),
         config,
     )
-    run_dir = root / "run"
+    run_dir = root / report.run_id
     _write_required_artifacts(run_dir, report)
     (run_dir / "model-qualification-runtime.json").write_text(
         json.dumps(validation.as_dict(), indent=2, sort_keys=True) + "\n",
@@ -911,6 +919,23 @@ def test_new_manifest_issuance_rejects_legacy_model_execution_custody(
         build_run_evidence_manifest(run_dir=run_dir, report=report, config=config)
 
 
+def test_new_manifest_issuance_rejects_legacy_findings_custody(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    run_dir = tmp_path / "legacy-findings"
+    report = _report(config)
+    _write_required_artifacts(run_dir, report)
+    write_json(
+        run_dir / "findings.json",
+        build_findings_artifact(report, schema_version="1.1"),
+    )
+
+    with pytest.raises(ValueError, match="current typed findings custody"):
+        build_run_evidence_manifest(run_dir=run_dir, report=report, config=config)
+
+
 def test_sealed_legacy_manifest_accepts_legacy_model_execution_custody(
     tmp_path: Path,
     config_factory,
@@ -922,7 +947,7 @@ def test_sealed_legacy_manifest_accepts_legacy_model_execution_custody(
     current = build_run_evidence_manifest(run_dir=run_dir, report=report, config=config)
     write_json(
         run_dir / "model-execution.json",
-        build_model_execution_artifact(report, legacy_schema_1_0=True),
+        build_model_execution_artifact(report, schema_version="1.0"),
     )
     legacy = _rewrite_as_sealed_schema_1_1(
         run_dir,
@@ -1363,6 +1388,7 @@ def test_manifest_binds_differential_and_fork_rpc_privacy_artifacts(
     config_factory,
 ) -> None:
     config = config_factory(
+        language_profile="solidity-evm",
         smart_contracts={
             "repository_suite": {
                 "fork_matrix_states": [
@@ -1389,7 +1415,7 @@ def test_manifest_binds_differential_and_fork_rpc_privacy_artifacts(
                 ],
                 "fork_matrix_repetitions": 2,
             }
-        }
+        },
     )
     differential = RepositorySuiteDifferentialRun.sealed(
         status=RepositoryDifferentialRunStatus.FAILED,
@@ -1461,11 +1487,7 @@ def test_manifest_self_hash_and_artifact_hashes_reject_tampering(
         if binding["path"] != LANGUAGE_CAPABILITY_ARTIFACT_PATH
     ]
     missing_capability["manifest_sha256"] = canonical_sha256(
-        {
-            key: value
-            for key, value in missing_capability.items()
-            if key != "manifest_sha256"
-        }
+        {key: value for key, value in missing_capability.items() if key != "manifest_sha256"}
     )
     with pytest.raises(ValidationError, match=r"language-capability\.json"):
         RunEvidenceManifest.model_validate(missing_capability)
@@ -2172,6 +2194,240 @@ def test_verify_run_is_current_and_serializes_deterministically(
     tampered["status"] = RunVerificationStatus.STALE
     with pytest.raises(ValidationError, match="inconsistent"):
         RunVerification.model_validate(tampered)
+
+
+def test_verify_run_revalidates_every_unfiltered_language_inventory_source(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory(
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
+        repository={"include_docs": True},
+    )
+    repository, run_dir, _manifest, report = _write_verifiable_run(tmp_path, config)
+    extra_path = repository / "docs" / "Architecture.md"
+    extra_path.parent.mkdir(parents=True)
+    extra_contents = "# Synthetic architecture\n"
+    extra_path.write_text(extra_contents, encoding="utf-8")
+    extra_bytes = extra_contents.encode("utf-8")
+    capability_files = tuple(
+        sorted(
+            (
+                *(
+                    LanguageCapabilityFileEvidence(
+                        path=item.path,
+                        sha256=item.sha256,
+                        size=item.size,
+                        lines=item.lines,
+                        language=item.language,
+                    )
+                    for item in report.repository.files
+                ),
+                LanguageCapabilityFileEvidence(
+                    path="docs/Architecture.md",
+                    sha256=hashlib.sha256(extra_bytes).hexdigest(),
+                    size=len(extra_bytes),
+                    lines=1,
+                    language="Markdown",
+                ),
+            ),
+            key=lambda item: item.path,
+        )
+    )
+    capability = language_capability_for_files(
+        config.language_profile,
+        capability_files,
+        solidity_project_count=1,
+    )
+    rebound_report = report.model_copy(update={"language_capability": capability.assessment})
+    _write_required_artifacts(
+        run_dir,
+        rebound_report,
+        language_artifact=capability,
+    )
+    manifest = build_run_evidence_manifest(
+        run_dir=run_dir,
+        report=rebound_report,
+        config=config,
+    )
+    write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", manifest)
+
+    current = verify_run_evidence(
+        manifest_path=run_dir / "run-evidence-manifest.json",
+        run_dir=run_dir,
+        repository_root=repository,
+        config=config,
+    )
+    assert current.status is RunVerificationStatus.CURRENT, [
+        (item.category.value, item.identifier, item.kind.value) for item in current.mismatches
+    ]
+
+    extra_path.write_text("# Changed synthetic architecture\n", encoding="utf-8")
+    stale = verify_run_evidence(
+        manifest_path=run_dir / "run-evidence-manifest.json",
+        run_dir=run_dir,
+        repository_root=repository,
+        config=config,
+    )
+
+    assert stale.status is RunVerificationStatus.STALE
+    assert any(
+        mismatch.category is RunVerificationCategory.SOURCE
+        and mismatch.identifier == "language-capability/docs/Architecture.md"
+        and mismatch.kind is RunVerificationMismatchKind.CHANGED
+        for mismatch in stale.mismatches
+    )
+
+
+def test_verify_run_rejects_source_added_after_language_inventory_was_sealed(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    repository, run_dir, _manifest, _report = _write_verifiable_run(tmp_path, config)
+
+    current = verify_run_evidence(
+        manifest_path=run_dir / "run-evidence-manifest.json",
+        run_dir=run_dir,
+        repository_root=repository,
+        config=config,
+    )
+    assert current.status is RunVerificationStatus.CURRENT
+
+    (repository / ".mmauditignore").write_text(
+        "/.mmauditignore\n/src/LateAdded.sol\n",
+        encoding="utf-8",
+    )
+    added = repository / "src" / "LateAdded.sol"
+    added.parent.mkdir(parents=True, exist_ok=True)
+    added.write_text("contract LateAdded {}\n", encoding="utf-8")
+    added_sha256 = hashlib.sha256(added.read_bytes()).hexdigest()
+
+    stale = verify_run_evidence(
+        manifest_path=run_dir / "run-evidence-manifest.json",
+        run_dir=run_dir,
+        repository_root=repository,
+        config=config,
+    )
+
+    assert stale.status is RunVerificationStatus.STALE
+    assert any(
+        mismatch.category is RunVerificationCategory.SOURCE
+        and mismatch.identifier == "language-capability/src/LateAdded.sol"
+        and mismatch.kind is RunVerificationMismatchKind.UNEXPECTED
+        and mismatch.observed_sha256 == added_sha256
+        for mismatch in stale.mismatches
+    )
+
+
+def test_verify_run_detects_source_changed_between_descriptor_read_and_rediscovery(
+    tmp_path: Path,
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = config_factory()
+    repository, run_dir, _manifest, _report = _write_verifiable_run(tmp_path, config)
+    source = repository / "src" / "Vault.sol"
+    replacement = "contract Vault { function evil() external {} }\n"
+    replacement_bytes = replacement.encode("utf-8")
+    original_discover = verification_module.discover_repository
+
+    def mutate_then_discover(*args, **kwargs):
+        source.write_text(replacement, encoding="utf-8")
+        return original_discover(*args, **kwargs)
+
+    monkeypatch.setattr(verification_module, "discover_repository", mutate_then_discover)
+    stale = verify_run_evidence(
+        manifest_path=run_dir / "run-evidence-manifest.json",
+        run_dir=run_dir,
+        repository_root=repository,
+        config=config,
+    )
+
+    assert stale.status is RunVerificationStatus.STALE
+    assert any(
+        mismatch.category is RunVerificationCategory.SOURCE
+        and mismatch.identifier == "language-capability/src/Vault.sol"
+        and mismatch.kind is RunVerificationMismatchKind.CHANGED
+        and mismatch.observed_sha256 == hashlib.sha256(replacement_bytes).hexdigest()
+        for mismatch in stale.mismatches
+    )
+
+
+def test_verify_run_rejects_linked_parent_in_language_inventory_source(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory(
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
+        repository={"include_docs": True},
+    )
+    repository, run_dir, _manifest, report = _write_verifiable_run(tmp_path, config)
+    docs = repository / "docs"
+    docs.mkdir()
+    extra_path = docs / "Architecture.md"
+    extra_contents = "# Synthetic architecture\n"
+    extra_path.write_text(extra_contents, encoding="utf-8")
+    extra_bytes = extra_contents.encode("utf-8")
+    capability_files = tuple(
+        sorted(
+            (
+                *(
+                    LanguageCapabilityFileEvidence(
+                        path=item.path,
+                        sha256=item.sha256,
+                        size=item.size,
+                        lines=item.lines,
+                        language=item.language,
+                    )
+                    for item in report.repository.files
+                ),
+                LanguageCapabilityFileEvidence(
+                    path="docs/Architecture.md",
+                    sha256=hashlib.sha256(extra_bytes).hexdigest(),
+                    size=len(extra_bytes),
+                    lines=1,
+                    language="Markdown",
+                ),
+            ),
+            key=lambda item: item.path,
+        )
+    )
+    capability = language_capability_for_files(
+        config.language_profile,
+        capability_files,
+        solidity_project_count=1,
+    )
+    rebound_report = report.model_copy(update={"language_capability": capability.assessment})
+    _write_required_artifacts(run_dir, rebound_report, language_artifact=capability)
+    manifest = build_run_evidence_manifest(
+        run_dir=run_dir,
+        report=rebound_report,
+        config=config,
+    )
+    write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", manifest)
+
+    backing = repository / "docs-backing"
+    docs.rename(backing)
+    try:
+        docs.symlink_to(backing, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are unavailable")
+
+    stale = verify_run_evidence(
+        manifest_path=run_dir / "run-evidence-manifest.json",
+        run_dir=run_dir,
+        repository_root=repository,
+        config=config,
+    )
+
+    assert stale.status is RunVerificationStatus.STALE
+    assert any(
+        mismatch.category is RunVerificationCategory.SOURCE
+        and mismatch.identifier == "language-capability/docs/Architecture.md"
+        and mismatch.kind is RunVerificationMismatchKind.UNSAFE
+        for mismatch in stale.mismatches
+    )
 
 
 def test_verify_run_reconstructs_an_already_sealed_schema_1_1_manifest(

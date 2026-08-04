@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from mmaudit.models.schemas import (
     AuditProfile,
@@ -23,6 +24,8 @@ from mmaudit.release_gates import (
 from mmaudit.release_io import write_json_evidence
 from mmaudit.release_observations import (
     BoundReleaseGateResult,
+    BoundReleaseSubjectKind,
+    ManifestSetSubject,
     collect_bound_release_gate_receipt,
     validate_bound_release_gate_receipts,
 )
@@ -84,6 +87,7 @@ def _run() -> ReleaseRunBinding:
         achieved_language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
         capability_status=LanguageCapabilityStatus.MATCHED,
         reduced_language_capability=False,
+        blocking_discovery_omissions=(),
         language_capability_sha256="4" * 64,
         artifact_evidence_file_sha256="0" * 64,
         artifact_evidence_file_size=1_000,
@@ -126,6 +130,148 @@ def _verification(run: ReleaseRunBinding) -> ReleaseRunVerificationBinding:
             "binding_sha256": canonical_sha256(serialized),
         }
     )
+
+
+def _manifest_subject_payload() -> dict[str, object]:
+    run = _run()
+    verification = _verification(run)
+    return {
+        "kind": BoundReleaseSubjectKind.MANIFEST_SET,
+        "run_id": run.run_id,
+        "manifest_sha256": run.manifest_sha256,
+        "manifest_file_sha256": run.manifest_file_sha256,
+        "run_configuration_sha256": run.run_configuration_sha256,
+        "effective_config_sha256": run.effective_config_sha256,
+        "requested_profile": run.requested_profile,
+        "achieved_profile": run.achieved_profile,
+        "requested_language_profile": run.requested_language_profile,
+        "achieved_language_profile": run.achieved_language_profile,
+        "capability_status": run.capability_status,
+        "reduced_language_capability": run.reduced_language_capability,
+        "blocking_discovery_omissions": run.blocking_discovery_omissions,
+        "language_capability_sha256": run.language_capability_sha256,
+        "verification_binding_sha256": verification.binding_sha256,
+        "verification_sha256": verification.verification_sha256,
+        "verification_status": "current",
+    }
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"achieved_profile": AuditProfile.MAXIMUM_ASSURANCE},
+        {
+            "requested_profile": AuditProfile.STANDARD,
+            "achieved_profile": AuditProfile.STANDARD,
+            "requested_language_profile": (LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW),
+            "achieved_language_profile": (LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW),
+            "capability_status": LanguageCapabilityStatus.REDUCED,
+            "reduced_language_capability": True,
+        },
+        {
+            "achieved_language_profile": None,
+            "capability_status": LanguageCapabilityStatus.MISMATCH,
+        },
+        {
+            "requested_profile": AuditProfile.STANDARD,
+            "requested_language_profile": (LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW),
+            "achieved_language_profile": None,
+            "capability_status": LanguageCapabilityStatus.INCONCLUSIVE,
+        },
+    ],
+    ids=(
+        "maximum-matched-solidity",
+        "standard-reduced-generic",
+        "solidity-mismatch",
+        "generic-inconclusive",
+    ),
+)
+def test_manifest_subject_accepts_only_coherent_language_states(
+    updates: dict[str, object],
+) -> None:
+    payload = _manifest_subject_payload()
+    payload.update(updates)
+
+    subject = ManifestSetSubject.model_validate(payload)
+
+    assert subject.capability_status is payload["capability_status"]
+
+
+@pytest.mark.parametrize(
+    ("updates", "message"),
+    [
+        (
+            {"achieved_profile": AuditProfile.STANDARD},
+            "unrequested achieved profile",
+        ),
+        (
+            {"achieved_language_profile": (LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW)},
+            "unrequested language capability",
+        ),
+        (
+            {
+                "achieved_language_profile": None,
+                "capability_status": LanguageCapabilityStatus.REDUCED,
+            },
+            "reduced manifest capability",
+        ),
+        (
+            {
+                "requested_language_profile": (LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW),
+                "achieved_language_profile": (LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW),
+            },
+            "matched manifest capability",
+        ),
+        (
+            {
+                "capability_status": LanguageCapabilityStatus.MISMATCH,
+            },
+            "unachieved manifest capability",
+        ),
+        (
+            {
+                "reduced_language_capability": True,
+            },
+            "reduced language capability is inconsistent",
+        ),
+        (
+            {
+                "achieved_profile": AuditProfile.MAXIMUM_ASSURANCE,
+                "requested_language_profile": (LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW),
+                "achieved_language_profile": (LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW),
+                "capability_status": LanguageCapabilityStatus.REDUCED,
+                "reduced_language_capability": True,
+            },
+            "maximum-assurance manifest subject",
+        ),
+        (
+            {
+                "achieved_profile": AuditProfile.MAXIMUM_ASSURANCE,
+                "blocking_discovery_omissions": ("repository: max_files reached",),
+            },
+            "maximum-assurance manifest subject",
+        ),
+    ],
+    ids=(
+        "unrequested-audit-profile",
+        "unrequested-language-profile",
+        "reduced-without-generic-achievement",
+        "matched-generic",
+        "mismatch-with-achievement",
+        "matched-marked-reduced",
+        "maximum-assurance-generic",
+        "maximum-assurance-blocking-omission",
+    ),
+)
+def test_manifest_subject_rejects_incoherent_language_states(
+    updates: dict[str, object],
+    message: str,
+) -> None:
+    payload = _manifest_subject_payload()
+    payload.update(updates)
+
+    with pytest.raises(ValidationError, match=message):
+        ManifestSetSubject.model_validate(payload)
 
 
 def _static(candidate: ReleaseCandidateObservation) -> StaticReleaseEvidence:

@@ -276,6 +276,7 @@ def _deep_scheduler_report_quality_config(config_factory: Any) -> AuditConfig:
 
 def _semantic_scheduler_config(config_factory: Any) -> AuditConfig:
     payload = _deep_scheduler_config(config_factory).model_dump(mode="python")
+    payload["language_profile"] = "solidity-evm"
     payload["execution"]["budget_usd"] = 100
     payload["execution"]["max_requests_per_agent"] = 32
     payload["smart_contracts"]["compile"] = False
@@ -408,6 +409,7 @@ def _maximum_protocol_overlap_context(
 ) -> tuple[ContextBuilder, ModelSurfaceReviewRequest, SolidityGraphEdge, set[str]]:
     repository = FIXTURES / "solidity" / "maximum_assurance_protocol"
     config = config_factory(
+        language_profile="solidity-evm",
         repository={"max_total_context_bytes": 5_000_000},
         privacy={"fail_on_detected_secret": False},
     ).effective()
@@ -714,7 +716,7 @@ async def test_pipeline_persists_exact_seven_pass_scheduler_evidence(
     model_execution = ModelExecutionArtifact.model_validate_json(
         model_execution_path.read_text(encoding="utf-8")
     )
-    assert model_execution.schema_version == "1.1"
+    assert model_execution.schema_version == "1.2"
     assert isinstance(model_execution.cost_ledger, RunCostLedgerEvidence)
     assert model_execution.cost_ledger.baseline_sha256 == (
         artifact.summary.manifest.cost_ledger_baseline.baseline_sha256
@@ -934,6 +936,13 @@ async def test_manifest_binds_public_terminal_status_and_achieved_profile_to_pri
             "effective_config_sha256": changed_configuration_payload["effective_config_sha256"],
             "requested_profile": changed_configuration_payload["requested_profile"],
             "achieved_profile": changed_configuration_payload["achieved_profile"],
+            "requested_language_profile": changed_configuration_payload[
+                "requested_language_profile"
+            ],
+            "achieved_language_profile": changed_configuration_payload["achieved_language_profile"],
+            "reduced_language_capability": changed_configuration_payload[
+                "reduced_language_capability"
+            ],
         }
     )
     changed_configuration = type(manifest.run_configuration).model_validate(
@@ -1903,11 +1912,15 @@ async def test_maximum_scheduler_executes_four_blind_whole_protocol_reviews(
     repo = tmp_path / "provider_smoke"
     shutil.copytree(FIXTURES / "solidity" / "provider_smoke", repo)
     specialists = _maximum_specialists()
-    base_registry = [entry.model_dump(mode="json") for entry in config_factory().models.registry]
+    base_registry = [
+        entry.model_dump(mode="json")
+        for entry in config_factory(language_profile="solidity-evm").models.registry
+    ]
     specialist_registry = [model_registry_entry(slot["primary"]) for slot in specialists.values()]
     registry = [*base_registry, *specialist_registry]
     config = config_factory(
         profile="maximum-assurance",
+        language_profile="solidity-evm",
         privacy={
             "fail_on_detected_secret": False,
             "approved_model_lineages": sorted({str(entry["root_lineage"]) for entry in registry}),
@@ -2434,6 +2447,7 @@ async def test_pipeline_activates_pass_three_after_overlapping_formal_evidence_i
     repository = tmp_path / "formal-ordering"
     shutil.copytree(FIXTURES / "solidity" / "foundry", repository)
     config_payload = _deep_scheduler_config(config_factory).model_dump(mode="python")
+    config_payload["language_profile"] = "solidity-evm"
     config_payload["smart_contracts"]["compile"] = False
     config_payload["formal"]["enabled"] = True
     config_payload["reproduction"]["required_for_solidity"] = False

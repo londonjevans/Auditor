@@ -9,6 +9,9 @@ from mmaudit.models.schemas import (
     AuditQualityStatus,
     AuditReport,
     AuditRunStatus,
+    LanguageCapabilityAssessment,
+    LanguageCapabilityProfile,
+    LanguageCapabilityStatus,
     QualityGateResult,
     StrictModel,
 )
@@ -37,6 +40,7 @@ class ReportStatusProjection(StrictModel):
     completed: bool
     quality_gates: list[QualityGateResult]
     limitations: list[str]
+    language_capability: LanguageCapabilityAssessment | None
 
     @model_validator(mode="after")
     def status_quality_and_limitations_are_consistent(self) -> ReportStatusProjection:
@@ -50,6 +54,34 @@ class ReportStatusProjection(StrictModel):
             raise ValueError("COMPLETE report projection cannot retain incomplete limitations")
         if self.run_status is not AuditRunStatus.COMPLETE and not self.limitations:
             raise ValueError("non-complete report projection requires a prominent limitation")
+        if self.run_status is AuditRunStatus.COMPLETE:
+            capability = self.language_capability
+            matched_solidity_evm = bool(
+                capability is not None
+                and capability.status is LanguageCapabilityStatus.MATCHED
+                and capability.requested_profile is LanguageCapabilityProfile.SOLIDITY_EVM
+                and capability.achieved_profile is LanguageCapabilityProfile.SOLIDITY_EVM
+                and capability.evm_portfolio_applicable
+                and capability.evm_maximum_assurance_eligible
+                and not capability.reduced_capability
+            )
+            reduced_generic = bool(
+                capability is not None
+                and capability.status is LanguageCapabilityStatus.REDUCED
+                and capability.requested_profile is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
+                and capability.achieved_profile is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
+                and not capability.evm_portfolio_applicable
+                and not capability.evm_maximum_assurance_eligible
+                and capability.reduced_capability
+            )
+            if (
+                not (matched_solidity_evm or reduced_generic)
+                or capability is None
+                or bool(capability.blocking_discovery_omissions)
+            ):
+                raise ValueError(
+                    "COMPLETE report projection requires coherent achieved language capability"
+                )
         floor_gates = [gate for gate in self.quality_gates if gate.gate == "minimum_analysis_floor"]
         if len(floor_gates) != 1 or not floor_gates[0].required:
             raise ValueError("report projection requires one status-consistent minimum-floor gate")
@@ -72,6 +104,7 @@ def effective_report_status(report: AuditReport) -> ReportStatusProjection:
             completed=report.run_status is AuditRunStatus.COMPLETE,
             quality_gates=list(report.quality_gates),
             limitations=list(dict.fromkeys(report.incomplete_reasons)),
+            language_capability=report.language_capability,
         )
 
     run_status = (
@@ -105,6 +138,7 @@ def effective_report_status(report: AuditReport) -> ReportStatusProjection:
             *(gate for gate in report.quality_gates if gate.gate != "minimum_analysis_floor"),
         ],
         limitations=list(dict.fromkeys([limitation, *report.incomplete_reasons])),
+        language_capability=report.language_capability,
     )
 
 

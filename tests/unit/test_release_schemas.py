@@ -21,6 +21,33 @@ def test_release_schemas_are_exact_strict_generated_models() -> None:
         assert schema["additionalProperties"] is False
 
 
+def test_versioned_report_artifacts_bind_language_capability_without_rewriting_legacy() -> None:
+    contracts = {
+        "findings_artifact.schema.json": (["1.1", "1.2"], ["1.1"]),
+        "model_execution_artifact.schema.json": (["1.0", "1.1", "1.2"], ["1.0", "1.1"]),
+    }
+    for filename, (versions, legacy_versions) in contracts.items():
+        schema = json.loads((ROOT / "schemas" / filename).read_text(encoding="utf-8"))
+        assert schema["properties"]["schema_version"]["enum"] == versions
+        assert schema["properties"]["schema_version"]["default"] == "1.2"
+        assert schema["allOf"] == [
+            {
+                "if": {"properties": {"schema_version": {"const": "1.2"}}},
+                "then": {
+                    "properties": {"language_capability": {"not": {"type": "null"}}},
+                    "required": ["language_capability"],
+                },
+            },
+            {
+                "if": {
+                    "properties": {"schema_version": {"enum": legacy_versions}},
+                    "required": ["schema_version"],
+                },
+                "then": {"not": {"required": ["language_capability"]}},
+            },
+        ]
+
+
 def test_models_config_schema_separates_identity_from_optional_measured_quality() -> None:
     schema = json.loads((ROOT / "schemas" / "models_config.schema.json").read_text())
     lineage = schema["$defs"]["ModelLineageConfig"]
