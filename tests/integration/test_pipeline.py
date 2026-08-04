@@ -192,6 +192,7 @@ class StaticScannerRunner:
         scanner_name: str = "semgrep",
         before_return: Callable[[], None] | None = None,
         source_integrity_error: bool = False,
+        emit_finding: bool = True,
     ) -> None:
         self.status = status
         self.required = required
@@ -200,6 +201,7 @@ class StaticScannerRunner:
         self.scanner_name = scanner_name
         self.before_return = before_return
         self.source_integrity_error = source_integrity_error
+        self.emit_finding = emit_finding
         self.expected_repository_sha256: str | None = None
         self.repository_exclusion_root: Path | None = None
         self.audited_relative_paths: tuple[str, ...] = ()
@@ -226,7 +228,7 @@ class StaticScannerRunner:
         del allow_custom_repository_exclusion
         now = datetime.now(UTC)
         findings = []
-        if self.status is ScannerStatus.SUCCESS:
+        if self.status is ScannerStatus.SUCCESS and self.emit_finding:
             findings = [
                 ScannerFinding(
                     scanner=self.scanner_name,
@@ -5806,7 +5808,7 @@ async def test_pipeline_excludes_custom_in_repository_output_from_frozen_scanner
     nested_same_name = vulnerable_repo / "src" / "custom-audit-output" / "keep.py"
     nested_same_name.parent.mkdir(parents=True)
     nested_same_name.write_text("VALUE = 1\n", encoding="utf-8")
-    scanner_runner = StaticScannerRunner()
+    scanner_runner = SyntheticValidatedScannerRunner()
     config = config_factory()
     pipeline = AuditPipeline(
         config,
@@ -5872,7 +5874,7 @@ async def test_pipeline_external_output_ancestor_does_not_exclude_repository_sou
     vulnerable_repo: Path,
     tmp_path: Path,
 ) -> None:
-    scanner_runner = StaticScannerRunner()
+    scanner_runner = SyntheticValidatedScannerRunner()
     expected_source = scanner_workspace_sha256(vulnerable_repo)
     config = config_factory(
         scanners={"foundry_fork": {"enabled": True, "required": False}},
@@ -5985,7 +5987,7 @@ async def test_pipeline_revalidates_frozen_source_after_scanner_execution(
             encoding="utf-8",
         )
 
-    scanner_runner = StaticScannerRunner(before_return=add_source_during_scanner)
+    scanner_runner = SyntheticValidatedScannerRunner(before_return=add_source_during_scanner)
     config = config_factory()
     pipeline = AuditPipeline(
         config,
@@ -6044,7 +6046,7 @@ async def test_pipeline_persists_configured_repository_fork_matrix_failure(
     matrix_runner = StaticRepositoryForkMatrixRunner(
         configuration_sha256=config.smart_contracts.repository_suite.stable_hash()
     )
-    scanner_runner = StaticScannerRunner(scanner_name="foundry_fork")
+    scanner_runner = StaticScannerRunner(scanner_name="foundry_fork", emit_finding=False)
     scanner_runner.backend = object()  # type: ignore[attr-defined]
     pipeline = AuditPipeline(
         config,
@@ -6111,7 +6113,7 @@ async def test_pipeline_revalidates_frozen_source_after_repository_fork_matrix(
         configuration_sha256=config.smart_contracts.repository_suite.stable_hash(),
         before_return=mutate_repository,
     )
-    scanner_runner = StaticScannerRunner(scanner_name="foundry_fork")
+    scanner_runner = StaticScannerRunner(scanner_name="foundry_fork", emit_finding=False)
     scanner_runner.backend = object()  # type: ignore[attr-defined]
     pipeline = AuditPipeline(
         config,
@@ -6175,7 +6177,7 @@ async def test_pipeline_persists_current_benchmark_verification(
         config,
         repo=vulnerable_repo,
         output=tmp_path / "benchmark-current-output",
-        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+        scanner_runner=SyntheticValidatedScannerRunner(),  # type: ignore[arg-type]
     )
 
     result = await pipeline.run(
@@ -6233,7 +6235,7 @@ async def test_latest_report_refresh_does_not_follow_hardlink(
         config_factory(),
         repo=vulnerable_repo,
         output=output,
-        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+        scanner_runner=SyntheticValidatedScannerRunner(),  # type: ignore[arg-type]
     )
     result = await pipeline.run(scanner_only=True)
     assert result.exit_code is ExitCode.INCOMPLETE
@@ -6267,7 +6269,7 @@ async def test_scanner_only_latest_refresh_removes_stale_provider_privacy_artifa
         config_factory(),
         repo=vulnerable_repo,
         output=output,
-        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+        scanner_runner=SyntheticValidatedScannerRunner(),  # type: ignore[arg-type]
     )
     result = await pipeline.run(scanner_only=True)
 
@@ -6298,7 +6300,7 @@ async def test_reused_pipeline_does_not_leak_provider_privacy_state_into_scanner
         output=tmp_path / "reused-output",
         client=client,
         cost_ledger=ledger,
-        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+        scanner_runner=SyntheticValidatedScannerRunner(),  # type: ignore[arg-type]
     )
     try:
         provider_result = await pipeline.run(allow_code_egress=True)
@@ -6705,14 +6707,23 @@ async def test_ci_report_or_baseline_rejects_resealed_state_projection_mismatch(
     resealed_manifest = RunEvidenceManifest.model_validate_json(
         (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
     )
-    validate_manifest_artifacts(resealed_manifest, result.run_dir)
+    with pytest.raises(
+        ValueError,
+        match="public report differs from private terminal report authority",
+    ):
+        validate_manifest_artifacts(resealed_manifest, result.run_dir)
+
+    public_bundle = _copy_ci_public_bundle(
+        result.run_dir,
+        tmp_path / "ci-projection-public-bundle",
+    )
 
     with pytest.raises(
         ValueError,
         match="CI baseline scanner workspace identity is absent from the report",
     ):
-        load_ci_baseline(
-            result.run_dir.resolve(strict=True),
+        load_ci_baseline_bundle(
+            public_bundle,
             expected_repository_git_commit=commit,
         )
 
@@ -6746,9 +6757,20 @@ async def test_ci_baseline_rejects_resealed_report_source_inventory_mismatch(
     )
     _replace_manifest_bound_report(result.run_dir, tampered_report)
 
+    resealed_manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    with pytest.raises(ValueError, match=r"client-report\.md differs from the final report"):
+        validate_manifest_artifacts(resealed_manifest, result.run_dir)
+
+    public_bundle = _copy_ci_public_bundle(
+        result.run_dir,
+        tmp_path / "ci-source-inventory-public-bundle",
+    )
+
     with pytest.raises(ValueError, match="sources differ from the final report"):
-        load_ci_baseline(
-            result.run_dir.resolve(strict=True),
+        load_ci_baseline_bundle(
+            public_bundle,
             expected_repository_git_commit=commit,
         )
 

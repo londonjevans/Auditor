@@ -406,10 +406,11 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   dissent and limitations are prominent; large coverage tables stay forensic.
 - **Dependencies:** `V3-FLOOR-001`.
 - **Status:** `IN_PROGRESS`
-- **Current action:** Implement descriptor-retained source observation and private manifest-bound
-  evidence for a REAL machine-validated scanner finding on an ignored local path, without adding
-  that path to audited/model scope; add origin-confusion and coherent-reseal regressions, then rerun
-  the remaining pipeline matrix and complete ticket gates.
+- **Current action:** `PAUSED_BY_OPERATOR` after the repaired complete suite was gracefully
+  interrupted at `73 passed, 5 skipped in 432.60s` with no failure emitted and no complete-suite
+  credit. On resume, rerun the complete suite under the local-listener-capable host policy to a
+  terminal result, then perform final static/artifact and independent diff reviews and close
+  traceability only from recorded evidence.
 
 ## V3-SCOPE-001 — Honest Solidity/EVM product profile
 

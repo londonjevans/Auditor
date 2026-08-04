@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Client report and forensic evidence bundle
 CURRENT_TICKET: V3-REPORT-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-FIXTURE-001 (COMPLETE)
-NEXT_ACTION: Run the broader report/release and representative pipeline matrices against the descriptor-retained scanner-source implementation; repair actual regressions, complete schema/static/full-suite gates, independently review the final diff, then close V3-REPORT-001 traceability only from recorded evidence.
-LAST_COMMAND: `.venv/bin/ruff check` on the affected implementation/tests, affected strict `.venv/bin/mypy`, then `.venv/bin/pytest -q` over scanner-source authority/observation, release-schema, ignored-path, model-exclusion, conditional-presence, and coherent-reseal cases.
-LAST_RESULT: PASS: affected Ruff and strict mypy passed; all 33 focused tests passed in 8.01s. The REAL ignored-path finding retained exact report evidence while remaining absent from RepositoryMap, manifest sources, and model requests; unverified/model-origin authority, conditional private-artifact drift, and coherently resealed context tampering failed closed. No provider or network call ran.
+NEXT_ACTION: On operator resume, rerun `.venv/bin/pytest -q` under the local-listener-capable host policy to a terminal result; if green, run final static/artifact and independent diff reviews, close V3-REPORT-001 traceability from recorded evidence, checkpoint, and begin V3-SCOPE-001.
+LAST_COMMAND: `.venv/bin/pytest -q`
+LAST_RESULT: INTERRUPTED_BY_OPERATOR_PAUSE: the repaired complete suite was stopped cleanly at 2026-08-04T03:29:36Z after `73 passed, 5 skipped in 432.60s`; this partial run receives no complete-suite credit and emitted no failure before interruption.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -20,6 +20,148 @@ OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
 LAST_CHECKPOINT_COMMIT: 3916b891967eff4898d8a08621c62595a9765026
+
+## 2026-08-04T02:11:31Z — Resume
+
+- Resumed `V3-REPORT-001` from clean SSH-synchronized pause metadata commit
+  `87e489610601eb36a7164b643ff316f3b82be30f`; implementation checkpoint remains
+  `3916b891967eff4898d8a08621c62595a9765026`.
+- Re-read the complete 1,417-line objective, repository instructions, active queue, runtime state,
+  and clean worktree. Objective SHA-256 remains
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
+- Resume is validation-only unless an actual regression is reproduced: broader report/release and
+  affected pipeline matrices first, then scheduler integration, schema, Ruff, strict mypy, and the
+  complete suite. No provider, secret, public RPC, or live target action is required.
+- **Pre-command record (2026-08-04T02:12:30Z):** Run `.venv/bin/pytest -q` over
+  `tests/unit/test_client_forensic_reporting.py`,
+  `tests/unit/test_client_forensic_reporting_adversarial.py`,
+  `tests/unit/test_context_manifest.py`, `tests/unit/test_execution_origin_reporting.py`,
+  `tests/unit/test_forensic_cost_ledger.py`, `tests/unit/test_forensic_export.py`,
+  `tests/unit/test_manifest.py`, every `tests/unit/test_release*.py` file explicitly enumerated in
+  the shell command, `tests/unit/test_report_status_projection.py`,
+  `tests/unit/test_run_status.py`, `tests/unit/test_scanner_source_evidence.py`,
+  `tests/unit/test_scanner_workspace_text_observation.py`, and
+  `tests/unit/test_scanners_reporting.py`. Result is pending until the exact process exits.
+
+## 2026-08-04T02:15:09Z — Broader report/release unit gate
+
+- The first exact matrix attempt stopped after `130 passed` at one stale synthetic scanner fixture:
+  the test supplied a made-up fingerprint while the canonical projection correctly rejected the
+  semantic mismatch. Production authority was not relaxed.
+- Updated only `tests/unit/test_execution_origin_reporting.py` to derive the fingerprint through
+  the production canonical function. Focused Ruff and the exact regression passed (`1 passed`).
+- Reran the exact 27-file matrix: `723 passed in 45.11s`. Two inherited permission-restricted
+  disposable-toolchain cleanup warnings were non-failing. No provider or network call ran.
+- **Pre-command record:** `.venv/bin/pytest -q -x tests/integration/test_pipeline.py` will execute
+  all `117` collected non-scheduler pipeline integration cases. Result is pending until exit.
+
+## 2026-08-04T02:27:44Z — Pipeline scanner-fixture authority recovery
+
+- The first complete-file attempt stopped after `70 passed` at a scanner-only source-exclusion
+  test (`1 failed, 70 passed in 397.35s`). The production manifest correctly rejected a synthetic
+  `StaticScannerRunner` finding that lacked REAL retained machine-output replay authority.
+- Preserved the fail-closed production gate. Successful scanner-finding paths now use the existing
+  production-shaped `SyntheticValidatedScannerRunner`; two foundry-fork matrix plumbing cases use
+  a new test-only `emit_finding=False` option because they do not test finding custody. A second
+  narrowed run exposed and repaired the same stale fixture in the post-scanner source-mutation
+  case.
+- Focused Ruff passed. The seven independently reviewed affected success paths passed together in
+  `9.22s`; the post-scanner mutation and both fork-matrix cases also passed in their focused runs.
+  No production authority check was relaxed, and no provider or network call ran.
+- **Pre-command record:** Restart `.venv/bin/pytest -q -x
+  tests/integration/test_pipeline.py` over all `117` cases. Result is pending until exit.
+
+## 2026-08-04T02:37:52Z — Layered CI tamper validation recovery
+
+- The repaired full-file attempt passed the scanner/source/output region and stopped after `95`
+  passes at a stale CI tamper stage expectation (`1 failed, 95 passed in 417.09s`). Exact private
+  terminal report authority correctly rejected a coherently manifest-rebound public report before
+  the old CI loader assertion.
+- Strengthened the tests without removing CI semantics: full bundles must reject the forged report
+  against private terminal authority (or derived client-report consistency), while a deliberately
+  reduced three-file public CI bundle independently reaches and rejects the forged CI metadata or
+  source inventory.
+- Focused Ruff passed; all `17` layered private/public tamper cases passed in `16.88s`; the complete
+  `-k 'ci_'` integration slice passed `32` with `85` deselected in `29.47s`. No provider or network
+  call ran.
+- **Pre-command record:** Restart `.venv/bin/pytest -q -x
+  tests/integration/test_pipeline.py` over all `117` cases for one uninterrupted final result.
+
+## 2026-08-04T02:45:45Z — Complete non-scheduler pipeline gate
+
+- The uninterrupted final command `.venv/bin/pytest -q -x
+  tests/integration/test_pipeline.py` passed all `117` cases in `432.57s` (`7m12s`). This includes
+  the maximum-assurance evidence path, local dynamic/reproduction controls, ignored scanner-source
+  authority, output/source isolation, benchmark custody, latest projection, and all CI artifact
+  cases.
+- Two inherited permission-restricted disposable-toolchain cleanup warnings were non-failing. No
+  provider call, secret access, public RPC, live target, or network operation ran.
+- **Pre-command record:** `.venv/bin/pytest -q -x
+  tests/integration/test_scheduler_pipeline.py` will execute all `37` collected scheduler pipeline
+  cases. Result is pending until exit.
+
+## 2026-08-04T02:49:32Z — Pre-full-suite gate
+
+- `.venv/bin/pytest -q -x tests/integration/test_scheduler_pipeline.py` passed all `37` scheduler
+  integration cases in `144.82s` (`2m24s`). Two inherited permission-restricted disposable-
+  toolchain cleanup warnings were non-failing.
+- `.venv/bin/python scripts/generate_release_schemas.py` passed with no drift;
+  `.venv/bin/ruff format .` left all `442` files unchanged; `.venv/bin/ruff check .` passed;
+  `.venv/bin/mypy` passed all `175` source files; runtime JSON and `git diff --check` passed.
+- No provider call, secret access, public RPC, live target, or network operation ran.
+- **Pre-command record:** `.venv/bin/pytest -q` will run the complete repository suite. Result is
+  pending until the exact process exits.
+
+## 2026-08-04T03:15:08Z — Full-suite failure triage
+
+- `.venv/bin/pytest -q` completed with `4675 passed, 21 skipped, 12 failed, 88 errors in
+  1451.63s` (`24m11s`). It receives no complete-suite credit.
+- All `88` setup errors report `PermissionError: [Errno 1] Operation not permitted` while local
+  unit fixtures attempt to bind numeric-loopback listeners; this is a managed-sandbox execution
+  boundary, not a passing real integration. The eventual complete gate must be rerun with the
+  required local-listener permission rather than converting these tests to skips or passes.
+- The `12` failures are localized to execution-origin artifact custody, six loopback-relay tests,
+  one realistic-scale generator golden tree, and replay-fixture status assumptions. Independent
+  focused diagnosis is active; no production check or threshold will be weakened.
+- No paid provider call, secret access, public RPC, live target, or external network action ran.
+
+## 2026-08-04T03:21:41Z — Full-suite recovery and final rerun boundary
+
+- Exact reproduction classified all `88` setup errors and five loopback-relay failures as managed-
+  sandbox socket denials before product assertions. The same four local-listener files passed all
+  `138` tests in `51.85s` under a local-listener-capable host policy; only loopback and Unix sockets
+  were used.
+- Execution-origin artifact custody and replay compatibility failures were stale fixtures after
+  stronger deterministic resolution and fail-closed legacy status projection. Fixtures now derive
+  canonical reproduction resolutions, rebuild authentic legacy metadata before resealing, and use
+  the emitted incomplete boolean for type/non-finite tamper cases. The complete two-file matrix
+  passed `98` tests in `8.46s`; production gates were unchanged.
+- Removed one ignored, untracked Forge cache file and its empty directory from the deterministic
+  realistic-scale fixture. It was generated state, not committed evidence, and can be regenerated;
+  no source fixture was deleted. The generator verified all `196` expected files and its full unit
+  file passed `8` tests in `1.45s`.
+- Final preflight passed: all `442` files unchanged by Ruff format, Ruff check green, strict mypy
+  green over `175` source files, generated release schemas synchronized, runtime JSON valid,
+  `git diff --check` green, and no realistic-scale cache directory remains.
+- **Pre-command record:** Rerun `.venv/bin/pytest -q` under the local-listener-capable host policy.
+  Result is pending until the exact process exits. No external/public network or paid provider call
+  is authorized by this command.
+
+## 2026-08-04T03:29:36Z — Operator-requested pause
+
+- Gracefully interrupted the repaired complete-suite process at the operator's request. Pytest
+  exited by `KeyboardInterrupt` after `73 passed, 5 skipped in 432.60s`; no failure had been
+  emitted, but the partial result receives no complete-suite credit.
+- Preserved all focused validation evidence: report/release unit `723` passed, non-scheduler
+  pipeline `117` passed, scheduler pipeline `37` passed, execution-origin/replay recovery `98`
+  passed, deterministic fixture `8` passed, and the local-listener matrix `138` passed. Ruff,
+  strict mypy, generated-schema, JSON, and diff checks had also passed before the interrupted run.
+- `V3-REPORT-001` remains `IN_PROGRESS`. No maximum-assurance, release, or ticket-complete claim
+  is made. No provider call, secret access, public RPC, live target, or external network operation
+  occurred; model-call and cost-ledger totals are unchanged.
+- Resume by rerunning the complete suite under the same local-listener-capable host policy to a
+  terminal result, then perform the final static/artifact and independent diff reviews before
+  deciding the ticket from evidence.
 
 ## 2026-08-04T02:07:41Z — Operator-requested pause
 

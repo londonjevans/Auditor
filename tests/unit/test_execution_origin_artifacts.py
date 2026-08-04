@@ -40,6 +40,9 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.orchestration.manifest import _validate_report_artifact_consistency
 from mmaudit.orchestration.replay import _ReplayArtifacts
+from mmaudit.orchestration.reproduction_resolution import (
+    build_candidate_reproduction_resolutions,
+)
 from mmaudit.reporting.json_report import write_json
 from tests.unit import test_run_status as run_status_fixtures
 from tests.unit.test_execution_candidate_schema import (
@@ -332,13 +335,13 @@ def _manifest_execution_fixture(
         candidates=[candidate.model_dump(mode="json")],
         execution_runtime=(suite, harness, corpus, execution),
         dispositions=list(build.dispositions),
-        candidate_resolutions=[
-            CandidateReproductionResolution(
-                candidate_id=candidate.candidate_id,
-                kind=ReproductionResolutionKind.INCONCLUSIVE,
-                detail="post-judgment impact remained unresolved",
+        candidate_resolutions=list(
+            build_candidate_reproduction_resolutions(
+                candidates=[candidate],
+                results=[],
+                forced_candidate_ids={candidate.candidate_id},
             )
-        ],
+        ),
     )
     report = _report_shell(
         findings=[

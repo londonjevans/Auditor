@@ -47,6 +47,7 @@ from mmaudit.orchestration.run_status import (
 )
 from mmaudit.reporting.markdown import render_markdown
 from mmaudit.reporting.sarif import generate_sarif
+from mmaudit.scanners.base import scanner_fingerprint
 from tests.unit.test_execution_candidates import (
     _build as _build_execution_candidates,
 )
@@ -614,12 +615,13 @@ def test_scanner_report_conversion_preserves_static_analyzer_origin(tmp_path: Pa
         "pragma solidity 0.8.30;\ncontract ScannerTarget {}\n",
         encoding="utf-8",
     )
+    scanner_message = "A deterministic analyzer matched a synthetic rule."
     scanner = ScannerFinding(
         scanner="semgrep",
         rule_id="synthetic-rule",
         title="Synthetic scanner observation",
         severity=Severity.MEDIUM,
-        message="A deterministic analyzer matched a synthetic rule.",
+        message=scanner_message,
         locations=[
             Location(
                 path="src/ScannerTarget.sol",
@@ -628,7 +630,13 @@ def test_scanner_report_conversion_preserves_static_analyzer_origin(tmp_path: Pa
                 symbol="ScannerTarget",
             )
         ],
-        fingerprint="synthetic-scanner-fingerprint",
+        fingerprint=scanner_fingerprint(
+            "semgrep",
+            "synthetic-rule",
+            "src/ScannerTarget.sol",
+            2,
+            scanner_message,
+        ),
     )
 
     finding = _scanner_findings_for_report(tmp_path, [scanner])[0]

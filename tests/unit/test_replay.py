@@ -2640,6 +2640,27 @@ def test_repository_differential_qualification_requires_copy_and_lifecycle_evide
 def _rewrite_manifest_as_legacy(manifest_path: Path) -> None:
     manifest = RunEvidenceManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
     payload = manifest.model_dump(mode="json")
+    run_dir = manifest_path.parent
+    report = AuditReport.model_validate_json(
+        (run_dir / "final-findings.json").read_text(encoding="utf-8")
+    )
+    metadata_path = run_dir / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["completed"] = report.completed
+    metadata["incomplete_reasons"] = report.incomplete_reasons
+    for current_status_field in (
+        "quality_status",
+        "run_status",
+        "quality_gates",
+        "limitations",
+        "minimum_analysis_floor",
+    ):
+        metadata.pop(current_status_field, None)
+    metadata_path.write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    _rebind_artifact(payload, metadata_path)
     payload["schema_version"] = "1.0"
     payload["run_configuration"] = None
     payload["manifest_sha256"] = canonical_sha256(
@@ -3306,8 +3327,8 @@ def test_verify_run_rejects_type_confused_metadata_boolean(
     repository, run_dir, manifest_path = _write_replay_run(tmp_path, config, candidate)
     metadata_path = run_dir / "metadata.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    assert metadata["completed"] is True
-    metadata["completed"] = 1
+    assert metadata["completed"] is False
+    metadata["completed"] = 0
     metadata_path.write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -3344,10 +3365,10 @@ def test_verify_run_normalizes_nonfinite_metadata_to_stale(
     repository, run_dir, manifest_path = _write_replay_run(tmp_path, config, candidate)
     metadata_path = run_dir / "metadata.json"
     serialized_metadata = metadata_path.read_text(encoding="utf-8")
-    assert '"completed": true' in serialized_metadata
+    assert '"completed": false' in serialized_metadata
     metadata_path.write_text(
         serialized_metadata.replace(
-            '"completed": true',
+            '"completed": false',
             f'"completed": {nonfinite_json}',
         ),
         encoding="utf-8",
