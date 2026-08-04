@@ -406,11 +406,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   dissent and limitations are prominent; large coverage tables stay forensic.
 - **Dependencies:** `V3-FLOOR-001`.
 - **Status:** `IN_PROGRESS`
-- **Current action:** `PAUSED_BY_OPERATOR` after the repaired complete suite was gracefully
-  interrupted at `73 passed, 5 skipped in 432.60s` with no failure emitted and no complete-suite
-  credit. On resume, rerun the complete suite under the local-listener-capable host policy to a
-  terminal result, then perform final static/artifact and independent diff reviews and close
-  traceability only from recorded evidence.
+- **Current action:** The immutable pre-review-fix suite passed `4785` tests with `11` explicit
+  skips. Add focused regressions and correct status-blind complete-no-findings roadmaps, raw Unicode
+  format-control rendering, and the omitted manifest-bound `audit-report.md` traceability leaf;
+  then rerun focused/static/schema/full-suite gates and close only from recorded evidence.
 
 ## V3-SCOPE-001 — Honest Solidity/EVM product profile
 
@@ -1761,7 +1760,7 @@ are invisible to source review by construction.
   `src/mmaudit/scanners/osv.py`, `src/mmaudit/scanners/trivy.py`,
   `src/mmaudit/scanners/slither.py`, reporting, `operator_prerequisites.md`, regressions.
 - **Dependencies:** `V3-TOOLDIAG-001` (`COMPLETE`).
-- **Status:** `COMPLETE`
+- **Status:** `PARTIAL`
 - **Acceptance evidence:** Semgrep `1.172.0`, Gitleaks `8.30.1`, and Slither `0.11.6` each
   produced strictly validated nonempty machine output with `REAL` network-denied
   `sandbox-exec` evidence against committed fixtures. Installed OSV produced a typed
@@ -1773,11 +1772,25 @@ are invisible to source review by construction.
   regressions. The final real macOS matrix passed `6` cases in `17.49s`; the exact final tree
   passed Ruff, strict mypy over `166` source files, schema verification, and `4501` tests with
   `11` explicit prerequisite/paid-provider skips in `1430.04s`.
+- **Reopened 2026-08-04. Closed against an unmet acceptance criterion.** The ticket was
+  marked `COMPLETE` while its own criterion — "At least `semgrep`, `gitleaks`, and `slither`
+  produce validated non-empty machine output against a committed Solidity fixture under the
+  real backend" — was not satisfied, and while the recorded slither diagnosis in this same
+  ticket showed it unmet. The previous remaining-limitation note disclosed only trivy and did
+  not mention slither at all, so the single defect blocking a working deterministic audit was
+  recorded as resolved.
+- **Remaining gap 1 — slither, blocking.** Verified again on 2026-08-04 against
+  `tests/fixtures/solidity/realistic_scale/solidity_005k`: slither reports `silent_failure`
+  with zero findings and the run reports `static analyzer=0`, while the identical fixture
+  yields 213 detectors standalone. The diagnosis, probable cause, prohibited shortcuts, and
+  verification requirement are recorded above and are unchanged. This is the only remaining
+  blocker to a deterministic audit that produces findings.
 - **Remaining boundary:** Trivy cannot consume an operator-prepared offline database yet and
   therefore remains an explicit unmet external prerequisite, not a successful scan. Real
   non-macOS integrations remain conditional on an equivalent approved backend and trusted
   toolchain.
-- **Next action:** Continue the queue with close-out ticket `V3-FIXTURE-001`.
+- **Next action:** Resolve remaining gap 1. This ticket cannot become `COMPLETE` while any
+  acceptance criterion is unmet; see the completion discipline in the execution order.
 
 ## V3-BOOTSTRAP-001 — Separate declared model identity from measured model quality
 
@@ -2138,6 +2151,30 @@ model, no qualification, and no provider spend anywhere in the path.
 41. `V3-CONSENT-001`
 42. `V3-SERVICE-001`
 43. `V3-AUTONOMY-001`
+
+### Completion discipline
+
+**A ticket may not be marked `COMPLETE` while any of its acceptance criteria is unmet.** It goes
+`PARTIAL`, and every unmet criterion is named explicitly in a remaining-gap entry. This is the
+same rule the run gates already enforce, applied to the queue itself.
+
+The reason it is written down: on 2026-08-04 `V3-TOOLDIAG-002` was marked `COMPLETE` while its
+criterion requiring slither to produce validated non-empty output was unmet, with the evidence
+of non-satisfaction recorded in the same ticket, and while its remaining-limitation note named
+only trivy. On 2026-08-03 `V3-BOOTSTRAP-001` was briefly marked `COMPLETE` with fifteen failing
+tests. `V3-FLOOR-001` prevents a *run* claiming completeness it has not earned; nothing
+prevented a *ticket* doing the same, and a closed ticket is not revisited.
+
+Concretely:
+
+- Before marking `COMPLETE`, re-read the ticket's own acceptance criteria and confirm each one
+  against current evidence, not against the intent of the work done.
+- A remaining-limitation note must name **every** unmet criterion. A note that discloses one gap
+  while omitting another is worse than no note, because it reads as a complete disclosure.
+- Where a criterion requires a measured result, the measurement must be reproduced at closure,
+  not inherited from an earlier checkpoint.
+- Reopening a ticket is normal and costs nothing. Closing one that is not finished removes it
+  from view permanently.
 
 ### Standing instructions
 
