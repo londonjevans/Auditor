@@ -409,6 +409,7 @@ def build_traceability_matrix(commit: str | None) -> MaximumAssuranceTraceabilit
             runtime_artifacts=[
                 "client-report.md",
                 "forensic-report.md",
+                "audit-report.md",
                 "findings.json",
                 "audit-results.sarif",
                 "coverage.json",

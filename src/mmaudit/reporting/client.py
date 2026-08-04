@@ -30,7 +30,7 @@ from mmaudit.reporting.bundle import (
     scanner_source_authority,
     source_symbol_is_present,
 )
-from mmaudit.reporting.markdown import _inline, _text
+from mmaudit.reporting.markdown import _inline, _neutralize_untrusted_controls, _text
 from mmaudit.reporting.status import effective_report_status
 from mmaudit.repository.chunking import line_range_hash
 from mmaudit.scanners.base import ScannerWorkspaceTextRecord
@@ -323,16 +323,17 @@ def build_scanner_source_evidence_for_report(
 
 
 def _code_line(value: str) -> str:
-    retained = "".join(
-        character for character in value if character == "\t" or ord(character) >= 32
-    )
+    retained = _neutralize_untrusted_controls(value, retain_newlines=False)
     if len(retained) > _MAX_RENDERED_CODE_LINE_CHARACTERS:
         retained = retained[:_MAX_RENDERED_CODE_LINE_CHARACTERS] + "… [line truncated]"
     return html.escape(retained, quote=False)
 
 
 def _render_excerpt(excerpt: SourceExcerptEvidence) -> list[str]:
-    all_lines = excerpt.content.splitlines()
+    all_lines = [
+        line[:-2] if line.endswith("\r\n") else line[:-1] if line.endswith(("\r", "\n")) else line
+        for line in excerpt.content.splitlines(keepends=True)
+    ]
     selected_start = 0
     if len(all_lines) > _MAX_RENDERED_EXCERPT_LINES:
         cited_start = excerpt.cited_start_line - excerpt.excerpt_start_line
@@ -355,6 +356,9 @@ def _render_excerpt(excerpt: SourceExcerptEvidence) -> list[str]:
         )
     selected_end = min(len(all_lines), selected_start + _MAX_RENDERED_EXCERPT_LINES)
     lines = all_lines[selected_start:selected_end]
+    controls_neutralized = any(
+        _neutralize_untrusted_controls(line, retain_newlines=False) != line for line in lines
+    )
     rendered = [
         f"    {line_number:04d} | {_code_line(line)}"
         for line_number, line in enumerate(
@@ -368,6 +372,16 @@ def _render_excerpt(excerpt: SourceExcerptEvidence) -> list[str]:
         rendered.insert(0, f"    … {omitted_before} bound source line(s) omitted before …")
     if omitted_after:
         rendered.append(f"    … {omitted_after} bound source line(s) omitted after …")
+    display_disclosure = (
+        [
+            "Unicode control, format, and separator code points are displayed as visible "
+            "`[U+HEX]` markers; findings.json retains the exact source text and hashes binding "
+            "its UTF-8 bytes.",
+            "",
+        ]
+        if controls_neutralized
+        else []
+    )
     return [
         "Source excerpt — "
         + _inline(f"{excerpt.path}:{excerpt.cited_start_line}-{excerpt.cited_end_line}"),
@@ -381,6 +395,7 @@ def _render_excerpt(excerpt: SourceExcerptEvidence) -> list[str]:
             else "The displayed excerpt contains the complete cited range plus bounded context."
         ),
         "",
+        *display_disclosure,
         "Cited range SHA-256: " + _inline(excerpt.cited_content_sha256),
         "",
     ]
@@ -776,7 +791,10 @@ def _render_client_markdown_from_artifact(
         )
     else:
         lines.append(
-            "1. Resolve any incomplete analysis prerequisites and repeat the audit after material changes."
+            "1. Retain this evidence baseline and repeat the audit after material changes."
+            if status is AuditRunStatus.COMPLETE
+            else "1. Resolve any incomplete analysis prerequisites and repeat the audit after "
+            "material changes."
         )
     lines.extend(["", "## Detailed findings", ""])
     for record in ordered_records:
@@ -788,6 +806,21 @@ def _render_client_markdown_from_artifact(
                 "evidence and dissent remain in `findings.json` and `forensic-report.md`.",
                 "",
             ]
+        )
+    if status is AuditRunStatus.COMPLETE:
+        conclusion = (
+            "The completed scope retained findings. Address them according to their recorded "
+            "disposition, severity, and uncertainty, then execute the recorded safe verification "
+            "checks; absence of further findings must not be represented as proof of safety."
+            if ordered_records
+            else "The completed scope produced no reportable findings. Retain this evidence "
+            "baseline and repeat the audit after material changes; absence of findings must not "
+            "be represented as proof of safety."
+        )
+    else:
+        conclusion = (
+            "This run is incomplete. Resolve the prominent limitations and repeat the audit "
+            "before drawing a repository-wide security conclusion."
         )
     lines.extend(
         [
@@ -802,14 +835,7 @@ def _render_client_markdown_from_artifact(
             "",
             "## Conclusion",
             "",
-            (
-                "The completed scope produced the findings and limitations above. Remediate in "
-                "severity order and rerun the bound regression suite; absence of further findings "
-                "must not be represented as proof of safety."
-                if status is AuditRunStatus.COMPLETE
-                else "This run is incomplete. Resolve the prominent limitations and repeat the "
-                "audit before drawing a repository-wide security conclusion."
-            ),
+            conclusion,
             "",
             "## Forensic bundle index",
             "",

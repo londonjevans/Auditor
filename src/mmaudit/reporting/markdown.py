@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import re
+import unicodedata
 from collections import Counter
 
 from mmaudit.constants import ALL_MODEL_ROLES
@@ -33,8 +34,23 @@ _MAX_AUDITED_SUITE_COVERAGE_GAP_ROWS = 20
 _MAX_FILTERED_FINDING_ROWS = 50
 
 
+def _neutralize_untrusted_controls(value: str, *, retain_newlines: bool = True) -> str:
+    """Render control, format, and separator code points as visible code-point markers."""
+
+    retained: list[str] = []
+    allowed = "\n\t" if retain_newlines else "\t"
+    for character in value:
+        if character in allowed:
+            retained.append(character)
+        elif unicodedata.category(character) in {"Cc", "Cf", "Cs", "Zl", "Zp"}:
+            retained.append(f"[U+{ord(character):04X}]")
+        else:
+            retained.append(character)
+    return "".join(retained)
+
+
 def _clean(value: str) -> str:
-    value = "".join(character for character in value if character in "\n\t" or ord(character) >= 32)
+    value = _neutralize_untrusted_controls(value)
     value = re.sub(r"[\r\n]+", " ", value)
     return html.escape(value, quote=False)
 
@@ -1713,6 +1729,26 @@ def render_markdown(
     for finding in report.rejected_findings:
         lines.extend([f"Rejected candidate origin: [{_text(_origin_label(finding))}]", ""])
         lines.extend(_finding(finding, report, artifact_records.get(finding.id)))
+    recommended_actions: list[str] = []
+    if ordered:
+        recommended_actions.append(
+            "Validate the retained findings and resolve their recorded assumptions, dissent, and "
+            "uncertainty in a disposable local environment."
+        )
+    if scanner_failures:
+        recommended_actions.append(
+            "Resolve scanner failures and repeat the audit after material code changes."
+        )
+    if projection.completed:
+        recommended_actions.append(
+            "Retain this evidence baseline and repeat the audit after material changes."
+        )
+    else:
+        recommended_actions.append(
+            "Resolve any incomplete analysis prerequisites before drawing a repository-wide "
+            "security conclusion."
+        )
+    recommended_actions.append("Obtain professional review for high-impact or regulated systems.")
     lines.extend(
         [
             "",
@@ -1727,10 +1763,7 @@ def render_markdown(
             "",
             "## Recommended next actions",
             "",
-            "1. Reproduce confirmed and high-confidence findings in a disposable local environment.",
-            "2. Review `needs_review` items with maintainers who understand runtime controls.",
-            "3. Resolve scanner failures and repeat the audit after material code changes.",
-            "4. Obtain professional review for high-impact or regulated systems.",
+            *[f"{index}. {action}" for index, action in enumerate(recommended_actions, start=1)],
             "",
         ]
     )

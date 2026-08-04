@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from mmaudit.reporting.bundle import REQUIRED_REPORT_DELIVERABLES
 from mmaudit.traceability import (
     ImplementationStatus,
     MaximumAssuranceTraceability,
@@ -80,8 +81,7 @@ def test_report_bundle_traceability_names_complete_delivery_and_cost_custody() -
     assert "schemas/forensic_delivery_descriptor.schema.json" in report.implementation_paths
     assert "tests/unit/test_forensic_export.py" in report.unit_tests
     assert "tests/unit/test_forensic_cost_ledger.py" in report.unit_tests
-    assert "forensic-report.md" in report.runtime_artifacts
-    assert "run-evidence-manifest.json" in report.runtime_artifacts
+    assert set(report.runtime_artifacts) == REQUIRED_REPORT_DELIVERABLES
 
 
 @pytest.mark.parametrize(

@@ -40,9 +40,11 @@ from mmaudit.models.schemas import (
 from mmaudit.reporting.bundle import build_coverage_artifact, build_findings_artifact
 from mmaudit.reporting.client import (
     bind_active_finding_source_locations,
+    build_client_source_excerpts,
     render_client_markdown,
+    render_client_markdown_from_artifact,
 )
-from mmaudit.reporting.markdown import render_forensic_markdown
+from mmaudit.reporting.markdown import render_forensic_markdown, render_markdown
 from mmaudit.reporting.run_authority import RunTerminalReportAuthority
 from mmaudit.reporting.sarif import generate_report_sarif
 from mmaudit.reporting.status import effective_report_status
@@ -271,6 +273,8 @@ def test_legacy_zero_evidence_report_cannot_render_complete() -> None:
     report = AuditReport.model_validate(_report_payload())
 
     rendered = _render_client(report, {})
+    artifact = build_findings_artifact(report)
+    forensic = render_forensic_markdown(report, findings_artifact=artifact)
 
     assert "> **RUN STATUS: INCOMPLETE**" in rendered
     assert "> **RUN STATUS: COMPLETE**" not in rendered
@@ -278,6 +282,10 @@ def test_legacy_zero_evidence_report_cannot_render_complete() -> None:
         "No reportable findings were identified by the analyses that completed. "
         "This run is incomplete and does not support a conclusion about repository safety."
     ) in rendered
+    assert "Resolve any incomplete analysis prerequisites" in rendered
+    assert "Resolve any incomplete analysis prerequisites" in forensic
+    assert "Retain this evidence baseline" not in rendered
+    assert "Retain this evidence baseline" not in forensic
 
 
 def test_typed_complete_floor_can_render_calibrated_complete_no_findings() -> None:
@@ -315,10 +323,35 @@ def test_typed_complete_floor_can_render_calibrated_complete_no_findings() -> No
         assert artifact.limitations == []
     assert "> **RUN STATUS: COMPLETE**" in forensic
     assert "No surviving findings met the configured scope" in forensic
+    assert "Resolve any incomplete analysis prerequisites" not in rendered
+    assert "Resolve any incomplete analysis prerequisites" not in forensic
+    assert "Resolve scanner failures" not in forensic
+    assert "Reproduce confirmed and high-confidence findings" not in forensic
+    assert "Retain this evidence baseline" in rendered
+    assert "Retain this evidence baseline" in forensic
+    assert "Remediate in severity order" not in rendered
+    assert "Unicode control, format, and separator code points" not in rendered
     assert sarif["runs"][0]["properties"]["runStatus"] == AuditRunStatus.COMPLETE.value
     assert sarif["runs"][0]["properties"]["completed"] is True
     assert authority.run_status == AuditRunStatus.COMPLETE.value
     assert authority.terminal_exit_code == 0
+    finding = _finding(FindingStatus.CONFIRMED)
+    complete_with_finding = report.model_copy(
+        update={
+            "repository": _report().repository,
+            "findings": [finding],
+        }
+    )
+    finding_rendered = _render_client(
+        complete_with_finding,
+        {SOURCE_PATH: SOURCE},
+    )
+    assert "> **RUN STATUS: COMPLETE**" in finding_rendered
+    assert "Address them according to their recorded disposition, severity, and uncertainty" in (
+        finding_rendered
+    )
+    assert "execute the recorded safe verification checks" in finding_rendered
+    assert "rerun the bound verification tests" not in finding_rendered
     accounted_cost = authority.accounted_cost_usd_exact
 
     with pytest.raises(
@@ -384,12 +417,18 @@ def test_verifier_dissent_limits_strong_or_confirmed_projection(
     expected_disposition: str,
 ) -> None:
     decision = _verification(verdict)
+    finding = _finding(finding_status)
     report = _report_with_decisions(
-        _finding(finding_status),
+        finding,
         verifications=[decision],
     )
 
     rendered = _render_client(report, {SOURCE_PATH: SOURCE})
+    artifact = build_findings_artifact(
+        report,
+        candidates=[_candidate("candidate-synthetic-001", finding)],
+    )
+    forensic = render_forensic_markdown(report, findings_artifact=artifact)
 
     assert f"> **{expected_disposition}**" in rendered
     for retained in (
@@ -405,6 +444,8 @@ def test_verifier_dissent_limits_strong_or_confirmed_projection(
     ):
         assert retained in rendered
     assert rendered.count(f"Confidence: {decision.confidence:.2f}") == 1
+    assert "confirmed and high-confidence findings" not in forensic
+    assert "Validate the retained findings and resolve their recorded assumptions" in forensic
 
 
 @pytest.mark.parametrize(
@@ -752,6 +793,68 @@ def test_oversized_source_line_renders_a_bounded_inert_excerpt() -> None:
     assert len(cited_line.encode()) < 16_384
     assert "[line truncated]" in cited_line
     assert omitted_tail not in rendered
+
+
+def test_untrusted_unicode_format_controls_are_visible_not_directional_in_markdown() -> None:
+    directional_override = "\u202e"
+    directional_isolate = "\u2067"
+    non_bmp_format = "\U000e0001"
+    source_separators = ("\u000b", "\u0085", "\u2028", "\u2029")
+    source = (
+        "pragma solidity ^0.8.30;\n"
+        "contract SyntheticVault {\n"
+        "    uint256 public assets;\n"
+        "    function withdraw(uint256 amount) external { "
+        f"/* {directional_override} before{source_separators[0]}after"
+        f"{source_separators[1]}more{source_separators[2]}again"
+        f"{source_separators[3]}end */ assets -= amount; }}\n"
+        "}\n"
+    )
+    report = _report_for_source(source, start_line=4, end_line=8, symbol="withdraw")
+    finding = report.findings[0].model_copy(
+        update={"title": f"Directional {directional_isolate} {non_bmp_format} narrative"}
+    )
+    report = report.model_copy(update={"findings": [finding]})
+    excerpts = build_client_source_excerpts(report, {SOURCE_PATH: source})
+    artifact = build_findings_artifact(
+        report,
+        candidates=[_candidate("candidate-synthetic-001", finding)],
+        source_excerpts=excerpts,
+    )
+
+    client = render_client_markdown_from_artifact(report, artifact)
+    forensic = render_forensic_markdown(report, findings_artifact=artifact)
+    compatibility = render_markdown(report, findings_artifact=artifact)
+    reparsed = type(artifact).model_validate_json(artifact.model_dump_json())
+
+    assert artifact.records[0].source_excerpt is not None
+    assert directional_override in artifact.records[0].source_excerpt.content
+    assert directional_isolate in artifact.records[0].finding.title
+    assert non_bmp_format in artifact.records[0].finding.title
+    for separator in source_separators:
+        assert separator in artifact.records[0].source_excerpt.content
+    assert reparsed == artifact
+    assert reparsed.records[0].source_excerpt is not None
+    assert directional_override in reparsed.records[0].source_excerpt.content
+    assert directional_isolate in reparsed.records[0].finding.title
+    assert non_bmp_format in reparsed.records[0].finding.title
+    for rendered in (client, forensic, compatibility):
+        assert directional_override not in rendered
+        assert directional_isolate not in rendered
+        assert non_bmp_format not in rendered
+        for separator in source_separators:
+            assert separator not in rendered
+    for marker in ("[U+000B]", "[U+0085]", "[U+2028]", "[U+2029]", "[U+202E]"):
+        assert marker in client
+    assert r"\[U+2067\]" in client
+    assert r"\[U+E0001\]" in client
+    assert r"\[U+2067\]" in forensic
+    assert r"\[U+E0001\]" in forensic
+    assert r"\[U+2067\]" in compatibility
+    assert r"\[U+E0001\]" in compatibility
+    assert "findings.json retains the exact source text and hashes binding its UTF-8 bytes" in (
+        client
+    )
 
 
 def test_permuted_candidate_and_decision_inputs_render_identically() -> None:
