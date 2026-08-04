@@ -194,10 +194,11 @@ def test_cli_and_readme_state_the_explicit_language_capability_boundary() -> Non
     for command in ("doctor", "scan", "run"):
         help_result = runner.invoke(app, [command, "--help"], env={"COLUMNS": "300"})
         assert help_result.exit_code == 0
+        normalized_help = " ".join(help_result.stdout.replace("│", " ").split())
         assert "--language-profile" in help_result.stdout
         assert "solidity-evm" in help_result.stdout
         assert "generic-source-review" in help_result.stdout
-        assert "cannot claim EVM maximum assurance" in help_result.stdout
+        assert "cannot claim EVM maximum assurance" in normalized_help
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "evidence-driven Solidity/EVM security auditor" in readme

@@ -2324,6 +2324,29 @@ def test_maximum_assurance_rejects_missing_language_capability_artifact(
     assert assessment.status is not MaximumAssuranceStatus.COMPLETE
 
 
+def test_maximum_assurance_rejects_blocking_language_discovery_omissions(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    assert runtime.language_capability is not None
+    capability = runtime.language_capability.model_copy(
+        update={"blocking_discovery_omissions": ("repository: max_files reached",)}
+    )
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(runtime, language_capability=capability)
+    )
+
+    requirement = next(
+        item
+        for item in assessment.requirements
+        if item.engine == "solidity_evm_language_capability"
+    )
+    assert not requirement.passed
+    assert "blocking omissions" in requirement.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
 @pytest.mark.parametrize(
     ("field", "detail"),
     [

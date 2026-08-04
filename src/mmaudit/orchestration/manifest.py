@@ -32,6 +32,7 @@ from mmaudit.config import (
     parse_canonical_audit_config,
 )
 from mmaudit.constants import ALL_MODEL_ROLES, VERSION
+from mmaudit.language_plugins import parse_language_capability_payload
 from mmaudit.models.scheduler import (
     ABSENT_QUALIFICATION_SHA256,
     SchedulerAbsenceReason,
@@ -79,8 +80,9 @@ from mmaudit.models.schemas import (
     InvariantExecutionOriginDispositionArtifact,
     InvariantExecutionResult,
     JudgeDecisionBatch,
-    LanguageCapabilityProfile,
     LanguageCapabilityArtifact,
+    LanguageCapabilityProfile,
+    LanguageCapabilityStatus,
     Location,
     LocationValidation,
     MaximumAssuranceStatus,
@@ -388,7 +390,13 @@ class RunEvidenceManifest(StrictModel):
             raise ValueError("manifest artifact paths must be unique and sorted")
         if self.schema_version == "1.2":
             missing_report_artifacts = sorted(
-                (MANIFEST_BOUND_REPORT_DELIVERABLES | {RUN_TERMINAL_REPORT_AUTHORITY_PATH})
+                (
+                    MANIFEST_BOUND_REPORT_DELIVERABLES
+                    | {
+                        LANGUAGE_CAPABILITY_ARTIFACT_PATH,
+                        RUN_TERMINAL_REPORT_AUTHORITY_PATH,
+                    }
+                )
                 - set(artifact_paths)
             )
             if missing_report_artifacts:
@@ -2352,6 +2360,13 @@ def _run_configuration_binding(
         raise ValueError("report lacks source-bound language capability evidence")
     if report.language_capability.requested_profile is not effective_config.language_profile:
         raise ValueError("report language profile differs from the effective config")
+    if report.language_capability.evm_portfolio_applicable and (
+        effective_config.language_profile is not LanguageCapabilityProfile.SOLIDITY_EVM
+        or not effective_config.smart_contracts.enabled
+    ):
+        raise ValueError(
+            "report EVM capability conflicts with the effective smart-contract configuration"
+        )
     if report.metadata.get("run_options") != run_options.model_dump(mode="json"):
         raise ValueError("report run options differ from the sealed invocation")
     expected_provenance = {
@@ -4444,13 +4459,12 @@ def _validate_language_capability_artifact(
     """Bind the typed capability artifact to the final report under optional byte custody."""
 
     try:
-        artifact = LanguageCapabilityArtifact.model_validate(
+        artifact = parse_language_capability_payload(
             _read_json_artifact(
                 root,
                 LANGUAGE_CAPABILITY_ARTIFACT_PATH,
                 expected_binding=expected_binding,
-            ),
-            strict=True,
+            )
         )
     except ValueError as exc:
         raise ValueError("language capability artifact is invalid") from exc
@@ -4458,6 +4472,29 @@ def _validate_language_capability_artifact(
         raise ValueError("current report lacks source-bound language capability evidence")
     if artifact.assessment != report.language_capability:
         raise ValueError("language capability artifact differs from the final report")
+    capability_by_path = {item.path: item for item in artifact.files}
+    report_paths = tuple(item.path for item in report.repository.files)
+    if len(report_paths) != len(set(report_paths)):
+        raise ValueError("final report repeats a language capability source path")
+    for report_file in report.repository.files:
+        capability_file = capability_by_path.get(report_file.path)
+        if capability_file is None or (
+            capability_file.sha256 != report_file.sha256
+            or capability_file.size != report_file.size
+            or capability_file.lines != report_file.lines
+            or capability_file.language != report_file.language
+        ):
+            raise ValueError(
+                "final report source differs from the language capability inventory"
+            )
+    if (
+        artifact.assessment.status is LanguageCapabilityStatus.MATCHED
+        and not any(
+            capability_by_path[item.path].language == "Solidity"
+            for item in report.repository.files
+        )
+    ):
+        raise ValueError("matched Solidity/EVM capability lacks an audited Solidity source")
     return artifact
 
 

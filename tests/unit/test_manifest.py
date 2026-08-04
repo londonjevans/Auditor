@@ -177,6 +177,34 @@ def _report(config) -> AuditReport:
     )
 
 
+def _with_repository_capability(
+    report: AuditReport,
+    repository: RepositoryMap,
+    config: AuditConfig,
+) -> AuditReport:
+    capability_files = tuple(
+        LanguageCapabilityFileEvidence(
+            path=item.path,
+            sha256=item.sha256,
+            size=item.size,
+            lines=item.lines,
+            language=item.language,
+        )
+        for item in repository.files
+    )
+    capability = language_capability_for_files(
+        config.language_profile,
+        capability_files,
+        solidity_project_count=int(any(item.language == "Solidity" for item in repository.files)),
+    )
+    return report.model_copy(
+        update={
+            "repository": repository,
+            "language_capability": capability.assessment,
+        }
+    )
+
+
 def _qualified_reasoning_usage(
     config: AuditConfig,
     qualification: VerifiedProductionQualification,
@@ -513,24 +541,24 @@ def _write_verifiable_run(
     source.parent.mkdir(parents=True)
     source_contents = "contract Vault { function safe() external {} }\n"
     source.write_text(source_contents, encoding="utf-8")
-    report = _report(config)
-    report = report.model_copy(
-        update={
-            "repository": report.repository.model_copy(
-                update={
-                    "root_name": repository.name,
-                    "files": [
-                        RepositoryFile(
-                            path="src/Vault.sol",
-                            size=len(source_contents.encode("utf-8")),
-                            lines=1,
-                            sha256=hashlib.sha256(source_contents.encode("utf-8")).hexdigest(),
-                            language="Solidity",
-                        )
-                    ],
-                }
-            )
-        }
+    base_report = _report(config)
+    report = _with_repository_capability(
+        base_report,
+        base_report.repository.model_copy(
+            update={
+                "root_name": repository.name,
+                "files": [
+                    RepositoryFile(
+                        path="src/Vault.sol",
+                        size=len(source_contents.encode("utf-8")),
+                        lines=1,
+                        sha256=hashlib.sha256(source_contents.encode("utf-8")).hexdigest(),
+                        language="Solidity",
+                    )
+                ],
+            }
+        ),
+        config,
     )
     run_dir = root / "run"
     _write_required_artifacts(run_dir, report)
@@ -680,23 +708,23 @@ def _write_qualified_verifiable_run(
     source_contents = "contract Vault { function safe() external {} }\n"
     source.write_text(source_contents, encoding="utf-8")
     base_report = _report(config)
-    report = base_report.model_copy(
-        update={
-            "repository": base_report.repository.model_copy(
-                update={
-                    "root_name": repository.name,
-                    "files": [
-                        RepositoryFile(
-                            path="src/Vault.sol",
-                            size=len(source_contents.encode("utf-8")),
-                            lines=1,
-                            sha256=hashlib.sha256(source_contents.encode("utf-8")).hexdigest(),
-                            language="Solidity",
-                        )
-                    ],
-                }
-            ),
-        }
+    report = _with_repository_capability(
+        base_report,
+        base_report.repository.model_copy(
+            update={
+                "root_name": repository.name,
+                "files": [
+                    RepositoryFile(
+                        path="src/Vault.sol",
+                        size=len(source_contents.encode("utf-8")),
+                        lines=1,
+                        sha256=hashlib.sha256(source_contents.encode("utf-8")).hexdigest(),
+                        language="Solidity",
+                    )
+                ],
+            }
+        ),
+        config,
     )
     run_dir = root / "run"
     _write_required_artifacts(run_dir, report)
@@ -1263,12 +1291,8 @@ def test_manifest_rejects_coherently_resealed_scanner_projection_tamper(
             ],
         }
     )
-    report = base_report.model_copy(
-        update={
-            "repository": repository_map,
-            "scanner_runs": [scanner_run],
-            "findings": [projected],
-        }
+    report = _with_repository_capability(base_report, repository_map, config).model_copy(
+        update={"scanner_runs": [scanner_run], "findings": [projected]}
     )
     source_contents = {location.path: source_content}
     _write_required_artifacts(run_dir, report, source_contents=source_contents)
@@ -1429,6 +1453,22 @@ def test_manifest_self_hash_and_artifact_hashes_reject_tampering(
     manifest_path = run_dir / "run-evidence-manifest.json"
     write_run_evidence_manifest(manifest_path, manifest)
     validate_manifest_artifacts(manifest, run_dir)
+
+    missing_capability = manifest.model_dump(mode="json")
+    missing_capability["artifacts"] = [
+        binding
+        for binding in missing_capability["artifacts"]
+        if binding["path"] != LANGUAGE_CAPABILITY_ARTIFACT_PATH
+    ]
+    missing_capability["manifest_sha256"] = canonical_sha256(
+        {
+            key: value
+            for key, value in missing_capability.items()
+            if key != "manifest_sha256"
+        }
+    )
+    with pytest.raises(ValidationError, match=r"language-capability\.json"):
+        RunEvidenceManifest.model_validate(missing_capability)
 
     altered_manifest = manifest.model_dump(mode="json")
     altered_manifest["repository_root_name"] = "tampered"

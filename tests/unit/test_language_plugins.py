@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from mmaudit.config import AuditConfig, SmartContractsConfig
 from mmaudit.language_plugins import (
     assess_language_capability,
     build_language_capability_artifact,
+    parse_language_capability_payload,
     resolve_language_plugin,
 )
 from mmaudit.models.schemas import (
@@ -162,6 +164,12 @@ def test_language_capability_artifact_recomputes_inventory_hash_and_census(
     artifact = build_language_capability_artifact(assessment, discovery)
 
     assert LanguageCapabilityArtifact.model_validate_json(artifact.model_dump_json()) == artifact
+    assert parse_language_capability_payload(artifact.model_dump(mode="json")) == artifact
+
+    primitive_coercion = artifact.model_dump(mode="json")
+    primitive_coercion["assessment"]["evm_portfolio_applicable"] = 1
+    with pytest.raises(ValidationError):
+        parse_language_capability_payload(primitive_coercion)
 
     digest_tamper = artifact.model_dump(mode="json")
     digest_tamper["assessment"]["discovery_inventory_sha256"] = "0" * 64
@@ -172,6 +180,24 @@ def test_language_capability_artifact_recomputes_inventory_hash_and_census(
     census_tamper["files"][0]["language"] = "Rust"
     with pytest.raises(ValidationError, match="language counts"):
         LanguageCapabilityArtifact.model_validate(census_tamper)
+
+    hidden_blocker = artifact.model_dump(mode="json")
+    hidden_blocker["omitted"] = ["repository: max_files reached"]
+    inventory_payload = {
+        "files": hidden_blocker["files"],
+        "omitted": hidden_blocker["omitted"],
+    }
+    hidden_blocker["assessment"]["discovery_inventory_sha256"] = hashlib.sha256(
+        json.dumps(
+            inventory_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    with pytest.raises(ValidationError, match="blocking omissions differ"):
+        LanguageCapabilityArtifact.model_validate(hidden_blocker)
 
 
 def test_maximum_assurance_preflight_requires_solidity_evm_capability_profile() -> None:

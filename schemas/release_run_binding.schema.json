@@ -9,6 +9,26 @@
       ],
       "title": "AuditProfile",
       "type": "string"
+    },
+    "LanguageCapabilityProfile": {
+      "description": "Explicit product capability selected independently of analysis depth.",
+      "enum": [
+        "solidity-evm",
+        "generic-source-review"
+      ],
+      "title": "LanguageCapabilityProfile",
+      "type": "string"
+    },
+    "LanguageCapabilityStatus": {
+      "description": "Evidence-derived relationship between requested capability and audited source.",
+      "enum": [
+        "MATCHED",
+        "REDUCED",
+        "MISMATCH",
+        "INCONCLUSIVE"
+      ],
+      "title": "LanguageCapabilityStatus",
+      "type": "string"
     }
   },
   "$id": "https://mmaudit.local/schemas/release_run_binding.schema.json",
@@ -16,6 +36,16 @@
   "additionalProperties": false,
   "description": "Self-hashed binding derived from two fresh observations of one run.",
   "properties": {
+    "achieved_language_profile": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LanguageCapabilityProfile"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "achieved_profile": {
       "anyOf": [
         {
@@ -58,6 +88,9 @@
       "title": "Binding Sha256",
       "type": "string"
     },
+    "capability_status": {
+      "$ref": "#/$defs/LanguageCapabilityStatus"
+    },
     "cli_overrides_sha256": {
       "pattern": "^[0-9a-f]{64}$",
       "title": "Cli Overrides Sha256",
@@ -88,6 +121,11 @@
       "title": "Invocation Sha256",
       "type": "string"
     },
+    "language_capability_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Language Capability Sha256",
+      "type": "string"
+    },
     "manifest_file_sha256": {
       "pattern": "^[0-9a-f]{64}$",
       "title": "Manifest File Sha256",
@@ -112,6 +150,13 @@
       "format": "date-time",
       "title": "Observed At",
       "type": "string"
+    },
+    "reduced_language_capability": {
+      "title": "Reduced Language Capability",
+      "type": "boolean"
+    },
+    "requested_language_profile": {
+      "$ref": "#/$defs/LanguageCapabilityProfile"
     },
     "requested_profile": {
       "$ref": "#/$defs/AuditProfile"
@@ -185,6 +230,11 @@
     "invocation_sha256",
     "requested_profile",
     "achieved_profile",
+    "requested_language_profile",
+    "achieved_language_profile",
+    "capability_status",
+    "reduced_language_capability",
+    "language_capability_sha256",
     "artifact_evidence_file_sha256",
     "artifact_evidence_file_size",
     "artifact_evidence_sha256",

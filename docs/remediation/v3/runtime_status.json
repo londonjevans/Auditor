@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-04T06:26:40Z",
+  "updated_at": "2026-08-04T06:56:14Z",
   "candidate_commit": "493df6dd64a710fb8faa874cc24b5bbe784093f8",
-  "autorun_status": "PAUSED_BY_OPERATOR",
+  "autorun_status": "PAUSED",
   "current_milestone": "honest_solidity_evm_product_profile",
   "current_ticket": "V3-SCOPE-001 (IN_PROGRESS)",
   "last_checkpoint_commit": "493df6dd64a710fb8faa874cc24b5bbe784093f8",
@@ -23,8 +23,8 @@
     "V3-FORKSUITE-001.hardhat": "Real Hardhat execution requires the process-attested digest-pinned rootless single-loopback runtime and trusted image-baked reporter specified by V3-HARDHAT-001."
   },
   "last_validation": {
-    "command": ".venv/bin/python -m compileall -q src/mmaudit scripts/generate_release_schemas.py tests/language_capability_support.py tests/unit/test_assurance.py tests/unit/test_cli.py tests/unit/test_config.py tests/unit/test_language_plugins.py tests/unit/test_manifest.py tests/unit/test_openrouter_qualification_config.py tests/unit/test_release_artifacts.py tests/unit/test_release_observations.py tests/unit/test_release_report.py tests/unit/test_release_run.py tests/unit/test_release_schemas.py tests/unit/test_release_validation.py tests/unit/test_release_verification.py tests/unit/test_run_status.py tests/unit/test_traceability.py",
-    "result": "PASS syntax validation at 2026-08-04T06:26:40Z for the paused V3-SCOPE-001 source and directly changed tests. Ticket acceptance, schema synchronization, focused matrices, and broader gates remain pending."
+    "command": "git status --short --branch && .venv/bin/python -m py_compile src/mmaudit/orchestration/verification.py src/mmaudit/repository/discovery.py; process check for pytest/mypy/Ruff/mmaudit/schema generation",
+    "result": "PASS at 2026-08-04T06:56:14Z: newest source-revalidation files compile and no matching validation or product process remains running. This is pause-boundary integrity evidence only; ticket acceptance and broader gates remain pending."
   },
   "pause_state": {
     "requested_at": "2026-08-03T20:08:17Z",
@@ -79,7 +79,11 @@
     "resumed_at_v3_scope_implementation": "2026-08-04T06:00:33Z",
     "requested_at_v3_scope_binding": "2026-08-04T06:26:40Z",
     "result_v3_scope_binding": "Paused at a syntax-valid WIP boundary with V3-SCOPE-001 still IN_PROGRESS. Source-bound typed capability evidence, manifest and assurance binding, release-language projection, claim corrections, and focused regressions are preserved; schema regeneration and focused-to-broad acceptance gates remain pending. No provider call, secret access, network operation, external engine, container, paid action, or release claim occurred.",
-    "resume_action_v3_scope_binding": "Fix residual generic-mismatch report wording and the two current report-fixture compatibility failures, regenerate release schemas, then run the focused language/config/CLI/status/traceability, release, manifest, and assurance matrices before broader V3-SCOPE-001 validation."
+    "resume_action_v3_scope_binding": "Fix residual generic-mismatch report wording and the two current report-fixture compatibility failures, regenerate release schemas, then run the focused language/config/CLI/status/traceability, release, manifest, and assurance matrices before broader V3-SCOPE-001 validation.",
+    "resumed_at_v3_scope_binding": "2026-08-04T06:30:02Z",
+    "requested_at_v3_scope_source_binding": "2026-08-04T06:56:14Z",
+    "result_v3_scope_source_binding": "Paused at a syntax-valid WIP boundary with V3-SCOPE-001 still IN_PROGRESS. Strict capability parsing, exact source/manifest joins, false-COMPLETE closure, report/SARIF claim corrections, release binding validation, schema updates, and focused regressions are preserved. No provider call, secret access, network operation, external engine, container, paid action, or release claim occurred.",
+    "resume_action_v3_scope_source_binding": "Inspect and test the new language-capability source revalidation helper; add its source-drift regression and ManifestSetSubject language-state coherence; repair remaining current-schema fixtures; regenerate schemas; then rerun focused language/report/manifest/release/assurance matrices before broader V3-SCOPE-001 validation."
   },
   "scheduler_assurance_validation": {
     "status": "PASS_COMPONENT_FULL_ASSURANCE",

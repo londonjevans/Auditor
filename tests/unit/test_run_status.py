@@ -599,3 +599,31 @@ def test_current_python_report_cannot_claim_complete_without_language_capability
 
     with pytest.raises(ValidationError, match="typed language capability"):
         AuditReport.model_validate(payload)
+
+
+def test_matched_solidity_capability_cannot_complete_without_applicable_runtime() -> None:
+    usage = [_usage(role) for role in ANALYSIS_ROLES]
+    floor = assess_minimum_analysis_floor(
+        repository=_repository(),
+        compilations=[],
+        scanner_runs=[],
+        usage=usage,
+        required_model_roles=ANALYSIS_ROLES,
+        coverage_metrics=_coverage(),
+        solidity_applicable=False,
+        static_analysis_applicable=False,
+    )
+    assert floor.run_status is AuditRunStatus.COMPLETE
+    payload = _typed_report_payload(
+        floor=floor,
+        scanner_runs=[],
+        usage=usage,
+        coverage=_coverage(),
+    )
+    payload["metadata"] = {
+        "scanner_only": False,
+        "solidity": {"projects": [], "compilation": []},
+    }
+
+    with pytest.raises(ValidationError, match="capability conflicts.*Solidity applicability"):
+        AuditReport.model_validate(payload)

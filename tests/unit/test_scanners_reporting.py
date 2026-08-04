@@ -55,6 +55,8 @@ from mmaudit.models.schemas import (
     LendingBoundaryEvidence,
     Location,
     LocationValidation,
+    LanguageCapabilityFileEvidence,
+    LanguageCapabilityProfile,
     MinimumAnalysisFloor,
     ModelReviewCoverage,
     ModelReviewSurfaceKind,
@@ -129,6 +131,10 @@ from mmaudit.scanners.semgrep import SemgrepScanner
 from mmaudit.scanners.slither import SlitherScanner
 from mmaudit.scanners.trivy import TrivyScanner
 from mmaudit.solidity.reproduction import MacOSToolchainResolutionError
+from tests.language_capability_support import (
+    empty_language_capability,
+    language_capability_for_files,
+)
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 
@@ -3146,6 +3152,37 @@ def test_markdown_does_not_present_incomplete_empty_run_as_safe(
         minimum_floor_met=False,
         limitations=["no real scanner or model review completed"],
     )
+    report_files = (
+        [
+            RepositoryFile(
+                path="app.py",
+                size=20,
+                lines=1,
+                sha256="a" * 64,
+                language="Python",
+            )
+        ]
+        if source_ingestion_succeeded
+        else []
+    )
+    language_capability = (
+        language_capability_for_files(
+            LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW,
+            (
+                LanguageCapabilityFileEvidence(
+                    path="app.py",
+                    size=20,
+                    lines=1,
+                    sha256="a" * 64,
+                    language="Python",
+                ),
+            ),
+        ).assessment
+        if source_ingestion_succeeded
+        else empty_language_capability(
+            LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
+        ).assessment
+    )
     payload = _report([]).model_dump(mode="python")
     payload.update(
         {
@@ -3156,23 +3193,8 @@ def test_markdown_does_not_present_incomplete_empty_run_as_safe(
             "quality_status": quality_status,
             "completed": False,
             "incomplete_reasons": ["no real scanner or model review completed"],
-            "repository": _report([]).repository.model_copy(
-                update={
-                    "files": (
-                        [
-                            RepositoryFile(
-                                path="app.py",
-                                size=20,
-                                lines=1,
-                                sha256="a" * 64,
-                                language="Python",
-                            )
-                        ]
-                        if source_ingestion_succeeded
-                        else []
-                    )
-                }
-            ),
+            "language_capability": language_capability,
+            "repository": _report([]).repository.model_copy(update={"files": report_files}),
             "metadata": {
                 "scanner_only": True,
                 "solidity": {"projects": [], "compilation": []},
@@ -3191,6 +3213,11 @@ def test_markdown_does_not_present_incomplete_empty_run_as_safe(
     assert f"## Executive summary\n\n{required_summary}\n\n" in executive_summary
     assert f"> **RUN STATUS: {run_status.value}**" in executive_summary
     assert "The audit produced **0 surviving finding(s)**" not in executive_summary
+    if source_ingestion_succeeded:
+        assert "This explicitly reduced generic source review" in rendered
+    else:
+        assert "The requested language capability was not established" in rendered
+        assert "This explicitly reduced generic source review" not in rendered
 
 
 def test_legacy_degraded_label_cannot_bypass_the_typed_minimum_floor() -> None:
@@ -4391,6 +4418,21 @@ def test_sarif_marks_only_complete_run_status_successful() -> None:
     assert degraded["runs"][0]["invocations"][0]["executionSuccessful"] is False
     assert quality_only["runs"][0]["invocations"][0]["executionSuccessful"] is False
     assert generate_sarif([])["runs"][0]["invocations"] == []
+
+
+def test_sarif_rejects_complete_run_with_unachieved_language_capability() -> None:
+    mismatch = empty_language_capability(
+        LanguageCapabilityProfile.SOLIDITY_EVM
+    ).assessment
+
+    with pytest.raises(ValueError, match="unachieved language capability"):
+        generate_sarif(
+            [],
+            language_capability=mismatch,
+            run_status=AuditRunStatus.COMPLETE,
+            quality_status=AuditQualityStatus.COMPLETED,
+            completed=True,
+        )
 
 
 @pytest.mark.parametrize(

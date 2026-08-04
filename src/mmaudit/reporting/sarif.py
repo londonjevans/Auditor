@@ -15,8 +15,10 @@ from mmaudit.models.schemas import (
     Finding,
     FindingStatus,
     LanguageCapabilityAssessment,
+    LanguageCapabilityProfile,
     LanguageCapabilityStatus,
     MaximumAssuranceAssessment,
+    MaximumAssuranceStatus,
     QualityGateResult,
     ScannerRun,
     ScannerStatus,
@@ -207,6 +209,29 @@ def generate_sarif(
         completed_quality = quality_status is AuditQualityStatus.COMPLETED
         if completed != completed_quality:
             raise ValueError("SARIF completion conflicts with the quality status")
+    if language_capability is not None and language_capability.status in {
+        LanguageCapabilityStatus.MISMATCH,
+        LanguageCapabilityStatus.INCONCLUSIVE,
+    } and (
+        run_status is AuditRunStatus.COMPLETE
+        or completed is True
+        or quality_status is AuditQualityStatus.COMPLETED
+    ):
+        raise ValueError("SARIF completion conflicts with unachieved language capability")
+    if (
+        maximum_assurance is not None
+        and maximum_assurance.status is MaximumAssuranceStatus.COMPLETE
+        and (
+            language_capability is None
+            or language_capability.status is not LanguageCapabilityStatus.MATCHED
+            or language_capability.achieved_profile
+            is not LanguageCapabilityProfile.SOLIDITY_EVM
+            or not language_capability.evm_maximum_assurance_eligible
+        )
+    ):
+        raise ValueError(
+            "SARIF maximum-assurance completion lacks matched Solidity/EVM capability"
+        )
 
     included = []
     for finding in findings:
@@ -497,7 +522,7 @@ def generate_report_sarif(
             or findings_artifact.filtered_findings != report.filtered_findings
         ):
             raise ValueError("findings artifact differs from the bound audit report")
-    return generate_sarif(
+    sarif = generate_sarif(
         report.findings,
         findings_artifact=findings_artifact,
         scanner_runs=report.scanner_runs,
@@ -509,6 +534,24 @@ def generate_report_sarif(
         incomplete_reasons=projection.limitations,
         quality_gates=projection.quality_gates,
     )
+    if report.language_capability is None:
+        run = sarif["runs"][0]
+        run["properties"]["capabilityStatus"] = "NOT_RECORDED"
+        if run["invocations"]:
+            invocation = run["invocations"][0]
+            invocation["properties"]["capabilityStatus"] = "NOT_RECORDED"
+            invocation["toolExecutionNotifications"].append(
+                {
+                    "level": "warning",
+                    "message": {
+                        "text": (
+                            "Language capability evidence was not recorded; this legacy report "
+                            "cannot support a Solidity/EVM or maximum-assurance claim."
+                        )
+                    },
+                }
+            )
+    return sarif
 
 
 def _security_score(finding: Finding) -> float:

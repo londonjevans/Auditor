@@ -86,10 +86,40 @@
         }
       ]
     },
+    "LanguageCapabilityProfile": {
+      "description": "Explicit product capability selected independently of analysis depth.",
+      "enum": [
+        "solidity-evm",
+        "generic-source-review"
+      ],
+      "title": "LanguageCapabilityProfile",
+      "type": "string"
+    },
+    "LanguageCapabilityStatus": {
+      "description": "Evidence-derived relationship between requested capability and audited source.",
+      "enum": [
+        "MATCHED",
+        "REDUCED",
+        "MISMATCH",
+        "INCONCLUSIVE"
+      ],
+      "title": "LanguageCapabilityStatus",
+      "type": "string"
+    },
     "ManifestSetSubject": {
       "additionalProperties": false,
       "description": "Reconstructable manifest/configuration and CURRENT verification identity.",
       "properties": {
+        "achieved_language_profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LanguageCapabilityProfile"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "achieved_profile": {
           "anyOf": [
             {
@@ -99,6 +129,9 @@
               "type": "null"
             }
           ]
+        },
+        "capability_status": {
+          "$ref": "#/$defs/LanguageCapabilityStatus"
         },
         "effective_config_sha256": {
           "pattern": "^[0-9a-f]{64}$",
@@ -110,6 +143,11 @@
           "title": "Kind",
           "type": "string"
         },
+        "language_capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Language Capability Sha256",
+          "type": "string"
+        },
         "manifest_file_sha256": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Manifest File Sha256",
@@ -119,6 +157,13 @@
           "pattern": "^[0-9a-f]{64}$",
           "title": "Manifest Sha256",
           "type": "string"
+        },
+        "reduced_language_capability": {
+          "title": "Reduced Language Capability",
+          "type": "boolean"
+        },
+        "requested_language_profile": {
+          "$ref": "#/$defs/LanguageCapabilityProfile"
         },
         "requested_profile": {
           "$ref": "#/$defs/AuditProfile"
@@ -157,6 +202,11 @@
         "effective_config_sha256",
         "requested_profile",
         "achieved_profile",
+        "requested_language_profile",
+        "achieved_language_profile",
+        "capability_status",
+        "reduced_language_capability",
+        "language_capability_sha256",
         "verification_binding_sha256",
         "verification_sha256",
         "verification_status"

@@ -118,6 +118,48 @@
       "title": "LanguageCapabilityAssessment",
       "type": "object"
     },
+    "LanguageCapabilityFileEvidence": {
+      "additionalProperties": false,
+      "description": "One canonical retained source observation used for capability classification.",
+      "properties": {
+        "language": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Language",
+          "type": "string"
+        },
+        "lines": {
+          "minimum": 0,
+          "title": "Lines",
+          "type": "integer"
+        },
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size": {
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "size",
+        "lines",
+        "language"
+      ],
+      "title": "LanguageCapabilityFileEvidence",
+      "type": "object"
+    },
     "LanguageCapabilityProfile": {
       "description": "Explicit product capability selected independently of analysis depth.",
       "enum": [
@@ -142,10 +184,27 @@
   "$id": "https://mmaudit.local/schemas/language_capability.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Versioned public artifact carrying the exact language-capability assessment.",
+  "description": "Versioned source inventory and its exact language-capability assessment.",
   "properties": {
     "assessment": {
       "$ref": "#/$defs/LanguageCapabilityAssessment"
+    },
+    "files": {
+      "items": {
+        "$ref": "#/$defs/LanguageCapabilityFileEvidence"
+      },
+      "maxItems": 100000,
+      "title": "Files",
+      "type": "array"
+    },
+    "omitted": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 100000,
+      "title": "Omitted",
+      "type": "array"
     },
     "schema_version": {
       "const": "1.0",
@@ -155,7 +214,8 @@
     }
   },
   "required": [
-    "assessment"
+    "assessment",
+    "files"
   ],
   "title": "mmaudit language capability artifact",
   "type": "object"

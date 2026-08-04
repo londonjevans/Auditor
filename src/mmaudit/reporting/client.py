@@ -719,7 +719,17 @@ def _render_client_markdown_from_artifact(
         key=lambda item: (-_SEVERITY_ORDER[item.finding.severity], item.finding.id),
     )
     capability = report.language_capability
-    if capability is not None and capability.status in {
+    if capability is None:
+        risk_narrative = (
+            f"This legacy evidence record reached **{status.value}**, but it predates typed "
+            "language-capability evidence and cannot support a Solidity/EVM or "
+            "maximum-assurance claim."
+        )
+        methodology = (
+            "Only the exact analyses recorded below are attributable to this legacy run; no "
+            "language-specific analysis portfolio is inferred."
+        )
+    elif capability.status in {
         LanguageCapabilityStatus.MISMATCH,
         LanguageCapabilityStatus.INCONCLUSIVE,
     }:
@@ -732,10 +742,7 @@ def _render_client_markdown_from_artifact(
             "mmaudit completed bounded source discovery and capability assessment only; the "
             "requested analysis portfolio was not authorized to execute."
         )
-    elif (
-        capability is not None
-        and capability.requested_profile is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
-    ):
+    elif capability.requested_profile is LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW:
         risk_narrative = (
             "This explicitly reduced generic source review reached "
             f"**{status.value}** with {len(report.findings)} reportable and "

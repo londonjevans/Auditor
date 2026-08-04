@@ -380,6 +380,21 @@ def test_non_maximum_run_cannot_produce_a_complete_release() -> None:
         )
 
 
+def test_reduced_release_capability_requires_achieved_generic_review() -> None:
+    payload = _run().model_dump(mode="json", exclude={"binding_sha256"})
+    payload.update(
+        {
+            "requested_language_profile": "generic-source-review",
+            "achieved_language_profile": None,
+            "capability_status": "REDUCED",
+            "reduced_language_capability": False,
+        }
+    )
+
+    with pytest.raises(ValidationError, match="achieved generic source review"):
+        ReleaseRunBindingPayload.model_validate(payload)
+
+
 def test_structurally_self_hashed_legacy_report_cannot_validate_as_current() -> None:
     legacy = {
         "schema_version": "1.0",

@@ -78,6 +78,9 @@ def test_legacy_no_floor_status_is_identical_across_every_canonical_report_leaf(
         assert "> **RUN STATUS: INCOMPLETE**" in markdown
         assert "Quality status: **incomplete**" in markdown
         assert LEGACY_MINIMUM_FLOOR_LIMITATION in markdown
+        assert "LANGUAGE CAPABILITY NOT RECORDED" in markdown
+        assert "evidence-derived standard Solidity/EVM audit" not in markdown
+        assert "For Solidity findings, model agreement" not in markdown
     assert sarif_properties["runStatus"] == projection.run_status.value
     assert sarif_properties["qualityStatus"] == projection.quality_status.value
     assert sarif_properties["completed"] is projection.completed
@@ -85,6 +88,14 @@ def test_legacy_no_floor_status_is_identical_across_every_canonical_report_leaf(
         gate.model_dump(mode="json") for gate in projection.quality_gates
     ]
     assert sarif_properties["limitations"] == projection.limitations
+    assert sarif_properties["capabilityStatus"] == "NOT_RECORDED"
+    invocation = sarif["runs"][0]["invocations"][0]
+    assert invocation["properties"]["capabilityStatus"] == "NOT_RECORDED"
+    assert any(
+        "Language capability evidence was not recorded"
+        in notification["message"]["text"]
+        for notification in invocation["toolExecutionNotifications"]
+    )
 
 
 def test_degraded_projection_preserves_a_passing_minimum_floor() -> None:

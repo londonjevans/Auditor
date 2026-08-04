@@ -20,20 +20,24 @@ from mmaudit.config import (
     parse_canonical_audit_config,
 )
 from mmaudit.constants import VERSION
+from mmaudit.language_plugins import parse_language_capability_payload
 from mmaudit.models.schemas import AuditReport, StrictModel
 from mmaudit.orchestration.manifest import (
+    LANGUAGE_CAPABILITY_ARTIFACT_PATH,
     ManifestFileBinding,
     ManifestHashBinding,
     RunEvidenceManifest,
     canonical_sha256,
     collect_run_artifacts,
     load_run_evidence_manifest,
+    open_manifest_bound_json_artifacts,
     rebuild_run_evidence_manifest_for_verification,
     resolve_run_evidence_config,
     validate_solidity_shard_artifacts,
 )
 from mmaudit.reporting.json_report import stable_json
 from mmaudit.reporting.status import report_status_metadata
+from mmaudit.repository.discovery import source_language_for_path
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_name
 
@@ -178,6 +182,13 @@ def verify_run_evidence(
     source_root = _safe_directory(repository_root, "repository")
     mismatches: list[RunVerificationMismatch] = []
     mismatches.extend(_source_mismatches(manifest, source_root))
+    mismatches.extend(
+        _language_capability_source_mismatches(
+            manifest=manifest,
+            run_dir=root,
+            repository_root=source_root,
+        )
+    )
 
     observed_artifacts = collect_run_artifacts(root)
     mismatches.extend(
@@ -394,14 +405,24 @@ def _source_mismatches(
     manifest: RunEvidenceManifest,
     repository_root: Path,
 ) -> list[RunVerificationMismatch]:
+    return _source_binding_mismatches(manifest.sources, repository_root)
+
+
+def _source_binding_mismatches(
+    expected_sources: list[ManifestFileBinding],
+    repository_root: Path,
+    *,
+    identifier_prefix: str = "",
+) -> list[RunVerificationMismatch]:
     mismatches: list[RunVerificationMismatch] = []
-    for expected in manifest.sources:
+    for expected in expected_sources:
+        identifier = f"{identifier_prefix}{expected.path}"
         candidate = repository_root / normalize_relative_path(expected.path)
         if candidate.is_symlink() or candidate.is_junction():
             mismatches.append(
                 RunVerificationMismatch(
                     category=RunVerificationCategory.SOURCE,
-                    identifier=expected.path,
+                    identifier=identifier,
                     kind=RunVerificationMismatchKind.UNSAFE,
                     expected_sha256=expected.sha256,
                     expected_size=expected.size,
@@ -415,7 +436,7 @@ def _source_mismatches(
             mismatches.append(
                 RunVerificationMismatch(
                     category=RunVerificationCategory.SOURCE,
-                    identifier=expected.path,
+                    identifier=identifier,
                     kind=RunVerificationMismatchKind.MISSING,
                     expected_sha256=expected.sha256,
                     expected_size=expected.size,
@@ -427,7 +448,7 @@ def _source_mismatches(
             mismatches.append(
                 RunVerificationMismatch(
                     category=RunVerificationCategory.SOURCE,
-                    identifier=expected.path,
+                    identifier=identifier,
                     kind=RunVerificationMismatchKind.UNSAFE,
                     expected_sha256=expected.sha256,
                     expected_size=expected.size,
@@ -443,12 +464,79 @@ def _source_mismatches(
             mismatches.append(
                 RunVerificationMismatch(
                     category=RunVerificationCategory.SOURCE,
-                    identifier=expected.path,
+                    identifier=identifier,
                     kind=RunVerificationMismatchKind.CHANGED,
                     expected_sha256=expected.sha256,
                     observed_sha256=observed.sha256,
                     expected_size=expected.size,
                     observed_size=observed.size,
+                )
+            )
+    return mismatches
+
+
+def _language_capability_source_mismatches(
+    *,
+    manifest: RunEvidenceManifest,
+    run_dir: Path,
+    repository_root: Path,
+) -> list[RunVerificationMismatch]:
+    binding = next(
+        (
+            item
+            for item in manifest.artifacts
+            if item.path == LANGUAGE_CAPABILITY_ARTIFACT_PATH
+        ),
+        None,
+    )
+    if binding is None:
+        if manifest.schema_version != "1.2":
+            return []
+        return [
+            RunVerificationMismatch(
+                category=RunVerificationCategory.ARTIFACT,
+                identifier="language-capability/source-inventory",
+                kind=RunVerificationMismatchKind.UNVERIFIABLE,
+            )
+        ]
+    try:
+        with open_manifest_bound_json_artifacts(
+            run_dir,
+            (LANGUAGE_CAPABILITY_ARTIFACT_PATH,),
+            required_bindings=(binding,),
+        ) as payloads:
+            artifact = parse_language_capability_payload(
+                payloads[LANGUAGE_CAPABILITY_ARTIFACT_PATH]
+            )
+        source_bindings = [
+            ManifestFileBinding(path=item.path, sha256=item.sha256, size=item.size)
+            for item in artifact.files
+        ]
+    except (OSError, TypeError, ValueError):
+        return [
+            RunVerificationMismatch(
+                category=RunVerificationCategory.ARTIFACT,
+                identifier="language-capability/source-inventory",
+                kind=RunVerificationMismatchKind.UNVERIFIABLE,
+                expected_sha256=binding.sha256,
+                expected_size=binding.size,
+            )
+        ]
+
+    mismatches = _source_binding_mismatches(
+        source_bindings,
+        repository_root,
+        identifier_prefix="language-capability/",
+    )
+    for item in artifact.files:
+        if source_language_for_path(item.path) != item.language:
+            mismatches.append(
+                RunVerificationMismatch(
+                    category=RunVerificationCategory.SOURCE,
+                    identifier=f"language-capability/{item.path}/language",
+                    kind=RunVerificationMismatchKind.UNVERIFIABLE,
+                    expected_sha256=item.sha256,
+                    expected_size=item.size,
                 )
             )
     return mismatches

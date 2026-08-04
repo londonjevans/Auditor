@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_BY_OPERATOR
+AUTORUN_STATUS: PAUSED
 CURRENT_MILESTONE: Honest Solidity/EVM product profile
 CURRENT_TICKET: V3-SCOPE-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-REPORT-001 (COMPLETE)
-NEXT_ACTION: Resume V3-SCOPE-001 by fixing the residual generic-mismatch report wording and the two current report-fixture compatibility failures, regenerate all release schemas, then run the focused language/config/CLI/status/traceability, release, manifest, and assurance matrices before broader validation.
-LAST_COMMAND: `.venv/bin/python -m compileall -q src/mmaudit scripts/generate_release_schemas.py tests/language_capability_support.py tests/unit/test_assurance.py tests/unit/test_cli.py tests/unit/test_config.py tests/unit/test_language_plugins.py tests/unit/test_manifest.py tests/unit/test_openrouter_qualification_config.py tests/unit/test_release_artifacts.py tests/unit/test_release_observations.py tests/unit/test_release_report.py tests/unit/test_release_run.py tests/unit/test_release_schemas.py tests/unit/test_release_validation.py tests/unit/test_release_verification.py tests/unit/test_run_status.py tests/unit/test_traceability.py`
-LAST_RESULT: PASS — the complete paused V3-SCOPE-001 implementation and directly changed test slice compiled without syntax errors at 2026-08-04T06:26:40Z. The ticket remains IN_PROGRESS; generated-schema synchronization and focused-to-broad test gates are pending, and a read-only review matrix identified two fixture-compatibility failures rather than a production completion result.
+NEXT_ACTION: Resume V3-SCOPE-001 by inspecting the new language-capability source revalidation helper, add its drift regression plus ManifestSetSubject language-state coherence, repair the remaining current-schema fixtures, regenerate schemas, then run focused language/report/manifest/release/assurance matrices before broader validation.
+LAST_COMMAND: `git status --short --branch && .venv/bin/python -m py_compile src/mmaudit/orchestration/verification.py src/mmaudit/repository/discovery.py`; process check for pytest/mypy/Ruff/mmaudit/schema generation
+LAST_RESULT: PASS — the latest source-revalidation slice compiled, the worktree contains only the preserved V3-SCOPE-001 WIP, all review agents are complete, and no matching validation or product process remains running. Ticket acceptance and broad validation remain pending.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -20,6 +20,35 @@ OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
 LAST_CHECKPOINT_COMMIT: 493df6dd64a710fb8faa874cc24b5bbe784093f8
+
+## 2026-08-04T06:56:14Z — Operator-requested graceful pause
+
+- Paused `V3-SCOPE-001` while it remains `IN_PROGRESS`; no ticket, maximum-assurance, release,
+  fitness, or superiority completion claim is made.
+- Preserved strict capability parsing, exact manifest/source joins, false-COMPLETE closure work,
+  report/SARIF claim corrections, release binding validation, generated schema updates, and their
+  focused regressions.
+- Last validation was a targeted syntax check of the newest verification/discovery changes and
+  passed. Earlier focused evidence in this slice includes language/config/CLI/status/traceability
+  (`157 passed`), release (`109 passed`), and manifest (`49 passed`) matrices; subsequent edits
+  still require those matrices to be rerun.
+- All three read-only review agents are complete. No test, formatter, type checker, mmaudit,
+  schema-generator, provider, external-engine, or container process remains active.
+- No provider call, secret access, public RPC, live target, paid action, or release claim occurred.
+  The exact resume action is recorded above.
+
+## 2026-08-04T06:30:02Z — Resume V3-SCOPE-001
+
+- Resumed from clean SSH-synchronized pause commit
+  `b2ecbaee306e4d21e1cfdc805205c29876080c3e`; implementation checkpoint remains
+  `493df6dd64a710fb8faa874cc24b5bbe784093f8`.
+- Re-read the complete 1,417-line objective (SHA-256
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`), repository
+  instructions, active V3 ticket, worklog checkpoint, legacy completed queue state, and clean Git
+  state.
+- Continue only the bounded capability-honesty ticket through report/schema/fixture closure and
+  focused-to-broad validation. No provider, secret, public RPC, external engine, container, or
+  paid action is required.
 
 ## 2026-08-04T06:26:40Z — Operator-requested graceful pause
 

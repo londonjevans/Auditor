@@ -15,9 +15,9 @@ from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 
+from mmaudit.language_plugins import parse_language_capability_payload
 from mmaudit.models.schemas import (
     AuditProfile,
-    LanguageCapabilityArtifact,
     LanguageCapabilityProfile,
     LanguageCapabilityStatus,
     StrictModel,
@@ -104,6 +104,14 @@ class ReleaseRunBindingPayload(StrictModel):
         )
         if self.reduced_language_capability is not expected_reduced:
             raise ValueError("release run reduced language capability is inconsistent")
+        if self.capability_status is LanguageCapabilityStatus.REDUCED and (
+            self.requested_language_profile
+            is not LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
+            or self.achieved_language_profile
+            is not LanguageCapabilityProfile.GENERIC_SOURCE_REVIEW
+            or not self.reduced_language_capability
+        ):
+            raise ValueError("reduced release capability must be achieved generic source review")
         if self.capability_status is LanguageCapabilityStatus.MATCHED and (
             self.achieved_language_profile is not LanguageCapabilityProfile.SOLIDITY_EVM
             or self.reduced_language_capability
@@ -197,7 +205,7 @@ def observe_release_run_binding(
         or hashlib.sha256(capability_bytes).hexdigest() != capability_binding.sha256
     ):
         raise ValueError("language capability artifact differs from the run manifest")
-    language_capability = LanguageCapabilityArtifact.model_validate(
+    language_capability = parse_language_capability_payload(
         _decode_json_object(capability_bytes, label="language capability artifact")
     ).assessment
     if (

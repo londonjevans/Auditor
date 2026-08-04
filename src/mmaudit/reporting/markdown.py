@@ -90,7 +90,11 @@ def _capability_report_title(report: AuditReport) -> str:
 def _capability_report_lines(report: AuditReport) -> list[str]:
     capability = report.language_capability
     if capability is None:
-        return []
+        return [
+            "> **LANGUAGE CAPABILITY NOT RECORDED:** this legacy report predates typed "
+            "capability evidence and cannot support a Solidity/EVM or maximum-assurance claim.",
+            "",
+        ]
     achieved = capability.achieved_profile.value if capability.achieved_profile else "none"
     lines = [
         f"Capability profile: **{_text(capability.requested_profile.value)}**. "
@@ -832,11 +836,21 @@ def render_markdown(
                 "confirmation requires a replay-confirmed deterministic invariant "
                 "counterexample, local reproduction, formal proof/counterexample, or strong "
                 "deterministic analyzer evidence plus verifier acceptance."
-                if report.language_capability is None
-                or report.language_capability.evm_portfolio_applicable
+                if report.language_capability is not None
+                and report.language_capability.evm_portfolio_applicable
                 else (
-                    "This reduced generic source review does not apply the Solidity/EVM "
-                    "confirmation portfolio and makes no EVM assurance claim."
+                    "Language capability evidence was not recorded; this legacy report cannot "
+                    "claim use of the Solidity/EVM confirmation portfolio."
+                    if report.language_capability is None
+                    else (
+                        "This explicitly reduced generic source review does not apply the "
+                        "Solidity/EVM confirmation portfolio and makes no EVM assurance claim."
+                        if report.language_capability.status is LanguageCapabilityStatus.REDUCED
+                        else (
+                            "The requested language capability was not established; no analysis "
+                            "portfolio or EVM assurance claim is authorized."
+                        )
+                    )
                 )
             ),
             "",

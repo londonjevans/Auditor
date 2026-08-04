@@ -8,7 +8,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Protocol, TypedDict
+from typing import Any, Protocol, TypedDict
 
 from mmaudit.models.schemas import (
     AnalysisState,
@@ -19,20 +19,9 @@ from mmaudit.models.schemas import (
     LanguageCapabilityStatus,
     QualityGateResult,
     SolidityProjectMetadata,
+    language_capability_blocking_omissions,
 )
 from mmaudit.repository.discovery import DiscoveryResult
-
-_GLOBAL_TRUNCATION_PREFIXES = (
-    "repository: max_files reached",
-    "repository: max_walk_entries reached",
-)
-_UNKNOWN_PATH_OMISSIONS = frozenset(
-    {
-        "repository directory omitted: unsupported path",
-        "repository file omitted: unsupported path",
-    }
-)
-
 
 class _CapabilityEvidence(TypedDict):
     language_counts: dict[str, int]
@@ -94,16 +83,7 @@ def _discovery_inventory_sha256(discovery: DiscoveryResult) -> str:
 
 
 def _blocking_discovery_omissions(discovery: DiscoveryResult) -> tuple[str, ...]:
-    return tuple(
-        sorted(
-            {
-                omission
-                for omission in discovery.omitted
-                if omission.startswith(_GLOBAL_TRUNCATION_PREFIXES)
-                or omission in _UNKNOWN_PATH_OMISSIONS
-            }
-        )
-    )
+    return language_capability_blocking_omissions(discovery.omitted)
 
 
 def _common_evidence(
@@ -296,6 +276,21 @@ def build_language_capability_artifact(
         ),
         omitted=tuple(sorted(set(discovery.omitted))),
     )
+
+
+def parse_language_capability_payload(
+    payload: Mapping[str, Any],
+) -> LanguageCapabilityArtifact:
+    """Validate a duplicate-checked JSON object without relaxing primitive types."""
+
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+    return LanguageCapabilityArtifact.model_validate_json(encoded, strict=True)
 
 
 def language_capability_quality_gate(

@@ -95,6 +95,12 @@ _MANIFESTS = {
 }
 
 
+def source_language_for_path(path: str | Path) -> str:
+    """Return the deterministic discovery language for one source path."""
+
+    return _LANGUAGES.get(Path(path).suffix.lower(), "Text")
+
+
 def _contained(root: Path, candidate: Path) -> bool:
     try:
         candidate.relative_to(root)
@@ -484,7 +490,7 @@ def discover_repository(
                     size=len(data),
                     lines=len(content.splitlines()),
                     sha256=hashlib.sha256(data).hexdigest(),
-                    language=_LANGUAGES.get(candidate.suffix.lower(), "Text"),
+                    language=source_language_for_path(candidate),
                     categories=_categories(relative, content, relative in changed),
                 )
             )

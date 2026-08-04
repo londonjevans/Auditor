@@ -1253,6 +1253,7 @@ class MaximumAssuranceContract:
             and runtime.language_capability.status is LanguageCapabilityStatus.MATCHED
             and runtime.language_capability.evm_portfolio_applicable
             and runtime.language_capability.evm_maximum_assurance_eligible
+            and not runtime.language_capability.blocking_discovery_omissions
             and "language-capability.json" in runtime.artifacts
         )
         clauses = [
@@ -1292,10 +1293,17 @@ class MaximumAssuranceContract:
                             and runtime.language_capability.evm_maximum_assurance_eligible
                             and "language-capability.json" not in runtime.artifacts
                             else (
-                                f"requested={runtime.language_capability.requested_profile.value}; "
-                                f"status={runtime.language_capability.status.value}; "
-                                "maximum-assurance-eligible="
-                                f"{runtime.language_capability.evm_maximum_assurance_eligible}"
+                                "language capability discovery retained blocking omissions: "
+                                + ", ".join(
+                                    runtime.language_capability.blocking_discovery_omissions
+                                )
+                                if runtime.language_capability.blocking_discovery_omissions
+                                else (
+                                    f"requested={runtime.language_capability.requested_profile.value}; "
+                                    f"status={runtime.language_capability.status.value}; "
+                                    "maximum-assurance-eligible="
+                                    f"{runtime.language_capability.evm_maximum_assurance_eligible}"
+                                )
                             )
                         )
                     )

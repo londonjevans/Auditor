@@ -457,6 +457,35 @@ class LanguageCapabilityStatus(StrEnum):
     INCONCLUSIVE = "INCONCLUSIVE"
 
 
+_LANGUAGE_CAPABILITY_GLOBAL_TRUNCATION_PREFIXES = (
+    "repository: max_files reached",
+    "repository: max_walk_entries reached",
+)
+_LANGUAGE_CAPABILITY_UNKNOWN_PATH_OMISSIONS = frozenset(
+    {
+        "repository directory omitted: unsupported path",
+        "repository file omitted: unsupported path",
+    }
+)
+
+
+def language_capability_blocking_omissions(
+    omissions: Sequence[str],
+) -> tuple[str, ...]:
+    """Return the exact discovery omissions that prevent a capability decision."""
+
+    return tuple(
+        sorted(
+            {
+                omission
+                for omission in omissions
+                if omission.startswith(_LANGUAGE_CAPABILITY_GLOBAL_TRUNCATION_PREFIXES)
+                or omission in _LANGUAGE_CAPABILITY_UNKNOWN_PATH_OMISSIONS
+            }
+        )
+    )
+
+
 class AuditScope(StrEnum):
     CONTRACTS_ONLY = "contracts-only"
     CONTRACTS_AND_DEPLOYMENT = "contracts-and-deployment"
@@ -11289,8 +11318,9 @@ class LanguageCapabilityArtifact(StrictModel):
         ).encode("utf-8")
         if hashlib.sha256(encoded).hexdigest() != self.assessment.discovery_inventory_sha256:
             raise ValueError("language capability inventory hash is inconsistent")
-        if not set(self.assessment.blocking_discovery_omissions) <= set(self.omitted):
-            raise ValueError("language capability blocking omissions lack retained evidence")
+        expected_blocking = language_capability_blocking_omissions(self.omitted)
+        if self.assessment.blocking_discovery_omissions != expected_blocking:
+            raise ValueError("language capability blocking omissions differ from retained evidence")
         return self
 
 
@@ -11678,6 +11708,10 @@ class AuditReport(StrictModel):
                     "run completion conflicts with the required maximum-assurance assessment"
                 )
         capability = self.language_capability
+        if capability.evm_portfolio_applicable is not self.minimum_analysis_floor.solidity_applicable:
+            raise ValueError(
+                "language capability conflicts with minimum-floor Solidity applicability"
+            )
         if capability.status in {
             LanguageCapabilityStatus.MISMATCH,
             LanguageCapabilityStatus.INCONCLUSIVE,
