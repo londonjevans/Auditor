@@ -215,14 +215,15 @@
       "id": "P",
       "title": "Client-ready report and forensic bundle",
       "tickets": ["V3-REPORT-001"],
-      "status": "IN_PROGRESS",
+      "status": "COMPLETE",
       "current_evidence_class": "LOCAL_IMPLEMENTATION",
       "evidence": [
-        "Typed Corrovera client and forensic projections, six manifest-bound report leaves, manifest schema 1.2 requirements, release observation, CI staging, published schemas, and deterministic report-quality regressions are implemented at checkpoint 9c14487ed1587d384f12ca4d99f790b99565b442.",
-        "The broader reporting/release matrix passed 306 tests with one explicit hardened-isolation skip; strict mypy passed 168 source files.",
-        "Independent adversarial and acceptance review identified unfinished evidence-credit, candidate-closure, cross-artifact status, current-manifest issuance, source-excerpt binding, and complete delivery-scope obligations."
+        "Checkpoint 487041a58431119ae2f52ae704dddd6b9b91170c implements the concise Corrovera client report, exhaustive forensic projection, exact source excerpts, effective disposition/dissent, status-aware no-findings language, and visible neutralization of untrusted control/format/separator code points while typed evidence retains exact source text and UTF-8 hash bindings.",
+        "The exact required delivery is enforced as seven manifest-bound leaves (audit-report.md, client-report.md, forensic-report.md, findings.json, audit-results.sarif, coverage.json, and model-execution.json) plus the non-recursive run-evidence-manifest.json; private terminal, scanner-source, candidate, cost, export, release, CI, replay, and detached-manifest authority reject missing, swapped, mutated, coherently resealed, or status-inconsistent evidence.",
+        "Confirmed, supported, disputed, inconclusive, rejected, complete-no-findings, and incomplete-no-findings cases are direct regressions. Large surface coverage stays forensic; client section and size bounds pass; exact JSON serialization preserves raw evidence while client, forensic, and compatibility Markdown remain inert and disclosure-calibrated.",
+        "Final validation passed the strengthened 8-case assay, the 477-test report/manifest/status/traceability matrix, the earlier 723-test report/release matrix, 117 non-scheduler and 37 scheduler pipeline cases, Ruff, strict mypy over 175 source files, release-schema synchronization, and the definitive complete suite: 4786 passed with 11 explicit prerequisite/opt-in skips in 1625.17s. Three independent final reviews found no material implementation, regression, traceability, artifact, or secret-boundary blocker."
       ],
-      "remaining_proof": "Make all adversarial cases green; prove one effective run status across every deliverable; reject absent or partial current report bundles without schema downgrade; reject coherently resealed scanner-origin excerpts; make the delivered forensic bundle self-contained; enforce a representative client size/section budget; then run focused, schema, integration, Ruff, mypy, and full-suite gates."
+      "remaining_proof": null
     },
     {
       "id": "Q",
@@ -273,7 +274,8 @@
         "V3-EXECORIGIN-001 closed two independent serialized-evidence false-complete gaps, passed its 154-test final focused matrix, schema synchronization, Ruff, strict mypy over 149 source files, diff and artifact review, and the complete local suite with 3203 tests and 11 explicit prerequisite skips. Paid-provider execution remained disabled.",
         "V3-MODELREFRESH-001 completed its provider-free discovery/diff/workflow slice with independent adversarial replay, 354 touched tests, Ruff, strict mypy over 154 source files, generated-schema and workflow-shell verification, diff and artifact review, and a final complete result of 3602 passed with 11 explicit prerequisite skips. The paid-provider test remained disabled and the ticket stayed PARTIAL.",
         "V3-LINEAGE-001 completed its provider-free non-authorizing overlay and all eight consumer fail-closed regressions. The joined matrix passed 565 tests; repository Ruff, strict mypy over 155 source files, schema synchronization, and diff integrity passed; the complete local suite had only sandbox-denied loopback setup errors, and the exact 76-test bridge file passed with local-loopback permission. The ticket remains PARTIAL because no current real refresh or independently authenticated complete operator decision exists.",
-        "V3-TOOLDIAG-002 followed reproduce, negative regression, remediation, focused/static/real integration, independent review, traceability, and full-suite sequencing. The final real macOS matrix passed 6 cases; the exact final tree passed 4501 tests with 11 explicit skips in 1430.04s, Ruff, strict mypy over 166 source files, release schemas, diff, artifact, and secret-boundary review."
+        "V3-TOOLDIAG-002 followed reproduce, negative regression, remediation, focused/static/real integration, independent review, traceability, and full-suite sequencing. The final real macOS matrix passed 6 cases; the exact final tree passed 4501 tests with 11 explicit skips in 1430.04s, Ruff, strict mypy over 166 source files, release schemas, diff, artifact, and secret-boundary review.",
+        "V3-REPORT-001 followed red-to-green report-quality assays, broad report/release and pipeline matrices, independent adversarial review, final rendering hardening, exact artifact-set traceability, schema/static/hygiene checks, and a definitive 4786-pass complete suite with 11 explicit external-prerequisite/opt-in skips. Checkpoint 487041a58431119ae2f52ae704dddd6b9b91170c contains the implementation; no provider call, secret access, public RPC, live target, or new real audit occurred."
       ],
       "remaining_proof": "Repeat focused/full validation and exact worklog evidence for every ticket."
     },

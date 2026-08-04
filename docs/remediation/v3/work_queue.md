@@ -405,11 +405,17 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   complete-no-findings, and incomplete-no-findings report-quality cases pass;
   dissent and limitations are prominent; large coverage tables stay forensic.
 - **Dependencies:** `V3-FLOOR-001`.
-- **Status:** `IN_PROGRESS`
-- **Current action:** The immutable pre-review-fix suite passed `4785` tests with `11` explicit
-  skips. Add focused regressions and correct status-blind complete-no-findings roadmaps, raw Unicode
-  format-control rendering, and the omitted manifest-bound `audit-report.md` traceability leaf;
-  then rerun focused/static/schema/full-suite gates and close only from recorded evidence.
+- **Status:** `COMPLETE`
+- **Evidence:** Checkpoint `487041a58431119ae2f52ae704dddd6b9b91170c` implements and
+  independently validates all seven disposition/no-finding report-quality cases, concise client
+  bounds, exhaustive forensic custody, exact required artifact inventory, source-bound excerpts,
+  calibrated status/disposition language, and inert visible rendering of untrusted Unicode
+  controls with exact typed evidence retention. The final 477-test report/manifest matrix, Ruff,
+  strict mypy over 175 source files, synchronized schemas, and definitive full suite passed
+  (`4786 passed, 11 skipped in 1625.17s`).
+- **Remaining limitation:** This ticket proves local implementation and deterministic integration;
+  it does not claim a new provider call or a completed real audit.
+- **Next action:** None; continue with `V3-SCOPE-001`.
 
 ## V3-SCOPE-001 — Honest Solidity/EVM product profile
 
@@ -418,7 +424,11 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Acceptance criteria:** Language mismatch is detected; non-Solidity runs cannot
   claim EVM assurance; README and CLI claims match actual capability.
 - **Dependencies:** `V3-REPORT-001`.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
+- **Current action:** Inspect language detection, capability/profile configuration, plugin
+  boundaries, CLI descriptions, README claims, and existing tests; reproduce any path that lets a
+  non-Solidity repository retain Solidity/EVM maximum-assurance claims before implementing one
+  cohesive scope-honesty correction.
 
 ## V3-QUALIFY-001 — Real staged model qualification
 

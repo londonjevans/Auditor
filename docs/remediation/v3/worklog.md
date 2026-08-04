@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_BY_OPERATOR
-CURRENT_MILESTONE: Client report and forensic evidence bundle
-CURRENT_TICKET: V3-REPORT-001 (IN_PROGRESS)
-LAST_COMPLETED_TICKET: V3-FIXTURE-001 (COMPLETE)
-NEXT_ACTION: On operator resume, rerun `.venv/bin/pytest -q` under the local-listener-capable host policy to a terminal result; if green, run final static/artifact and independent diff reviews, close V3-REPORT-001 traceability from recorded evidence, checkpoint, and begin V3-SCOPE-001.
+AUTORUN_STATUS: RUNNING
+CURRENT_MILESTONE: Honest Solidity/EVM product profile
+CURRENT_TICKET: V3-SCOPE-001 (IN_PROGRESS)
+LAST_COMPLETED_TICKET: V3-REPORT-001 (COMPLETE)
+NEXT_ACTION: Inspect language detection, capability/profile configuration, plugin boundaries, CLI descriptions, README claims, and existing tests; reproduce any non-Solidity path that retains Solidity/EVM maximum-assurance claims, then implement one cohesive scope-honesty correction.
 LAST_COMMAND: `.venv/bin/pytest -q`
-LAST_RESULT: INTERRUPTED_BY_OPERATOR_PAUSE: the repaired complete suite was stopped cleanly at 2026-08-04T03:29:36Z after `73 passed, 5 skipped in 432.60s`; this partial run receives no complete-suite credit and emitted no failure before interruption.
+LAST_RESULT: PASS_DEFINITIVE_V3_REPORT_SUITE: exact final tree passed `4786` tests with `11` explicit prerequisite/opt-in skips in `1625.17s`; two inherited permission-restricted temporary-tree cleanup warnings were non-failing.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
-LAST_CHECKPOINT_COMMIT: b90e38731d6c149975b90403c3dc0ad8e4f5d194
+LAST_CHECKPOINT_COMMIT: 487041a58431119ae2f52ae704dddd6b9b91170c
 
 ## 2026-08-04T02:11:31Z — Resume
 
@@ -164,6 +164,181 @@ LAST_CHECKPOINT_COMMIT: b90e38731d6c149975b90403c3dc0ad8e4f5d194
   deciding the ticket from evidence.
 - Local checkpoint containing the preserved recovery fixtures, strengthened integration
   expectations, and exact pause record: `b90e38731d6c149975b90403c3dc0ad8e4f5d194`.
+
+## 2026-08-04T03:32:51Z — Resume and terminal validation restart
+
+- Resumed `V3-REPORT-001` from clean SSH-synchronized pause commit
+  `6749f6bb175964e675b8bde0a69d418cc42ebaaa`; implementation/test checkpoint remains
+  `b90e38731d6c149975b90403c3dc0ad8e4f5d194`.
+- Re-read the complete 1,417-line objective, repository instructions, active queue, worklog,
+  traceability, runtime state, and clean worktree. Objective SHA-256 remains
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`; local HEAD and SSH
+  upstream are identical.
+- **Pre-command record:** `.venv/bin/pytest -q` will run the complete repository suite under the
+  local-listener-capable host policy. The interrupted `73`-pass partial run remains non-creditable;
+  only this new process's terminal result can satisfy the complete-suite gate. No paid provider,
+  public RPC, live target, or external-network action is authorized by this command.
+
+## 2026-08-04T03:59:39Z — Green baseline and independent close-out findings
+
+- The immutable resumed command `.venv/bin/pytest -q` passed `4785` tests with `11` explicit
+  prerequisite/opt-in skips in `1557.58s` (`25m57s`). The skips remain unavailable rootless
+  isolation, Echidna, Halmos, Medusa, local compiler/replay/fork execution, and paid-provider
+  integration; none receives pass credit. Two inherited permission-restricted temporary-tree
+  cleanup warnings were non-failing.
+- Three independent read-only reviews confirmed all seven V3-REPORT disposition/no-finding cases,
+  private scanner-source and terminal authority, detached manifest replay, and test-fixture
+  corrections without production-gate weakening. They also reproduced three closure defects:
+  complete no-findings client/forensic roadmaps recommend resolving nonexistent failures; raw
+  Unicode format controls can visually reorder untrusted inline source/narrative Markdown; and the
+  machine traceability registry omits the manifest-bound `audit-report.md` compatibility leaf.
+- No source changed beneath the green process. These defects remain in-scope and prevent ticket
+  closure until focused regressions, implementation corrections, final static/schema validation,
+  and a post-fix complete-suite result pass. No provider call, secret access, public RPC, live
+  target, or external network operation ran.
+
+## 2026-08-04T04:03:31Z — Independent report-quality corrections
+
+- Added pre-fix regressions that reproduced the review findings: the exact four-test matrix first
+  returned `3 failed, 1 passed`. Complete no-findings output contained nonexistent-prerequisite
+  advice, raw U+202E survived both client and forensic Markdown, and `MA-REPORT-BUNDLE` omitted
+  `audit-report.md`; the incomplete control continued to preserve prerequisite-remediation advice.
+- Markdown now renders Unicode control, format, and surrogate code points as visible `\\uXXXX`
+  text while retaining exact unmodified source/narrative evidence in typed JSON. Client and
+  forensic roadmaps derive actions from effective completion, findings, needs-review records, and
+  actual scanner failures. Complete zero-finding output maintains the bound regression suite;
+  incomplete output still requires resolving prerequisites. Machine traceability now names the
+  manifest-bound compatibility report leaf.
+- The exact four-test regression matrix passed after correction. Affected Ruff passed, and the
+  broader 11-file report, manifest, status, scanner-reporting, scheduler-manifest, and traceability
+  matrix passed all `477` tests in `42.33s`. Two inherited permission-restricted cleanup warnings
+  were non-failing. `git diff --check` is green.
+- **Pre-command record:** Run strict `.venv/bin/mypy`, release-schema drift verification, affected
+  Ruff, runtime JSON validation, and diff integrity. If green, record and start a post-fix complete
+  suite under the local-listener-capable host policy. No provider or external network call is
+  required.
+
+## 2026-08-04T04:04:10Z — Post-fix complete-suite boundary
+
+- `.venv/bin/ruff format .` left all `442` files unchanged; `.venv/bin/ruff check .` passed;
+  strict `.venv/bin/mypy` passed all `175` source files; release-schema drift verification passed;
+  runtime and traceability JSON parse cleanly; and `git diff --check` passed.
+- **Pre-command record:** `.venv/bin/pytest -q` will execute the complete post-fix repository suite
+  under the local-listener-capable host policy. Only its terminal result can close the ticket; the
+  earlier `4785`-pass run is pre-fix baseline evidence. No paid provider, public RPC, live target,
+  or external-network action is authorized by this command.
+
+## 2026-08-04T04:31:16Z — First post-fix suite and final review refinements
+
+- The first post-fix `.venv/bin/pytest -q` run passed `4786` tests with the same `11` explicit
+  prerequisite/opt-in skips in `1570.68s` (`26m10s`). Two inherited permission-restricted
+  temporary-tree cleanup warnings were non-failing.
+- Independent re-review found no weakened gate, authority bypass, artifact inconsistency, or secret
+  leak. It did identify final report-quality seams: any nonempty forensic report still named
+  confirmed/high-confidence findings regardless of effective disposition; complete zero-finding
+  output implied a bound regression suite and severity-ordered remediation without evidence; and
+  visibly escaped Unicode controls lacked an operator-facing display disclosure.
+- The final regression refinement must also prove incomplete advice in forensic Markdown, distinct
+  exact narrative/source escapes, typed `findings.json` serialization round-trip retention,
+  compatibility `audit-report.md` rendering, and equality with the authoritative required-report
+  artifact set. The current green suite predates those changes and cannot be the final-tree gate.
+- No provider call, secret access, public RPC, live target, or external network operation ran.
+
+## 2026-08-04T04:33:59Z — Final report wording and evidence-display refinement
+
+- Strengthened the pre-fix assay with incomplete forensic advice, four disputed/inconclusive
+  effective-disposition roadmaps, distinct U+202E source and U+2067 narrative controls, exact
+  escape spelling, typed JSON serialization/reparse equality, direct compatibility-report
+  rendering, Unicode-display disclosure, complete zero-finding conclusion, and exact equality to
+  `REQUIRED_REPORT_DELIVERABLES`. It reproduced `6` failures with `2` passes before correction.
+- Forensic advice is now disposition-neutral and directs validation of retained findings plus
+  recorded assumptions, dissent, and uncertainty. Complete no-findings output retains an evidence
+  baseline without claiming findings or a regression suite. The client conclusion no longer
+  recommends severity-ordered remediation when no reportable findings exist. When raw source
+  controls are displayed as visible escapes, the excerpt explicitly states that `findings.json`
+  retains and hash-binds the exact raw bytes.
+- The strengthened assay passed all `8` cases in `0.65s`. Affected Ruff passed, and the full
+  11-file report/manifest/status/traceability matrix passed all `477` tests in `42.04s`; two
+  inherited permission-restricted cleanup warnings were non-failing. `git diff --check` passed.
+- **Pre-command record:** Run final-tree Ruff format/check, strict mypy, release-schema generation,
+  runtime/traceability JSON, and diff integrity, then start the definitive complete suite under the
+  local-listener-capable host policy. No provider or external network call is required.
+
+## 2026-08-04T04:35:06Z — Definitive final-tree suite boundary
+
+- Final-tree `.venv/bin/ruff format .` left all `442` files unchanged; Ruff check passed; strict
+  mypy passed all `175` source files; release-schema drift verification passed; runtime and
+  traceability JSON parse cleanly; and `git diff --check` passed.
+- Three independent read-only final reviews are rechecking report semantics, regression adequacy,
+  traceability, and artifact/secret hygiene against this exact diff.
+- **Pre-command record:** `.venv/bin/pytest -q` will execute the definitive complete repository
+  suite under the local-listener-capable host policy. Only its terminal result applies to the exact
+  final tree. No paid provider, public RPC, live target, or external-network action is authorized.
+
+## 2026-08-04T04:40:56Z — Final rendering hardening and renewed suite boundary
+
+- Final authority review reproduced two additional untrusted-display edges before the definitive
+  run began: broad `splitlines()` consumed VT, FF, FS/GS/RS, NEL, U+2028, and U+2029 before visible
+  neutralization; and `\\uXXXX` was ambiguous for non-BMP format code points. Rendering now strips
+  only canonical CR/LF endings, preserves all other separators, and emits uniform `[U+HEX]`
+  markers for `Cc`, `Cf`, `Cs`, `Zl`, and `Zp` code points.
+- Expanded typed evidence contains VT, NEL, U+2028, U+2029, U+202E, U+2067, and non-BMP U+E0001.
+  Tests prove exact typed JSON round-trip retention, absence of raw controls in client/forensic/
+  compatibility Markdown, exact markers, and precise disclosure. COMPLETE findings now direct
+  disposition/severity/uncertainty-aware handling and execution of recorded safe checks without
+  claiming those checks previously ran.
+- The exact strengthened selector passed `8` tests in `0.78s`; affected Ruff passed; the 11-file
+  report/manifest/status/traceability matrix passed all `477` tests in `43.75s`. Final independent
+  authority review found no remaining report-semantic or control-neutralization blocker.
+- Final-tree Ruff format left `442` files unchanged; Ruff check passed; strict mypy passed `175`
+  source files; release schemas, runtime/traceability JSON, and diff integrity passed.
+- **Pre-command record:** Start `.venv/bin/pytest -q` under the local-listener-capable host policy
+  against this exact latest tree. Only its terminal result can close V3-REPORT-001. No provider or
+  external network call is authorized.
+
+## 2026-08-04T05:09:24Z — V3-REPORT-001 complete
+
+- The definitive exact-tree `.venv/bin/pytest -q` command passed `4786` tests with `11` explicit
+  prerequisite/opt-in skips in `1625.17s` (`27m05s`). Skips remain unavailable rootless isolation,
+  Echidna, Halmos, Medusa, explicit local compiler/replay/fork integrations, and paid-provider
+  opt-in; none receives pass credit. Two inherited permission-restricted temporary-tree cleanup
+  warnings were non-failing.
+- Final implementation checkpoint `487041a58431119ae2f52ae704dddd6b9b91170c` contains the report
+  rendering and machine-traceability changes. Three independent final reviews found no remaining
+  report-semantic, control-neutralization, regression, traceability, artifact, or secret-boundary
+  blocker. The exact required artifact set is seven manifest-bound leaves plus the non-recursive
+  run manifest.
+- `V3-REPORT-001` is `COMPLETE` as local implementation evidence. It does not claim a new provider
+  call, real scanner/formal integration, hardened rootless runtime, or completed real audit.
+  Provider counts, cost ledger, and external blockers are unchanged.
+
+### Literal validation commands retained for V3-REPORT-001
+
+- Broader report/release unit matrix (`723 passed in 45.11s`):
+  `.venv/bin/pytest -q tests/unit/test_client_forensic_reporting.py tests/unit/test_client_forensic_reporting_adversarial.py tests/unit/test_context_manifest.py tests/unit/test_execution_origin_reporting.py tests/unit/test_forensic_cost_ledger.py tests/unit/test_forensic_export.py tests/unit/test_manifest.py tests/unit/test_release.py tests/unit/test_release_artifacts.py tests/unit/test_release_attestation.py tests/unit/test_release_candidate.py tests/unit/test_release_collection.py tests/unit/test_release_gates.py tests/unit/test_release_io.py tests/unit/test_release_observations.py tests/unit/test_release_report.py tests/unit/test_release_run.py tests/unit/test_release_runtime.py tests/unit/test_release_schemas.py tests/unit/test_release_static.py tests/unit/test_release_validation.py tests/unit/test_release_verification.py tests/unit/test_report_status_projection.py tests/unit/test_run_status.py tests/unit/test_scanner_source_evidence.py tests/unit/test_scanner_workspace_text_observation.py tests/unit/test_scanners_reporting.py`.
+- Non-scheduler pipeline (`117 passed in 432.57s`):
+  `.venv/bin/pytest -q -x tests/integration/test_pipeline.py`.
+- Scheduler pipeline (`37 passed in 144.82s`):
+  `.venv/bin/pytest -q -x tests/integration/test_scheduler_pipeline.py`.
+- Local-listener matrix (`138 passed in 51.85s`, local-listener-capable host policy):
+  `.venv/bin/pytest -q tests/unit/test_read_only_rpc_bridge.py tests/unit/test_read_only_rpc_unix_bridge.py tests/unit/test_hardhat_isolation_backend.py tests/unit/test_hardhat_loopback_relay.py --cache-clear`.
+- Execution-origin/replay recovery (`98 passed in 8.46s`):
+  `.venv/bin/pytest -q tests/unit/test_execution_origin_artifacts.py tests/unit/test_replay.py`.
+- Deterministic realistic-scale fixture: `.venv/bin/python
+  scripts/generate_realistic_scale_fixtures.py` verified `196` files; `.venv/bin/pytest -q
+  tests/unit/test_realistic_scale_fixture_generator.py` passed `8` tests in `1.45s`.
+- Final strengthened selector (`8 passed in 0.78s`):
+  `.venv/bin/pytest -q tests/unit/test_client_forensic_reporting_adversarial.py::test_legacy_zero_evidence_report_cannot_render_complete tests/unit/test_client_forensic_reporting_adversarial.py::test_typed_complete_floor_can_render_calibrated_complete_no_findings tests/unit/test_client_forensic_reporting_adversarial.py::test_verifier_dissent_limits_strong_or_confirmed_projection tests/unit/test_client_forensic_reporting_adversarial.py::test_untrusted_unicode_format_controls_are_visible_not_directional_in_markdown tests/unit/test_traceability.py::test_report_bundle_traceability_names_complete_delivery_and_cost_custody`.
+- Final report/manifest/status/traceability matrix (`477 passed in 43.75s`):
+  `.venv/bin/pytest -q tests/unit/test_client_forensic_reporting.py tests/unit/test_client_forensic_reporting_adversarial.py tests/unit/test_context_manifest.py tests/unit/test_execution_origin_reporting.py tests/unit/test_manifest.py tests/unit/test_release_artifacts.py tests/unit/test_report_status_projection.py tests/unit/test_scanners_reporting.py tests/unit/test_scheduler_manifest.py tests/unit/test_scheduler_retained_journal_manifest.py tests/unit/test_traceability.py`.
+- Final static/schema gate: `.venv/bin/ruff format . && .venv/bin/ruff check . &&
+  .venv/bin/mypy && .venv/bin/python scripts/generate_release_schemas.py && .venv/bin/python -m
+  json.tool docs/remediation/v3/runtime_status.json >/dev/null && .venv/bin/python -m json.tool
+  docs/remediation/v3/review_traceability.json >/dev/null && git diff --check` — `442` files
+  unchanged, Ruff pass, strict mypy pass over `175` source files, schemas/JSON/diff pass.
+- Definitive complete suite: `.venv/bin/pytest -q` — `4786 passed, 11 skipped in 1625.17s`.
+- **Next ticket:** `V3-SCOPE-001` is now `IN_PROGRESS`; inspect current language-profile and claim
+  boundaries before editing.
 
 ## 2026-08-04T02:07:41Z — Operator-requested pause
 
