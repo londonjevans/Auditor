@@ -985,6 +985,64 @@ are invisible to source review by construction.
 - **Dependencies:** `V3-SCHEDULER-001`.
 - **Status:** `QUEUED`
 
+## V3-ACTORMODEL-001 — Actor and incentive model as a required audit input
+
+- **Objective:** Give reviewers the identity, capital position, and incentives of every
+  privileged role, so findings that require an aligned party to act against their own interest
+  are rated correctly rather than reported as attacks.
+- **Why this is needed — three measured corrections in one engagement.** During the
+  ForestRoadVault review on 2026-08-04, five frontier lineages plus a four-lineage adversarial
+  refutation pass produced findings whose *mechanisms* were correct and whose *economic
+  judgements* were wrong. Each was corrected by the operator from knowledge held outside the
+  source:
+  - **Severity.** A curator round-trip was rated High by three independent refuting lineages.
+    The operator identified a 21-day request-anchored redemption cooldown that removes
+    opportunistic execution. Corrected to Medium.
+  - **Framing.** A servicer deferring a past-due mark was reported as an attack. The operator
+    observed that the originator's business depends on repayment, so the realistic case is
+    ordinary forbearance. The finding survived but inverted: no misconduct required, higher
+    likelihood, different remediation.
+  - **Actor identity and scope.** The adversary was assumed to be a hostile curator. The
+    operator identified that Forest Road is the anchor curator posting first-loss capital, and
+    is therefore consumed before any senior loss — inverting the assumed incentive. Real scope
+    is third-party curators, admitted by ADR but not yet onboarded.
+  In every case the source was read correctly. What was missing was who holds each role, what
+  capital they have at risk, and what they lose if the protocol fails. That information lives in
+  ADRs, governance records, and operating reality, not in Solidity.
+- **The general failure mode.** A model shown only code will infer an adversary wherever the code
+  permits one. It cannot know that the permitted actor is the party with the most to lose. This
+  systematically over-rates findings requiring an aligned party to act against its own interest,
+  and — the mirror error — under-reports harms arising from entirely legitimate behaviour, which
+  is where F-02 actually landed.
+- **Acceptance criteria:**
+  - A typed, versioned actor model is a first-class audit input: for each privileged role, the
+    holder, whether roles are concentrated in one party, capital at risk and its seniority in the
+    loss waterfall, fee and revenue exposure, and what the party loses if the protocol fails.
+  - Capital seniority is explicit, because it inverts incentives. An actor whose capital is
+    consumed before the party they could harm is not a plausible adversary against that party.
+  - The model distinguishes **currently held** roles from **admitted but unfilled** ones. F-01 is
+    near-unreachable today and live on the first third-party curator approval; a reviewer must be
+    able to express exactly that.
+  - Severity assignment consumes the actor model, and a finding requiring an actor to act against
+    a stated interest must record why that is plausible or be rated down. Findings that require
+    **no** misconduct are flagged for higher likelihood, not lower.
+  - The model is operator-authored evidence, never inferred from source. An absent or stale actor
+    model is a stated limitation on every severity in the report, not a silent default.
+  - Where the actor model and the code disagree — a role the code permits that the model says is
+    unfilled — the disagreement is surfaced as a governance finding rather than silently resolved.
+  - Regressions cover the three corrections above as fixtures: each must be rated correctly with
+    the actor model supplied, and must reproduce the original over-rating without it.
+- **Relationship to existing tickets.** `V3-TAXONOMY-001` asks whether a failure mode was
+  considered; this asks whether a plausible actor exists to cause it. `V3-CONSENSUS-001` and the
+  evidence-capped judgment stage are where the model must be consumed — severity is currently
+  inherited from proposing and refuting roles, and this engagement showed that refuters challenge
+  the mechanism while leaving severity unexamined.
+- **Files expected to change:** actor-model schema and loader, `src/mmaudit/orchestration/`
+  consensus and severity assignment, specialist and judge prompts, report provenance, regressions.
+- **Dependencies:** None for the schema and input path; `V3-CONSENSUS-001` for severity
+  consumption.
+- **Status:** `QUEUED`
+
 ## V3-TAXONOMY-001 — Known-issue taxonomy with mandatory disposition
 
 - **Objective:** Add a versioned taxonomy of known vulnerability classes, bound to the
@@ -2185,35 +2243,38 @@ model, no qualification, and no provider spend anywhere in the path.
 22. `V3-MULTI-AUDIT-001`
 23. `V3-ENSEMBLE-001` — settle whether the specialist ensemble beats concentrated compute
     before committing to its cost and latency.
-24. `V3-TAXONOMY-001`
-25. `V3-RETRIEVAL-001`
-26. `V3-MUTATION-001`
+24. `V3-ACTORMODEL-001` — actor and incentive model as an audit input. Three severity/framing
+   errors in one real engagement traced to reviewers not knowing who holds each role or what
+   capital they have at risk.
+25. `V3-TAXONOMY-001`
+26. `V3-RETRIEVAL-001`
+27. `V3-MUTATION-001`
 
 ### Phase 5 — evidence and claims
-27. `V3-CONVERGENCE-001` — thresholds derived from the measured discovery curve, not guessed.
-28. `V3-HUMANCMP-001` — the only ticket that can ever substantiate a superiority claim.
-29. `V3-STABILITY-001`
+28. `V3-CONVERGENCE-001` — thresholds derived from the measured discovery curve, not guessed.
+29. `V3-HUMANCMP-001` — the only ticket that can ever substantiate a superiority claim.
+30. `V3-STABILITY-001`
 
 ### Phase 6 — release
 
-30. `V3-BYTECODE-001`
-31. `V3-ENGINES-001`
-32. `V3-BENCHMARK-001`
-33. `V3-CERTIFICATE-001`
-34. `V3-ADR-001`
-35. `V3-RELEASE-001`
+31. `V3-BYTECODE-001`
+32. `V3-ENGINES-001`
+33. `V3-BENCHMARK-001`
+34. `V3-CERTIFICATE-001`
+35. `V3-ADR-001`
+36. `V3-RELEASE-001`
 
 ### Phase 7 — operator-prerequisite and product work
 
-36. `V3-QUOTE-001`
-37. `V3-HARDHAT-001` — resumes only when the digest-pinned rootless image exists.
-38. `V3-CI-001`
-39. `V3-LIFECYCLE-001`
-40. `V3-REVERIFY-001`
-41. `V3-INTAKE-001`
-42. `V3-CONSENT-001`
-43. `V3-SERVICE-001`
-44. `V3-AUTONOMY-001`
+37. `V3-QUOTE-001`
+38. `V3-HARDHAT-001` — resumes only when the digest-pinned rootless image exists.
+39. `V3-CI-001`
+40. `V3-LIFECYCLE-001`
+41. `V3-REVERIFY-001`
+42. `V3-INTAKE-001`
+43. `V3-CONSENT-001`
+44. `V3-SERVICE-001`
+45. `V3-AUTONOMY-001`
 
 ### Completion discipline
 
