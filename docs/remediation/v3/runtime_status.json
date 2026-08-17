@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-17T11:15:01Z",
-  "candidate_commit": "97f9de051e977fa0c6cd6750fa79df9f3e974f79",
+  "updated_at": "2026-08-17T11:21:24Z",
+  "candidate_commit": "12c389f6f8fe3a242b4bbc6c3e5aceb3880cb4a8",
   "autorun_status": "PAUSED_AT_TICKET_BOUNDARY",
   "current_milestone": "M1-DETERMINISTIC-PRODUCT (REACHED)",
   "current_ticket": "NONE",
-  "last_checkpoint_commit": "97f9de051e977fa0c6cd6750fa79df9f3e974f79",
+  "last_checkpoint_commit": "12c389f6f8fe3a242b4bbc6c3e5aceb3880cb4a8",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,
@@ -133,7 +133,7 @@
     "result_v3_policyelig_selection_refresh": "The audit-scoped technical-policy intersection, cross-audit runtime reassertion contract, non-authorizing daily policy-refresh projection, and exact optional sixth-artifact staging passed focused tests and static/schema checks. No legal decision or production authority was inferred.",
     "next_action_v3_policyelig_selection_refresh": "Finish live OpenRouter and pipeline enforcement, then bind exact policy-selection custody through scheduler, assurance, report, and manifest artifacts before closing the ticket.",
     "completed_at_v3_policyelig": "2026-08-17T11:15:01Z",
-    "result_v3_policyelig_completion": "V3-POLICYELIG-001 completed at the provider-free mechanism boundary with typed expiring policy evidence, independently pinned signed authority, per-source-reference drift replay, exact audit-scoped selection, live transport enforcement, detached REAL-usage rejection, and pipeline/scheduler/assurance/report/manifest custody. The complete suite and repository static/schema/ledger gates passed; no legal determination, provider call, qualified ensemble, completed audit, checkpoint, or release claim occurred.",
+    "result_v3_policyelig_completion": "V3-POLICYELIG-001 completed at the provider-free mechanism boundary with typed expiring policy evidence, independently pinned signed authority, per-source-reference drift replay, exact audit-scoped selection, live transport enforcement, detached REAL-usage rejection, and pipeline/scheduler/assurance/report/manifest custody. The complete suite and repository static/schema/ledger gates passed; local checkpoint 12c389f6f8fe3a242b4bbc6c3e5aceb3880cb4a8 records the boundary and was not pushed. No legal determination, provider call, qualified ensemble, completed audit, or release claim occurred.",
     "next_action_after_v3_policyelig": "V3-QUALIFY-001 is next in model-ticket order but is not actionable until blocked lineage and calibration, current independently authenticated policy determinations, and real qualification evidence exist."
   },
   "scheduler_assurance_validation": {

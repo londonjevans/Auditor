@@ -1881,8 +1881,9 @@ are invisible to source review by construction.
   --check` passed.
 - **Remaining limitation:** The provider-free mechanism is complete. It creates no legal
   determination, provider approval, source-egress authority, qualified model, production
-  ensemble, completed audit, provider call, release claim, or checkpoint. The 21 skipped tests
-  remain explicit, non-crediting external or opt-in prerequisites.
+  ensemble, completed audit, provider call, or release claim. Local implementation checkpoint
+  `12c389f6f8fe3a242b4bbc6c3e5aceb3880cb4a8` records this provider-free boundary and has not been
+  pushed. The 21 skipped tests remain explicit, non-crediting external or opt-in prerequisites.
 - **Next action:** None for this ticket. `V3-QUALIFY-001` is next in model-ticket order but is not
   actionable while `V3-LINEAGE-001` and `V3-CALIBRATE-001` remain blocked and current
   independently authenticated policy determinations and real qualification evidence are absent.

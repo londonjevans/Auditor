@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 97f9de051e977fa0c6cd6750fa79df9f3e974f79
+LAST_CHECKPOINT_COMMIT: 12c389f6f8fe3a242b4bbc6c3e5aceb3880cb4a8
 
 ## 2026-08-17T11:15:01Z — V3-POLICYELIG-001 COMPLETE at provider-free mechanism boundary
 
@@ -41,9 +41,10 @@ LAST_CHECKPOINT_COMMIT: 97f9de051e977fa0c6cd6750fa79df9f3e974f79
   passed; strict mypy passed over `180` source files; release-schema verification, V3 JSON parses,
   and `git diff --check` passed.
 - No real legal determination, provider/network call, credential access, source-egress authority,
-  qualified production ensemble, completed real audit, checkpoint, superiority demonstration, or
-  release claim occurred. The repository remains `INCOMPLETE`; the existing call, cost, and audit
-  counters are unchanged.
+  qualified production ensemble, completed real audit, superiority demonstration, or release
+  claim occurred. Local implementation checkpoint
+  `12c389f6f8fe3a242b4bbc6c3e5aceb3880cb4a8` records the validated boundary and was not pushed.
+  The repository remains `INCOMPLETE`; the existing call, cost, and audit counters are unchanged.
 - `V3-QUALIFY-001` is the next queued model ticket, but it remains non-actionable while
   `V3-LINEAGE-001` and `V3-CALIBRATE-001` are blocked and actual policy/qualification evidence is
   absent.
