@@ -32,6 +32,7 @@ from mmaudit.models.scheduler import (
     SchedulerPassResult,
     SchedulerPassStatus,
     SchedulerPrivacyEvidenceCustody,
+    SchedulerProviderAttemptEvidence,
     SchedulerScope,
     SchedulerShardDescriptor,
     SchedulerShardInventory,
@@ -81,8 +82,10 @@ from mmaudit.orchestration.scheduler_runtime import (
     scheduler_response_schema_registry,
 )
 from mmaudit.release_io import write_json_evidence
+from mmaudit.reporting.json_report import stable_json
 from tests.identity_fixtures import reattest_synthetic_real_usage
 from tests.scheduler_support import (
+    build_scheduler_test_audit_model_selection_binding,
     build_scheduler_test_host_payload,
     build_scheduler_test_model_payload,
     build_scheduler_test_model_surface_review_custody,
@@ -166,8 +169,26 @@ def _bindings(
     *,
     changed: str | None = None,
     cost_ledger_baseline_sha256: str | None = None,
+    with_audit_policy: bool = False,
+    audit_policy_seed: str = "scheduler-journal-policy",
 ) -> SchedulerBindings:
     inventory = _inventory()
+    audit_selection = (
+        build_scheduler_test_audit_model_selection_binding(
+            source_sha256=inventory.source_tree_sha256,
+            selected_routes=(
+                (
+                    "synthetic/auditor-v1",
+                    "sha256:" + hashlib.sha256(b"synthetic/auditor-v1").hexdigest(),
+                    "Synthetic Provider",
+                    "synthetic-provider",
+                ),
+            ),
+            seed=audit_policy_seed,
+        )
+        if with_audit_policy
+        else None
+    )
     values = {
         "source_sha256": inventory.source_tree_sha256,
         "analysis_input_sha256": _analysis_inventory().analysis_input_sha256,
@@ -182,6 +203,8 @@ def _bindings(
             source_sha256=inventory.source_tree_sha256
         ).custody_sha256,
     }
+    if audit_selection is not None:
+        values["audit_model_selection"] = audit_selection
     if changed is not None:
         values[changed] = "f" * 64
     if cost_ledger_baseline_sha256 is not None:
@@ -202,6 +225,7 @@ def _bindings_without_privacy_custody() -> SchedulerBindings:
         schema_set_sha256=bindings.schema_set_sha256,
         tool_policy_sha256=bindings.tool_policy_sha256,
         cost_ledger_baseline_sha256=bindings.cost_ledger_baseline_sha256,
+        audit_model_selection=bindings.audit_model_selection,
     )
 
 
@@ -291,7 +315,13 @@ def _task(
             "synthetic/auditor-v1" if resolved_kind is SchedulerTaskKind.MODEL_REQUEST else None
         ),
         root_lineage=(
-            "sha256:" + hashlib.sha256(key.encode()).hexdigest()
+            (
+                journal.manifest.bindings.audit_model_selection.route_for(
+                    "synthetic/auditor-v1"
+                ).root_lineage
+                if journal.manifest.bindings.audit_model_selection is not None
+                else "sha256:" + hashlib.sha256(key.encode()).hexdigest()
+            )
             if resolved_kind is SchedulerTaskKind.MODEL_REQUEST
             else None
         ),
@@ -1058,7 +1088,11 @@ async def test_failed_paid_attempt_survives_resume_without_review_credit_or_doub
 ) -> None:
     exact_cost = Decimal("0.125")
     path = tmp_path / classification
-    journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+    journal = create_scheduler_journal(
+        path,
+        bindings=_bindings(with_audit_policy=True),
+        shard_inventory=_inventory(),
+    )
     plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
     task = plan.tasks[0]
     activation = journal.activate_task(
@@ -1077,6 +1111,7 @@ async def test_failed_paid_attempt_survives_resume_without_review_credit_or_doub
         validated_output=payload,
         cost_usd_exact=str(exact_cost),
         privacy_evidence_custody=journal.manifest.privacy_evidence_custody,
+        audit_model_selection=journal.manifest.bindings.audit_model_selection,
     )
     failed_usage = reattest_synthetic_real_usage(
         successful_usage.model_copy(
@@ -1104,6 +1139,21 @@ async def test_failed_paid_attempt_survives_resume_without_review_credit_or_doub
     assert result.terminal_status is terminal_status
     assert len(journal.provider_attempts) == 1
     attempt = journal.provider_attempts[0]
+    audit_selection = journal.manifest.bindings.audit_model_selection
+    assert audit_selection is not None
+    assert attempt.audit_policy_selection_binding_sha256 == audit_selection.binding_sha256
+    assert (
+        attempt.audit_model_selection_bundle_sha256
+        == audit_selection.audit_model_selection_bundle_sha256
+    )
+    assert attempt.audit_selection_sha256 == audit_selection.audit_selection_sha256
+    assert attempt.audit_selected_model_set_sha256 == audit_selection.selected_model_set_sha256
+    assert attempt.audit_scope_sha256 == audit_selection.audit_scope_sha256
+    assert attempt.audit_source_sha256 == audit_selection.source_sha256
+    assert attempt.audit_selection_expires_at == audit_selection.selection_expires_at
+    assert attempt.audit_policy_routing_evidence_sha256 == failed_usage.routing.get(
+        "audit_policy_routing_evidence_sha256"
+    )
     assert result.terminal_evidence_sha256 == attempt.attempt_evidence_sha256
     assert journal.outputs == ()
     assert journal.structurally_successful_review_usage_records == ()
@@ -1118,7 +1168,7 @@ async def test_failed_paid_attempt_survives_resume_without_review_credit_or_doub
 
     resumed = resume_scheduler_journal(
         path,
-        expected_bindings=_bindings(),
+        expected_bindings=_bindings(with_audit_policy=True),
         expected_shard_inventory=_inventory(),
     )
     serialized = resumed.restorable_usage_records
@@ -1147,12 +1197,156 @@ async def test_failed_paid_attempt_survives_resume_without_review_credit_or_doub
     resumed.close()
 
 
+def test_failed_paid_provider_attempt_rejects_missing_audit_policy_custody(
+    tmp_path: Path,
+) -> None:
+    journal = create_scheduler_journal(
+        tmp_path / "missing-attempt-policy",
+        bindings=_bindings(with_audit_policy=True),
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    journal.mark_dispatched(task.task_id)
+    payload = build_scheduler_test_model_payload(plan, task)
+    usage = build_scheduler_test_real_usage(
+        task,
+        activation,
+        validated_output=payload,
+        privacy_evidence_custody=journal.manifest.privacy_evidence_custody,
+    )
+    failed_usage = reattest_synthetic_real_usage(
+        usage.model_copy(
+            update={
+                "identity_strength": ModelIdentityStrength.UNBOUND,
+                "provider_error_classification": "timeout",
+                "status": "provider_error",
+                "validation_status": ModelRequestValidationStatus.PROVIDER_ERROR,
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="lacks audit policy selection evidence"):
+        journal.persist_provider_attempt(task.task_id, failed_usage)
+    assert journal.provider_attempts == ()
+    journal.close()
+
+
+def test_resume_rejects_coherently_swapped_provider_attempt_audit_selection(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "swapped-attempt-policy"
+    original_bindings = _bindings(
+        with_audit_policy=True,
+        audit_policy_seed="scheduler-attempt-original",
+    )
+    journal = create_scheduler_journal(
+        path,
+        bindings=original_bindings,
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    journal.mark_dispatched(task.task_id)
+    payload = build_scheduler_test_model_payload(plan, task)
+    original_usage = build_scheduler_test_real_usage(
+        task,
+        activation,
+        validated_output=payload,
+        privacy_evidence_custody=journal.manifest.privacy_evidence_custody,
+        audit_model_selection=journal.manifest.bindings.audit_model_selection,
+    )
+    original_failed_usage = reattest_synthetic_real_usage(
+        original_usage.model_copy(
+            update={
+                "identity_strength": ModelIdentityStrength.UNBOUND,
+                "provider_error_classification": "timeout",
+                "status": "provider_error",
+                "validation_status": ModelRequestValidationStatus.PROVIDER_ERROR,
+            }
+        )
+    )
+    PipelineScheduler(journal).record_failure(
+        task,
+        TimeoutError("synthetic provider timeout"),
+        usage_records=(original_failed_usage,),
+    )
+    campaign = journal.manifest
+    journal.close()
+
+    swapped_selection = build_scheduler_test_audit_model_selection_binding(
+        source_sha256=campaign.bindings.source_sha256,
+        selected_routes=(
+            (
+                task.requested_model or "",
+                task.root_lineage or "",
+                "Synthetic Provider",
+                "synthetic-provider",
+            ),
+        ),
+        seed="scheduler-attempt-swapped",
+    )
+    swapped_usage = build_scheduler_test_real_usage(
+        task,
+        activation,
+        validated_output=payload,
+        privacy_evidence_custody=campaign.privacy_evidence_custody,
+        audit_model_selection=swapped_selection,
+    )
+    swapped_failed_usage = reattest_synthetic_real_usage(
+        swapped_usage.model_copy(
+            update={
+                "identity_strength": ModelIdentityStrength.UNBOUND,
+                "provider_error_classification": "timeout",
+                "status": "provider_error",
+                "validation_status": ModelRequestValidationStatus.PROVIDER_ERROR,
+            }
+        )
+    )
+    swapped_attempt = SchedulerProviderAttemptEvidence.build(
+        task=task,
+        activation=activation,
+        usage_record=swapped_failed_usage,
+        audit_model_selection=swapped_selection,
+    )
+    attempt_path = next((path / "provider-attempts").glob("*.json"))
+    attempt_path.write_text(stable_json(swapped_attempt), encoding="utf-8")
+    attempt_path.rename(
+        attempt_path.with_name(
+            f"{swapped_attempt.task_id}-{swapped_attempt.attempt_evidence_sha256}.json"
+        )
+    )
+
+    with pytest.raises(ValueError, match="differs from audit policy selection"):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=original_bindings,
+            expected_shard_inventory=_inventory(),
+        )
+
+
 def test_post_transport_privacy_mismatch_is_accounted_but_never_credited(
     tmp_path: Path,
 ) -> None:
     journal = create_scheduler_journal(
         tmp_path / "privacy-mismatch",
-        bindings=_bindings(),
+        bindings=_bindings(with_audit_policy=True),
         shard_inventory=_inventory(),
     )
     plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
@@ -1173,6 +1367,7 @@ def test_post_transport_privacy_mismatch_is_accounted_but_never_credited(
         validated_output=payload,
         cost_usd_exact="0.125",
         privacy_evidence_custody=journal.manifest.privacy_evidence_custody,
+        audit_model_selection=journal.manifest.bindings.audit_model_selection,
     )
     mismatched_usage = reattest_synthetic_real_usage(
         exact_usage.model_copy(
@@ -1237,6 +1432,36 @@ def test_success_requires_private_output_and_reconstructs_typed_payload(tmp_path
     journal.close()
 
 
+def test_paid_real_success_rejects_stripped_audit_policy_routing(tmp_path: Path) -> None:
+    journal = create_scheduler_journal(
+        tmp_path / "policy-stripped",
+        bindings=_bindings(with_audit_policy=True),
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    journal.mark_dispatched(task.task_id)
+    payload = build_scheduler_test_model_payload(plan, task)
+    stripped = build_scheduler_test_real_usage(
+        task,
+        activation,
+        validated_output=payload,
+        privacy_evidence_custody=journal.manifest.privacy_evidence_custody,
+    )
+
+    with pytest.raises(ValueError, match="lacks audit policy selection evidence"):
+        journal.persist_output(task.task_id, payload, usage_record=stripped)
+    journal.close()
+
+
 def test_resume_repairs_activation_file_crash_window(tmp_path: Path) -> None:
     path = tmp_path / "journal"
     journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
@@ -1265,13 +1490,40 @@ def test_resume_repairs_activation_file_crash_window(tmp_path: Path) -> None:
     resumed.close()
 
 
+def test_resume_rejects_swapped_audit_policy_selection_bundle(tmp_path: Path) -> None:
+    path = tmp_path / "journal"
+    journal = create_scheduler_journal(
+        path,
+        bindings=_bindings(
+            with_audit_policy=True,
+            audit_policy_seed="scheduler-policy-original",
+        ),
+        shard_inventory=_inventory(),
+    )
+    journal.close()
+
+    with pytest.raises(ValueError, match="bindings or shard inventory do not match"):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(
+                with_audit_policy=True,
+                audit_policy_seed="scheduler-policy-swapped",
+            ),
+            expected_shard_inventory=_inventory(),
+        )
+
+
 @pytest.mark.asyncio
 async def test_resume_re_attests_exact_real_usage_once_but_serialized_copy_cannot(
     tmp_path: Path,
 ) -> None:
     exact_cost = Decimal("0.123456789012345678")
     path = tmp_path / "journal"
-    journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
+    journal = create_scheduler_journal(
+        path,
+        bindings=_bindings(with_audit_policy=True),
+        shard_inventory=_inventory(),
+    )
     plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
     task = plan.tasks[0]
     activation = journal.activate_task(
@@ -1290,6 +1542,7 @@ async def test_resume_re_attests_exact_real_usage_once_but_serialized_copy_canno
         validated_output=payload,
         cost_usd_exact=str(exact_cost),
         privacy_evidence_custody=journal.manifest.privacy_evidence_custody,
+        audit_model_selection=journal.manifest.bindings.audit_model_selection,
     )
     assert is_creditable_usage_record(runtime_usage, require_real=True)
     output = journal.persist_output(task.task_id, payload, usage_record=runtime_usage)
@@ -1326,7 +1579,7 @@ async def test_resume_re_attests_exact_real_usage_once_but_serialized_copy_canno
 
     verification = open_scheduler_journal_for_verification(
         path,
-        expected_bindings=_bindings(),
+        expected_bindings=_bindings(with_audit_policy=True),
         expected_shard_inventory=_inventory(),
     )
     with pytest.raises(ValueError, match="read-only"):
@@ -1335,7 +1588,7 @@ async def test_resume_re_attests_exact_real_usage_once_but_serialized_copy_canno
 
     resumed = resume_scheduler_journal(
         path,
-        expected_bindings=_bindings(),
+        expected_bindings=_bindings(with_audit_policy=True),
         expected_shard_inventory=_inventory(),
     )
     serialized = resumed.restorable_usage_records

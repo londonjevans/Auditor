@@ -13,12 +13,13 @@ import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from functools import cache
 from pathlib import PurePosixPath
 from types import MappingProxyType
-from typing import Any, Literal, Self, cast
+from typing import TYPE_CHECKING, Any, Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 from pydantic_core import SchemaValidator
@@ -58,7 +59,16 @@ from mmaudit.models.schemas import (
     VerificationBatch,
     VerificationDecision,
 )
-from mmaudit.models.usage import is_structurally_accountable_usage_record
+from mmaudit.models.usage import (
+    is_structurally_accountable_usage_record,
+    usage_requires_audit_policy_evidence,
+)
+
+if TYPE_CHECKING:
+    from mmaudit.models.policy_selection import (
+        AuditModelRoutingEvidence,
+        AuditModelSelectionEvidenceBundle,
+    )
 
 SCHEDULER_ALGORITHM_VERSION = "mmaudit.seven-pass-scheduler.v1"
 SCHEDULER_ANALYSIS_INPUT_LABELS = (
@@ -90,6 +100,8 @@ SCHEDULER_ANALYSIS_INPUT_LABELS = (
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _SHARD_ID_PATTERN = r"^shard-[0-9a-f]{24}$"
 _MODEL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
+_PROVIDER_ENDPOINT_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$"
+_PROVIDER_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9 ._:/()&+-]{0,199}$"
 _SAFE_KEY_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"
 _ROLE_PATTERN = r"^[a-z][a-z0-9_:.-]{0,127}$"
 _MAX_TASK_OUTPUT_BYTES = 100_000_000
@@ -182,6 +194,8 @@ def _json_default(value: Any) -> Any:
         return value.model_dump(mode="json")
     if isinstance(value, StrEnum):
         return value.value
+    if isinstance(value, datetime):
+        return value.isoformat().replace("+00:00", "Z")
     raise TypeError(f"unsupported scheduler canonical value: {type(value).__name__}")
 
 
@@ -548,7 +562,7 @@ class SchedulerCandidatePayloadBinding(StrictModel):
         candidate_payload_sha256: str,
     ) -> SchedulerCandidatePayloadBinding:
         _candidate_id_inventory((candidate_id,), "candidate payload")
-        values = {
+        values: dict[str, Any] = {
             "candidate_id": candidate_id,
             "candidate_payload_sha256": candidate_payload_sha256,
         }
@@ -974,6 +988,240 @@ class SchedulerCostLedgerBaseline(StrictModel):
         return self
 
 
+class SchedulerAuditSelectedRouteBinding(StrictModel):
+    """Minimal non-authorizing identity for one policy-selected audit route."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    exact_model_id: str = Field(pattern=_MODEL_ID_PATTERN)
+    root_lineage: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    provider_name: str = Field(pattern=_PROVIDER_NAME_PATTERN)
+    provider_endpoint: str = Field(pattern=_PROVIDER_ENDPOINT_PATTERN)
+    policy_route_sha256: str = Field(pattern=_SHA256_PATTERN)
+    selected_model_sha256: str = Field(pattern=_SHA256_PATTERN)
+    route_binding_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        exact_model_id: str,
+        root_lineage: str,
+        provider_name: str,
+        provider_endpoint: str,
+        policy_route_sha256: str,
+        selected_model_sha256: str,
+    ) -> SchedulerAuditSelectedRouteBinding:
+        values = {
+            "exact_model_id": exact_model_id,
+            "root_lineage": root_lineage,
+            "provider_name": provider_name,
+            "provider_endpoint": provider_endpoint,
+            "policy_route_sha256": policy_route_sha256,
+            "selected_model_sha256": selected_model_sha256,
+        }
+        return cls(**values, route_binding_sha256=scheduler_canonical_sha256(values))
+
+    @model_validator(mode="after")
+    def route_binding_is_exact(self) -> Self:
+        if self.route_binding_sha256 != _model_sha256(
+            self,
+            exclude={"route_binding_sha256"},
+        ):
+            raise ValueError("scheduler audit-selected route binding is inconsistent")
+        return self
+
+
+class SchedulerAuditModelSelectionBinding(StrictModel):
+    """Hash-only campaign join to one durable audit policy-selection bundle.
+
+    This record is comparison evidence, not runtime authority. The live opaque
+    selection capability is deliberately absent.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    evidence_authority: Literal["comparison_required"] = "comparison_required"
+    intended_use: Literal["PAID_CUSTOMER_FACING_DEFENSIVE_SOURCE_AUDIT"] = (
+        "PAID_CUSTOMER_FACING_DEFENSIVE_SOURCE_AUDIT"
+    )
+    audit_model_selection_bundle_sha256: str = Field(pattern=_SHA256_PATTERN)
+    audit_selection_sha256: str = Field(pattern=_SHA256_PATTERN)
+    selected_model_set_sha256: str = Field(pattern=_SHA256_PATTERN)
+    selected_model_ids: tuple[str, ...] = Field(min_length=1, max_length=128)
+    selected_routes: tuple[SchedulerAuditSelectedRouteBinding, ...] = Field(
+        min_length=1,
+        max_length=128,
+    )
+    audit_scope_sha256: str = Field(pattern=_SHA256_PATTERN)
+    source_sha256: str = Field(pattern=_SHA256_PATTERN)
+    audit_context_sha256: str = Field(pattern=_SHA256_PATTERN)
+    client_constraints_sha256: str = Field(pattern=_SHA256_PATTERN)
+    technical_route_set_sha256: str = Field(pattern=_SHA256_PATTERN)
+    eligible_route_set_sha256: str = Field(pattern=_SHA256_PATTERN)
+    policy_exclusion_set_sha256: str = Field(pattern=_SHA256_PATTERN)
+    technical_production_selection_sha256: str = Field(pattern=_SHA256_PATTERN)
+    technical_qualification_capability_sha256: str = Field(pattern=_SHA256_PATTERN)
+    policy_artifact_sha256: str = Field(pattern=_SHA256_PATTERN)
+    policy_evaluation_sha256: str = Field(pattern=_SHA256_PATTERN)
+    policy_authority_receipt_sha256: str = Field(pattern=_SHA256_PATTERN)
+    policy_authority_statement_sha256: str = Field(pattern=_SHA256_PATTERN)
+    policy_authority_envelope_sha256: str = Field(pattern=_SHA256_PATTERN)
+    policy_authority_trust_anchor_sha256: str = Field(pattern=_SHA256_PATTERN)
+    policy_source_observation_sha256: str = Field(pattern=_SHA256_PATTERN)
+    policy_source_commitment_set_sha256: str = Field(pattern=_SHA256_PATTERN)
+    selection_expires_at: datetime
+    binding_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        audit_model_selection_bundle_sha256: str,
+        audit_selection_sha256: str,
+        selected_model_set_sha256: str,
+        selected_routes: Iterable[SchedulerAuditSelectedRouteBinding],
+        audit_scope_sha256: str,
+        source_sha256: str,
+        audit_context_sha256: str,
+        client_constraints_sha256: str,
+        technical_route_set_sha256: str,
+        eligible_route_set_sha256: str,
+        policy_exclusion_set_sha256: str,
+        technical_production_selection_sha256: str,
+        technical_qualification_capability_sha256: str,
+        policy_artifact_sha256: str,
+        policy_evaluation_sha256: str,
+        policy_authority_receipt_sha256: str,
+        policy_authority_statement_sha256: str,
+        policy_authority_envelope_sha256: str,
+        policy_authority_trust_anchor_sha256: str,
+        policy_source_observation_sha256: str,
+        policy_source_commitment_set_sha256: str,
+        selection_expires_at: datetime,
+    ) -> SchedulerAuditModelSelectionBinding:
+        canonical_routes = tuple(sorted(selected_routes, key=lambda item: item.exact_model_id))
+        values: dict[str, Any] = {
+            "schema_version": "1.0",
+            "evidence_authority": "comparison_required",
+            "intended_use": "PAID_CUSTOMER_FACING_DEFENSIVE_SOURCE_AUDIT",
+            "audit_model_selection_bundle_sha256": audit_model_selection_bundle_sha256,
+            "audit_selection_sha256": audit_selection_sha256,
+            "selected_model_set_sha256": selected_model_set_sha256,
+            "selected_model_ids": tuple(item.exact_model_id for item in canonical_routes),
+            "selected_routes": canonical_routes,
+            "audit_scope_sha256": audit_scope_sha256,
+            "source_sha256": source_sha256,
+            "audit_context_sha256": audit_context_sha256,
+            "client_constraints_sha256": client_constraints_sha256,
+            "technical_route_set_sha256": technical_route_set_sha256,
+            "eligible_route_set_sha256": eligible_route_set_sha256,
+            "policy_exclusion_set_sha256": policy_exclusion_set_sha256,
+            "technical_production_selection_sha256": technical_production_selection_sha256,
+            "technical_qualification_capability_sha256": (
+                technical_qualification_capability_sha256
+            ),
+            "policy_artifact_sha256": policy_artifact_sha256,
+            "policy_evaluation_sha256": policy_evaluation_sha256,
+            "policy_authority_receipt_sha256": policy_authority_receipt_sha256,
+            "policy_authority_statement_sha256": policy_authority_statement_sha256,
+            "policy_authority_envelope_sha256": policy_authority_envelope_sha256,
+            "policy_authority_trust_anchor_sha256": policy_authority_trust_anchor_sha256,
+            "policy_source_observation_sha256": policy_source_observation_sha256,
+            "policy_source_commitment_set_sha256": policy_source_commitment_set_sha256,
+            "selection_expires_at": selection_expires_at,
+        }
+        return cls(**values, binding_sha256=scheduler_canonical_sha256(values))
+
+    @classmethod
+    def from_evidence_bundle(
+        cls,
+        evidence_bundle: AuditModelSelectionEvidenceBundle,
+    ) -> SchedulerAuditModelSelectionBinding:
+        """Project a validated durable bundle without retaining opaque authority."""
+
+        from mmaudit.models.policy_selection import AuditModelSelectionEvidenceBundle
+
+        if type(evidence_bundle) is not AuditModelSelectionEvidenceBundle:
+            raise ValueError("scheduler audit selection requires an exact evidence bundle")
+        bundle = AuditModelSelectionEvidenceBundle.model_validate_json(
+            evidence_bundle.model_dump_json(),
+            strict=True,
+        )
+        selection = bundle.selection
+        routes = tuple(
+            SchedulerAuditSelectedRouteBinding.build(
+                exact_model_id=model.exact_model_id,
+                root_lineage=model.root_lineage,
+                provider_name=model.approved_provider_name,
+                provider_endpoint=model.approved_provider_endpoint,
+                policy_route_sha256=model.policy_route_sha256,
+                selected_model_sha256=model.selected_model_sha256,
+            )
+            for model in selection.models
+        )
+        return cls.build(
+            audit_model_selection_bundle_sha256=bundle.bundle_sha256,
+            audit_selection_sha256=selection.selection_sha256,
+            selected_model_set_sha256=selection.selected_model_set_sha256,
+            selected_routes=routes,
+            audit_scope_sha256=selection.audit_scope_sha256,
+            source_sha256=selection.source_sha256,
+            audit_context_sha256=selection.audit_context_sha256,
+            client_constraints_sha256=selection.client_constraints_sha256,
+            technical_route_set_sha256=selection.technical_route_set_sha256,
+            eligible_route_set_sha256=selection.eligible_route_set_sha256,
+            policy_exclusion_set_sha256=selection.policy_exclusion_set_sha256,
+            technical_production_selection_sha256=(selection.technical_production_selection_sha256),
+            technical_qualification_capability_sha256=(
+                selection.technical_qualification_capability_sha256
+            ),
+            policy_artifact_sha256=selection.policy_artifact_sha256,
+            policy_evaluation_sha256=selection.policy_evaluation_sha256,
+            policy_authority_receipt_sha256=selection.policy_authority_receipt_sha256,
+            policy_authority_statement_sha256=selection.policy_authority_statement_sha256,
+            policy_authority_envelope_sha256=selection.policy_authority_envelope_sha256,
+            policy_authority_trust_anchor_sha256=(selection.policy_authority_trust_anchor_sha256),
+            policy_source_observation_sha256=selection.policy_source_observation_sha256,
+            policy_source_commitment_set_sha256=(selection.policy_source_commitment_set_sha256),
+            selection_expires_at=selection.expires_at,
+        )
+
+    @field_validator("selection_expires_at")
+    @classmethod
+    def expiry_is_whole_second_utc(cls, value: datetime) -> datetime:
+        if (
+            type(value) is not datetime
+            or value.tzinfo is None
+            or value.utcoffset() != timedelta(0)
+            or value.microsecond != 0
+        ):
+            raise ValueError("scheduler audit-selection expiry must be whole-second UTC")
+        return value
+
+    def route_for(self, exact_model_id: str) -> SchedulerAuditSelectedRouteBinding:
+        matches = tuple(
+            item for item in self.selected_routes if item.exact_model_id == exact_model_id
+        )
+        if len(matches) != 1:
+            raise ValueError(f"model is absent from scheduler audit selection: {exact_model_id}")
+        return matches[0]
+
+    @model_validator(mode="after")
+    def binding_is_canonical_and_exact(self) -> Self:
+        if self.selected_routes != tuple(
+            sorted(self.selected_routes, key=lambda item: item.exact_model_id)
+        ):
+            raise ValueError("scheduler audit-selected routes must be sorted")
+        route_ids = tuple(item.exact_model_id for item in self.selected_routes)
+        if route_ids != tuple(sorted(set(route_ids))) or route_ids != self.selected_model_ids:
+            raise ValueError("scheduler audit-selected model set is not exact")
+        if self.binding_sha256 != _model_sha256(self, exclude={"binding_sha256"}):
+            raise ValueError("scheduler audit model-selection binding is inconsistent")
+        return self
+
+
 class SchedulerBindings(StrictModel):
     """Immutable hash-only inputs that define one scheduler campaign."""
 
@@ -1001,6 +1249,10 @@ class SchedulerBindings(StrictModel):
         default=ABSENT_PRIVACY_EVIDENCE_CUSTODY_SHA256,
         pattern=_SHA256_PATTERN,
     )
+    audit_model_selection: SchedulerAuditModelSelectionBinding | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     bindings_sha256: str = Field(pattern=_SHA256_PATTERN)
 
     @classmethod
@@ -1018,8 +1270,23 @@ class SchedulerBindings(StrictModel):
         tool_policy_sha256: str,
         cost_ledger_baseline_sha256: str = ABSENT_COST_LEDGER_BASELINE_SHA256,
         privacy_evidence_custody_sha256: str = ABSENT_PRIVACY_EVIDENCE_CUSTODY_SHA256,
+        audit_model_selection_evidence: AuditModelSelectionEvidenceBundle | None = None,
+        audit_model_selection: SchedulerAuditModelSelectionBinding | None = None,
     ) -> SchedulerBindings:
-        values = {
+        if audit_model_selection_evidence is not None and audit_model_selection is not None:
+            raise ValueError("scheduler audit selection can have only one exact source")
+        validated_audit_selection = (
+            SchedulerAuditModelSelectionBinding.from_evidence_bundle(audit_model_selection_evidence)
+            if audit_model_selection_evidence is not None
+            else (
+                SchedulerAuditModelSelectionBinding.model_validate(
+                    audit_model_selection.model_dump(mode="python")
+                )
+                if audit_model_selection is not None
+                else None
+            )
+        )
+        values: dict[str, Any] = {
             "schema_version": "1.0",
             "algorithm_version": SCHEDULER_ALGORITHM_VERSION,
             "evidence_authority": "comparison_required",
@@ -1035,10 +1302,17 @@ class SchedulerBindings(StrictModel):
             "cost_ledger_baseline_sha256": cost_ledger_baseline_sha256,
             "privacy_evidence_custody_sha256": privacy_evidence_custody_sha256,
         }
+        if validated_audit_selection is not None:
+            values["audit_model_selection"] = validated_audit_selection
         return cls(**values, bindings_sha256=scheduler_canonical_sha256(values))
 
     @model_validator(mode="after")
     def bindings_hash_is_exact(self) -> Self:
+        if (
+            self.audit_model_selection is not None
+            and self.audit_model_selection.source_sha256 != self.source_sha256
+        ):
+            raise ValueError("scheduler audit selection differs from campaign source")
         if self.bindings_sha256 != _model_sha256(self, exclude={"bindings_sha256"}):
             raise ValueError("scheduler bindings hash does not match its typed fields")
         return self
@@ -1473,6 +1747,13 @@ class SchedulerTaskPlan(StrictModel):
             manifest.model_dump(mode="python")
         )
         validated_scope = SchedulerScope.model_validate(scope.model_dump(mode="python"))
+        audit_selection = validated_manifest.bindings.audit_model_selection
+        if task_kind is SchedulerTaskKind.MODEL_REQUEST and audit_selection is not None:
+            if requested_model is None or root_lineage is None:
+                raise ValueError("policy-bound scheduler request lacks an exact selected model")
+            selected_route = audit_selection.route_for(requested_model)
+            if selected_route.root_lineage != root_lineage:
+                raise ValueError("scheduler request root differs from audit-selected model")
         values: dict[str, Any] = {
             "schema_version": "1.0",
             "evidence_authority": "comparison_required",
@@ -1730,6 +2011,12 @@ class SchedulerPassPlan(StrictModel):
                 raise ValueError("scheduler task differs from its pass identity")
             if not set(task.scope.shard_ids) <= manifest_shards:
                 raise ValueError("scheduler task scope contains an unknown shard")
+            audit_selection = self.manifest.bindings.audit_model_selection
+            if task.task_kind is SchedulerTaskKind.MODEL_REQUEST and audit_selection is not None:
+                assert task.requested_model is not None and task.root_lineage is not None
+                selected_route = audit_selection.route_for(task.requested_model)
+                if selected_route.root_lineage != task.root_lineage:
+                    raise ValueError("scheduler task differs from its audit-selected route")
         empty_tasks = [
             item for item in self.tasks if item.task_kind is SchedulerTaskKind.EMPTY_COMPLETION
         ]
@@ -2148,6 +2435,95 @@ def _reject_sensitive_usage_material(value: Any) -> None:
             _reject_sensitive_usage_material(item)
 
 
+def _usage_audit_routing_evidence(
+    usage_record: UsageRecord,
+) -> AuditModelRoutingEvidence | None:
+    """Parse an exact non-authorizing routing projection retained in usage evidence."""
+
+    from mmaudit.models.policy_selection import AuditModelRoutingEvidence
+
+    raw = usage_record.routing.get("audit_model_routing_evidence")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("scheduler usage has invalid typed audit policy routing evidence")
+    try:
+        evidence = AuditModelRoutingEvidence.model_validate_json(
+            json.dumps(
+                raw,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ),
+            strict=True,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("scheduler usage has invalid typed audit policy routing evidence") from exc
+    if evidence.model_dump(mode="json") != raw:
+        raise ValueError("scheduler usage audit policy routing evidence changed on validation")
+    metadata = dict(evidence.request_metadata())
+    routing_sha256 = metadata.pop("routing_evidence_sha256")
+    if usage_record.routing.get("audit_policy_routing_evidence_sha256") != routing_sha256 or any(
+        usage_record.routing.get(key) != value for key, value in metadata.items()
+    ):
+        raise ValueError("scheduler usage audit policy routing projection is inconsistent")
+    return evidence
+
+
+def _require_usage_audit_selection(
+    *,
+    usage_record: UsageRecord,
+    requested_model: str,
+    binding: SchedulerAuditModelSelectionBinding | None,
+) -> AuditModelRoutingEvidence:
+    """Require one REAL paid scheduler use to match its campaign selection."""
+
+    evidence = _usage_audit_routing_evidence(usage_record)
+    if binding is None or evidence is None:
+        raise ValueError("REAL scheduler model usage lacks audit policy selection evidence")
+    selected_route = binding.route_for(requested_model)
+    if (
+        evidence.audit_model_selection_bundle_sha256 != binding.audit_model_selection_bundle_sha256
+        or evidence.audit_selection_sha256 != binding.audit_selection_sha256
+        or evidence.selected_model_set_sha256 != binding.selected_model_set_sha256
+        or evidence.audit_scope_sha256 != binding.audit_scope_sha256
+        or evidence.source_sha256 != binding.source_sha256
+        or evidence.audit_context_sha256 != binding.audit_context_sha256
+        or evidence.client_constraints_sha256 != binding.client_constraints_sha256
+        or evidence.intended_use.value != binding.intended_use
+        or evidence.technical_production_selection_sha256
+        != binding.technical_production_selection_sha256
+        or evidence.technical_qualification_capability_sha256
+        != binding.technical_qualification_capability_sha256
+        or evidence.policy_artifact_sha256 != binding.policy_artifact_sha256
+        or evidence.policy_evaluation_sha256 != binding.policy_evaluation_sha256
+        or evidence.policy_authority_receipt_sha256 != binding.policy_authority_receipt_sha256
+        or evidence.policy_authority_statement_sha256 != binding.policy_authority_statement_sha256
+        or evidence.policy_authority_envelope_sha256 != binding.policy_authority_envelope_sha256
+        or evidence.policy_authority_trust_anchor_sha256
+        != binding.policy_authority_trust_anchor_sha256
+        or evidence.policy_source_observation_sha256 != binding.policy_source_observation_sha256
+        or evidence.policy_source_commitment_set_sha256
+        != binding.policy_source_commitment_set_sha256
+        or evidence.expires_at != binding.selection_expires_at
+        or evidence.route.exact_model_id != selected_route.exact_model_id
+        or evidence.route.provider_name != selected_route.provider_name
+        or evidence.route.provider_endpoint != selected_route.provider_endpoint
+        or evidence.route.route_sha256 != selected_route.policy_route_sha256
+        or evidence.selected_model_sha256 != selected_route.selected_model_sha256
+        or usage_record.requested_model != selected_route.exact_model_id
+        or usage_record.provider != selected_route.provider_name
+        or usage_record.actual_provider_endpoint != selected_route.provider_endpoint
+        or usage_record.started_at is None
+        or usage_record.ended_at is None
+        or usage_record.started_at >= binding.selection_expires_at
+        or usage_record.ended_at >= binding.selection_expires_at
+    ):
+        raise ValueError("REAL scheduler model usage differs from audit policy selection")
+    return evidence
+
+
 class SchedulerModelCompletionEvidence(StrictModel):
     """Private redacted provider/normalization evidence for one successful model task."""
 
@@ -2161,6 +2537,45 @@ class SchedulerModelCompletionEvidence(StrictModel):
     delivered_source_descriptor_sha256s: tuple[str, ...] = Field(max_length=100_000)
     usage_record: UsageRecord
     usage_record_sha256: str = Field(pattern=_SHA256_PATTERN)
+    audit_policy_selection_binding_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_selection_bundle_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_selection_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_selected_model_set_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_scope_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_source_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_selection_expires_at: datetime | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    audit_policy_routing_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
     context_request_evidence: ContextRequestEvidence
     context_request_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
     provider_response_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -2178,6 +2593,7 @@ class SchedulerModelCompletionEvidence(StrictModel):
         activation: SchedulerTaskActivation,
         usage_record: UsageRecord,
         privacy_evidence_custody: SchedulerPrivacyEvidenceCustody | None,
+        audit_model_selection: SchedulerAuditModelSelectionBinding | None,
         normalizer_sha256: str,
         normalized_output_sha256: str,
     ) -> SchedulerModelCompletionEvidence:
@@ -2201,6 +2617,20 @@ class SchedulerModelCompletionEvidence(StrictModel):
             frozen_usage.execution_evidence is ExecutionEvidenceKind.REAL or privacy_keys_present
         ) and any(frozen_usage.routing.get(key) != value for key, value in privacy_routing.items()):
             raise ValueError("scheduler model completion differs from privacy custody")
+        audit_routing = _usage_audit_routing_evidence(frozen_usage)
+        if (
+            usage_requires_audit_policy_evidence(frozen_usage)
+            or (
+                frozen_usage.execution_evidence is ExecutionEvidenceKind.REAL
+                and audit_model_selection is not None
+            )
+            or audit_routing is not None
+        ):
+            audit_routing = _require_usage_audit_selection(
+                usage_record=frozen_usage,
+                requested_model=task.requested_model or "",
+                binding=audit_model_selection,
+            )
         raw_context = frozen_usage.routing.get("context_request_evidence")
         if not isinstance(raw_context, dict):
             raise ValueError("scheduler model completion lacks typed context request evidence")
@@ -2236,6 +2666,22 @@ class SchedulerModelCompletionEvidence(StrictModel):
             "delivered_source_descriptor_sha256s": (activation.delivered_source_descriptor_sha256s),
             "usage_record": frozen_usage,
             "usage_record_sha256": scheduler_canonical_sha256(frozen_usage.model_dump(mode="json")),
+            **(
+                {
+                    "audit_policy_selection_binding_sha256": (audit_model_selection.binding_sha256),
+                    "audit_model_selection_bundle_sha256": (
+                        audit_routing.audit_model_selection_bundle_sha256
+                    ),
+                    "audit_selection_sha256": audit_routing.audit_selection_sha256,
+                    "audit_selected_model_set_sha256": (audit_routing.selected_model_set_sha256),
+                    "audit_scope_sha256": audit_routing.audit_scope_sha256,
+                    "audit_source_sha256": audit_routing.source_sha256,
+                    "audit_selection_expires_at": audit_routing.expires_at,
+                    "audit_policy_routing_evidence_sha256": (audit_routing.routing_evidence_sha256),
+                }
+                if audit_routing is not None and audit_model_selection is not None
+                else {}
+            ),
             "context_request_evidence": context,
             "context_request_evidence_sha256": context.evidence_sha256,
             "provider_response_sha256": frozen_usage.response_sha256,
@@ -2252,6 +2698,36 @@ class SchedulerModelCompletionEvidence(StrictModel):
     @model_validator(mode="after")
     def completion_evidence_is_redacted_and_exact(self) -> Self:
         _reject_sensitive_usage_material(self.usage_record.model_dump(mode="json"))
+        audit_fields = (
+            self.audit_policy_selection_binding_sha256,
+            self.audit_model_selection_bundle_sha256,
+            self.audit_selection_sha256,
+            self.audit_selected_model_set_sha256,
+            self.audit_scope_sha256,
+            self.audit_source_sha256,
+            self.audit_selection_expires_at,
+            self.audit_policy_routing_evidence_sha256,
+        )
+        if any(item is None for item in audit_fields) and any(
+            item is not None for item in audit_fields
+        ):
+            raise ValueError("scheduler audit policy completion evidence is all-or-none")
+        audit_routing = _usage_audit_routing_evidence(self.usage_record)
+        if usage_requires_audit_policy_evidence(self.usage_record) and (
+            audit_routing is None or any(item is None for item in audit_fields)
+        ):
+            raise ValueError("REAL scheduler completion lacks audit policy routing evidence")
+        if audit_routing is not None and (
+            self.audit_model_selection_bundle_sha256
+            != audit_routing.audit_model_selection_bundle_sha256
+            or self.audit_selection_sha256 != audit_routing.audit_selection_sha256
+            or self.audit_selected_model_set_sha256 != audit_routing.selected_model_set_sha256
+            or self.audit_scope_sha256 != audit_routing.audit_scope_sha256
+            or self.audit_source_sha256 != audit_routing.source_sha256
+            or self.audit_selection_expires_at != audit_routing.expires_at
+            or self.audit_policy_routing_evidence_sha256 != audit_routing.routing_evidence_sha256
+        ):
+            raise ValueError("scheduler audit policy completion hashes are inconsistent")
         if (
             self.usage_record_sha256
             != scheduler_canonical_sha256(self.usage_record.model_dump(mode="json"))
@@ -2287,6 +2763,45 @@ class SchedulerProviderAttemptEvidence(StrictModel):
     delivered_source_descriptor_sha256s: tuple[str, ...] = Field(max_length=100_000)
     usage_record: UsageRecord
     usage_record_sha256: str = Field(pattern=_SHA256_PATTERN)
+    audit_policy_selection_binding_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_selection_bundle_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_selection_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_selected_model_set_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_scope_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_source_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_selection_expires_at: datetime | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    audit_policy_routing_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
     context_request_evidence: ContextRequestEvidence
     context_request_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
     provider_response_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
@@ -2301,11 +2816,26 @@ class SchedulerProviderAttemptEvidence(StrictModel):
         task: SchedulerTaskPlan,
         activation: SchedulerTaskActivation,
         usage_record: UsageRecord,
+        audit_model_selection: SchedulerAuditModelSelectionBinding | None,
     ) -> SchedulerProviderAttemptEvidence:
         if task.task_kind is not SchedulerTaskKind.MODEL_REQUEST:
             raise ValueError("scheduler provider-attempt evidence requires a model task")
         frozen_usage = UsageRecord.model_validate(usage_record.model_dump(mode="python"))
         _reject_sensitive_usage_material(frozen_usage.model_dump(mode="json"))
+        audit_routing = _usage_audit_routing_evidence(frozen_usage)
+        if (
+            usage_requires_audit_policy_evidence(frozen_usage)
+            or (
+                frozen_usage.execution_evidence is ExecutionEvidenceKind.REAL
+                and audit_model_selection is not None
+            )
+            or audit_routing is not None
+        ):
+            audit_routing = _require_usage_audit_selection(
+                usage_record=frozen_usage,
+                requested_model=task.requested_model or "",
+                binding=audit_model_selection,
+            )
         context = ContextRequestEvidence.model_validate(
             frozen_usage.routing.get("context_request_evidence")
         )
@@ -2336,6 +2866,22 @@ class SchedulerProviderAttemptEvidence(StrictModel):
             "delivered_source_descriptor_sha256s": (activation.delivered_source_descriptor_sha256s),
             "usage_record": frozen_usage,
             "usage_record_sha256": scheduler_canonical_sha256(frozen_usage.model_dump(mode="json")),
+            **(
+                {
+                    "audit_policy_selection_binding_sha256": (audit_model_selection.binding_sha256),
+                    "audit_model_selection_bundle_sha256": (
+                        audit_routing.audit_model_selection_bundle_sha256
+                    ),
+                    "audit_selection_sha256": audit_routing.audit_selection_sha256,
+                    "audit_selected_model_set_sha256": (audit_routing.selected_model_set_sha256),
+                    "audit_scope_sha256": audit_routing.audit_scope_sha256,
+                    "audit_source_sha256": audit_routing.source_sha256,
+                    "audit_selection_expires_at": audit_routing.expires_at,
+                    "audit_policy_routing_evidence_sha256": (audit_routing.routing_evidence_sha256),
+                }
+                if audit_routing is not None and audit_model_selection is not None
+                else {}
+            ),
             "context_request_evidence": context,
             "context_request_evidence_sha256": context.evidence_sha256,
             "provider_response_sha256": frozen_usage.response_sha256,
@@ -2347,6 +2893,36 @@ class SchedulerProviderAttemptEvidence(StrictModel):
     @model_validator(mode="after")
     def attempt_is_redacted_and_exact(self) -> Self:
         _reject_sensitive_usage_material(self.usage_record.model_dump(mode="json"))
+        audit_fields = (
+            self.audit_policy_selection_binding_sha256,
+            self.audit_model_selection_bundle_sha256,
+            self.audit_selection_sha256,
+            self.audit_selected_model_set_sha256,
+            self.audit_scope_sha256,
+            self.audit_source_sha256,
+            self.audit_selection_expires_at,
+            self.audit_policy_routing_evidence_sha256,
+        )
+        if any(item is None for item in audit_fields) and any(
+            item is not None for item in audit_fields
+        ):
+            raise ValueError("scheduler audit policy provider-attempt evidence is all-or-none")
+        audit_routing = _usage_audit_routing_evidence(self.usage_record)
+        if (audit_routing is None) != all(item is None for item in audit_fields):
+            raise ValueError("scheduler provider attempt has incomplete audit policy custody")
+        if usage_requires_audit_policy_evidence(self.usage_record) and audit_routing is None:
+            raise ValueError("REAL scheduler provider attempt lacks audit policy routing evidence")
+        if audit_routing is not None and (
+            self.audit_model_selection_bundle_sha256
+            != audit_routing.audit_model_selection_bundle_sha256
+            or self.audit_selection_sha256 != audit_routing.audit_selection_sha256
+            or self.audit_selected_model_set_sha256 != audit_routing.selected_model_set_sha256
+            or self.audit_scope_sha256 != audit_routing.audit_scope_sha256
+            or self.audit_source_sha256 != audit_routing.source_sha256
+            or self.audit_selection_expires_at != audit_routing.expires_at
+            or self.audit_policy_routing_evidence_sha256 != audit_routing.routing_evidence_sha256
+        ):
+            raise ValueError("scheduler audit policy provider-attempt hashes are inconsistent")
         if (
             not is_structurally_accountable_usage_record(self.usage_record)
             or self.usage_record_sha256
@@ -3355,6 +3931,7 @@ class SchedulerTaskOutput(StrictModel):
                 activation=activation,
                 usage_record=usage_record,
                 privacy_evidence_custody=plan.manifest.privacy_evidence_custody,
+                audit_model_selection=plan.manifest.bindings.audit_model_selection,
                 normalizer_sha256=effective_normalizer_sha256,
                 normalized_output_sha256=output_sha256,
             )
@@ -3643,6 +4220,45 @@ class SchedulerTaskResult(StrictModel):
         pattern=_SHA256_PATTERN,
     )
     usage_record_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
+    audit_policy_selection_binding_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_selection_bundle_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_selection_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_selected_model_set_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_scope_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_source_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_selection_expires_at: datetime | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    audit_policy_routing_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
     context_request_evidence_sha256: str | None = Field(
         default=None,
         pattern=_SHA256_PATTERN,
@@ -3808,6 +4424,35 @@ class SchedulerTaskResult(StrictModel):
                 if output is not None and output.model_completion_evidence is not None
                 else None
             ),
+            **(
+                {
+                    "audit_policy_selection_binding_sha256": (
+                        output.model_completion_evidence.audit_policy_selection_binding_sha256
+                    ),
+                    "audit_model_selection_bundle_sha256": (
+                        output.model_completion_evidence.audit_model_selection_bundle_sha256
+                    ),
+                    "audit_selection_sha256": (
+                        output.model_completion_evidence.audit_selection_sha256
+                    ),
+                    "audit_selected_model_set_sha256": (
+                        output.model_completion_evidence.audit_selected_model_set_sha256
+                    ),
+                    "audit_scope_sha256": output.model_completion_evidence.audit_scope_sha256,
+                    "audit_source_sha256": output.model_completion_evidence.audit_source_sha256,
+                    "audit_selection_expires_at": (
+                        output.model_completion_evidence.audit_selection_expires_at
+                    ),
+                    "audit_policy_routing_evidence_sha256": (
+                        output.model_completion_evidence.audit_policy_routing_evidence_sha256
+                    ),
+                }
+                if output is not None
+                and output.model_completion_evidence is not None
+                and output.model_completion_evidence.audit_policy_routing_evidence_sha256
+                is not None
+                else {}
+            ),
             "context_request_evidence_sha256": (
                 output.model_completion_evidence.context_request_evidence_sha256
                 if output is not None and output.model_completion_evidence is not None
@@ -3898,6 +4543,25 @@ class SchedulerTaskResult(StrictModel):
             self.validated_response_sha256,
             self.normalizer_sha256,
         )
+        audit_policy_hashes = (
+            self.audit_policy_selection_binding_sha256,
+            self.audit_model_selection_bundle_sha256,
+            self.audit_selection_sha256,
+            self.audit_selected_model_set_sha256,
+            self.audit_scope_sha256,
+            self.audit_source_sha256,
+            self.audit_selection_expires_at,
+            self.audit_policy_routing_evidence_sha256,
+        )
+        if any(item is None for item in audit_policy_hashes) and any(
+            item is not None for item in audit_policy_hashes
+        ):
+            raise ValueError("scheduler result audit policy hashes are all-or-none")
+        if any(item is not None for item in audit_policy_hashes) and (
+            self.terminal_status is not SchedulerTerminalStatus.SUCCEEDED
+            or any(item is None for item in provider_hashes)
+        ):
+            raise ValueError("scheduler result audit policy evidence requires model success")
         if self.specialist_accepted_outcome_sha256 is not None and (
             self.terminal_status is not SchedulerTerminalStatus.SUCCEEDED
             or any(item is None for item in provider_hashes)
@@ -3988,6 +4652,45 @@ class SchedulerModelRequestEvidence(StrictModel):
         pattern=_SHA256_PATTERN,
     )
     usage_record_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
+    audit_policy_selection_binding_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_selection_bundle_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_selection_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_selected_model_set_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_scope_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_source_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_selection_expires_at: datetime | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    audit_policy_routing_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
     context_request_evidence_sha256: str | None = Field(
         default=None,
         pattern=_SHA256_PATTERN,
@@ -4103,6 +4806,26 @@ class SchedulerModelRequestEvidence(StrictModel):
                 result.model_completion_evidence_sha256 if result is not None else None
             ),
             "usage_record_sha256": result.usage_record_sha256 if result is not None else None,
+            **(
+                {
+                    "audit_policy_selection_binding_sha256": (
+                        result.audit_policy_selection_binding_sha256
+                    ),
+                    "audit_model_selection_bundle_sha256": (
+                        result.audit_model_selection_bundle_sha256
+                    ),
+                    "audit_selection_sha256": result.audit_selection_sha256,
+                    "audit_selected_model_set_sha256": (result.audit_selected_model_set_sha256),
+                    "audit_scope_sha256": result.audit_scope_sha256,
+                    "audit_source_sha256": result.audit_source_sha256,
+                    "audit_selection_expires_at": result.audit_selection_expires_at,
+                    "audit_policy_routing_evidence_sha256": (
+                        result.audit_policy_routing_evidence_sha256
+                    ),
+                }
+                if result is not None and result.audit_policy_routing_evidence_sha256 is not None
+                else {}
+            ),
             "context_request_evidence_sha256": (
                 result.context_request_evidence_sha256 if result is not None else None
             ),
@@ -4198,6 +4921,25 @@ class SchedulerModelRequestEvidence(StrictModel):
                 raise ValueError("successful public model request lacks completion hashes")
         elif any(item is not None for item in completion_fields):
             raise ValueError("non-success public model request cannot claim completion hashes")
+        audit_policy_fields = (
+            self.audit_policy_selection_binding_sha256,
+            self.audit_model_selection_bundle_sha256,
+            self.audit_selection_sha256,
+            self.audit_selected_model_set_sha256,
+            self.audit_scope_sha256,
+            self.audit_source_sha256,
+            self.audit_selection_expires_at,
+            self.audit_policy_routing_evidence_sha256,
+        )
+        if any(item is None for item in audit_policy_fields) and any(
+            item is not None for item in audit_policy_fields
+        ):
+            raise ValueError("public model-request audit policy hashes are all-or-none")
+        if any(item is not None for item in audit_policy_fields) and (
+            self.terminal_status is not SchedulerTerminalStatus.SUCCEEDED
+            or any(item is None for item in completion_fields)
+        ):
+            raise ValueError("public audit policy evidence requires successful model completion")
         if self.specialist_accepted_outcome_sha256 is not None and (
             self.terminal_status is not SchedulerTerminalStatus.SUCCEEDED
             or any(item is None for item in completion_fields)
@@ -5339,6 +6081,7 @@ class SchedulerArtifact(StrictModel):
     @model_validator(mode="after")
     def artifact_hash_and_journal_binding_are_exact(self) -> Self:
         evidence = self.journal_evidence
+        audit_selection = self.summary.manifest.bindings.audit_model_selection
         request_ids = tuple(item.task_id for item in self.model_requests)
         if (
             self.schema_version != evidence.schema_version
@@ -5365,6 +6108,38 @@ class SchedulerArtifact(StrictModel):
             )
         ):
             raise ValueError("scheduler public artifact differs from its journal evidence")
+        for request in self.model_requests:
+            audit_fields = (
+                request.audit_policy_selection_binding_sha256,
+                request.audit_model_selection_bundle_sha256,
+                request.audit_selection_sha256,
+                request.audit_selected_model_set_sha256,
+                request.audit_scope_sha256,
+                request.audit_source_sha256,
+                request.audit_selection_expires_at,
+                request.audit_policy_routing_evidence_sha256,
+            )
+            if audit_selection is None:
+                if any(item is not None for item in audit_fields):
+                    raise ValueError("scheduler request claims an unbound audit selection")
+                continue
+            if request.terminal_status is not SchedulerTerminalStatus.SUCCEEDED:
+                continue
+            selected_route = audit_selection.route_for(request.requested_model)
+            if (
+                request.root_lineage != selected_route.root_lineage
+                or request.audit_policy_selection_binding_sha256 != audit_selection.binding_sha256
+                or request.audit_model_selection_bundle_sha256
+                != audit_selection.audit_model_selection_bundle_sha256
+                or request.audit_selection_sha256 != audit_selection.audit_selection_sha256
+                or request.audit_selected_model_set_sha256
+                != audit_selection.selected_model_set_sha256
+                or request.audit_scope_sha256 != audit_selection.audit_scope_sha256
+                or request.audit_source_sha256 != audit_selection.source_sha256
+                or request.audit_selection_expires_at != audit_selection.selection_expires_at
+                or request.audit_policy_routing_evidence_sha256 is None
+            ):
+                raise ValueError("successful scheduler request differs from its audit selection")
         if self.summary.status is SchedulerCampaignStatus.COMPLETE and (
             evidence.pass_plan_count != 7
             or evidence.pass_result_count != 7
@@ -5993,6 +6768,25 @@ def _validate_scheduler_journal_evidence(
         if observed_activation is None:
             raise ValueError("scheduler journal output lacks exact activation evidence")
         exact_output.require_exact_activation(observed_activation)
+        _plan, task = task_by_id[task_id]
+        completion = exact_output.model_completion_evidence
+        audit_selection = manifest.bindings.audit_model_selection
+        if (
+            completion is not None
+            and completion.usage_record.execution_evidence is ExecutionEvidenceKind.REAL
+            and audit_selection is not None
+        ):
+            routing = _require_usage_audit_selection(
+                usage_record=completion.usage_record,
+                requested_model=task.requested_model or "",
+                binding=audit_selection,
+            )
+            if (
+                completion.audit_policy_selection_binding_sha256 != audit_selection.binding_sha256
+                or completion.audit_policy_routing_evidence_sha256
+                != routing.routing_evidence_sha256
+            ):
+                raise ValueError("scheduler journal output differs from its audit selection")
     if set(provider_attempt_by_task).intersection(output_by_task):
         raise ValueError("scheduler provider attempt cannot also receive review credit")
     for task_id, attempt in provider_attempt_by_task.items():
@@ -6004,6 +6798,7 @@ def _validate_scheduler_journal_evidence(
             task=task,
             activation=observed_activation,
             usage_record=attempt.usage_record,
+            audit_model_selection=manifest.bindings.audit_model_selection,
         ):
             raise ValueError("scheduler provider attempt differs from exact task evidence")
     for result in result_observations:

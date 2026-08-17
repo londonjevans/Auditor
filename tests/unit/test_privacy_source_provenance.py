@@ -14,7 +14,21 @@ from pathlib import Path
 import pytest
 
 import mmaudit
+import mmaudit.config as config_module
 import mmaudit.repository.privacy_provenance as provenance_module
+from mmaudit.benchmark.models import (
+    MODEL_BENCHMARK_SCHEMA_NAME,
+    ModelBenchmarkCorpusPayload,
+    ModelBenchmarkGroundTruthPayload,
+    ModelBenchmarkResponse,
+    ModelBenchmarkSuite,
+    blinded_model_benchmark_request,
+    load_model_benchmark_corpus,
+    model_benchmark_system_prompt,
+    seal_model_benchmark_corpus,
+    seal_model_benchmark_ground_truth,
+)
+from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.privacy import (
     PrivacyProfile,
     PrivacySourceClassification,
@@ -24,12 +38,16 @@ from mmaudit.repository.discovery import DiscoveredFile, DiscoveryResult
 from mmaudit.repository.privacy_provenance import (
     PrivacySourceProvenanceObservation,
     prove_privacy_source_classification,
+    prove_release_pinned_model_benchmark_source,
+    reobserve_retained_privacy_source_provenance,
     validate_privacy_source_provenance_observation,
+    validate_release_pinned_model_benchmark_request,
 )
 
 _NOW = datetime(2026, 7, 29, 12, 0, tzinfo=UTC)
 _DECLARATION_PATH = Path("src/mmaudit/resources/privacy-synthetic-sources.json")
 _DEFAULT_SCOPE = "tests/fixtures/synthetic"
+_MODEL_BENCHMARK_CORPUS = Path(__file__).parents[2] / "benchmarks/model_corpus/manifest.json"
 
 
 def _git(root: Path, *arguments: str, input_bytes: bytes | None = None) -> bytes:
@@ -174,6 +192,135 @@ def _prove(discovery: DiscoveryResult) -> PrivacySourceProvenanceObservation:
         source_sha256=_source_sha256(discovery),
         now=_NOW,
     )
+
+
+def _custom_model_benchmark_suite() -> ModelBenchmarkSuite:
+    suite = load_model_benchmark_corpus(_MODEL_BENCHMARK_CORPUS)
+    cases = list(suite.corpus.cases)
+    cases[0] = cases[0].model_copy(
+        update={"source_excerpt": cases[0].source_excerpt + "\n// custom corpus drift"}
+    )
+    corpus = seal_model_benchmark_corpus(
+        ModelBenchmarkCorpusPayload(
+            schema_version=suite.corpus.schema_version,
+            name=suite.corpus.name,
+            cases=cases,
+        )
+    )
+    ground_truth = seal_model_benchmark_ground_truth(
+        ModelBenchmarkGroundTruthPayload(
+            schema_version=suite.ground_truth.schema_version,
+            corpus_name=corpus.name,
+            corpus_sha256=corpus.corpus_sha256,
+            cases=suite.ground_truth.cases,
+        )
+    )
+    return ModelBenchmarkSuite(corpus=corpus, ground_truth=ground_truth)
+
+
+def test_release_pinned_model_benchmark_proves_exact_provider_visible_inventory() -> None:
+    suite = load_model_benchmark_corpus(_MODEL_BENCHMARK_CORPUS)
+
+    observation = prove_release_pinned_model_benchmark_source(suite, now=_NOW)
+    evidence = validate_privacy_source_provenance_observation(
+        observation,
+        source_sha256=suite.corpus_sha256,
+        source_classification=PrivacySourceClassification.SYNTHETIC_COMMITTED,
+    )
+
+    assert evidence.proof_kind == "RELEASE_PINNED_MODEL_BENCHMARK"
+    assert evidence.release_pin_set_sha256
+    assert evidence.provider_visible_case_count == len(suite.cases)
+    assert evidence.provider_visible_case_inventory_sha256
+    assert evidence.committed_file_count == 0
+    assert evidence.committed_file_inventory_sha256 is None
+    assert evidence.synthetic_declaration_path is None
+    assert evidence.synthetic_declaration_sha256 is None
+    assert evidence.synthetic_declaration_entry_sha256 is None
+    validated_request = validate_release_pinned_model_benchmark_request(
+        observation,
+        request_role="model_benchmark",
+        system_prompt=model_benchmark_system_prompt(),
+        user_prompt=blinded_model_benchmark_request(suite.cases[0]),
+        response_model=ModelBenchmarkResponse,
+        schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
+        structured_output_mode=StructuredOutputMode.NATIVE_JSON_SCHEMA,
+        context_package=None,
+    )
+    assert validated_request.evidence_sha256 == evidence.evidence_sha256
+    with pytest.raises(ValueError, match="absent from the live release-pinned"):
+        validate_release_pinned_model_benchmark_request(
+            observation,
+            request_role="model_benchmark",
+            system_prompt=model_benchmark_system_prompt(),
+            user_prompt="arbitrary caller-controlled source",
+            response_model=ModelBenchmarkResponse,
+            schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
+            structured_output_mode=StructuredOutputMode.NATIVE_JSON_SCHEMA,
+            context_package=None,
+        )
+
+
+def test_retained_provenance_reobservation_requires_matching_current_live_authority() -> None:
+    suite = load_model_benchmark_corpus(_MODEL_BENCHMARK_CORPUS)
+    retained_observation = prove_release_pinned_model_benchmark_source(suite, now=_NOW)
+    retained = retained_observation.evidence
+    current_observation = prove_release_pinned_model_benchmark_source(
+        suite,
+        now=_NOW.replace(hour=_NOW.hour + 1),
+    )
+
+    reobserved = reobserve_retained_privacy_source_provenance(
+        current_observation,
+        retained,
+    )
+
+    assert reobserved.evidence == retained
+    validated = validate_release_pinned_model_benchmark_request(
+        reobserved,
+        request_role="model_benchmark",
+        system_prompt=model_benchmark_system_prompt(),
+        user_prompt=blinded_model_benchmark_request(suite.cases[0]),
+        response_model=ModelBenchmarkResponse,
+        schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
+        structured_output_mode=StructuredOutputMode.JSON_OBJECT,
+        context_package=None,
+    )
+    assert validated == retained
+
+
+def test_retained_provenance_reobservation_rejects_forged_or_future_evidence() -> None:
+    suite = load_model_benchmark_corpus(_MODEL_BENCHMARK_CORPUS)
+    current = prove_release_pinned_model_benchmark_source(suite, now=_NOW)
+    future = prove_release_pinned_model_benchmark_source(
+        suite,
+        now=_NOW.replace(hour=_NOW.hour + 1),
+    ).evidence
+
+    with pytest.raises(ValueError, match="differs from the current live observation"):
+        reobserve_retained_privacy_source_provenance(current, future)
+    forged = object.__new__(PrivacySourceProvenanceObservation)
+    with pytest.raises(ValueError, match="not issued in this process"):
+        reobserve_retained_privacy_source_provenance(forged, current.evidence)
+
+
+def test_runtime_config_pin_monkeypatch_cannot_bless_custom_benchmark(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    custom_suite = _custom_model_benchmark_suite()
+    monkeypatch.setattr(
+        config_module,
+        "MAXIMUM_ASSURANCE_BENCHMARK_CORPUS_SHA256",
+        custom_suite.corpus_sha256,
+    )
+    monkeypatch.setattr(
+        config_module,
+        "MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_SHA256",
+        custom_suite.ground_truth_sha256,
+    )
+
+    with pytest.raises(ValueError, match="release-pinned synthetic prequalification"):
+        prove_release_pinned_model_benchmark_source(custom_suite, now=_NOW)
 
 
 def test_clean_declared_distribution_fixture_proves_synthetic_committed(
@@ -444,7 +591,7 @@ def test_provenance_observation_is_live_noncopyable_and_exactly_bound(
     discovery = _discovery(target)
     observation = _prove(discovery)
 
-    with pytest.raises(TypeError, match="trusted prover"):
+    with pytest.raises(TypeError, match="cannot be constructed directly"):
         PrivacySourceProvenanceObservation(evidence=observation.evidence)
     with pytest.raises(TypeError, match="cannot be copied"):
         copy.copy(observation)
@@ -463,6 +610,28 @@ def test_provenance_observation_is_live_noncopyable_and_exactly_bound(
             observation,
             source_sha256=_source_sha256(discovery),
             source_classification=PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
+        )
+
+
+def test_provenance_authority_has_no_importable_issuer_or_registry_handles() -> None:
+    forbidden_names = (
+        "_TRUSTED_PROVENANCE_ISSUER",
+        "_LIVE_PROVENANCE_OBSERVATIONS",
+        "_ProvenanceBinding",
+        "_issue_observation",
+        "_build_privacy_source_provenance_authority",
+        "_build_privacy_source_classification_evidence",
+        "_build_release_pinned_model_benchmark_evidence",
+        "_TRUSTED_REQUIRE_RELEASE_PINNED_MODEL_BENCHMARK",
+    )
+    assert all(not hasattr(provenance_module, name) for name in forbidden_names)
+
+    forged = object.__new__(PrivacySourceProvenanceObservation)
+    with pytest.raises(ValueError, match="not issued in this process"):
+        validate_privacy_source_provenance_observation(
+            forged,
+            source_sha256="0" * 64,
+            source_classification=PrivacySourceClassification.SYNTHETIC_COMMITTED,
         )
 
 

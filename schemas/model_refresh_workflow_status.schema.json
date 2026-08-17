@@ -36,7 +36,8 @@
             "model-refresh-snapshot.json",
             "model-refresh-diff.json",
             "model-refresh-attempt.json",
-            "model-refresh-freshness.json"
+            "model-refresh-freshness.json",
+            "model-policy-eligibility-refresh.json"
           ],
           "title": "Filename",
           "type": "string"
@@ -78,6 +79,10 @@
       "title": "Hard Max Age Hours",
       "type": "integer"
     },
+    "policy_projection_expected": {
+      "title": "Policy Projection Expected",
+      "type": "boolean"
+    },
     "pricing_tolerance_fraction": {
       "title": "Pricing Tolerance Fraction",
       "type": "string"
@@ -89,8 +94,8 @@
       "type": "integer"
     },
     "schema_version": {
-      "const": "2.0",
-      "default": "2.0",
+      "const": "3.0",
+      "default": "3.0",
       "title": "Schema Version",
       "type": "string"
     },
@@ -137,6 +142,7 @@
     "pricing_tolerance_fraction",
     "soft_max_age_hours",
     "hard_max_age_hours",
+    "policy_projection_expected",
     "artifacts",
     "workflow_status_sha256"
   ],

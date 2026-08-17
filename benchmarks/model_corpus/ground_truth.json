@@ -1,7 +1,7 @@
 {
     "schema_version": "2.0",
     "corpus_name": "mmaudit request-blinded synthetic model qualification benchmark v2",
-    "corpus_sha256": "524f4c37c41d8178c6e159a5d7d67bf0b3fe33c83015c8a8401006f6fbd1ce3b",
+    "corpus_sha256": "f92ff08ffff2de6fc4b8a4be547d2a0aef45990f7090f734c551ec696ca33e38",
     "cases": [
         {
             "case_id": "case-05167b12e54fee2a",
@@ -58,6 +58,25 @@
                 "required_assumptions": [],
                 "required_unsupported_assumptions": [],
                 "expected_verifier_conclusion": "supported",
+                "expected_falsifier_conclusion": null,
+                "required_remediation_terms": [],
+                "forbidden_output_markers": []
+            },
+            "source_attribution": "Original mmaudit synthetic defensive fixture",
+            "training_exposure": "unknown"
+        },
+        {
+            "case_id": "case-240b594f45b0b896",
+            "dimensions": ["accounting_conservation", "invariant_generation"],
+            "expectation": {
+                "classification": "safe",
+                "locations": [],
+                "invariant_kind": "observed_assets_cover_claims",
+                "required_invariant_terms": ["claims", "conserved", "settled-assets", "total-credit"],
+                "required_analysis_terms": ["accounting", "conservation", "internal-transfer", "preserved-total"],
+                "required_assumptions": [],
+                "required_unsupported_assumptions": [],
+                "expected_verifier_conclusion": null,
                 "expected_falsifier_conclusion": null,
                 "required_remediation_terms": [],
                 "forbidden_output_markers": []
@@ -133,6 +152,75 @@
             "training_exposure": "unknown"
         },
         {
+            "case_id": "case-4d57bd5decacbe54",
+            "dimensions": ["cross_contract_business_logic", "signature_replay"],
+            "expectation": {
+                "classification": "insufficient_context",
+                "locations": [],
+                "invariant_kind": null,
+                "required_invariant_terms": [],
+                "required_analysis_terms": ["cross-contract", "domain-bound", "external-verifier", "nonce", "policy-implementation"],
+                "required_assumptions": [],
+                "required_unsupported_assumptions": [],
+                "expected_verifier_conclusion": null,
+                "expected_falsifier_conclusion": null,
+                "required_remediation_terms": [],
+                "forbidden_output_markers": []
+            },
+            "source_attribution": "Original mmaudit synthetic defensive fixture",
+            "training_exposure": "unknown"
+        },
+        {
+            "case_id": "case-4e1ab3e176d314f5",
+            "dimensions": [
+                "false_positive_rejection",
+                "falsifier_quality",
+                "safe_near_miss_rejection",
+                "unsupported_assumption_disclosure",
+                "upgrade_storage"
+            ],
+            "expectation": {
+                "classification": "insufficient_context",
+                "locations": [],
+                "invariant_kind": null,
+                "required_invariant_terms": [],
+                "required_analysis_terms": ["authorization-hook", "missing-implementation", "uuid-check", "uups", "witness"],
+                "required_assumptions": [],
+                "required_unsupported_assumptions": ["authorization-policy", "implementation-layout"],
+                "expected_verifier_conclusion": null,
+                "expected_falsifier_conclusion": "inconclusive",
+                "required_remediation_terms": [],
+                "forbidden_output_markers": []
+            },
+            "source_attribution": "Original mmaudit synthetic defensive fixture",
+            "training_exposure": "unknown"
+        },
+        {
+            "case_id": "case-586ccf68980d9242",
+            "dimensions": [
+                "false_positive_rejection",
+                "falsifier_quality",
+                "oracle_assumptions",
+                "safe_near_miss_rejection",
+                "unsupported_assumption_disclosure"
+            ],
+            "expectation": {
+                "classification": "insufficient_context",
+                "locations": [],
+                "invariant_kind": null,
+                "required_invariant_terms": [],
+                "required_analysis_terms": ["adapter-boundary", "expiry-check", "missing-implementation", "normalization", "witness"],
+                "required_assumptions": [],
+                "required_unsupported_assumptions": ["adapter-source-integrity", "normalization-policy"],
+                "expected_verifier_conclusion": null,
+                "expected_falsifier_conclusion": "inconclusive",
+                "required_remediation_terms": [],
+                "forbidden_output_markers": []
+            },
+            "source_attribution": "Original mmaudit synthetic defensive fixture",
+            "training_exposure": "unknown"
+        },
+        {
             "case_id": "case-6032f23af234df08",
             "dimensions": ["oracle_assumptions"],
             "expectation": {
@@ -171,6 +259,32 @@
                 "expected_verifier_conclusion": null,
                 "expected_falsifier_conclusion": "inconclusive",
                 "required_remediation_terms": [],
+                "forbidden_output_markers": []
+            },
+            "source_attribution": "Original mmaudit synthetic defensive fixture",
+            "training_exposure": "unknown"
+        },
+        {
+            "case_id": "case-62f9e80c7ce4205d",
+            "dimensions": [
+                "accounting_conservation",
+                "invariant_generation",
+                "report_quality",
+                "solidity_security_reasoning"
+            ],
+            "expectation": {
+                "classification": "vulnerability",
+                "locations": [
+                    {"path": "synthetic/C0017.sol", "start_line": 14, "end_line": 18}
+                ],
+                "invariant_kind": "observed_assets_cover_claims",
+                "required_invariant_terms": ["claims", "conserved", "settled-assets", "total-credit"],
+                "required_analysis_terms": ["accounting", "conservation", "double-count", "internal-transfer"],
+                "required_assumptions": [],
+                "required_unsupported_assumptions": [],
+                "expected_verifier_conclusion": null,
+                "expected_falsifier_conclusion": null,
+                "required_remediation_terms": ["preserve-total-credit", "remove-double-count"],
                 "forbidden_output_markers": []
             },
             "source_attribution": "Original mmaudit synthetic defensive fixture",
@@ -286,6 +400,32 @@
             "training_exposure": "unknown"
         },
         {
+            "case_id": "case-cc43b75a80c263c1",
+            "dimensions": [
+                "oracle_assumptions",
+                "report_quality",
+                "solidity_security_reasoning",
+                "verifier_quality"
+            ],
+            "expectation": {
+                "classification": "vulnerability",
+                "locations": [
+                    {"path": "synthetic/C0019.sol", "start_line": 16, "end_line": 20}
+                ],
+                "invariant_kind": null,
+                "required_invariant_terms": [],
+                "required_analysis_terms": ["cumulative-price", "elapsed-time", "fixed-window", "normalization"],
+                "required_assumptions": [],
+                "required_unsupported_assumptions": [],
+                "expected_verifier_conclusion": "supported",
+                "expected_falsifier_conclusion": null,
+                "required_remediation_terms": ["bound-observation-window", "divide-by-elapsed-time"],
+                "forbidden_output_markers": []
+            },
+            "source_attribution": "Original mmaudit synthetic defensive fixture",
+            "training_exposure": "unknown"
+        },
+        {
             "case_id": "case-d9811f7285992cfe",
             "dimensions": [
                 "cross_contract_business_logic",
@@ -349,7 +489,55 @@
             },
             "source_attribution": "Original mmaudit synthetic defensive fixture",
             "training_exposure": "unknown"
+        },
+        {
+            "case_id": "case-e9e5182a385b14d5",
+            "dimensions": [
+                "cross_contract_business_logic",
+                "upgrade_storage",
+                "verifier_quality"
+            ],
+            "expectation": {
+                "classification": "vulnerability",
+                "locations": [
+                    {"path": "synthetic/C0021.sol", "start_line": 10, "end_line": 12},
+                    {"path": "synthetic/C0021.sol", "start_line": 14, "end_line": 21}
+                ],
+                "invariant_kind": null,
+                "required_invariant_terms": [],
+                "required_analysis_terms": ["authorization", "beacon", "cross-contract", "delegatecall", "upgrade"],
+                "required_assumptions": [],
+                "required_unsupported_assumptions": [],
+                "expected_verifier_conclusion": "supported",
+                "expected_falsifier_conclusion": null,
+                "required_remediation_terms": [],
+                "forbidden_output_markers": []
+            },
+            "source_attribution": "Original mmaudit synthetic defensive fixture",
+            "training_exposure": "unknown"
+        },
+        {
+            "case_id": "case-ecf501a2e15c8c5a",
+            "dimensions": ["access_control", "signature_replay"],
+            "expectation": {
+                "classification": "vulnerability",
+                "locations": [
+                    {"path": "synthetic/C0023.sol", "start_line": 12, "end_line": 12},
+                    {"path": "synthetic/C0023.sol", "start_line": 15, "end_line": 20}
+                ],
+                "invariant_kind": null,
+                "required_invariant_terms": [],
+                "required_analysis_terms": ["authorization", "nonce-scope", "relayer", "replay"],
+                "required_assumptions": [],
+                "required_unsupported_assumptions": [],
+                "expected_verifier_conclusion": null,
+                "expected_falsifier_conclusion": null,
+                "required_remediation_terms": [],
+                "forbidden_output_markers": []
+            },
+            "source_attribution": "Original mmaudit synthetic defensive fixture",
+            "training_exposure": "unknown"
         }
     ],
-    "ground_truth_sha256": "09c86d16caa05c9602fa8082a46b2dc438f92cc0b668fe7ce7d001e4a9358c92"
+    "ground_truth_sha256": "246f5f84aac6aaeecf20a017c9bd5a0f1897e56d54c82ce5ba75a02751d7118c"
 }

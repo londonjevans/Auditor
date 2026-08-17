@@ -3,13 +3,23 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 
 from mmaudit.models.schemas import (
     SolidityEntity,
     SolidityEntityKind,
     SolidityGraphEdge,
+    SolidityGraphFactKind,
+    SolidityGraphFactOmission,
+    SolidityGraphKind,
+    SolidityGraphNode,
+    SolidityGraphOccurrenceKind,
+    SolidityGraphOmission,
+    SolidityGraphRetainedOccurrence,
     SolidityGraphSet,
+    SolidityStorageEntry,
     SoliditySymbolIndex,
+    solidity_graph_occurrence_sha256,
 )
 
 
@@ -87,20 +97,167 @@ def compact_solidity_graphs(
     )
     retained_limit = max(max_edges, len(required))
     warnings = list(graphs.warnings)
-    if len(edges) > retained_limit:
-        warnings.append(
-            f"{len(edges) - retained_limit} Solidity graph edges omitted from {role} context"
-        )
     selected = edges[:retained_limit]
     referenced_ids = {
         identifier for edge in selected for identifier in (edge.source_id, edge.target_id)
     }
     nodes = [node for node in graphs.nodes if node.id in referenced_ids][: retained_limit * 2]
-    return graphs.model_copy(
-        update={
+    storage_layout = graphs.storage_layout[:500]
+    occurrence_counts = {
+        (item.subject_kind, item.subject_sha256): item.occurrence_count
+        for item in graphs.retained_occurrences
+    }
+
+    def retained_occurrence_count(
+        subject_kind: SolidityGraphOccurrenceKind,
+        subject: SolidityGraphEdge | SolidityGraphNode | SolidityStorageEntry | str,
+    ) -> int:
+        return occurrence_counts[
+            (subject_kind, solidity_graph_occurrence_sha256(subject_kind, subject))
+        ]
+
+    selected_edge_occurrences = {
+        solidity_graph_occurrence_sha256(SolidityGraphOccurrenceKind.EDGE, edge): (
+            retained_occurrence_count(SolidityGraphOccurrenceKind.EDGE, edge)
+        )
+        for edge in selected
+    }
+    selected_counts = Counter(edge.graph for edge in selected)
+    selected_occurrence_counts = Counter(
+        {
+            graph: sum(
+                selected_edge_occurrences[
+                    solidity_graph_occurrence_sha256(SolidityGraphOccurrenceKind.EDGE, edge)
+                ]
+                for edge in selected
+                if edge.graph is graph
+            )
+            for graph in SolidityGraphKind
+        }
+    )
+    selected_counts_by_name = Counter(edge.graph.value for edge in selected)
+    projected_omissions = tuple(
+        SolidityGraphOmission.build(
+            graph=omission.graph,
+            reason=omission.reason,
+            candidate_count=(selected_occurrence_counts[omission.graph] + omission.omitted_count),
+            retained_count=selected_counts[omission.graph],
+            retained_occurrence_count=selected_occurrence_counts[omission.graph],
+            omitted_count=omission.omitted_count,
+            omitted_canonical_bytes=omission.omitted_canonical_bytes,
+            analytical_omitted_count=omission.analytical_omitted_count,
+            analytical_population_sample_sha256s=(omission.analytical_population_sample_sha256s),
+            omitted_stream_sha256=omission.omitted_stream_sha256,
+            omitted_sample_sha256s=omission.omitted_sample_sha256s,
+        )
+        for omission in graphs.edge_omissions
+    )
+    retained_occurrences_by_key: dict[
+        tuple[SolidityGraphOccurrenceKind, str], SolidityGraphRetainedOccurrence
+    ] = {}
+
+    def retain_occurrence(
+        subject_kind: SolidityGraphOccurrenceKind,
+        subject: SolidityGraphEdge | SolidityGraphNode | SolidityStorageEntry | str,
+    ) -> None:
+        subject_sha256 = solidity_graph_occurrence_sha256(subject_kind, subject)
+        key = (subject_kind, subject_sha256)
+        retained_occurrences_by_key[key] = SolidityGraphRetainedOccurrence(
+            subject_kind=subject_kind,
+            subject_sha256=subject_sha256,
+            occurrence_count=occurrence_counts[key],
+        )
+
+    for edge in selected:
+        retain_occurrence(SolidityGraphOccurrenceKind.EDGE, edge)
+    for node in nodes:
+        retain_occurrence(SolidityGraphOccurrenceKind.GRAPH_NODE, node)
+    for entry in storage_layout:
+        retain_occurrence(SolidityGraphOccurrenceKind.STORAGE_ENTRY, entry)
+    for warning in graphs.warnings:
+        retain_occurrence(SolidityGraphOccurrenceKind.WARNING, warning)
+
+    if len(edges) > retained_limit:
+        context_warning = (
+            f"{len(edges) - retained_limit} Solidity graph edges omitted from {role} context"
+        )
+        warning_sha256 = solidity_graph_occurrence_sha256(
+            SolidityGraphOccurrenceKind.WARNING, context_warning
+        )
+        warning_key = (SolidityGraphOccurrenceKind.WARNING, warning_sha256)
+        previous_warning = retained_occurrences_by_key.get(warning_key)
+        if previous_warning is None:
+            warnings.append(context_warning)
+            retained_occurrences_by_key[warning_key] = SolidityGraphRetainedOccurrence(
+                subject_kind=SolidityGraphOccurrenceKind.WARNING,
+                subject_sha256=warning_sha256,
+                occurrence_count=1,
+            )
+        else:
+            retained_occurrences_by_key[warning_key] = previous_warning.model_copy(
+                update={"occurrence_count": previous_warning.occurrence_count + 1}
+            )
+
+    projected_retained_occurrences = tuple(
+        sorted(
+            retained_occurrences_by_key.values(),
+            key=lambda item: (item.subject_kind.value, item.subject_sha256),
+        )
+    )
+    retained_fact_counts = {
+        SolidityGraphFactKind.GRAPH_NODE: len(nodes),
+        SolidityGraphFactKind.STORAGE_ENTRY: len(storage_layout),
+        SolidityGraphFactKind.WARNING: len(warnings),
+    }
+    retained_fact_occurrence_counts = Counter(
+        {
+            item.subject_kind: sum(
+                occurrence.occurrence_count
+                for occurrence in projected_retained_occurrences
+                if occurrence.subject_kind is item.subject_kind
+            )
+            for item in projected_retained_occurrences
+        }
+    )
+    projected_fact_omissions = tuple(
+        SolidityGraphFactOmission.build(
+            fact_kind=omission.fact_kind,
+            reason=omission.reason,
+            candidate_count=(
+                retained_fact_occurrence_counts[
+                    SolidityGraphOccurrenceKind(omission.fact_kind.value)
+                ]
+                + omission.omitted_count
+            ),
+            retained_count=retained_fact_counts[omission.fact_kind],
+            retained_occurrence_count=retained_fact_occurrence_counts[
+                SolidityGraphOccurrenceKind(omission.fact_kind.value)
+            ],
+            omitted_count=omission.omitted_count,
+            omitted_canonical_bytes=omission.omitted_canonical_bytes,
+            omitted_stream_sha256=omission.omitted_stream_sha256,
+            omitted_sample_sha256s=omission.omitted_sample_sha256s,
+        )
+        for omission in graphs.fact_omissions
+    )
+    coverage_keys = {
+        *graphs.coverage,
+        *(edge.graph.value for edge in selected),
+        *(omission.graph.value for omission in projected_omissions),
+    }
+    # Producer omissions remain upstream facts; ContextPackage separately records edges
+    # removed by this context projection. Rebuild the local retained counters so this
+    # projection cannot claim graph facts that its serialized edge inventory does not carry.
+    return SolidityGraphSet.model_validate(
+        {
+            **graphs.model_dump(mode="python"),
             "edges": selected,
             "nodes": nodes,
-            "storage_layout": graphs.storage_layout[:500],
+            "storage_layout": storage_layout,
+            "retained_occurrences": projected_retained_occurrences,
+            "coverage": {key: selected_counts_by_name.get(key, 0) for key in sorted(coverage_keys)},
+            "edge_omissions": projected_omissions,
+            "fact_omissions": projected_fact_omissions,
             "warnings": warnings,
         }
     )

@@ -10,6 +10,10 @@ from mmaudit.models.registry import ModelRegistry
 from tests.conftest import MODEL_IDS, base_config_data
 from tests.unit import test_model_qualification as qualification_fixtures
 
+# Re-export the qualification fixture's test-only release-pin shim so imported
+# production-shaped bundles retain the same synthetic authority boundary here.
+_synthetic_release_pin = qualification_fixtures._treat_synthetic_live_policy_as_release_pinned
+
 
 def _identity_records() -> tuple[
     qualification_fixtures._Bundle,

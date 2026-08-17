@@ -159,7 +159,7 @@ class ExecutionConfig(ConfigModel):
     cost_ledger_path: str | None = None
     max_request_bytes: int = Field(default=4_000_000, ge=1_024)
     max_output_tokens_per_request: int = Field(default=32_768, ge=256, le=65_536)
-    max_requests_per_agent: int = Field(default=2, ge=1, le=512)
+    max_requests_per_agent: int = Field(default=2, ge=1, le=640)
     conservative_usd_per_million_tokens: float = Field(default=60.0, gt=0)
 
     @field_validator("cost_ledger_path")
@@ -813,15 +813,15 @@ class QualityGateConfig(ConfigModel):
 
 
 MAXIMUM_ASSURANCE_QUALIFICATION_POLICY_SHA256 = (
-    "f36e89643bb9c74c607222ac6690a5a2dc3d2ac98f0e36b941d3d1cccc293c83"
+    "1df14052e97a8ceb2cf3ec9fd25637f5f2f3a821818a54382a7c1f241059da8c"
 )
 MAXIMUM_ASSURANCE_BENCHMARK_CORPUS_VERSION = "2.0"
 MAXIMUM_ASSURANCE_BENCHMARK_CORPUS_SHA256 = (
-    "524f4c37c41d8178c6e159a5d7d67bf0b3fe33c83015c8a8401006f6fbd1ce3b"
+    "f92ff08ffff2de6fc4b8a4be547d2a0aef45990f7090f734c551ec696ca33e38"
 )
 MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_VERSION = "2.0"
 MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_SHA256 = (
-    "09c86d16caa05c9602fa8082a46b2dc438f92cc0b668fe7ce7d001e4a9358c92"
+    "246f5f84aac6aaeecf20a017c9bd5a0f1897e56d54c82ce5ba75a02751d7118c"
 )
 
 

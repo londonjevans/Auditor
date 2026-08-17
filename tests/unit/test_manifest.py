@@ -50,9 +50,12 @@ from mmaudit.models.schemas import (
     RepositorySuiteDifferentialRun,
     ScannerRun,
     ScannerStatus,
+    SolidityCoverage,
     UsageRecord,
 )
 from mmaudit.orchestration.manifest import (
+    AUDIT_MODEL_SELECTION_BINDING_IDS,
+    AUDIT_MODEL_SELECTION_EVIDENCE_PATH,
     LANGUAGE_CAPABILITY_ARTIFACT_PATH,
     ManifestBindingSet,
     ManifestFileBinding,
@@ -425,7 +428,15 @@ def _write_required_artifacts(
             "candidate_resolutions": [],
             "falsification_decisions": [],
         },
-        "solidity-coverage.json": {"schema_version": "1.0", "coverage": None},
+        "solidity-coverage.json": {
+            "schema_version": "1.0",
+            "evidence_authority": "comparison_required",
+            "coverage": (
+                report.solidity_coverage.model_dump(mode="json")
+                if report.solidity_coverage is not None
+                else None
+            ),
+        },
         "model-review-coverage.json": {"schema_version": "1.0", "coverage": None},
         "scope-assessment.json": {"schema_version": "1.0", "assessment": None},
         "scanner-results.json": {
@@ -1498,11 +1509,38 @@ def test_manifest_self_hash_and_artifact_hashes_reject_tampering(
         RunEvidenceManifest.model_validate(altered_manifest)
 
     (run_dir / "solidity-coverage.json").write_text(
-        '{"schema_version":"1.0","coverage":{"tampered":true}}\n',
+        '{"schema_version":"1.0","evidence_authority":"comparison_required",'
+        '"coverage":{"tampered":true}}\n',
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="artifact hash mismatch"):
         validate_manifest_artifacts(manifest, run_dir)
+
+
+def test_manifest_rejects_coherently_resealed_solidity_coverage_disagreement(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    run_dir = tmp_path / "run"
+    report = _report(config).model_copy(
+        update={"solidity_coverage": SolidityCoverage(files_discovered=1)}
+    )
+    _write_required_artifacts(run_dir, report)
+    manifest = build_run_evidence_manifest(run_dir=run_dir, report=report, config=config)
+    write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", manifest)
+    write_json(
+        run_dir / "solidity-coverage.json",
+        {
+            "schema_version": "1.0",
+            "evidence_authority": "comparison_required",
+            "coverage": SolidityCoverage(files_discovered=2).model_dump(mode="json"),
+        },
+    )
+    resealed = _reseal_current_artifacts(run_dir, manifest)
+
+    with pytest.raises(ValueError, match="Solidity coverage differs from the final report"):
+        validate_manifest_artifacts(resealed, run_dir)
 
 
 def test_manifest_rejects_coherently_resealed_compatibility_markdown(
@@ -2139,6 +2177,26 @@ def test_published_manifest_schema_is_strict_and_bounded() -> None:
         contract["minContains"] == contract["maxContains"] == 1
         for contract in report_bundle_contracts
     )
+    selection_artifact_rule = next(
+        rule for rule in compatibility if rule["if"].get("required") == ["artifacts"]
+    )
+    selection_binding_rule = next(
+        rule for rule in compatibility if rule["if"].get("required") == ["bindings"]
+    )
+    artifact_match = selection_artifact_rule["if"]["properties"]["artifacts"]["contains"]
+    assert artifact_match["properties"]["path"]["const"] == (AUDIT_MODEL_SELECTION_EVIDENCE_PATH)
+    binding_contracts = selection_artifact_rule["then"]["properties"]["bindings"]["properties"][
+        "models"
+    ]["allOf"]
+    assert {
+        contract["contains"]["properties"]["identifier"]["const"] for contract in binding_contracts
+    } == AUDIT_MODEL_SELECTION_BINDING_IDS
+    assert all(
+        contract["minContains"] == contract["maxContains"] == 1 for contract in binding_contracts
+    )
+    reverse_artifact = selection_binding_rule["then"]["properties"]["artifacts"]
+    assert reverse_artifact["contains"] == artifact_match
+    assert reverse_artifact["minContains"] == reverse_artifact["maxContains"] == 1
 
 
 def test_manifest_loader_rejects_duplicate_json_keys(tmp_path: Path, config_factory) -> None:

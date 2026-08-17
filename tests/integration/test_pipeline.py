@@ -18,6 +18,7 @@ import httpx
 import pytest
 
 from mmaudit.agents.specialists import build_specialist_execution_records
+from mmaudit.artifact_limits import MAX_JSON_ARTIFACT_BYTES
 from mmaudit.benchmark.certificate import (
     BenchmarkCertificateVerification,
     CertificateVerificationOrigin,
@@ -93,11 +94,17 @@ from mmaudit.models.schemas import (
     ScannerStatus,
     Severity,
     SolidityCompilationResult,
+    SolidityGraphOccurrenceKind,
     SolidityProjectMetadata,
     TransactionOrderingCapability,
     UsageRecord,
 )
-from mmaudit.models.sharding import SolidityShardReportBinding, SolidityShardsArtifact
+from mmaudit.models.sharding import (
+    SolidityCoverageArtifact,
+    SolidityGraphsArtifact,
+    SolidityShardReportBinding,
+    SolidityShardsArtifact,
+)
 from mmaudit.models.usage import UsageLedger
 from mmaudit.operator_secrets import load_operator_secrets
 from mmaudit.orchestration import ci as ci_module
@@ -1238,7 +1245,7 @@ async def test_mock_provider_session_rejects_usage_relabelled_as_real(
     try:
         with pytest.raises(
             ValueError,
-            match="final report usage differs from exact retained scheduler custody",
+            match="REAL paid-audit usage lacks typed audit routing evidence",
         ):
             await pipeline.run(allow_code_egress=True)
     finally:
@@ -3194,6 +3201,11 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
         "audit-results.sarif",
     ):
         assert (result.run_dir / artifact).is_file()
+    solidity_coverage_artifact = SolidityCoverageArtifact.model_validate_json(
+        (result.run_dir / "solidity-coverage.json").read_text(encoding="utf-8")
+    )
+    assert solidity_coverage_artifact.evidence_authority == "comparison_required"
+    assert solidity_coverage_artifact.coverage == result.report.solidity_coverage
     shard_payload = json.loads(
         (result.run_dir / "solidity-shards.json").read_text(encoding="utf-8")
     )
@@ -6298,6 +6310,252 @@ async def test_pipeline_blocks_scanners_when_discovery_reincludes_excluded_sourc
         "audited source inventory is incompatible with scanner execution workspaces" in limitation
         for limitation in result.report.incomplete_reasons
     )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_uses_only_configuration_relative_ignore_policy(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    operator_ignored = vulnerable_repo / "operator-ignored.py"
+    operator_ignored.write_text("operator_ignored = True\n", encoding="utf-8")
+    target_only = vulnerable_repo / "target-only.py"
+    target_only.write_text("target_only = True\n", encoding="utf-8")
+    (vulnerable_repo / ".mmauditignore").write_text("/target-only.py\n", encoding="utf-8")
+    configuration_root = tmp_path / "operator-control"
+    configuration_root.mkdir()
+    (configuration_root / ".mmauditignore").write_text(
+        "/operator-ignored.py\n",
+        encoding="utf-8",
+    )
+    pipeline = AuditPipeline(
+        config_factory(),
+        repo=vulnerable_repo,
+        output=tmp_path / "configuration-ignore-output",
+        configuration_root=configuration_root,
+        scanner_runner=StaticScannerRunner(emit_finding=False),  # type: ignore[arg-type]
+    )
+
+    result = await pipeline.run(scanner_only=True)
+
+    repository_map = json.loads(
+        (result.run_dir / "repository-map.json").read_text(encoding="utf-8")
+    )
+    discovered_paths = {item["path"] for item in repository_map["files"]}
+    assert "operator-ignored.py" not in discovered_paths
+    assert "target-only.py" in discovered_paths
+    capability = json.loads(
+        (result.run_dir / "language-capability.json").read_text(encoding="utf-8")
+    )
+    assert "/operator-ignored.py" in capability["effective_ignore_rules"]
+    assert "/target-only.py" not in capability["effective_ignore_rules"]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_completes_with_manifest_bound_partial_graph_evidence(
+    config_factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mmaudit.orchestration import pipeline as pipeline_module
+    from mmaudit.solidity.graphs import build_solidity_graphs as real_build_solidity_graphs
+
+    fixture = FIXTURES / "solidity" / "realistic_scale" / "solidity_005k"
+    graph_limit = 2_000_000
+
+    def bounded_graphs(discovery, build, *, shard_policy=None):
+        return real_build_solidity_graphs(
+            discovery,
+            build,
+            max_artifact_bytes=graph_limit,
+            shard_policy=shard_policy,
+        )
+
+    monkeypatch.setattr(pipeline_module, "build_solidity_graphs", bounded_graphs)
+    config = config_factory(
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
+        repository={
+            "max_files": 500,
+            "max_walk_entries": 2_000,
+            "max_file_bytes": 48_000,
+            "max_discovery_bytes": 10_000_000,
+            "max_total_context_bytes": 600_000,
+        },
+        privacy={"fail_on_detected_secret": False},
+    )
+    result = await AuditPipeline(
+        config,
+        repo=fixture,
+        output=tmp_path / "bounded-graph-output",
+        scanner_runner=StaticScannerRunner(emit_finding=False),  # type: ignore[arg-type]
+    ).run(scanner_only=True)
+
+    graph_path = result.run_dir / "solidity-graphs.json"
+    graph_artifact = json.loads(graph_path.read_text(encoding="utf-8"))
+    graphs = graph_artifact["graphs"]
+    assert graph_path.stat().st_size <= graph_limit
+    assert graphs["generation_complete"] is False
+    assert graphs["edge_omissions"]
+    assert graphs["fact_omissions"]
+    assert result.report.solidity_coverage is not None
+    assert result.report.solidity_coverage.graph_analysis_state is AnalysisState.ATTEMPTED_FAILED
+    assert result.report.run_status is AuditRunStatus.INCOMPLETE
+    assert any(
+        "semantic graph generation omitted bounded edge or fact evidence" in reason
+        for reason in result.report.incomplete_reasons
+    )
+    graph_summary = result.report.metadata["solidity"]["graph_summary"]
+    assert graph_summary["generation_complete"] is False
+    assert graph_summary["candidate_edges"] == (
+        graph_summary["retained_edge_occurrences"] + graph_summary["omitted_edges"]
+    )
+    assert all(
+        graph_summary["candidate_facts"][kind]
+        == graph_summary["retained_fact_occurrences"][kind]
+        + graph_summary["omitted_facts"].get(kind, 0)
+        for kind in graph_summary["candidate_facts"]
+    )
+    assert result.report.solidity_coverage.graph_fact_omission_evidence_sha256s == sorted(
+        item["evidence_sha256"] for item in graphs["fact_omissions"]
+    )
+    shard_artifact = SolidityShardsArtifact.model_validate_json(
+        (result.run_dir / "solidity-shards.json").read_text(encoding="utf-8")
+    )
+    assert shard_artifact.inventory is not None
+    assert shard_artifact.inventory.coverage.complete is False
+    validate_solidity_shard_artifacts(
+        run_dir=result.run_dir,
+        report=result.report,
+    )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_degrades_candidate_graph_larger_than_real_artifact_ceiling(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "large-graph-repository"
+    source = repository / "src" / "GraphPressure.sol"
+    source.parent.mkdir(parents=True)
+    variable_count = 500
+    declarations = "\n".join(
+        f"    uint256 private value{index};" for index in range(variable_count)
+    )
+    updates = "\n".join(f"        value{index} += 1;" for index in range(variable_count))
+    source.write_text(
+        "// synthetic non-production graph pressure fixture\n"
+        "pragma solidity ^0.8.20;\n"
+        "contract GraphPressure {\n"
+        f"{declarations}\n"
+        "    function reconcile() external {\n"
+        f"{updates}\n"
+        "    }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    config = config_factory(
+        language_profile=LanguageCapabilityProfile.SOLIDITY_EVM,
+        repository={
+            "max_files": 100,
+            "max_walk_entries": 500,
+            "max_file_bytes": 250_000,
+            "max_discovery_bytes": 5_000_000,
+            "max_total_context_bytes": 600_000,
+        },
+        smart_contracts={"compile": False},
+        privacy={"fail_on_detected_secret": False},
+    )
+
+    result = await AuditPipeline(
+        config,
+        repo=repository,
+        output=tmp_path / "real-ceiling-output",
+        scanner_runner=StaticScannerRunner(emit_finding=False),  # type: ignore[arg-type]
+    ).run(scanner_only=True)
+
+    graph_path = result.run_dir / "solidity-graphs.json"
+    graph_artifact = SolidityGraphsArtifact.model_validate_json(
+        graph_path.read_text(encoding="utf-8")
+    )
+    assert graph_artifact.graphs is not None
+    graphs = graph_artifact.graphs
+    candidate_canonical_edge_bytes = sum(
+        len(
+            json.dumps(
+                edge.model_dump(mode="json"),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        )
+        for edge in graphs.edges
+    ) + sum(item.omitted_canonical_bytes for item in graphs.edge_omissions)
+    assert candidate_canonical_edge_bytes > MAX_JSON_ARTIFACT_BYTES
+    assert graph_path.stat().st_size <= MAX_JSON_ARTIFACT_BYTES
+    assert graphs.generation_complete is False
+    assert graphs.edge_omissions
+    assert result.report.run_status is AuditRunStatus.INCOMPLETE
+    assert result.report.solidity_coverage is not None
+    coverage = result.report.solidity_coverage
+    assert coverage.graph_analysis_state is AnalysisState.ATTEMPTED_FAILED
+    retained_edge_occurrences = sum(
+        item.occurrence_count
+        for item in graphs.retained_occurrences
+        if item.subject_kind is SolidityGraphOccurrenceKind.EDGE
+    )
+    retained_fact_occurrences = {
+        kind.value: sum(
+            item.occurrence_count
+            for item in graphs.retained_occurrences
+            if item.subject_kind.value == kind.value
+        )
+        for kind in SolidityGraphOccurrenceKind
+        if kind is not SolidityGraphOccurrenceKind.EDGE
+    }
+    assert len(graphs.retained_occurrences) == (
+        len(graphs.edges) + len(graphs.nodes) + len(graphs.storage_layout) + len(graphs.warnings)
+    )
+    assert sum(coverage.graph_retained_edge_occurrence_counts.values()) == (
+        retained_edge_occurrences
+    )
+    assert coverage.graph_fact_retained_occurrence_counts == retained_fact_occurrences
+    assert sum(coverage.graph_candidate_edge_counts.values()) == (
+        sum(coverage.graph_retained_edge_occurrence_counts.values())
+        + sum(coverage.graph_omitted_edge_counts.values())
+    )
+
+    shards = SolidityShardsArtifact.model_validate_json(
+        (result.run_dir / "solidity-shards.json").read_text(encoding="utf-8")
+    )
+    assert shards.inventory is not None
+    assert shards.inventory.coverage.complete is False
+    assert shards.inventory.coverage.graph_edge_candidate_occurrences_total == (
+        shards.inventory.coverage.graph_edge_candidate_occurrences_covered
+        + sum(item.omitted_count for item in graphs.edge_omissions)
+    )
+    assert (
+        shards.inventory.coverage.graph_edge_candidate_occurrences_covered
+        == retained_edge_occurrences
+    )
+
+    manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    graph_binding = next(
+        binding for binding in manifest.artifacts if binding.path == "solidity-graphs.json"
+    )
+    graph_bytes = graph_path.read_bytes()
+    assert graph_binding.size == len(graph_bytes)
+    assert graph_binding.sha256 == hashlib.sha256(graph_bytes).hexdigest()
+    assert all(
+        binding.size <= MAX_JSON_ARTIFACT_BYTES
+        for binding in manifest.artifacts
+        if binding.path.endswith(".json")
+    )
+    validate_manifest_artifacts(manifest, result.run_dir)
+    validate_solidity_shard_artifacts(result.run_dir, result.report)
 
 
 @pytest.mark.asyncio

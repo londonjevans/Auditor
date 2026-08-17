@@ -39,6 +39,7 @@ from mmaudit.models.schemas import (
     Severity,
     VerificationTest,
 )
+from mmaudit.models.sharding import SolidityCoverageArtifact
 from mmaudit.orchestration.manifest import _validate_report_artifact_consistency
 from mmaudit.orchestration.replay import _ReplayArtifacts
 from mmaudit.orchestration.reproduction_resolution import (
@@ -285,6 +286,13 @@ def _write_manifest_inputs(
         },
     )
     write_json(root / "scanner-results.json", {"runs": []})
+    write_json(
+        root / "solidity-coverage.json",
+        SolidityCoverageArtifact(
+            evidence_authority="comparison_required",
+            coverage=None,
+        ).model_dump(mode="json"),
+    )
     write_json(root / "solidity-projects.json", {"schema_version": "1.0", "projects": []})
     write_json(root / "solidity-compilation.json", {"schema_version": "1.0", "results": []})
     write_json(

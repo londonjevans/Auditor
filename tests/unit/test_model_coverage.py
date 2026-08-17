@@ -46,12 +46,15 @@ from mmaudit.models.schemas import (
     SolidityEntityKind,
     SolidityGraphEdge,
     SolidityGraphKind,
+    SolidityGraphOccurrenceKind,
+    SolidityGraphRetainedOccurrence,
     SolidityGraphSet,
     SolidityProjectMetadata,
     SolidityProjectType,
     SolidityProvenance,
     SoliditySymbolIndex,
     UsageRecord,
+    solidity_graph_occurrence_sha256,
 )
 from mmaudit.models.token_planning import (
     ContextOmissionCategory,
@@ -138,6 +141,27 @@ def _edge(
     )
 
 
+def _edge_occurrences(
+    edges: list[SolidityGraphEdge],
+) -> tuple[SolidityGraphRetainedOccurrence, ...]:
+    return tuple(
+        sorted(
+            (
+                SolidityGraphRetainedOccurrence(
+                    subject_kind=SolidityGraphOccurrenceKind.EDGE,
+                    subject_sha256=solidity_graph_occurrence_sha256(
+                        SolidityGraphOccurrenceKind.EDGE,
+                        edge,
+                    ),
+                    occurrence_count=1,
+                )
+                for edge in edges
+            ),
+            key=lambda item: (item.subject_kind.value, item.subject_sha256),
+        )
+    )
+
+
 def _inventory() -> tuple[SoliditySymbolIndex, SolidityGraphSet, InvariantSuite]:
     index = SoliditySymbolIndex(
         projects=[
@@ -180,41 +204,43 @@ def _inventory() -> tuple[SoliditySymbolIndex, SolidityGraphSet, InvariantSuite]
         ],
         ast_sources=["src/Vault.sol"],
     )
+    edges = [
+        _edge(
+            SolidityGraphKind.ASSET_FLOW,
+            "function:Vault.deposit",
+            "asset:synthetic",
+            "observed asset inflow",
+            10,
+            11,
+        ),
+        _edge(
+            SolidityGraphKind.PRIVILEGE,
+            "function:Vault.adminSet",
+            "role:admin",
+            "administrator guarded transition",
+            20,
+            21,
+        ),
+        _edge(
+            SolidityGraphKind.EXTERNAL_CALL,
+            "function:Vault.deposit",
+            "external:token",
+            "bounded synthetic token call",
+            10,
+            11,
+        ),
+        _edge(
+            SolidityGraphKind.STATE_WRITE,
+            "function:Vault.deposit",
+            "state:Vault.totalAssets",
+            "writes totalAssets",
+            10,
+            11,
+        ),
+    ]
     graphs = SolidityGraphSet(
-        edges=[
-            _edge(
-                SolidityGraphKind.ASSET_FLOW,
-                "function:Vault.deposit",
-                "asset:synthetic",
-                "observed asset inflow",
-                10,
-                11,
-            ),
-            _edge(
-                SolidityGraphKind.PRIVILEGE,
-                "function:Vault.adminSet",
-                "role:admin",
-                "administrator guarded transition",
-                20,
-                21,
-            ),
-            _edge(
-                SolidityGraphKind.EXTERNAL_CALL,
-                "function:Vault.deposit",
-                "external:token",
-                "bounded synthetic token call",
-                10,
-                11,
-            ),
-            _edge(
-                SolidityGraphKind.STATE_WRITE,
-                "function:Vault.deposit",
-                "state:Vault.totalAssets",
-                "writes totalAssets",
-                10,
-                11,
-            ),
-        ],
+        edges=edges,
+        retained_occurrences=_edge_occurrences(edges),
         analyzed_graphs=[
             SolidityGraphKind.PRIVILEGE,
             SolidityGraphKind.ASSET_FLOW,
@@ -972,7 +998,10 @@ def test_direct_and_location_bound_invariants_make_exact_contract_surfaces_criti
     state = next(entity for entity in index.entities if entity.id == "state:Vault.totalAssets")
     graphs = graphs.model_copy(
         update={
-            "edges": [edge for edge in graphs.edges if edge.graph is SolidityGraphKind.STATE_WRITE]
+            "edges": [edge for edge in graphs.edges if edge.graph is SolidityGraphKind.STATE_WRITE],
+            "retained_occurrences": _edge_occurrences(
+                [edge for edge in graphs.edges if edge.graph is SolidityGraphKind.STATE_WRITE]
+            ),
         }
     )
 
@@ -1310,8 +1339,12 @@ def test_test_harness_entities_edges_and_invariants_never_enter_surface_denomina
             "entities": [*index.entities, harness_contract, harness_function],
         }
     )
+    extended_edges = [*graphs.edges, harness_edge, source_id_spoofed_test_edge]
     extended_graphs = graphs.model_copy(
-        update={"edges": [*graphs.edges, harness_edge, source_id_spoofed_test_edge]}
+        update={
+            "edges": extended_edges,
+            "retained_occurrences": _edge_occurrences(extended_edges),
+        }
     )
     extended_invariants = invariants.model_copy(
         update={"invariants": [*invariants.invariants, harness_invariant]}
@@ -1417,19 +1450,21 @@ def test_public_model_coverage_paths_reject_incomplete_critical_classification_i
             SolidityGraphKind.SENSITIVE_REACHABILITY,
         }
     )
+    partial_edges = [
+        edge.model_copy(
+            update={
+                "end_line": edge.start_line,
+                "source_hash": _source_hash(edge.start_line, edge.start_line),
+            }
+        )
+        if edge == partial_edge
+        else edge
+        for edge in graphs.edges
+    ]
     partial_graphs = graphs.model_copy(
         update={
-            "edges": [
-                edge.model_copy(
-                    update={
-                        "end_line": edge.start_line,
-                        "source_hash": _source_hash(edge.start_line, edge.start_line),
-                    }
-                )
-                if edge == partial_edge
-                else edge
-                for edge in graphs.edges
-            ]
+            "edges": partial_edges,
+            "retained_occurrences": _edge_occurrences(partial_edges),
         }
     )
     source_contents_by_path = {_PATH: _SOURCE}
@@ -2820,9 +2855,11 @@ def test_compact_source_context_inventory_subset_receives_credit(
             ]
         }
     )
+    compact_edges = [edge for edge in graphs.edges if edge.graph is SolidityGraphKind.STATE_WRITE]
     compact_graphs = graphs.model_copy(
         update={
-            "edges": [edge for edge in graphs.edges if edge.graph is SolidityGraphKind.STATE_WRITE]
+            "edges": compact_edges,
+            "retained_occurrences": _edge_occurrences(compact_edges),
         }
     )
     context = _with_exact_context_bytes(

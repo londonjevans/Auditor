@@ -59,6 +59,7 @@ from mmaudit.models.qualification_workflow import (
     load_qualification_workflow_bundle,
     run_qualification_workflow,
     seal_qualification_release_bindings,
+    validate_calibrated_successor_qualification_inputs,
     validate_qualification_portfolio_readiness,
     write_qualification_workflow_bundle,
 )
@@ -359,6 +360,7 @@ def _release_bindings(
     *,
     benchmark_corpus_version: str = "2.0",
     benchmark_ground_truth_version: str = "2.0",
+    effective_config_sha256: str = "3" * 64,
 ):
     records = [
         case.usage_record for case in report.results[0].cases if case.usage_record is not None
@@ -371,7 +373,7 @@ def _release_bindings(
     return seal_qualification_release_bindings(
         source_commit="1" * 40,
         source_tree_sha256="2" * 64,
-        effective_config_sha256="3" * 64,
+        effective_config_sha256=effective_config_sha256,
         prompt_sha256=prompt_sha256,
         response_schema_sha256=response_schema_sha256,
         toolchain_sha256="4" * 64,
@@ -710,6 +712,273 @@ def _run(
         evaluated_at=observed_at if evaluated_at is None else evaluated_at,
         qualification_expires_at=qualification_expires_at,
     )
+
+
+@pytest.mark.asyncio
+async def test_structural_successor_bridge_preserves_predecessor_and_refuses_unpinned_p2(
+    tmp_path: Path,
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import patch
+
+    from mmaudit.models.calibration import (
+        ModelCalibrationArtifact,
+        TrustedModelCalibrationVerification,
+        derive_calibrated_qualification_policy,
+    )
+    from mmaudit.models.calibration_transition import (
+        CalibrationReleaseTransitionArtifact,
+        build_calibration_release_transition_artifact,
+    )
+    from mmaudit.models.qualification import (
+        issue_release_pinned_trusted_calibrated_qualification_policy,
+        load_qualification_policy,
+        validate_release_pinned_calibrated_policy_inputs,
+    )
+    from tests.unit import test_model_calibration as calibration_fixtures
+    from tests.unit import test_model_lineage_authority as authority_fixtures
+    from tests.unit import test_model_lineage_review as lineage_fixtures
+    from tests.unit import test_qualification_policy_calibration as policy_fixtures
+
+    model_ids = tuple(f"successor/model-{index:03d}" for index in range(8))
+    declared_roles = ("falsifier", "judge", "verifier", "whole_protocol_review")
+    with patch.multiple(
+        lineage_fixtures,
+        DISCOVERED_AT=calibration_fixtures.LINEAGE_DISCOVERED_AT,
+        REFRESHED_AT=calibration_fixtures.LINEAGE_REFRESHED_AT,
+        CREATED_AT=calibration_fixtures.LINEAGE_CREATED_AT,
+        EXPIRES_AT=calibration_fixtures.LINEAGE_EXPIRES_AT,
+    ):
+        predecessor = lineage_fixtures._bundle(
+            model_ids,
+            approved_roles=declared_roles,
+        )
+        review = lineage_fixtures._artifact(
+            predecessor,
+            tuple(
+                lineage_fixtures._review(
+                    (model_id,),
+                    label=f"successor-lineage-{index}",
+                    reviewed_at=calibration_fixtures.LINEAGE_REVIEWED_AT,
+                )
+                for index, model_id in enumerate(model_ids)
+            ),
+        )
+    signing_root = tmp_path / "successor-lineage-authority"
+    signing_root.mkdir(mode=0o700)
+    _anchor, envelope, lineage_capability = authority_fixtures._signed_authority(
+        root=signing_root,
+        artifact=review,
+        signed_at=calibration_fixtures.LINEAGE_SIGNED_AT,
+        expires_at=calibration_fixtures.LINEAGE_AUTHORITY_EXPIRES_AT,
+    )
+
+    template = await policy_fixtures._calibration_template(tmp_path)
+    expanded = policy_fixtures._expanded_artifact(template)
+    predecessor_policy = load_qualification_policy(
+        ROOT / "config" / "models.maximum-assurance.toml"
+    )
+    predecessor_config = config_factory(
+        profile=policy_fixtures.AuditProfile.MAXIMUM_ASSURANCE
+    ).effective()
+    calibration_payload = expanded.model_dump(mode="json")
+    review_bindings = {item.exact_model_id: item for item in review.candidate_bindings}
+    for index, candidate in enumerate(calibration_payload["candidates"]):
+        model_id = model_ids[index]
+        binding = review_bindings[model_id]
+        candidate["exact_model_id"] = model_id
+        candidate["root_lineage"] = binding.root_lineage
+        candidate["lineage_binding_sha256"] = binding.binding_sha256
+        candidate["diagnostic"]["exact_model_id"] = model_id
+    for distribution in calibration_payload["distributions"]:
+        for index, observation in enumerate(distribution["observations"]):
+            model_id = model_ids[index]
+            observation["exact_model_id"] = model_id
+            observation["root_lineage"] = review_bindings[model_id].root_lineage
+    suite = load_model_benchmark_corpus(CORPUS_PATH)
+    calibration_payload.update(
+        candidate_registry_sha256=predecessor.registry.registry_sha256,
+        discovery_manifest_sha256=predecessor.manifest.manifest_sha256,
+        candidate_set_sha256=canonical_sha256(list(model_ids)),
+        lineage_review_artifact_sha256=review.artifact_sha256,
+        lineage_authority_envelope_sha256=envelope.authority_envelope_sha256,
+        benchmark_policy_sha256=predecessor_policy.policy_sha256,
+        effective_config_sha256=predecessor_config.stable_hash(),
+        benchmark_corpus_version=suite.corpus.schema_version,
+        benchmark_corpus_sha256=suite.corpus_sha256,
+        benchmark_ground_truth_version=suite.ground_truth.schema_version,
+        benchmark_ground_truth_sha256=suite.ground_truth_sha256,
+        included_root_lineage_count=8,
+    )
+    calibration_payload["artifact_sha256"] = canonical_sha256(
+        {key: value for key, value in calibration_payload.items() if key != "artifact_sha256"}
+    )
+    calibration = ModelCalibrationArtifact.model_validate(calibration_payload)
+    live_calibration = object.__new__(TrustedModelCalibrationVerification)
+    with patch(
+        "mmaudit.models.calibration._require_trusted_calibration_capability"
+    ) as require_live_calibration:
+        successor_policy = derive_calibrated_qualification_policy(
+            calibration=calibration,
+            trusted_calibration_verification=live_calibration,
+        )
+    assert require_live_calibration.call_count >= 1
+    successor_config = policy_fixtures._successor_config(
+        config_factory,
+        monkeypatch,
+        policy_sha256=successor_policy.policy_sha256,
+    )
+    release_bindings = policy_fixtures._release_bindings_for_config(successor_config)
+    transition = build_calibration_release_transition_artifact(
+        predecessor_policy=predecessor_policy,
+        calibration=calibration,
+        successor_policy=successor_policy,
+        successor_effective_config=successor_config,
+        successor_release_bindings=release_bindings,
+    )
+    campaign_started_at = calibration.created_at
+    observed_at = campaign_started_at + timedelta(minutes=1)
+    reviewed_registry = qualification_workflow_module.build_identity_reviewed_candidate_registry(
+        candidate_registry=predecessor.registry,
+        lineage_review_artifact=review,
+        lineage_authority_envelope=envelope,
+        calibration_artifact=calibration,
+        discovery_run_manifest=predecessor.manifest,
+        trusted_lineage_verification=lineage_capability,
+        campaign_started_at=campaign_started_at,
+        observed_at=observed_at,
+    )
+
+    validated = validate_calibrated_successor_qualification_inputs(
+        candidate_registry=reviewed_registry,
+        calibration_candidate_registry=predecessor.registry,
+        discovery_run_manifest=predecessor.manifest,
+        lineage_review_artifact=review,
+        lineage_authority_envelope=envelope,
+        trusted_lineage_verification=lineage_capability,
+        calibration_artifact=calibration,
+        calibration_release_transition=transition,
+        policy=successor_policy,
+        benchmark_suite=suite,
+        release_bindings=release_bindings,
+        campaign_started_at=campaign_started_at,
+        observed_at=observed_at,
+    )
+
+    assert validated == calibration
+    assert predecessor.registry.registry_sha256 != reviewed_registry.registry_sha256
+    assert all(
+        candidate.approved_roles == declared_roles
+        and candidate.benchmark_status is CandidateBenchmarkStatus.PENDING
+        for candidate in reviewed_registry.candidates
+    )
+    assert calibration.benchmark_policy_sha256 != successor_policy.policy_sha256
+    assert calibration.effective_config_sha256 != release_bindings.effective_config_sha256
+    release_observation = synthetic_release_observation(
+        release_bindings,
+        observed_at=observed_at,
+    )
+    successor_pins = successor_config.maximum_assurance.qualification
+    assert validate_release_pinned_calibrated_policy_inputs(
+        policy=successor_policy,
+        calibration=calibration,
+        config=successor_config,
+        release_bindings=release_bindings,
+        trusted_release_observation=release_observation,
+        source_release_pins=(
+            successor_pins.policy_sha256,
+            successor_pins.corpus_version,
+            successor_pins.corpus_sha256,
+            successor_pins.ground_truth_version,
+            successor_pins.ground_truth_sha256,
+        ),
+        predecessor_policy=predecessor_policy,
+        calibration_candidate_registry=predecessor.registry,
+        qualification_candidate_registry=reviewed_registry,
+        discovery_run_manifest=predecessor.manifest,
+        lineage_review_artifact=review,
+        lineage_authority_envelope=envelope,
+        trusted_lineage_verification=lineage_capability,
+        qualification_campaign_started_at=campaign_started_at,
+    ) == (reviewed_registry.registry_sha256, transition.artifact_sha256)
+    with pytest.raises(ValueError, match="R1 differs from exact R0 transition"):
+        validate_release_pinned_calibrated_policy_inputs(
+            policy=successor_policy,
+            calibration=calibration,
+            config=successor_config,
+            release_bindings=release_bindings,
+            trusted_release_observation=release_observation,
+            source_release_pins=(
+                successor_pins.policy_sha256,
+                successor_pins.corpus_version,
+                successor_pins.corpus_sha256,
+                successor_pins.ground_truth_version,
+                successor_pins.ground_truth_sha256,
+            ),
+            predecessor_policy=predecessor_policy,
+            calibration_candidate_registry=predecessor.registry,
+            qualification_candidate_registry=predecessor.registry,
+            discovery_run_manifest=predecessor.manifest,
+            lineage_review_artifact=review,
+            lineage_authority_envelope=envelope,
+            trusted_lineage_verification=lineage_capability,
+            qualification_campaign_started_at=campaign_started_at,
+        )
+    transition_payload = transition.model_dump(mode="json")
+    transition_payload["calibration_artifact_sha256"] = "f" * 64
+    transition_payload["artifact_sha256"] = canonical_sha256(
+        {key: value for key, value in transition_payload.items() if key != "artifact_sha256"}
+    )
+    spliced_transition = CalibrationReleaseTransitionArtifact.model_validate(transition_payload)
+    with pytest.raises(ValueError, match="transition differs from exact"):
+        validate_calibrated_successor_qualification_inputs(
+            candidate_registry=reviewed_registry,
+            calibration_candidate_registry=predecessor.registry,
+            discovery_run_manifest=predecessor.manifest,
+            lineage_review_artifact=review,
+            lineage_authority_envelope=envelope,
+            trusted_lineage_verification=lineage_capability,
+            calibration_artifact=calibration,
+            calibration_release_transition=spliced_transition,
+            policy=successor_policy,
+            benchmark_suite=suite,
+            release_bindings=release_bindings,
+            campaign_started_at=campaign_started_at,
+            observed_at=observed_at,
+        )
+    with pytest.raises(ValueError, match="exact R0 lineage transition"):
+        validate_calibrated_successor_qualification_inputs(
+            candidate_registry=predecessor.registry,
+            calibration_candidate_registry=predecessor.registry,
+            discovery_run_manifest=predecessor.manifest,
+            lineage_review_artifact=review,
+            lineage_authority_envelope=envelope,
+            trusted_lineage_verification=lineage_capability,
+            calibration_artifact=calibration,
+            calibration_release_transition=transition,
+            policy=successor_policy,
+            benchmark_suite=suite,
+            release_bindings=release_bindings,
+            campaign_started_at=campaign_started_at,
+            observed_at=observed_at,
+        )
+    with pytest.raises(ValueError, match="current source release"):
+        issue_release_pinned_trusted_calibrated_qualification_policy(
+            policy=successor_policy,
+            calibration=calibration,
+            config=successor_config,
+            release_bindings=release_bindings,
+            trusted_release_observation=release_observation,
+            predecessor_policy=predecessor_policy,
+            calibration_candidate_registry=predecessor.registry,
+            qualification_candidate_registry=reviewed_registry,
+            discovery_run_manifest=predecessor.manifest,
+            lineage_review_artifact=review,
+            lineage_authority_envelope=envelope,
+            trusted_lineage_verification=lineage_capability,
+            qualification_campaign_started_at=campaign_started_at,
+        )
 
 
 @pytest.mark.asyncio
@@ -1507,7 +1776,8 @@ async def test_workflow_bundle_fails_readiness_for_low_scoring_reasoning_profile
         campaign_verification=campaign_verification,
         release_bindings=release_bindings,
     )
-    assert primary_bundle.qualification_verification.production_selection_ready
+    assert primary_bundle.qualification_verification.valid
+    assert not primary_bundle.qualification_verification.production_selection_ready
     plan = build_candidate_reasoning_profile_benchmark_plan(
         artifact=primary_bundle.qualification_artifact,
         primary_reports=(primary,),

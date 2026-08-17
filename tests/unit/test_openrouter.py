@@ -17,6 +17,13 @@ import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError, create_model
 
 import mmaudit.models.openrouter as openrouter_module
+from mmaudit.benchmark.models import (
+    MODEL_BENCHMARK_SCHEMA_NAME,
+    ModelBenchmarkResponse,
+    blinded_model_benchmark_request,
+    load_model_benchmark_corpus,
+    model_benchmark_system_prompt,
+)
 from mmaudit.constants import OPENROUTER_DEFAULT_BASE_URL
 from mmaudit.models.discovery import (
     _TRUSTED_OPENROUTER_DISCOVERY_ISSUER,
@@ -125,7 +132,13 @@ from mmaudit.privacy import (
     resolve_effective_privacy_policy,
     resolve_trusted_privacy_authorization,
 )
+from mmaudit.repository.privacy_provenance import (
+    PrivacySourceProvenanceObservation,
+    prove_release_pinned_model_benchmark_source,
+)
 from tests.qualification_support import synthetic_production_qualification
+
+_MODEL_BENCHMARK_CORPUS = Path(__file__).parents[2] / "benchmarks/model_corpus/manifest.json"
 
 
 class Answer(BaseModel):
@@ -572,6 +585,44 @@ def _strict_privacy_policy(
         ),
         now=datetime.now(UTC).replace(microsecond=0),
     )
+
+
+def _synthetic_prequalification_privacy_context(
+    config: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    models: tuple[str, ...] = ("alpha/atlas-secure",),
+    providers: tuple[str, ...] = ("approved-provider",),
+    requested_budget_usd: Decimal | None = None,
+) -> tuple[
+    EffectivePrivacyPolicyEvidence,
+    PrivacySourceProvenanceObservation,
+    str,
+]:
+    del monkeypatch
+    suite = load_model_benchmark_corpus(_MODEL_BENCHMARK_CORPUS)
+    source_sha256 = suite.corpus_sha256
+    source_provenance = prove_release_pinned_model_benchmark_source(
+        suite,
+        now=datetime.now(UTC).replace(microsecond=0),
+    )
+    policy = resolve_effective_privacy_policy(
+        profile=config.privacy.profile,
+        require_zdr=config.privacy.require_zdr,
+        consent_observation=None,
+        source_sha256=source_sha256,
+        source_classification=PrivacySourceClassification.SYNTHETIC_COMMITTED,
+        source_provenance_observation=source_provenance,
+        configured_model_ids=models,
+        configured_provider_endpoints=providers,
+        requested_budget_usd=(
+            requested_budget_usd
+            if requested_budget_usd is not None
+            else Decimal(str(config.execution.budget_usd))
+        ),
+        now=datetime.now(UTC).replace(microsecond=0),
+    )
+    return policy, source_provenance, blinded_model_benchmark_request(suite.cases[0])
 
 
 def _model_discovery_run(
@@ -1490,17 +1541,31 @@ async def test_mock_transport_exception_is_secretless(
 
 
 @pytest.mark.asyncio
-async def test_real_completion_requires_durable_atomic_cost_ledger(config_factory) -> None:
-    client = _owned_client(config_factory(), base_url=OPENROUTER_DEFAULT_BASE_URL)
+async def test_real_completion_requires_durable_atomic_cost_ledger(
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = config_factory()
+    client = _owned_client(config, base_url=OPENROUTER_DEFAULT_BASE_URL)
+    client.provider_policy = OpenRouterProviderPolicy(only=("approved-provider",))
+    policy, observation, user_prompt = _synthetic_prequalification_privacy_context(
+        config,
+        monkeypatch,
+    )
+    client.bind_effective_privacy_context(
+        effective_privacy_policy=policy,
+        source_provenance_observation=observation,
+        privacy_authorization=None,
+    )
     try:
         with pytest.raises(OpenRouterCostControlError, match="durable atomic cost ledger"):
             await client.complete(
-                role="source_audit",
+                role="model_benchmark",
                 models=["alpha/atlas-secure"],
-                system_prompt="system",
-                user_prompt="synthetic local input",
-                response_model=Answer,
-                schema_name="answer",
+                system_prompt=model_benchmark_system_prompt(),
+                user_prompt=user_prompt,
+                response_model=ModelBenchmarkResponse,
+                schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
             )
     finally:
         await client.close()
@@ -1510,6 +1575,7 @@ async def test_real_completion_requires_durable_atomic_cost_ledger(config_factor
 async def test_real_completion_requires_frozen_identity_before_transport(
     config_factory,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = config_factory(execution={"max_json_repair_attempts": 0})
     ledger = AtomicCostLedger.initialize(
@@ -1517,6 +1583,15 @@ async def test_real_completion_requires_frozen_identity_before_transport(
         cap_usd=Decimal("20"),
     )
     endpoint_snapshot = _endpoint_snapshot()
+    (
+        effective_privacy_policy,
+        source_provenance_observation,
+        prequalification_user_prompt,
+    ) = _synthetic_prequalification_privacy_context(
+        config,
+        monkeypatch,
+        requested_budget_usd=Decimal("20"),
+    )
     client = OpenRouterClient(
         api_key="synthetic-key",
         execution=config.execution,
@@ -1536,7 +1611,8 @@ async def test_real_completion_requires_frozen_identity_before_transport(
             only=("approved-provider",),
         ),
         qualification_routing=(_qualification_routing_for_endpoint_snapshot(endpoint_snapshot),),
-        effective_privacy_policy=_strict_privacy_policy(config),
+        effective_privacy_policy=effective_privacy_policy,
+        source_provenance_observation=source_provenance_observation,
     )
     client.register_certification_endpoint_snapshot(evidence=endpoint_snapshot)
     client._authentication_validated = True
@@ -1545,10 +1621,10 @@ async def test_real_completion_requires_frozen_identity_before_transport(
             await client.complete(
                 role="model_benchmark",
                 models=["alpha/atlas-secure"],
-                system_prompt="system",
-                user_prompt="synthetic local input",
-                response_model=Answer,
-                schema_name="answer",
+                system_prompt=model_benchmark_system_prompt(),
+                user_prompt=prequalification_user_prompt,
+                response_model=ModelBenchmarkResponse,
+                schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
             )
     finally:
         await client.close()
@@ -2398,6 +2474,9 @@ async def test_consent_bound_non_zdr_request_omits_zdr_and_serializes_only_hash_
     )
     assert completion.usage_record.routing["effective_privacy_policy_sha256"] == (
         policy.evidence_sha256
+    )
+    assert completion.usage_record.routing["privacy_source_proof_kind"] == (
+        policy.source_proof_kind
     )
     serialized_evidence = json.dumps(
         {
@@ -3337,6 +3416,14 @@ async def test_real_completion_dispatches_through_generation_binding_before_retu
         response_model=Answer,
         schema_name="answer",
     )
+    (
+        client.effective_privacy_policy,
+        client._privacy_source_provenance_observation,
+        prequalification_user_prompt,
+    ) = _synthetic_prequalification_privacy_context(
+        config_factory(execution={"max_json_repair_attempts": 0}),
+        monkeypatch,
+    )
     calls: list[str] = []
 
     async def completed_without_transport(**_kwargs: Any) -> Any:
@@ -3356,10 +3443,10 @@ async def test_real_completion_dispatches_through_generation_binding_before_retu
         result = await client.complete_with_evidence(
             role="model_benchmark",
             models=["alpha/atlas-secure"],
-            system_prompt="system",
-            user_prompt="synthetic local input",
-            response_model=Answer,
-            schema_name="answer",
+            system_prompt=model_benchmark_system_prompt(),
+            user_prompt=prequalification_user_prompt,
+            response_model=ModelBenchmarkResponse,
+            schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
         )
     finally:
         await http_client.aclose()
@@ -3431,6 +3518,15 @@ async def test_real_unbound_generation_result_is_preserved_without_host_model_fa
     async def preserve_unbound(completion: Any) -> Any:
         return completion
 
+    (
+        client.effective_privacy_policy,
+        client._privacy_source_provenance_observation,
+        prequalification_user_prompt,
+    ) = _synthetic_prequalification_privacy_context(
+        config_factory(),
+        monkeypatch,
+        models=("alpha/atlas-secure", "bravo/borealis-secure"),
+    )
     _mock_real_control_flow(monkeypatch, client)
     client._owns_client = True
     client._authentication_validated = True
@@ -3438,12 +3534,12 @@ async def test_real_unbound_generation_result_is_preserved_without_host_model_fa
     monkeypatch.setattr(client, "_bind_real_completion_identity", preserve_unbound)
     try:
         result = await client.complete_with_evidence(
-            role="source_audit",
+            role="model_benchmark",
             models=["alpha/atlas-secure", "bravo/borealis-secure"],
-            system_prompt="system",
-            user_prompt="synthetic local input",
-            response_model=Answer,
-            schema_name="answer",
+            system_prompt=model_benchmark_system_prompt(),
+            user_prompt=prequalification_user_prompt,
+            response_model=ModelBenchmarkResponse,
+            schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
         )
     finally:
         await http_client.aclose()
@@ -3553,6 +3649,15 @@ async def test_actual_real_identity_binding_retains_metadata_fetch_failure(
         tmp_path / "unbound-metadata-ledger.json",
         cap_usd=Decimal("20"),
     )
+    (
+        effective_privacy_policy,
+        source_provenance_observation,
+        prequalification_user_prompt,
+    ) = _synthetic_prequalification_privacy_context(
+        config,
+        monkeypatch,
+        requested_budget_usd=Decimal("20"),
+    )
     client = OpenRouterClient(
         api_key="synthetic-key",
         execution=config.execution,
@@ -3572,6 +3677,8 @@ async def test_actual_real_identity_binding_retains_metadata_fetch_failure(
             only=("approved-provider",),
         ),
         qualification_routing=(),
+        effective_privacy_policy=effective_privacy_policy,
+        source_provenance_observation=source_provenance_observation,
     )
     client.register_certification_model_discovery(evidence=evidence, manifest=manifest)
     client._authentication_validated = True
@@ -3595,10 +3702,10 @@ async def test_actual_real_identity_binding_retains_metadata_fetch_failure(
         result = await client.complete_with_evidence(
             role="model_benchmark",
             models=["alpha/atlas-secure"],
-            system_prompt="system",
-            user_prompt="synthetic local input",
-            response_model=Answer,
-            schema_name="answer",
+            system_prompt=model_benchmark_system_prompt(),
+            user_prompt=prequalification_user_prompt,
+            response_model=ModelBenchmarkResponse,
+            schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
         )
     finally:
         client.clear_credentials()
@@ -3706,17 +3813,27 @@ async def test_real_ordinary_provider_fallback_is_preserved_as_unbound(
     async def return_provisional(**_kwargs: Any) -> Any:
         return real_completion
 
+    (
+        client.effective_privacy_policy,
+        client._privacy_source_provenance_observation,
+        prequalification_user_prompt,
+    ) = _synthetic_prequalification_privacy_context(
+        config,
+        monkeypatch,
+        providers=("approved-provider", "fallback-provider"),
+        requested_budget_usd=Decimal("20"),
+    )
     monkeypatch.setattr(client, "_complete_one", return_provisional)
     await client._client.aclose()
     _mock_real_control_flow(monkeypatch, client)
     try:
         result = await client.complete_with_evidence(
-            role="source_audit",
+            role="model_benchmark",
             models=["alpha/atlas-secure"],
-            system_prompt="system",
-            user_prompt="synthetic local input",
-            response_model=Answer,
-            schema_name="answer",
+            system_prompt=model_benchmark_system_prompt(),
+            user_prompt=prequalification_user_prompt,
+            response_model=ModelBenchmarkResponse,
+            schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
         )
     finally:
         client.clear_credentials()
@@ -7110,9 +7227,26 @@ def test_real_prequalification_roles_remain_outside_postqualification_reasoning_
         ),
         reasoning=reasoning,
     )
+    (
+        client.effective_privacy_policy,
+        client._privacy_source_provenance_observation,
+        prequalification_user_prompt,
+    ) = _synthetic_prequalification_privacy_context(
+        config_factory(),
+        monkeypatch,
+    )
     _mock_real_control_flow(monkeypatch, client)
     try:
-        assert not client._is_real_postqualification_certification(role)
+        requires_policy = client._requires_real_audit_policy_selection(
+            role,
+            system_prompt=model_benchmark_system_prompt(),
+            user_prompt=prequalification_user_prompt,
+            response_model=ModelBenchmarkResponse,
+            schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
+            structured_output_mode=StructuredOutputMode.NATIVE_JSON_SCHEMA,
+            context_package=None,
+        )
+        assert requires_policy is (role == "real_provider_smoke")
         assert client._reasoning_for_role(role) == reasoning
     finally:
         asyncio.run(http_client.aclose())
@@ -7182,6 +7316,12 @@ def test_real_postqualification_seals_exact_capability_and_qualification_reasoni
         plan = client._require_real_postqualification_reasoning_plan(
             role="source_audit",
             model=target.exact_model_id,
+            system_prompt="system",
+            user_prompt="synthetic local input",
+            response_model=Answer,
+            schema_name="answer",
+            structured_output_mode=client._selected_structured_output_mode(target.exact_model_id),
+            context_package=None,
             qualification_binding=qualification_binding,
         )
     finally:
@@ -7765,6 +7905,7 @@ async def test_certification_failure_record_retains_exact_qualification_hashes(
 
     expected_routing = binding.routing_evidence()
     assert {key: usage.records[0].routing[key] for key in expected_routing} == expected_routing
+    assert usage.records[0].routing["privacy_source_proof_kind"] == "PRIVATE_DEFAULT"
     assert usage.records[0].status != "success"
 
 

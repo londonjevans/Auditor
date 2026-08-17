@@ -5,6 +5,11 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from mmaudit.models.policy_eligibility_refresh import (
+    load_model_policy_eligibility_artifact,
+    load_policy_eligibility_checked_routes,
+    load_policy_eligibility_source_observation,
+)
 from mmaudit.models.qualification import load_candidate_registry
 from mmaudit.models.refresh import (
     load_model_refresh_snapshot,
@@ -45,6 +50,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--candidate-registry", type=_bounded_path, required=True)
     parser.add_argument("--previous-snapshot", type=_bounded_path)
     parser.add_argument("--previous-source-evidence", type=_bounded_path)
+    parser.add_argument("--policy-eligibility-artifact", type=_bounded_path)
+    parser.add_argument("--policy-source-observation", type=_bounded_path)
+    parser.add_argument("--policy-checked-routes", type=_bounded_path)
     parser.add_argument("--refresh-exit-status", type=int, required=True)
     parser.add_argument("--source-commit", type=_bounded_identity, required=True)
     parser.add_argument("--workflow-run-id", type=_bounded_identity, required=True)
@@ -61,6 +69,17 @@ def main(argv: list[str] | None = None) -> int:
             raise ModelRefreshStagingError(
                 "previous snapshot and source evidence must be supplied together"
             )
+        policy_paths = (
+            arguments.policy_eligibility_artifact,
+            arguments.policy_source_observation,
+            arguments.policy_checked_routes,
+        )
+        if any(path is not None for path in policy_paths) and not all(
+            path is not None for path in policy_paths
+        ):
+            raise ModelRefreshStagingError(
+                "policy artifact, source observation, and checked routes must be supplied together"
+            )
         previous_snapshot = (
             load_model_refresh_snapshot(arguments.previous_snapshot)
             if arguments.previous_snapshot is not None
@@ -69,6 +88,21 @@ def main(argv: list[str] | None = None) -> int:
         previous_source_evidence = (
             load_model_refresh_source_evidence(arguments.previous_source_evidence)
             if arguments.previous_source_evidence is not None
+            else None
+        )
+        policy_artifact = (
+            load_model_policy_eligibility_artifact(arguments.policy_eligibility_artifact)
+            if arguments.policy_eligibility_artifact is not None
+            else None
+        )
+        policy_observation = (
+            load_policy_eligibility_source_observation(arguments.policy_source_observation)
+            if arguments.policy_source_observation is not None
+            else None
+        )
+        policy_routes = (
+            load_policy_eligibility_checked_routes(arguments.policy_checked_routes)
+            if arguments.policy_checked_routes is not None
             else None
         )
         status = stage_model_refresh_evidence(
@@ -84,6 +118,9 @@ def main(argv: list[str] | None = None) -> int:
             hard_max_age_hours=arguments.hard_max_age_hours,
             previous_snapshot=previous_snapshot,
             previous_source_evidence=previous_source_evidence,
+            policy_eligibility_artifact=policy_artifact,
+            policy_source_observation=policy_observation,
+            policy_checked_routes=policy_routes,
         )
     except (ModelRefreshStagingError, ValueError):
         print("model-refresh artifact staging failed")

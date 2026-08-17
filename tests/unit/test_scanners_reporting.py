@@ -80,6 +80,8 @@ from mmaudit.models.schemas import (
     SolidityCompilationResult,
     SolidityCoverage,
     SolidityEntityKind,
+    SolidityGraphFactKind,
+    SolidityGraphKind,
     TransactionOrderingCapability,
     VerificationTest,
 )
@@ -3822,6 +3824,16 @@ def test_invariant_report_serializes_seed_and_minimized_state_sequence() -> None
 
 
 def test_markdown_reports_separate_asset_flow_operations_and_endpoints() -> None:
+    graph_edge_counts = {kind.value: 0 for kind in SolidityGraphKind}
+    graph_edge_counts.update(
+        {
+            SolidityGraphKind.ASSET_FLOW.value: 4,
+            SolidityGraphKind.PRIVILEGE.value: 4,
+            SolidityGraphKind.GOVERNANCE.value: 3,
+            SolidityGraphKind.DEPENDENCY.value: 2,
+            SolidityGraphKind.ORACLE_DEPENDENCY.value: 2,
+        }
+    )
     report = _report([]).model_copy(
         update={
             "metadata": {
@@ -3829,6 +3841,19 @@ def test_markdown_reports_separate_asset_flow_operations_and_endpoints() -> None
                 "solidity": {
                     "coverage": {
                         "projects_discovered": 1,
+                        "graph_analysis_state": AnalysisState.DETERMINISTIC.value,
+                        "graph_edge_counts": graph_edge_counts,
+                        "graph_retained_edge_occurrence_counts": graph_edge_counts,
+                        "graph_candidate_edge_counts": graph_edge_counts,
+                        "graph_fact_retained_counts": {
+                            kind.value: 0 for kind in SolidityGraphFactKind
+                        },
+                        "graph_fact_retained_occurrence_counts": {
+                            kind.value: 0 for kind in SolidityGraphFactKind
+                        },
+                        "graph_fact_candidate_counts": {
+                            kind.value: 0 for kind in SolidityGraphFactKind
+                        },
                         "asset_flow_operation_counts": {
                             "balance_observation": 2,
                             "claim": 1,

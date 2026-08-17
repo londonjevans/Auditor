@@ -32,6 +32,14 @@ from mmaudit.benchmark.engine import (
     BenchmarkReport,
     BenchmarkStatus,
 )
+from mmaudit.benchmark.models import (
+    ModelBenchmarkCorpusPayload,
+    ModelBenchmarkGroundTruthPayload,
+    ModelBenchmarkSuite,
+    load_model_benchmark_corpus,
+    seal_model_benchmark_corpus,
+    seal_model_benchmark_ground_truth,
+)
 from mmaudit.benchmark.mutations import (
     MutationKind,
     MutationPropertyOutcome,
@@ -646,6 +654,53 @@ def test_scanner_only_run_does_not_require_provider_retention_consent(
     assert constructed
 
 
+def test_cli_passes_configuration_directory_as_ignore_policy_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Any,
+) -> None:
+    repository = _synthetic_run_repository(tmp_path)
+    configuration_root = tmp_path / "operator-control"
+    configuration_root.mkdir()
+    config_path = configuration_root / "mmaudit.toml"
+    observed: dict[str, object] = {}
+
+    class SyntheticPipelineResult:
+        run_dir = tmp_path / "synthetic-run"
+
+        def exit_for_findings(self, _fail_on: object) -> ExitCode:
+            return ExitCode.SUCCESS
+
+    class SyntheticPipeline:
+        def __init__(self, *_args: object, **kwargs: object) -> None:
+            observed.update(kwargs)
+
+        async def run(self, **_kwargs: object) -> SyntheticPipelineResult:
+            return SyntheticPipelineResult()
+
+    _patch_loaded_audit_config(monkeypatch, config_factory())
+    monkeypatch.setattr("mmaudit.cli.AuditPipeline", SyntheticPipeline)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--config",
+            str(config_path),
+            "--repo",
+            str(repository),
+            "--output",
+            str(tmp_path / "audit-output"),
+            "--scanner-only",
+            "--skip-codeql",
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.SUCCESS, result.stdout
+    assert observed["configuration_root"] == configuration_root.resolve()
+
+
 def test_scanner_only_cli_fails_closed_when_no_real_analysis_completed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1097,6 +1152,82 @@ def test_models_benchmark_requires_explicit_egress_before_provider_access(
     assert with_approval.exit_code == ExitCode.CONFIGURATION
     assert "--cost-ledger" in with_approval.stdout
     assert not (tmp_path / "model-benchmark.json").exists()
+
+
+def test_models_benchmark_custom_corpus_cannot_gain_prequalification_exemption(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Any,
+) -> None:
+    config = config_factory()
+    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config)
+    suite = load_model_benchmark_corpus(ROOT / "benchmarks" / "model_corpus" / "manifest.json")
+    cases = list(suite.corpus.cases)
+    cases[0] = cases[0].model_copy(
+        update={"source_excerpt": cases[0].source_excerpt + "\n// custom corpus drift"}
+    )
+    corpus = seal_model_benchmark_corpus(
+        ModelBenchmarkCorpusPayload(
+            schema_version=suite.corpus.schema_version,
+            name=suite.corpus.name,
+            cases=cases,
+        )
+    )
+    ground_truth = seal_model_benchmark_ground_truth(
+        ModelBenchmarkGroundTruthPayload(
+            schema_version=suite.ground_truth.schema_version,
+            corpus_name=corpus.name,
+            corpus_sha256=corpus.corpus_sha256,
+            cases=suite.ground_truth.cases,
+        )
+    )
+    custom_suite = ModelBenchmarkSuite(corpus=corpus, ground_truth=ground_truth)
+    corpus_path = tmp_path / "custom-manifest.json"
+    ground_truth_path = tmp_path / "ground_truth.json"
+    corpus_path.write_text(custom_suite.corpus.model_dump_json(indent=2), encoding="utf-8")
+    ground_truth_path.write_text(
+        custom_suite.ground_truth.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "benchmark-cost-ledger.json",
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    secret_accessed = False
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_accessed
+        secret_accessed = True
+        raise AssertionError("custom benchmark must fail before secret access")
+
+    monkeypatch.setattr("mmaudit.cli.load_operator_secrets", forbidden_secret_access)
+    output = tmp_path / "custom-benchmark.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "models",
+            "benchmark",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--corpus",
+            str(corpus_path),
+            "--model",
+            config.models.threat_model.primary,
+            "--output",
+            str(output),
+            "--cost-ledger",
+            str(ledger.path),
+            "--allow-code-egress",
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "release-pinned synthetic prequalification" in result.stdout
+    assert not secret_accessed
+    assert ledger.snapshot().entries == ()
+    assert not output.exists()
 
 
 def test_models_discover_rejects_alias_before_secret_access(

@@ -18,6 +18,7 @@ from mmaudit.models.scheduler import (
     SchedulerAnalysisInputDescriptor,
     SchedulerAnalysisInputInventory,
     SchedulerArtifact,
+    SchedulerAuditModelSelectionBinding,
     SchedulerBindings,
     SchedulerCampaignManifest,
     SchedulerCampaignStatus,
@@ -79,6 +80,7 @@ from mmaudit.models.schemas import (
 from tests.scheduler_support import (
     SchedulerFixtureModelTask,
     build_complete_scheduler_fixture,
+    build_scheduler_test_audit_model_selection_binding,
     build_scheduler_test_host_payload,
     build_scheduler_test_model_payload,
     build_scheduler_test_model_surface_review_custody,
@@ -987,6 +989,42 @@ def test_campaign_rejects_bindings_detached_from_inventory() -> None:
             bindings=detached,
             shard_inventory=inventory,
         )
+
+
+def test_audit_selection_binding_hashes_policy_population_boundaries() -> None:
+    inventory = _inventory("audit-policy-populations")
+    binding = build_scheduler_test_audit_model_selection_binding(
+        source_sha256=inventory.source_tree_sha256,
+        selected_routes=(
+            (
+                "synthetic/auditor-v1",
+                "sha256:" + _sha256("audit-policy-lineage"),
+                "Synthetic Provider",
+                "synthetic-provider",
+            ),
+        ),
+        seed="audit-policy-populations",
+    )
+
+    assert (
+        len(
+            {
+                binding.technical_route_set_sha256,
+                binding.eligible_route_set_sha256,
+                binding.policy_exclusion_set_sha256,
+            }
+        )
+        == 3
+    )
+    for field in (
+        "technical_route_set_sha256",
+        "eligible_route_set_sha256",
+        "policy_exclusion_set_sha256",
+    ):
+        with pytest.raises(ValidationError, match="binding is inconsistent"):
+            SchedulerAuditModelSelectionBinding.model_validate(
+                binding.model_copy(update={field: _sha256(f"tampered:{field}")})
+            )
 
 
 def test_scope_shapes_are_explicit_canonical_and_self_hashed() -> None:

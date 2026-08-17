@@ -323,6 +323,7 @@ def _scheduler_artifact(
             task=task,
             activation=activation,
             usage_record=usage,
+            audit_model_selection=plan.manifest.bindings.audit_model_selection,
         )
         if retain_provider_attempt
         else None
@@ -1027,6 +1028,41 @@ def test_scheduler_retains_valid_provider_success_followed_by_host_invalid_resul
 
     assert validate_scheduler_artifact(run_dir, report, config=config) == artifact
     assert artifact.summary.status.value == "FAILED"
+
+
+def test_scheduler_validation_rejects_revoked_lineage_approval(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    base_report = _non_solidity_report(config)
+    artifact, request = _scheduler_artifact(
+        base_report,
+        config=config,
+        terminal_status=SchedulerTerminalStatus.INVALID,
+    )
+    usage = _provider_usage(base_report, request)
+    report = _with_scheduler(base_report.model_copy(update={"usage": [usage]}), artifact)
+    run_dir = tmp_path / "revoked-lineage"
+    _write_scheduler_run(run_dir, report, artifact)
+    assert validate_scheduler_artifact(run_dir, report, config=config) == artifact
+
+    revoked_config = config.model_copy(
+        update={
+            "privacy": config.privacy.model_copy(
+                update={
+                    "approved_model_lineages": tuple(
+                        lineage
+                        for lineage in config.privacy.approved_model_lineages
+                        if lineage != request.root_lineage
+                    )
+                }
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match="lacks an approved configured lineage"):
+        validate_scheduler_artifact(run_dir, report, config=revoked_config)
 
 
 def test_current_custody_closes_failed_usage_against_retained_provider_attempt(

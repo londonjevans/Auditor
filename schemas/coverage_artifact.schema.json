@@ -1273,10 +1273,180 @@
       "type": "string"
     },
     "SolidityCoverage": {
+      "$comment": "Runtime validation additionally requires one canonical evidence hash per sparse omitted-kind entry and exact candidate = retained-occurrence + omitted arithmetic.",
       "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "graph_candidate_edge_counts": {
+                "maxProperties": 27,
+                "minProperties": 27
+              },
+              "graph_edge_counts": {
+                "maxProperties": 27,
+                "minProperties": 27
+              },
+              "graph_fact_candidate_counts": {
+                "maxProperties": 3,
+                "minProperties": 3
+              },
+              "graph_fact_retained_counts": {
+                "maxProperties": 3,
+                "minProperties": 3
+              },
+              "graph_fact_retained_occurrence_counts": {
+                "maxProperties": 3,
+                "minProperties": 3
+              },
+              "graph_retained_edge_occurrence_counts": {
+                "maxProperties": 27,
+                "minProperties": 27
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "graph_analysis_state": {
+                "const": "not_analyzed"
+              }
+            },
+            "required": [
+              "graph_analysis_state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "asset_flow_direction_counts": {
+                "maxProperties": 0
+              },
+              "asset_flow_operation_counts": {
+                "maxProperties": 0
+              },
+              "control_resolution_counts": {
+                "maxProperties": 0
+              },
+              "dependency_resolution_counts": {
+                "maxProperties": 0
+              },
+              "governance_stage_counts": {
+                "maxProperties": 0
+              },
+              "graph_candidate_edge_counts": {
+                "maxProperties": 0
+              },
+              "graph_edge_counts": {
+                "maxProperties": 0
+              },
+              "graph_fact_candidate_counts": {
+                "maxProperties": 0
+              },
+              "graph_fact_omission_evidence_sha256s": {
+                "maxItems": 0
+              },
+              "graph_fact_omitted_counts": {
+                "maxProperties": 0
+              },
+              "graph_fact_retained_counts": {
+                "maxProperties": 0
+              },
+              "graph_fact_retained_occurrence_counts": {
+                "maxProperties": 0
+              },
+              "graph_node_counts": {
+                "maxProperties": 0
+              },
+              "graph_omission_evidence_sha256s": {
+                "maxItems": 0
+              },
+              "graph_omitted_edge_counts": {
+                "maxProperties": 0
+              },
+              "graph_retained_edge_occurrence_counts": {
+                "maxProperties": 0
+              },
+              "graph_warnings": {
+                "maxItems": 0
+              },
+              "oracle_freshness_counts": {
+                "maxProperties": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "graph_analysis_state": {
+                "const": "attempted_but_failed"
+              }
+            },
+            "required": [
+              "graph_analysis_state"
+            ]
+          },
+          "then": {
+            "anyOf": [
+              {
+                "properties": {
+                  "graph_omission_evidence_sha256s": {
+                    "minItems": 1
+                  },
+                  "graph_omitted_edge_counts": {
+                    "minProperties": 1
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "graph_fact_omission_evidence_sha256s": {
+                    "minItems": 1
+                  },
+                  "graph_fact_omitted_counts": {
+                    "minProperties": 1
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "graph_analysis_state": {
+                "enum": [
+                  "analyzed_with_fallback_parser",
+                  "deterministic"
+                ]
+              }
+            },
+            "required": [
+              "graph_analysis_state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "graph_fact_omission_evidence_sha256s": {
+                "maxItems": 0
+              },
+              "graph_fact_omitted_counts": {
+                "maxProperties": 0
+              },
+              "graph_omission_evidence_sha256s": {
+                "maxItems": 0
+              },
+              "graph_omitted_edge_counts": {
+                "maxProperties": 0
+              }
+            }
+          }
+        }
+      ],
       "properties": {
         "asset_flow_direction_counts": {
           "additionalProperties": {
+            "maximum": 9223372036854775807,
+            "minimum": 0,
             "type": "integer"
           },
           "title": "Asset Flow Direction Counts",
@@ -1284,6 +1454,8 @@
         },
         "asset_flow_operation_counts": {
           "additionalProperties": {
+            "maximum": 9223372036854775807,
+            "minimum": 0,
             "type": "integer"
           },
           "title": "Asset Flow Operation Counts",
@@ -1326,6 +1498,8 @@
         },
         "control_resolution_counts": {
           "additionalProperties": {
+            "maximum": 9223372036854775807,
+            "minimum": 0,
             "type": "integer"
           },
           "title": "Control Resolution Counts",
@@ -1333,6 +1507,8 @@
         },
         "dependency_resolution_counts": {
           "additionalProperties": {
+            "maximum": 9223372036854775807,
+            "minimum": 0,
             "type": "integer"
           },
           "title": "Dependency Resolution Counts",
@@ -1418,27 +1594,288 @@
         },
         "governance_stage_counts": {
           "additionalProperties": {
+            "maximum": 9223372036854775807,
+            "minimum": 0,
             "type": "integer"
           },
           "title": "Governance Stage Counts",
           "type": "object"
         },
         "graph_analysis_state": {
-          "$ref": "#/$defs/AnalysisState",
-          "default": "not_analyzed"
+          "default": "not_analyzed",
+          "enum": [
+            "not_analyzed",
+            "attempted_but_failed",
+            "analyzed_with_fallback_parser",
+            "deterministic"
+          ],
+          "title": "Graph Analysis State",
+          "type": "string"
+        },
+        "graph_candidate_edge_counts": {
+          "additionalProperties": {
+            "maximum": 9223372036854775807,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "propertyNames": {
+            "enum": [
+              "inheritance",
+              "modifier",
+              "internal_call",
+              "external_call",
+              "low_level_call",
+              "delegatecall",
+              "contract_creation",
+              "state_read",
+              "state_write",
+              "state_dependency",
+              "asset_flow",
+              "privilege",
+              "governance",
+              "dependency",
+              "proxy",
+              "storage_layout",
+              "upgrade_compatibility",
+              "initializer",
+              "oracle_dependency",
+              "event_state",
+              "event_flow",
+              "cross_chain",
+              "offchain_dependency",
+              "signature_replay",
+              "reentrancy",
+              "state_growth",
+              "sensitive_reachability"
+            ]
+          },
+          "title": "Graph Candidate Edge Counts",
+          "type": "object"
         },
         "graph_edge_counts": {
           "additionalProperties": {
+            "maximum": 9223372036854775807,
+            "minimum": 0,
             "type": "integer"
+          },
+          "propertyNames": {
+            "enum": [
+              "inheritance",
+              "modifier",
+              "internal_call",
+              "external_call",
+              "low_level_call",
+              "delegatecall",
+              "contract_creation",
+              "state_read",
+              "state_write",
+              "state_dependency",
+              "asset_flow",
+              "privilege",
+              "governance",
+              "dependency",
+              "proxy",
+              "storage_layout",
+              "upgrade_compatibility",
+              "initializer",
+              "oracle_dependency",
+              "event_state",
+              "event_flow",
+              "cross_chain",
+              "offchain_dependency",
+              "signature_replay",
+              "reentrancy",
+              "state_growth",
+              "sensitive_reachability"
+            ]
           },
           "title": "Graph Edge Counts",
           "type": "object"
         },
-        "graph_node_counts": {
+        "graph_fact_candidate_counts": {
           "additionalProperties": {
+            "maximum": 9223372036854775807,
+            "minimum": 0,
             "type": "integer"
           },
+          "propertyNames": {
+            "enum": [
+              "graph_node",
+              "storage_entry",
+              "warning"
+            ]
+          },
+          "title": "Graph Fact Candidate Counts",
+          "type": "object"
+        },
+        "graph_fact_omission_evidence_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "title": "Graph Fact Omission Evidence Sha256S",
+          "type": "array"
+        },
+        "graph_fact_omitted_counts": {
+          "additionalProperties": {
+            "maximum": 9223372036854775807,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "propertyNames": {
+            "enum": [
+              "graph_node",
+              "storage_entry",
+              "warning"
+            ]
+          },
+          "title": "Graph Fact Omitted Counts",
+          "type": "object"
+        },
+        "graph_fact_retained_counts": {
+          "additionalProperties": {
+            "maximum": 9223372036854775807,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "propertyNames": {
+            "enum": [
+              "graph_node",
+              "storage_entry",
+              "warning"
+            ]
+          },
+          "title": "Graph Fact Retained Counts",
+          "type": "object"
+        },
+        "graph_fact_retained_occurrence_counts": {
+          "additionalProperties": {
+            "maximum": 9223372036854775807,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "propertyNames": {
+            "enum": [
+              "graph_node",
+              "storage_entry",
+              "warning"
+            ]
+          },
+          "title": "Graph Fact Retained Occurrence Counts",
+          "type": "object"
+        },
+        "graph_node_counts": {
+          "additionalProperties": {
+            "maximum": 9223372036854775807,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "propertyNames": {
+            "enum": [
+              "entity",
+              "external_target",
+              "state_variable",
+              "role",
+              "asset",
+              "storage_slot",
+              "proxy",
+              "oracle",
+              "governance",
+              "message",
+              "offchain_actor",
+              "signature_domain",
+              "unknown"
+            ]
+          },
           "title": "Graph Node Counts",
+          "type": "object"
+        },
+        "graph_omission_evidence_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "title": "Graph Omission Evidence Sha256S",
+          "type": "array"
+        },
+        "graph_omitted_edge_counts": {
+          "additionalProperties": {
+            "maximum": 9223372036854775807,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "propertyNames": {
+            "enum": [
+              "inheritance",
+              "modifier",
+              "internal_call",
+              "external_call",
+              "low_level_call",
+              "delegatecall",
+              "contract_creation",
+              "state_read",
+              "state_write",
+              "state_dependency",
+              "asset_flow",
+              "privilege",
+              "governance",
+              "dependency",
+              "proxy",
+              "storage_layout",
+              "upgrade_compatibility",
+              "initializer",
+              "oracle_dependency",
+              "event_state",
+              "event_flow",
+              "cross_chain",
+              "offchain_dependency",
+              "signature_replay",
+              "reentrancy",
+              "state_growth",
+              "sensitive_reachability"
+            ]
+          },
+          "title": "Graph Omitted Edge Counts",
+          "type": "object"
+        },
+        "graph_retained_edge_occurrence_counts": {
+          "additionalProperties": {
+            "maximum": 9223372036854775807,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "propertyNames": {
+            "enum": [
+              "inheritance",
+              "modifier",
+              "internal_call",
+              "external_call",
+              "low_level_call",
+              "delegatecall",
+              "contract_creation",
+              "state_read",
+              "state_write",
+              "state_dependency",
+              "asset_flow",
+              "privilege",
+              "governance",
+              "dependency",
+              "proxy",
+              "storage_layout",
+              "upgrade_compatibility",
+              "initializer",
+              "oracle_dependency",
+              "event_state",
+              "event_flow",
+              "cross_chain",
+              "offchain_dependency",
+              "signature_replay",
+              "reentrancy",
+              "state_growth",
+              "sensitive_reachability"
+            ]
+          },
+          "title": "Graph Retained Edge Occurrence Counts",
           "type": "object"
         },
         "graph_warnings": {
@@ -1512,6 +1949,8 @@
         },
         "oracle_freshness_counts": {
           "additionalProperties": {
+            "maximum": 9223372036854775807,
+            "minimum": 0,
             "type": "integer"
           },
           "title": "Oracle Freshness Counts",
@@ -1606,6 +2045,27 @@
           "type": "array"
         }
       },
+      "required": [
+        "asset_flow_direction_counts",
+        "asset_flow_operation_counts",
+        "control_resolution_counts",
+        "dependency_resolution_counts",
+        "governance_stage_counts",
+        "graph_analysis_state",
+        "graph_candidate_edge_counts",
+        "graph_edge_counts",
+        "graph_fact_candidate_counts",
+        "graph_fact_omission_evidence_sha256s",
+        "graph_fact_omitted_counts",
+        "graph_fact_retained_counts",
+        "graph_fact_retained_occurrence_counts",
+        "graph_node_counts",
+        "graph_omission_evidence_sha256s",
+        "graph_omitted_edge_counts",
+        "graph_retained_edge_occurrence_counts",
+        "graph_warnings",
+        "oracle_freshness_counts"
+      ],
       "title": "SolidityCoverage",
       "type": "object"
     },

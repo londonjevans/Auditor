@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 import mmaudit.models.release_attestation as release_module
+from mmaudit.models.qualification import QualificationBindings
 from mmaudit.models.qualification_workflow import seal_qualification_release_bindings
 from mmaudit.models.release_attestation import (
     ReleaseEnvironmentMeasurement,
@@ -232,18 +233,18 @@ def test_release_observation_is_opaque_and_exactly_bound() -> None:
     forged = object.__new__(TrustedReleaseBindingObservation)
     with pytest.raises(ValueError, match="not trusted"):
         _ = forged.measurement_sha256
+    with pytest.raises(TypeError, match="cannot be constructed"):
+        TrustedReleaseBindingObservation()
+    assert not hasattr(release_module, "_TRUSTED_RELEASE_OBSERVATION_ISSUER")
+    assert not hasattr(release_module, "_build_release_observation_authority")
 
 
 @pytest.mark.parametrize(
-    "field,value",
-    (
-        ("__observed_at", NOW.replace(hour=13)),
-        ("__measurement_sha256", "f" * 64),
-    ),
+    "field",
+    ("__observed_at", "__measurement_sha256", "__issuer"),
 )
-def test_release_observation_rejects_post_issuance_measurement_mutation(
+def test_release_observation_keeps_issuance_state_outside_the_capability(
     field: str,
-    value: object,
 ) -> None:
     bindings = seal_qualification_release_bindings(
         source_commit="1" * 40,
@@ -271,15 +272,63 @@ def test_release_observation_rejects_post_issuance_measurement_mutation(
             isolation_backend=object(),
         )
 
-    object.__setattr__(
-        observation,
-        f"_TrustedReleaseBindingObservation{field}",
-        value,
+    with pytest.raises(AttributeError):
+        object.__setattr__(
+            observation,
+            f"_TrustedReleaseBindingObservation{field}",
+            object(),
+        )
+    observation.require_for(bindings)
+
+
+def test_release_observation_binds_the_exact_qualification_projection() -> None:
+    release_bindings = seal_qualification_release_bindings(
+        source_commit="1" * 40,
+        source_tree_sha256="2" * 64,
+        effective_config_sha256="3" * 64,
+        prompt_sha256="4" * 64,
+        response_schema_sha256="5" * 64,
+        toolchain_sha256="6" * 64,
+        isolation_sha256="7" * 64,
+        benchmark_corpus_version="2.0",
+        benchmark_ground_truth_version="2.0",
     )
-    with pytest.raises(ValueError, match="integrity check failed"):
-        _ = observation.measurement_sha256
-    with pytest.raises(ValueError, match="integrity check failed"):
-        observation.require_for(bindings)
+    measurement = _measurement(release_bindings)
+    with (
+        patch.object(
+            release_module,
+            "measure_qualification_release_environment",
+            return_value=measurement,
+        ),
+        patch.object(release_module, "_utc_now", return_value=NOW),
+    ):
+        observation = observe_and_verify_qualification_release(
+            release_bindings=release_bindings,
+            source_root=Path("/synthetic"),
+            isolation_backend=object(),
+        )
+
+    qualification_bindings = QualificationBindings(
+        source_commit=release_bindings.source_commit,
+        source_tree_sha256=release_bindings.source_tree_sha256,
+        effective_config_sha256=release_bindings.effective_config_sha256,
+        prompt_sha256=release_bindings.prompt_sha256,
+        response_schema_sha256=release_bindings.response_schema_sha256,
+        toolchain_sha256=release_bindings.toolchain_sha256,
+        isolation_sha256=release_bindings.isolation_sha256,
+        benchmark_corpus_version=release_bindings.benchmark_corpus_version,
+        benchmark_corpus_sha256="8" * 64,
+        benchmark_ground_truth_version=release_bindings.benchmark_ground_truth_version,
+        benchmark_ground_truth_sha256="9" * 64,
+        benchmark_portfolio_sha256="a" * 64,
+        candidate_registry_sha256="b" * 64,
+        qualification_policy_sha256="c" * 64,
+    )
+    observation.require_for(qualification_bindings)
+
+    drifted = qualification_bindings.model_copy(update={"prompt_sha256": "d" * 64})
+    with pytest.raises(ValueError, match="differs from qualification bindings"):
+        observation.require_for(drifted)
 
 
 @pytest.mark.parametrize("offset_hours", (-1, 1))

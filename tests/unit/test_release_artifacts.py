@@ -27,6 +27,7 @@ from mmaudit.models.schemas import (
     CandidateFindingArtifact,
     RepositoryMap,
 )
+from mmaudit.models.sharding import SolidityCoverageArtifact
 from mmaudit.orchestration.manifest import (
     ManifestBindingSet,
     ManifestHashBinding,
@@ -239,6 +240,13 @@ def _write_report_artifacts(run_dir: Path, report: AuditReport) -> None:
         )
         + "\n",
         encoding="utf-8",
+    )
+    write_json(
+        run_dir / "solidity-coverage.json",
+        SolidityCoverageArtifact(
+            evidence_authority="comparison_required",
+            coverage=report.solidity_coverage,
+        ),
     )
     write_json(
         run_dir / "verification-results.json",

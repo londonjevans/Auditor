@@ -83,6 +83,21 @@ def source_backed_whole_protocol_context(
     return evidence
 
 
+def usage_requires_audit_policy_evidence(record: UsageRecord) -> bool:
+    """Require policy custody for every detached REAL production-audit usage record.
+
+    Release-pinned qualification benchmarks have a narrower live OpenRouter exemption that
+    rechecks an opaque provenance observation and the complete provider-visible request shape.
+    Audit reports, model-execution artifacts, scheduler evidence, and manifests are not benchmark
+    custody boundaries, so caller-asserted roles, classifications, proof kinds, or hashes cannot
+    recreate that live exemption after serialization.
+    """
+
+    if type(record) is not UsageRecord:
+        return True
+    return record.execution_evidence is ExecutionEvidenceKind.REAL
+
+
 def is_creditable_usage_record(
     record: UsageRecord,
     *,

@@ -9,6 +9,20 @@ import pytest
 from pydantic import ValidationError
 
 import mmaudit.models.refresh_staging as refresh_staging_module
+from mmaudit.models.policy_eligibility import (
+    PolicyReviewReason,
+    build_model_policy_eligibility_artifact,
+    build_policy_eligibility_route,
+)
+from mmaudit.models.policy_eligibility_authority import (
+    build_policy_eligibility_source_observation,
+)
+from mmaudit.models.policy_eligibility_refresh import (
+    POLICY_ELIGIBILITY_REFRESH_FILENAME,
+    ModelPolicyEligibilityRefreshArtifact,
+    build_model_policy_eligibility_refresh_artifact,
+    load_model_policy_eligibility_refresh_artifact,
+)
 from mmaudit.models.refresh import (
     ATTEMPT_FILENAME,
     DIFF_FILENAME,
@@ -61,6 +75,32 @@ SUCCESS_NAMES = {
     FRESHNESS_FILENAME,
     WORKFLOW_STATUS_FILENAME,
 }
+POLICY_SUCCESS_NAMES = SUCCESS_NAMES | {POLICY_ELIGIBILITY_REFRESH_FILENAME}
+
+
+def _missing_policy_inputs(
+    registry: Any,
+    *,
+    observed_at: datetime = NOW,
+) -> tuple[Any, Any, tuple[Any, ...]]:
+    candidate = registry.candidates[0]
+    route = build_policy_eligibility_route(
+        exact_model_id=candidate.exact_model_id,
+        provider_name=candidate.approved_provider_name,
+        provider_endpoint=candidate.approved_provider_endpoint,
+    )
+    artifact = build_model_policy_eligibility_artifact(
+        created_at=observed_at - timedelta(hours=1),
+        official_evidence=(),
+        determinations=(),
+    )
+    observation = build_policy_eligibility_source_observation(
+        artifact=artifact,
+        observed_at=observed_at,
+        expires_at=observed_at + timedelta(hours=12),
+        source_commitments=(),
+    )
+    return artifact, observation, (route,)
 
 
 def _write_success_bundle(
@@ -69,6 +109,7 @@ def _write_success_bundle(
     previous: Any | None = None,
     blocked: bool = False,
     retrieved_at: datetime | None = None,
+    policy_inputs: tuple[Any, Any, tuple[Any, ...]] | None = None,
 ) -> tuple[Any, tuple[SelectedModelRoute, ...]]:
     registry = _registry()
     observed_at = (
@@ -110,6 +151,14 @@ def _write_success_bundle(
         hard_max_age_hours=72,
         production_selection_present=bool(selected),
     )
+    policy_refresh: ModelPolicyEligibilityRefreshArtifact | None = None
+    if policy_inputs is not None:
+        policy_refresh = build_model_policy_eligibility_refresh_artifact(
+            refresh_snapshot=snapshot,
+            policy_artifact=policy_inputs[0],
+            source_observation=policy_inputs[1],
+            checked_routes=policy_inputs[2],
+        )
     write_model_refresh_success(
         output,
         source_evidence=source,
@@ -117,6 +166,7 @@ def _write_success_bundle(
         diff=diff,
         attempt=attempt,
         freshness=freshness,
+        policy_eligibility_refresh=policy_refresh,
     )
     return registry, selected
 
@@ -133,6 +183,7 @@ def _stage(
     pricing_tolerance_fraction: str = "0.05",
     soft_max_age_hours: int = 30,
     hard_max_age_hours: int = 72,
+    policy_inputs: tuple[Any, Any, tuple[Any, ...]] | None = None,
     validation_observed_at: Any = NOW + timedelta(hours=1),
 ):
     return stage_model_refresh_evidence(
@@ -149,6 +200,9 @@ def _stage(
         previous_snapshot=previous,
         previous_source_evidence=previous_source,
         expected_selected_routes=selected,
+        policy_eligibility_artifact=(None if policy_inputs is None else policy_inputs[0]),
+        policy_source_observation=(None if policy_inputs is None else policy_inputs[1]),
+        policy_checked_routes=(None if policy_inputs is None else policy_inputs[2]),
         _validation_observed_at=validation_observed_at,
     )
 
@@ -177,6 +231,7 @@ def test_success_bundle_is_revalidated_reconstructed_and_commit_bound(
     assert status.pricing_tolerance_fraction == "0.05"
     assert status.soft_max_age_hours == 30
     assert status.hard_max_age_hours == 72
+    assert status.policy_projection_expected is False
     assert status.validated_at == NOW + timedelta(hours=1)
     assert {path.name for path in staging.iterdir()} == SUCCESS_NAMES
     assert staging.stat().st_mode & 0o777 == 0o700
@@ -206,8 +261,74 @@ def test_success_bundle_is_revalidated_reconstructed_and_commit_bound(
     legacy_payload["workflow_status_sha256"] = _sha(
         {key: value for key, value in legacy_payload.items() if key != "workflow_status_sha256"}
     )
-    with pytest.raises(ValidationError, match=r"2\.0"):
+    with pytest.raises(ValidationError, match=r"3\.0"):
         ModelRefreshWorkflowStatus.model_validate(legacy_payload)
+
+
+def test_policy_projection_is_rebuilt_staged_and_bound_in_workflow_status(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "output"
+    registry = _registry()
+    policy_inputs = _missing_policy_inputs(registry)
+    _registry_again, selected = _write_success_bundle(output, policy_inputs=policy_inputs)
+    staging = tmp_path / "staging"
+
+    status = _stage(
+        output=output,
+        staging=staging,
+        registry=registry,
+        exit_status=0,
+        selected=selected,
+        policy_inputs=policy_inputs,
+    )
+
+    assert status.policy_projection_expected is True
+    assert {path.name for path in staging.iterdir()} == POLICY_SUCCESS_NAMES
+    projection = load_model_policy_eligibility_refresh_artifact(
+        staging / POLICY_ELIGIBILITY_REFRESH_FILENAME
+    )
+    assert projection.redetermination_required is True
+    assert projection.route_records[0].review_reasons == (PolicyReviewReason.MISSING,)
+    projection_binding = next(
+        binding
+        for binding in status.artifacts
+        if binding.filename == POLICY_ELIGIBILITY_REFRESH_FILENAME
+    )
+    assert projection_binding.artifact_sha256 == projection.artifact_sha256
+
+
+@pytest.mark.parametrize("mutation", ["omitted", "unexpected", "tampered"])
+def test_policy_projection_omission_extra_or_tamper_is_rejected(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    output = tmp_path / "output"
+    registry = _registry()
+    policy_inputs = _missing_policy_inputs(registry)
+    _registry_again, selected = _write_success_bundle(output, policy_inputs=policy_inputs)
+    projection_path = output / POLICY_ELIGIBILITY_REFRESH_FILENAME
+    staged_policy_inputs = policy_inputs
+    if mutation == "omitted":
+        projection_path.unlink()
+    elif mutation == "unexpected":
+        staged_policy_inputs = None
+    else:
+        projection_path.write_text(
+            projection_path.read_text(encoding="utf-8") + "\n",
+            encoding="utf-8",
+        )
+
+    with pytest.raises((ModelRefreshStagingError, ValueError)):
+        _stage(
+            output=output,
+            staging=tmp_path / "staging",
+            registry=registry,
+            exit_status=0,
+            selected=selected,
+            policy_inputs=staged_policy_inputs,
+        )
+    assert not (tmp_path / "staging").exists()
 
 
 def test_production_blocked_bundle_requires_exit_six_and_expected_routes(

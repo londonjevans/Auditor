@@ -1,10 +1,10 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-04T14:30:45Z",
+  "updated_at": "2026-08-17T11:15:01Z",
   "candidate_commit": "97f9de051e977fa0c6cd6750fa79df9f3e974f79",
-  "autorun_status": "PAUSED",
-  "current_milestone": "M1-DETERMINISTIC-PRODUCT (ACTIVE)",
-  "current_ticket": "NONE (V3-TOOLDIAG-002 COMPLETE and checkpointed)",
+  "autorun_status": "PAUSED_AT_TICKET_BOUNDARY",
+  "current_milestone": "M1-DETERMINISTIC-PRODUCT (REACHED)",
+  "current_ticket": "NONE",
   "last_checkpoint_commit": "97f9de051e977fa0c6cd6750fa79df9f3e974f79",
   "real_model_calls": {
     "attempted": 10,
@@ -19,12 +19,13 @@
   },
   "completed_real_audits": 0,
   "blocked_tickets": {
-    "V3-TARGETSPEC-001": "The exact objective source is now committed, but this ticket remains dependency-blocked until actionable V3-OBJECTIVE-001 finishes its digest-reference and regression work.",
-    "V3-FORKSUITE-001.hardhat": "Real Hardhat execution requires the process-attested digest-pinned rootless single-loopback runtime and trusted image-baked reporter specified by V3-HARDHAT-001."
+    "V3-FORKSUITE-001.hardhat": "Real Hardhat execution requires the process-attested digest-pinned rootless single-loopback runtime and trusted image-baked reporter specified by V3-HARDHAT-001.",
+    "V3-LINEAGE-001": "The calibration-only signed authority contract is implemented, but ticket completion requires a successful current exact provider refresh and an actual authorized operator-signed decision over that exact candidate set. Runtime approvals remain empty.",
+    "V3-CALIBRATE-001": "Provider-free empirical derivation and the exact two-campaign authority bridge are implemented, but statistically meaningful thresholds require a representative randomized independently adjudicated holdout plus current refreshed, signed, and real calibration evidence."
   },
   "last_validation": {
-        "command": ".venv/bin/ruff format .; .venv/bin/ruff check .; .venv/bin/mypy; .venv/bin/python scripts/generate_release_schemas.py; .venv/bin/pytest -q",
-        "result": "PASS: Ruff format/check, strict mypy over 177 source files, schema verification, and 4849 tests with 11 explicit prerequisite skips passed; Slither produced 213 validated findings under REAL sandbox-exec."
+    "command": ".venv/bin/pytest -q; .venv/bin/ruff format --check .; .venv/bin/ruff check .; .venv/bin/mypy src; .venv/bin/python scripts/generate_release_schemas.py; parse both V3 JSON ledgers; git diff --check",
+    "result": "PASS: 5155 tests passed with 21 explicit non-crediting skips in 1207.75s; 469 files were already formatted; Ruff, strict mypy over 180 source files, release schemas, JSON parsing, and diff integrity passed."
   },
   "pause_state": {
     "requested_at": "2026-08-03T20:08:17Z",
@@ -91,7 +92,49 @@
     "resumed_at_v3_scope_portfolio_boundary": "2026-08-04T07:25:21Z",
     "requested_at_v3_tooldiag_checkpoint": "2026-08-04T14:30:45Z",
     "result_v3_tooldiag_checkpoint": "Paused at clean ticket boundary after validated implementation commit 97f9de051e977fa0c6cd6750fa79df9f3e974f79 was pushed to origin/main over SSH.",
-    "resume_action_v3_tooldiag_checkpoint": "Begin active M1-DETERMINISTIC-PRODUCT member V3-GRAPHBOUND-001 before any ticket outside the milestone."
+    "resume_action_v3_tooldiag_checkpoint": "Begin active M1-DETERMINISTIC-PRODUCT member V3-GRAPHBOUND-001 before any ticket outside the milestone.",
+    "requested_at_v3_graphbound_wip": "2026-08-04T15:49:57Z",
+    "result_v3_graphbound_wip": "Paused with V3-GRAPHBOUND-001 IN_PROGRESS after preserving bounded edge/node/storage/warning collectors, analytic state-product omission plumbing, shard/report denominator hardening, configuration-relative ignore behavior, exact artifact publication, and path-scoped graph identities. The latest focused run stopped at one risk-frontier assertion after 5 passes; no process, provider call, secret access, network operation, external engine, container, paid action, or release claim remains active.",
+    "resume_action_v3_graphbound_wip": "Finish the streaming storage-collector integration, reconcile the 2 MB risk-frontier expectation with the conservative downstream-safe budget without weakening priority ordering, propagate non-edge fact omissions through shard/coverage/context/manifest schemas, then run the literal >100 MB fixture through the full pipeline and all affected gates.",
+    "resumed_at_v3_graphbound_completion": "2026-08-16T20:37:22Z",
+    "result_v3_graphbound_completion": "V3-GRAPHBOUND-001 completed after bounded generation/publication, deterministic risk ordering, typed bounded edge/fact omissions, exact retained-occurrence denominators, configuration-relative ignore authority, and the literal over-100 MB full-pipeline regression all passed. The terminal suite passed 4920 tests with 21 explicit unavailable/opt-in skips; no provider call, credential access, public RPC, live target, deployment, paid action, checkpoint commit, or release claim occurred.",
+    "next_action_after_v3_graphbound": "Begin queued and actionable V3-OBJECTIVE-001 by re-verifying docs/remediation/v3/product_completion_goal.txt against the recorded digest, updating authoritative path references, and adding the drift regression.",
+    "resumed_at_v3_objective": "2026-08-17T02:39:33Z",
+    "result_v3_objective_preflight": "The tracked objective is an unchanged regular file of 40779 bytes and 1418 logical lines with the exact required SHA-256; the ticket is IN_PROGRESS with no provider, network, credential, or objective-content mutation.",
+    "resume_action_v3_objective": "Bind the stable objective path beside the queue, worklog, and review-traceability digest authorities; add the missing/link/drift regression; then run focused and repository-level gates.",
+    "result_v3_objective_binding": "Current queue/worklog/traceability authorities bind the stable path and exact digest; a pure-stdlib regression rejects missing, symlinked, non-regular, multiply-linked, resized, relined, or rehashed content; Git EOL normalization is disabled for the objective path; focused tests and Ruff pass.",
+    "next_action_v3_objective_binding": "Run the objective, traceability, and static-release regression group, then repository Ruff, strict mypy, schema verification, JSON/ledger checks, and diff integrity before closure.",
+    "completed_at_v3_objective": "2026-08-17T02:52:48Z",
+    "result_v3_objective_completion": "V3-OBJECTIVE-001 completed with unchanged hash-verified objective bytes, stable path/digest authorities, checkout-byte protection, and fail-closed custody regression. The related 17-test group and repository static/schema/ledger gates passed; no new complete-suite, provider, network, credential, checkpoint, or release claim occurred.",
+    "next_action_after_v3_objective": "Begin queued V3-TARGETSPEC-001 by reconciling the committed objective with the product vision before changing README or model-selection claims.",
+    "resumed_at_v3_targetspec": "2026-08-17T02:56:19Z",
+    "result_v3_targetspec_preflight": "V3-TARGETSPEC-001 is the sole IN_PROGRESS work unit after its exact objective dependency completed; no claim, provider, network, credential, checkpoint, or release state changed during preflight.",
+    "resume_action_v3_targetspec": "Map every acceptance criterion to the exact objective, product vision, current implementation evidence, README, model-selection guide, and status-derived regression before editing claims.",
+    "result_v3_targetspec_mapping": "Independent audits mapped every acceptance criterion and found one false COMPLETE authority: V3-TESTQUALITY-001 lacked trusted statement coverage and real mutation execution. It is now PARTIAL; traceability requirements Q and S are reconciled to their ticket states; stale aggregate prose counts are removed pending the parser-based regression.",
+    "next_action_v3_targetspec_mapping": "Finish the vision authority/commercial/intake decisions, current README and model-selection projections, then bind all status and digest joins with the new pure-stdlib regression.",
+    "result_v3_targetspec_binding": "The reconciled vision binds the exact objective and precedence, enumerates the target offerings and commercial owners/deferrals, separates snapshot and connector threats, and freezes coverage before budget feasibility. README and model-selection claims now match queue/runtime evidence. Exact status and digest regressions plus the related 367-test matrix passed.",
+    "next_action_v3_targetspec_binding": "Run repository Ruff, strict mypy, release-schema verification, JSON/authority checks, diff integrity, and final independent acceptance review before closing V3-TARGETSPEC-001.",
+    "completed_at_v3_targetspec": "2026-08-17T03:18:08Z",
+    "result_v3_targetspec_completion": "V3-TARGETSPEC-001 completed with exact objective/vision precedence and digest authority, explicit target offerings and commercial/intake decisions, evidence-honest README/model documentation, and queue-derived status/traceability regressions. The final related 367-test matrix and repository static/schema/ledger gates passed; no provider, network, credential, checkpoint, completed-real-audit, or release state changed.",
+    "next_action_after_v3_targetspec": "Begin V3-LINEAGE-001 provider-free reviewed-lineage binding; do not grant production selection or private-source egress from unauthenticated or unqualified evidence.",
+    "resumed_at_v3_lineage": "2026-08-17T03:20:45Z",
+    "result_v3_lineage_preflight": "The existing provider-free lineage overlay and all known fail-closed consumers remain present. Runtime approvals remain empty because no successful current refresh plus complete independently authenticated operator decision exists; no authority was inferred from documentary or self-hashed evidence.",
+    "resume_action_v3_lineage": "Audit the exact current refresh/review evidence and all approval-dependent consumers; define the minimal independently authenticated operator-decision handoff without granting source-egress or production authority from self-hashed evidence.",
+    "blocked_at_v3_lineage": "2026-08-17T04:07:42Z",
+    "result_v3_lineage_blocked": "The provider-free signed calibration-only authority, opaque capability, calibration schema v2 binding, pre-spend CLI checks, and consumer revocation regressions passed. Completion remains blocked on a successful current exact provider refresh and actual authorized operator-signed exact-set decision; runtime approvals remain empty.",
+    "resumed_at_v3_calibrate": "2026-08-17T04:07:43Z",
+    "resume_action_v3_calibrate": "Audit calibration schema integrity, signed-lineage joins, frozen corpus denominators, and the two-campaign policy lifecycle; implement only provider-free evidence improvements and keep real calibration blocked.",
+    "blocked_at_v3_calibrate": "2026-08-17T06:15:34Z",
+    "result_v3_calibrate_blocked": "The 24-case empirical corpus, deterministic P2 derivation, signed-lineage and release-transition joins, private artifact publication, and production-ineligible v1 gate passed the merged focused/static/schema validation. Completion remains blocked on a statistically defensible holdout and real refreshed, signed, calibrated evidence; no production authority was granted.",
+    "next_action_after_v3_calibrate": "Begin V3-POLICYELIG-001 with a distinct operator/legal evidence gate; do not begin V3-QUALIFY-001 while calibration and lineage remain blocked.",
+    "resumed_at_v3_policyelig": "2026-08-17T06:18:06Z",
+    "result_v3_policyelig_preflight": "Existing eligibility is technical/privacy-only. No provider-terms, commercial-use, source-analysis, entity, jurisdiction, or per-client contractual determination is implemented or inferred.",
+    "resume_action_v3_policyelig": "Implement a typed expiring operator/legal determination and exact final-selection join without granting authority from provider catalogue or refresh metadata.",
+    "result_v3_policyelig_selection_refresh": "The audit-scoped technical-policy intersection, cross-audit runtime reassertion contract, non-authorizing daily policy-refresh projection, and exact optional sixth-artifact staging passed focused tests and static/schema checks. No legal decision or production authority was inferred.",
+    "next_action_v3_policyelig_selection_refresh": "Finish live OpenRouter and pipeline enforcement, then bind exact policy-selection custody through scheduler, assurance, report, and manifest artifacts before closing the ticket.",
+    "completed_at_v3_policyelig": "2026-08-17T11:15:01Z",
+    "result_v3_policyelig_completion": "V3-POLICYELIG-001 completed at the provider-free mechanism boundary with typed expiring policy evidence, independently pinned signed authority, per-source-reference drift replay, exact audit-scoped selection, live transport enforcement, detached REAL-usage rejection, and pipeline/scheduler/assurance/report/manifest custody. The complete suite and repository static/schema/ledger gates passed; no legal determination, provider call, qualified ensemble, completed audit, checkpoint, or release claim occurred.",
+    "next_action_after_v3_policyelig": "V3-QUALIFY-001 is next in model-ticket order but is not actionable until blocked lineage and calibration, current independently authenticated policy determinations, and real qualification evidence exist."
   },
   "scheduler_assurance_validation": {
     "status": "PASS_COMPONENT_FULL_ASSURANCE",
@@ -167,6 +210,12 @@
     "diagnostic_result": "FAIL: first stale integration assertion expected 6 legacy calls while the exact seven-pass campaign completed 14 typed fake-provider calls",
     "focused_result": "PASS: 5 recovered pipeline integration cases passed in 64.24s; 40 manifest and scheduler-manifest unit tests passed in 8.80s; 207 assurance tests passed in 497.65s",
     "remaining": "none; exact normalized tree passed 4401 tests with 11 explicit prerequisite skips in 1299.53s",
+    "provider_calls": 0
+  },
+  "policy_eligibility_core_validation": {
+    "status": "COMPLETE_PROVIDER_FREE_MECHANISM",
+    "command": ".venv/bin/pytest -q; .venv/bin/ruff format --check .; .venv/bin/ruff check .; .venv/bin/mypy src; .venv/bin/python scripts/generate_release_schemas.py; parse both V3 JSON ledgers; git diff --check",
+    "result": "PASS: 5155 tests passed with 21 explicit non-crediting skips in 1207.75s; full policy authority, source drift, audit selection, transport, pipeline, scheduler, assurance, report, manifest, refresh, and schema custody validated. No legal determination or production authority was issued.",
     "provider_calls": 0
   },
   "release_status": "INCOMPLETE",

@@ -15,9 +15,11 @@ from mmaudit.models.schemas import (
     SolidityEntity,
     SolidityEntityKind,
     SolidityGraphEdge,
+    SolidityGraphFactKind,
     SolidityGraphKind,
     SolidityGraphNode,
     SolidityGraphNodeKind,
+    SolidityGraphOccurrenceKind,
     SolidityGraphSet,
     SolidityStorageEntry,
     SoliditySymbolIndex,
@@ -146,6 +148,86 @@ def verify_solidity_shard_projection(
     storage_entries = tuple(sorted(validated_graphs.storage_layout, key=lambda item: item.id))
     nodes = tuple(sorted(validated_graphs.nodes, key=lambda item: item.id))
     edges = tuple(sorted(validated_graphs.edges, key=solidity_graph_edge_id))
+    retained_occurrence_totals = _retained_occurrence_totals(validated_graphs)
+    fact_omissions = {omission.fact_kind: omission for omission in validated_graphs.fact_omissions}
+    node_omission = fact_omissions.get(SolidityGraphFactKind.GRAPH_NODE)
+    expected_graph_node_occurrences_covered = retained_occurrence_totals[
+        SolidityGraphOccurrenceKind.GRAPH_NODE
+    ]
+    expected_graph_node_occurrences_total = expected_graph_node_occurrences_covered + (
+        node_omission.omitted_count if node_omission is not None else 0
+    )
+    expected_graph_edge_occurrences_covered = retained_occurrence_totals[
+        SolidityGraphOccurrenceKind.EDGE
+    ]
+    expected_graph_edge_occurrences_total = expected_graph_edge_occurrences_covered + sum(
+        omission.omitted_count for omission in validated_graphs.edge_omissions
+    )
+    storage_omission = fact_omissions.get(SolidityGraphFactKind.STORAGE_ENTRY)
+    expected_storage_occurrences_covered = retained_occurrence_totals[
+        SolidityGraphOccurrenceKind.STORAGE_ENTRY
+    ]
+    expected_storage_occurrences_total = expected_storage_occurrences_covered + (
+        storage_omission.omitted_count if storage_omission is not None else 0
+    )
+    warning_omission = fact_omissions.get(SolidityGraphFactKind.WARNING)
+    expected_warning_occurrences_covered = retained_occurrence_totals[
+        SolidityGraphOccurrenceKind.WARNING
+    ]
+    expected_warning_occurrences_total = expected_warning_occurrences_covered + (
+        warning_omission.omitted_count if warning_omission is not None else 0
+    )
+    if (
+        validated_inventory.coverage.graph_nodes_covered != len(nodes)
+        or validated_inventory.coverage.graph_nodes_total != len(nodes)
+        or validated_inventory.coverage.graph_node_candidate_occurrences_covered
+        != expected_graph_node_occurrences_covered
+        or validated_inventory.coverage.graph_node_candidate_occurrences_total
+        != expected_graph_node_occurrences_total
+    ):
+        raise SolidityShardingError(
+            "persisted Solidity shard node denominator differs from typed graph omissions"
+        )
+    if validated_inventory.coverage.graph_edges_covered != len(edges):
+        raise SolidityShardingError(
+            "persisted Solidity shard retained-edge coverage differs from graph facts"
+        )
+    if (
+        validated_inventory.coverage.graph_edges_total != len(edges)
+        or validated_inventory.coverage.graph_edge_candidate_occurrences_covered
+        != expected_graph_edge_occurrences_covered
+        or validated_inventory.coverage.graph_edge_candidate_occurrences_total
+        != expected_graph_edge_occurrences_total
+    ):
+        raise SolidityShardingError(
+            "persisted Solidity shard edge denominator differs from typed graph omissions"
+        )
+    if (
+        validated_inventory.coverage.storage_entries_covered != len(storage_entries)
+        or validated_inventory.coverage.storage_entries_total != len(storage_entries)
+        or validated_inventory.coverage.storage_entry_candidate_occurrences_covered
+        != expected_storage_occurrences_covered
+        or validated_inventory.coverage.storage_entry_candidate_occurrences_total
+        != expected_storage_occurrences_total
+    ):
+        raise SolidityShardingError(
+            "persisted Solidity shard storage denominator differs from typed graph omissions"
+        )
+    if (
+        validated_inventory.coverage.graph_warnings_covered != len(validated_graphs.warnings)
+        or validated_inventory.coverage.graph_warnings_total != len(validated_graphs.warnings)
+        or validated_inventory.coverage.graph_warning_candidate_occurrences_covered
+        != expected_warning_occurrences_covered
+        or validated_inventory.coverage.graph_warning_candidate_occurrences_total
+        != expected_warning_occurrences_total
+    ):
+        raise SolidityShardingError(
+            "persisted Solidity shard warning denominator differs from typed graph omissions"
+        )
+    if validated_inventory.coverage.complete is not validated_graphs.generation_complete:
+        raise SolidityShardingError(
+            "persisted Solidity shard completion differs from graph generation evidence"
+        )
     _require_unique_ids((item.id for item in entities), "Solidity entity")
     _require_unique_ids((item.id for item in storage_entries), "Solidity storage entry")
     _require_unique_ids((item.id for item in nodes), "Solidity graph node")
@@ -454,7 +536,9 @@ def build_solidity_shard_inventory(
         index = SoliditySymbolIndex.model_validate(index.model_dump(mode="python"))
         graphs = SolidityGraphSet.model_validate(graphs.model_dump(mode="python"))
     except (TypeError, ValueError) as exc:
-        raise SolidityShardingError("Solidity shard inputs failed detached validation") from exc
+        raise SolidityShardingError(
+            f"Solidity shard inputs failed detached validation: {exc}"
+        ) from exc
     _validate_discovery_coverage(discovery)
     files = _validated_solidity_files(discovery)
     if len(files) > effective_policy.max_shards:
@@ -715,7 +799,14 @@ def build_solidity_shard_inventory(
         )
     )
     sorted_shards = tuple(sorted(shards, key=lambda item: item.shard_id))
+    retained_occurrence_totals = _retained_occurrence_totals(graphs)
+    fact_omissions = {item.fact_kind: item for item in graphs.fact_omissions}
+    node_omission = fact_omissions.get(SolidityGraphFactKind.GRAPH_NODE)
+    storage_omission = fact_omissions.get(SolidityGraphFactKind.STORAGE_ENTRY)
+    warning_omission = fact_omissions.get(SolidityGraphFactKind.WARNING)
+    graph_edge_occurrences_covered = retained_occurrence_totals[SolidityGraphOccurrenceKind.EDGE]
     coverage = SolidityShardCoverage(
+        complete=graphs.generation_complete,
         source_units_total=len(source_units),
         source_units_covered=len(source_units),
         source_bytes_total=sum(item.utf8_bytes for item in source_units),
@@ -724,12 +815,40 @@ def build_solidity_shard_inventory(
         entities_covered=sum(len(shard.primary_entity_ids) for shard in sorted_shards),
         graph_nodes_total=len(nodes),
         graph_nodes_covered=sum(len(shard.primary_graph_node_ids) for shard in sorted_shards),
+        graph_node_candidate_occurrences_total=(
+            retained_occurrence_totals[SolidityGraphOccurrenceKind.GRAPH_NODE]
+            + (node_omission.omitted_count if node_omission is not None else 0)
+        ),
+        graph_node_candidate_occurrences_covered=retained_occurrence_totals[
+            SolidityGraphOccurrenceKind.GRAPH_NODE
+        ],
         graph_edges_total=len(edges),
         graph_edges_covered=sum(len(shard.primary_graph_edge_ids) for shard in sorted_shards),
+        graph_edge_candidate_occurrences_total=(
+            graph_edge_occurrences_covered
+            + sum(item.omitted_count for item in graphs.edge_omissions)
+        ),
+        graph_edge_candidate_occurrences_covered=graph_edge_occurrences_covered,
         storage_entries_total=len(storage_entries),
         storage_entries_covered=sum(
             len(shard.primary_storage_entry_ids) for shard in sorted_shards
         ),
+        storage_entry_candidate_occurrences_total=(
+            retained_occurrence_totals[SolidityGraphOccurrenceKind.STORAGE_ENTRY]
+            + (storage_omission.omitted_count if storage_omission is not None else 0)
+        ),
+        storage_entry_candidate_occurrences_covered=retained_occurrence_totals[
+            SolidityGraphOccurrenceKind.STORAGE_ENTRY
+        ],
+        graph_warnings_total=len(graphs.warnings),
+        graph_warnings_covered=len(graphs.warnings),
+        graph_warning_candidate_occurrences_total=(
+            retained_occurrence_totals[SolidityGraphOccurrenceKind.WARNING]
+            + (warning_omission.omitted_count if warning_omission is not None else 0)
+        ),
+        graph_warning_candidate_occurrences_covered=retained_occurrence_totals[
+            SolidityGraphOccurrenceKind.WARNING
+        ],
     )
     return SolidityShardInventory.build(
         git_commit=discovery.git_commit,
@@ -908,7 +1027,9 @@ def _validate_graph_consistency(
     edges: tuple[SolidityGraphEdge, ...],
 ) -> None:
     analyzed = list(graphs.analyzed_graphs)
-    if len(analyzed) != len(set(analyzed)) or set(analyzed) != set(SolidityGraphKind):
+    omitted_kinds = {item.graph for item in graphs.edge_omissions}
+    expected_analyzed = set(SolidityGraphKind) - omitted_kinds
+    if len(analyzed) != len(set(analyzed)) or set(analyzed) != expected_analyzed:
         raise SolidityShardingError("Solidity graph analysis-kind inventory is incomplete")
     counts = Counter(edge.graph.value for edge in edges)
     expected_coverage = {
@@ -917,11 +1038,18 @@ def _validate_graph_consistency(
     if graphs.coverage != expected_coverage:
         raise SolidityShardingError("Solidity graph coverage counters differ from graph facts")
     node_ids = {node.id for node in nodes}
-    required_source_nodes = {entity.id for entity in entities} | {
-        entry.id for entry in storage_entries
+    edge_endpoint_ids = {
+        identifier for edge in edges for identifier in (edge.source_id, edge.target_id)
     }
-    if not required_source_nodes <= node_ids:
-        raise SolidityShardingError("Solidity graph nodes omit indexed source-owned facts")
+    if not edge_endpoint_ids <= node_ids:
+        raise SolidityShardingError("Solidity graph edges reference omitted graph nodes")
+    omitted_fact_kinds = {item.fact_kind for item in graphs.fact_omissions}
+    if SolidityGraphFactKind.GRAPH_NODE not in omitted_fact_kinds:
+        required_source_nodes = {entity.id for entity in entities} | {
+            entry.id for entry in storage_entries
+        }
+        if not required_source_nodes <= node_ids:
+            raise SolidityShardingError("Solidity graph nodes omit indexed source-owned facts")
 
 
 def _validated_entities(
@@ -1229,12 +1357,37 @@ def _symbol_index_projection_sha256(
     )
 
 
+def _retained_occurrence_totals(
+    graphs: SolidityGraphSet,
+) -> Counter[SolidityGraphOccurrenceKind]:
+    """Return exact retained occurrence totals without mixing serialized record units."""
+
+    return Counter(
+        {
+            kind: sum(
+                item.occurrence_count
+                for item in graphs.retained_occurrences
+                if item.subject_kind is kind
+            )
+            for kind in SolidityGraphOccurrenceKind
+        }
+    )
+
+
 def _graph_set_context_sha256(graphs: SolidityGraphSet) -> str:
     return _canonical_sha256(
         {
             "analyzed_graphs": sorted(item.value for item in graphs.analyzed_graphs),
             "coverage": dict(sorted(graphs.coverage.items())),
             "warnings": sorted(graphs.warnings),
+            "generation_complete": graphs.generation_complete,
+            "artifact_byte_limit": graphs.artifact_byte_limit,
+            "selection_algorithm": graphs.selection_algorithm,
+            "retained_occurrences": [
+                item.model_dump(mode="json") for item in graphs.retained_occurrences
+            ],
+            "edge_omissions": [item.model_dump(mode="json") for item in graphs.edge_omissions],
+            "fact_omissions": [item.model_dump(mode="json") for item in graphs.fact_omissions],
         }
     )
 
@@ -1255,6 +1408,14 @@ def _graph_set_sha256(graphs: SolidityGraphSet) -> str:
             ),
             "coverage": dict(sorted(graphs.coverage.items())),
             "warnings": sorted(graphs.warnings),
+            "generation_complete": graphs.generation_complete,
+            "artifact_byte_limit": graphs.artifact_byte_limit,
+            "selection_algorithm": graphs.selection_algorithm,
+            "retained_occurrences": [
+                item.model_dump(mode="json") for item in graphs.retained_occurrences
+            ],
+            "edge_omissions": [item.model_dump(mode="json") for item in graphs.edge_omissions],
+            "fact_omissions": [item.model_dump(mode="json") for item in graphs.fact_omissions],
         }
     )
 

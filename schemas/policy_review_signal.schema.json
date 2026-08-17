@@ -1,0 +1,185 @@
+{
+  "$defs": {
+    "PolicyEligibilityRoute": {
+      "additionalProperties": false,
+      "description": "One exact model/provider/endpoint identity.",
+      "properties": {
+        "exact_model_id": {
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "provider_name": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Provider Name",
+          "type": "string"
+        },
+        "route_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Route Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "provider_name",
+        "provider_endpoint",
+        "route_sha256"
+      ],
+      "title": "PolicyEligibilityRoute",
+      "type": "object"
+    },
+    "PolicyEligibilitySourceReferenceObservation": {
+      "additionalProperties": false,
+      "description": "One explicit current-content observation for one cited official reference.",
+      "properties": {
+        "current_content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Current Content Sha256",
+          "type": "string"
+        },
+        "expected_content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Expected Content Sha256",
+          "type": "string"
+        },
+        "observation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Observation Sha256",
+          "type": "string"
+        },
+        "reference_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reference Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reference_sha256",
+        "expected_content_sha256",
+        "current_content_sha256",
+        "observation_sha256"
+      ],
+      "title": "PolicyEligibilitySourceReferenceObservation",
+      "type": "object"
+    },
+    "PolicyReviewReason": {
+      "description": "Refresh-safe states; this enum intentionally has no eligible state.",
+      "enum": [
+        "EXPIRED",
+        "MISSING",
+        "REVIEW_REQUIRED",
+        "SOURCE_CHANGED"
+      ],
+      "title": "PolicyReviewReason",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/policy_review_signal.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Non-authorizing refresh signal that can only request review.",
+  "properties": {
+    "artifact_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Artifact Sha256",
+      "type": "string"
+    },
+    "automated_eligibility_inference": {
+      "const": false,
+      "default": false,
+      "title": "Automated Eligibility Inference",
+      "type": "boolean"
+    },
+    "determination_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Determination Sha256"
+    },
+    "observed_at": {
+      "format": "date-time",
+      "title": "Observed At",
+      "type": "string"
+    },
+    "production_selection_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Production Selection Authorized",
+      "type": "boolean"
+    },
+    "reasons": {
+      "items": {
+        "$ref": "#/$defs/PolicyReviewReason"
+      },
+      "maxItems": 4,
+      "minItems": 1,
+      "title": "Reasons",
+      "type": "array"
+    },
+    "route": {
+      "$ref": "#/$defs/PolicyEligibilityRoute"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "signal_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Signal Sha256",
+      "type": "string"
+    },
+    "source_reference_observations": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/PolicyEligibilitySourceReferenceObservation"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Reference Observations"
+    }
+  },
+  "required": [
+    "observed_at",
+    "artifact_sha256",
+    "route",
+    "reasons",
+    "signal_sha256"
+  ],
+  "title": "mmaudit model policy review signal",
+  "type": "object"
+}

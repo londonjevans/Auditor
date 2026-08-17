@@ -18,6 +18,18 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from mmaudit.models.policy_eligibility import (
+    ModelPolicyEligibilityArtifact,
+    PolicyEligibilityRoute,
+)
+from mmaudit.models.policy_eligibility_authority import PolicyEligibilitySourceObservation
+from mmaudit.models.policy_eligibility_refresh import (
+    POLICY_ELIGIBILITY_REFRESH_FILENAME,
+    ModelPolicyEligibilityRefreshError,
+    build_model_policy_eligibility_refresh_artifact,
+    load_model_policy_eligibility_refresh_artifact,
+    verify_model_policy_eligibility_refresh_artifact,
+)
 from mmaudit.models.qualification import CandidateRegistry
 from mmaudit.models.refresh import (
     ATTEMPT_FILENAME,
@@ -53,6 +65,7 @@ _SUCCESS_FILENAMES = frozenset(
         FRESHNESS_FILENAME,
     }
 )
+_POLICY_SUCCESS_FILENAMES = _SUCCESS_FILENAMES | {POLICY_ELIGIBILITY_REFRESH_FILENAME}
 _FAILURE_FILENAMES = frozenset({ATTEMPT_FILENAME})
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _GIT_COMMIT_PATTERN = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
@@ -87,6 +100,7 @@ class StagedModelRefreshArtifact(_FrozenModel):
         "model-refresh-diff.json",
         "model-refresh-attempt.json",
         "model-refresh-freshness.json",
+        "model-policy-eligibility-refresh.json",
     ]
     content_sha256: str = Field(pattern=_SHA256_PATTERN)
     artifact_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -96,7 +110,7 @@ class StagedModelRefreshArtifact(_FrozenModel):
 class ModelRefreshWorkflowStatus(_FrozenModel):
     """Commit-bound inventory for one scheduled refresh attempt."""
 
-    schema_version: Literal["2.0"] = "2.0"
+    schema_version: Literal["3.0"] = "3.0"
     validated_at: datetime
     disposition: ModelRefreshWorkflowDisposition
     refresh_exit_status: int = Field(ge=0, le=255)
@@ -107,6 +121,7 @@ class ModelRefreshWorkflowStatus(_FrozenModel):
     pricing_tolerance_fraction: str
     soft_max_age_hours: int = Field(ge=1, le=24 * 30)
     hard_max_age_hours: int = Field(ge=2, le=24 * 90)
+    policy_projection_expected: bool
     artifacts: tuple[StagedModelRefreshArtifact, ...]
     workflow_status_sha256: str = Field(pattern=_SHA256_PATTERN)
 
@@ -123,6 +138,13 @@ class ModelRefreshWorkflowStatus(_FrozenModel):
     def validation_time_is_utc(cls, value: datetime) -> datetime:
         return _whole_second_utc(value, label="refresh workflow validation time")
 
+    @field_validator("policy_projection_expected", mode="before")
+    @classmethod
+    def policy_expectation_is_a_literal_bool(cls, value: object) -> object:
+        if type(value) is not bool:
+            raise ValueError("policy refresh projection expectation must be a literal boolean")
+        return value
+
     @model_validator(mode="after")
     def status_is_canonical_and_self_bound(self) -> Self:
         if self.hard_max_age_hours <= self.soft_max_age_hours:
@@ -135,7 +157,9 @@ class ModelRefreshWorkflowStatus(_FrozenModel):
             ModelRefreshWorkflowDisposition.COMPLETED,
             ModelRefreshWorkflowDisposition.PRODUCTION_BLOCKED,
         }:
-            expected_names = _SUCCESS_FILENAMES
+            expected_names = (
+                _POLICY_SUCCESS_FILENAMES if self.policy_projection_expected else _SUCCESS_FILENAMES
+            )
         elif self.disposition is ModelRefreshWorkflowDisposition.FAILED:
             expected_names = _FAILURE_FILENAMES
         else:
@@ -168,6 +192,9 @@ def stage_model_refresh_evidence(
     previous_snapshot: ModelRefreshSnapshot | None = None,
     previous_source_evidence: ModelRefreshSourceEvidence | None = None,
     expected_selected_routes: Sequence[SelectedModelRoute] = (),
+    policy_eligibility_artifact: ModelPolicyEligibilityArtifact | None = None,
+    policy_source_observation: PolicyEligibilitySourceObservation | None = None,
+    policy_checked_routes: Sequence[PolicyEligibilityRoute] | None = None,
     _validation_observed_at: datetime | None = None,
 ) -> ModelRefreshWorkflowStatus:
     """Validate one exact emitted bundle and reconstruct canonical upload evidence."""
@@ -187,6 +214,43 @@ def stage_model_refresh_evidence(
         raise ModelRefreshStagingError(
             "refresh previous snapshot and source evidence must be supplied together"
         )
+    policy_inputs = (
+        policy_eligibility_artifact,
+        policy_source_observation,
+        policy_checked_routes,
+    )
+    if any(item is not None for item in policy_inputs) and not all(
+        item is not None for item in policy_inputs
+    ):
+        raise ModelRefreshStagingError(
+            "refresh policy artifact, source observation, and checked routes "
+            "must be supplied together"
+        )
+    policy_projection_expected = all(item is not None for item in policy_inputs)
+    validated_policy_artifact = None
+    validated_policy_observation = None
+    validated_policy_routes: tuple[PolicyEligibilityRoute, ...] | None = None
+    if policy_projection_expected:
+        assert policy_eligibility_artifact is not None
+        assert policy_source_observation is not None
+        assert policy_checked_routes is not None
+        try:
+            validated_policy_artifact = ModelPolicyEligibilityArtifact.model_validate_json(
+                policy_eligibility_artifact.model_dump_json(),
+                strict=True,
+            )
+            validated_policy_observation = PolicyEligibilitySourceObservation.model_validate_json(
+                policy_source_observation.model_dump_json(),
+                strict=True,
+            )
+            validated_policy_routes = tuple(
+                PolicyEligibilityRoute.model_validate_json(route.model_dump_json(), strict=True)
+                for route in policy_checked_routes
+            )
+            if not validated_policy_routes:
+                raise ValueError("policy checked routes are empty")
+        except (AttributeError, ValueError) as exc:
+            raise ModelRefreshStagingError("refresh policy inputs are invalid") from exc
     tolerance = _canonical_fraction(pricing_tolerance_fraction)
     if tolerance > 1:
         raise ModelRefreshStagingError("refresh staging pricing tolerance cannot exceed one")
@@ -201,7 +265,10 @@ def stage_model_refresh_evidence(
     ):
         raise ModelRefreshStagingError("refresh staging freshness policy is invalid")
     disposition = _disposition_for_exit(refresh_exit_status)
-    expected_names = _expected_output_names(disposition)
+    expected_names = _expected_output_names(
+        disposition,
+        policy_projection_expected=policy_projection_expected,
+    )
     if disposition is ModelRefreshWorkflowDisposition.PREREQUISITE_MISSING:
         if output_dir.exists() or output_dir.is_symlink():
             raise ModelRefreshStagingError(
@@ -221,6 +288,9 @@ def stage_model_refresh_evidence(
             soft_max_age_hours=soft_max_age_hours,
             hard_max_age_hours=hard_max_age_hours,
             validated_at=validated_at,
+            policy_eligibility_artifact=validated_policy_artifact,
+            policy_source_observation=validated_policy_observation,
+            policy_checked_routes=validated_policy_routes,
         )
         after = _observe_exact_private_directory(output_dir, expected_names=expected_names)
         if before != after:
@@ -249,7 +319,7 @@ def stage_model_refresh_evidence(
             )
 
         status_values = {
-            "schema_version": "2.0",
+            "schema_version": "3.0",
             "validated_at": validated_at.isoformat().replace("+00:00", "Z"),
             "disposition": disposition.value,
             "refresh_exit_status": refresh_exit_status,
@@ -260,6 +330,7 @@ def stage_model_refresh_evidence(
             "pricing_tolerance_fraction": pricing_tolerance_fraction,
             "soft_max_age_hours": soft_max_age_hours,
             "hard_max_age_hours": hard_max_age_hours,
+            "policy_projection_expected": policy_projection_expected,
             "artifacts": [binding.model_dump(mode="json") for binding in bindings],
         }
         status_values["workflow_status_sha256"] = _canonical_sha256(status_values)
@@ -315,6 +386,9 @@ def _load_and_validate_bundle(
     soft_max_age_hours: int,
     hard_max_age_hours: int,
     validated_at: datetime,
+    policy_eligibility_artifact: ModelPolicyEligibilityArtifact | None,
+    policy_source_observation: PolicyEligibilitySourceObservation | None,
+    policy_checked_routes: tuple[PolicyEligibilityRoute, ...] | None,
 ) -> dict[str, BaseModel]:
     attempt = load_model_refresh_attempt(output_dir / ATTEMPT_FILENAME)
     if attempt.candidate_registry_sha256 != registry.registry_sha256:
@@ -328,6 +402,13 @@ def _load_and_validate_bundle(
     snapshot = load_model_refresh_snapshot(output_dir / SNAPSHOT_FILENAME)
     diff = load_model_refresh_diff(output_dir / DIFF_FILENAME)
     freshness = load_model_refresh_freshness(output_dir / FRESHNESS_FILENAME)
+    policy_refresh = (
+        load_model_policy_eligibility_refresh_artifact(
+            output_dir / POLICY_ELIGIBILITY_REFRESH_FILENAME
+        )
+        if policy_eligibility_artifact is not None
+        else None
+    )
     try:
         reproduced_snapshot = build_model_refresh_snapshot_from_source(
             source_evidence=source_evidence,
@@ -398,6 +479,33 @@ def _load_and_validate_bundle(
         ) from exc
     if trusted_freshness.state is not ModelRefreshFreshnessState.CURRENT:
         raise ModelRefreshStagingError("refresh success bundle is not current at staging time")
+    if policy_refresh is not None:
+        assert policy_eligibility_artifact is not None
+        assert policy_source_observation is not None
+        assert policy_checked_routes is not None
+        try:
+            rebuilt_policy_refresh = build_model_policy_eligibility_refresh_artifact(
+                refresh_snapshot=snapshot,
+                policy_artifact=policy_eligibility_artifact,
+                source_observation=policy_source_observation,
+                checked_routes=policy_checked_routes,
+            )
+            verify_model_policy_eligibility_refresh_artifact(
+                artifact=policy_refresh,
+                refresh_snapshot=snapshot,
+                policy_artifact=policy_eligibility_artifact,
+                source_observation=policy_source_observation,
+                checked_routes=policy_checked_routes,
+                used_at=trusted_observed_at,
+            )
+        except ModelPolicyEligibilityRefreshError as exc:
+            raise ModelRefreshStagingError(
+                "policy refresh projection cannot be reproduced from exact inputs"
+            ) from exc
+        if policy_refresh != rebuilt_policy_refresh:
+            raise ModelRefreshStagingError(
+                "policy refresh projection differs from its reproduced evidence"
+            )
     if diff.baseline_kind is RefreshBaselineKind.CANDIDATE_REGISTRY_HASH_ONLY:
         if (
             diff.baseline_sha256 != registry.registry_sha256
@@ -457,23 +565,28 @@ def _load_and_validate_bundle(
         raise ModelRefreshStagingError(
             "incomplete refresh exit lacks a production-blocked attempt status"
         )
-    return {
+    result: dict[str, BaseModel] = {
         SOURCE_EVIDENCE_FILENAME: source_evidence,
         SNAPSHOT_FILENAME: snapshot,
         DIFF_FILENAME: diff,
         ATTEMPT_FILENAME: attempt,
         FRESHNESS_FILENAME: freshness,
     }
+    if policy_refresh is not None:
+        result[POLICY_ELIGIBILITY_REFRESH_FILENAME] = policy_refresh
+    return result
 
 
 def _expected_output_names(
     disposition: ModelRefreshWorkflowDisposition,
+    *,
+    policy_projection_expected: bool,
 ) -> frozenset[str]:
     if disposition in {
         ModelRefreshWorkflowDisposition.COMPLETED,
         ModelRefreshWorkflowDisposition.PRODUCTION_BLOCKED,
     }:
-        return _SUCCESS_FILENAMES
+        return _POLICY_SUCCESS_FILENAMES if policy_projection_expected else _SUCCESS_FILENAMES
     if disposition is ModelRefreshWorkflowDisposition.FAILED:
         return _FAILURE_FILENAMES
     return frozenset()
@@ -498,6 +611,7 @@ def _artifact_self_hash(filename: str, artifact: BaseModel) -> str:
         DIFF_FILENAME: "diff_sha256",
         ATTEMPT_FILENAME: "attempt_sha256",
         FRESHNESS_FILENAME: "freshness_sha256",
+        POLICY_ELIGIBILITY_REFRESH_FILENAME: "artifact_sha256",
     }.get(filename)
     value = getattr(artifact, field, None) if field is not None else None
     if isinstance(value, str) and re.fullmatch(_SHA256_PATTERN, value):
@@ -640,7 +754,7 @@ def _remove_fresh_staging_directory(path: Path) -> None:
         path = quarantine
     except OSError:
         pass
-    for name in (*_SUCCESS_FILENAMES, WORKFLOW_STATUS_FILENAME):
+    for name in (*_POLICY_SUCCESS_FILENAMES, WORKFLOW_STATUS_FILENAME):
         candidate = path / name
         try:
             if candidate.is_file() and not candidate.is_symlink():

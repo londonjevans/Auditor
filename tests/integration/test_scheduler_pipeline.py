@@ -52,8 +52,11 @@ from mmaudit.models.schemas import (
     ModelSurfaceReviewStatus,
     SolidityGraphEdge,
     SolidityGraphKind,
+    SolidityGraphOccurrenceKind,
+    SolidityGraphRetainedOccurrence,
     SolidityProvenance,
     SourceSink,
+    solidity_graph_occurrence_sha256,
 )
 from mmaudit.orchestration.assurance import AssuranceRuntime, MaximumAssuranceContract
 from mmaudit.orchestration.context import ContextBudgetError, ContextBuilder
@@ -319,10 +322,24 @@ def _cross_shard_accounting_graphs(
     )
     coverage = dict(graphs.coverage)
     coverage[accounting_edge.graph.value] = coverage.get(accounting_edge.graph.value, 0) + 1
+    accounting_occurrence = SolidityGraphRetainedOccurrence(
+        subject_kind=SolidityGraphOccurrenceKind.EDGE,
+        subject_sha256=solidity_graph_occurrence_sha256(
+            SolidityGraphOccurrenceKind.EDGE,
+            accounting_edge,
+        ),
+        occurrence_count=1,
+    )
     graphs = graphs.model_copy(
         update={
             "edges": [*graphs.edges, accounting_edge],
             "coverage": coverage,
+            "retained_occurrences": tuple(
+                sorted(
+                    (*graphs.retained_occurrences, accounting_occurrence),
+                    key=lambda item: (item.subject_kind.value, item.subject_sha256),
+                )
+            ),
         }
     )
     inventory = build_solidity_shard_inventory(
@@ -417,6 +434,56 @@ def _maximum_protocol_overlap_context(
     projects = discover_solidity_projects(discovery, config.smart_contracts)
     index_build = build_solidity_index(discovery, projects, [])
     graphs = build_solidity_graphs(discovery, index_build)
+    source = next(
+        entity
+        for entity in index_build.index.entities
+        if entity.path == "src/SafeVariants.sol"
+        and entity.contract_name == "SafeInflationVault"
+        and entity.signature == "deposit(uint256)"
+    )
+    target = next(
+        entity
+        for entity in index_build.index.entities
+        if entity.path == "src/InflationVault.sol"
+        and entity.contract_name == "InflationVault"
+        and entity.name == "deposit"
+    )
+    overlap_edge = SolidityGraphEdge(
+        graph=SolidityGraphKind.EXTERNAL_CALL,
+        source_id=source.id,
+        target_id=target.id,
+        label="synthetic exact cross-file deposit dependency",
+        provenance=SolidityProvenance.FALLBACK,
+        path=source.path,
+        start_line=source.start_line,
+        end_line=source.end_line,
+        source_hash=source.source_hash,
+        confidence=0.70,
+        transformation="synthetic_local_cross_file_deposit_binding",
+        metadata={"resolution": "synthetic_exact_entity_binding"},
+    )
+    coverage = dict(graphs.coverage)
+    coverage[overlap_edge.graph.value] = coverage.get(overlap_edge.graph.value, 0) + 1
+    overlap_occurrence = SolidityGraphRetainedOccurrence(
+        subject_kind=SolidityGraphOccurrenceKind.EDGE,
+        subject_sha256=solidity_graph_occurrence_sha256(
+            SolidityGraphOccurrenceKind.EDGE,
+            overlap_edge,
+        ),
+        occurrence_count=1,
+    )
+    graphs = graphs.model_copy(
+        update={
+            "edges": [*graphs.edges, overlap_edge],
+            "coverage": coverage,
+            "retained_occurrences": tuple(
+                sorted(
+                    (*graphs.retained_occurrences, overlap_occurrence),
+                    key=lambda item: (item.subject_kind.value, item.subject_sha256),
+                )
+            ),
+        }
+    )
     inventory = build_solidity_shard_inventory(discovery, index_build.index, graphs)
     requests = _cross_shard_overlap_surface_requests(
         inventory,
@@ -2036,7 +2103,7 @@ async def test_pass_four_model_discovery_distinguishes_unsafe_and_safe_cross_sha
         graphs, inventory = _cross_shard_accounting_graphs(repository, config)
         monkeypatch.setattr(
             "mmaudit.orchestration.pipeline.build_solidity_graphs",
-            lambda _discovery, _index_build, exact=graphs: exact,
+            lambda _discovery, _index_build, exact=graphs, **_kwargs: exact,
         )
         fake = FakeOpenRouter(
             mode="semantic_accounting",

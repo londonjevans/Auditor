@@ -18,6 +18,7 @@ from mmaudit.models.scheduler import (
 )
 from mmaudit.models.schemas import (
     AnalysisState,
+    AuditModelSelection,
     AuditReport,
     AuditRunStatus,
     AuditScopeAssessment,
@@ -50,6 +51,7 @@ from mmaudit.models.schemas import (
     UsageRecord,
     VerificationDecision,
     VerificationVerdict,
+    validate_audit_model_selection_usage_custody,
 )
 from mmaudit.orchestration.cost_ledger import (
     CostEntry,
@@ -1434,6 +1436,10 @@ class ModelExecutionArtifact(ReportStatusProjection):
         exclude_if=lambda value: value is None,
     )
     run_id: str = Field(min_length=1, max_length=160)
+    audit_model_selection: AuditModelSelection | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     configured_models: dict[str, str]
     configured_fallbacks: dict[str, list[str]]
     requested_models: list[str]
@@ -1466,6 +1472,12 @@ class ModelExecutionArtifact(ReportStatusProjection):
     def totals_are_exact(self) -> ModelExecutionArtifact:
         if self.schema_version == "1.2" and self.language_capability is None:
             raise ValueError("current artifact requires non-null language capability evidence")
+        if self.schema_version != "1.2" and self.audit_model_selection is not None:
+            raise ValueError("legacy model-execution evidence cannot carry audit model selection")
+        validate_audit_model_selection_usage_custody(
+            audit_model_selection=self.audit_model_selection,
+            usage=self.usage,
+        )
         if self.prompt_tokens != sum(record.prompt_tokens for record in self.usage):
             raise ValueError("model execution prompt-token total is inconsistent")
         if self.completion_tokens != sum(record.completion_tokens for record in self.usage):
@@ -1807,11 +1819,14 @@ def build_model_execution_artifact(
         exact_cost = usage_exact_cost
     projection_payload = projection.model_dump(mode="python")
     if resolved_schema_version != "1.2":
+        if report.audit_model_selection is not None:
+            raise ValueError("audit model selection requires current model-execution custody")
         projection_payload.pop("language_capability", None)
     return ModelExecutionArtifact(
         **projection_payload,
         schema_version=resolved_schema_version,
         run_id=report.run_id,
+        audit_model_selection=report.audit_model_selection,
         configured_models=_string_mapping(report.metadata.get("configured_models")),
         configured_fallbacks=_fallback_mapping(report.metadata.get("configured_fallbacks")),
         requested_models=sorted({record.requested_model for record in usage}),

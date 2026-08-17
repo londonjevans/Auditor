@@ -200,8 +200,8 @@ def test_v2_role_policy_is_complete_strict_and_self_hashed() -> None:
         thresholds=_global_thresholds(calibrated=True),
         role_policies=_role_policies(calibrated=True),
         calibration_artifact_sha256="8" * 64,
-        calibration_included_candidate_count=3,
-        calibration_included_root_lineage_count=3,
+        calibration_included_candidate_count=8,
+        calibration_included_root_lineage_count=6,
         tier_a_minimum_overall_score=0.75,
         tier_a_overall_rationale="Synthetic measured Tier A aggregate threshold rationale.",
         maximum_validity_days=30,
@@ -349,8 +349,8 @@ async def test_workflow_refuses_role_policy_without_live_calibration_evidence() 
         thresholds=_global_thresholds(calibrated=True),
         role_policies=_role_policies(calibrated=True),
         calibration_artifact_sha256="8" * 64,
-        calibration_included_candidate_count=3,
-        calibration_included_root_lineage_count=3,
+        calibration_included_candidate_count=8,
+        calibration_included_root_lineage_count=6,
         tier_a_minimum_overall_score=0.75,
         tier_a_overall_rationale="Synthetic measured Tier A aggregate threshold rationale.",
         maximum_validity_days=30,
@@ -366,7 +366,7 @@ async def test_workflow_refuses_role_policy_without_live_calibration_evidence() 
     )
     release_bindings = workflow_fixtures._release_bindings(report)
 
-    with pytest.raises(ValueError, match="live calibration evidence"):
+    with pytest.raises(ValueError, match="exact predecessor calibration"):
         run_qualification_workflow(
             candidate_registry=registry,
             discovery_run_manifest=manifest,

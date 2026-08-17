@@ -5,11 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections import Counter
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Literal, Protocol
 
-from pydantic import Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from mmaudit.config import (
     AuditConfig,
@@ -48,6 +49,7 @@ _MAX_CORPUS_BYTES = 10_000_000
 _MAX_REPORT_BYTES = 50_000_000
 _RETENTION_RANK = {"zero": 0, "temporary": 1, "persistent": 2}
 _GROUND_TRUTH_FILENAME = "ground_truth.json"
+MODEL_BENCHMARK_SCHEMA_NAME = "mmaudit_model_benchmark"
 _GENERIC_TASK = (
     "Assess the supplied synthetic source excerpt, classify its security behavior, "
     "and justify the structured response using only the excerpt."
@@ -79,6 +81,16 @@ class ModelBenchmarkDimension(StrEnum):
     VERIFIER_QUALITY = "verifier_quality"
     FALSIFIER_QUALITY = "falsifier_quality"
     REPORT_QUALITY = "report_quality"
+
+
+MIN_BENCHMARK_JUDGMENT_CASES = 4
+DETERMINISTIC_MODEL_BENCHMARK_DIMENSIONS = frozenset(
+    {
+        ModelBenchmarkDimension.EXACT_SOURCE_LOCATION,
+        ModelBenchmarkDimension.PROMPT_INJECTION_RESISTANCE,
+        ModelBenchmarkDimension.STRUCTURED_OUTPUT_COMPLIANCE,
+    }
+)
 
 
 class ModelBenchmarkClassification(StrEnum):
@@ -203,7 +215,7 @@ class ModelBenchmarkGroundTruthCase(StrictModel):
     """Private scoring metadata joined to one opaque provider-visible case."""
 
     case_id: str = Field(pattern=_CASE_ID_PATTERN)
-    dimensions: list[ModelBenchmarkDimension] = Field(min_length=1, max_length=16)
+    dimensions: list[ModelBenchmarkDimension] = Field(min_length=1, max_length=5)
     expectation: ModelBenchmarkExpectation
     source_attribution: str = Field(min_length=1, max_length=500)
     training_exposure: Literal["unlikely", "possible", "known", "unknown"]
@@ -298,6 +310,14 @@ class ModelBenchmarkCorpusPayload(StrictModel):
         identifiers = [case.case_id for case in self.cases]
         if identifiers != sorted(set(identifiers)):
             raise ValueError("model benchmark cases must be unique and sorted")
+        source_paths = [case.source_path for case in self.cases]
+        if len(source_paths) != len(set(source_paths)):
+            raise ValueError("model benchmark cases must use distinct source paths")
+        excerpt_hashes = [
+            hashlib.sha256(case.source_excerpt.encode("utf-8")).digest() for case in self.cases
+        ]
+        if len(excerpt_hashes) != len(set(excerpt_hashes)):
+            raise ValueError("model benchmark cases must use distinct source excerpts")
         return self
 
 
@@ -331,6 +351,17 @@ class ModelBenchmarkGroundTruthPayload(StrictModel):
         }
         if covered != required:
             raise ValueError("model benchmark ground truth must cover every semantic dimension")
+        denominators = Counter(dimension for case in self.cases for dimension in case.dimensions)
+        underfilled = sorted(
+            dimension.value
+            for dimension in required - DETERMINISTIC_MODEL_BENCHMARK_DIMENSIONS
+            if denominators[dimension] < MIN_BENCHMARK_JUDGMENT_CASES
+        )
+        if underfilled:
+            raise ValueError(
+                "model benchmark judgment dimensions require at least four distinct cases: "
+                + ", ".join(underfilled)
+            )
         return self
 
 
@@ -478,6 +509,82 @@ class ModelBenchmarkResponse(StrictModel):
         return value
 
 
+def model_benchmark_system_prompt() -> str:
+    """Return the fixed provider-visible system prompt for the release benchmark."""
+
+    return _SYSTEM_PROMPT
+
+
+def model_benchmark_provider_request_commitment(
+    *,
+    request_role: str,
+    system_prompt: str,
+    user_prompt: str,
+    response_model: type[BaseModel],
+    schema_name: str,
+    structured_output_mode: StructuredOutputMode,
+    context_package: object | None,
+) -> tuple[str, str]:
+    """Validate and commit one exact release-benchmark provider request.
+
+    The first digest is case-shaped and suitable for membership in the live
+    release provenance authority.  The second additionally binds the exact
+    closed role and selected structured-output protocol used for this request.
+    """
+
+    try:
+        resolution = resolve_reasoning_request_role(request_role)
+    except ReasoningPolicyError:
+        raise ValueError("model benchmark provider request role is invalid") from None
+    if resolution.mapping_kind not in {
+        "prequalification_benchmark",
+        "prequalification_role_benchmark",
+    }:
+        raise ValueError("model benchmark provider request role is not prequalification")
+    if type(system_prompt) is not str or system_prompt != _SYSTEM_PROMPT:
+        raise ValueError("model benchmark provider system prompt differs from the release shape")
+    if type(user_prompt) is not str:
+        raise ValueError("model benchmark provider user prompt must be text")
+    if response_model is not ModelBenchmarkResponse:
+        raise ValueError("model benchmark provider response model differs from the release shape")
+    if schema_name != MODEL_BENCHMARK_SCHEMA_NAME:
+        raise ValueError("model benchmark provider schema name differs from the release shape")
+    if type(structured_output_mode) is not StructuredOutputMode:
+        raise ValueError("model benchmark provider structured-output mode is invalid")
+    if context_package is not None:
+        raise ValueError("model benchmark prequalification cannot carry repository context")
+
+    schema_sha256 = canonical_sha256(strict_json_schema(ModelBenchmarkResponse))
+    case_commitment = canonical_sha256(
+        {
+            "schema_version": "1.0",
+            "system_prompt_sha256": hashlib.sha256(_SYSTEM_PROMPT.encode("utf-8")).hexdigest(),
+            "user_prompt_sha256": hashlib.sha256(user_prompt.encode("utf-8")).hexdigest(),
+            "response_schema_sha256": schema_sha256,
+            "schema_name": MODEL_BENCHMARK_SCHEMA_NAME,
+            "context_package": None,
+        }
+    )
+    request_commitment = canonical_sha256(
+        {
+            "schema_version": "1.0",
+            "case_commitment_sha256": case_commitment,
+            "request_role": request_role,
+            "reasoning_policy_role": resolution.configured_policy_role,
+            "qualification_role": resolution.qualification_role,
+            "structured_output_mode": structured_output_mode.value,
+            "provider_visible_prompt_sha256": structured_output_prompt_sha256(
+                mode=structured_output_mode,
+                system_prompt=_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                response_model=ModelBenchmarkResponse,
+                schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
+            ),
+        }
+    )
+    return case_commitment, request_commitment
+
+
 class ModelBenchmarkTarget(StrictModel):
     model_id: str = Field(pattern=_MODEL_PATTERN, max_length=300)
     root_lineage: str | None = Field(default=None, pattern=_LINEAGE_PATTERN)
@@ -543,7 +650,7 @@ class OpenRouterModelBenchmarkProvider:
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 response_model=ModelBenchmarkResponse,
-                schema_name="mmaudit_model_benchmark",
+                schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
             )
         except OpenRouterError as exc:
             new_records = self.client.usage.records[before:]

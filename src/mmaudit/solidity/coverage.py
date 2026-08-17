@@ -51,10 +51,13 @@ from mmaudit.models.schemas import (
     SolidityEntity,
     SolidityEntityKind,
     SolidityGraphEdge,
+    SolidityGraphFactKind,
     SolidityGraphKind,
+    SolidityGraphOccurrenceKind,
     SolidityGraphSet,
     SolidityProjectMetadata,
     SoliditySymbolIndex,
+    solidity_graph_occurrence_sha256,
 )
 from mmaudit.orchestration.coverage import scanner_completion_coverage_metric
 from mmaudit.repository.chunking import line_range_hash
@@ -728,18 +731,64 @@ def build_solidity_coverage(
         invariant_executions,
     )
     indexed_paths = {entity.path for entity in entities}
-    graph_edge_counts = dict(graphs.coverage) if graphs else {}
+    graph_edge_counts = (
+        {kind.value: graphs.coverage.get(kind.value, 0) for kind in SolidityGraphKind}
+        if graphs
+        else {}
+    )
+    edge_omissions = {item.graph.value: item for item in (graphs.edge_omissions if graphs else ())}
+    graph_omitted_edge_counts = {kind: item.omitted_count for kind, item in edge_omissions.items()}
+    graph_retained_edge_occurrence_counts = (
+        _retained_edge_occurrence_counts(graphs) if graphs is not None else {}
+    )
+    graph_candidate_edge_counts = (
+        {
+            kind.value: graph_retained_edge_occurrence_counts.get(kind.value, 0)
+            + graph_omitted_edge_counts.get(kind.value, 0)
+            for kind in SolidityGraphKind
+        }
+        if graphs is not None
+        else {}
+    )
     graph_node_counts: dict[str, int] = {}
     if graphs:
         for node in graphs.nodes:
             graph_node_counts[node.kind.value] = graph_node_counts.get(node.kind.value, 0) + 1
+    graph_fact_retained_counts = (
+        {
+            SolidityGraphFactKind.GRAPH_NODE.value: len(graphs.nodes),
+            SolidityGraphFactKind.STORAGE_ENTRY.value: len(graphs.storage_layout),
+            SolidityGraphFactKind.WARNING.value: len(graphs.warnings),
+        }
+        if graphs is not None
+        else {}
+    )
+    fact_omissions = {
+        item.fact_kind.value: item for item in (graphs.fact_omissions if graphs else ())
+    }
+    graph_fact_omitted_counts = {kind: item.omitted_count for kind, item in fact_omissions.items()}
+    graph_fact_retained_occurrence_counts = (
+        _retained_fact_occurrence_counts(graphs) if graphs is not None else {}
+    )
+    graph_fact_candidate_counts = (
+        {
+            kind.value: graph_fact_retained_occurrence_counts[kind.value]
+            + graph_fact_omitted_counts.get(kind.value, 0)
+            for kind in SolidityGraphFactKind
+        }
+        if graphs is not None
+        else {}
+    )
     graph_state = AnalysisState.NOT_ANALYZED
     if graphs is not None:
-        graph_state = (
-            AnalysisState.FALLBACK_PARSER
-            if index is not None and index.fallback_sources
-            else AnalysisState.DETERMINISTIC
-        )
+        if not graphs.generation_complete:
+            graph_state = AnalysisState.ATTEMPTED_FAILED
+        else:
+            graph_state = (
+                AnalysisState.FALLBACK_PARSER
+                if index is not None and index.fallback_sources
+                else AnalysisState.DETERMINISTIC
+            )
     index_state = AnalysisState.NOT_ANALYZED
     if index is not None:
         index_state = (
@@ -813,11 +862,35 @@ def build_solidity_coverage(
             SolidityGraphKind.DELEGATECALL,
         }
     ]
+    external_retained_occurrence_count = sum(
+        graph_retained_edge_occurrence_counts.get(kind.value, 0)
+        for kind in (
+            SolidityGraphKind.EXTERNAL_CALL,
+            SolidityGraphKind.LOW_LEVEL_CALL,
+            SolidityGraphKind.DELEGATECALL,
+        )
+    )
+    external_candidate_count = sum(
+        graph_candidate_edge_counts.get(kind.value, 0)
+        for kind in (
+            SolidityGraphKind.EXTERNAL_CALL,
+            SolidityGraphKind.LOW_LEVEL_CALL,
+            SolidityGraphKind.DELEGATECALL,
+        )
+    )
     asset_edges = [
         edge
         for edge in (graphs.edges if graphs else [])
         if edge.graph is SolidityGraphKind.ASSET_FLOW
     ]
+    asset_retained_occurrence_count = graph_retained_edge_occurrence_counts.get(
+        SolidityGraphKind.ASSET_FLOW.value,
+        0,
+    )
+    asset_candidate_count = graph_candidate_edge_counts.get(
+        SolidityGraphKind.ASSET_FLOW.value,
+        0,
+    )
     classified_asset_edges = [
         edge
         for edge in asset_edges
@@ -826,6 +899,11 @@ def build_solidity_coverage(
         and edge.metadata.get("asset_standard")
         and edge.metadata.get("asset_standard") != "unknown"
     ]
+    classified_asset_occurrence_lower_bound = (
+        asset_retained_occurrence_count
+        if len(classified_asset_edges) == len(asset_edges)
+        else len(classified_asset_edges)
+    )
     asset_flow_summary = summarize_asset_flows(graphs)
     control_dependency_summary = summarize_control_dependencies(graphs)
     dependency_exclusions = [
@@ -1084,46 +1162,50 @@ def build_solidity_coverage(
             failures=sensitive_failures,
         ),
         "external_calls_classified": _metric(
-            len(external_edges),
-            len(external_edges),
+            external_retained_occurrence_count,
+            external_candidate_count,
             graph_state,
             "External/low-level/delegate call edges represented in the semantic graph",
-            population=len(external_edges),
+            population=external_candidate_count,
             exclusions=[],
             not_applicable_evidence=(
                 ["semantic graph contains no external, low-level, or delegate call edges"]
-                if not external_edges and graphs is not None
+                if not external_candidate_count and graphs is not None
                 else []
             ),
             confidence=min((edge.confidence for edge in external_edges), default=1),
             provenance=[CoverageProvenance.SEMANTIC_GRAPH],
             failures=(
                 ["Solidity semantic graph was not produced"]
-                if not external_edges and graphs is None
-                else []
+                if not external_candidate_count and graphs is None
+                else _coverage_gap(
+                    external_retained_occurrence_count,
+                    external_candidate_count,
+                    "candidate external-call edge(s) were omitted before classification",
+                )
             ),
         ),
         "asset_flows_classified": _metric(
-            len(classified_asset_edges),
-            len(asset_edges),
+            classified_asset_occurrence_lower_bound,
+            asset_candidate_count,
             graph_state,
             "Asset-flow graph edges classified by flow direction and token/native-asset family",
-            population=len(asset_edges),
+            population=asset_candidate_count,
             exclusions=[],
             not_applicable_evidence=(
                 ["semantic graph contains no asset-flow edges"]
-                if not asset_edges and graphs is not None
+                if not asset_candidate_count and graphs is not None
                 else []
             ),
             confidence=min((edge.confidence for edge in asset_edges), default=1),
             provenance=[CoverageProvenance.SEMANTIC_GRAPH],
             failures=(
                 ["Solidity semantic graph was not produced"]
-                if not asset_edges and graphs is None
+                if not asset_candidate_count and graphs is None
                 else _coverage_gap(
-                    len(classified_asset_edges),
-                    len(asset_edges),
-                    "asset-flow edge(s) lack complete classification",
+                    classified_asset_occurrence_lower_bound,
+                    asset_candidate_count,
+                    "candidate asset-flow edge(s) lack retained complete classification",
                 )
             ),
         ),
@@ -1288,7 +1370,20 @@ def build_solidity_coverage(
         ast_backed_files=len(index.ast_sources) if index else 0,
         fallback_parser_files=len(index.fallback_sources) if index else 0,
         graph_edge_counts=graph_edge_counts,
+        graph_retained_edge_occurrence_counts=graph_retained_edge_occurrence_counts,
+        graph_candidate_edge_counts=graph_candidate_edge_counts,
+        graph_omitted_edge_counts=graph_omitted_edge_counts,
+        graph_omission_evidence_sha256s=sorted(
+            item.evidence_sha256 for item in (graphs.edge_omissions if graphs else ())
+        ),
         graph_node_counts=graph_node_counts,
+        graph_fact_retained_counts=graph_fact_retained_counts,
+        graph_fact_retained_occurrence_counts=graph_fact_retained_occurrence_counts,
+        graph_fact_candidate_counts=graph_fact_candidate_counts,
+        graph_fact_omitted_counts=graph_fact_omitted_counts,
+        graph_fact_omission_evidence_sha256s=sorted(
+            item.evidence_sha256 for item in (graphs.fact_omissions if graphs else ())
+        ),
         asset_flow_operation_counts=asset_flow_summary["operations"],
         asset_flow_direction_counts=asset_flow_summary["directions"],
         control_resolution_counts=control_dependency_summary["controls"],
@@ -1357,7 +1452,17 @@ def build_solidity_coverage(
         ),
         audited_suite_coverage=audited_suite_coverage,
         quality_metrics=quality_metrics,
-        context_limitations=list(index.warnings if index else []),
+        context_limitations=[
+            *(index.warnings if index else []),
+            *(
+                [
+                    "semantic graph generation was partial; typed omitted edge and fact counts "
+                    "remain in coverage denominators"
+                ]
+                if graphs is not None and not graphs.generation_complete
+                else []
+            ),
+        ],
         excluded_paths=sorted(
             {
                 path
@@ -2877,6 +2982,37 @@ def _graph_source_ids(
     graph_kind: SolidityGraphKind,
 ) -> set[str]:
     return {edge.source_id for edge in (graphs.edges if graphs else []) if edge.graph is graph_kind}
+
+
+def _retained_edge_occurrence_counts(graphs: SolidityGraphSet) -> dict[str, int]:
+    """Aggregate exact retained edge occurrences by their serialized graph kind."""
+
+    occurrence_counts = {
+        item.subject_sha256: item.occurrence_count
+        for item in graphs.retained_occurrences
+        if item.subject_kind is SolidityGraphOccurrenceKind.EDGE
+    }
+    counts = {kind.value: 0 for kind in SolidityGraphKind}
+    for edge in graphs.edges:
+        subject_sha256 = solidity_graph_occurrence_sha256(
+            SolidityGraphOccurrenceKind.EDGE,
+            edge,
+        )
+        counts[edge.graph.value] += occurrence_counts[subject_sha256]
+    return counts
+
+
+def _retained_fact_occurrence_counts(graphs: SolidityGraphSet) -> dict[str, int]:
+    """Aggregate exact retained non-edge occurrences by typed fact population."""
+
+    return {
+        kind.value: sum(
+            item.occurrence_count
+            for item in graphs.retained_occurrences
+            if item.subject_kind.value == kind.value
+        )
+        for kind in SolidityGraphFactKind
+    }
 
 
 def _graph_kind_classification_evidence(

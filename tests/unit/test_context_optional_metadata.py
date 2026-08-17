@@ -7,11 +7,14 @@ from pathlib import Path
 from mmaudit.models.schemas import (
     SolidityGraphNode,
     SolidityGraphNodeKind,
+    SolidityGraphOccurrenceKind,
+    SolidityGraphRetainedOccurrence,
     SolidityGraphSet,
     SolidityProjectMetadata,
     SolidityProjectType,
     SolidityProvenance,
     SoliditySymbolIndex,
+    solidity_graph_occurrence_sha256,
 )
 from mmaudit.models.token_planning import ContextOmissionCategory, ContextOmissionReason
 from mmaudit.orchestration.context import (
@@ -55,6 +58,30 @@ def _retained_original_map_list_items(original, compacted) -> int:
                 original_values[value] -= 1
                 retained += 1
     return retained
+
+
+def _graph_with_nodes(nodes: list[SolidityGraphNode]) -> SolidityGraphSet:
+    retained_occurrences = tuple(
+        sorted(
+            (
+                SolidityGraphRetainedOccurrence(
+                    subject_kind=SolidityGraphOccurrenceKind.GRAPH_NODE,
+                    subject_sha256=solidity_graph_occurrence_sha256(
+                        SolidityGraphOccurrenceKind.GRAPH_NODE,
+                        node,
+                    ),
+                    occurrence_count=1,
+                )
+                for node in nodes
+            ),
+            key=lambda item: (item.subject_kind.value, item.subject_sha256),
+        )
+    )
+    return SolidityGraphSet(
+        nodes=nodes,
+        edges=[],
+        retained_occurrences=retained_occurrences,
+    )
 
 
 def test_context_builder_omits_optional_project_metadata_per_item(
@@ -283,8 +310,8 @@ def test_context_builder_commits_compacted_isolated_graph_nodes(
     discovery = discover_repository(vulnerable_repo, config.repository, IgnoreMatcher())
     packages = []
     for terminal_marker in ("first", "second"):
-        graphs = SolidityGraphSet(
-            nodes=[
+        graphs = _graph_with_nodes(
+            [
                 SolidityGraphNode(
                     id=f"isolated:{terminal_marker}",
                     kind=SolidityGraphNodeKind.UNKNOWN,
@@ -298,7 +325,6 @@ def test_context_builder_commits_compacted_isolated_graph_nodes(
                     transformation="synthetic compiler evidence",
                 )
             ],
-            edges=[],
         )
         packages.append(
             ContextBuilder(
@@ -320,7 +346,7 @@ def test_context_builder_commits_compacted_isolated_graph_nodes(
         )
         for package in packages
     ]
-    assert all(omission.omitted_item_count == 1 for omission in graph_omissions)
+    assert all(omission.omitted_item_count == 2 for omission in graph_omissions)
     assert packages[0].solidity_graphs == packages[1].solidity_graphs
     assert _provider_omission_commitment(packages[0]) != _provider_omission_commitment(packages[1])
 
@@ -336,8 +362,8 @@ def test_context_inventory_snapshot_is_byte_equivalent_to_legacy_hashing(
         entities=[],
         ast_sources=["SyntheticOrphan.sol"],
     )
-    graphs = SolidityGraphSet(
-        nodes=[
+    graphs = _graph_with_nodes(
+        [
             SolidityGraphNode(
                 id="isolated:inventory-equivalence",
                 kind=SolidityGraphNodeKind.UNKNOWN,
@@ -351,7 +377,6 @@ def test_context_inventory_snapshot_is_byte_equivalent_to_legacy_hashing(
                 transformation="synthetic compiler evidence",
             )
         ],
-        edges=[],
     )
     builder = ContextBuilder(
         discovery=discovery,
@@ -390,8 +415,8 @@ def test_context_inventory_snapshot_isolated_from_caller_mutation(
         entities=[],
         ast_sources=["SyntheticOriginal.sol"],
     )
-    graphs = SolidityGraphSet(
-        nodes=[
+    graphs = _graph_with_nodes(
+        [
             SolidityGraphNode(
                 id="isolated:owned-snapshot",
                 kind=SolidityGraphNodeKind.UNKNOWN,
@@ -405,7 +430,6 @@ def test_context_inventory_snapshot_isolated_from_caller_mutation(
                 transformation="synthetic compiler evidence",
             )
         ],
-        edges=[],
     )
     control_map = repository_map.model_copy(deep=True)
     control_project = project.model_copy(deep=True)

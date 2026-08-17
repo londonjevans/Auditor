@@ -65,6 +65,10 @@ from mmaudit.privacy import (
     PrivacySourceClassification,
     resolve_effective_privacy_policy,
 )
+from mmaudit.repository.privacy_provenance import (
+    PrivacySourceProvenanceObservation,
+    prove_release_pinned_model_benchmark_source,
+)
 
 _ENDPOINT_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$"
 _ERROR_KIND_PATTERN = r"^[A-Za-z][A-Za-z0-9_]{0,99}$"
@@ -859,20 +863,27 @@ def _candidate_benchmark_privacy_policy(
     budget: BudgetManager,
     benchmark_suite: ModelBenchmarkSuite,
     candidate: CandidateModel,
-) -> EffectivePrivacyPolicyEvidence:
+) -> tuple[EffectivePrivacyPolicyEvidence, PrivacySourceProvenanceObservation]:
     """Bind one strict-ZDR candidate request to the exact versioned synthetic corpus."""
 
-    return resolve_effective_privacy_policy(
+    observed_at = datetime.now(UTC).replace(microsecond=0)
+    source_provenance = prove_release_pinned_model_benchmark_source(
+        benchmark_suite,
+        now=observed_at,
+    )
+    policy = resolve_effective_privacy_policy(
         profile=PrivacyProfile.STRICT_ZDR,
         require_zdr=True,
         consent_observation=None,
         source_sha256=benchmark_suite.corpus_sha256,
-        source_classification=PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
+        source_classification=PrivacySourceClassification.SYNTHETIC_COMMITTED,
+        source_provenance_observation=source_provenance,
         configured_model_ids=(candidate.exact_model_id,),
         configured_provider_endpoints=(candidate.approved_provider_endpoint,),
         requested_budget_usd=Decimal(str(budget.total_usd)),
-        now=datetime.now(UTC).replace(microsecond=0),
+        now=observed_at,
     )
+    return policy, source_provenance
 
 
 async def _execute_candidate(
@@ -898,7 +909,10 @@ async def _execute_candidate(
             allow_fallbacks=False,
         )
         try:
-            effective_privacy_policy = _candidate_benchmark_privacy_policy(
+            (
+                effective_privacy_policy,
+                source_provenance_observation,
+            ) = _candidate_benchmark_privacy_policy(
                 config=config,
                 budget=budget,
                 benchmark_suite=benchmark_suite,
@@ -919,11 +933,12 @@ async def _execute_candidate(
             if client.effective_privacy_policy is None:
                 client.bind_effective_privacy_context(
                     effective_privacy_policy=effective_privacy_policy,
+                    source_provenance_observation=source_provenance_observation,
                     privacy_authorization=None,
                 )
             elif client.effective_privacy_policy != effective_privacy_policy:
                 raise ValueError(
-                    "candidate benchmark client binds different effective privacy evidence"
+                    "candidate benchmark client lacks the exact live release-pinned privacy proof"
                 )
         except Exception:
             return (

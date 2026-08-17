@@ -244,6 +244,19 @@
           "title": "Benchmark Portfolio Sha256",
           "type": "string"
         },
+        "calibration_release_transition_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Calibration Release Transition Sha256"
+        },
         "candidate_registry_sha256": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Candidate Registry Sha256",
@@ -258,6 +271,19 @@
           "pattern": "^[0-9a-f]{64}$",
           "title": "Isolation Sha256",
           "type": "string"
+        },
+        "lineage_candidate_registry_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lineage Candidate Registry Sha256"
         },
         "prompt_sha256": {
           "pattern": "^[0-9a-f]{64}$",

@@ -16,6 +16,20 @@ This document defines what Corrovera Security Auditor is intended to become.
 
 It is a target-state specification, not a statement that the current implementation already satisfies every requirement. It should be used to guide product design, system architecture, implementation priorities, testing, release gates, marketing claims, and independent evaluation.
 
+The current remediation phase is governed by the exact committed objective at
+`docs/remediation/v3/product_completion_goal.txt`, SHA-256
+`f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`. That objective governs
+what is built now, remediation sequencing, defensive safety boundaries, and the aggregate USD 250
+engineering budget. This vision governs the destination the product is intended to reach. If the
+two documents conflict, the objective controls the current remediation phase and the divergence
+must be recorded; the vision continues to control the target state. Neither document silently
+overrides the other.
+
+In particular, the website, billing, connector, multi-tenant, and service requirements below are
+target-state requirements. They are not claims about the current implementation and do not
+authorize service-layer work before the engine gates and sequencing requirements in the committed
+objective permit it.
+
 The system is intended to be the most capable autonomous smart-contract security auditor in the world. It should combine:
 
 - the best eligible frontier AI models available through OpenRouter;
@@ -26,7 +40,9 @@ The system is intended to be the most capable autonomous smart-contract security
 - realistic local or forked-chain reproduction;
 - an evidence-capped consensus process;
 - a concise client-facing audit report and a complete forensic evidence bundle;
-- a fully autonomous web product through which a customer can purchase an audit, connect or upload a repository, and receive the finished result without an internal operator manually running the audit.
+- a fully autonomous web product through which a customer can purchase an audit, initially upload
+  an immutable repository snapshot, later use a separately gated repository connector where one is
+  offered, and receive the finished result without an internal operator manually running the audit.
 
 The ambition is not merely to generate a large number of possible issues. The system must maximize discovery while minimizing false claims. A finding is valuable only when it is real, reachable, relevant to the audited code, correctly located, correctly characterized, and presented with the evidence needed for a client to act on it.
 
@@ -58,7 +74,8 @@ A customer should be able to:
 
 1. Create an account on the Corrovera website.
 2. Select an audit product and scope.
-3. Connect a Git provider, upload an immutable repository snapshot, or identify a specific commit.
+3. Upload an immutable repository snapshot bound to a specific commit or tree. A Git-provider
+   connector may be used only after its separate credential and ingestion-security gates pass.
 4. Declare the relevant chains, deployments, proxy addresses, prior audits, protocol documentation, and expected off-chain components.
 5. Choose a privacy profile and approve the estimated model/tool budget.
 6. Pay for the audit.
@@ -78,7 +95,10 @@ A customer should be able to:
 
 After the customer completes the required scope, consent, and payment steps, the audit should run without an internal operator manually choosing models, copying prompts, executing scanners, interpreting raw tool output, or assembling the report.
 
-“Fully autonomous” does not mean concealing problems. If a mandatory component cannot run, the system must fail or explicitly downgrade the audit, explain what is missing, and tell the client what is required to proceed.
+“Fully autonomous” does not mean concealing problems. If a mandatory component cannot run after
+execution begins, the selected-tier run must fail or remain incomplete, explain what is missing,
+and tell the client what is required to proceed. A lower named offering may be selected only before
+a new execution begins.
 
 ---
 
@@ -206,7 +226,9 @@ Every serious candidate must be challenged. The system should actively search fo
 
 ### 6.7 Fail closed
 
-Missing mandatory analysis cannot become “completed with zero findings.” It must result in a failed, incomplete, inconclusive, or explicitly downgraded run.
+Missing mandatory analysis cannot become “completed with zero findings.” It must result in a
+failed, incomplete, or inconclusive selected-tier run. A lower assurance result is valid only when
+the customer selected that named offering before execution.
 
 ### 6.8 Reproducibility
 
@@ -241,13 +263,13 @@ The website should provide:
 
 ### 7.2 Repository onboarding
 
-The customer should be able to:
+The initial supported intake path should be an immutable archive or equivalent snapshot. The
+customer should be able to:
 
-- connect GitHub, GitLab, or another supported provider;
-- select an organization, repository, branch, and commit;
 - upload an immutable archive;
-- provide submodule access;
-- specify private dependencies;
+- identify the expected organization, repository, branch, commit, and tree identity as provenance;
+- include separately authorized, content-pinned submodules and private dependencies in the
+  snapshot;
 - declare the contracts, chains, deployments, and scope;
 - provide architecture documents and protocol specifications;
 - optionally provide prior audits that remain hidden until blind discovery is complete;
@@ -255,6 +277,36 @@ The customer should be able to:
 - identify excluded files and explain exclusions.
 
 The system must freeze the source snapshot before analysis and show the customer exactly what will be audited.
+
+#### Initial immutable-snapshot intake
+
+Snapshot upload does not require a credential that can read the customer's Git organization. The
+ingestion service must treat the uploaded bytes as hostile, enforce compressed and expanded size
+and file-count limits, reject traversal, links, special files, ambiguous names, and archive nesting,
+exclude secrets before model egress, and bind the accepted tree to an immutable content hash. Build
+scripts and repository code must not execute in the ingestion worker. Every later analysis path must
+consume the same validated snapshot identity.
+
+#### Deferred Git-provider connector
+
+Direct Git-provider connection is deferred from the initial product until its separate service and
+security release gates pass. The accountable decision owner is the **Corrovera Service Security
+Owner**. A connector may be offered only when all of the following are implemented and tested:
+
+- a provider application or equivalent narrowly scoped integration is used instead of a broad
+  personal access token;
+- authorization is read-only, repository- and ref-scoped, short-lived, revocable, and separately
+  approved for submodules or private dependencies;
+- the credential is delivered only to an isolated ingestion component and never to build, scanner,
+  model, report, log, or artifact contexts;
+- provider hosts and redirects are allowlisted, and SSRF, DNS-rebinding, cross-organization, and
+  confused-deputy paths fail closed;
+- issuance, use, refresh, revocation, and deletion are auditable without recording the secret;
+- the fetched commit and tree are converted into the same immutable, hostile-input snapshot used by
+  the upload path before any analysis begins.
+
+Deferring the connector does not weaken the snapshot path or block a snapshot-only product. A future
+connector is an additional credential-bearing threat boundary, not a convenience alias for upload.
 
 ### 7.3 Privacy and model consent
 
@@ -307,6 +359,13 @@ Before payment is finalized or irreversible model spending begins, the system sh
 
 An audit that cannot satisfy its advertised assurance gates must be rejected, re-scoped, or explicitly downgraded before execution.
 
+The required model, lineage, surface-coverage, and engine set for the selected offering must be
+frozen before cost feasibility is evaluated. Budget is not model qualification and must not be used
+to silently remove a required model or analysis. If the complete set cannot fit, the system must
+reject preflight or let the customer select a different named offering or reduce scope before the
+source snapshot is frozen. Budget exhaustion after execution begins produces an incomplete or
+failed run; it does not retroactively redefine the purchased assurance level.
+
 ### 7.5 Autonomous execution
 
 The platform should:
@@ -353,7 +412,8 @@ Responsible for:
 - authentication;
 - organizations;
 - billing;
-- repository connections;
+- secure immutable-snapshot upload;
+- separately gated repository connections when that later intake mode is offered;
 - audit configuration;
 - consent;
 - status;
@@ -383,8 +443,11 @@ Responsible for:
 Responsible for:
 
 - immutable source snapshots;
+- distinct upload and connector trust boundaries;
 - commit and tree identity;
 - submodule and dependency recording;
+- hostile archive expansion and path validation;
+- narrowly scoped connector-credential custody when connectors are enabled;
 - secret exclusion;
 - path normalization;
 - symlink and hardlink rejection;
@@ -392,6 +455,11 @@ Responsible for:
 - generated-output classification;
 - prompt-injection delimiting;
 - source excerpt hashing.
+
+The upload path must remain usable without any Git-provider credential. Enabling a connector must
+not broaden the permissions, egress, execution behavior, or secret exposure of the snapshot
+validator. Both paths converge only after producing the same validated immutable source-snapshot
+contract.
 
 ### 8.4 Isolated analysis workers
 
@@ -562,7 +630,7 @@ A model must also satisfy minimum technical requirements for its assigned roles,
 - low truncation rate;
 - acceptable latency;
 - stable endpoint identity;
-- cost compatible with the product tier.
+- complete pricing evidence suitable for a separate product-level feasibility decision.
 
 ### 9.4 Security-audit qualification
 
@@ -613,14 +681,20 @@ Repeated calls to one model do not create independent agreement.
 
 ### 9.6 Production model set
 
-The production audit should use:
+A maximum-assurance production audit must use:
 
-- every qualified, policy-eligible Tier-A frontier model supported by the selected privacy profile and product budget;
+- every qualified, policy-eligible Tier-A frontier model supported by the selected privacy profile;
 - multiple independent root lineages;
 - whole-protocol reviews from each major lineage;
 - specialist routing based on measured benchmark strengths;
 - redundant independent review of critical surfaces;
 - multiple independent verifiers and falsifiers.
+
+Qualification, policy eligibility, and the frozen required model set are determined independently
+of budget. The selected maximum-assurance budget must fund the complete set. If it cannot, preflight
+must reject the request; the system must not hand-pick an affordable subset and preserve the
+maximum-assurance label. A customer may instead select another named offering or re-scope before
+source freeze, with the resulting coverage and exclusions stated explicitly.
 
 Exact model and provider endpoint selection must be pinned for the audit. Certification runs must not use an opaque automatic router or silently substitute another model.
 
@@ -630,7 +704,8 @@ If an approved model becomes unavailable during an audit:
 - use a fallback only when explicitly allowed;
 - record the substitution;
 - never inherit the original model's qualification automatically;
-- downgrade or fail the audit when required lineage coverage is no longer met.
+- mark the selected-tier run incomplete or failed when required lineage coverage is no longer met;
+  any lower offering requires a new pre-execution selection.
 
 ---
 
@@ -758,7 +833,9 @@ A surface is not considered reviewed merely because it appeared somewhere in the
 
 ### 10.6 Risk-tiered coverage
 
-Security surfaces should be classified deterministically.
+Security surfaces should be classified deterministically. The review counts in this section are
+the maximum-assurance floors. The separately named Standard offering has the lower, explicit floor
+in section 23.1 and must not inherit a maximum-assurance claim.
 
 #### Tier 0: critical
 
@@ -777,7 +854,8 @@ Examples:
 - emergency controls;
 - sensitive external calls before state updates.
 
-Every Tier-0 surface should receive at least three substantive reviews from independent qualified root lineages.
+For maximum assurance, every Tier-0 surface should receive at least three substantive reviews from
+independent qualified root lineages.
 
 #### Tier 1: high risk
 
@@ -789,7 +867,8 @@ Examples:
 - fee and reward calculations;
 - protocol configuration.
 
-Every Tier-1 surface should receive at least two independent qualified reviews.
+For maximum assurance, every Tier-1 surface should receive at least two independent qualified
+reviews.
 
 #### Tier 2: supporting
 
@@ -799,7 +878,8 @@ Examples:
 - supporting libraries;
 - secondary accounting helpers.
 
-Every Tier-2 surface should receive at least one qualified model review plus deterministic analysis.
+For maximum assurance, every Tier-2 surface should receive at least one qualified model review plus
+deterministic analysis.
 
 #### Tier 3: low risk
 
@@ -810,7 +890,8 @@ Examples:
 - events;
 - basic getters.
 
-These may use deterministic review plus risk-based sampling, while still remaining in the repository inventory.
+For maximum assurance, these may use deterministic review plus risk-based sampling, while still
+remaining in the repository inventory.
 
 ### 10.7 Truncation and retries
 
@@ -903,7 +984,8 @@ Scope should include, where present:
 - oracle configuration;
 - bridge adapters;
 - keepers and relayers;
-- front-end transaction construction where included in the product tier;
+- front-end transaction construction when it is included in the frozen scope and expected-component
+  manifest;
 - prior audit remediation status.
 
 For a full-protocol audit, the client must provide or approve an expected-component manifest. Missing components must not silently become “not applicable.”
@@ -1559,8 +1641,8 @@ The production service should include:
 - web portal;
 - organization and user management;
 - role-based access;
-- repository connectors;
-- secure upload;
+- secure immutable-snapshot upload;
+- repository connectors only after the distinct connector release gate passes;
 - job queue;
 - scheduler;
 - isolated worker fleet;
@@ -1581,27 +1663,188 @@ The production service should include:
 
 The service must support idempotent jobs, durable checkpoints, and immutable evidence.
 
+### 22.1 Post-delivery security incident response
+
+If a client reports, or credible evidence shows, that an audited protocol was later exploited or
+that a material finding was missed, the service must follow a pre-approved response process owned by
+the **Corrovera Security Incident Response Owner**. The process must:
+
+- preserve the original source snapshot, run manifest, report, and forensic evidence without
+  rewriting history;
+- acknowledge and investigate the report through a confidential client channel;
+- compare the incident mechanism with the audited scope, findings, exclusions, limitations, and
+  analyses that actually ran;
+- identify other clients, releases, detectors, prompts, benchmarks, and product claims that may be
+  affected;
+- correct the product, add a non-deployable regression where safe, and re-evaluate affected release
+  evidence;
+- coordinate client, legal, insurer, and public-disclosure decisions instead of publishing
+  unilaterally;
+- add incident material to a learning or benchmark corpus only when disclosure, licensing,
+  confidentiality, and holdout-contamination rules permit it.
+
+This policy defines the minimum defensive response, not a warranty or a contractual remedy.
+Notification deadlines, service credits, refunds, indemnities, and insurance handling remain part
+of the first-sale commercial decision gate in section 23.
+
 ---
 
-## 23. Cost management
+## 23. Product offerings, commercial decisions, and cost management
 
-Audit quality should not be strangled by arbitrary token caps, but spending must remain controlled.
+The catalogue below defines the target technical contents of each offering. It is not a claim that
+an offering is implemented, released, priced, insured, or available for purchase today. Pricing is
+not defined by this document. The accountable owner for the catalogue definition is the
+**Corrovera Product Owner**; changes must be versioned and must not weaken an already purchased
+offering.
+
+### 23.1 Target product offerings
+
+#### Standard Solidity/EVM Audit
+
+This is the lower of the two Solidity/EVM audit tiers. It includes:
+
+- an authorized immutable source snapshot and explicit scope inventory;
+- Solidity/EVM project detection, source indexing, semantic graphs, and exact-source custody;
+- every configured applicable deterministic scanner, with failures and unavailable engines
+  disclosed rather than credited;
+- at least three qualified independent root lineages across the audit, including at least one
+  substantive qualified review of every Tier-0 and Tier-1 surface, one qualified review plus
+  deterministic analysis for Tier-2 surfaces, and deterministic analysis plus recorded risk-based
+  sampling for Tier-3 surfaces;
+- coherent sharding, blind discovery, source-bound finding validation, adversarial challenge of
+  serious candidates, and evidence-capped judgment;
+- a client report, forensic evidence bundle, machine-readable findings, coverage, model-execution
+  evidence, SARIF, and an immutable run manifest;
+- explicit disclosure of every dynamic, symbolic, formal, fork, model, or scanner method that was
+  not required, was inapplicable, or did not execute.
+
+This tier does not promise every qualified Tier-A model, the complete mandatory dynamic and formal
+portfolio, or a maximum-assurance benchmark certificate. It must not inherit the
+maximum-assurance name or completion gate.
+
+#### Maximum-Assurance Solidity/EVM Audit
+
+This tier includes everything in the Standard Solidity/EVM Audit and additionally requires:
+
+- full-protocol scope with an expected-component manifest and no silent scope reduction;
+- every current qualified, policy-eligible Tier-A frontier model allowed by the selected privacy
+  profile;
+- the configured release minimum of independent qualified root lineages, which must never be below
+  four for the initial release, with a whole-protocol pass from each selected lineage;
+- at least three independent qualified reviews for every Tier-0 surface, at least two for every
+  Tier-1 surface, and the Tier-2 and Tier-3 floors defined in section 10.6;
+- all seven sharded review, integration, cross-examination, verification, falsification, and
+  evidence-capped judgment passes;
+- successful execution of every mandatory deterministic, scanner, invariant, fuzzing, symbolic,
+  formal, economic, and fork-validation gate that is applicable to the frozen scope;
+- a current product benchmark certificate bound to the exact release and all maximum-assurance
+  release gates in section 25.
+
+If any mandatory element cannot be funded or executed, preflight must reject the tier or the run
+must remain incomplete or failed. It must not silently become a cheaper subset while retaining the
+maximum-assurance name.
+
+#### Generic Source Review
+
+This is a separate reduced offering, not a Solidity/EVM audit tier. It includes an authorized
+immutable source snapshot, a language-neutral source inventory, explicitly scoped qualified model
+review, exact-source validation, stated coverage and limitations, and client and forensic outputs.
+It excludes Solidity compilation, EVM semantic and storage analysis, Solidity-specific invariants,
+economic templates, generated Foundry reproduction, fork validation, and Solidity formal-engine
+gates. It can never produce an EVM maximum-assurance claim.
+
+#### Remediation Verification
+
+This is a follow-up offering, not a new whole-repository audit. It includes the original report and
+finding identities, exact original and remediation commits, verification of each original mechanism,
+execution of the original safe regression where available, a bounded search for regressions
+introduced by the remediation, updated closure states, and a concise verification report. Any new
+full-scope assurance claim requires a separately purchased audit tier.
+
+The CLI execution profiles `quick`, `standard`, `deep`, and `maximum-assurance` are engineering
+configurations, not commercial promises, prices, or proof of achieved assurance. Similar names do
+not make a run a product-tier completion. The emitted evidence and the selected offering's gates do.
+
+### 23.2 Deliberate coverage-versus-cost rule
+
+Audit quality must not be strangled by arbitrary token caps, but spending must remain controlled.
+Model qualification, policy eligibility, required lineage coverage, surface-review floors, and
+mandatory engines are determined before price feasibility. The budget for an offering must fit
+that frozen set; the set must not shrink to fit the budget.
+
+Before source freeze, a customer may choose a different named offering or explicitly reduce the
+future scope and receive a new quote. After source freeze and execution start, model, engine, or
+coverage removal caused by cost cannot silently downgrade the contract. It produces a blocked,
+incomplete, or failed result under the selected offering's rules.
+
+### 23.3 Cost controls
 
 The system should:
 
-- estimate the complete audit before execution;
+- estimate the complete selected offering before execution;
 - reserve worst-case cost before each model request;
 - reconcile actual usage after each response;
 - prevent parallel requests from exceeding the budget;
 - show the client estimated and actual cost;
 - allocate budget by phase;
 - preserve a retry reserve;
-- fail preflight when the requested quality cannot fit the approved budget;
-- never silently reduce model coverage to fit cost.
+- fail preflight when the selected offering cannot fit the approved budget;
+- never silently reduce model or engine coverage to fit cost.
 
-Premium tiers may use more frontier models, more lineages, more specialist passes, deeper dynamic testing, and larger fork-validation budgets.
+### 23.4 Commercial decision register
 
-Every product tier must state exactly what it includes.
+The following target-state commercial decisions are intentionally explicit. An accountable role
+owner must record the final approved policy and the individual acting in that role in the launch
+record. A deferred decision is not permission to invent a default.
+
+#### Turnaround, concurrency, and service level
+
+- **Decision state:** Deferred pending completed end-to-end audit measurements across representative
+  repository sizes, assurance tiers, queue loads, retry conditions, and external-provider failures.
+- **Decision owner:** **Corrovera Product and Service Operations Owner**.
+- **First-sale gate:** Before the first paid external audit, approve a versioned policy defining the
+  quoted turnaround basis, bounded job concurrency and queue allowance, uptime or service-level
+  commitment if any, exclusions, notification cadence, cancellation, and any credit or refund.
+- **Interim claim rule:** A preflight may show a non-guaranteed estimate with its assumptions, but
+  no SLA or guaranteed turnaround may be advertised. If an estimate is exceeded, the service must
+  preserve checkpoints, show the delay and cause prominently, update the client, and apply the
+  approved cancellation or resume policy. It must not mark the audit complete to satisfy a clock.
+
+#### Liability, professional-indemnity insurance, and indemnification
+
+- **Decision state:** Deferred to legal and commercial review. This document does not assert that
+  insurance exists, that an insurer covers the offering, or that Corrovera indemnifies a client.
+- **Decision owner:** **Corrovera Legal and Commercial Risk Owner**.
+- **First-sale gate:** Before the first paid external audit, approve client terms covering scope,
+  reliance, warranties and disclaimers, limitation of liability, professional-indemnity posture,
+  indemnification if any, and commercial handling of a missed critical finding.
+- **Interim claim rule:** The report is evidence for risk decisions, not a guarantee of security. No
+  warranty, insurance, indemnity, or liability-limit claim may be made before the approved terms
+  support it.
+
+#### Post-audit incident response
+
+- **Decision state:** The minimum defensive process in section 22.1 is required. Contractual
+  deadlines, service credits, refunds, insurer notice, and public-disclosure authority remain
+  deferred.
+- **Decision owner:** **Corrovera Security Incident Response Owner**, with approval from the
+  Corrovera Legal and Commercial Risk Owner for legal, insurer, and disclosure terms.
+- **First-sale gate:** Before the first paid external audit, approve and exercise a versioned
+  incident runbook, confidential client channel, evidence-preservation procedure, affected-client
+  assessment, and disclosure decision path.
+
+#### Optional expert review
+
+- **Decision state:** The autonomous audit must complete and expose its own evidence without an
+  internal human reviewer. If expert review is offered, it is a separately labelled add-on; it
+  cannot cure a failed machine gate, raise an evidence cap without qualifying evidence, or be
+  silently included in an autonomous-completion claim. Whether to offer and price the add-on is
+  deferred.
+- **Decision owner:** **Corrovera Product Owner**.
+- **First-sale gate:** Before advertising or selling an expert-review add-on, define reviewer
+  qualifications, independence, scope, deliverable, conflict handling, turnaround, and liability
+  terms. Omitting the add-on from the launch catalogue does not block sale of an otherwise approved
+  autonomous offering.
 
 ---
 
@@ -1687,7 +1930,7 @@ Use:
 
 ## 25. Release gates
 
-A maximum-assurance production release must not ship until:
+The target maximum-assurance production service must not ship until:
 
 ### Model layer
 
@@ -1743,13 +1986,16 @@ A maximum-assurance production release must not ship until:
 ### Service layer
 
 - website purchase flow works;
-- repository connection works;
+- immutable-snapshot upload passes its hostile-input, scope, and source-identity gates;
+- a Git-provider connector, if offered, passes the separate credential, isolation, egress,
+  revocation, and immutable-snapshot convergence gates in section 7.2;
 - billing works;
 - tenant isolation is tested;
 - job resume works;
 - report delivery works;
 - data deletion works;
-- client portal shows truthful status.
+- client portal shows truthful status;
+- the applicable first-sale policies in section 23.4 are approved, versioned, and exercised.
 
 ---
 
@@ -1778,9 +2024,15 @@ The product objective is to become demonstrably best in class. The product claim
 
 ## 27. Definition of satisfactory completion
 
-The project has reached its intended first major destination when a customer can purchase an audit through the website, connect a real Solidity repository, and receive—without an internal operator—a complete audit that:
+The project has reached its intended first major destination when a customer can purchase the
+Maximum-Assurance Solidity/EVM Audit through the website, submit an authorized real Solidity
+repository through the immutable-snapshot path or a separately released connector, and
+receive—without an internal operator—a complete audit that:
 
-- uses the daily-qualified set of policy-eligible frontier models;
+- freezes the selected offering's technical contents before cost feasibility and never silently
+  removes required coverage to fit budget;
+- for maximum assurance, uses every current daily-qualified, policy-eligible Tier-A frontier model
+  allowed by the selected privacy profile;
 - reviews the full repository through coherent shards;
 - gives every critical surface independent multi-lineage review;
 - runs deterministic scanners and semantic analysis;
@@ -1793,6 +2045,8 @@ The project has reached its intended first major destination when a customer can
 - is reproducible from its run manifest;
 - passes the product benchmark and release gates;
 - protects client source, credentials, and tenant boundaries;
+- satisfies the applicable commercial first-sale gates without inventing an SLA, insurance,
+  indemnity, incident remedy, expert-review service, or price;
 - completes autonomously from purchase to delivery.
 
 The ultimate destination is reached when blind, independently adjudicated evidence shows that Corrovera consistently matches or exceeds elite professional smart-contract audits on recall, precision, evidence quality, and coverage.

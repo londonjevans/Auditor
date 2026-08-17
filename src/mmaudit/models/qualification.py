@@ -18,15 +18,25 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Literal, Never, Self, SupportsIndex
 
 from pydantic import ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
 from mmaudit.benchmark.models import (
+    DETERMINISTIC_MODEL_BENCHMARK_DIMENSIONS,
+    MIN_BENCHMARK_JUDGMENT_CASES,
     ModelBenchmarkDimension,
     ModelBenchmarkReport,
     ModelBenchmarkSuite,
     verify_model_benchmark_report_structure,
+)
+from mmaudit.config import (
+    MAXIMUM_ASSURANCE_BENCHMARK_CORPUS_SHA256,
+    MAXIMUM_ASSURANCE_BENCHMARK_CORPUS_VERSION,
+    MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_SHA256,
+    MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_VERSION,
+    MAXIMUM_ASSURANCE_QUALIFICATION_POLICY_SHA256,
 )
 from mmaudit.constants import ALL_SPECIALIST_ROLES
 from mmaudit.models.discovery import (
@@ -55,7 +65,7 @@ from mmaudit.models.reasoning import (
     resolve_reasoning_request_role,
 )
 from mmaudit.models.release_attestation import TrustedReleaseBindingObservation
-from mmaudit.models.schemas import ExecutionEvidenceKind, StrictModel, UsageRecord
+from mmaudit.models.schemas import AuditProfile, ExecutionEvidenceKind, StrictModel, UsageRecord
 from mmaudit.models.usage import (
     _is_structurally_creditable_usage_record,
     is_creditable_usage_record,
@@ -79,16 +89,25 @@ _MIN_SPECIALIST_RESPONSIBILITIES = 24
 _MIN_WHOLE_PROTOCOL_LINEAGES = 4
 _MIN_CRITICAL_SURFACE_LINEAGES = 3
 _MIN_FALSIFIER_LINEAGES = 2
-MIN_CALIBRATION_INCLUDED_CANDIDATES = 3
-MIN_CALIBRATION_INCLUDED_ROOT_LINEAGES = 3
-MIN_CALIBRATED_JUDGMENT_CASES = 4
-DETERMINISTIC_QUALIFICATION_DIMENSIONS = frozenset(
-    {
-        ModelBenchmarkDimension.EXACT_SOURCE_LOCATION,
-        ModelBenchmarkDimension.PROMPT_INJECTION_RESISTANCE,
-        ModelBenchmarkDimension.STRUCTURED_OUTPUT_COMPLIANCE,
-    }
+_COMPILED_QUALIFICATION_RELEASE_PINS = (
+    "1df14052e97a8ceb2cf3ec9fd25637f5f2f3a821818a54382a7c1f241059da8c",
+    "2.0",
+    "f92ff08ffff2de6fc4b8a4be547d2a0aef45990f7090f734c551ec696ca33e38",
+    "2.0",
+    "246f5f84aac6aaeecf20a017c9bd5a0f1897e56d54c82ce5ba75a02751d7118c",
 )
+if _COMPILED_QUALIFICATION_RELEASE_PINS != (
+    MAXIMUM_ASSURANCE_QUALIFICATION_POLICY_SHA256,
+    MAXIMUM_ASSURANCE_BENCHMARK_CORPUS_VERSION,
+    MAXIMUM_ASSURANCE_BENCHMARK_CORPUS_SHA256,
+    MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_VERSION,
+    MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_SHA256,
+):
+    raise RuntimeError("qualification release pins differ across compiled source modules")
+MIN_CALIBRATION_INCLUDED_CANDIDATES = _MIN_EXACT_MODELS
+MIN_CALIBRATION_INCLUDED_ROOT_LINEAGES = _MIN_ROOT_LINEAGES
+MIN_CALIBRATED_JUDGMENT_CASES = MIN_BENCHMARK_JUDGMENT_CASES
+DETERMINISTIC_QUALIFICATION_DIMENSIONS = DETERMINISTIC_MODEL_BENCHMARK_DIMENSIONS
 
 _JSON_ADAPTER = TypeAdapter(Any)
 
@@ -153,6 +172,16 @@ class QualificationRoleClass(StrEnum):
     VERIFIER = "verifier"
     FALSIFIER = "falsifier"
     JUDGE = "judge"
+
+
+CALIBRATION_ROLE_ROOT_SUPPORT: Mapping[QualificationRoleClass, int] = MappingProxyType(
+    {
+        QualificationRoleClass.INVESTIGATOR: _MIN_WHOLE_PROTOCOL_LINEAGES,
+        QualificationRoleClass.VERIFIER: _MIN_FALSIFIER_LINEAGES,
+        QualificationRoleClass.FALSIFIER: _MIN_FALSIFIER_LINEAGES,
+        QualificationRoleClass.JUDGE: _MIN_FALSIFIER_LINEAGES,
+    }
+)
 
 
 _REQUIRED_ROLE_QUALIFICATION_DIMENSIONS = {
@@ -1136,6 +1165,27 @@ class TrustedCalibratedQualificationPolicy:
     def require_for(self, policy: QualificationPolicy) -> None:
         _require_trusted_calibrated_policy(self, policy.policy_sha256)
 
+    def require_release_pinned_for(
+        self,
+        *,
+        policy: QualificationPolicy,
+        calibration_artifact_sha256: str,
+        release_bindings_sha256: str,
+        candidate_registry_sha256: str,
+        calibration_release_transition_sha256: str,
+    ) -> None:
+        """Require successor-release authority over one exact A/P2/C2 join."""
+
+        _require_trusted_calibrated_policy(
+            self,
+            policy.policy_sha256,
+            required_kind="release_pinned",
+            calibration_artifact_sha256=calibration_artifact_sha256,
+            release_bindings_sha256=release_bindings_sha256,
+            candidate_registry_sha256=candidate_registry_sha256,
+            calibration_release_transition_sha256=(calibration_release_transition_sha256),
+        )
+
     def __copy__(self) -> None:
         raise TypeError("trusted calibrated policy cannot be copied")
 
@@ -1149,15 +1199,217 @@ class TrustedCalibratedQualificationPolicy:
         raise TypeError("trusted calibrated policy cannot be serialized")
 
 
-def _build_trusted_calibrated_policy_authority() -> tuple[
+def validate_release_pinned_calibrated_policy_inputs(
+    *,
+    policy: QualificationPolicy,
+    calibration: Any,
+    config: Any,
+    release_bindings: Any,
+    trusted_release_observation: TrustedReleaseBindingObservation,
+    source_release_pins: tuple[str, str, str, str, str],
+    predecessor_policy: QualificationPolicy | None = None,
+    calibration_candidate_registry: CandidateRegistry | None = None,
+    qualification_candidate_registry: CandidateRegistry | None = None,
+    discovery_run_manifest: OpenRouterModelDiscoveryRunManifest | None = None,
+    lineage_review_artifact: Any = None,
+    lineage_authority_envelope: Any = None,
+    trusted_lineage_verification: Any = None,
+    qualification_campaign_started_at: datetime | None = None,
+) -> tuple[str, str]:
+    """Validate an injected source-pin/A/R0/R1/P2/C2 join without granting authority."""
+
+    from mmaudit.config import AuditConfig
+    from mmaudit.models.calibration import (
+        ModelCalibrationArtifact,
+        verify_calibrated_qualification_policy_structure,
+    )
+    from mmaudit.models.calibration_transition import (
+        build_calibration_release_transition_artifact,
+    )
+    from mmaudit.models.lineage_authority import (
+        ModelLineageAuthorityEnvelope,
+        TrustedModelLineageReviewVerification,
+    )
+    from mmaudit.models.lineage_review import ModelLineageReviewArtifact
+    from mmaudit.models.lineage_transition import build_identity_reviewed_candidate_registry
+    from mmaudit.models.qualification_workflow import QualificationReleaseBindings
+
+    if type(policy) is not QualificationPolicy:
+        raise ValueError("release-pinned calibrated policy validation requires a typed policy")
+    if type(calibration) is not ModelCalibrationArtifact:
+        raise ValueError("release-pinned calibrated policy validation requires a typed artifact")
+    if type(config) is not AuditConfig:
+        raise ValueError("release-pinned calibrated policy validation requires a typed config")
+    if type(release_bindings) is not QualificationReleaseBindings:
+        raise ValueError(
+            "release-pinned calibrated policy validation requires typed release bindings"
+        )
+    if type(trusted_release_observation) is not TrustedReleaseBindingObservation:
+        raise ValueError(
+            "release-pinned calibrated policy validation requires a trusted release observation"
+        )
+
+    validated_policy = QualificationPolicy.model_validate(policy.model_dump(mode="json"))
+    artifact = ModelCalibrationArtifact.model_validate(calibration.model_dump(mode="json"))
+    validated_config = AuditConfig.model_validate(config.model_dump(mode="python", by_alias=True))
+    bindings = QualificationReleaseBindings.model_validate(release_bindings.model_dump(mode="json"))
+    verify_calibrated_qualification_policy_structure(
+        calibration=artifact,
+        policy=validated_policy,
+    )
+    if (
+        validated_config.profile is not AuditProfile.MAXIMUM_ASSURANCE
+        or validated_config.maximum_assurance.allow_downgrade
+        or validated_config != validated_config.effective()
+    ):
+        raise ValueError(
+            "release-pinned calibrated policy validation requires an effective "
+            "non-downgradable maximum-assurance config"
+        )
+    pins = validated_config.maximum_assurance.qualification
+    configured_pins = (
+        pins.policy_sha256,
+        pins.corpus_version,
+        pins.corpus_sha256,
+        pins.ground_truth_version,
+        pins.ground_truth_sha256,
+    )
+    if configured_pins != source_release_pins:
+        raise ValueError("maximum-assurance config pins differ from the current source release")
+    if validated_policy.schema_version != "2.0" or (
+        validated_policy.policy_sha256 != pins.policy_sha256
+    ):
+        raise ValueError("calibrated policy differs from the current maximum-assurance release pin")
+    calibration_suite = (
+        artifact.benchmark_corpus_version,
+        artifact.benchmark_corpus_sha256,
+        artifact.benchmark_ground_truth_version,
+        artifact.benchmark_ground_truth_sha256,
+    )
+    pinned_suite = (
+        pins.corpus_version,
+        pins.corpus_sha256,
+        pins.ground_truth_version,
+        pins.ground_truth_sha256,
+    )
+    if calibration_suite != pinned_suite:
+        raise ValueError("calibration corpus or ground truth differs from the release pins")
+    if (
+        bindings.benchmark_corpus_version != pins.corpus_version
+        or bindings.benchmark_ground_truth_version != pins.ground_truth_version
+    ):
+        raise ValueError("successor release bindings differ from pinned benchmark versions")
+    if validated_config.stable_hash() != bindings.effective_config_sha256:
+        raise ValueError("successor release bindings differ from the exact effective config")
+    trusted_release_observation.require_for(bindings)
+
+    transition_types = (
+        (calibration_candidate_registry, CandidateRegistry),
+        (qualification_candidate_registry, CandidateRegistry),
+        (discovery_run_manifest, OpenRouterModelDiscoveryRunManifest),
+        (lineage_review_artifact, ModelLineageReviewArtifact),
+        (lineage_authority_envelope, ModelLineageAuthorityEnvelope),
+        (trusted_lineage_verification, TrustedModelLineageReviewVerification),
+    )
+    if any(type(value) is not expected for value, expected in transition_types):
+        raise ValueError(
+            "release-pinned calibrated policy validation requires exact R0/R1 lineage inputs"
+        )
+    if qualification_campaign_started_at is None:
+        raise ValueError(
+            "release-pinned calibrated policy validation requires the J2 campaign start"
+        )
+    assert calibration_candidate_registry is not None
+    assert qualification_candidate_registry is not None
+    assert discovery_run_manifest is not None
+    assert type(lineage_review_artifact) is ModelLineageReviewArtifact
+    assert type(lineage_authority_envelope) is ModelLineageAuthorityEnvelope
+    assert type(trusted_lineage_verification) is TrustedModelLineageReviewVerification
+    reviewed_registry = build_identity_reviewed_candidate_registry(
+        candidate_registry=calibration_candidate_registry,
+        lineage_review_artifact=lineage_review_artifact,
+        lineage_authority_envelope=lineage_authority_envelope,
+        calibration_artifact=artifact,
+        discovery_run_manifest=discovery_run_manifest,
+        trusted_lineage_verification=trusted_lineage_verification,
+        campaign_started_at=qualification_campaign_started_at,
+        observed_at=trusted_release_observation.observed_at,
+    )
+    validated_qualification_registry = CandidateRegistry.model_validate(
+        qualification_candidate_registry.model_dump(mode="json")
+    )
+    if reviewed_registry != validated_qualification_registry:
+        raise ValueError(
+            "release-pinned calibrated policy validation R1 differs from exact R0 transition"
+        )
+    if type(predecessor_policy) is not QualificationPolicy:
+        raise ValueError(
+            "release-pinned calibrated policy validation requires the exact predecessor policy"
+        )
+    transition = build_calibration_release_transition_artifact(
+        predecessor_policy=predecessor_policy,
+        calibration=artifact,
+        successor_policy=validated_policy,
+        successor_effective_config=validated_config,
+        successor_release_bindings=bindings,
+    )
+    return reviewed_registry.registry_sha256, transition.artifact_sha256
+
+
+def _build_trusted_calibrated_policy_authority(
+    *,
+    source_release_pins: tuple[str, str, str, str, str],
+) -> tuple[
     Callable[..., TrustedCalibratedQualificationPolicy],
-    Callable[[TrustedCalibratedQualificationPolicy, str], None],
+    Callable[..., TrustedCalibratedQualificationPolicy],
+    Callable[..., None],
 ]:
     registry: dict[
         int,
-        tuple[weakref.ReferenceType[TrustedCalibratedQualificationPolicy], str],
+        tuple[
+            weakref.ReferenceType[TrustedCalibratedQualificationPolicy],
+            str,
+            Literal["live_calibration", "release_pinned"],
+            str,
+            str | None,
+            str | None,
+            str | None,
+        ],
     ] = {}
     lock = threading.RLock()
+
+    def grant(
+        validated: QualificationPolicy,
+        *,
+        authority_kind: Literal["live_calibration", "release_pinned"],
+        calibration_artifact_sha256: str,
+        release_bindings_sha256: str | None,
+        candidate_registry_sha256: str | None,
+        calibration_release_transition_sha256: str | None,
+    ) -> TrustedCalibratedQualificationPolicy:
+        capability = object.__new__(TrustedCalibratedQualificationPolicy)
+        key = id(capability)
+
+        def discard(
+            reference: weakref.ReferenceType[TrustedCalibratedQualificationPolicy],
+        ) -> None:
+            with lock:
+                current = registry.get(key)
+                if current is not None and current[0] is reference:
+                    registry.pop(key, None)
+
+        reference = weakref.ref(capability, discard)
+        with lock:
+            registry[key] = (
+                reference,
+                validated.policy_sha256,
+                authority_kind,
+                calibration_artifact_sha256,
+                release_bindings_sha256,
+                candidate_registry_sha256,
+                calibration_release_transition_sha256,
+            )
+        return capability
 
     def issue(
         *,
@@ -1177,25 +1429,71 @@ def _build_trusted_calibrated_policy_authority() -> tuple[
             policy=validated,
             trusted_calibration_verification=trusted_calibration_verification,
         )
-        capability = object.__new__(TrustedCalibratedQualificationPolicy)
-        key = id(capability)
+        return grant(
+            validated,
+            authority_kind="live_calibration",
+            calibration_artifact_sha256=calibration.artifact_sha256,
+            release_bindings_sha256=None,
+            candidate_registry_sha256=None,
+            calibration_release_transition_sha256=None,
+        )
 
-        def discard(
-            reference: weakref.ReferenceType[TrustedCalibratedQualificationPolicy],
-        ) -> None:
-            with lock:
-                current = registry.get(key)
-                if current is not None and current[0] is reference:
-                    registry.pop(key, None)
+    def issue_from_release(
+        *,
+        policy: QualificationPolicy,
+        calibration: Any,
+        config: Any,
+        release_bindings: Any,
+        trusted_release_observation: TrustedReleaseBindingObservation,
+        predecessor_policy: QualificationPolicy | None = None,
+        calibration_candidate_registry: CandidateRegistry | None = None,
+        qualification_candidate_registry: CandidateRegistry | None = None,
+        discovery_run_manifest: OpenRouterModelDiscoveryRunManifest | None = None,
+        lineage_review_artifact: Any = None,
+        lineage_authority_envelope: Any = None,
+        trusted_lineage_verification: Any = None,
+        qualification_campaign_started_at: datetime | None = None,
+    ) -> TrustedCalibratedQualificationPolicy:
+        """Reconstruct P2 authority only from this release's immutable successor pins."""
 
-        reference = weakref.ref(capability, discard)
-        with lock:
-            registry[key] = (reference, validated.policy_sha256)
-        return capability
+        (
+            candidate_registry_sha256,
+            calibration_release_transition_sha256,
+        ) = validate_release_pinned_calibrated_policy_inputs(
+            policy=policy,
+            calibration=calibration,
+            config=config,
+            release_bindings=release_bindings,
+            trusted_release_observation=trusted_release_observation,
+            source_release_pins=source_release_pins,
+            predecessor_policy=predecessor_policy,
+            calibration_candidate_registry=calibration_candidate_registry,
+            qualification_candidate_registry=qualification_candidate_registry,
+            discovery_run_manifest=discovery_run_manifest,
+            lineage_review_artifact=lineage_review_artifact,
+            lineage_authority_envelope=lineage_authority_envelope,
+            trusted_lineage_verification=trusted_lineage_verification,
+            qualification_campaign_started_at=qualification_campaign_started_at,
+        )
+        validated_policy = QualificationPolicy.model_validate(policy.model_dump(mode="json"))
+        return grant(
+            validated_policy,
+            authority_kind="release_pinned",
+            calibration_artifact_sha256=calibration.artifact_sha256,
+            release_bindings_sha256=release_bindings.bindings_sha256,
+            candidate_registry_sha256=candidate_registry_sha256,
+            calibration_release_transition_sha256=(calibration_release_transition_sha256),
+        )
 
     def require(
         capability: TrustedCalibratedQualificationPolicy,
         policy_sha256: str,
+        *,
+        required_kind: Literal["release_pinned"] | None = None,
+        calibration_artifact_sha256: str | None = None,
+        release_bindings_sha256: str | None = None,
+        candidate_registry_sha256: str | None = None,
+        calibration_release_transition_sha256: str | None = None,
     ) -> None:
         with lock:
             registered = registry.get(id(capability))
@@ -1205,14 +1503,41 @@ def _build_trusted_calibrated_policy_authority() -> tuple[
                 or registered[1] != policy_sha256
             ):
                 raise ValueError("trusted calibrated policy authority is absent or mismatched")
+            if required_kind is not None and registered[2] != required_kind:
+                raise ValueError("trusted calibrated policy authority is not release-pinned")
+            if (
+                calibration_artifact_sha256 is not None
+                and registered[3] != calibration_artifact_sha256
+            ):
+                raise ValueError("trusted calibrated policy authority calibration is mismatched")
+            if release_bindings_sha256 is not None and registered[4] != release_bindings_sha256:
+                raise ValueError(
+                    "trusted calibrated policy authority release bindings are mismatched"
+                )
+            if candidate_registry_sha256 is not None and registered[5] != candidate_registry_sha256:
+                raise ValueError(
+                    "trusted calibrated policy authority candidate registry is mismatched"
+                )
+            if (
+                calibration_release_transition_sha256 is not None
+                and registered[6] != calibration_release_transition_sha256
+            ):
+                raise ValueError(
+                    "trusted calibrated policy authority calibration transition is mismatched"
+                )
 
-    return issue, require
+    return issue, issue_from_release, require
 
 
 (
     issue_trusted_calibrated_qualification_policy,
+    issue_release_pinned_trusted_calibrated_qualification_policy,
     _require_trusted_calibrated_policy,
-) = _build_trusted_calibrated_policy_authority()
+) = _build_trusted_calibrated_policy_authority(
+    source_release_pins=_COMPILED_QUALIFICATION_RELEASE_PINS
+)
+del _build_trusted_calibrated_policy_authority
+del _COMPILED_QUALIFICATION_RELEASE_PINS
 
 
 class QualificationBindings(StrictModel):
@@ -1230,8 +1555,88 @@ class QualificationBindings(StrictModel):
     benchmark_ground_truth_version: str = Field(min_length=1, max_length=100)
     benchmark_ground_truth_sha256: str = Field(pattern=_SHA256_PATTERN)
     benchmark_portfolio_sha256: str = Field(pattern=_SHA256_PATTERN)
+    lineage_candidate_registry_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
     candidate_registry_sha256: str = Field(pattern=_SHA256_PATTERN)
     qualification_policy_sha256: str = Field(pattern=_SHA256_PATTERN)
+    calibration_release_transition_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+
+
+def _require_qualification_registry_descends_from_lineage_registry(
+    *,
+    lineage_registry: CandidateRegistry,
+    qualification_registry: CandidateRegistry,
+) -> None:
+    """Require R2 to change only benchmark conclusions and retained role permissions."""
+
+    lineage = CandidateRegistry.model_validate(lineage_registry.model_dump(mode="json"))
+    qualified = CandidateRegistry.model_validate(qualification_registry.model_dump(mode="json"))
+    if (
+        lineage.created_at != qualified.created_at
+        or lineage.discovery_run_sha256 != qualified.discovery_run_sha256
+    ):
+        raise ValueError("qualification registry metadata differs from lineage-transition R1")
+    lineage_candidates = {candidate.exact_model_id: candidate for candidate in lineage.candidates}
+    qualified_candidates = {
+        candidate.exact_model_id: candidate for candidate in qualified.candidates
+    }
+    if set(lineage_candidates) != set(qualified_candidates):
+        raise ValueError("qualification registry candidate set differs from lineage-transition R1")
+    mutable_fields = {
+        "approved_roles",
+        "benchmark_artifact_sha256",
+        "benchmark_status",
+        "qualification_expires_at",
+    }
+    for model_id, predecessor in lineage_candidates.items():
+        successor = qualified_candidates[model_id]
+        if (
+            predecessor.benchmark_status is not CandidateBenchmarkStatus.PENDING
+            or predecessor.benchmark_artifact_sha256 is not None
+            or predecessor.qualification_expires_at is not None
+        ):
+            raise ValueError("lineage-transition R1 already contains benchmark conclusions")
+        predecessor_identity = predecessor.model_dump(
+            mode="json",
+            exclude=mutable_fields,
+        )
+        successor_identity = successor.model_dump(
+            mode="json",
+            exclude=mutable_fields,
+        )
+        if predecessor_identity != successor_identity:
+            raise ValueError(
+                f"qualification registry identity differs from lineage-transition R1: {model_id}"
+            )
+        if not set(successor.approved_roles).issubset(predecessor.approved_roles):
+            raise ValueError(f"qualification registry adds undeclared role permissions: {model_id}")
+
+
+def _qualification_release_bindings_sha256(bindings: QualificationBindings) -> str:
+    """Project J2 bindings back to the exact release-observation document digest."""
+
+    validated = QualificationBindings.model_validate(bindings.model_dump(mode="json"))
+    return canonical_sha256(
+        {
+            "schema_version": "1.0",
+            "source_commit": validated.source_commit,
+            "source_tree_sha256": validated.source_tree_sha256,
+            "effective_config_sha256": validated.effective_config_sha256,
+            "prompt_sha256": validated.prompt_sha256,
+            "response_schema_sha256": validated.response_schema_sha256,
+            "toolchain_sha256": validated.toolchain_sha256,
+            "isolation_sha256": validated.isolation_sha256,
+            "benchmark_corpus_version": validated.benchmark_corpus_version,
+            "benchmark_ground_truth_version": validated.benchmark_ground_truth_version,
+        }
+    )
 
 
 class QualificationDimensionResult(StrictModel):
@@ -2648,19 +3053,56 @@ def verify_model_qualification(
     trusted_benchmark_evidence: tuple[TrustedBenchmarkVerificationEvidence, ...],
     now: datetime,
     trusted_calibrated_policy: TrustedCalibratedQualificationPolicy | None = None,
+    lineage_candidate_registry: CandidateRegistry | None = None,
 ) -> QualificationVerification:
-    """Recompute production eligibility; unresolved evidence always fails closed."""
+    """Recompute production eligibility; only calibrated v2 policy may authorize it.
+
+    Schema-v1 policies remain valid predecessor inputs for non-dispositive calibration and
+    benchmark evaluation, but they cannot make a model production-eligible.
+    """
 
     now = _validate_utc_second(now, label="qualification verification time")
     errors: list[str] = []
     if policy.schema_version == "2.0":
         if type(trusted_calibrated_policy) is not TrustedCalibratedQualificationPolicy:
-            errors.append("calibrated qualification policy lacks live verification authority")
+            errors.append(
+                "calibrated qualification policy lacks release-pinned successor authority"
+            )
+        elif type(lineage_candidate_registry) is not CandidateRegistry:
+            errors.append("calibrated qualification policy lacks the exact lineage-transition R1")
         else:
             try:
-                trusted_calibrated_policy.require_for(policy)
+                lineage_registry = CandidateRegistry.model_validate(
+                    lineage_candidate_registry.model_dump(mode="json")
+                )
+                if policy.calibration_artifact_sha256 is None:
+                    raise ValueError("calibrated policy omits its calibration binding")
+                if expected_bindings.calibration_release_transition_sha256 is None:
+                    raise ValueError("qualification bindings omit the calibration transition")
+                if expected_bindings.lineage_candidate_registry_sha256 is None:
+                    raise ValueError("qualification bindings omit the lineage-transition R1")
+                if (
+                    lineage_registry.registry_sha256
+                    != expected_bindings.lineage_candidate_registry_sha256
+                ):
+                    raise ValueError("lineage-transition R1 differs from qualification bindings")
+                _require_qualification_registry_descends_from_lineage_registry(
+                    lineage_registry=lineage_registry,
+                    qualification_registry=registry,
+                )
+                trusted_calibrated_policy.require_release_pinned_for(
+                    policy=policy,
+                    calibration_artifact_sha256=policy.calibration_artifact_sha256,
+                    release_bindings_sha256=_qualification_release_bindings_sha256(
+                        expected_bindings
+                    ),
+                    candidate_registry_sha256=lineage_registry.registry_sha256,
+                    calibration_release_transition_sha256=(
+                        expected_bindings.calibration_release_transition_sha256
+                    ),
+                )
             except ValueError:
-                errors.append("calibrated qualification policy authority is mismatched")
+                errors.append("calibrated qualification policy release authority is mismatched")
     elif trusted_calibrated_policy is not None:
         errors.append("legacy qualification policy received calibrated policy authority")
     if artifact.bindings != expected_bindings:
@@ -2695,6 +3137,7 @@ def verify_model_qualification(
         evidence_by_model[trusted_evidence.exact_model_id] = trusted_evidence
 
     thresholds = {threshold.dimension: threshold for threshold in policy.thresholds}
+    global_inputs_valid = not errors
     eligible_ids: list[str] = []
     eligible_roots: list[str] = []
     for model_id in sorted(set(candidates) & set(results)):
@@ -2768,7 +3211,9 @@ def verify_model_qualification(
                 errors.append(f"Tier A qualification is expired: {model_id}")
             review = candidate.lineage_review
             production_eligible = (
-                len(errors) == model_error_count
+                policy.schema_version == "2.0"
+                and global_inputs_valid
+                and len(errors) == model_error_count
                 and threshold_passed
                 and evidence is not None
                 and review.status is LineageReviewStatus.APPROVED
@@ -3146,6 +3591,7 @@ def resolve_verified_production_qualification(
     reasoning_policy: ReasoningPolicyArtifact,
     now: datetime,
     trusted_calibrated_policy: TrustedCalibratedQualificationPolicy | None = None,
+    lineage_candidate_registry: CandidateRegistry | None = None,
     reasoning_benchmark_reports: tuple[ModelBenchmarkReport, ...] = (),
     reasoning_benchmark_plan: object | None = None,
     trusted_reasoning_campaign_verification: object | None = None,
@@ -3157,6 +3603,11 @@ def resolve_verified_production_qualification(
         (registry, CandidateRegistry, "candidate registry"),
         (policy, QualificationPolicy, "qualification policy"),
         (expected_bindings, QualificationBindings, "expected qualification bindings"),
+        (
+            lineage_candidate_registry,
+            CandidateRegistry,
+            "lineage-transition candidate registry",
+        ),
     )
     for input_value, expected_type, label in inputs:
         if type(input_value) is not expected_type:
@@ -3174,15 +3625,43 @@ def resolve_verified_production_qualification(
 
     artifact = ModelQualificationArtifact.model_validate(artifact.model_dump(mode="json"))
     registry = CandidateRegistry.model_validate(registry.model_dump(mode="json"))
+    assert lineage_candidate_registry is not None
+    lineage_candidate_registry = CandidateRegistry.model_validate(
+        lineage_candidate_registry.model_dump(mode="json")
+    )
     policy = QualificationPolicy.model_validate(policy.model_dump(mode="json"))
-    if policy.schema_version == "2.0":
-        if type(trusted_calibrated_policy) is not TrustedCalibratedQualificationPolicy:
-            raise ValueError("production qualification requires live calibrated policy authority")
-        trusted_calibrated_policy.require_for(policy)
-    elif trusted_calibrated_policy is not None:
-        raise ValueError("legacy production qualification cannot consume calibrated authority")
     expected_bindings = QualificationBindings.model_validate(
         expected_bindings.model_dump(mode="json")
+    )
+    if policy.schema_version != "2.0":
+        raise ValueError("production qualification requires calibrated qualification policy v2")
+    if type(trusted_calibrated_policy) is not TrustedCalibratedQualificationPolicy:
+        raise ValueError(
+            "production qualification requires release-pinned calibrated policy authority"
+        )
+    if policy.calibration_artifact_sha256 is None:
+        raise ValueError("production qualification policy omits its calibration binding")
+    if expected_bindings.calibration_release_transition_sha256 is None:
+        raise ValueError("production qualification bindings omit the calibration transition")
+    if expected_bindings.lineage_candidate_registry_sha256 is None:
+        raise ValueError("production qualification bindings omit the lineage-transition R1")
+    if (
+        lineage_candidate_registry.registry_sha256
+        != expected_bindings.lineage_candidate_registry_sha256
+    ):
+        raise ValueError("production lineage-transition R1 differs from qualification bindings")
+    _require_qualification_registry_descends_from_lineage_registry(
+        lineage_registry=lineage_candidate_registry,
+        qualification_registry=registry,
+    )
+    trusted_calibrated_policy.require_release_pinned_for(
+        policy=policy,
+        calibration_artifact_sha256=policy.calibration_artifact_sha256,
+        release_bindings_sha256=_qualification_release_bindings_sha256(expected_bindings),
+        candidate_registry_sha256=lineage_candidate_registry.registry_sha256,
+        calibration_release_transition_sha256=(
+            expected_bindings.calibration_release_transition_sha256
+        ),
     )
     if type(trusted_release_observation) is not TrustedReleaseBindingObservation:
         raise ValueError("production qualification requires a trusted release observation")
@@ -3227,6 +3706,7 @@ def resolve_verified_production_qualification(
         trusted_benchmark_evidence=ordered_trusted,
         now=now,
         trusted_calibrated_policy=trusted_calibrated_policy,
+        lineage_candidate_registry=lineage_candidate_registry,
     )
     if not verification.valid:
         raise ValueError(

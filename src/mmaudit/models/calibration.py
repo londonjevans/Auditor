@@ -9,8 +9,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import stat
-import tempfile
 import threading
 import weakref
 from collections.abc import Callable
@@ -38,14 +38,17 @@ from mmaudit.models.candidate_benchmark import (
 )
 from mmaudit.models.discovery import OpenRouterModelDiscoveryRunManifest
 from mmaudit.models.identifiers import require_exact_openrouter_model_id
+from mmaudit.models.lineage_authority import TrustedModelLineageReviewVerification
+from mmaudit.models.lineage_review import ModelLineageReviewArtifact
 from mmaudit.models.qualification import (
-    MIN_CALIBRATION_INCLUDED_CANDIDATES,
-    MIN_CALIBRATION_INCLUDED_ROOT_LINEAGES,
+    DETERMINISTIC_QUALIFICATION_DIMENSIONS,
     CandidateModel,
     CandidateRegistry,
     LineageReviewStatus,
     QualificationDimensionThreshold,
     QualificationPolicy,
+    QualificationRoleClass,
+    QualificationThresholdBasis,
     RoleQualificationPolicy,
     seal_qualification_policy,
 )
@@ -62,6 +65,49 @@ _MAX_CANDIDATES = 128
 _MAX_ARTIFACT_BYTES = 10_000_000
 _PRIVATE_FILE_MODE = 0o600
 _JSON_ADAPTER = TypeAdapter(Any)
+_PRIVATE_JSON_DIR_FD_SUPPORTED = all(
+    function in os.supports_dir_fd for function in (os.open, os.stat, os.unlink, os.link)
+)
+_PRIVATE_JSON_NOFOLLOW_SUPPORTED = all(
+    function in os.supports_follow_symlinks for function in (os.stat, os.link)
+)
+_CALIBRATED_POLICY_MAXIMUM_VALIDITY_DAYS = 30
+_CALIBRATED_POLICY_MAXIMUM_BENCHMARK_EVIDENCE_AGE_DAYS = 7
+_CALIBRATION_GLOBAL_CANDIDATE_SUPPORT = 8
+_CALIBRATION_GLOBAL_ROOT_SUPPORT = 6
+_CALIBRATION_ROLE_ROOT_SUPPORT = {
+    QualificationRoleClass.INVESTIGATOR: 4,
+    QualificationRoleClass.VERIFIER: 2,
+    QualificationRoleClass.FALSIFIER: 2,
+    QualificationRoleClass.JUDGE: 2,
+}
+_CALIBRATION_ROLE_DIMENSIONS = {
+    QualificationRoleClass.INVESTIGATOR: (
+        ModelBenchmarkDimension.EXACT_SOURCE_LOCATION,
+        ModelBenchmarkDimension.FALSE_POSITIVE_REJECTION,
+        ModelBenchmarkDimension.SOLIDITY_SECURITY_REASONING,
+    ),
+    QualificationRoleClass.VERIFIER: (ModelBenchmarkDimension.VERIFIER_QUALITY,),
+    QualificationRoleClass.FALSIFIER: (ModelBenchmarkDimension.FALSIFIER_QUALITY,),
+    QualificationRoleClass.JUDGE: (
+        ModelBenchmarkDimension.FALSIFIER_QUALITY,
+        ModelBenchmarkDimension.REPORT_QUALITY,
+        ModelBenchmarkDimension.VERIFIER_QUALITY,
+    ),
+}
+_DETERMINISTIC_EMPIRICAL_SUPPORT_RATIONALE = (
+    "Non-statistical empirical-support record for the deterministic exact-pass requirement; "
+    "the 1.0 gate is a protocol requirement, not a statistical-significance claim."
+)
+_JUDGMENT_EMPIRICAL_SUPPORT_RATIONALE = (
+    "Non-statistical empirical-support threshold: the strongest positive non-perfect observed "
+    "score meeting the frozen candidate and root-lineage support floor; this is not a "
+    "statistical-significance claim."
+)
+_AGGREGATE_EMPIRICAL_SUPPORT_RATIONALE = (
+    "Non-statistical empirical-support aggregate: the strongest observed supported score capped "
+    "below perfection; this is not a statistical-significance claim."
+)
 
 
 class TrustedModelCalibrationVerification:
@@ -123,6 +169,8 @@ def _build_calibration_runtime_authority() -> tuple[
         benchmark_policy_sha256: str,
         effective_config_sha256: str,
         trusted_campaign_verification: TrustedCandidateBenchmarkCampaignVerification,
+        lineage_review_artifact: ModelLineageReviewArtifact,
+        trusted_lineage_verification: TrustedModelLineageReviewVerification,
     ) -> TrustedModelCalibrationVerification:
         if type(artifact) is not ModelCalibrationArtifact:
             raise ValueError("trusted calibration issuance requires a typed artifact")
@@ -137,6 +185,8 @@ def _build_calibration_runtime_authority() -> tuple[
             benchmark_policy_sha256=benchmark_policy_sha256,
             effective_config_sha256=effective_config_sha256,
             trusted_campaign_verification=trusted_campaign_verification,
+            lineage_review_artifact=lineage_review_artifact,
+            trusted_lineage_verification=trusted_lineage_verification,
         )
         if rebuilt != validated:
             raise ValueError("calibration artifact differs from live campaign evidence")
@@ -185,7 +235,6 @@ class CalibrationExclusionReason(StrEnum):
     REPORT_CASES_INCOMPLETE = "report_cases_incomplete"
     REPORT_NOT_REAL = "report_not_real"
     ROOT_LINEAGE_NOT_APPROVED = "root_lineage_not_approved"
-    ROOT_LINEAGE_REVIEW_POSTDATES_CAMPAIGN = "root_lineage_review_postdates_campaign"
 
 
 class ModelCalibrationCandidateObservation(StrictModel):
@@ -193,6 +242,7 @@ class ModelCalibrationCandidateObservation(StrictModel):
 
     exact_model_id: str = Field(min_length=3, max_length=300)
     root_lineage: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+    lineage_binding_sha256: str = Field(pattern=_SHA256_PATTERN)
     report_sha256: str = Field(pattern=_SHA256_PATTERN)
     report_execution_evidence: ExecutionEvidenceKind
     diagnostic: CandidateBenchmarkDiagnostic
@@ -336,11 +386,13 @@ class ModelCalibrationDimensionDistribution(StrictModel):
 class ModelCalibrationArtifact(StrictModel):
     """Self-hashed calibration evidence that intentionally makes no disposition."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["2.0"] = "2.0"
     created_at: datetime
     candidate_registry_sha256: str = Field(pattern=_SHA256_PATTERN)
     discovery_manifest_sha256: str = Field(pattern=_SHA256_PATTERN)
     candidate_set_sha256: str = Field(pattern=_SHA256_PATTERN)
+    lineage_review_artifact_sha256: str = Field(pattern=_SHA256_PATTERN)
+    lineage_authority_envelope_sha256: str = Field(pattern=_SHA256_PATTERN)
     benchmark_corpus_version: str = Field(min_length=1, max_length=100)
     benchmark_corpus_sha256: str = Field(pattern=_SHA256_PATTERN)
     benchmark_ground_truth_version: str = Field(min_length=1, max_length=100)
@@ -374,6 +426,9 @@ class ModelCalibrationArtifact(StrictModel):
         candidate_ids = tuple(item.exact_model_id for item in self.candidates)
         if candidate_ids != tuple(sorted(set(candidate_ids))):
             raise ValueError("calibration candidates must be unique and sorted")
+        lineage_bindings = tuple(item.lineage_binding_sha256 for item in self.candidates)
+        if len(lineage_bindings) != len(set(lineage_bindings)):
+            raise ValueError("calibration lineage bindings must be unique per candidate")
         if self.candidate_set_sha256 != canonical_sha256(list(candidate_ids)):
             raise ValueError("calibration candidate-set hash is inconsistent")
         dimension_names = tuple(item.dimension.value for item in self.distributions)
@@ -433,6 +488,8 @@ def build_model_calibration_artifact(
     benchmark_policy_sha256: str,
     effective_config_sha256: str,
     trusted_campaign_verification: TrustedCandidateBenchmarkCampaignVerification,
+    lineage_review_artifact: ModelLineageReviewArtifact,
+    trusted_lineage_verification: TrustedModelLineageReviewVerification,
 ) -> ModelCalibrationArtifact:
     """Build observed distributions from one live, exact candidate campaign."""
 
@@ -450,6 +507,11 @@ def build_model_calibration_artifact(
         ModelBenchmarkReport.model_validate(report.model_dump(mode="json"))
         for report in benchmark_reports
     )
+    if type(lineage_review_artifact) is not ModelLineageReviewArtifact:
+        raise ValueError("calibration requires a typed lineage review artifact")
+    lineage = ModelLineageReviewArtifact.model_validate(
+        lineage_review_artifact.model_dump(mode="json")
+    )
     campaign_anchor = (
         registry.created_at if portfolio.ended_at is None else portfolio.ended_at
     ).replace(microsecond=0)
@@ -461,6 +523,14 @@ def build_model_calibration_artifact(
         manifest=manifest,
         candidate_ids=candidate_ids,
     )
+    lineage_candidate_ids = tuple(binding.exact_model_id for binding in lineage.candidate_bindings)
+    if (
+        lineage.candidate_registry_sha256 != registry.registry_sha256
+        or lineage.discovery_manifest_sha256 != manifest.manifest_sha256
+        or lineage.discovery_candidate_set_sha256 != manifest.candidate_set_sha256
+        or lineage_candidate_ids != candidate_ids
+    ):
+        raise ValueError("calibration lineage review differs from the exact candidate evidence")
     _validate_portfolio_and_report_bindings(
         registry=registry,
         manifest=manifest,
@@ -480,6 +550,30 @@ def build_model_calibration_artifact(
         )
     except ValueError as exc:
         raise ValueError("trusted campaign verification does not bind calibration inputs") from exc
+    if type(trusted_lineage_verification) is not TrustedModelLineageReviewVerification:
+        raise ValueError("calibration requires trusted operator lineage verification")
+    campaign_started_at = portfolio.started_at or registry.created_at
+    try:
+        lineage_authority = trusted_lineage_verification.require_for(
+            candidate_registry=registry,
+            discovery_manifest=manifest,
+            campaign_started_at=campaign_started_at,
+            observed_at=created_at,
+        )
+    except ValueError as exc:
+        raise ValueError("trusted lineage verification does not bind calibration inputs") from exc
+    if lineage_authority.review_artifact_sha256 != lineage.artifact_sha256:
+        raise ValueError("trusted lineage verification differs from the supplied artifact")
+    lineage_by_model = {binding.exact_model_id: binding for binding in lineage.candidate_bindings}
+    authority_by_model = {
+        candidate.exact_model_id: candidate for candidate in lineage_authority.candidates
+    }
+    if tuple(authority_by_model) != candidate_ids or any(
+        authority_by_model[model_id].lineage_binding_sha256
+        != lineage_by_model[model_id].binding_sha256
+        for model_id in candidate_ids
+    ):
+        raise ValueError("trusted lineage candidate projection differs from the artifact")
 
     candidates: list[ModelCalibrationCandidateObservation] = []
     for candidate, report, diagnostic in zip(
@@ -488,6 +582,8 @@ def build_model_calibration_artifact(
         portfolio.diagnostics,
         strict=True,
     ):
+        lineage_binding = lineage_by_model[candidate.exact_model_id]
+        lineage_decision = authority_by_model[candidate.exact_model_id]
         result = report.results[0]
         failed_cases = sum(case.error_kind is not None for case in result.cases)
         if (
@@ -515,21 +611,16 @@ def build_model_calibration_artifact(
         if not complete_cases:
             reasons.add(CalibrationExclusionReason.REPORT_CASES_INCOMPLETE)
         if (
-            candidate.root_lineage is None
-            or candidate.lineage_review.status is not LineageReviewStatus.APPROVED
+            lineage_decision.root_lineage is None
+            or lineage_decision.decision is not LineageReviewStatus.APPROVED
         ):
             reasons.add(CalibrationExclusionReason.ROOT_LINEAGE_NOT_APPROVED)
-        if (
-            candidate.lineage_review.reviewed_at is not None
-            and benchmark_portfolio.started_at is not None
-            and candidate.lineage_review.reviewed_at > benchmark_portfolio.started_at
-        ):
-            reasons.add(CalibrationExclusionReason.ROOT_LINEAGE_REVIEW_POSTDATES_CAMPAIGN)
         is_included = not reasons
         candidates.append(
             ModelCalibrationCandidateObservation(
                 exact_model_id=candidate.exact_model_id,
-                root_lineage=candidate.root_lineage,
+                root_lineage=lineage_decision.root_lineage,
+                lineage_binding_sha256=lineage_binding.binding_sha256,
                 report_sha256=report.report_sha256,
                 report_execution_evidence=report.execution_evidence,
                 diagnostic=diagnostic,
@@ -577,11 +668,13 @@ def build_model_calibration_artifact(
     if portfolio.campaign_journal_sha256 is None:
         raise ValueError("calibration requires a journal-bound benchmark portfolio")
     payload: dict[str, Any] = {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "created_at": created_at,
         "candidate_registry_sha256": registry.registry_sha256,
         "discovery_manifest_sha256": manifest.manifest_sha256,
         "candidate_set_sha256": canonical_sha256(list(candidate_ids)),
+        "lineage_review_artifact_sha256": lineage.artifact_sha256,
+        "lineage_authority_envelope_sha256": (lineage_authority.authority_envelope_sha256),
         "benchmark_corpus_version": suite.corpus.schema_version,
         "benchmark_corpus_sha256": suite.corpus_sha256,
         "benchmark_ground_truth_version": suite.ground_truth.schema_version,
@@ -609,6 +702,120 @@ def calibration_distribution_sha256(
     return canonical_sha256(validated.model_dump(mode="json"))
 
 
+def derive_calibrated_qualification_policy(
+    *,
+    calibration: ModelCalibrationArtifact,
+    trusted_calibration_verification: TrustedModelCalibrationVerification,
+) -> QualificationPolicy:
+    """Derive and seal the only supported P2 threshold projection from live calibration.
+
+    The resulting policy is a successor candidate, not production-selection authority.
+    Its scores, denominators, distribution hashes, role dimensions, and rationales are
+    derived here; callers cannot choose any quality threshold.
+    """
+
+    if type(calibration) is not ModelCalibrationArtifact:
+        raise ValueError("calibrated policy derivation requires a typed artifact")
+    artifact = ModelCalibrationArtifact.model_validate(calibration.model_dump(mode="json"))
+    if type(trusted_calibration_verification) is not TrustedModelCalibrationVerification:
+        raise ValueError("calibrated policy derivation requires live calibration verification")
+    trusted_calibration_verification.require_for(artifact)
+
+    distributions = {item.dimension: item for item in artifact.distributions}
+    thresholds = tuple(
+        _derive_dimension_threshold(
+            distribution=distributions[dimension],
+            required_candidate_count=_CALIBRATION_GLOBAL_CANDIDATE_SUPPORT,
+            required_root_count=_CALIBRATION_GLOBAL_ROOT_SUPPORT,
+        )
+        for dimension in sorted(ModelBenchmarkDimension, key=lambda item: item.value)
+    )
+    role_policies = tuple(
+        RoleQualificationPolicy(
+            role_class=role_class,
+            thresholds=tuple(
+                _derive_dimension_threshold(
+                    distribution=distributions[dimension],
+                    required_candidate_count=None,
+                    required_root_count=_CALIBRATION_ROLE_ROOT_SUPPORT[role_class],
+                )
+                for dimension in _CALIBRATION_ROLE_DIMENSIONS[role_class]
+            ),
+            minimum_overall_score=_derived_supported_overall_score(
+                calibration=artifact,
+                dimensions=_CALIBRATION_ROLE_DIMENSIONS[role_class],
+                required_candidate_count=None,
+                required_root_count=_CALIBRATION_ROLE_ROOT_SUPPORT[role_class],
+                label=role_class.value,
+            ),
+            minimum_overall_rationale=_AGGREGATE_EMPIRICAL_SUPPORT_RATIONALE,
+        )
+        for role_class in sorted(QualificationRoleClass, key=lambda item: item.value)
+    )
+    global_dimensions = tuple(sorted(ModelBenchmarkDimension, key=lambda item: item.value))
+    global_overall_score = _derived_supported_overall_score(
+        calibration=artifact,
+        dimensions=global_dimensions,
+        required_candidate_count=_CALIBRATION_GLOBAL_CANDIDATE_SUPPORT,
+        required_root_count=_CALIBRATION_GLOBAL_ROOT_SUPPORT,
+        label="global",
+    )
+    return seal_calibrated_qualification_policy(
+        calibration=artifact,
+        trusted_calibration_verification=trusted_calibration_verification,
+        created_at=artifact.created_at,
+        thresholds=thresholds,
+        role_policies=role_policies,
+        tier_a_minimum_overall_score=global_overall_score,
+        tier_a_overall_rationale=_AGGREGATE_EMPIRICAL_SUPPORT_RATIONALE,
+        maximum_validity_days=_CALIBRATED_POLICY_MAXIMUM_VALIDITY_DAYS,
+        maximum_benchmark_evidence_age_days=(
+            _CALIBRATED_POLICY_MAXIMUM_BENCHMARK_EVIDENCE_AGE_DAYS
+        ),
+    )
+
+
+def _derive_dimension_threshold(
+    *,
+    distribution: ModelCalibrationDimensionDistribution,
+    required_candidate_count: int | None,
+    required_root_count: int,
+) -> QualificationDimensionThreshold:
+    evaluated_counts = {item.evaluated for item in distribution.observations}
+    if not distribution.observations or len(evaluated_counts) != 1:
+        raise ValueError(
+            f"{distribution.dimension.value} calibration distribution has no exact denominator"
+        )
+    denominator = next(iter(evaluated_counts))
+    deterministic = distribution.dimension in DETERMINISTIC_QUALIFICATION_DIMENSIONS
+    minimum_score = (
+        1.0
+        if deterministic
+        else _greatest_supported_nonabsolute_score(
+            distribution=distribution,
+            denominator=denominator,
+            required_candidate_count=required_candidate_count,
+            required_root_count=required_root_count,
+        )
+    )
+    return QualificationDimensionThreshold(
+        dimension=distribution.dimension,
+        minimum_cases=denominator,
+        minimum_score=minimum_score,
+        basis=(
+            QualificationThresholdBasis.DETERMINISTIC_REQUIREMENT
+            if deterministic
+            else QualificationThresholdBasis.CALIBRATED_DISTRIBUTION
+        ),
+        rationale=(
+            _DETERMINISTIC_EMPIRICAL_SUPPORT_RATIONALE
+            if deterministic
+            else _JUDGMENT_EMPIRICAL_SUPPORT_RATIONALE
+        ),
+        calibration_distribution_sha256=calibration_distribution_sha256(distribution),
+    )
+
+
 def seal_calibrated_qualification_policy(
     *,
     calibration: ModelCalibrationArtifact,
@@ -627,20 +834,33 @@ def seal_calibrated_qualification_policy(
     if type(trusted_calibration_verification) is not TrustedModelCalibrationVerification:
         raise ValueError("calibrated policy sealing requires live calibration verification")
     trusted_calibration_verification.require_for(artifact)
-    if created_at < artifact.created_at:
-        raise ValueError("calibrated policy cannot predate its calibration artifact")
+    if created_at != artifact.created_at:
+        raise ValueError("calibrated policy creation time must equal its calibration artifact")
+    if (
+        maximum_validity_days != _CALIBRATED_POLICY_MAXIMUM_VALIDITY_DAYS
+        or maximum_benchmark_evidence_age_days
+        != _CALIBRATED_POLICY_MAXIMUM_BENCHMARK_EVIDENCE_AGE_DAYS
+    ):
+        raise ValueError("calibrated policy validity windows differ from the frozen projection")
+    if tier_a_overall_rationale != _AGGREGATE_EMPIRICAL_SUPPORT_RATIONALE:
+        raise ValueError("calibrated policy aggregate rationale differs from the frozen projection")
     included_count = sum(item.included_in_distribution for item in artifact.candidates)
-    if included_count < MIN_CALIBRATION_INCLUDED_CANDIDATES:
-        raise ValueError("calibrated policy requires at least three complete REAL candidates")
-    if artifact.included_root_lineage_count < MIN_CALIBRATION_INCLUDED_ROOT_LINEAGES:
+    if included_count < _CALIBRATION_GLOBAL_CANDIDATE_SUPPORT:
         raise ValueError(
-            "calibrated policy requires at least three independently reviewed root lineages"
+            "calibrated policy requires at least "
+            f"{_CALIBRATION_GLOBAL_CANDIDATE_SUPPORT} complete REAL candidates"
+        )
+    if artifact.included_root_lineage_count < _CALIBRATION_GLOBAL_ROOT_SUPPORT:
+        raise ValueError(
+            "calibrated policy requires at least "
+            f"{_CALIBRATION_GLOBAL_ROOT_SUPPORT} independently reviewed root lineages"
         )
 
     _verify_policy_threshold_bindings(
         calibration=artifact,
         thresholds=thresholds,
         role_policies=role_policies,
+        tier_a_minimum_overall_score=tier_a_minimum_overall_score,
     )
     policy = seal_qualification_policy(
         created_at=created_at,
@@ -668,17 +888,38 @@ def verify_calibrated_qualification_policy(
     policy: QualificationPolicy,
     trusted_calibration_verification: TrustedModelCalibrationVerification,
 ) -> None:
-    """Require exact policy, distribution, and process-local REAL provenance bindings."""
+    """Require structural calibration bindings plus process-local REAL provenance."""
 
     if type(calibration) is not ModelCalibrationArtifact:
         raise ValueError("calibrated policy verification requires a typed artifact")
-    if type(policy) is not QualificationPolicy:
-        raise ValueError("calibrated policy verification requires a typed policy")
     artifact = ModelCalibrationArtifact.model_validate(calibration.model_dump(mode="json"))
-    validated_policy = QualificationPolicy.model_validate(policy.model_dump(mode="json"))
+    verify_calibrated_qualification_policy_structure(
+        calibration=artifact,
+        policy=policy,
+    )
     if type(trusted_calibration_verification) is not TrustedModelCalibrationVerification:
         raise ValueError("calibrated policy verification requires live calibration verification")
     trusted_calibration_verification.require_for(artifact)
+
+
+def verify_calibrated_qualification_policy_structure(
+    *,
+    calibration: ModelCalibrationArtifact,
+    policy: QualificationPolicy,
+) -> None:
+    """Verify the exact A-to-P2 relation without issuing runtime authority.
+
+    This provider-free check proves only that the policy is the deterministic
+    structural projection of the supplied calibration artifact. Self-hashes and
+    this relation alone are declarations, not production-selection authority.
+    """
+
+    if type(calibration) is not ModelCalibrationArtifact:
+        raise ValueError("calibrated policy structural verification requires a typed artifact")
+    if type(policy) is not QualificationPolicy:
+        raise ValueError("calibrated policy structural verification requires a typed policy")
+    artifact = ModelCalibrationArtifact.model_validate(calibration.model_dump(mode="json"))
+    validated_policy = QualificationPolicy.model_validate(policy.model_dump(mode="json"))
     included_count = sum(item.included_in_distribution for item in artifact.candidates)
     if (
         validated_policy.schema_version != "2.0"
@@ -686,13 +927,18 @@ def verify_calibrated_qualification_policy(
         or validated_policy.calibration_included_candidate_count != included_count
         or validated_policy.calibration_included_root_lineage_count
         != artifact.included_root_lineage_count
-        or validated_policy.created_at < artifact.created_at
+        or validated_policy.created_at != artifact.created_at
+        or validated_policy.maximum_validity_days != _CALIBRATED_POLICY_MAXIMUM_VALIDITY_DAYS
+        or validated_policy.maximum_benchmark_evidence_age_days
+        != _CALIBRATED_POLICY_MAXIMUM_BENCHMARK_EVIDENCE_AGE_DAYS
+        or validated_policy.tier_a_overall_rationale != _AGGREGATE_EMPIRICAL_SUPPORT_RATIONALE
     ):
         raise ValueError("qualification policy differs from its calibration artifact")
     _verify_policy_threshold_bindings(
         calibration=artifact,
         thresholds=validated_policy.thresholds,
         role_policies=validated_policy.role_policies,
+        tier_a_minimum_overall_score=validated_policy.tier_a_minimum_overall_score,
     )
 
 
@@ -701,22 +947,68 @@ def _verify_policy_threshold_bindings(
     calibration: ModelCalibrationArtifact,
     thresholds: tuple[QualificationDimensionThreshold, ...],
     role_policies: tuple[RoleQualificationPolicy, ...],
+    tier_a_minimum_overall_score: float,
 ) -> None:
     distributions = {item.dimension: item for item in calibration.distributions}
     global_thresholds = {item.dimension: item for item in thresholds}
-    if len(global_thresholds) != len(thresholds):
-        raise ValueError("calibrated policy contains duplicate global thresholds")
+    if len(global_thresholds) != len(thresholds) or set(global_thresholds) != set(
+        ModelBenchmarkDimension
+    ):
+        raise ValueError("calibrated policy must bind every global dimension exactly once")
+    roles = {item.role_class: item for item in role_policies}
+    if len(roles) != len(role_policies) or set(roles) != set(QualificationRoleClass):
+        raise ValueError("calibrated policy must bind every role class exactly once")
+    for role_class, role_policy in roles.items():
+        if (
+            tuple(item.dimension for item in role_policy.thresholds)
+            != (_CALIBRATION_ROLE_DIMENSIONS[role_class])
+        ):
+            raise ValueError(
+                f"{role_class.value} calibrated policy differs from its canonical dimensions"
+            )
+        if role_policy.minimum_overall_rationale != _AGGREGATE_EMPIRICAL_SUPPORT_RATIONALE:
+            raise ValueError(
+                f"{role_class.value} calibrated policy aggregate rationale differs "
+                "from the frozen projection"
+            )
     for threshold in thresholds:
         _require_threshold_distribution_binding(
             threshold=threshold,
             distribution=distributions[threshold.dimension],
+            required_candidate_count=_CALIBRATION_GLOBAL_CANDIDATE_SUPPORT,
+            required_root_count=_CALIBRATION_GLOBAL_ROOT_SUPPORT,
         )
     for role_policy in role_policies:
         for threshold in role_policy.thresholds:
             _require_threshold_distribution_binding(
                 threshold=threshold,
                 distribution=distributions[threshold.dimension],
+                required_candidate_count=None,
+                required_root_count=_CALIBRATION_ROLE_ROOT_SUPPORT[role_policy.role_class],
             )
+    _require_overall_threshold_binding(
+        calibration=calibration,
+        dimensions=tuple(sorted(ModelBenchmarkDimension, key=lambda item: item.value)),
+        supplied_score=tier_a_minimum_overall_score,
+        required_candidate_count=_CALIBRATION_GLOBAL_CANDIDATE_SUPPORT,
+        required_root_count=_CALIBRATION_GLOBAL_ROOT_SUPPORT,
+        label="global",
+    )
+    for role_policy in role_policies:
+        _require_overall_threshold_binding(
+            calibration=calibration,
+            dimensions=tuple(item.dimension for item in role_policy.thresholds),
+            supplied_score=role_policy.minimum_overall_score,
+            required_candidate_count=None,
+            required_root_count=_CALIBRATION_ROLE_ROOT_SUPPORT[role_policy.role_class],
+            label=role_policy.role_class.value,
+        )
+    _require_joint_policy_support(
+        calibration=calibration,
+        thresholds=thresholds,
+        role_policies=role_policies,
+        tier_a_minimum_overall_score=tier_a_minimum_overall_score,
+    )
 
 
 def model_calibration_artifact_bytes(artifact: ModelCalibrationArtifact) -> bytes:
@@ -733,127 +1025,17 @@ def write_model_calibration_artifact(
     """Atomically create one fresh canonical mode-0600 calibration artifact."""
 
     serialized = model_calibration_artifact_bytes(artifact)
-    if not serialized or len(serialized) > _MAX_ARTIFACT_BYTES:
-        raise ValueError("model calibration artifact exceeds its bounded size")
-    absolute = Path(os.path.abspath(path))
-    parent = absolute.parent
-    _reject_linked_components(parent)
-    if not parent.is_dir():
-        raise ValueError("model calibration output parent must already exist")
-    if os.path.lexists(absolute):
-        raise ValueError("model calibration output must be a fresh file")
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{absolute.name}.",
-        suffix=".tmp",
-        dir=parent,
+    _write_private_json_artifact(
+        path,
+        serialized,
+        label="model calibration artifact",
     )
-    temporary = Path(temporary_name)
-    published = False
-    linked = False
-    try:
-        os.fchmod(descriptor, _PRIVATE_FILE_MODE)
-        view = memoryview(serialized)
-        while view:
-            written = os.write(descriptor, view)
-            if written <= 0:
-                raise OSError("model calibration output made no write progress")
-            view = view[written:]
-        os.fsync(descriptor)
-        os.close(descriptor)
-        descriptor = -1
-        if os.path.lexists(absolute):
-            raise ValueError("model calibration output appeared during publication")
-        os.link(temporary, absolute, follow_symlinks=False)
-        linked = True
-        temporary.unlink()
-        _fsync_directory(parent)
-        if load_model_calibration_artifact(absolute) != artifact:
-            raise ValueError("model calibration artifact changed during publication")
-        published = True
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-        if not published:
-            temporary.unlink(missing_ok=True)
-            if linked:
-                absolute.unlink(missing_ok=True)
 
 
 def load_model_calibration_artifact(path: Path) -> ModelCalibrationArtifact:
     """Load one bounded canonical private artifact without following links."""
 
-    absolute = Path(os.path.abspath(path))
-    _reject_linked_components(absolute.parent)
-    flags = os.O_RDONLY | os.O_NONBLOCK
-    no_follow = getattr(os, "O_NOFOLLOW", None)
-    if no_follow is None:
-        raise ValueError("model calibration artifact loading requires no-follow support")
-    descriptor = -1
-    try:
-        descriptor = os.open(absolute, flags | no_follow)
-        before = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(before.st_mode)
-            or before.st_nlink != 1
-            or stat.S_IMODE(before.st_mode) != _PRIVATE_FILE_MODE
-            or before.st_size <= 0
-            or before.st_size > _MAX_ARTIFACT_BYTES
-        ):
-            raise ValueError(
-                "model calibration artifact must be a bounded private unshared regular file"
-            )
-        chunks: list[bytes] = []
-        remaining = before.st_size
-        while remaining:
-            chunk = os.read(descriptor, min(remaining, 1_048_576))
-            if not chunk:
-                raise ValueError("model calibration artifact ended before its declared size")
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        if os.read(descriptor, 1):
-            raise ValueError("model calibration artifact grew during reading")
-        after = os.fstat(descriptor)
-        identity_before = (
-            before.st_dev,
-            before.st_ino,
-            before.st_mode,
-            before.st_nlink,
-            before.st_size,
-            before.st_mtime_ns,
-            before.st_ctime_ns,
-        )
-        identity_after = (
-            after.st_dev,
-            after.st_ino,
-            after.st_mode,
-            after.st_nlink,
-            after.st_size,
-            after.st_mtime_ns,
-            after.st_ctime_ns,
-        )
-        if identity_before != identity_after:
-            raise ValueError("model calibration artifact changed during reading")
-        try:
-            current = os.lstat(absolute)
-        except OSError as exc:
-            raise ValueError("model calibration artifact path changed during reading") from exc
-        identity_current = (
-            current.st_dev,
-            current.st_ino,
-            current.st_mode,
-            current.st_nlink,
-            current.st_size,
-            current.st_mtime_ns,
-            current.st_ctime_ns,
-        )
-        if identity_current != identity_after:
-            raise ValueError("model calibration artifact path changed during reading")
-        raw = b"".join(chunks)
-    except OSError as exc:
-        raise ValueError("model calibration artifact is unavailable") from exc
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
+    raw = _load_private_json_artifact(path, label="model calibration artifact")
     try:
         payload = json.loads(raw, object_pairs_hook=_unique_json_object)
         if not isinstance(payload, dict):
@@ -864,6 +1046,49 @@ def load_model_calibration_artifact(path: Path) -> ModelCalibrationArtifact:
     if raw != model_calibration_artifact_bytes(artifact):
         raise ValueError("model calibration artifact is not canonically serialized")
     return artifact
+
+
+def calibrated_qualification_policy_bytes(policy: QualificationPolicy) -> bytes:
+    """Return the canonical JSON encoding for one calibrated P2 candidate."""
+
+    if type(policy) is not QualificationPolicy:
+        raise ValueError("calibrated qualification policy serialization requires a typed policy")
+    validated = QualificationPolicy.model_validate(policy.model_dump(mode="json"))
+    if validated.schema_version != "2.0":
+        raise ValueError("calibrated qualification policy must use schema version 2.0")
+    return stable_json(validated).encode("utf-8")
+
+
+def write_calibrated_qualification_policy(
+    path: Path,
+    policy: QualificationPolicy,
+) -> None:
+    """Atomically create one fresh canonical mode-0600 calibrated P2 candidate."""
+
+    serialized = calibrated_qualification_policy_bytes(policy)
+    _write_private_json_artifact(
+        path,
+        serialized,
+        label="calibrated qualification policy",
+    )
+
+
+def load_calibrated_qualification_policy(path: Path) -> QualificationPolicy:
+    """Descriptor-read one canonical private P2 candidate without following links."""
+
+    raw = _load_private_json_artifact(path, label="calibrated qualification policy")
+    try:
+        payload = json.loads(raw, object_pairs_hook=_unique_json_object)
+        if not isinstance(payload, dict):
+            raise ValueError("calibrated qualification policy must contain one JSON object")
+        policy = QualificationPolicy.model_validate(payload)
+        if policy.schema_version != "2.0":
+            raise ValueError("calibrated qualification policy must use schema version 2.0")
+    except (UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError("calibrated qualification policy failed strict validation") from exc
+    if raw != calibrated_qualification_policy_bytes(policy):
+        raise ValueError("calibrated qualification policy is not canonically serialized")
+    return policy
 
 
 def _validate_discovery_binding(
@@ -1015,9 +1240,20 @@ def _require_threshold_distribution_binding(
     *,
     threshold: QualificationDimensionThreshold,
     distribution: ModelCalibrationDimensionDistribution,
+    required_candidate_count: int | None,
+    required_root_count: int,
 ) -> None:
+    expected_rationale = (
+        _DETERMINISTIC_EMPIRICAL_SUPPORT_RATIONALE
+        if threshold.dimension in DETERMINISTIC_QUALIFICATION_DIMENSIONS
+        else _JUDGMENT_EMPIRICAL_SUPPORT_RATIONALE
+    )
+    if threshold.rationale != expected_rationale:
+        raise ValueError(
+            f"{threshold.dimension.value} threshold rationale differs from its frozen projection"
+        )
     if (
-        distribution.included_candidate_count < MIN_CALIBRATION_INCLUDED_CANDIDATES
+        distribution.included_candidate_count < _CALIBRATION_GLOBAL_CANDIDATE_SUPPORT
         or not distribution.observations
     ):
         raise ValueError("calibrated threshold requires a populated distribution")
@@ -1029,33 +1265,509 @@ def _require_threshold_distribution_binding(
         raise ValueError("calibrated threshold cannot reduce its observed denominator")
     if threshold.calibration_distribution_sha256 != calibration_distribution_sha256(distribution):
         raise ValueError("calibrated threshold distribution hash is inconsistent")
-    representable_scores = {
-        round(passed / observed_denominator, 6) for passed in range(observed_denominator + 1)
-    }
-    if threshold.minimum_score not in representable_scores:
-        raise ValueError("calibrated threshold score is not representable by its denominator")
+    if threshold.dimension in DETERMINISTIC_QUALIFICATION_DIMENSIONS:
+        expected_score = 1.0
+        supporters = tuple(
+            item for item in distribution.observations if item.passed == observed_denominator
+        )
+        if not _has_required_empirical_support(
+            exact_model_ids={item.exact_model_id for item in supporters},
+            root_lineages={item.root_lineage for item in supporters},
+            required_candidate_count=required_candidate_count,
+            required_root_count=required_root_count,
+        ):
+            raise ValueError(f"{threshold.dimension.value} lacks required exact empirical support")
+    else:
+        expected_score = _greatest_supported_nonabsolute_score(
+            distribution=distribution,
+            denominator=observed_denominator,
+            required_candidate_count=required_candidate_count,
+            required_root_count=required_root_count,
+        )
+    if threshold.minimum_score != expected_score:
+        raise ValueError(
+            f"{threshold.dimension.value} threshold differs from its frozen "
+            f"empirical-support value {expected_score}"
+        )
+
+
+def _greatest_supported_nonabsolute_score(
+    *,
+    distribution: ModelCalibrationDimensionDistribution,
+    denominator: int,
+    required_candidate_count: int | None,
+    required_root_count: int,
+) -> float:
+    """Select the strongest positive, non-perfect score with exact observed support."""
+
+    for passed in range(denominator - 1, 0, -1):
+        supporters = tuple(item for item in distribution.observations if item.passed >= passed)
+        if _has_required_empirical_support(
+            exact_model_ids={item.exact_model_id for item in supporters},
+            root_lineages={item.root_lineage for item in supporters},
+            required_candidate_count=required_candidate_count,
+            required_root_count=required_root_count,
+        ):
+            return round(passed / denominator, 6)
+    raise ValueError(
+        f"{distribution.dimension.value} lacks positive non-absolute empirical support"
+    )
+
+
+def _require_overall_threshold_binding(
+    *,
+    calibration: ModelCalibrationArtifact,
+    dimensions: tuple[ModelBenchmarkDimension, ...],
+    supplied_score: float,
+    required_candidate_count: int | None,
+    required_root_count: int,
+    label: str,
+) -> None:
+    expected_score = _derived_supported_overall_score(
+        calibration=calibration,
+        dimensions=dimensions,
+        required_candidate_count=required_candidate_count,
+        required_root_count=required_root_count,
+        label=label,
+    )
+    if supplied_score != expected_score:
+        raise ValueError(
+            f"{label} aggregate threshold differs from its frozen "
+            f"empirical-support value {expected_score}"
+        )
+
+
+def _derived_supported_overall_score(
+    *,
+    calibration: ModelCalibrationArtifact,
+    dimensions: tuple[ModelBenchmarkDimension, ...],
+    required_candidate_count: int | None,
+    required_root_count: int,
+    label: str,
+) -> float:
+    """Derive a bounded aggregate gate from exact empirical support."""
+
+    if not dimensions or len(dimensions) != len(set(dimensions)):
+        raise ValueError(f"{label} aggregate dimensions are empty or duplicate")
+    distributions = {item.dimension: item for item in calibration.distributions}
+    judgment_denominators: list[int] = []
+    for dimension in dimensions:
+        if dimension in DETERMINISTIC_QUALIFICATION_DIMENSIONS:
+            continue
+        evaluated_counts = {item.evaluated for item in distributions[dimension].observations}
+        if len(evaluated_counts) != 1:
+            raise ValueError(f"{label} aggregate has inconsistent {dimension.value} denominators")
+        judgment_denominators.append(next(iter(evaluated_counts)))
+    if not judgment_denominators:
+        raise ValueError(f"{label} aggregate lacks a judgment dimension")
+
+    aggregate_scores: dict[str, float] = {}
+    included = tuple(item for item in calibration.candidates if item.included_in_distribution)
+    for candidate in included:
+        scores = {item.dimension: item.score for item in candidate.dimensions}
+        aggregate_scores[candidate.exact_model_id] = round(
+            sum(scores[dimension] for dimension in dimensions) / len(dimensions),
+            6,
+        )
+    supported_score: float | None = None
+    for score in sorted(set(aggregate_scores.values()), reverse=True):
+        supporters = tuple(
+            candidate
+            for candidate in included
+            if aggregate_scores[candidate.exact_model_id] >= score
+        )
+        if _has_required_empirical_support(
+            exact_model_ids={item.exact_model_id for item in supporters},
+            root_lineages={_required_calibration_root_lineage(item) for item in supporters},
+            required_candidate_count=required_candidate_count,
+            required_root_count=required_root_count,
+        ):
+            supported_score = score
+            break
+    if supported_score is None or supported_score <= 0:
+        raise ValueError(f"{label} aggregate lacks positive empirical support")
+
+    nonabsolute_ceiling = round(
+        1 - (1 / (max(judgment_denominators) * len(dimensions))),
+        6,
+    )
+    return min(supported_score, nonabsolute_ceiling)
+
+
+def _require_joint_policy_support(
+    *,
+    calibration: ModelCalibrationArtifact,
+    thresholds: tuple[QualificationDimensionThreshold, ...],
+    role_policies: tuple[RoleQualificationPolicy, ...],
+    tier_a_minimum_overall_score: float,
+) -> None:
+    included = tuple(item for item in calibration.candidates if item.included_in_distribution)
+    global_dimensions = tuple(item.dimension for item in thresholds)
+    global_supporters = tuple(
+        candidate
+        for candidate in included
+        if _candidate_passes_thresholds(candidate=candidate, thresholds=thresholds)
+        and _candidate_aggregate_score(candidate, global_dimensions) >= tier_a_minimum_overall_score
+    )
+    if not _has_required_empirical_support(
+        exact_model_ids={item.exact_model_id for item in global_supporters},
+        root_lineages={_required_calibration_root_lineage(item) for item in global_supporters},
+        required_candidate_count=_CALIBRATION_GLOBAL_CANDIDATE_SUPPORT,
+        required_root_count=_CALIBRATION_GLOBAL_ROOT_SUPPORT,
+    ):
+        raise ValueError(
+            "global calibrated policy is not jointly supported by the required "
+            "exact candidates and root lineages"
+        )
+
+    for role_policy in role_policies:
+        role_dimensions = tuple(item.dimension for item in role_policy.thresholds)
+        role_supporters = tuple(
+            candidate
+            for candidate in global_supporters
+            if _candidate_passes_thresholds(
+                candidate=candidate,
+                thresholds=role_policy.thresholds,
+            )
+            and _candidate_aggregate_score(candidate, role_dimensions)
+            >= role_policy.minimum_overall_score
+        )
+        if not _has_required_empirical_support(
+            exact_model_ids={item.exact_model_id for item in role_supporters},
+            root_lineages={_required_calibration_root_lineage(item) for item in role_supporters},
+            required_candidate_count=None,
+            required_root_count=_CALIBRATION_ROLE_ROOT_SUPPORT[role_policy.role_class],
+        ):
+            raise ValueError(
+                f"{role_policy.role_class.value} calibrated policy is not jointly "
+                "supported by the required root lineages"
+            )
+
+
+def _candidate_passes_thresholds(
+    *,
+    candidate: ModelCalibrationCandidateObservation,
+    thresholds: tuple[QualificationDimensionThreshold, ...],
+) -> bool:
+    scores = {item.dimension: item for item in candidate.dimensions}
+    return all(
+        scores[threshold.dimension].evaluated >= threshold.minimum_cases
+        and scores[threshold.dimension].score >= threshold.minimum_score
+        for threshold in thresholds
+    )
+
+
+def _candidate_aggregate_score(
+    candidate: ModelCalibrationCandidateObservation,
+    dimensions: tuple[ModelBenchmarkDimension, ...],
+) -> float:
+    scores = {item.dimension: item.score for item in candidate.dimensions}
+    return round(
+        sum(scores[dimension] for dimension in dimensions) / len(dimensions),
+        6,
+    )
+
+
+def _has_required_empirical_support(
+    *,
+    exact_model_ids: set[str],
+    root_lineages: set[str],
+    required_candidate_count: int | None,
+    required_root_count: int,
+) -> bool:
+    return (
+        required_candidate_count is None or len(exact_model_ids) >= required_candidate_count
+    ) and len(root_lineages) >= required_root_count
 
 
 def _canonical_json_sha256(value: Any) -> str:
     return canonical_sha256(_JSON_ADAPTER.dump_python(value, mode="json"))
 
 
-def _reject_linked_components(path: Path) -> None:
+def _required_private_json_flag(name: str, *, label: str) -> int:
+    value = getattr(os, name, 0)
+    if not value:
+        raise ValueError(f"{label} I/O requires {name} support")
+    return int(value)
+
+
+def _open_private_json_parent(path: Path, *, label: str) -> tuple[Path, int, str]:
+    """Open every ancestor relative to stable no-follow directory descriptors."""
+
+    if not _PRIVATE_JSON_DIR_FD_SUPPORTED:
+        raise ValueError(f"descriptor-safe {label} traversal is unavailable")
+    if not _PRIVATE_JSON_NOFOLLOW_SUPPORTED:
+        raise ValueError(f"no-follow {label} access is unavailable")
     absolute = Path(os.path.abspath(path))
-    current = Path(absolute.anchor)
-    for part in absolute.parts[1:]:
-        current /= part
-        if current.is_symlink() or current.is_junction():
-            raise ValueError("model calibration artifact paths cannot traverse links")
-
-
-def _fsync_directory(path: Path) -> None:
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    descriptor = os.open(path, flags)
+    if not absolute.name or absolute.name in {".", ".."}:
+        raise ValueError(f"{label} path lacks a file name")
+    flags = (
+        os.O_RDONLY
+        | _required_private_json_flag("O_DIRECTORY", label=label)
+        | _required_private_json_flag("O_NOFOLLOW", label=label)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    descriptor = -1
     try:
-        os.fsync(descriptor)
+        descriptor = os.open(absolute.anchor, flags)
+        for component in absolute.parts[1:-1]:
+            child = os.open(component, flags, dir_fd=descriptor)
+            try:
+                if not stat.S_ISDIR(os.fstat(child).st_mode):
+                    raise ValueError(f"{label} parent must be an unlinked directory")
+            except BaseException:
+                os.close(child)
+                raise
+            os.close(descriptor)
+            descriptor = child
+        return absolute, descriptor, absolute.name
+    except OSError as exc:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise ValueError(f"{label} parent is unavailable or linked") from exc
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
+
+
+def _private_json_file_identity(
+    metadata: os.stat_result,
+) -> tuple[int, int, int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _private_json_directory_identity(metadata: os.stat_result) -> tuple[int, int, int]:
+    return metadata.st_dev, metadata.st_ino, metadata.st_mode
+
+
+def _read_exact_private_json_bytes(descriptor: int, size: int, *, label: str) -> bytes:
+    chunks: list[bytes] = []
+    remaining = size
+    while remaining:
+        chunk = os.read(descriptor, min(remaining, 1_048_576))
+        if not chunk:
+            raise ValueError(f"{label} ended before its declared size")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    if os.read(descriptor, 1):
+        raise ValueError(f"{label} grew during reading")
+    return b"".join(chunks)
+
+
+def _require_private_json_path_identity(
+    path: Path,
+    *,
+    label: str,
+    parent_metadata: os.stat_result,
+    file_metadata: os.stat_result,
+) -> None:
+    _absolute, current_parent, leaf = _open_private_json_parent(path, label=label)
+    try:
+        current_file = os.stat(leaf, dir_fd=current_parent, follow_symlinks=False)
+        if _private_json_directory_identity(
+            os.fstat(current_parent)
+        ) != _private_json_directory_identity(parent_metadata) or _private_json_file_identity(
+            current_file
+        ) != _private_json_file_identity(file_metadata):
+            raise ValueError(f"{label} path changed during access")
+    except OSError as exc:
+        raise ValueError(f"{label} path changed during access") from exc
     finally:
-        os.close(descriptor)
+        os.close(current_parent)
+
+
+def _unlink_private_json_if_identity(
+    parent_descriptor: int,
+    leaf: str,
+    expected_identity: tuple[int, int] | None,
+) -> None:
+    if expected_identity is None:
+        return
+    try:
+        metadata = os.stat(leaf, dir_fd=parent_descriptor, follow_symlinks=False)
+        if (metadata.st_dev, metadata.st_ino) == expected_identity:
+            os.unlink(leaf, dir_fd=parent_descriptor)
+    except OSError:
+        return
+
+
+def _write_private_json_artifact(path: Path, serialized: bytes, *, label: str) -> None:
+    if not serialized or len(serialized) > _MAX_ARTIFACT_BYTES:
+        raise ValueError(f"{label} exceeds its bounded size")
+    absolute, parent_descriptor, leaf = _open_private_json_parent(path, label=label)
+    descriptor = -1
+    temporary_leaf: str | None = None
+    created_identity: tuple[int, int] | None = None
+    published = False
+    linked = False
+    try:
+        try:
+            os.stat(leaf, dir_fd=parent_descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise ValueError(f"{label} destination could not be inspected safely") from exc
+        else:
+            raise ValueError(f"{label} output must be a fresh file")
+
+        flags = (
+            os.O_RDWR
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+            | _required_private_json_flag("O_NOFOLLOW", label=label)
+        )
+        for _attempt in range(32):
+            candidate = f".mmaudit-private-json-{secrets.token_hex(16)}.tmp"
+            try:
+                descriptor = os.open(
+                    candidate,
+                    flags,
+                    _PRIVATE_FILE_MODE,
+                    dir_fd=parent_descriptor,
+                )
+            except FileExistsError:
+                continue
+            temporary_leaf = candidate
+            break
+        if descriptor < 0 or temporary_leaf is None:
+            raise ValueError(f"{label} temporary name space is exhausted")
+
+        os.fchmod(descriptor, _PRIVATE_FILE_MODE)
+        opened = os.fstat(descriptor)
+        created_identity = (opened.st_dev, opened.st_ino)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or opened.st_size != 0
+            or stat.S_IMODE(opened.st_mode) != _PRIVATE_FILE_MODE
+        ):
+            raise ValueError(f"{label} output is not a fresh private file")
+        view = memoryview(serialized)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError(f"{label} output made no write progress")
+            view = view[written:]
+        os.fsync(descriptor)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        if _read_exact_private_json_bytes(descriptor, len(serialized), label=label) != serialized:
+            raise ValueError(f"{label} changed before publication")
+
+        try:
+            os.link(
+                temporary_leaf,
+                leaf,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except FileExistsError as exc:
+            raise ValueError(f"{label} output appeared during publication") from exc
+        linked = True
+        os.unlink(temporary_leaf, dir_fd=parent_descriptor)
+        temporary_leaf = None
+        final_descriptor_metadata = os.fstat(descriptor)
+        final_entry_metadata = os.stat(
+            leaf,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        if (
+            created_identity != (final_descriptor_metadata.st_dev, final_descriptor_metadata.st_ino)
+            or _private_json_file_identity(final_descriptor_metadata)
+            != _private_json_file_identity(final_entry_metadata)
+            or not stat.S_ISREG(final_entry_metadata.st_mode)
+            or final_entry_metadata.st_nlink != 1
+            or final_entry_metadata.st_size != len(serialized)
+            or stat.S_IMODE(final_entry_metadata.st_mode) != _PRIVATE_FILE_MODE
+        ):
+            raise ValueError(f"{label} changed during publication")
+        os.fsync(parent_descriptor)
+        _require_private_json_path_identity(
+            absolute,
+            label=label,
+            parent_metadata=os.fstat(parent_descriptor),
+            file_metadata=final_entry_metadata,
+        )
+        published = True
+    except OSError as exc:
+        raise ValueError(f"{label} could not be written safely") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if not published:
+            if temporary_leaf is not None:
+                _unlink_private_json_if_identity(
+                    parent_descriptor,
+                    temporary_leaf,
+                    created_identity,
+                )
+            if linked:
+                _unlink_private_json_if_identity(
+                    parent_descriptor,
+                    leaf,
+                    created_identity,
+                )
+        os.close(parent_descriptor)
+
+
+def _load_private_json_artifact(path: Path, *, label: str) -> bytes:
+    absolute, parent_descriptor, leaf = _open_private_json_parent(path, label=label)
+    flags = (
+        os.O_RDONLY
+        | os.O_NONBLOCK
+        | getattr(os, "O_CLOEXEC", 0)
+        | _required_private_json_flag("O_NOFOLLOW", label=label)
+    )
+    descriptor = -1
+    try:
+        before = os.stat(leaf, dir_fd=parent_descriptor, follow_symlinks=False)
+        descriptor = os.open(leaf, flags, dir_fd=parent_descriptor)
+        opened = os.fstat(descriptor)
+        if _private_json_file_identity(before) != _private_json_file_identity(opened):
+            raise ValueError(f"{label} changed before reading")
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) != _PRIVATE_FILE_MODE
+            or before.st_size <= 0
+            or before.st_size > _MAX_ARTIFACT_BYTES
+        ):
+            raise ValueError(f"{label} must be a bounded private unshared regular file")
+        raw = _read_exact_private_json_bytes(descriptor, before.st_size, label=label)
+        after = os.fstat(descriptor)
+        current = os.stat(leaf, dir_fd=parent_descriptor, follow_symlinks=False)
+        identities = {
+            _private_json_file_identity(before),
+            _private_json_file_identity(opened),
+            _private_json_file_identity(after),
+            _private_json_file_identity(current),
+        }
+        if len(identities) != 1:
+            raise ValueError(f"{label} changed during reading")
+        _require_private_json_path_identity(
+            absolute,
+            label=label,
+            parent_metadata=os.fstat(parent_descriptor),
+            file_metadata=current,
+        )
+        return raw
+    except OSError as exc:
+        raise ValueError(f"{label} is unavailable") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(parent_descriptor)
 
 
 def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

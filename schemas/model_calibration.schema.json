@@ -6,8 +6,7 @@
         "candidate_run_not_complete",
         "report_cases_incomplete",
         "report_not_real",
-        "root_lineage_not_approved",
-        "root_lineage_review_postdates_campaign"
+        "root_lineage_not_approved"
       ],
       "title": "CalibrationExclusionReason",
       "type": "string"
@@ -379,6 +378,11 @@
           "title": "Included In Distribution",
           "type": "boolean"
         },
+        "lineage_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Lineage Binding Sha256",
+          "type": "string"
+        },
         "overall_score": {
           "anyOf": [
             {
@@ -417,6 +421,7 @@
       },
       "required": [
         "exact_model_id",
+        "lineage_binding_sha256",
         "report_sha256",
         "report_execution_evidence",
         "diagnostic",
@@ -655,9 +660,19 @@
       "title": "Included Root Lineage Count",
       "type": "integer"
     },
+    "lineage_authority_envelope_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Lineage Authority Envelope Sha256",
+      "type": "string"
+    },
+    "lineage_review_artifact_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Lineage Review Artifact Sha256",
+      "type": "string"
+    },
     "schema_version": {
-      "const": "1.0",
-      "default": "1.0",
+      "const": "2.0",
+      "default": "2.0",
       "title": "Schema Version",
       "type": "string"
     }
@@ -667,6 +682,8 @@
     "candidate_registry_sha256",
     "discovery_manifest_sha256",
     "candidate_set_sha256",
+    "lineage_review_artifact_sha256",
+    "lineage_authority_envelope_sha256",
     "benchmark_corpus_version",
     "benchmark_corpus_sha256",
     "benchmark_ground_truth_version",

@@ -1,0 +1,200 @@
+{
+  "$defs": {
+    "ModelLineageAuthorityStatement": {
+      "additionalProperties": false,
+      "description": "Canonical domain-separated statement signed by the operator.",
+      "properties": {
+        "approved_root_lineages": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "title": "Approved Root Lineages",
+          "type": "array"
+        },
+        "calibration_identity_authorized": {
+          "const": true,
+          "default": true,
+          "title": "Calibration Identity Authorized",
+          "type": "boolean"
+        },
+        "candidate_binding_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Binding Set Sha256",
+          "type": "string"
+        },
+        "candidate_registry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Registry Sha256",
+          "type": "string"
+        },
+        "discovery_candidate_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Discovery Candidate Set Sha256",
+          "type": "string"
+        },
+        "discovery_manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Discovery Manifest Sha256",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "operator_decision_authenticity": {
+          "const": "SSHSIG_ED25519_VERIFIED",
+          "default": "SSHSIG_ED25519_VERIFIED",
+          "title": "Operator Decision Authenticity",
+          "type": "string"
+        },
+        "operator_principal": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._@+-]{0,127}$",
+          "title": "Operator Principal",
+          "type": "string"
+        },
+        "production_selection_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Production Selection Authorized",
+          "type": "boolean"
+        },
+        "provider_observation_authenticity": {
+          "const": "NOT_INDEPENDENTLY_PROVEN",
+          "default": "NOT_INDEPENDENTLY_PROVEN",
+          "title": "Provider Observation Authenticity",
+          "type": "string"
+        },
+        "purpose": {
+          "const": "LINEAGE_IDENTITY_ONLY",
+          "default": "LINEAGE_IDENTITY_ONLY",
+          "title": "Purpose",
+          "type": "string"
+        },
+        "refresh_semantic_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Refresh Semantic Sha256",
+          "type": "string"
+        },
+        "refresh_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Refresh Snapshot Sha256",
+          "type": "string"
+        },
+        "refresh_source_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Refresh Source Evidence Sha256",
+          "type": "string"
+        },
+        "review_artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Review Artifact Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "signature_namespace": {
+          "const": "mmaudit-model-lineage-review-v1",
+          "default": "mmaudit-model-lineage-review-v1",
+          "title": "Signature Namespace",
+          "type": "string"
+        },
+        "signed_at": {
+          "format": "date-time",
+          "title": "Signed At",
+          "type": "string"
+        },
+        "source_egress_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Source Egress Authorized",
+          "type": "boolean"
+        },
+        "source_scope": {
+          "const": "PUBLIC_OPEN_SOURCE_ONLY",
+          "default": "PUBLIC_OPEN_SOURCE_ONLY",
+          "title": "Source Scope",
+          "type": "string"
+        },
+        "statement_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Statement Sha256",
+          "type": "string"
+        },
+        "trust_anchor_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Trust Anchor Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "signed_at",
+        "expires_at",
+        "operator_principal",
+        "trust_anchor_sha256",
+        "review_artifact_sha256",
+        "candidate_registry_sha256",
+        "discovery_manifest_sha256",
+        "discovery_candidate_set_sha256",
+        "refresh_source_evidence_sha256",
+        "refresh_snapshot_sha256",
+        "refresh_semantic_sha256",
+        "candidate_binding_set_sha256",
+        "approved_root_lineages",
+        "statement_sha256"
+      ],
+      "title": "ModelLineageAuthorityStatement",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/model_lineage_authority.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Bounded detached SSHSIG envelope for one exact authority statement.",
+  "properties": {
+    "authority_envelope_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Authority Envelope Sha256",
+      "type": "string"
+    },
+    "detached_signature": {
+      "maxLength": 16384,
+      "minLength": 100,
+      "title": "Detached Signature",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "signature_algorithm": {
+      "const": "SSHSIG_ED25519",
+      "default": "SSHSIG_ED25519",
+      "title": "Signature Algorithm",
+      "type": "string"
+    },
+    "signature_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Signature Sha256",
+      "type": "string"
+    },
+    "statement": {
+      "$ref": "#/$defs/ModelLineageAuthorityStatement"
+    }
+  },
+  "required": [
+    "statement",
+    "detached_signature",
+    "signature_sha256",
+    "authority_envelope_sha256"
+  ],
+  "title": "mmaudit signed model lineage authority",
+  "type": "object"
+}

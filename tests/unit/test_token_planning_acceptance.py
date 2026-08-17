@@ -28,10 +28,13 @@ from mmaudit.models.schemas import (
     SolidityEntityKind,
     SolidityGraphEdge,
     SolidityGraphKind,
+    SolidityGraphOccurrenceKind,
+    SolidityGraphRetainedOccurrence,
     SolidityGraphSet,
     SolidityProvenance,
     SoliditySymbolIndex,
     UsageRecord,
+    solidity_graph_occurrence_sha256,
 )
 from mmaudit.models.token_planning import (
     PROMPT_ALLOCATION_CATEGORIES,
@@ -94,6 +97,27 @@ def _write_large_synthetic_repository(root: Path, *, source_bytes: int) -> None:
         blocks.append(f"contract SyntheticVault{index} {{\n{declarations}}}\n")
         index += 1
     source_path.write_text("".join(blocks), encoding="utf-8")
+
+
+def _edge_occurrences(
+    edges: list[SolidityGraphEdge],
+) -> tuple[SolidityGraphRetainedOccurrence, ...]:
+    return tuple(
+        sorted(
+            (
+                SolidityGraphRetainedOccurrence(
+                    subject_kind=SolidityGraphOccurrenceKind.EDGE,
+                    subject_sha256=solidity_graph_occurrence_sha256(
+                        SolidityGraphOccurrenceKind.EDGE,
+                        edge,
+                    ),
+                    occurrence_count=1,
+                )
+                for edge in edges
+            ),
+            key=lambda item: (item.subject_kind.value, item.subject_sha256),
+        )
+    )
 
 
 def _metadata_inventory(
@@ -190,6 +214,7 @@ def _metadata_inventory(
         ),
         SolidityGraphSet(
             edges=edges,
+            retained_occurrences=_edge_occurrences(edges),
             analyzed_graphs=[SolidityGraphKind.STATE_WRITE],
         ),
         InvariantSuite(
@@ -508,7 +533,12 @@ def test_metadata_omission_aggregate_binds_every_actual_inventory_reduction(
     changed_edges[0] = changed_edges[0].model_copy(
         update={"label": f"{marker}:{changed_edges[0].label}"}
     )
-    changed_graphs = graphs.model_copy(update={"edges": changed_edges})
+    changed_graphs = graphs.model_copy(
+        update={
+            "edges": changed_edges,
+            "retained_occurrences": _edge_occurrences(changed_edges),
+        }
+    )
     config = config_factory(
         repository={
             "max_file_bytes": 100_000,

@@ -11,6 +11,19 @@ import mmaudit.cli as cli_module
 from mmaudit.cli import app
 from mmaudit.constants import ExitCode
 from mmaudit.models.openrouter import OpenRouterAuthenticationError
+from mmaudit.models.policy_eligibility import (
+    PolicyReviewReason,
+    build_model_policy_eligibility_artifact,
+    build_policy_eligibility_route,
+)
+from mmaudit.models.policy_eligibility_authority import (
+    build_policy_eligibility_source_observation,
+)
+from mmaudit.models.policy_eligibility_refresh import (
+    POLICY_ELIGIBILITY_REFRESH_FILENAME,
+    PolicyEligibilityRefreshRouteDisposition,
+    load_model_policy_eligibility_refresh_artifact,
+)
 from mmaudit.models.qualification import CandidateRegistry, load_candidate_registry
 from mmaudit.models.refresh import (
     ATTEMPT_FILENAME,
@@ -21,8 +34,10 @@ from mmaudit.models.refresh import (
     ModelRefreshAttemptStatus,
     ModelRefreshFailureCode,
     load_model_refresh_attempt,
+    load_model_refresh_snapshot,
     load_model_refresh_source_evidence,
 )
+from mmaudit.reporting.json_report import stable_json
 
 ROOT = Path(__file__).resolve().parents[2]
 REGISTRY_PATH = ROOT / "config" / "models.candidates.toml"
@@ -173,6 +188,48 @@ def _arguments(tmp_path: Path, secret: Path) -> list[str]:
     ]
 
 
+def _missing_policy_inputs(tmp_path: Path, registry: CandidateRegistry) -> tuple[list[str], str]:
+    observed_at = datetime.now(UTC).replace(microsecond=0)
+    candidate = registry.candidates[0]
+    route = build_policy_eligibility_route(
+        exact_model_id=candidate.exact_model_id,
+        provider_name=candidate.approved_provider_name,
+        provider_endpoint=candidate.approved_provider_endpoint,
+    )
+    artifact = build_model_policy_eligibility_artifact(
+        created_at=observed_at - timedelta(hours=1),
+        official_evidence=(),
+        determinations=(),
+    )
+    observation = build_policy_eligibility_source_observation(
+        artifact=artifact,
+        observed_at=observed_at,
+        expires_at=observed_at + timedelta(hours=12),
+        source_commitments=(),
+    )
+    artifact_path = tmp_path / "policy-artifact.json"
+    observation_path = tmp_path / "policy-source-observation.json"
+    routes_path = tmp_path / "policy-checked-routes.json"
+    for path, value in (
+        (artifact_path, artifact),
+        (observation_path, observation),
+        (routes_path, [route.model_dump(mode="json")]),
+    ):
+        path.write_text(stable_json(value), encoding="utf-8")
+        path.chmod(0o600)
+    return (
+        [
+            "--policy-eligibility-artifact",
+            str(artifact_path),
+            "--policy-source-observation",
+            str(observation_path),
+            "--policy-checked-routes",
+            str(routes_path),
+        ],
+        route.route_sha256,
+    )
+
+
 def test_models_refresh_help_exposes_only_metadata_and_evidence_controls() -> None:
     result = runner.invoke(app, ["models", "refresh", "--help"], env={"COLUMNS": "240"})
 
@@ -187,6 +244,9 @@ def test_models_refresh_help_exposes_only_metadata_and_evidence_controls() -> No
         "--soft-max-age-hours",
         "--hard-max-age-hours",
         "--pricing-tolerance-fraction",
+        "--policy-eligibility-artifact",
+        "--policy-source-observation",
+        "--policy-checked-routes",
     ):
         assert option in result.stdout
     assert "--benchmark" not in result.stdout
@@ -332,6 +392,137 @@ def test_models_refresh_executes_get_only_path_and_emits_private_artifacts(
     assert canary not in result.stdout
     assert canary not in serialized
     assert str(secret) not in serialized
+
+
+def test_models_refresh_explicit_policy_inputs_emit_bound_missing_review_signal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canary = "synthetic-refresh-canary"
+    secret = _secret_file(tmp_path, canary)
+    registry = load_candidate_registry(REGISTRY_PATH)
+    _client, calls, usages = _install_fake_client(monkeypatch, registry)
+    policy_arguments, checked_route_sha256 = _missing_policy_inputs(tmp_path, registry)
+    output = tmp_path / "refresh-output"
+
+    result = runner.invoke(
+        app,
+        [*_arguments(tmp_path, secret), *policy_arguments],
+        env={"COLUMNS": "500"},
+    )
+
+    assert result.exit_code == ExitCode.SUCCESS, result.stdout
+    assert calls[0:3] == ["authenticate", "catalog", "zdr"]
+    assert calls[-1] == "close"
+    assert all(usage.records == [] for usage in usages)
+    projection = load_model_policy_eligibility_refresh_artifact(
+        output / POLICY_ELIGIBILITY_REFRESH_FILENAME
+    )
+    snapshot = load_model_refresh_snapshot(output / SNAPSHOT_FILENAME)
+    assert projection.refresh_snapshot_sha256 == snapshot.snapshot_sha256
+    assert projection.refresh_source_evidence_sha256 == snapshot.source_evidence_sha256
+    assert projection.observed_at == snapshot.retrieved_at
+    assert projection.checked_routes[0].route_sha256 == checked_route_sha256
+    assert projection.route_records[0].disposition is (
+        PolicyEligibilityRefreshRouteDisposition.REDETERMINATION_REQUIRED
+    )
+    assert projection.route_records[0].review_reasons == (PolicyReviewReason.MISSING,)
+    assert projection.redetermination_required is True
+    assert projection.automated_eligibility_inference is False
+    assert projection.policy_selection_authorized is False
+    assert projection.qualification_authorized is False
+    assert projection.source_egress_authorized is False
+    assert projection.production_selection_authorized is False
+    assert canary not in (output / POLICY_ELIGIBILITY_REFRESH_FILENAME).read_text(encoding="utf-8")
+
+
+def test_models_refresh_requires_all_policy_inputs_before_secret_or_provider_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret_accessed = False
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_accessed
+        secret_accessed = True
+        raise AssertionError("operator secrets must not be accessed")
+
+    class ForbiddenClient:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("provider client must not be constructed")
+
+    monkeypatch.setattr(cli_module, "load_operator_secrets", forbidden_secret_access)
+    monkeypatch.setattr(cli_module, "OpenRouterClient", ForbiddenClient)
+    monkeypatch.setattr(cli_module, "_TRUSTED_OPENROUTER_CLIENT_TYPE", ForbiddenClient)
+    result = runner.invoke(
+        app,
+        [
+            "models",
+            "refresh",
+            "--candidate-registry",
+            str(REGISTRY_PATH),
+            "--policy-eligibility-artifact",
+            str(tmp_path / "policy-artifact.json"),
+            "--output-dir",
+            str(tmp_path / "output"),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "must be supplied together" in " ".join(result.stdout.split())
+    assert not secret_accessed
+
+
+def test_models_refresh_rejects_unapproved_policy_route_before_provider_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = load_candidate_registry(REGISTRY_PATH)
+    policy_arguments, _route_sha256 = _missing_policy_inputs(tmp_path, registry)
+    candidate = registry.candidates[0]
+    unapproved = build_policy_eligibility_route(
+        exact_model_id=candidate.exact_model_id,
+        provider_name=candidate.approved_provider_name,
+        provider_endpoint="unapproved-provider/route",
+    )
+    routes_path = Path(policy_arguments[policy_arguments.index("--policy-checked-routes") + 1])
+    routes_path.write_text(
+        stable_json([unapproved.model_dump(mode="json")]),
+        encoding="utf-8",
+    )
+    routes_path.chmod(0o600)
+    secret_accessed = False
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_accessed
+        secret_accessed = True
+        raise AssertionError("operator secrets must not be accessed")
+
+    class ForbiddenClient:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("provider client must not be constructed")
+
+    monkeypatch.setattr(cli_module, "load_operator_secrets", forbidden_secret_access)
+    monkeypatch.setattr(cli_module, "OpenRouterClient", ForbiddenClient)
+    monkeypatch.setattr(cli_module, "_TRUSTED_OPENROUTER_CLIENT_TYPE", ForbiddenClient)
+    result = runner.invoke(
+        app,
+        [
+            "models",
+            "refresh",
+            "--candidate-registry",
+            str(REGISTRY_PATH),
+            *policy_arguments,
+            "--output-dir",
+            str(tmp_path / "output"),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "checked policy route" in " ".join(result.stdout.split())
+    assert not secret_accessed
 
 
 def test_models_refresh_replays_a_paired_previous_source_before_provider_work(

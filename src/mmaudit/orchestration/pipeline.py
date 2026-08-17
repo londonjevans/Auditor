@@ -52,6 +52,7 @@ from mmaudit.agents.verifier import (
 from mmaudit.agents.verifier import (
     insufficient_verifications as _insufficient_verifications,
 )
+from mmaudit.artifact_limits import MAX_JSON_ARTIFACT_BYTES
 from mmaudit.benchmark.certificate import (
     BenchmarkCertificateVerification,
     CertificateVerificationOrigin,
@@ -103,6 +104,12 @@ from mmaudit.models.openrouter import (
     OpenRouterQualifiedReasoningRoutingBinding,
     OpenRouterSchemaError,
     trusted_openrouter_execution_evidence,
+)
+from mmaudit.models.policy_eligibility import PolicyUsePurpose
+from mmaudit.models.policy_selection import (
+    AUDIT_MODEL_SELECTION_EVIDENCE_FILENAME,
+    AuditModelSelectionEvidenceBundle,
+    VerifiedAuditModelSelection,
 )
 from mmaudit.models.qualification import VerifiedProductionQualification
 from mmaudit.models.registry import (
@@ -203,6 +210,8 @@ from mmaudit.models.schemas import (
     SolidityCompilationResult,
     SolidityCoverage,
     SolidityGraphEdge,
+    SolidityGraphFactKind,
+    SolidityGraphOccurrenceKind,
     SolidityGraphSet,
     SolidityProjectMetadata,
     SolidityProjectType,
@@ -217,6 +226,7 @@ from mmaudit.models.schemas import (
     VerificationVerdict,
 )
 from mmaudit.models.sharding import (
+    SolidityCoverageArtifact,
     SolidityShardInventory,
     SolidityShardOverlapKind,
     SolidityShardPolicy,
@@ -358,7 +368,7 @@ from mmaudit.reporting.client import (
     build_scanner_source_evidence_for_report,
     render_client_markdown_from_artifact,
 )
-from mmaudit.reporting.json_report import stable_json, write_json
+from mmaudit.reporting.json_report import stable_json, write_json, write_json_bounded
 from mmaudit.reporting.markdown import render_forensic_markdown, render_markdown
 from mmaudit.reporting.run_authority import (
     RUN_TERMINAL_REPORT_AUTHORITY_PATH,
@@ -379,6 +389,7 @@ from mmaudit.repository.privacy_provenance import (
     PrivacySourceProvenanceEvidence,
     PrivacySourceProvenanceObservation,
     prove_privacy_source_classification,
+    reobserve_retained_privacy_source_provenance,
     validate_privacy_source_provenance_observation,
 )
 from mmaudit.repository.redaction import SecretSafetyError
@@ -694,6 +705,9 @@ def _scheduler_root_lineage(config: AuditConfig, model_id: str) -> str:
 def _whole_protocol_review_models(
     config: AuditConfig,
     qualification: VerifiedProductionQualification | None,
+    *,
+    selected_model_ids: frozenset[str] | None = None,
+    now: datetime | None = None,
 ) -> tuple[tuple[str, str], ...]:
     """Select four exact independently qualified whole-protocol reviewers."""
 
@@ -701,13 +715,14 @@ def _whole_protocol_review_models(
         return ()
     if qualification is None:
         raise ValueError("maximum assurance lacks production model qualification")
-    qualification.require_current(now=datetime.now(UTC).replace(microsecond=0))
+    qualification.require_current(now=now or datetime.now(UTC).replace(microsecond=0))
     configured = set(configured_model_ids(config, include_fallbacks=True))
     selected: list[tuple[str, str]] = []
     selected_lineages: set[str] = set()
     for model in sorted(qualification.models, key=lambda item: item.exact_model_id):
         if (
             model.exact_model_id not in configured
+            or (selected_model_ids is not None and model.exact_model_id not in selected_model_ids)
             or "whole_protocol_review" not in model.approved_roles
             or model.root_lineage in selected_lineages
         ):
@@ -721,6 +736,69 @@ def _whole_protocol_review_models(
             "maximum assurance lacks four independently qualified whole-protocol reviewers"
         )
     return tuple(selected)
+
+
+def _policy_selected_auxiliary_config(
+    config: AuditConfig,
+    *,
+    selected_model_ids: frozenset[str] | None,
+) -> AuditConfig:
+    """Remove policy-excluded fallbacks from auxiliary reviewer candidate pools.
+
+    Role primaries are checked independently and remain unchanged. Model lineage and
+    measured-quality records are also left untouched so policy eligibility cannot alter
+    technical qualification or scoring.
+    """
+
+    if selected_model_ids is None:
+        return config
+    core_roles = (
+        "threat_model",
+        "source_audit",
+        "business_logic",
+        "configuration",
+        "verifier",
+        "judge",
+    )
+    updates: dict[str, Any] = {
+        role: config.models.role(role).model_copy(
+            update={
+                "fallbacks": [
+                    model_id
+                    for model_id in config.models.role(role).fallbacks
+                    if model_id in selected_model_ids
+                ]
+            }
+        )
+        for role in core_roles
+    }
+    updates["specialists"] = {
+        role: role_config.model_copy(
+            update={
+                "fallbacks": [
+                    model_id for model_id in role_config.fallbacks if model_id in selected_model_ids
+                ]
+            }
+        )
+        for role, role_config in config.models.specialists.items()
+        if role_config.primary in selected_model_ids
+    }
+    return config.model_copy(update={"models": config.models.model_copy(update=updates)})
+
+
+def _require_policy_selected_scheduled_model(
+    *,
+    selected_model_ids: frozenset[str] | None,
+    request_role: str,
+    model_id: str,
+) -> None:
+    """Reject one actually scheduled model when policy selection excluded it."""
+
+    if selected_model_ids is not None and model_id not in selected_model_ids:
+        raise ValueError(
+            f"scheduled role {request_role} model lacks verified audit policy eligibility: "
+            f"{model_id}"
+        )
 
 
 def _scheduler_primary_only_config(config: AuditConfig) -> AuditConfig:
@@ -1642,6 +1720,7 @@ class AuditPipeline:
         *,
         repo: Path,
         output: Path,
+        configuration_root: Path | None = None,
         file_config: AuditConfig | None = None,
         environment_overrides: AuditConfigOverrides | None = None,
         cli_overrides: AuditConfigOverrides | None = None,
@@ -1654,6 +1733,8 @@ class AuditPipeline:
         invariant_runner: FoundryInvariantRunner | None = None,
         formal_runner: FormalRunner | None = None,
         production_qualification: VerifiedProductionQualification | None = None,
+        audit_model_selection_evidence: AuditModelSelectionEvidenceBundle | None = None,
+        verified_audit_model_selection: VerifiedAuditModelSelection | None = None,
         privacy_consent_observation: PrivacyRetentionConsentObservation | None = None,
         privacy_source_classification: PrivacySourceClassification = (
             PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE
@@ -1671,10 +1752,40 @@ class AuditPipeline:
             )
         self.repo_input = safe_repository_root(repo)
         self.output = resolve_safe_output_root(output)
+        self.configuration_root = (
+            self.repo_input
+            if configuration_root is None
+            else configuration_root.resolve(strict=True)
+        )
+        if not self.configuration_root.is_dir():
+            raise ValueError("configuration root must be a directory")
         self.client = client
         self.cost_ledger = cost_ledger
         self.api_key = api_key or ""
         self.production_qualification = production_qualification
+        if (audit_model_selection_evidence is None) != (verified_audit_model_selection is None):
+            raise ValueError(
+                "audit model selection evidence and live authority must be supplied together"
+            )
+        if (
+            audit_model_selection_evidence is not None
+            and type(audit_model_selection_evidence) is not AuditModelSelectionEvidenceBundle
+        ):
+            raise ValueError("audit model selection evidence has an invalid exact type")
+        if (
+            verified_audit_model_selection is not None
+            and type(verified_audit_model_selection) is not VerifiedAuditModelSelection
+        ):
+            raise ValueError("verified audit model selection has an invalid opaque type")
+        self.audit_model_selection_evidence = (
+            AuditModelSelectionEvidenceBundle.model_validate_json(
+                audit_model_selection_evidence.model_dump_json(),
+                strict=True,
+            )
+            if audit_model_selection_evidence is not None
+            else None
+        )
+        self.verified_audit_model_selection = verified_audit_model_selection
         self.privacy_consent_observation = privacy_consent_observation
         self.privacy_source_classification = privacy_source_classification
         self.privacy_source_provenance_observation: PrivacySourceProvenanceObservation | None = None
@@ -1756,6 +1867,131 @@ class AuditPipeline:
         if self.client is None:
             return ExecutionEvidenceKind.REAL
         return trusted_openrouter_execution_evidence(self.client)
+
+    def _require_current_audit_model_selection(
+        self,
+        *,
+        now: datetime,
+        expected_source_sha256: str | None = None,
+    ) -> frozenset[str]:
+        """Recheck one exact paid-audit selection without treating records as authority."""
+
+        evidence = self.audit_model_selection_evidence
+        authority = self.verified_audit_model_selection
+        if (
+            type(evidence) is not AuditModelSelectionEvidenceBundle
+            or type(authority) is not VerifiedAuditModelSelection
+        ):
+            raise ValueError(
+                "real paid audit requires exact model-selection evidence and live authority"
+            )
+        canonical_evidence = AuditModelSelectionEvidenceBundle.model_validate_json(
+            evidence.model_dump_json(),
+            strict=True,
+        )
+        if canonical_evidence != evidence:
+            raise ValueError("audit model selection evidence is not an exact canonical bundle")
+        selection = canonical_evidence.selection
+        audit_context = canonical_evidence.audit_context
+        constraints = canonical_evidence.client_constraints
+        if (
+            audit_context.intended_use
+            is not PolicyUsePurpose.PAID_CUSTOMER_FACING_DEFENSIVE_SOURCE_AUDIT
+        ):
+            raise ValueError("real paid audit requires paid customer-facing policy intended use")
+        if constraints.audit_context != audit_context:
+            raise ValueError("client policy constraints bind a different audit context")
+        if (
+            selection.audit_scope_sha256 != audit_context.audit_scope_sha256
+            or selection.source_sha256 != audit_context.source_sha256
+            or selection.audit_context_sha256 != audit_context.context_sha256
+            or selection.client_constraints_sha256 != constraints.constraints_sha256
+            or authority.audit_selection_sha256 != selection.selection_sha256
+            or authority.audit_scope_sha256 != audit_context.audit_scope_sha256
+            or authority.source_sha256 != audit_context.source_sha256
+            or authority.audit_context_sha256 != audit_context.context_sha256
+        ):
+            raise ValueError("audit model selection differs from its exact audit bindings")
+        qualification = self.production_qualification
+        if type(qualification) is not VerifiedProductionQualification:
+            raise ValueError("real paid audit lacks exact technical qualification authority")
+        qualification.require_current(now=now)
+        technical_model_ids = tuple(model.exact_model_id for model in qualification.models)
+        selected_model_ids = tuple(model.exact_model_id for model in authority.models)
+        if (
+            selection.technical_qualification_capability_sha256 != qualification.capability_sha256
+            or selection.technical_production_selection_sha256
+            != qualification.production_selection_sha256
+            or authority.technical_qualification_capability_sha256
+            != qualification.capability_sha256
+            or authority.technical_production_selection_sha256
+            != qualification.production_selection_sha256
+            or selection.technical_model_ids != technical_model_ids
+            or selection.selected_model_ids != selected_model_ids
+        ):
+            raise ValueError("audit model selection differs from technical qualification")
+        authority.require_current(
+            now=now,
+            expected_audit_scope_sha256=audit_context.audit_scope_sha256,
+            expected_source_sha256=audit_context.source_sha256,
+            expected_audit_context_sha256=audit_context.context_sha256,
+            expected_client_constraints_sha256=constraints.constraints_sha256,
+        )
+        if audit_context.source_classification is not self.privacy_source_classification:
+            raise ValueError("audit policy source classification differs from the pending run")
+        if (
+            expected_source_sha256 is not None
+            and audit_context.source_sha256 != expected_source_sha256
+        ):
+            raise ValueError("audit policy source SHA-256 differs from the frozen repository map")
+        if self.effective_privacy_policy is not None and (
+            self.effective_privacy_policy.source_sha256 != audit_context.source_sha256
+            or self.effective_privacy_policy.source_classification
+            is not audit_context.source_classification
+        ):
+            raise ValueError("audit policy context differs from effective privacy evidence")
+        selected = frozenset(selection.selected_model_ids)
+        configured_primaries = {
+            role: self.config.models.role(role).primary
+            for role in (
+                "threat_model",
+                "source_audit",
+                "business_logic",
+                "configuration",
+                "verifier",
+                "judge",
+            )
+        }
+        excluded_primaries = tuple(
+            f"{role}={model_id}"
+            for role, model_id in sorted(configured_primaries.items())
+            if model_id not in selected
+        )
+        if excluded_primaries:
+            raise ValueError(
+                "configured role primary lacks verified audit policy eligibility: "
+                + ", ".join(excluded_primaries)
+            )
+        return selected
+
+    def _persist_current_audit_model_selection_evidence(
+        self,
+        *,
+        run_dir: Path,
+        now: datetime,
+        expected_source_sha256: str,
+    ) -> frozenset[str]:
+        """Persist canonical non-authorizing evidence after the frozen-source recheck."""
+
+        selected = self._require_current_audit_model_selection(
+            now=now,
+            expected_source_sha256=expected_source_sha256,
+        )
+        evidence = self.audit_model_selection_evidence
+        if type(evidence) is not AuditModelSelectionEvidenceBundle:
+            raise ValueError("audit model selection evidence disappeared before persistence")
+        write_json(run_dir / AUDIT_MODEL_SELECTION_EVIDENCE_FILENAME, evidence)
+        return selected
 
     async def run(
         self,
@@ -1899,9 +2135,37 @@ class AuditPipeline:
             and (not self._owns_client or type(self.client) is not OpenRouterClient)
         ):
             raise ValueError("injected provider clients cannot establish REAL execution provenance")
+        paid_audit_policy_required = (
+            not scanner_only
+            and planned_model_execution_evidence is ExecutionEvidenceKind.REAL
+            and (self.client is not None or bool(self.api_key))
+        )
+        if not paid_audit_policy_required and (
+            self.audit_model_selection_evidence is not None
+            or self.verified_audit_model_selection is not None
+        ):
+            raise ValueError(
+                "audit model-selection evidence is accepted only for paid REAL provider audits"
+            )
+        policy_selected_model_ids: frozenset[str] | None = None
         effective_cost_ledger = self._effective_cost_ledger()
         if not scanner_only and effective_cost_ledger is None:
             raise ValueError("provider audits require an explicit existing cumulative cost ledger")
+        if (
+            paid_audit_policy_required
+            and type(self.production_qualification) is VerifiedProductionQualification
+        ):
+            policy_now = datetime.now(UTC).replace(microsecond=0)
+            try:
+                self.production_qualification.require_current(now=policy_now)
+            except ValueError:
+                # The established technical-qualification preflight owns this failure and
+                # records it without allowing model transport.
+                pass
+            else:
+                policy_selected_model_ids = self._require_current_audit_model_selection(
+                    now=policy_now
+                )
         benchmark_required = (
             self.config.maximum_assurance.benchmark_gate or self.config.maximum_assurance.ci_mode
         )
@@ -2095,7 +2359,7 @@ class AuditPipeline:
             terminal_code = ExitCode.CONFIGURATION
 
         ignore_path = safe_ignore_file(
-            self.repo_input,
+            self.configuration_root,
             self.config.repository.ignore_file,
         )
         matcher = IgnoreMatcher.from_file(ignore_path)
@@ -2256,6 +2520,19 @@ class AuditPipeline:
         repository_map = build_repository_map(discovery, changed_since=changed_since)
         write_json(run_dir / "repository-map.json", repository_map)
         self.privacy_source_sha256 = _repository_source_scope_sha256(repository_map)
+        if policy_selected_model_ids is not None:
+            try:
+                if self.privacy_source_sha256 is None:
+                    raise ValueError("frozen repository-map source SHA-256 is unavailable")
+                policy_selected_model_ids = self._persist_current_audit_model_selection_evidence(
+                    run_dir=run_dir,
+                    now=datetime.now(UTC).replace(microsecond=0),
+                    expected_source_sha256=self.privacy_source_sha256,
+                )
+            except ValueError as exc:
+                incomplete.append(f"audit model policy selection failed: {exc}")
+                if terminal_code is ExitCode.SUCCESS:
+                    terminal_code = ExitCode.PRIVACY_REFUSAL
         if not scanner_only:
             configured_privacy_models = tuple(
                 sorted(set(configured_model_ids(self.config, include_fallbacks=True)))
@@ -2328,10 +2605,13 @@ class AuditPipeline:
                     if (
                         self.privacy_source_provenance is None
                         or self.effective_privacy_policy is None
+                        or type(self.privacy_source_provenance_observation)
+                        is not PrivacySourceProvenanceObservation
                     ):
                         raise OpenRouterPrivacyError(
                             "scheduler resume lacks current privacy evidence"
                         )
+                    current_source_observation = self.privacy_source_provenance_observation
                     (
                         self.privacy_source_provenance,
                         self.effective_privacy_policy,
@@ -2339,6 +2619,12 @@ class AuditPipeline:
                         resume_scheduler_journal,
                         current_provenance=self.privacy_source_provenance,
                         current_policy=self.effective_privacy_policy,
+                    )
+                    self.privacy_source_provenance_observation = (
+                        reobserve_retained_privacy_source_provenance(
+                            current_source_observation,
+                            self.privacy_source_provenance,
+                        )
                     )
                     write_json(
                         run_dir / "privacy-source-provenance.json",
@@ -2351,6 +2637,7 @@ class AuditPipeline:
                 ):
                     self.client.bind_effective_privacy_context(
                         effective_privacy_policy=self.effective_privacy_policy,
+                        source_provenance_observation=(self.privacy_source_provenance_observation),
                         privacy_authorization=self.privacy_authorization,
                     )
                 elif (
@@ -2447,9 +2734,13 @@ class AuditPipeline:
                 compilation_run.artifact_roots,
             )
             solidity_index = index_build.index
-            solidity_graphs = build_solidity_graphs(solidity_analysis_discovery, index_build)
             if any(item.language == "Solidity" for item in solidity_analysis_discovery.files):
                 shard_policy = SolidityShardPolicy.build()
+                solidity_graphs = build_solidity_graphs(
+                    solidity_analysis_discovery,
+                    index_build,
+                    shard_policy=shard_policy,
+                )
                 solidity_shards = build_solidity_shard_inventory(
                     solidity_analysis_discovery,
                     solidity_index,
@@ -2464,6 +2755,11 @@ class AuditPipeline:
                     inventory=solidity_shards,
                     expected_policy=shard_policy,
                     report_binding=solidity_shard_binding,
+                )
+            else:
+                solidity_graphs = build_solidity_graphs(
+                    solidity_analysis_discovery,
+                    index_build,
                 )
             solidity_invariants = discover_invariants(
                 solidity_analysis_discovery,
@@ -2633,12 +2929,17 @@ class AuditPipeline:
                 "index": solidity_index.model_dump(mode="json") if solidity_index else None,
             },
         )
-        write_json(
+        write_json_bounded(
             run_dir / "solidity-graphs.json",
             {
                 "schema_version": REPORT_SCHEMA_VERSION,
                 "graphs": solidity_graphs.model_dump(mode="json") if solidity_graphs else None,
             },
+            max_bytes=(
+                solidity_graphs.artifact_byte_limit
+                if solidity_graphs is not None
+                else MAX_JSON_ARTIFACT_BYTES
+            ),
         )
         write_json(
             run_dir / "solidity-shards.json",
@@ -2787,10 +3088,10 @@ class AuditPipeline:
         )
         write_json(
             run_dir / "solidity-coverage.json",
-            {
-                "schema_version": REPORT_SCHEMA_VERSION,
-                "coverage": solidity_coverage.model_dump(mode="json"),
-            },
+            SolidityCoverageArtifact(
+                evidence_authority="comparison_required",
+                coverage=solidity_coverage,
+            ),
         )
 
         fork_acknowledged = self.config.smart_contracts.allow_fork_probing or allow_fork_probing
@@ -2849,10 +3150,10 @@ class AuditPipeline:
             )
             write_json(
                 run_dir / "solidity-coverage.json",
-                {
-                    "schema_version": REPORT_SCHEMA_VERSION,
-                    "coverage": solidity_coverage.model_dump(mode="json"),
-                },
+                SolidityCoverageArtifact(
+                    evidence_authority="comparison_required",
+                    coverage=solidity_coverage,
+                ),
             )
         if (
             solidity_projects
@@ -3020,6 +3321,35 @@ class AuditPipeline:
                 if terminal_code is ExitCode.SUCCESS:
                     terminal_code = ExitCode.INCOMPLETE
 
+        if (
+            paid_audit_policy_required
+            and terminal_code is ExitCode.SUCCESS
+            and not model_spend_preflight_blocked
+        ):
+            try:
+                policy_selected_model_ids = self._require_current_audit_model_selection(
+                    now=datetime.now(UTC).replace(microsecond=0),
+                    expected_source_sha256=self.privacy_source_sha256,
+                )
+                if self.client is not None:
+                    policy_evidence = cast(
+                        AuditModelSelectionEvidenceBundle,
+                        self.audit_model_selection_evidence,
+                    )
+                    OpenRouterClient.require_audit_policy_binding(
+                        self.client,
+                        audit_model_selection=cast(
+                            VerifiedAuditModelSelection,
+                            self.verified_audit_model_selection,
+                        ),
+                        policy_audit_context=policy_evidence.audit_context,
+                        client_policy_constraints=policy_evidence.client_constraints,
+                        checked_at=datetime.now(UTC).replace(microsecond=0),
+                    )
+            except (ValueError, OpenRouterError) as exc:
+                incomplete.append(f"audit model policy selection failed: {exc}")
+                terminal_code = ExitCode.MODEL_FAILURE
+
         context_builder: ContextBuilder | None = None
         if (
             not scanner_only
@@ -3027,6 +3357,7 @@ class AuditPipeline:
             and not model_spend_preflight_blocked
         ):
             if self.client is None:
+                client_policy_evidence = self.audit_model_selection_evidence
                 controls = build_openrouter_runtime_controls(
                     self.config,
                     certification=model_qualification_required,
@@ -3048,8 +3379,20 @@ class AuditPipeline:
                         self.production_qualification
                     ),
                     production_qualification=self.production_qualification,
+                    audit_model_selection=self.verified_audit_model_selection,
+                    policy_audit_context=(
+                        client_policy_evidence.audit_context
+                        if client_policy_evidence is not None
+                        else None
+                    ),
+                    client_policy_constraints=(
+                        client_policy_evidence.client_constraints
+                        if client_policy_evidence is not None
+                        else None
+                    ),
                     token_budgets=self.config.token_budgets,
                     effective_privacy_policy=self.effective_privacy_policy,
+                    source_provenance_observation=self.privacy_source_provenance_observation,
                     privacy_authorization=self.privacy_authorization,
                 )
                 self._owns_client = True
@@ -3138,6 +3481,9 @@ class AuditPipeline:
                     analysis_input_sha256=scheduler_analysis_input_sha256,
                     cost_ledger_baseline=scheduler_cost_ledger_baseline,
                     privacy_evidence_custody=scheduler_privacy_evidence_custody,
+                    audit_model_selection_evidence=(
+                        self.audit_model_selection_evidence if paid_audit_policy_required else None
+                    ),
                 )
                 if resume_scheduler_journal is None:
                     if scheduler_privacy_evidence_custody is None:
@@ -3209,6 +3555,10 @@ class AuditPipeline:
         packages: list[ContextPackage] = []
         accepted_specialist_outcomes: list[SpecialistAcceptedOutcome] = []
         scheduler_agent_config = _scheduler_primary_only_config(self.config)
+        auxiliary_model_config = _policy_selected_auxiliary_config(
+            self.config,
+            selected_model_ids=(policy_selected_model_ids if paid_audit_policy_required else None),
+        )
         if (
             context_builder is not None
             and self.client is not None
@@ -3321,7 +3671,16 @@ class AuditPipeline:
                 if role.startswith("specialist:"):
                     configured_role = role.split(":", 1)[1]
                 role_config = self.config.models.role(configured_role)
-                return (role_config.primary, *role_config.fallbacks)
+                configured_models = (role_config.primary, *role_config.fallbacks)
+                return (
+                    configured_models
+                    if policy_selected_model_ids is None
+                    else tuple(
+                        model_id
+                        for model_id in configured_models
+                        if model_id in policy_selected_model_ids
+                    )
+                )
 
             def build_context(
                 role: str,
@@ -3449,6 +3808,13 @@ class AuditPipeline:
                     if configured_role is None:
                         raise ValueError("scheduled model task lacks a configured role")
                     selected_model = self.config.models.role(configured_role).primary
+                _require_policy_selected_scheduled_model(
+                    selected_model_ids=(
+                        policy_selected_model_ids if paid_audit_policy_required else None
+                    ),
+                    request_role=request_role,
+                    model_id=selected_model,
+                )
                 selected_lineage = root_lineage or _scheduler_root_lineage(
                     self.config,
                     selected_model,
@@ -3746,6 +4112,9 @@ class AuditPipeline:
                     _whole_protocol_review_models(
                         self.config,
                         self.production_qualification,
+                        selected_model_ids=(
+                            policy_selected_model_ids if paid_audit_policy_required else None
+                        ),
                     )
                 ):
                     whole_agent = WholeProtocolReviewAgent(
@@ -4854,7 +5223,7 @@ class AuditPipeline:
                     conclude_scheduler_result(completed_cross_examination)
             elif not scheduler_halted:
                 assert cross_candidate_workset is not None
-                reviewer_models = select_candidate_falsifier_models(self.config)
+                reviewer_models = select_candidate_falsifier_models(auxiliary_model_config)
                 if len(reviewer_models) != 2:
                     incomplete.append(
                         "candidate cross-examination requires two registered models "
@@ -5197,7 +5566,7 @@ class AuditPipeline:
                 if role in self.config.models.specialists
             ]
             validation_falsifier_models = (
-                select_validation_falsifier_models(self.config)
+                select_validation_falsifier_models(auxiliary_model_config)
                 if validation_candidates and not scheduler_halted
                 else []
             )
@@ -7324,6 +7693,8 @@ class AuditPipeline:
                 model_usage=usage.records,
                 provider_session=provider_session,
                 production_qualification=self.production_qualification,
+                audit_model_selection_evidence=self.audit_model_selection_evidence,
+                verified_audit_model_selection=self.verified_audit_model_selection,
                 language_capability=language_capability,
                 scope_assessment=scope_assessment,
                 benchmark_verification=benchmark_verification,
@@ -7400,11 +7771,17 @@ class AuditPipeline:
             explicit_downgrade_reason = "operator selected scanner-only reduced analysis"
         elif maximum_downgrade_authorized:
             explicit_downgrade_reason = "operator pre-authorized maximum-assurance downgrade"
-        surface_analysis_feasible = (
+        model_surface_analysis_feasible = (
             not solidity_projects
             or scanner_only
             or model_surface_assignment_gate.passed
             or (maximum_downgrade_authorized and lower_profile_surface_gate.passed)
+        )
+        graph_surface_analysis_feasible = (
+            solidity_graphs is None or solidity_graphs.generation_complete
+        )
+        surface_analysis_feasible = (
+            model_surface_analysis_feasible and graph_surface_analysis_feasible
         )
         model_review_applicable = not scanner_only
         incomplete = canonicalize_runtime_messages(incomplete)
@@ -7433,8 +7810,19 @@ class AuditPipeline:
             scanner_only=scanner_only,
             explicit_downgrade_reason=explicit_downgrade_reason,
             surface_analysis_feasible=surface_analysis_feasible,
-            surface_feasibility_reasons=(
-                () if surface_analysis_feasible else (model_surface_assignment_gate.detail,)
+            surface_feasibility_reasons=tuple(
+                reason
+                for condition, reason in (
+                    (
+                        model_surface_analysis_feasible,
+                        model_surface_assignment_gate.detail,
+                    ),
+                    (
+                        graph_surface_analysis_feasible,
+                        "semantic graph generation omitted bounded edge or fact evidence",
+                    ),
+                )
+                if not condition
             ),
             orchestration_failures=(() if terminal_code is ExitCode.SUCCESS else tuple(incomplete)),
         )
@@ -8182,6 +8570,11 @@ class AuditPipeline:
             language_capability=language_capability,
             scope_assessment=scope_assessment,
             prior_audit_comparison=prior_audit_comparison,
+            audit_model_selection=(
+                self.audit_model_selection_evidence.selection
+                if type(self.audit_model_selection_evidence) is AuditModelSelectionEvidenceBundle
+                else None
+            ),
             maximum_assurance=maximum_assurance,
             verification_decisions=verifications.decisions,
             cross_examination_decisions=cross_examinations,
@@ -8304,6 +8697,73 @@ class AuditPipeline:
                     "graph_summary": {
                         "edges": len(solidity_graphs.edges) if solidity_graphs else 0,
                         "warnings": len(solidity_graphs.warnings) if solidity_graphs else 0,
+                        **(
+                            {
+                                "generation_complete": False,
+                                "retained_edge_occurrences": sum(
+                                    item.occurrence_count
+                                    for item in solidity_graphs.retained_occurrences
+                                    if item.subject_kind is SolidityGraphOccurrenceKind.EDGE
+                                ),
+                                "candidate_edges": sum(
+                                    item.occurrence_count
+                                    for item in solidity_graphs.retained_occurrences
+                                    if item.subject_kind is SolidityGraphOccurrenceKind.EDGE
+                                )
+                                + sum(
+                                    item.omitted_count for item in solidity_graphs.edge_omissions
+                                ),
+                                "omitted_edges": sum(
+                                    item.omitted_count for item in solidity_graphs.edge_omissions
+                                ),
+                                "omission_evidence_sha256s": sorted(
+                                    item.evidence_sha256 for item in solidity_graphs.edge_omissions
+                                ),
+                                "retained_facts": {
+                                    SolidityGraphFactKind.GRAPH_NODE.value: len(
+                                        solidity_graphs.nodes
+                                    ),
+                                    SolidityGraphFactKind.STORAGE_ENTRY.value: len(
+                                        solidity_graphs.storage_layout
+                                    ),
+                                    SolidityGraphFactKind.WARNING.value: len(
+                                        solidity_graphs.warnings
+                                    ),
+                                },
+                                "retained_fact_occurrences": {
+                                    kind.value: sum(
+                                        item.occurrence_count
+                                        for item in solidity_graphs.retained_occurrences
+                                        if item.subject_kind.value == kind.value
+                                    )
+                                    for kind in SolidityGraphFactKind
+                                },
+                                "candidate_facts": {
+                                    kind.value: sum(
+                                        item.occurrence_count
+                                        for item in solidity_graphs.retained_occurrences
+                                        if item.subject_kind.value == kind.value
+                                    )
+                                    + sum(
+                                        item.omitted_count
+                                        for item in solidity_graphs.fact_omissions
+                                        if item.fact_kind is kind
+                                    )
+                                    for kind in SolidityGraphFactKind
+                                },
+                                "omitted_facts": {
+                                    item.fact_kind.value: item.omitted_count
+                                    for item in solidity_graphs.fact_omissions
+                                },
+                                "fact_omission_evidence_sha256s": sorted(
+                                    item.evidence_sha256 for item in solidity_graphs.fact_omissions
+                                ),
+                                "artifact_byte_limit": solidity_graphs.artifact_byte_limit,
+                            }
+                            if solidity_graphs is not None
+                            and not solidity_graphs.generation_complete
+                            else {}
+                        ),
                     },
                     "shard_summary": (
                         solidity_shard_binding.model_dump(mode="json")
@@ -8526,21 +8986,24 @@ class AuditPipeline:
                 "index": solidity_index.model_dump(mode="json") if solidity_index else None,
             },
         )
-        write_json(
+        write_json_bounded(
             run_dir / "solidity-graphs.json",
             {
                 "schema_version": REPORT_SCHEMA_VERSION,
                 "graphs": solidity_graphs.model_dump(mode="json") if solidity_graphs else None,
             },
+            max_bytes=(
+                solidity_graphs.artifact_byte_limit
+                if solidity_graphs is not None
+                else MAX_JSON_ARTIFACT_BYTES
+            ),
         )
         write_json(
             run_dir / "solidity-coverage.json",
-            {
-                "schema_version": REPORT_SCHEMA_VERSION,
-                "coverage": solidity_coverage.model_dump(mode="json")
-                if solidity_coverage
-                else None,
-            },
+            SolidityCoverageArtifact(
+                evidence_authority="comparison_required",
+                coverage=solidity_coverage,
+            ),
         )
         write_json(
             run_dir / "model-review-coverage.json",
@@ -8728,6 +9191,7 @@ class AuditPipeline:
             "language-capability.json",
             "privacy-source-provenance.json",
             "privacy-policy.json",
+            AUDIT_MODEL_SELECTION_EVIDENCE_FILENAME,
             "privacy-fork-rpc-egress.json",
             "scanner-results.json",
             "repository-suite-differential.json",
@@ -8768,16 +9232,22 @@ class AuditPipeline:
             "maximum_assurance_traceability.json",
             "run-evidence-manifest.json",
         ):
-            source = run_dir / filename
-            destination = latest / filename
-            if destination.is_symlink():
-                raise ValueError(f"refusing symlinked latest report destination: {filename}")
-            if destination.exists():
-                if not destination.is_file():
-                    raise ValueError(f"refusing non-file latest report destination: {filename}")
-                destination.unlink()
-            if source.exists():
-                shutil.copy2(source, destination)
+            _refresh_latest_artifact(run_dir=run_dir, latest=latest, filename=filename)
+
+
+def _refresh_latest_artifact(*, run_dir: Path, latest: Path, filename: str) -> None:
+    """Copy one current run artifact or remove its stale latest projection."""
+
+    source = run_dir / filename
+    destination = latest / filename
+    if destination.is_symlink():
+        raise ValueError(f"refusing symlinked latest report destination: {filename}")
+    if destination.exists():
+        if not destination.is_file():
+            raise ValueError(f"refusing non-file latest report destination: {filename}")
+        destination.unlink()
+    if source.exists():
+        shutil.copy2(source, destination)
 
 
 def _safe_output_directory(base: Path, name: str) -> Path:

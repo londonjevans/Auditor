@@ -14,10 +14,14 @@ import pytest
 from pydantic import ValidationError
 
 from mmaudit.benchmark.models import (
+    MODEL_BENCHMARK_SCHEMA_NAME,
     ModelBenchmarkCaseResult,
     ModelBenchmarkModelResult,
     ModelBenchmarkReport,
+    ModelBenchmarkResponse,
+    blinded_model_benchmark_request,
     load_model_benchmark_corpus,
+    model_benchmark_system_prompt,
 )
 from mmaudit.config import AuditConfig, model_lineage_index
 from mmaudit.models.candidate_benchmark import (
@@ -787,7 +791,19 @@ async def test_candidate_benchmark_uses_exact_mock_certification_route(
     assert effective_policy.privacy_profile is PrivacyProfile.STRICT_ZDR
     assert effective_policy.source_sha256 == suite.corpus_sha256
     assert effective_policy.source_classification is (
-        PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE
+        PrivacySourceClassification.SYNTHETIC_COMMITTED
+    )
+    assert effective_policy.source_proof_kind == "RELEASE_PINNED_MODEL_BENCHMARK"
+    assert effective_policy.source_synthetic_declaration_sha256 is None
+    assert effective_policy.source_synthetic_declaration_entry_sha256 is None
+    assert factory.clients[0]._is_trusted_prequalification_request(
+        report.results[0].target.request_role,
+        system_prompt=model_benchmark_system_prompt(),
+        user_prompt=blinded_model_benchmark_request(suite.cases[0]),
+        response_model=ModelBenchmarkResponse,
+        schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
+        structured_output_mode=factory.clients[0]._selected_structured_output_mode(spec.model_id),
+        context_package=None,
     )
     assert effective_policy.permitted_model_ids == (spec.model_id,)
     assert effective_policy.permitted_provider_endpoints == (spec.provider_endpoint,)

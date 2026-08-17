@@ -17,11 +17,14 @@ from mmaudit.models.schemas import (
     SolidityEntityKind,
     SolidityGraphEdge,
     SolidityGraphKind,
+    SolidityGraphOccurrenceKind,
+    SolidityGraphRetainedOccurrence,
     SolidityGraphSet,
     SolidityProjectMetadata,
     SolidityProjectType,
     SolidityProvenance,
     SoliditySymbolIndex,
+    solidity_graph_occurrence_sha256,
 )
 from mmaudit.repository.discovery import DiscoveredFile, DiscoveryResult
 from mmaudit.solidity.coverage import build_solidity_coverage, with_model_review_coverage
@@ -71,6 +74,27 @@ def _edge(graph: SolidityGraphKind, source_id: str, target_id: str) -> SolidityG
     )
 
 
+def _edge_occurrences(
+    edges: list[SolidityGraphEdge],
+) -> tuple[SolidityGraphRetainedOccurrence, ...]:
+    return tuple(
+        sorted(
+            (
+                SolidityGraphRetainedOccurrence(
+                    subject_kind=SolidityGraphOccurrenceKind.EDGE,
+                    subject_sha256=solidity_graph_occurrence_sha256(
+                        SolidityGraphOccurrenceKind.EDGE,
+                        edge,
+                    ),
+                    occurrence_count=1,
+                )
+                for edge in edges
+            ),
+            key=lambda item: (item.subject_kind.value, item.subject_sha256),
+        )
+    )
+
+
 def _base_inputs() -> tuple[SoliditySymbolIndex, SolidityGraphSet]:
     index = SoliditySymbolIndex(
         projects=[
@@ -86,16 +110,18 @@ def _base_inputs() -> tuple[SoliditySymbolIndex, SolidityGraphSet]:
         ],
         ast_sources=["src/Synthetic.sol"],
     )
+    edges = [
+        _edge(SolidityGraphKind.PRIVILEGE, "function:one", "modifier:owner"),
+        _edge(SolidityGraphKind.STATE_WRITE, "function:two", "state:value"),
+        _edge(
+            SolidityGraphKind.SENSITIVE_REACHABILITY,
+            "function:two",
+            "sink:value",
+        ),
+    ]
     graphs = SolidityGraphSet(
-        edges=[
-            _edge(SolidityGraphKind.PRIVILEGE, "function:one", "modifier:owner"),
-            _edge(SolidityGraphKind.STATE_WRITE, "function:two", "state:value"),
-            _edge(
-                SolidityGraphKind.SENSITIVE_REACHABILITY,
-                "function:two",
-                "sink:value",
-            ),
-        ],
+        edges=edges,
+        retained_occurrences=_edge_occurrences(edges),
         analyzed_graphs=[
             SolidityGraphKind.PRIVILEGE,
             SolidityGraphKind.STATE_WRITE,
@@ -297,7 +323,13 @@ def test_review_metrics_exclude_test_functions_with_explicit_population_evidence
             SolidityGraphKind.SENSITIVE_REACHABILITY,
         )
     ]
-    graphs = graphs.model_copy(update={"edges": [*graphs.edges, *test_edges]})
+    extended_edges = [*graphs.edges, *test_edges]
+    graphs = graphs.model_copy(
+        update={
+            "edges": extended_edges,
+            "retained_occurrences": _edge_occurrences(extended_edges),
+        }
+    )
     coverage = _base_coverage(index, graphs)
 
     for name, expected_denominator in {

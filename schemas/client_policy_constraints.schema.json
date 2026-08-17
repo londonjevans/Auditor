@@ -1,0 +1,225 @@
+{
+  "$defs": {
+    "ClientConstraintMode": {
+      "description": "One non-ambiguous interpretation for all populated client restrictions.",
+      "enum": [
+        "ALLOW_ONLY",
+        "DENY_ONLY"
+      ],
+      "title": "ClientConstraintMode",
+      "type": "string"
+    },
+    "PolicyAuditContext": {
+      "additionalProperties": false,
+      "description": "Exact current audit/client/operator facts used by structural evaluation.",
+      "properties": {
+        "audit_scope_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Scope Sha256",
+          "type": "string"
+        },
+        "client_entity_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Client Entity Sha256",
+          "type": "string"
+        },
+        "client_jurisdiction": {
+          "pattern": "^[A-Z]{2,3}(?:-[A-Z0-9]{1,8})?$",
+          "title": "Client Jurisdiction",
+          "type": "string"
+        },
+        "context_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Context Sha256",
+          "type": "string"
+        },
+        "intended_use": {
+          "$ref": "#/$defs/PolicyUsePurpose"
+        },
+        "operator_entity_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Operator Entity Sha256",
+          "type": "string"
+        },
+        "operator_jurisdiction": {
+          "pattern": "^[A-Z]{2,3}(?:-[A-Z0-9]{1,8})?$",
+          "title": "Operator Jurisdiction",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_classification": {
+          "$ref": "#/$defs/PrivacySourceClassification"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "audit_scope_sha256",
+        "source_sha256",
+        "source_classification",
+        "intended_use",
+        "client_entity_sha256",
+        "client_jurisdiction",
+        "operator_entity_sha256",
+        "operator_jurisdiction",
+        "context_sha256"
+      ],
+      "title": "PolicyAuditContext",
+      "type": "object"
+    },
+    "PolicyEligibilityRoute": {
+      "additionalProperties": false,
+      "description": "One exact model/provider/endpoint identity.",
+      "properties": {
+        "exact_model_id": {
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "provider_name": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Provider Name",
+          "type": "string"
+        },
+        "route_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Route Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "provider_name",
+        "provider_endpoint",
+        "route_sha256"
+      ],
+      "title": "PolicyEligibilityRoute",
+      "type": "object"
+    },
+    "PolicyUsePurpose": {
+      "description": "Exact commercial purpose that one determination may authorize structurally.",
+      "enum": [
+        "PAID_CUSTOMER_FACING_DEFENSIVE_SOURCE_AUDIT",
+        "PUBLIC_OR_SYNTHETIC_DEFENSIVE_EVALUATION"
+      ],
+      "title": "PolicyUsePurpose",
+      "type": "string"
+    },
+    "PrivacySourceClassification": {
+      "description": "Operator-controlled classification of the provider-visible source scope.",
+      "enum": [
+        "PRIVATE_OPERATOR_SOURCE",
+        "SYNTHETIC_COMMITTED",
+        "PUBLIC_BENCHMARK"
+      ],
+      "title": "PrivacySourceClassification",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/client_policy_constraints.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Unauthenticated client-specific restrictions for one exact audit context.",
+  "properties": {
+    "audit_context": {
+      "$ref": "#/$defs/PolicyAuditContext"
+    },
+    "constraint_basis_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Constraint Basis Sha256",
+      "type": "string"
+    },
+    "constraints_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Constraints Sha256",
+      "type": "string"
+    },
+    "effective_at": {
+      "format": "date-time",
+      "title": "Effective At",
+      "type": "string"
+    },
+    "exact_model_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 128,
+      "title": "Exact Model Ids",
+      "type": "array"
+    },
+    "exact_routes": {
+      "items": {
+        "$ref": "#/$defs/PolicyEligibilityRoute"
+      },
+      "maxItems": 128,
+      "title": "Exact Routes",
+      "type": "array"
+    },
+    "expires_at": {
+      "format": "date-time",
+      "title": "Expires At",
+      "type": "string"
+    },
+    "mode": {
+      "$ref": "#/$defs/ClientConstraintMode"
+    },
+    "provider_names": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 128,
+      "title": "Provider Names",
+      "type": "array"
+    },
+    "reviewed_at": {
+      "format": "date-time",
+      "title": "Reviewed At",
+      "type": "string"
+    },
+    "reviewed_by": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._@:/-]{0,199}$",
+      "title": "Reviewed By",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "audit_context",
+    "mode",
+    "provider_names",
+    "exact_model_ids",
+    "exact_routes",
+    "reviewed_by",
+    "reviewed_at",
+    "effective_at",
+    "expires_at",
+    "constraint_basis_sha256",
+    "constraints_sha256"
+  ],
+  "title": "mmaudit per-audit client policy constraints",
+  "type": "object"
+}

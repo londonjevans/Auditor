@@ -12,21 +12,29 @@ from pydantic import ValidationError
 
 from mmaudit.language_plugins import assess_language_capability
 from mmaudit.models.schemas import (
+    AnalysisState,
     AuditQualityStatus,
     AuditReport,
     AuditRunStatus,
     LanguageCapabilityProfile,
     MinimumAnalysisFloor,
     RepositoryMap,
+    SolidityCoverage,
     SolidityEntity,
     SolidityGraphEdge,
+    SolidityGraphFactKind,
+    SolidityGraphFactOmission,
     SolidityGraphKind,
     SolidityGraphNode,
     SolidityGraphNodeKind,
+    SolidityGraphOccurrenceKind,
+    SolidityGraphOmission,
+    SolidityGraphRetainedOccurrence,
     SolidityGraphSet,
     SolidityProvenance,
     SolidityStorageEntry,
     SoliditySymbolIndex,
+    solidity_graph_occurrence_sha256,
 )
 from mmaudit.models.sharding import (
     SolidityGraphsArtifact,
@@ -79,6 +87,71 @@ class _ShardInputs:
     source_function: SolidityEntity
     target_function: SolidityEntity
     storage_entry: SolidityStorageEntry
+
+
+def _retained_occurrence_inventory(
+    *,
+    edges: list[SolidityGraphEdge],
+    nodes: list[SolidityGraphNode],
+    storage_layout: list[SolidityStorageEntry],
+    warnings: list[str],
+    existing: tuple[SolidityGraphRetainedOccurrence, ...] = (),
+) -> tuple[SolidityGraphRetainedOccurrence, ...]:
+    """Build exact count-one evidence for new records while preserving known counts."""
+
+    existing_counts = {
+        (item.subject_kind, item.subject_sha256): item.occurrence_count for item in existing
+    }
+    records: list[
+        tuple[
+            SolidityGraphOccurrenceKind,
+            SolidityGraphEdge | SolidityGraphNode | SolidityStorageEntry | str,
+        ]
+    ] = [
+        *((SolidityGraphOccurrenceKind.EDGE, edge) for edge in edges),
+        *((SolidityGraphOccurrenceKind.GRAPH_NODE, node) for node in nodes),
+        *((SolidityGraphOccurrenceKind.STORAGE_ENTRY, entry) for entry in storage_layout),
+        *((SolidityGraphOccurrenceKind.WARNING, warning) for warning in warnings),
+    ]
+    occurrences = [
+        SolidityGraphRetainedOccurrence(
+            subject_kind=kind,
+            subject_sha256=(subject_sha256 := solidity_graph_occurrence_sha256(kind, subject)),
+            occurrence_count=existing_counts.get((kind, subject_sha256), 1),
+        )
+        for kind, subject in records
+    ]
+    return tuple(
+        sorted(
+            occurrences,
+            key=lambda item: (item.subject_kind.value, item.subject_sha256),
+        )
+    )
+
+
+def _graph_copy(
+    graphs: SolidityGraphSet,
+    *,
+    update: dict[str, object],
+) -> SolidityGraphSet:
+    """Copy a graph fixture while keeping its exact occurrence inventory synchronized."""
+
+    edges = list(update.get("edges", graphs.edges))  # type: ignore[arg-type]
+    nodes = list(update.get("nodes", graphs.nodes))  # type: ignore[arg-type]
+    storage_layout = list(update.get("storage_layout", graphs.storage_layout))  # type: ignore[arg-type]
+    warnings = list(update.get("warnings", graphs.warnings))  # type: ignore[arg-type]
+    return graphs.model_copy(
+        update={
+            **update,
+            "retained_occurrences": _retained_occurrence_inventory(
+                edges=edges,
+                nodes=nodes,
+                storage_layout=storage_layout,
+                warnings=warnings,
+                existing=graphs.retained_occurrences,
+            ),
+        }
+    )
 
 
 def _canonical_sha256(value: object) -> str:
@@ -287,13 +360,14 @@ def _shard_inputs(tmp_path: Path, config_factory: Callable[..., object]) -> _Sha
     coverage[SolidityGraphKind.INTERNAL_CALL.value] = (
         coverage.get(SolidityGraphKind.INTERNAL_CALL.value, 0) + 1
     )
-    graphs = graphs.model_copy(
+    graphs = _graph_copy(
+        graphs,
         update={
             "nodes": [*graphs.nodes, storage_node],
             "edges": [*graphs.edges, cross_file_edge],
             "storage_layout": [*graphs.storage_layout, storage_entry],
             "coverage": coverage,
-        }
+        },
     )
     return _ShardInputs(
         discovery=discovery,
@@ -314,6 +388,73 @@ def _inventory(inputs: _ShardInputs) -> SolidityShardInventory:
     )
 
 
+def _graphs_with_one_typed_omission(graphs: SolidityGraphSet) -> SolidityGraphSet:
+    dropped = graphs.edges[0]
+    retained = [edge for index, edge in enumerate(graphs.edges) if index != 0]
+    retained_count = sum(edge.graph is dropped.graph for edge in retained)
+    occurrence_counts = {
+        (item.subject_kind, item.subject_sha256): item.occurrence_count
+        for item in graphs.retained_occurrences
+    }
+    retained_occurrence_count = sum(
+        occurrence_counts[
+            (
+                SolidityGraphOccurrenceKind.EDGE,
+                solidity_graph_occurrence_sha256(SolidityGraphOccurrenceKind.EDGE, edge),
+            )
+        ]
+        for edge in retained
+        if edge.graph is dropped.graph
+    )
+    dropped_occurrence_count = occurrence_counts[
+        (
+            SolidityGraphOccurrenceKind.EDGE,
+            solidity_graph_occurrence_sha256(SolidityGraphOccurrenceKind.EDGE, dropped),
+        )
+    ]
+    encoded = json.dumps(
+        dropped.model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    digest = hashlib.sha256(encoded).hexdigest()
+    coverage = {
+        kind.value: sum(edge.graph is kind for edge in retained) for kind in SolidityGraphKind
+    }
+    return SolidityGraphSet.model_validate(
+        {
+            **graphs.model_dump(mode="python"),
+            "edges": retained,
+            "retained_occurrences": _retained_occurrence_inventory(
+                edges=retained,
+                nodes=graphs.nodes,
+                storage_layout=graphs.storage_layout,
+                warnings=graphs.warnings,
+                existing=graphs.retained_occurrences,
+            ),
+            "analyzed_graphs": [
+                kind for kind in graphs.analyzed_graphs if kind is not dropped.graph
+            ],
+            "coverage": coverage,
+            "generation_complete": False,
+            "edge_omissions": (
+                SolidityGraphOmission.build(
+                    graph=dropped.graph,
+                    candidate_count=retained_occurrence_count + dropped_occurrence_count,
+                    retained_count=retained_count,
+                    retained_occurrence_count=retained_occurrence_count,
+                    omitted_count=dropped_occurrence_count,
+                    omitted_canonical_bytes=len(encoded) * dropped_occurrence_count,
+                    omitted_stream_sha256=digest,
+                    omitted_sample_sha256s=(digest,),
+                ),
+            ),
+        }
+    )
+
+
 def _report_for_shards(
     *,
     repository: RepositoryMap,
@@ -321,6 +462,60 @@ def _report_for_shards(
     graphs: SolidityGraphSet,
     inventory: SolidityShardInventory | None,
 ) -> AuditReport:
+    graph_edge_counts = {
+        kind.value: graphs.coverage.get(kind.value, 0) for kind in SolidityGraphKind
+    }
+    graph_omitted_edge_counts = {
+        item.graph.value: item.omitted_count for item in graphs.edge_omissions
+    }
+    retained_edge_occurrences = {
+        item.subject_sha256: item.occurrence_count
+        for item in graphs.retained_occurrences
+        if item.subject_kind is SolidityGraphOccurrenceKind.EDGE
+    }
+    graph_retained_edge_occurrence_counts = {
+        kind.value: sum(
+            retained_edge_occurrences[
+                solidity_graph_occurrence_sha256(SolidityGraphOccurrenceKind.EDGE, edge)
+            ]
+            for edge in graphs.edges
+            if edge.graph is kind
+        )
+        for kind in SolidityGraphKind
+    }
+    graph_candidate_edge_counts = {
+        kind.value: graph_retained_edge_occurrence_counts[kind.value]
+        + graph_omitted_edge_counts.get(kind.value, 0)
+        for kind in SolidityGraphKind
+    }
+    graph_fact_retained_counts = {
+        SolidityGraphFactKind.GRAPH_NODE.value: len(graphs.nodes),
+        SolidityGraphFactKind.STORAGE_ENTRY.value: len(graphs.storage_layout),
+        SolidityGraphFactKind.WARNING.value: len(graphs.warnings),
+    }
+    graph_fact_omitted_counts = {
+        item.fact_kind.value: item.omitted_count for item in graphs.fact_omissions
+    }
+    graph_fact_retained_occurrence_counts = {
+        kind.value: sum(
+            item.occurrence_count
+            for item in graphs.retained_occurrences
+            if item.subject_kind.value == kind.value
+        )
+        for kind in SolidityGraphFactKind
+    }
+    graph_fact_candidate_counts = {
+        kind.value: graph_fact_retained_occurrence_counts[kind.value]
+        + graph_fact_omitted_counts.get(kind.value, 0)
+        for kind in SolidityGraphFactKind
+    }
+    graph_analysis_state = (
+        AnalysisState.ATTEMPTED_FAILED
+        if not graphs.generation_complete
+        else (
+            AnalysisState.FALLBACK_PARSER if index.fallback_sources else AnalysisState.DETERMINISTIC
+        )
+    )
     return AuditReport(
         schema_version="1.0",
         run_id="semantic-shard-projection-test",
@@ -347,6 +542,31 @@ def _report_for_shards(
                 "graph_summary": {
                     "edges": len(graphs.edges),
                     "warnings": len(graphs.warnings),
+                    **(
+                        {
+                            "generation_complete": False,
+                            "retained_edge_occurrences": sum(
+                                graph_retained_edge_occurrence_counts.values()
+                            ),
+                            "candidate_edges": sum(graph_candidate_edge_counts.values()),
+                            "omitted_edges": sum(
+                                item.omitted_count for item in graphs.edge_omissions
+                            ),
+                            "omission_evidence_sha256s": sorted(
+                                item.evidence_sha256 for item in graphs.edge_omissions
+                            ),
+                            "retained_facts": graph_fact_retained_counts,
+                            "retained_fact_occurrences": (graph_fact_retained_occurrence_counts),
+                            "candidate_facts": graph_fact_candidate_counts,
+                            "omitted_facts": graph_fact_omitted_counts,
+                            "fact_omission_evidence_sha256s": sorted(
+                                item.evidence_sha256 for item in graphs.fact_omissions
+                            ),
+                            "artifact_byte_limit": graphs.artifact_byte_limit,
+                        }
+                        if not graphs.generation_complete
+                        else {}
+                    ),
                 },
                 "shard_summary": (
                     SolidityShardReportBinding.from_inventory(inventory).model_dump(mode="json")
@@ -355,6 +575,33 @@ def _report_for_shards(
                 ),
             }
         },
+        solidity_coverage=SolidityCoverage(
+            graph_edge_counts=graph_edge_counts,
+            graph_retained_edge_occurrence_counts=(graph_retained_edge_occurrence_counts),
+            graph_candidate_edge_counts=graph_candidate_edge_counts,
+            graph_omitted_edge_counts=graph_omitted_edge_counts,
+            graph_omission_evidence_sha256s=sorted(
+                item.evidence_sha256 for item in graphs.edge_omissions
+            ),
+            graph_node_counts=dict(
+                sorted(
+                    {
+                        kind.value: sum(node.kind is kind for node in graphs.nodes)
+                        for kind in SolidityGraphNodeKind
+                        if any(node.kind is kind for node in graphs.nodes)
+                    }.items()
+                )
+            ),
+            graph_fact_retained_counts=graph_fact_retained_counts,
+            graph_fact_retained_occurrence_counts=(graph_fact_retained_occurrence_counts),
+            graph_fact_candidate_counts=graph_fact_candidate_counts,
+            graph_fact_omitted_counts=graph_fact_omitted_counts,
+            graph_fact_omission_evidence_sha256s=sorted(
+                item.evidence_sha256 for item in graphs.fact_omissions
+            ),
+            graph_warnings=list(graphs.warnings),
+            graph_analysis_state=graph_analysis_state,
+        ),
     )
 
 
@@ -571,7 +818,8 @@ def test_synthetic_node_path_does_not_invent_a_cross_source_boundary(
         transformation="synthetic_local_asset_observation",
         metadata={"operation": "balance_observation"},
     )
-    graphs = inputs.graphs.model_copy(
+    graphs = _graph_copy(
+        inputs.graphs,
         update={
             "nodes": [*inputs.graphs.nodes, synthetic_node],
             "edges": [*inputs.graphs.edges, synthetic_edge],
@@ -581,7 +829,7 @@ def test_synthetic_node_path_does_not_invent_a_cross_source_boundary(
                     inputs.graphs.coverage.get(SolidityGraphKind.ASSET_FLOW.value, 0) + 1
                 ),
             },
-        }
+        },
     )
 
     observed = build_solidity_shard_inventory(inputs.discovery, inputs.index, graphs)
@@ -631,7 +879,10 @@ def test_sharding_rejects_a_dangling_graph_endpoint(
 ) -> None:
     inputs = _shard_inputs(tmp_path, config_factory)
     dangling = inputs.cross_file_edge.model_copy(update={"target_id": "missing-graph-node"})
-    graphs = inputs.graphs.model_copy(update={"edges": [*inputs.graphs.edges, dangling]})
+    graphs = _graph_copy(
+        inputs.graphs,
+        update={"edges": [*inputs.graphs.edges, dangling]},
+    )
 
     with pytest.raises(SolidityShardingError, match=r"endpoint|node|dangling"):
         build_solidity_shard_inventory(inputs.discovery, inputs.index, graphs)
@@ -649,12 +900,18 @@ def test_sharding_rejects_duplicate_semantic_ids(
     if inventory_kind == "entity":
         index = index.model_copy(update={"entities": [*index.entities, index.entities[0]]})
     elif inventory_kind == "node":
-        graphs = graphs.model_copy(update={"nodes": [*graphs.nodes, graphs.nodes[0]]})
+        graphs = _graph_copy(
+            graphs,
+            update={"nodes": [*graphs.nodes, graphs.nodes[0]]},
+        )
     elif inventory_kind == "edge":
-        graphs = graphs.model_copy(update={"edges": [*graphs.edges, graphs.edges[0]]})
+        graphs = _graph_copy(
+            graphs,
+            update={"edges": [*graphs.edges, graphs.edges[0]]},
+        )
     else:
-        graphs = graphs.model_copy(
-            update={"storage_layout": [*graphs.storage_layout, inputs.storage_entry]}
+        graphs = _graph_copy(
+            graphs, update={"storage_layout": [*graphs.storage_layout, inputs.storage_entry]}
         )
 
     with pytest.raises(SolidityShardingError, match=r"duplicate|unique"):
@@ -717,8 +974,9 @@ def test_sharding_detached_revalidates_model_copy_inputs(
     else:
         node = next(item for item in graphs.nodes if item.id == inputs.source_function.id)
         invalid = node.model_copy(update={"start_line": node.end_line + 1})
-        graphs = graphs.model_copy(
-            update={"nodes": [invalid if item.id == invalid.id else item for item in graphs.nodes]}
+        graphs = _graph_copy(
+            graphs,
+            update={"nodes": [invalid if item.id == invalid.id else item for item in graphs.nodes]},
         )
 
     with pytest.raises(SolidityShardingError, match="detached validation"):
@@ -769,12 +1027,13 @@ def test_sharding_rejects_source_owned_graph_facts_rebound_to_an_unrelated_file(
                 "source_hash": unrelated.source_hash,
             }
         )
-        graphs = graphs.model_copy(
+        graphs = _graph_copy(
+            graphs,
             update={
                 "edges": [
                     rebound if item is inputs.cross_file_edge else item for item in graphs.edges
                 ]
-            }
+            },
         )
     else:
         node = next(item for item in graphs.nodes if item.id == inputs.source_function.id)
@@ -786,8 +1045,9 @@ def test_sharding_rejects_source_owned_graph_facts_rebound_to_an_unrelated_file(
                 "source_hash": unrelated.source_hash,
             }
         )
-        graphs = graphs.model_copy(
-            update={"nodes": [rebound if item.id == rebound.id else item for item in graphs.nodes]}
+        graphs = _graph_copy(
+            graphs,
+            update={"nodes": [rebound if item.id == rebound.id else item for item in graphs.nodes]},
         )
 
     with pytest.raises(SolidityShardingError, match="source-owned graph"):
@@ -801,13 +1061,14 @@ def test_sharding_rejects_a_misclassified_source_owned_graph_node(
     inputs = _shard_inputs(tmp_path, config_factory)
     node = next(item for item in inputs.graphs.nodes if item.id == inputs.source_function.id)
     misclassified = node.model_copy(update={"kind": SolidityGraphNodeKind.ASSET})
-    graphs = inputs.graphs.model_copy(
+    graphs = _graph_copy(
+        inputs.graphs,
         update={
             "nodes": [
                 misclassified if item.id == misclassified.id else item
                 for item in inputs.graphs.nodes
             ]
-        }
+        },
     )
 
     with pytest.raises(SolidityShardingError, match="source-owned graph node"):
@@ -1067,6 +1328,195 @@ def test_persisted_projection_rejects_resealed_impossible_graph_coverage(
         )
 
 
+@pytest.mark.parametrize("tamper", ["hidden_omission", "inflated_denominator"])
+def test_persisted_projection_derives_edge_denominator_from_typed_graph_omissions(
+    tmp_path: Path,
+    config_factory,
+    tamper: str,
+) -> None:
+    inputs = _shard_inputs(tmp_path, config_factory)
+    partial_graphs = _graphs_with_one_typed_omission(inputs.graphs)
+    policy = SolidityShardPolicy.build()
+    inventory = build_solidity_shard_inventory(
+        inputs.discovery,
+        inputs.index,
+        partial_graphs,
+        policy=policy,
+    )
+    payload = inventory.model_dump(mode="json")
+    coverage = payload["coverage"]
+    assert isinstance(coverage, dict)
+    if tamper == "hidden_omission":
+        coverage["complete"] = True
+        coverage["graph_edge_candidate_occurrences_total"] = coverage[
+            "graph_edge_candidate_occurrences_covered"
+        ]
+    else:
+        coverage["graph_edge_candidate_occurrences_total"] = (
+            int(coverage["graph_edge_candidate_occurrences_total"]) + 1
+        )
+    _reseal_inventory_payload(payload)
+    forged = SolidityShardInventory.model_validate(payload)
+
+    with pytest.raises(SolidityShardingError, match="edge denominator"):
+        verify_solidity_shard_projection(
+            index=inputs.index,
+            graphs=partial_graphs,
+            inventory=forged,
+            expected_policy=policy,
+            report_binding=SolidityShardReportBinding.from_inventory(forged),
+        )
+
+
+def test_retained_duplicate_occurrences_survive_report_and_shard_validation(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    inputs = _shard_inputs(tmp_path, config_factory)
+    dropped_kind = inputs.graphs.edges[0].graph
+    duplicate_edge = next(edge for edge in inputs.graphs.edges if edge.graph is not dropped_kind)
+    duplicate_sha256 = solidity_graph_occurrence_sha256(
+        SolidityGraphOccurrenceKind.EDGE,
+        duplicate_edge,
+    )
+    duplicated_graphs = SolidityGraphSet.model_validate(
+        {
+            **inputs.graphs.model_dump(mode="python"),
+            "retained_occurrences": tuple(
+                item.model_copy(update={"occurrence_count": 2})
+                if item.subject_kind is SolidityGraphOccurrenceKind.EDGE
+                and item.subject_sha256 == duplicate_sha256
+                else item
+                for item in inputs.graphs.retained_occurrences
+            ),
+        }
+    )
+    partial_graphs = _graphs_with_one_typed_omission(duplicated_graphs)
+    assert all(
+        omission.graph is not duplicate_edge.graph for omission in partial_graphs.edge_omissions
+    )
+
+    inventory = build_solidity_shard_inventory(
+        inputs.discovery,
+        inputs.index,
+        partial_graphs,
+    )
+    retained_edge_occurrences = sum(
+        item.occurrence_count
+        for item in partial_graphs.retained_occurrences
+        if item.subject_kind is SolidityGraphOccurrenceKind.EDGE
+    )
+    assert retained_edge_occurrences == len(partial_graphs.edges) + 1
+    assert inventory.coverage.graph_edge_candidate_occurrences_covered == retained_edge_occurrences
+    assert inventory.coverage.graph_edge_candidate_occurrences_total == (
+        retained_edge_occurrences
+        + sum(item.omitted_count for item in partial_graphs.edge_omissions)
+    )
+
+    report = _report_for_shards(
+        repository=build_repository_map(inputs.discovery),
+        index=inputs.index,
+        graphs=partial_graphs,
+        inventory=inventory,
+    )
+    assert report.solidity_coverage is not None
+    assert (
+        sum(report.solidity_coverage.graph_retained_edge_occurrence_counts.values())
+        == retained_edge_occurrences
+    )
+    assert report.solidity_coverage.graph_retained_edge_occurrence_counts[
+        duplicate_edge.graph.value
+    ] == (sum(edge.graph is duplicate_edge.graph for edge in partial_graphs.edges) + 1)
+
+    run_dir = tmp_path / "retained-duplicate-occurrences"
+    _write_shard_artifacts(
+        run_dir,
+        index=inputs.index,
+        graphs=partial_graphs,
+        inventory=inventory,
+    )
+    validate_solidity_shard_artifacts(run_dir, report)
+
+
+@pytest.mark.parametrize("fact_kind", list(SolidityGraphFactKind))
+def test_persisted_projection_derives_fact_denominators_from_typed_omissions(
+    tmp_path: Path,
+    config_factory,
+    fact_kind: SolidityGraphFactKind,
+) -> None:
+    inputs = _shard_inputs(tmp_path, config_factory)
+    retained_counts = {
+        SolidityGraphFactKind.GRAPH_NODE: len(inputs.graphs.nodes),
+        SolidityGraphFactKind.STORAGE_ENTRY: len(inputs.graphs.storage_layout),
+        SolidityGraphFactKind.WARNING: len(inputs.graphs.warnings),
+    }
+    omission = SolidityGraphFactOmission.build(
+        fact_kind=fact_kind,
+        candidate_count=retained_counts[fact_kind] + 2,
+        retained_count=retained_counts[fact_kind],
+        omitted_count=2,
+        omitted_canonical_bytes=256,
+        omitted_stream_sha256=hashlib.sha256(fact_kind.value.encode()).hexdigest(),
+        omitted_sample_sha256s=(hashlib.sha256(f"{fact_kind.value}:sample".encode()).hexdigest(),),
+    )
+    partial_graphs = SolidityGraphSet.model_validate(
+        {
+            **inputs.graphs.model_dump(mode="python"),
+            "generation_complete": False,
+            "fact_omissions": (omission,),
+        }
+    )
+    policy = SolidityShardPolicy.build()
+    inventory = build_solidity_shard_inventory(
+        inputs.discovery,
+        inputs.index,
+        partial_graphs,
+        policy=policy,
+    )
+
+    assert inventory.coverage.complete is False
+    field_by_kind = {
+        SolidityGraphFactKind.GRAPH_NODE: (
+            "graph_node_candidate_occurrences_covered",
+            "graph_node_candidate_occurrences_total",
+        ),
+        SolidityGraphFactKind.STORAGE_ENTRY: (
+            "storage_entry_candidate_occurrences_covered",
+            "storage_entry_candidate_occurrences_total",
+        ),
+        SolidityGraphFactKind.WARNING: (
+            "graph_warning_candidate_occurrences_covered",
+            "graph_warning_candidate_occurrences_total",
+        ),
+    }
+    covered_field, total_field = field_by_kind[fact_kind]
+    assert getattr(inventory.coverage, total_field) == (
+        getattr(inventory.coverage, covered_field) + 2
+    )
+    verify_solidity_shard_inventory(
+        discovery=inputs.discovery,
+        index=inputs.index,
+        graphs=partial_graphs,
+        inventory=inventory,
+        expected_policy=policy,
+    )
+
+    payload = inventory.model_dump(mode="json")
+    coverage = payload["coverage"]
+    assert isinstance(coverage, dict)
+    coverage[total_field] = int(coverage[total_field]) + 1
+    _reseal_inventory_payload(payload)
+    forged = SolidityShardInventory.model_validate(payload)
+    with pytest.raises(SolidityShardingError, match="denominator"):
+        verify_solidity_shard_projection(
+            index=inputs.index,
+            graphs=partial_graphs,
+            inventory=forged,
+            expected_policy=policy,
+            report_binding=SolidityShardReportBinding.from_inventory(forged),
+        )
+
+
 def test_persisted_shards_reject_report_repository_source_projection_mismatch(
     tmp_path: Path,
     config_factory,
@@ -1217,6 +1667,99 @@ def test_persisted_shards_reject_stale_report_semantic_summaries(
 
     with pytest.raises(ValueError, match=r"index report summary|graph report summary"):
         validate_solidity_shard_artifacts(run_dir, stale_report)
+
+
+@pytest.mark.parametrize(
+    ("tamper", "error"),
+    [
+        ("retained", "retained graph counts"),
+        ("candidate", "candidate graph counts"),
+        ("omitted", "omitted graph counts"),
+        ("omission_hash", "omission hashes"),
+        ("analysis_state", "analysis state"),
+    ],
+)
+def test_persisted_graphs_reject_report_coverage_tamper(
+    tmp_path: Path,
+    config_factory,
+    tamper: str,
+    error: str,
+) -> None:
+    inputs = _shard_inputs(tmp_path, config_factory)
+    graphs = _graphs_with_one_typed_omission(inputs.graphs)
+    partial_inputs = replace(inputs, graphs=graphs)
+    inventory = _inventory(partial_inputs)
+    run_dir = tmp_path / f"tampered-graph-coverage-{tamper}"
+    _write_shard_artifacts(
+        run_dir,
+        index=inputs.index,
+        graphs=graphs,
+        inventory=inventory,
+    )
+    report = _report_for_shards(
+        repository=build_repository_map(inputs.discovery),
+        index=inputs.index,
+        graphs=graphs,
+        inventory=inventory,
+    )
+    coverage = report.solidity_coverage
+    assert coverage is not None
+    omitted_kind = graphs.edge_omissions[0].graph.value
+    updates: dict[str, object]
+    if tamper == "retained":
+        counts = dict(coverage.graph_edge_counts)
+        counts[omitted_kind] += 1
+        updates = {"graph_edge_counts": counts}
+    elif tamper == "candidate":
+        counts = dict(coverage.graph_candidate_edge_counts)
+        counts[omitted_kind] += 1
+        updates = {"graph_candidate_edge_counts": counts}
+    elif tamper == "omitted":
+        counts = dict(coverage.graph_omitted_edge_counts)
+        counts[omitted_kind] += 1
+        updates = {"graph_omitted_edge_counts": counts}
+    elif tamper == "omission_hash":
+        updates = {"graph_omission_evidence_sha256s": ["f" * 64]}
+    else:
+        updates = {"graph_analysis_state": AnalysisState.DETERMINISTIC}
+    tampered_report = report.model_copy(
+        update={"solidity_coverage": coverage.model_copy(update=updates)}
+    )
+
+    with pytest.raises(ValueError, match=error):
+        validate_solidity_shard_artifacts(run_dir, tampered_report)
+
+
+def test_persisted_graphs_reject_artifact_larger_than_its_declared_limit(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    inputs = _shard_inputs(tmp_path, config_factory)
+    bounded_graphs = SolidityGraphSet.model_validate(
+        {
+            **inputs.graphs.model_dump(mode="python"),
+            "artifact_byte_limit": 1_024,
+        }
+    )
+    bounded_inputs = replace(inputs, graphs=bounded_graphs)
+    inventory = _inventory(bounded_inputs)
+    run_dir = tmp_path / "graph-declared-limit-tamper"
+    _write_shard_artifacts(
+        run_dir,
+        index=inputs.index,
+        graphs=bounded_graphs,
+        inventory=inventory,
+    )
+    report = _report_for_shards(
+        repository=build_repository_map(inputs.discovery),
+        index=inputs.index,
+        graphs=bounded_graphs,
+        inventory=inventory,
+    )
+    assert (run_dir / "solidity-graphs.json").stat().st_size > 1_024
+
+    with pytest.raises(ValueError, match=r"bounded|byte limit"):
+        validate_solidity_shard_artifacts(run_dir, report)
 
 
 @pytest.mark.parametrize(
@@ -1413,6 +1956,7 @@ def test_current_report_and_verify_run_reject_erased_solidity_metadata_with_shar
             "run_status": AuditRunStatus.INCOMPLETE,
             "minimum_analysis_floor": floor,
             "quality_gates": [minimum_analysis_floor_quality_gate(floor)],
+            "solidity_coverage": shard_report.solidity_coverage,
             "metadata": {
                 **base_report.metadata,
                 "scanner_only": True,
@@ -1532,8 +2076,8 @@ def test_sharding_rejects_incomplete_upstream_denominators(
             if item.name == "SyntheticMarker" and item.contract_name == "Unrelated"
         )
         assert all(unused.id not in {edge.source_id, edge.target_id} for edge in graphs.edges)
-        graphs = graphs.model_copy(
-            update={"nodes": [node for node in graphs.nodes if node.id != unused.id]}
+        graphs = _graph_copy(
+            graphs, update={"nodes": [node for node in graphs.nodes if node.id != unused.id]}
         )
 
     with pytest.raises(SolidityShardingError, match=r"provenance|coverage|nodes omit"):
@@ -1553,11 +2097,12 @@ def _with_second_cross_file_boundary(inputs: _ShardInputs) -> _ShardInputs:
     coverage[SolidityGraphKind.STATE_WRITE.value] += 1
     return replace(
         inputs,
-        graphs=inputs.graphs.model_copy(
+        graphs=_graph_copy(
+            inputs.graphs,
             update={
                 "edges": [*inputs.graphs.edges, second_edge],
                 "coverage": coverage,
-            }
+            },
         ),
     )
 
@@ -1628,8 +2173,9 @@ def test_primary_fact_change_updates_owning_shard_hash(
     else:
         node = next(item for item in graphs.nodes if item.id == entity.id)
         changed = node.model_copy(update={"label": f"{node.label} changed"})
-        graphs = graphs.model_copy(
-            update={"nodes": [changed if item.id == changed.id else item for item in graphs.nodes]}
+        graphs = _graph_copy(
+            graphs,
+            update={"nodes": [changed if item.id == changed.id else item for item in graphs.nodes]},
         )
 
     observed = build_solidity_shard_inventory(inputs.discovery, index, graphs)
@@ -1661,11 +2207,12 @@ def test_remote_overlap_fact_hash_changes_consumer_shard_hash(
         coverage[SolidityGraphKind.STATE_WRITE.value] += 1
         inputs = replace(
             inputs,
-            graphs=inputs.graphs.model_copy(
+            graphs=_graph_copy(
+                inputs.graphs,
                 update={
                     "edges": [*inputs.graphs.edges, boundary_edge],
                     "coverage": coverage,
-                }
+                },
             ),
         )
     baseline = _inventory(inputs)
@@ -1696,8 +2243,9 @@ def test_remote_overlap_fact_hash_changes_consumer_shard_hash(
     elif fact_kind == "node":
         node = next(item for item in graphs.nodes if item.id == inputs.target_function.id)
         changed = node.model_copy(update={"label": f"{node.label} changed"})
-        graphs = graphs.model_copy(
-            update={"nodes": [changed if item.id == changed.id else item for item in graphs.nodes]}
+        graphs = _graph_copy(
+            graphs,
+            update={"nodes": [changed if item.id == changed.id else item for item in graphs.nodes]},
         )
         resource_id = changed.id
         fact_field = "graph_node_facts"
@@ -1705,19 +2253,21 @@ def test_remote_overlap_fact_hash_changes_consumer_shard_hash(
         changed = boundary_edge.model_copy(
             update={"metadata": {**boundary_edge.metadata, "changed": True}}
         )
-        graphs = graphs.model_copy(
-            update={"edges": [changed if item is boundary_edge else item for item in graphs.edges]}
+        graphs = _graph_copy(
+            graphs,
+            update={"edges": [changed if item is boundary_edge else item for item in graphs.edges]},
         )
         resource_id = solidity_graph_edge_id(changed)
         fact_field = "graph_edge_facts"
     else:
         changed = inputs.storage_entry.model_copy(update={"type_name": "uint256 synthetic"})
-        graphs = graphs.model_copy(
+        graphs = _graph_copy(
+            graphs,
             update={
                 "storage_layout": [
                     changed if item.id == changed.id else item for item in graphs.storage_layout
                 ]
-            }
+            },
         )
         resource_id = changed.id
         fact_field = "storage_facts"

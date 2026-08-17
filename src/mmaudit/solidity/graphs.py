@@ -8,23 +8,38 @@ compiler evidence.
 from __future__ import annotations
 
 import hashlib
+import heapq
+import json
 import re
-from collections import Counter
-from itertools import pairwise
-from typing import Any
+from bisect import bisect_right
+from collections import Counter, defaultdict
+from collections.abc import Callable, Iterable, Iterator
+from dataclasses import dataclass
+from functools import lru_cache
+from itertools import groupby, islice, pairwise, product
+from typing import Any, Protocol
 
+from mmaudit.artifact_limits import MAX_JSON_ARTIFACT_BYTES
 from mmaudit.models.schemas import (
     SolidityEntity,
     SolidityEntityKind,
     SolidityGraphEdge,
+    SolidityGraphFactKind,
+    SolidityGraphFactOmission,
     SolidityGraphKind,
     SolidityGraphNode,
     SolidityGraphNodeKind,
+    SolidityGraphOccurrenceKind,
+    SolidityGraphOmission,
+    SolidityGraphRetainedOccurrence,
     SolidityGraphSet,
     SolidityProvenance,
     SolidityStorageEntry,
+    solidity_graph_edge_logical_key,
+    solidity_graph_occurrence_sha256,
 )
-from mmaudit.repository.chunking import line_range_hash
+from mmaudit.models.sharding import SolidityShardPolicy
+from mmaudit.reporting.json_report import stable_json_bytes
 from mmaudit.repository.discovery import DiscoveredFile, DiscoveryResult
 from mmaudit.solidity.index import AstDocument, SolidityIndexBuild, _parse_src_components
 
@@ -201,52 +216,1210 @@ _PROXY_SLOT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("rollback", re.compile(r"\bROLLBACK_SLOT\b", re.I)),
 )
 
+_GRAPH_SELECTION_ALGORITHM = "mmaudit.semantic-graph-risk-order.v1"
+_OMISSION_SAMPLE_LIMIT = 16
+# Graph facts are also projected into the bounded shard artifact.  Reserving only
+# one fifth of the graph envelope for edge payload leaves deterministic room for
+# endpoint nodes, source-owned facts, typed omission evidence, and the downstream
+# projection without relying on optimistic average record sizes.
+_EDGE_BUDGET_NUMERATOR = 1
+_EDGE_BUDGET_DENOMINATOR = 5
+_MAX_CARTESIAN_EDGE_RECORDS = 250_000
+_GRAPH_PRIORITY: dict[SolidityGraphKind, int] = {
+    # The first four classes are the operator-mandated pressure order.
+    SolidityGraphKind.PRIVILEGE: 500,
+    SolidityGraphKind.ASSET_FLOW: 490,
+    SolidityGraphKind.SENSITIVE_REACHABILITY: 480,
+    SolidityGraphKind.STATE_DEPENDENCY: 470,
+    SolidityGraphKind.REENTRANCY: 460,
+    SolidityGraphKind.DELEGATECALL: 450,
+    SolidityGraphKind.LOW_LEVEL_CALL: 440,
+    SolidityGraphKind.ORACLE_DEPENDENCY: 430,
+    SolidityGraphKind.SIGNATURE_REPLAY: 420,
+    SolidityGraphKind.INITIALIZER: 410,
+    SolidityGraphKind.UPGRADE_COMPATIBILITY: 400,
+    SolidityGraphKind.PROXY: 390,
+    SolidityGraphKind.GOVERNANCE: 380,
+    SolidityGraphKind.CROSS_CHAIN: 370,
+    SolidityGraphKind.EXTERNAL_CALL: 360,
+    SolidityGraphKind.CONTRACT_CREATION: 350,
+    SolidityGraphKind.STATE_WRITE: 340,
+    SolidityGraphKind.STATE_GROWTH: 330,
+    SolidityGraphKind.MODIFIER: 320,
+    SolidityGraphKind.DEPENDENCY: 310,
+    SolidityGraphKind.OFFCHAIN_DEPENDENCY: 300,
+    SolidityGraphKind.EVENT_STATE: 290,
+    SolidityGraphKind.STORAGE_LAYOUT: 280,
+    SolidityGraphKind.INTERNAL_CALL: 200,
+    SolidityGraphKind.STATE_READ: 190,
+    SolidityGraphKind.EVENT_FLOW: 180,
+    SolidityGraphKind.INHERITANCE: 170,
+}
+_NODE_KIND_PRIORITY: dict[SolidityGraphNodeKind, int] = {
+    # Indexed entities are the source/target backbone for every graph class.
+    SolidityGraphNodeKind.ENTITY: 510,
+    SolidityGraphNodeKind.ROLE: 500,
+    SolidityGraphNodeKind.ASSET: 490,
+    SolidityGraphNodeKind.STATE_VARIABLE: 480,
+    SolidityGraphNodeKind.UNKNOWN: 470,
+    SolidityGraphNodeKind.ORACLE: 460,
+    SolidityGraphNodeKind.GOVERNANCE: 450,
+    SolidityGraphNodeKind.MESSAGE: 440,
+    SolidityGraphNodeKind.PROXY: 430,
+    SolidityGraphNodeKind.STORAGE_SLOT: 420,
+    SolidityGraphNodeKind.EXTERNAL_TARGET: 410,
+    SolidityGraphNodeKind.OFFCHAIN_ACTOR: 400,
+    SolidityGraphNodeKind.SIGNATURE_DOMAIN: 390,
+}
+
+
+class _EdgeSink(Protocol):
+    def append(self, edge: SolidityGraphEdge) -> None: ...
+
+    def extend(self, edges: Iterable[SolidityGraphEdge]) -> None: ...
+
+    def record_analytical_omission(
+        self,
+        *,
+        graph: SolidityGraphKind,
+        omitted_count: int,
+        derivation: dict[str, Any],
+    ) -> None: ...
+
+
+class _NodeSink(Protocol):
+    def append(self, node: SolidityGraphNode) -> None: ...
+
+    def extend(self, nodes: Iterable[SolidityGraphNode]) -> None: ...
+
+
+class _WarningSink(Protocol):
+    def append(self, warning: str) -> None: ...
+
+
+class _DiscardingEdgeSink:
+    """Consume graph producer calls without retaining or accounting edge evidence."""
+
+    def append(self, edge: SolidityGraphEdge) -> None:
+        del edge
+
+    def extend(self, edges: Iterable[SolidityGraphEdge]) -> None:
+        del edges
+
+    def record_analytical_omission(
+        self,
+        *,
+        graph: SolidityGraphKind,
+        omitted_count: int,
+        derivation: dict[str, Any],
+    ) -> None:
+        del graph, omitted_count, derivation
+
+
+class _DiscardingNodeSink:
+    """Skip node construction side effects during the edge-selection pass."""
+
+    def append(self, node: SolidityGraphNode) -> None:
+        del node
+
+    def extend(self, nodes: Iterable[SolidityGraphNode]) -> None:
+        del nodes
+
+
+class _DiscardingWarningSink:
+    def append(self, warning: str) -> None:
+        del warning
+
+
+def _canonical_edge_bytes(edge: SolidityGraphEdge) -> bytes:
+    return json.dumps(
+        edge.model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+@lru_cache(maxsize=64)
+def _source_coordinates(content: str) -> tuple[bytes, tuple[int, ...]]:
+    """Cache immutable UTF-8 bytes and line starts for bounded source-range work."""
+
+    encoded = content.encode("utf-8")
+    starts = [0]
+    cursor = 0
+    while True:
+        newline = encoded.find(b"\n", cursor)
+        if newline < 0:
+            break
+        cursor = newline + 1
+        starts.append(cursor)
+    return encoded, tuple(starts)
+
+
+def _line_range_hash(content: str, start_line: int, end_line: int) -> str:
+    """Hash an inclusive line range without repeatedly splitting the source."""
+
+    encoded, starts = _source_coordinates(content)
+    start_index = max(0, start_line - 1)
+    if start_index >= len(starts):
+        return hashlib.sha256(b"").hexdigest()
+    start = starts[start_index]
+    end = starts[end_line] if end_line < len(starts) else len(encoded)
+    return hashlib.sha256(encoded[start:end]).hexdigest()
+
+
+def _edge_key(
+    edge: SolidityGraphEdge,
+) -> tuple[str, str, str, str, str, int, int, int | None]:
+    return solidity_graph_edge_logical_key(edge)
+
+
+def _edge_retention_key(edge: SolidityGraphEdge, digest: str) -> tuple[int, int, int, int, int]:
+    """Return a stable key where larger values have greater defensive value."""
+
+    unsafe = str(edge.metadata.get("compatibility", "")).casefold() in {
+        "incompatible",
+        "unsafe",
+    } or str(edge.metadata.get("control_resolution", "")).casefold() in {
+        "unknown",
+        "unresolved",
+    }
+    provenance = {
+        SolidityProvenance.COMPILER: 4,
+        SolidityProvenance.STATIC_TOOL: 3,
+        SolidityProvenance.HEURISTIC: 2,
+        SolidityProvenance.FALLBACK: 1,
+        SolidityProvenance.MODEL_SUGGESTED: 0,
+    }[edge.provenance]
+    # A lower canonical digest wins the final deterministic tie-break.
+    digest_tiebreak = -(int(digest, 16))
+    return (
+        _GRAPH_PRIORITY[edge.graph],
+        int(unsafe),
+        provenance,
+        int(edge.confidence * 1_000_000),
+        digest_tiebreak,
+    )
+
+
+def _edge_selection_key(
+    edge: SolidityGraphEdge,
+    key: tuple[str, str, str, str, str, int, int, int | None],
+) -> tuple[int, int, int, int, int]:
+    """Rank a logical edge independently from whichever evidence variant arrives first."""
+
+    key_digest = hashlib.sha256(
+        json.dumps(key, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    ).hexdigest()
+    return (_GRAPH_PRIORITY[edge.graph], 0, 0, 0, -int(key_digest, 16))
+
+
+def _node_retention_key(node: SolidityGraphNode, digest: str) -> tuple[int, int, int]:
+    """Return deterministic defensive value for one non-edge graph node."""
+
+    return (
+        _NODE_KIND_PRIORITY[node.kind],
+        int(node.confidence * 1_000_000),
+        -int(digest, 16),
+    )
+
+
+def _maximum_retained_edges_for_sharding(policy: SolidityShardPolicy) -> int:
+    """Return a global edge ceiling that cannot overflow any per-shard graph cap.
+
+    A retained edge can contribute one primary and one overlap edge membership,
+    two primary and two overlap node memberships, and one boundary membership to
+    a shard.  The global cap is deliberately conservative: even if every retained
+    edge touches the same source unit, the resulting projection remains within
+    the exact policy used downstream.
+    """
+
+    non_graph_memberships = sum(
+        (
+            policy.max_primary_entities_per_shard,
+            policy.max_overlap_entities_per_shard,
+            policy.max_primary_storage_entries_per_shard,
+            policy.max_overlap_storage_entries_per_shard,
+        )
+    )
+    graph_membership_capacity = max(
+        0,
+        policy.max_total_semantic_memberships_per_shard - non_graph_memberships,
+    )
+    return min(
+        policy.max_primary_graph_edges_per_shard,
+        policy.max_overlap_graph_edges_per_shard,
+        policy.max_primary_graph_nodes_per_shard // 2,
+        policy.max_overlap_graph_nodes_per_shard // 2,
+        policy.max_boundaries_per_shard,
+        policy.max_total_boundaries,
+        graph_membership_capacity // 6,
+    )
+
+
+@dataclass(slots=True)
+class _OccurrenceAggregate:
+    """Commutative evidence for candidate occurrences represented by one retained key."""
+
+    count: int
+    canonical_bytes: int
+    digest_xor: int
+    digest_sum: int
+    sample_digests: list[str]
+
+    @classmethod
+    def from_candidate(cls, size: int, digest: str) -> _OccurrenceAggregate:
+        digest_int = int(digest, 16)
+        return cls(
+            count=1,
+            canonical_bytes=size,
+            digest_xor=digest_int,
+            digest_sum=digest_int,
+            sample_digests=[digest],
+        )
+
+    def add_candidate(self, size: int, digest: str) -> None:
+        self.count += 1
+        self.canonical_bytes += size
+        digest_int = int(digest, 16)
+        self.digest_xor ^= digest_int
+        self.digest_sum = (self.digest_sum + digest_int) % (1 << 256)
+        _merge_digest_samples(self.sample_digests, (digest,))
+
+
+def _merge_digest_samples(target: list[str], additions: Iterable[str]) -> None:
+    target[:] = sorted(set(target) | set(additions))[:_OMISSION_SAMPLE_LIMIT]
+
+
+@dataclass(slots=True)
+class _FactRecord[FactT: (SolidityGraphNode, SolidityStorageEntry)]:
+    fact: FactT
+    size: int
+    digest: str
+    variant_priority: tuple[int, int, int]
+    selection_priority: tuple[int, ...]
+    sequence: int
+    occurrences: _OccurrenceAggregate
+
+
+class _BoundedFactCollector[FactT: (SolidityGraphNode, SolidityStorageEntry)]:
+    """Keep a deterministic top population of non-edge graph facts."""
+
+    def __init__(
+        self,
+        *,
+        fact_kind: SolidityGraphFactKind,
+        max_payload_bytes: int,
+        max_records: int,
+        priority: Callable[[FactT, str], tuple[int, int, int]],
+    ) -> None:
+        self.fact_kind = fact_kind
+        self.max_payload_bytes = max(0, max_payload_bytes)
+        self.max_records = max(0, max_records)
+        self._priority: Callable[[FactT, str], tuple[int, int, int]] = priority
+        self._by_id: dict[str, _FactRecord[FactT]] = {}
+        self._heap: list[tuple[tuple[int, ...], int, str]] = []
+        self._sequence = 0
+        self._endpoint_priorities: dict[str, tuple[int, int, int, int, int]] = {}
+        self._maximum_candidate_bytes = 0
+        self._omitted_count = 0
+        self._omitted_bytes = 0
+        self._omitted_xor = 0
+        self._omitted_sum = 0
+        self._omitted_samples: list[str] = []
+
+    def append(self, fact: FactT) -> None:
+        encoded = json.dumps(
+            fact.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        size = len(encoded)
+        digest = hashlib.sha256(encoded).hexdigest()
+        self._maximum_candidate_bytes = max(self._maximum_candidate_bytes, size)
+        variant_priority = self._priority(fact, digest)
+        previous = self._by_id.get(fact.id)
+        if previous is not None:
+            previous.occurrences.add_candidate(size, digest)
+            if variant_priority > previous.variant_priority:
+                previous.fact = fact
+                previous.size = size
+                previous.digest = digest
+                previous.variant_priority = variant_priority
+            self._enforce_retention_limit()
+            return
+
+        # Keep at most one staged record beyond the exact capacity. Several graph
+        # producers emit a synthetic endpoint immediately before its edge; the edge
+        # callback can therefore pin that endpoint before the next fact forces eviction.
+        self._enforce_retention_limit()
+        fact_priority = self._effective_priority(fact.id)
+        self._sequence += 1
+        record = _FactRecord(
+            fact=fact,
+            size=size,
+            digest=digest,
+            variant_priority=variant_priority,
+            selection_priority=fact_priority,
+            sequence=self._sequence,
+            occurrences=_OccurrenceAggregate.from_candidate(size, digest),
+        )
+        self._by_id[fact.id] = record
+        heapq.heappush(self._heap, (fact_priority, self._sequence, fact.id))
+        self._compact_heap_if_needed()
+
+    def set_endpoint_priority(
+        self,
+        fact_id: str,
+        edge_priority: tuple[int, int, int, int, int] | None,
+    ) -> None:
+        """Set the exact current defensive value of one retained-edge endpoint."""
+
+        previous_pin = self._endpoint_priorities.get(fact_id)
+        if previous_pin == edge_priority:
+            return
+        if edge_priority is None:
+            self._endpoint_priorities.pop(fact_id, None)
+        else:
+            self._endpoint_priorities[fact_id] = edge_priority
+        record = self._by_id.get(fact_id)
+        if record is None:
+            return
+        updated_priority = self._effective_priority(fact_id)
+        self._sequence += 1
+        record.selection_priority = updated_priority
+        record.sequence = self._sequence
+        heapq.heappush(self._heap, (updated_priority, self._sequence, fact_id))
+        self._compact_heap_if_needed()
+
+    def set_endpoint_priorities(
+        self,
+        priorities: dict[str, tuple[int, int, int, int, int]],
+    ) -> None:
+        """Replace transient pins with the exact final retained-edge endpoint set."""
+
+        self._endpoint_priorities = dict(priorities)
+        self._heap = []
+        for fact_id, record in sorted(self._by_id.items()):
+            effective = self._effective_priority(fact_id)
+            self._sequence += 1
+            record.selection_priority = effective
+            record.sequence = self._sequence
+            heapq.heappush(self._heap, (effective, self._sequence, fact_id))
+        self._enforce_retention_limit()
+
+    def extend(self, facts: Iterable[FactT]) -> None:
+        for fact in facts:
+            self.append(fact)
+
+    def retained(self) -> list[FactT]:
+        self._enforce_retention_limit()
+        return [record.fact for _fact_id, record in sorted(self._by_id.items())]
+
+    def retained_ids(self) -> set[str]:
+        self._enforce_retention_limit()
+        return set(self._by_id)
+
+    def retained_occurrences(self) -> tuple[SolidityGraphRetainedOccurrence, ...]:
+        """Return exact occurrence counts for the currently retained normalized facts."""
+
+        self._enforce_retention_limit()
+        subject_kind = SolidityGraphOccurrenceKind(self.fact_kind.value)
+        return tuple(
+            SolidityGraphRetainedOccurrence(
+                subject_kind=subject_kind,
+                subject_sha256=solidity_graph_occurrence_sha256(subject_kind, record.fact),
+                occurrence_count=record.occurrences.count,
+            )
+            for fact_id, record in sorted(self._by_id.items())
+        )
+
+    def discard_bytes(self, minimum_bytes: int) -> int:
+        self._enforce_retention_limit()
+        discarded = 0
+        while discarded < minimum_bytes and self._by_id:
+            omitted = self._pop_lowest()
+            if omitted is None:
+                continue
+            self._record_omission(omitted)
+            discarded += omitted.size
+        return discarded
+
+    def discard_ids(self, fact_ids: set[str]) -> int:
+        self._enforce_retention_limit()
+        discarded = 0
+        for fact_id in sorted(fact_ids & self._by_id.keys()):
+            omitted = self._by_id.pop(fact_id)
+            self._record_omission(omitted)
+            discarded += omitted.size
+        return discarded
+
+    def omission(self) -> SolidityGraphFactOmission | None:
+        self._enforce_retention_limit()
+        if self._omitted_count == 0:
+            return None
+        retained_occurrence_count = sum(record.occurrences.count for record in self._by_id.values())
+        return SolidityGraphFactOmission.build(
+            fact_kind=self.fact_kind,
+            candidate_count=retained_occurrence_count + self._omitted_count,
+            retained_count=len(self._by_id),
+            retained_occurrence_count=retained_occurrence_count,
+            omitted_count=self._omitted_count,
+            omitted_canonical_bytes=self._omitted_bytes,
+            omitted_stream_sha256=hashlib.sha256(
+                (f"{self._omitted_count}:{self._omitted_xor:064x}:{self._omitted_sum:064x}").encode(
+                    "ascii"
+                )
+            ).hexdigest(),
+            omitted_sample_sha256s=tuple(self._omitted_samples),
+        )
+
+    def _effective_priority(self, fact_id: str) -> tuple[int, ...]:
+        edge_priority = self._endpoint_priorities.get(fact_id)
+        resolved_edge_priority: tuple[int, int, int, int, int] = (
+            edge_priority if edge_priority is not None else (0, 0, 0, 0, 0)
+        )
+        identity_tiebreak = -int(
+            hashlib.sha256(f"{self.fact_kind.value}\0{fact_id}".encode()).hexdigest(),
+            16,
+        )
+        return (
+            int(edge_priority is not None),
+            *resolved_edge_priority,
+            identity_tiebreak,
+        )
+
+    def _capacity(self) -> int:
+        byte_capacity = (
+            self.max_payload_bytes // self._maximum_candidate_bytes
+            if self._maximum_candidate_bytes
+            else 0
+        )
+        return min(self.max_records, byte_capacity)
+
+    def _enforce_retention_limit(self) -> None:
+        capacity = self._capacity()
+        while len(self._by_id) > capacity:
+            omitted = self._pop_lowest()
+            if omitted is None:
+                break
+            self._record_omission(omitted)
+        self._compact_heap_if_needed()
+
+    def _compact_heap_if_needed(self) -> None:
+        if len(self._heap) <= len(self._by_id) * 2 + 1_024:
+            return
+        self._heap = [
+            (record.selection_priority, record.sequence, fact_id)
+            for fact_id, record in self._by_id.items()
+        ]
+        heapq.heapify(self._heap)
+
+    def _pop_lowest(
+        self,
+    ) -> _FactRecord[FactT] | None:
+        while self._heap:
+            _priority, sequence, omitted_id = heapq.heappop(self._heap)
+            omitted = self._by_id.get(omitted_id)
+            if omitted is None or omitted.sequence != sequence:
+                continue
+            del self._by_id[omitted_id]
+            return omitted
+        return None
+
+    def _record_omission(self, record: _FactRecord[FactT]) -> None:
+        occurrences = record.occurrences
+        self._omitted_count += occurrences.count
+        self._omitted_bytes += occurrences.canonical_bytes
+        self._omitted_xor ^= occurrences.digest_xor
+        self._omitted_sum = (self._omitted_sum + occurrences.digest_sum) % (1 << 256)
+        _merge_digest_samples(self._omitted_samples, occurrences.sample_digests)
+
+
+@dataclass(slots=True)
+class _WarningRecord:
+    warning: str
+    size: int
+    occurrences: _OccurrenceAggregate
+
+
+class _BoundedWarningCollector:
+    """Bound diagnostic strings and expose typed evidence when records are dropped."""
+
+    def __init__(self, *, max_payload_bytes: int, max_records: int = 256) -> None:
+        self.max_payload_bytes = max(0, max_payload_bytes)
+        self.max_records = max_records
+        self._by_digest: dict[str, _WarningRecord] = {}
+        self._omitted_count = 0
+        self._omitted_bytes = 0
+        self._omitted_xor = 0
+        self._omitted_sum = 0
+        self._omitted_samples: list[str] = []
+
+    def append(self, warning: str) -> None:
+        encoded = json.dumps(warning, ensure_ascii=False).encode("utf-8")
+        digest = hashlib.sha256(encoded).hexdigest()
+        previous = self._by_digest.get(digest)
+        if previous is not None:
+            previous.occurrences.add_candidate(len(encoded), digest)
+            return
+        self._by_digest[digest] = _WarningRecord(
+            warning=warning,
+            size=len(encoded),
+            occurrences=_OccurrenceAggregate.from_candidate(len(encoded), digest),
+        )
+        while (
+            len(self._by_digest) > self.max_records
+            or sum(item.size for item in self._by_digest.values()) > self.max_payload_bytes
+        ):
+            omitted_digest = max(self._by_digest)
+            omitted = self._by_digest.pop(omitted_digest)
+            self._record_omission(omitted)
+
+    def retained(self) -> list[str]:
+        return sorted(item.warning for item in self._by_digest.values())
+
+    def retained_occurrences(self) -> tuple[SolidityGraphRetainedOccurrence, ...]:
+        """Return exact occurrence counts for the retained normalized warnings."""
+
+        return tuple(
+            SolidityGraphRetainedOccurrence(
+                subject_kind=SolidityGraphOccurrenceKind.WARNING,
+                subject_sha256=solidity_graph_occurrence_sha256(
+                    SolidityGraphOccurrenceKind.WARNING, record.warning
+                ),
+                occurrence_count=record.occurrences.count,
+            )
+            for _digest, record in sorted(self._by_digest.items())
+        )
+
+    def omission(self) -> SolidityGraphFactOmission | None:
+        if self._omitted_count == 0:
+            return None
+        retained_occurrence_count = sum(
+            record.occurrences.count for record in self._by_digest.values()
+        )
+        return SolidityGraphFactOmission.build(
+            fact_kind=SolidityGraphFactKind.WARNING,
+            candidate_count=retained_occurrence_count + self._omitted_count,
+            retained_count=len(self._by_digest),
+            retained_occurrence_count=retained_occurrence_count,
+            omitted_count=self._omitted_count,
+            omitted_canonical_bytes=self._omitted_bytes,
+            omitted_stream_sha256=hashlib.sha256(
+                (f"{self._omitted_count}:{self._omitted_xor:064x}:{self._omitted_sum:064x}").encode(
+                    "ascii"
+                )
+            ).hexdigest(),
+            omitted_sample_sha256s=tuple(self._omitted_samples),
+        )
+
+    def _record_omission(self, record: _WarningRecord) -> None:
+        occurrences = record.occurrences
+        self._omitted_count += occurrences.count
+        self._omitted_bytes += occurrences.canonical_bytes
+        self._omitted_xor ^= occurrences.digest_xor
+        self._omitted_sum = (self._omitted_sum + occurrences.digest_sum) % (1 << 256)
+        _merge_digest_samples(self._omitted_samples, occurrences.sample_digests)
+
+
+@dataclass(slots=True)
+class _EdgeRecord:
+    edge: SolidityGraphEdge
+    size: int
+    digest: str
+    variant_priority: tuple[int, int, int, int, int]
+    selection_priority: tuple[int, int, int, int, int]
+    sequence: int
+    occurrences: _OccurrenceAggregate
+
+
+class _BoundedEdgeCollector:
+    """Retain a deterministic risk-ordered edge set under a fixed memory budget."""
+
+    def __init__(
+        self,
+        max_payload_bytes: int,
+        *,
+        max_retained_edges: int,
+        endpoint_sink: (Callable[[str, tuple[int, int, int, int, int] | None], None] | None) = None,
+    ) -> None:
+        self.max_payload_bytes = max(0, max_payload_bytes)
+        self.max_retained_edges = max(0, max_retained_edges)
+        self._endpoint_sink = endpoint_sink
+        self._endpoint_priority_counts: defaultdict[
+            str,
+            Counter[tuple[int, int, int, int, int]],
+        ] = defaultdict(Counter)
+        self._by_key: dict[
+            tuple[str, str, str, str, str, int, int, int | None],
+            _EdgeRecord,
+        ] = {}
+        self._heap: list[
+            tuple[
+                tuple[int, int, int, int, int],
+                int,
+                tuple[str, str, str, str, str, int, int, int | None],
+            ]
+        ] = []
+        self._sequence = 0
+        self._retained_bytes = 0
+        self._maximum_candidate_bytes = 0
+        self._omitted_count: Counter[SolidityGraphKind] = Counter()
+        self._omitted_bytes: Counter[SolidityGraphKind] = Counter()
+        self._omitted_xor: defaultdict[SolidityGraphKind, int] = defaultdict(int)
+        self._omitted_sum: defaultdict[SolidityGraphKind, int] = defaultdict(int)
+        self._omitted_samples: defaultdict[SolidityGraphKind, list[str]] = defaultdict(list)
+        self._analytical_omitted_count: Counter[SolidityGraphKind] = Counter()
+        self._analytical_population_hashes: defaultdict[SolidityGraphKind, list[str]] = defaultdict(
+            list
+        )
+        self._analytical_xor: defaultdict[SolidityGraphKind, int] = defaultdict(int)
+        self._analytical_sum: defaultdict[SolidityGraphKind, int] = defaultdict(int)
+
+    def append(self, edge: SolidityGraphEdge) -> None:
+        encoded = _canonical_edge_bytes(edge)
+        size = len(encoded)
+        self._maximum_candidate_bytes = max(self._maximum_candidate_bytes, size)
+        digest = hashlib.sha256(encoded).hexdigest()
+        key = _edge_key(edge)
+        variant_priority = _edge_retention_key(edge, digest)
+        previous = self._by_key.get(key)
+        if previous is not None:
+            previous.occurrences.add_candidate(size, digest)
+            if variant_priority > previous.variant_priority:
+                self._retained_bytes += size - previous.size
+                previous.edge = edge
+                previous.size = size
+                previous.digest = digest
+                previous.variant_priority = variant_priority
+            self._enforce_retention_limit()
+            return
+
+        selection_priority = _edge_selection_key(edge, key)
+        self._sequence += 1
+        sequence = self._sequence
+        self._by_key[key] = _EdgeRecord(
+            edge=edge,
+            size=size,
+            digest=digest,
+            variant_priority=variant_priority,
+            selection_priority=selection_priority,
+            sequence=sequence,
+            occurrences=_OccurrenceAggregate.from_candidate(size, digest),
+        )
+        self._retained_bytes += size
+        self._add_endpoint_bindings(edge, selection_priority)
+        heapq.heappush(self._heap, (selection_priority, sequence, key))
+        self._enforce_retention_limit()
+        if len(self._heap) > len(self._by_key) * 2 + 1_024:
+            self._heap = [
+                (record.selection_priority, record.sequence, retained_key)
+                for retained_key, record in self._by_key.items()
+            ]
+            heapq.heapify(self._heap)
+
+    def extend(self, edges: Iterable[SolidityGraphEdge]) -> None:
+        for edge in edges:
+            self.append(edge)
+
+    def record_analytical_omission(
+        self,
+        *,
+        graph: SolidityGraphKind,
+        omitted_count: int,
+        derivation: dict[str, Any],
+    ) -> None:
+        """Record an exact skipped population without constructing each edge object."""
+
+        if omitted_count <= 0:
+            return
+        payload = {
+            "algorithm": _GRAPH_SELECTION_ALGORITHM,
+            "graph": graph.value,
+            "omitted_count": omitted_count,
+            "derivation": derivation,
+        }
+        digest = hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        hashes = self._analytical_population_hashes[graph]
+        if digest not in hashes:
+            hashes.append(digest)
+            hashes.sort()
+            del hashes[_OMISSION_SAMPLE_LIMIT:]
+        digest_int = int(digest, 16)
+        self._analytical_xor[graph] ^= digest_int
+        self._analytical_sum[graph] = (self._analytical_sum[graph] + digest_int) % (1 << 256)
+        self._analytical_omitted_count[graph] += omitted_count
+        self._omitted_count[graph] += omitted_count
+
+    def discard_below_omission_frontier(self) -> None:
+        """Never retain a lower-risk graph kind after a higher-risk kind was omitted."""
+
+        if not self._omitted_count:
+            return
+        frontier = max(_GRAPH_PRIORITY[graph] for graph in self._omitted_count)
+        keys = [
+            key
+            for key, record in self._by_key.items()
+            if _GRAPH_PRIORITY[record.edge.graph] < frontier
+        ]
+        for key in sorted(keys):
+            record = self._by_key.pop(key)
+            self._retained_bytes -= record.size
+            self._remove_endpoint_bindings(record.edge, record.selection_priority)
+            self._record_omission(record)
+
+    def discard_bytes(self, minimum_bytes: int) -> int:
+        discarded = 0
+        while discarded < minimum_bytes and self._by_key:
+            record = self._pop_lowest()
+            if record is None:
+                break
+            self._record_omission(record)
+            discarded += record.size
+        return discarded
+
+    def discard_edges_with_missing_nodes(self, node_ids: set[str]) -> None:
+        missing = [
+            key
+            for key, record in self._by_key.items()
+            if record.edge.source_id not in node_ids or record.edge.target_id not in node_ids
+        ]
+        for key in sorted(missing):
+            record = self._by_key.pop(key)
+            self._retained_bytes -= record.size
+            self._remove_endpoint_bindings(record.edge, record.selection_priority)
+            self._record_omission(record)
+
+    def retained_edges(self) -> list[SolidityGraphEdge]:
+        return sorted(
+            (record.edge for record in self._by_key.values()),
+            key=lambda edge: (
+                edge.graph.value,
+                edge.source_id,
+                edge.target_id,
+                edge.path,
+                edge.start_line,
+                edge.end_line,
+                _int_or_none(edge.metadata.get("occurrence_relative_start")) or -1,
+                edge.label,
+            ),
+        )
+
+    def retained_occurrences(self) -> tuple[SolidityGraphRetainedOccurrence, ...]:
+        """Return exact occurrence counts for the retained normalized edge keys."""
+
+        occurrences = (
+            SolidityGraphRetainedOccurrence(
+                subject_kind=SolidityGraphOccurrenceKind.EDGE,
+                subject_sha256=solidity_graph_occurrence_sha256(
+                    SolidityGraphOccurrenceKind.EDGE, record.edge
+                ),
+                occurrence_count=record.occurrences.count,
+            )
+            for record in self._by_key.values()
+        )
+        return tuple(
+            sorted(
+                occurrences,
+                key=lambda item: (item.subject_kind.value, item.subject_sha256),
+            )
+        )
+
+    def endpoint_priorities(self) -> dict[str, tuple[int, int, int, int, int]]:
+        """Return exact maximum retained-edge priority for every endpoint."""
+
+        return {
+            endpoint: max(counts)
+            for endpoint, counts in self._endpoint_priority_counts.items()
+            if counts
+        }
+
+    def omissions(self) -> tuple[SolidityGraphOmission, ...]:
+        retained = Counter(edge.graph for edge in self.retained_edges())
+        retained_occurrences: Counter[SolidityGraphKind] = Counter()
+        for record in self._by_key.values():
+            retained_occurrences[record.edge.graph] += record.occurrences.count
+        omissions: list[SolidityGraphOmission] = []
+        for graph in sorted(self._omitted_count, key=lambda item: item.value):
+            omitted_count = self._omitted_count[graph]
+            if omitted_count <= 0:
+                continue
+            commitment_payload = (
+                f"{omitted_count}:{self._omitted_xor[graph]:064x}:"
+                f"{self._omitted_sum[graph]:064x}:"
+                f"{self._analytical_xor[graph]:064x}:"
+                f"{self._analytical_sum[graph]:064x}"
+            )
+            omissions.append(
+                SolidityGraphOmission.build(
+                    graph=graph,
+                    candidate_count=retained_occurrences[graph] + omitted_count,
+                    retained_count=retained[graph],
+                    retained_occurrence_count=retained_occurrences[graph],
+                    omitted_count=omitted_count,
+                    omitted_canonical_bytes=self._omitted_bytes[graph],
+                    analytical_omitted_count=self._analytical_omitted_count[graph],
+                    analytical_population_sample_sha256s=tuple(
+                        self._analytical_population_hashes[graph]
+                    ),
+                    omitted_stream_sha256=hashlib.sha256(
+                        commitment_payload.encode("ascii")
+                    ).hexdigest(),
+                    omitted_sample_sha256s=tuple(sorted(self._omitted_samples[graph])),
+                )
+            )
+        return tuple(omissions)
+
+    def _enforce_retention_limit(self) -> None:
+        byte_capacity = (
+            self.max_payload_bytes // self._maximum_candidate_bytes
+            if self._maximum_candidate_bytes
+            else 0
+        )
+        capacity = min(self.max_retained_edges, byte_capacity)
+        while len(self._by_key) > capacity:
+            record = self._pop_lowest()
+            if record is None:
+                break
+            self._record_omission(record)
+
+    def _pop_lowest(self) -> _EdgeRecord | None:
+        while self._heap:
+            _priority, sequence, key = heapq.heappop(self._heap)
+            current = self._by_key.get(key)
+            if current is None or current.sequence != sequence:
+                continue
+            record = self._by_key.pop(key)
+            self._retained_bytes -= record.size
+            self._remove_endpoint_bindings(record.edge, record.selection_priority)
+            return record
+        return None
+
+    def _add_endpoint_bindings(
+        self,
+        edge: SolidityGraphEdge,
+        priority: tuple[int, int, int, int, int],
+    ) -> None:
+        for endpoint in {edge.source_id, edge.target_id}:
+            counts = self._endpoint_priority_counts[endpoint]
+            counts[priority] += 1
+            if self._endpoint_sink is not None:
+                self._endpoint_sink(endpoint, max(counts))
+
+    def _remove_endpoint_bindings(
+        self,
+        edge: SolidityGraphEdge,
+        priority: tuple[int, int, int, int, int],
+    ) -> None:
+        for endpoint in {edge.source_id, edge.target_id}:
+            counts = self._endpoint_priority_counts[endpoint]
+            counts[priority] -= 1
+            if counts[priority] <= 0:
+                del counts[priority]
+            if counts:
+                current = max(counts)
+            else:
+                del self._endpoint_priority_counts[endpoint]
+                current = None
+            if self._endpoint_sink is not None:
+                self._endpoint_sink(endpoint, current)
+
+    def _record_omission(self, record: _EdgeRecord) -> None:
+        graph = record.edge.graph
+        occurrences = record.occurrences
+        self._omitted_count[graph] += occurrences.count
+        self._omitted_bytes[graph] += occurrences.canonical_bytes
+        self._omitted_xor[graph] ^= occurrences.digest_xor
+        self._omitted_sum[graph] = (self._omitted_sum[graph] + occurrences.digest_sum) % (1 << 256)
+        _merge_digest_samples(self._omitted_samples[graph], occurrences.sample_digests)
+
+
+def _bounded_state_dependency_pairs(
+    read_ids: Iterable[str],
+    write_ids: Iterable[str],
+    *,
+    edge_sink: _EdgeSink | None,
+    path: str,
+    function_id: str,
+    transformation: str,
+) -> Iterable[tuple[str, str]]:
+    """Yield a bounded canonical state-product and account for the skipped population."""
+
+    reads = tuple(sorted(set(read_ids)))
+    writes = tuple(sorted(set(write_ids)))
+    total = len(reads) * len(writes)
+    limit = total if edge_sink is None else min(total, _MAX_CARTESIAN_EDGE_RECORDS)
+    if edge_sink is not None and total > limit:
+        edge_sink.record_analytical_omission(
+            graph=SolidityGraphKind.STATE_DEPENDENCY,
+            omitted_count=total - limit,
+            derivation={
+                "transformation": transformation,
+                "path": path,
+                "function_id": function_id,
+                "read_count": len(reads),
+                "write_count": len(writes),
+                "read_ids_sha256": hashlib.sha256("\n".join(reads).encode("utf-8")).hexdigest(),
+                "write_ids_sha256": hashlib.sha256("\n".join(writes).encode("utf-8")).hexdigest(),
+                "enumerated_prefix_count": limit,
+            },
+        )
+    return islice(product(reads, writes), limit)
+
 
 def build_solidity_graphs(
     discovery: DiscoveryResult,
     build: SolidityIndexBuild,
+    *,
+    max_artifact_bytes: int = MAX_JSON_ARTIFACT_BYTES,
+    shard_policy: SolidityShardPolicy | None = None,
 ) -> SolidityGraphSet:
-    """Build the complete supported semantic graph set with provenance."""
+    """Build a risk-ordered semantic graph that cannot exceed its artifact ceiling."""
 
+    if (
+        type(max_artifact_bytes) is not int
+        or max_artifact_bytes < 1_024
+        or max_artifact_bytes > MAX_JSON_ARTIFACT_BYTES
+    ):
+        raise ValueError(
+            f"graph artifact byte ceiling must be in [1024, {MAX_JSON_ARTIFACT_BYTES}]"
+        )
+
+    effective_shard_policy = SolidityShardPolicy.model_validate(
+        (shard_policy or SolidityShardPolicy.build()).model_dump(mode="python")
+    )
     files = {item.relative_path: item for item in discovery.files if item.language == "Solidity"}
-    nodes = [_entity_node(entity) for entity in build.index.entities]
-    edges: list[SolidityGraphEdge] = []
-    warnings: list[str] = []
+    node_collector = _BoundedFactCollector[SolidityGraphNode](
+        fact_kind=SolidityGraphFactKind.GRAPH_NODE,
+        max_payload_bytes=max_artifact_bytes * 2 // 5,
+        max_records=min(
+            effective_shard_policy.max_primary_graph_nodes_per_shard,
+            effective_shard_policy.max_overlap_graph_nodes_per_shard,
+        ),
+        priority=_node_retention_key,
+    )
+    edge_budget = max_artifact_bytes * _EDGE_BUDGET_NUMERATOR // _EDGE_BUDGET_DENOMINATOR
+    edges = _BoundedEdgeCollector(
+        edge_budget,
+        max_retained_edges=_maximum_retained_edges_for_sharding(effective_shard_policy),
+        endpoint_sink=node_collector.set_endpoint_priority,
+    )
+    warnings = _BoundedWarningCollector(max_payload_bytes=max(1_024, max_artifact_bytes // 100))
+    storage_collector = _BoundedFactCollector[SolidityStorageEntry](
+        fact_kind=SolidityGraphFactKind.STORAGE_ENTRY,
+        max_payload_bytes=max_artifact_bytes // 10,
+        max_records=min(
+            effective_shard_policy.max_primary_storage_entries_per_shard,
+            effective_shard_policy.max_overlap_storage_entries_per_shard,
+        ),
+        priority=lambda entry, digest: (
+            1 if entry.provenance is SolidityProvenance.COMPILER else 0,
+            int(entry.confidence * 1_000_000),
+            -int(digest, 16),
+        ),
+    )
+    discarding_nodes = _DiscardingNodeSink()
     for document in build.ast_documents:
         file = files.get(document.source_path)
         if file is None:
             warnings.append(f"{document.source_path}: graph AST source was not discovered")
             continue
-        ast_edges, ast_nodes = _ast_edges(document, file, build, warnings)
+        ast_edges, _ast_nodes = _ast_edges(
+            document,
+            file,
+            build,
+            warnings,
+            edge_sink=edges,
+            node_sink=discarding_nodes,
+        )
         edges.extend(ast_edges)
-        nodes.extend(ast_nodes)
 
-    heuristic_edges, heuristic_nodes = _source_semantic_edges(files, build.index.entities)
-    edges.extend(heuristic_edges)
-    nodes.extend(heuristic_nodes)
-    storage_layout, storage_edges, storage_nodes = _storage_layout(
+    _heuristic_edges, _heuristic_nodes = _source_semantic_edges(
+        files,
+        build.index.entities,
+        edge_sink=edges,
+        node_sink=discarding_nodes,
+    )
+    _storage_layout_entries, storage_edges, _storage_nodes = _storage_layout(
         files,
         build.index.entities,
         build.storage_layout,
+        edge_sink=edges,
+        node_sink=discarding_nodes,
+        storage_sink=storage_collector,
     )
     edges.extend(storage_edges)
-    nodes.extend(storage_nodes)
-    proxy_edges, proxy_nodes = _proxy_edges(files, build.index.entities)
-    edges.extend(proxy_edges)
-    nodes.extend(proxy_nodes)
-
-    unique_edges = _unique_edges(edges)
-    unique_nodes = _unique_nodes(nodes)
-    coverage = Counter(edge.graph.value for edge in unique_edges)
-    analyzed = list(SolidityGraphKind)
-    return SolidityGraphSet(
-        nodes=unique_nodes,
-        edges=unique_edges,
-        storage_layout=storage_layout,
-        analyzed_graphs=analyzed,
-        coverage={kind.value: coverage.get(kind.value, 0) for kind in analyzed},
-        warnings=sorted(set(warnings)),
+    proxy_edges, _proxy_nodes = _proxy_edges(
+        files,
+        build.index.entities,
+        edge_sink=edges,
+        node_sink=discarding_nodes,
     )
+    edges.extend(proxy_edges)
+
+    edges.discard_below_omission_frontier()
+    node_collector.set_endpoint_priorities(edges.endpoint_priorities())
+
+    # Replay only node producers after edge selection so endpoint pins are immutable
+    # throughout fact retention. The sinks suppress duplicate edge/warning accounting.
+    replay_edges = _DiscardingEdgeSink()
+    replay_warnings = _DiscardingWarningSink()
+    for document in build.ast_documents:
+        file = files.get(document.source_path)
+        if file is None:
+            continue
+        _ast_edges(
+            document,
+            file,
+            build,
+            replay_warnings,
+            edge_sink=replay_edges,
+            node_sink=node_collector,
+        )
+    _source_semantic_edges(
+        files,
+        build.index.entities,
+        edge_sink=replay_edges,
+        node_sink=node_collector,
+    )
+    _storage_layout(
+        files,
+        build.index.entities,
+        build.storage_layout,
+        edge_sink=replay_edges,
+        node_sink=node_collector,
+        storage_sink=storage_collector,
+        populate_storage=False,
+    )
+    _proxy_edges(
+        files,
+        build.index.entities,
+        edge_sink=replay_edges,
+        node_sink=node_collector,
+    )
+    node_collector.extend(_entity_node(entity) for entity in build.index.entities)
+    edges.discard_edges_with_missing_nodes(node_collector.retained_ids())
+    edges.discard_below_omission_frontier()
+    node_collector.set_endpoint_priorities(edges.endpoint_priorities())
+
+    limit_warning_added = False
+
+    def ensure_limit_warning() -> None:
+        nonlocal limit_warning_added
+        if limit_warning_added:
+            return
+        if not (
+            edges.omissions()
+            or node_collector.omission()
+            or storage_collector.omission()
+            or warnings.omission()
+        ):
+            return
+        warnings.append(
+            "semantic graph artifact reached a bounded generation limit; typed "
+            "risk-ordered omissions are recorded"
+        )
+        limit_warning_added = True
+
+    def materialize() -> SolidityGraphSet:
+        ensure_limit_warning()
+        retained_edges = edges.retained_edges()
+        retained_nodes = node_collector.retained()
+        retained_storage = storage_collector.retained()
+        retained_warnings = warnings.retained()
+        retained_occurrences = tuple(
+            sorted(
+                (
+                    *edges.retained_occurrences(),
+                    *node_collector.retained_occurrences(),
+                    *storage_collector.retained_occurrences(),
+                    *warnings.retained_occurrences(),
+                ),
+                key=lambda item: (item.subject_kind.value, item.subject_sha256),
+            )
+        )
+        coverage = Counter(edge.graph.value for edge in retained_edges)
+        omissions = edges.omissions()
+        fact_omissions = tuple(
+            sorted(
+                (
+                    omission
+                    for omission in (
+                        node_collector.omission(),
+                        storage_collector.omission(),
+                        warnings.omission(),
+                    )
+                    if omission is not None
+                ),
+                key=lambda item: item.fact_kind.value,
+            )
+        )
+        omitted_kinds = {item.graph for item in omissions}
+        analyzed = [kind for kind in SolidityGraphKind if kind not in omitted_kinds]
+        return SolidityGraphSet(
+            nodes=retained_nodes,
+            edges=retained_edges,
+            storage_layout=retained_storage,
+            retained_occurrences=retained_occurrences,
+            analyzed_graphs=analyzed,
+            coverage={kind.value: coverage.get(kind.value, 0) for kind in SolidityGraphKind},
+            warnings=retained_warnings,
+            generation_complete=not omissions and not fact_omissions,
+            artifact_byte_limit=max_artifact_bytes,
+            selection_algorithm=_GRAPH_SELECTION_ALGORITHM,
+            edge_omissions=omissions,
+            fact_omissions=fact_omissions,
+        )
+
+    graph_set = materialize()
+    encoded_size = len(
+        stable_json_bytes(
+            {
+                "schema_version": "1.0",
+                "graphs": graph_set.model_dump(mode="json"),
+            }
+        )
+    )
+    while encoded_size > max_artifact_bytes:
+        excess = encoded_size - max_artifact_bytes
+        endpoint_ids = {
+            identifier
+            for edge in edges.retained_edges()
+            for identifier in (edge.source_id, edge.target_id)
+        }
+        discarded = node_collector.discard_ids(node_collector.retained_ids() - endpoint_ids)
+        if discarded == 0:
+            discarded = storage_collector.discard_bytes(max(1_024, excess * 2))
+        if discarded == 0:
+            discarded = edges.discard_bytes(max(1_024, excess * 2))
+        if discarded == 0:
+            discarded = node_collector.discard_bytes(max(1_024, excess * 2))
+            edges.discard_edges_with_missing_nodes(node_collector.retained_ids())
+        if discarded == 0:
+            raise ValueError("minimum typed semantic graph envelope exceeds its byte ceiling")
+        edges.discard_below_omission_frontier()
+        graph_set = materialize()
+        encoded_size = len(
+            stable_json_bytes(
+                {
+                    "schema_version": "1.0",
+                    "graphs": graph_set.model_dump(mode="json"),
+                }
+            )
+        )
+    return graph_set
 
 
 def summarize_asset_flows(graphs: SolidityGraphSet | None) -> dict[str, dict[str, int]]:
@@ -303,10 +1476,15 @@ def _ast_edges(
     document: AstDocument,
     file: DiscoveredFile,
     build: SolidityIndexBuild,
-    warnings: list[str],
+    warnings: _WarningSink,
+    *,
+    edge_sink: _EdgeSink | None = None,
+    node_sink: _NodeSink | None = None,
 ) -> tuple[list[SolidityGraphEdge], list[SolidityGraphNode]]:
-    edges: list[SolidityGraphEdge] = []
-    nodes: list[SolidityGraphNode] = []
+    local_edges: list[SolidityGraphEdge] = []
+    local_nodes: list[SolidityGraphNode] = []
+    edges: list[SolidityGraphEdge] | _EdgeSink = local_edges if edge_sink is None else edge_sink
+    nodes: list[SolidityGraphNode] | _NodeSink = local_nodes if node_sink is None else node_sink
     for contract in document.ast.get("nodes", []):
         if not isinstance(contract, dict) or contract.get("nodeType") != "ContractDefinition":
             continue
@@ -317,8 +1495,30 @@ def _ast_edges(
         for base in contract.get("baseContracts", []) or []:
             if not isinstance(base, dict):
                 continue
-            base_name = _name_from_ast(base.get("baseName"))
-            target_id = build.contract_entity_by_name.get(base_name)
+            base_node = base.get("baseName")
+            base_name = _name_from_ast(base_node)
+            declaration = (
+                _int_or_none(base_node.get("referencedDeclaration"))
+                if isinstance(base_node, dict)
+                else None
+            )
+            target_id = (
+                build.ast_entity_ids.get((file.relative_path, declaration))
+                if declaration is not None
+                else None
+            ) or _named_entity_id(
+                build.index.entities,
+                path=file.relative_path,
+                contract_name=None,
+                name=base_name,
+                kinds=frozenset(
+                    {
+                        SolidityEntityKind.CONTRACT,
+                        SolidityEntityKind.INTERFACE,
+                        SolidityEntityKind.LIBRARY,
+                    }
+                ),
+            )
             if target_id is None:
                 warnings.append(f"{contract_name}: inherited base {base_name} was not indexed")
                 continue
@@ -357,10 +1557,11 @@ def _ast_edges(
                 function_node=child,
                 body=body,
                 build=build,
+                edge_sink=edge_sink,
             )
             edges.extend(function_edges)
             nodes.extend(function_nodes)
-    return edges, nodes
+    return local_edges, local_nodes
 
 
 def _modifier_edges(
@@ -369,17 +1570,31 @@ def _modifier_edges(
     function_id: str,
     child: dict[str, Any],
     build: SolidityIndexBuild,
-    warnings: list[str],
+    warnings: _WarningSink,
 ) -> tuple[list[SolidityGraphEdge], list[SolidityGraphNode]]:
     edges: list[SolidityGraphEdge] = []
     nodes: list[SolidityGraphNode] = []
     for modifier in child.get("modifiers", []) or []:
         if not isinstance(modifier, dict):
             continue
-        modifier_name = _name_from_ast(modifier.get("modifierName"))
-        target_id = build.modifier_entity_by_contract_name.get(
-            (contract_name, modifier_name)
-        ) or _first_modifier(build.index.entities, modifier_name)
+        modifier_node = modifier.get("modifierName")
+        modifier_name = _name_from_ast(modifier_node)
+        declaration = (
+            _int_or_none(modifier_node.get("referencedDeclaration"))
+            if isinstance(modifier_node, dict)
+            else None
+        )
+        target_id = (
+            build.ast_entity_ids.get((file.relative_path, declaration))
+            if declaration is not None
+            else None
+        ) or _named_entity_id(
+            build.index.entities,
+            path=file.relative_path,
+            contract_name=contract_name,
+            name=modifier_name,
+            kinds=frozenset({SolidityEntityKind.MODIFIER}),
+        )
         if target_id is None:
             warnings.append(
                 f"{contract_name}.{child.get('name') or child.get('kind')}: "
@@ -387,6 +1602,7 @@ def _modifier_edges(
             )
             target_id = _synthetic_id(
                 "unknown-modifier",
+                file.relative_path,
                 contract_name,
                 str(child.get("name") or child.get("kind")),
                 modifier_name,
@@ -457,7 +1673,12 @@ def _modifier_edges(
             )
         )
         if _looks_privileged(modifier_name):
-            role_id = _synthetic_id("role", contract_name, modifier_name)
+            role_id = _synthetic_id(
+                "role",
+                file.relative_path,
+                contract_name,
+                modifier_name,
+            )
             nodes.append(
                 _synthetic_node(
                     role_id,
@@ -499,8 +1720,10 @@ def _ast_function_edges(
     function_node: dict[str, Any],
     body: Any,
     build: SolidityIndexBuild,
+    edge_sink: _EdgeSink | None = None,
 ) -> tuple[list[SolidityGraphEdge], list[SolidityGraphNode]]:
-    edges: list[SolidityGraphEdge] = []
+    local_edges: list[SolidityGraphEdge] = []
+    edges: list[SolidityGraphEdge] | _EdgeSink = local_edges if edge_sink is None else edge_sink
     nodes: list[SolidityGraphNode] = []
     function_entity = _entity_by_id(build.index.entities, function_id)
     function_source = (
@@ -571,21 +1794,27 @@ def _ast_function_edges(
         )
     read_ids = {variable_id for _, variable_id in reads}
     write_ids = {variable_id for _, variable_id, _, _ in writes}
-    for read_id in sorted(read_ids):
-        for write_id in sorted(write_ids):
-            edges.append(
-                _ast_edge(
-                    graph=SolidityGraphKind.STATE_DEPENDENCY,
-                    source_id=read_id,
-                    target_id=write_id,
-                    label=f"{function_node.get('name') or function_node.get('kind')} derives a write",
-                    file=file,
-                    node=function_node,
-                    transformation="function_state_read_write_dependency",
-                    confidence=0.9,
-                    metadata={"function_id": function_id},
-                )
+    for read_id, write_id in _bounded_state_dependency_pairs(
+        read_ids,
+        write_ids,
+        edge_sink=edge_sink,
+        path=file.relative_path,
+        function_id=function_id,
+        transformation="function_state_read_write_dependency",
+    ):
+        edges.append(
+            _ast_edge(
+                graph=SolidityGraphKind.STATE_DEPENDENCY,
+                source_id=read_id,
+                target_id=write_id,
+                label=f"{function_node.get('name') or function_node.get('kind')} derives a write",
+                file=file,
+                node=function_node,
+                transformation="function_state_read_write_dependency",
+                confidence=0.9,
+                metadata={"function_id": function_id},
             )
+        )
 
     event_edges = _ast_event_state_edges(
         file=file,
@@ -593,6 +1822,7 @@ def _ast_function_edges(
         body=body,
         write_ids=write_ids,
         build=build,
+        edge_sink=edge_sink,
     )
     edges.extend(event_edges)
     signature_edges, signature_nodes = _ast_signature_edges(
@@ -607,6 +1837,7 @@ def _ast_function_edges(
 
     guard_candidates = _ast_reentrancy_guard_candidates(function_node)
     external_calls: list[tuple[int, str, dict[str, Any]]] = []
+    sensitive_targets = set(write_ids)
     for call in _nodes_of_type(body, "FunctionCall"):
         expression = call.get("expression", {})
         if not isinstance(expression, dict):
@@ -618,7 +1849,18 @@ def _ast_function_edges(
                 build.ast_entity_ids.get((file.relative_path, declaration))
                 if declaration is not None
                 else None
-            ) or build.function_entity_by_contract_name.get((contract_name, call_name))
+            ) or _named_entity_id(
+                build.index.entities,
+                path=file.relative_path,
+                contract_name=contract_name,
+                name=call_name,
+                kinds=frozenset(
+                    {
+                        SolidityEntityKind.FUNCTION,
+                        SolidityEntityKind.CONSTRUCTOR,
+                    }
+                ),
+            )
             if target_id is not None:
                 edges.append(
                     _ast_edge(
@@ -642,7 +1884,12 @@ def _ast_function_edges(
             continue
         if expression.get("nodeType") == "NewExpression":
             target_label = _expression_label(expression.get("typeName")) or "contract"
-            target_id = _synthetic_id("creation", target_label)
+            target_id = _synthetic_id(
+                "creation",
+                file.relative_path,
+                contract_name,
+                target_label,
+            )
             nodes.append(
                 _synthetic_node(
                     target_id,
@@ -674,7 +1921,13 @@ def _ast_function_edges(
         target_label = _expression_label(expression.get("expression")) or "external"
         if member in {"push", "pop", "length"}:
             continue
-        target_id = _synthetic_id("external", contract_name, target_label, member)
+        target_id = _synthetic_id(
+            "external",
+            file.relative_path,
+            contract_name,
+            target_label,
+            member,
+        )
         target_kind = (
             SolidityGraphNodeKind.ORACLE
             if member in _ORACLE_MEMBERS or _looks_oracle(target_label)
@@ -722,6 +1975,8 @@ def _ast_function_edges(
                 },
             )
         )
+        if graph in {SolidityGraphKind.DELEGATECALL, SolidityGraphKind.LOW_LEVEL_CALL}:
+            sensitive_targets.add(target_id)
         dependency_metadata = _dependency_metadata(
             member,
             target_label,
@@ -742,7 +1997,12 @@ def _ast_function_edges(
         )
         external_calls.append((_src_start(call), target_id, call))
         if member in _ASSET_MEMBERS:
-            asset_id = _synthetic_id("asset", target_label, member)
+            asset_id = _synthetic_id(
+                "asset",
+                file.relative_path,
+                target_label,
+                member,
+            )
             nodes.append(
                 _synthetic_node(
                     asset_id,
@@ -769,6 +2029,7 @@ def _ast_function_edges(
                     metadata=_asset_flow_metadata(member, target_label),
                 )
             )
+            sensitive_targets.add(asset_id)
         if member in _ORACLE_MEMBERS or _looks_oracle(target_label):
             oracle_metadata = {
                 **dependency_metadata,
@@ -852,20 +2113,8 @@ def _ast_function_edges(
                         },
                     )
                 )
-    sensitive_targets = {
-        edge.target_id
-        for edge in edges
-        if edge.source_id == function_id
-        and edge.graph
-        in {
-            SolidityGraphKind.DELEGATECALL,
-            SolidityGraphKind.LOW_LEVEL_CALL,
-            SolidityGraphKind.ASSET_FLOW,
-            SolidityGraphKind.STATE_WRITE,
-        }
-    }
     if function_node.get("visibility") in {"public", "external"}:
-        for target_id in sensitive_targets:
+        for target_id in sorted(sensitive_targets):
             edges.append(
                 _ast_edge(
                     graph=SolidityGraphKind.SENSITIVE_REACHABILITY,
@@ -878,7 +2127,7 @@ def _ast_function_edges(
                     confidence=0.9,
                 )
             )
-    return edges, nodes
+    return local_edges, nodes
 
 
 def _ast_event_state_edges(
@@ -888,10 +2137,12 @@ def _ast_event_state_edges(
     body: Any,
     write_ids: set[str],
     build: SolidityIndexBuild,
+    edge_sink: _EdgeSink | None = None,
 ) -> list[SolidityGraphEdge]:
     """Project compiler-resolved event emissions onto state written by the function."""
 
-    edges: list[SolidityGraphEdge] = []
+    local_edges: list[SolidityGraphEdge] = []
+    edges: list[SolidityGraphEdge] | _EdgeSink = local_edges if edge_sink is None else edge_sink
     for emission in _nodes_of_type(body, "EmitStatement"):
         event_call = emission.get("eventCall")
         expression = event_call.get("expression") if isinstance(event_call, dict) else None
@@ -941,7 +2192,7 @@ def _ast_event_state_edges(
                     metadata={"function_id": function_id},
                 )
             )
-    return edges
+    return local_edges
 
 
 def _ast_signature_edges(
@@ -988,7 +2239,7 @@ def _ast_signature_edges(
             primitive = str(expression.get("memberName", ""))
         if primitive not in _SIGNATURE_PRIMITIVES:
             continue
-        target_id = _synthetic_id("signature", primitive)
+        target_id = _synthetic_id("signature", file.relative_path, primitive)
         nodes.append(
             _synthetic_node(
                 target_id,
@@ -1020,7 +2271,11 @@ def _ast_signature_edges(
         member_name = str(member.get("memberName", ""))
         if member_name != "chainid":
             continue
-        target_id = _synthetic_id("signature-domain", "chainid")
+        target_id = _synthetic_id(
+            "signature-domain",
+            file.relative_path,
+            "chainid",
+        )
         nodes.append(
             _synthetic_node(
                 target_id,
@@ -1096,7 +2351,12 @@ def _source_signature_edges(
     for aspect, label, pattern in patterns:
         if not re.search(pattern, source, re.I):
             continue
-        target_id = _synthetic_id("signature-domain", function.id, aspect)
+        target_id = _synthetic_id(
+            "signature-domain",
+            function.path,
+            function.id,
+            aspect,
+        )
         nodes.append(
             _entity_range_node(
                 target_id,
@@ -1127,33 +2387,48 @@ def _source_signature_edges(
 def _source_semantic_edges(
     files: dict[str, DiscoveredFile],
     entities: list[SolidityEntity],
+    *,
+    edge_sink: _EdgeSink | None = None,
+    node_sink: _NodeSink | None = None,
 ) -> tuple[list[SolidityGraphEdge], list[SolidityGraphNode]]:
     """Supplement incomplete compiler artifacts and all fallback parser entities."""
 
-    edges: list[SolidityGraphEdge] = []
-    nodes: list[SolidityGraphNode] = []
+    local_edges: list[SolidityGraphEdge] = []
+    local_nodes: list[SolidityGraphNode] = []
+    edges: list[SolidityGraphEdge] | _EdgeSink = local_edges if edge_sink is None else edge_sink
+    nodes: list[SolidityGraphNode] | _NodeSink = local_nodes if node_sink is None else node_sink
     functions = [
         entity
         for entity in entities
         if entity.kind in {SolidityEntityKind.FUNCTION, SolidityEntityKind.CONSTRUCTOR}
     ]
+    contract_keys = {
+        (entity.path, entity.contract_name)
+        for entity in entities
+        if entity.contract_name is not None
+    }
     state_by_contract = {
-        contract: [
-            entity for entity in entities if entity.contract_name == contract and _is_state(entity)
-        ]
-        for contract in {entity.contract_name for entity in entities if entity.contract_name}
-    }
-    functions_by_contract = {
-        contract: [entity for entity in functions if entity.contract_name == contract]
-        for contract in {entity.contract_name for entity in functions if entity.contract_name}
-    }
-    events_by_contract = {
-        contract: [
+        contract_key: [
             entity
             for entity in entities
-            if entity.contract_name == contract and entity.kind is SolidityEntityKind.EVENT
+            if (entity.path, entity.contract_name) == contract_key and _is_state(entity)
         ]
-        for contract in {entity.contract_name for entity in entities if entity.contract_name}
+        for contract_key in sorted(contract_keys)
+    }
+    functions_by_contract = {
+        contract_key: [
+            entity for entity in functions if (entity.path, entity.contract_name) == contract_key
+        ]
+        for contract_key in sorted(contract_keys)
+    }
+    events_by_contract = {
+        contract_key: [
+            entity
+            for entity in entities
+            if (entity.path, entity.contract_name) == contract_key
+            and entity.kind is SolidityEntityKind.EVENT
+        ]
+        for contract_key in sorted(contract_keys)
     }
     for function in functions:
         file = files.get(function.path)
@@ -1162,13 +2437,15 @@ def _source_semantic_edges(
         source = _entity_source(file.content, function)
         provenance = SolidityProvenance.HEURISTIC
         confidence = 0.55 if function.provenance is SolidityProvenance.COMPILER else 0.4
-        contract_key = function.contract_name or ""
+        contract_label = function.contract_name or ""
+        contract_key = (function.path, contract_label)
         role_labels = _roles_from_source(function, source)
         governance_stage = _governance_stage(function, source)
         if governance_stage is not None:
             governance_id = _synthetic_id(
                 "governance",
-                contract_key,
+                function.path,
+                contract_label,
                 governance_stage,
             )
             governance_metadata = {
@@ -1188,7 +2465,7 @@ def _source_semantic_edges(
                 _entity_range_node(
                     governance_id,
                     SolidityGraphNodeKind.GOVERNANCE,
-                    f"{contract_key or 'contract'} {governance_stage}",
+                    f"{contract_label or 'contract'} {governance_stage}",
                     function,
                     provenance,
                     confidence,
@@ -1311,20 +2588,26 @@ def _source_semantic_edges(
                         },
                     )
                 )
-        for read_id in sorted(state_reads):
-            for write_id in sorted(state_writes):
-                edges.append(
-                    _source_edge(
-                        SolidityGraphKind.STATE_DEPENDENCY,
-                        function,
-                        write_id,
-                        "heuristic state read/write dependency",
-                        file,
-                        "bounded_source_function_state_projection",
-                        confidence,
-                        source_id=read_id,
-                    )
+        for read_id, write_id in _bounded_state_dependency_pairs(
+            state_reads,
+            state_writes,
+            edge_sink=edge_sink,
+            path=file.relative_path,
+            function_id=function.id,
+            transformation="bounded_source_function_state_projection",
+        ):
+            edges.append(
+                _source_edge(
+                    SolidityGraphKind.STATE_DEPENDENCY,
+                    function,
+                    write_id,
+                    "heuristic state read/write dependency",
+                    file,
+                    "bounded_source_function_state_projection",
+                    confidence,
+                    source_id=read_id,
                 )
+            )
         for event in events_by_contract.get(contract_key, []):
             event_matches = list(re.finditer(rf"\bemit\s+{re.escape(event.name)}\s*\(", source))
             for event_match in event_matches:
@@ -1367,7 +2650,8 @@ def _source_semantic_edges(
                 if _looks_offchain_event(event.name):
                     offchain_id = _synthetic_id(
                         "offchain-event-consumer",
-                        contract_key,
+                        function.path,
+                        contract_label,
                         event.name,
                     )
                     offchain_metadata = _offchain_event_metadata(event.name)
@@ -1427,13 +2711,14 @@ def _source_semantic_edges(
                 source,
             )
         )
-        external_calls: list[tuple[re.Match[str], str]] = []
+        external_calls: list[tuple[re.Match[str], str, SolidityGraphNode]] = []
         message_member_seen = False
         for match in call_matches:
             target_label = match.group("target")
             member = match.group("member")
             target_id = _synthetic_id(
                 "external",
+                function.path,
                 function.contract_name or "",
                 target_label,
                 member,
@@ -1443,22 +2728,21 @@ def _source_semantic_edges(
                 if member in _ORACLE_MEMBERS or _looks_oracle(target_label)
                 else SolidityGraphNodeKind.EXTERNAL_TARGET
             )
-            nodes.append(
-                _entity_range_node(
-                    target_id,
-                    node_kind,
-                    f"{target_label}.{member}",
-                    function,
-                    provenance,
-                    confidence,
-                    {
-                        "target": target_label,
-                        "member": member,
-                        "call_kind": "target",
-                    },
-                    transformation="bounded_source_member_call_target_node",
-                )
+            target_node = _entity_range_node(
+                target_id,
+                node_kind,
+                f"{target_label}.{member}",
+                function,
+                provenance,
+                confidence,
+                {
+                    "target": target_label,
+                    "member": member,
+                    "call_kind": "target",
+                },
+                transformation="bounded_source_member_call_target_node",
             )
+            nodes.append(target_node)
             graph = (
                 SolidityGraphKind.DELEGATECALL
                 if member in {"delegatecall", "callcode"}
@@ -1505,9 +2789,14 @@ def _source_semantic_edges(
                     metadata=dependency_metadata,
                 )
             )
-            external_calls.append((match, target_id))
+            external_calls.append((match, target_id, target_node))
             if member in _ASSET_MEMBERS:
-                asset_id = _synthetic_id("asset", target_label, member)
+                asset_id = _synthetic_id(
+                    "asset",
+                    function.path,
+                    target_label,
+                    member,
+                )
                 nodes.append(
                     _entity_range_node(
                         asset_id,
@@ -1558,7 +2847,8 @@ def _source_semantic_edges(
                 direction = _message_direction(member) or "unknown"
                 message_id = _synthetic_id(
                     "cross-chain-message",
-                    contract_key,
+                    function.path,
+                    contract_label,
                     function.id,
                     target_label,
                     member,
@@ -1600,7 +2890,8 @@ def _source_semantic_edges(
             if entry_direction is not None:
                 message_id = _synthetic_id(
                     "cross-chain-message",
-                    contract_key,
+                    function.path,
+                    contract_label,
                     function.id,
                     entry_direction,
                 )
@@ -1638,7 +2929,8 @@ def _source_semantic_edges(
         if callback_kind is not None:
             offchain_id = _synthetic_id(
                 "offchain-callback",
-                contract_key,
+                function.path,
+                contract_label,
                 function.id,
                 callback_kind,
             )
@@ -1675,9 +2967,12 @@ def _source_semantic_edges(
                 )
             )
         if external_calls and state_writes:
-            last_call, call_target = max(external_calls, key=lambda item: item[0].start())
+            last_call, call_target, _call_target_node = max(
+                external_calls,
+                key=lambda item: item[0].start(),
+            )
             guard_candidates = _source_reentrancy_guard_candidates(source)
-            for variable_id in state_writes:
+            for variable_id in sorted(state_writes):
                 found_variable = _entity_by_id(entities, variable_id)
                 write_match = (
                     re.search(
@@ -1739,8 +3034,13 @@ def _source_semantic_edges(
                             },
                         )
                     )
-        for role in role_labels:
-            role_id = _synthetic_id("role", function.contract_name or "", role)
+        for role in sorted(role_labels):
+            role_id = _synthetic_id(
+                "role",
+                function.path,
+                function.contract_name or "",
+                role,
+            )
             control_metadata = _control_metadata(role)
             node_kind = (
                 SolidityGraphNodeKind.UNKNOWN
@@ -1779,7 +3079,7 @@ def _source_semantic_edges(
             or call_matches
             or any(token in function.name.lower() for token in _SENSITIVE_FUNCTION_TOKENS)
         ):
-            sink_id = next(iter(state_writes), function.id)
+            sink_id = min(state_writes) if state_writes else function.id
             edges.append(
                 _source_edge(
                     SolidityGraphKind.SENSITIVE_REACHABILITY,
@@ -1791,15 +3091,20 @@ def _source_semantic_edges(
                     confidence,
                 )
             )
-    return edges, nodes
+    return local_edges, local_nodes
 
 
 def _proxy_edges(
     files: dict[str, DiscoveredFile],
     entities: list[SolidityEntity],
+    *,
+    edge_sink: _EdgeSink | None = None,
+    node_sink: _NodeSink | None = None,
 ) -> tuple[list[SolidityGraphEdge], list[SolidityGraphNode]]:
-    edges: list[SolidityGraphEdge] = []
-    nodes: list[SolidityGraphNode] = []
+    local_edges: list[SolidityGraphEdge] = []
+    local_nodes: list[SolidityGraphNode] = []
+    edges: list[SolidityGraphEdge] | _EdgeSink = local_edges if edge_sink is None else edge_sink
+    nodes: list[SolidityGraphNode] | _NodeSink = local_nodes if node_sink is None else node_sink
     contracts = [
         entity
         for entity in entities
@@ -1811,10 +3116,11 @@ def _proxy_edges(
         }
     ]
     functions_by_contract = {
-        contract.name: [
+        (contract.path, contract.name): [
             entity
             for entity in entities
-            if entity.contract_name == contract.name
+            if entity.path == contract.path
+            and entity.contract_name == contract.name
             and entity.kind in {SolidityEntityKind.FUNCTION, SolidityEntityKind.CONSTRUCTOR}
         ]
         for contract in contracts
@@ -1824,7 +3130,7 @@ def _proxy_edges(
         if file is None:
             continue
         source = _entity_source(file.content, contract)
-        contract_functions = functions_by_contract.get(contract.name, [])
+        contract_functions = functions_by_contract.get((contract.path, contract.name), [])
         for function in contract_functions:
             lowered = function.name.casefold()
             function_source = _entity_source(file.content, function)
@@ -1971,25 +3277,35 @@ def _proxy_edges(
                     metadata=slot_metadata,
                 )
             )
-    return edges, nodes
+    return local_edges, local_nodes
 
 
 def _storage_layout(
     files: dict[str, DiscoveredFile],
     entities: list[SolidityEntity],
     compiler_layout: list[SolidityStorageEntry],
+    *,
+    edge_sink: _EdgeSink | None = None,
+    node_sink: _NodeSink | None = None,
+    storage_sink: _BoundedFactCollector[SolidityStorageEntry] | None = None,
+    populate_storage: bool = True,
 ) -> tuple[list[SolidityStorageEntry], list[SolidityGraphEdge], list[SolidityGraphNode]]:
     """Use compiler layouts and fill missing contracts with marked heuristics."""
 
-    entries: list[SolidityStorageEntry] = list(compiler_layout)
-    edges: list[SolidityGraphEdge] = []
-    nodes: list[SolidityGraphNode] = []
-    by_contract: dict[str, list[SolidityEntity]] = {}
+    local_entries: list[SolidityStorageEntry] = []
+    entry_sink: list[SolidityStorageEntry] | _BoundedFactCollector[SolidityStorageEntry] = (
+        local_entries if storage_sink is None else storage_sink
+    )
+    local_edges: list[SolidityGraphEdge] = []
+    local_nodes: list[SolidityGraphNode] = []
+    edges: list[SolidityGraphEdge] | _EdgeSink = local_edges if edge_sink is None else edge_sink
+    nodes: list[SolidityGraphNode] | _NodeSink = local_nodes if node_sink is None else node_sink
+    by_contract: dict[tuple[str, str], list[SolidityEntity]] = {}
     for entity in entities:
         if entity.contract_name and _is_state(entity):
-            by_contract.setdefault(entity.contract_name, []).append(entity)
+            by_contract.setdefault((entity.path, entity.contract_name), []).append(entity)
     contract_ids = {
-        entity.name: entity.id
+        (entity.path, entity.name): entity.id
         for entity in entities
         if entity.kind
         in {
@@ -1998,128 +3314,111 @@ def _storage_layout(
             SolidityEntityKind.LIBRARY,
         }
     }
-    compiler_contracts = {entry.contract_name for entry in compiler_layout}
-    for entry in compiler_layout:
-        nodes.append(
-            SolidityGraphNode(
-                id=entry.id,
-                kind=SolidityGraphNodeKind.STORAGE_SLOT,
-                label=(f"{entry.contract_name}.{entry.variable_name}@{entry.slot}:{entry.offset}"),
-                path=entry.path,
-                start_line=entry.start_line,
-                end_line=entry.end_line,
-                source_hash=entry.source_hash,
-                provenance=entry.provenance,
-                confidence=entry.confidence,
-                transformation=entry.transformation,
-                metadata={
-                    "slot": entry.slot,
-                    "offset": entry.offset,
-                    "type": entry.type_name,
-                    "byte_size": entry.byte_size,
-                    "declaring_contract": entry.declaring_contract_name,
-                    "ast_id": entry.ast_id,
-                    "estimated": False,
-                    "layout_resolution": "compiler",
-                },
-            )
+    compiler_by_contract: defaultdict[tuple[str, str], list[SolidityStorageEntry]] = defaultdict(
+        list
+    )
+    for compiler_entry in compiler_layout:
+        compiler_by_contract[(compiler_entry.path, compiler_entry.contract_name)].append(
+            compiler_entry
         )
-        contract_id = contract_ids.get(entry.contract_name)
-        if contract_id:
-            edges.append(
-                SolidityGraphEdge(
-                    graph=SolidityGraphKind.STORAGE_LAYOUT,
-                    source_id=contract_id,
-                    target_id=entry.id,
-                    label=f"compiler storage slot {entry.slot}:{entry.offset}",
-                    provenance=SolidityProvenance.COMPILER,
-                    path=entry.path,
-                    start_line=entry.start_line,
-                    end_line=entry.end_line,
-                    source_hash=entry.source_hash,
-                    confidence=entry.confidence,
-                    transformation="solc_storageLayout",
-                    metadata={
-                        "type": entry.type_name,
-                        "slot": entry.slot,
-                        "offset": entry.offset,
-                        "byte_size": entry.byte_size,
-                        "declaring_contract": entry.declaring_contract_name,
-                        "layout_resolution": "compiler",
-                    },
-                )
-            )
-    for contract_name, variables in by_contract.items():
-        if contract_name in compiler_contracts:
-            continue
-        for slot, variable in enumerate(
-            sorted(variables, key=lambda item: (item.path, item.start_line, item.id))
-        ):
-            file = files.get(variable.path)
-            if file is None:
+    compiler_contracts = set(compiler_by_contract)
+
+    def fallback_entries() -> Iterable[SolidityStorageEntry]:
+        for (contract_path, contract_name), variables in sorted(by_contract.items()):
+            if (contract_path, contract_name) in compiler_contracts:
                 continue
-            entry_id = _synthetic_id("storage", contract_name, variable.name, str(slot))
-            type_name = _state_type_from_source(file.content, variable)
-            entry = SolidityStorageEntry(
-                id=entry_id,
-                contract_name=contract_name,
-                declaring_contract_name=contract_name,
-                variable_name=variable.name,
-                type_name=type_name,
-                slot=str(slot),
-                offset=0,
-                byte_size=None,
-                path=variable.path,
-                start_line=variable.start_line,
-                end_line=variable.end_line,
-                source_hash=variable.source_hash,
-                provenance=SolidityProvenance.HEURISTIC,
-                confidence=0.35,
-                transformation="source_order_storage_layout_fallback",
-            )
-            entries.append(entry)
-            nodes.append(
-                SolidityGraphNode(
-                    id=entry_id,
-                    kind=SolidityGraphNodeKind.STORAGE_SLOT,
-                    label=f"{contract_name}.{variable.name}@slot?{slot}",
+            for slot, variable in enumerate(
+                sorted(variables, key=lambda item: (item.path, item.start_line, item.id))
+            ):
+                file = files.get(variable.path)
+                if file is None:
+                    continue
+                yield SolidityStorageEntry(
+                    id=_synthetic_id(
+                        "storage",
+                        contract_path,
+                        contract_name,
+                        variable.name,
+                        str(slot),
+                    ),
+                    contract_name=contract_name,
+                    declaring_contract_name=contract_name,
+                    variable_name=variable.name,
+                    type_name=_state_type_from_source(file.content, variable),
+                    slot=str(slot),
+                    offset=0,
+                    byte_size=None,
                     path=variable.path,
                     start_line=variable.start_line,
                     end_line=variable.end_line,
                     source_hash=variable.source_hash,
                     provenance=SolidityProvenance.HEURISTIC,
                     confidence=0.35,
-                    transformation="source_order_storage_layout_fallback.node",
-                    metadata={
-                        "slot": str(slot),
-                        "type": type_name,
-                        "estimated": True,
+                    transformation="source_order_storage_layout_fallback",
+                )
+
+    # Feed the bounded storage collector directly. The fallback iterator is replayable,
+    # so derived graph facts can still be streamed without retaining the candidate objects.
+    if populate_storage:
+        entry_sink.extend(compiler_layout)
+        entry_sink.extend(fallback_entries())
+        entries = local_entries if storage_sink is None else storage_sink.retained()
+    else:
+        entries = []
+
+    def emit_entry(entry: SolidityStorageEntry) -> None:
+        contract_id = contract_ids.get((entry.path, entry.contract_name))
+        if contract_id is None:
+            return
+        compiler_backed = entry.provenance is SolidityProvenance.COMPILER
+        edges.append(
+            SolidityGraphEdge(
+                graph=SolidityGraphKind.STORAGE_LAYOUT,
+                source_id=contract_id,
+                target_id=entry.id,
+                label=(
+                    f"compiler storage slot {entry.slot}:{entry.offset}"
+                    if compiler_backed
+                    else f"estimated storage order {entry.slot}"
+                ),
+                provenance=entry.provenance,
+                path=entry.path,
+                start_line=entry.start_line,
+                end_line=entry.end_line,
+                source_hash=entry.source_hash,
+                confidence=entry.confidence,
+                transformation=(
+                    "solc_storageLayout"
+                    if compiler_backed
+                    else "source_order_storage_layout_fallback"
+                ),
+                metadata=(
+                    {
+                        "type": entry.type_name,
+                        "slot": entry.slot,
+                        "offset": entry.offset,
+                        "byte_size": entry.byte_size,
+                        "declaring_contract": entry.declaring_contract_name,
+                        "layout_resolution": "compiler",
+                    }
+                    if compiler_backed
+                    else {
                         "layout_resolution": "unknown_estimate",
-                    },
-                )
+                        "estimated": True,
+                    }
+                ),
             )
-            contract_id = contract_ids.get(contract_name)
-            if contract_id:
-                edges.append(
-                    _source_edge(
-                        SolidityGraphKind.STORAGE_LAYOUT,
-                        variable,
-                        entry_id,
-                        f"estimated storage order {slot}",
-                        file,
-                        "source_order_storage_layout_fallback",
-                        0.35,
-                        source_id=contract_id,
-                        metadata={
-                            "layout_resolution": "unknown_estimate",
-                            "estimated": True,
-                        },
-                    )
-                )
-    layout_by_contract: dict[str, list[SolidityStorageEntry]] = {}
-    for entry in entries:
-        layout_by_contract.setdefault(entry.contract_name, []).append(entry)
-    for contract_name, contract_entries in layout_by_contract.items():
+        )
+
+    for compiler_entry in compiler_layout:
+        emit_entry(compiler_entry)
+    for fallback_entry in fallback_entries():
+        emit_entry(fallback_entry)
+
+    def emit_order_edges(
+        contract_name: str,
+        contract_entries: Iterable[SolidityStorageEntry],
+    ) -> None:
         ordered = sorted(
             contract_entries,
             key=lambda item: (_slot_number(item.slot), item.offset, item.variable_name, item.id),
@@ -2134,7 +3433,7 @@ def _storage_layout(
             end_line = right.end_line if right.path == left.path else left.end_line
             file = files.get(left.path)
             source_hash = (
-                line_range_hash(file.content, left.start_line, end_line)
+                _line_range_hash(file.content, left.start_line, end_line)
                 if file is not None
                 else left.source_hash
             )
@@ -2174,8 +3473,21 @@ def _storage_layout(
                     },
                 )
             )
-    edges.extend(_versioned_layout_edges(entries))
-    return entries, edges, nodes
+
+    for (_contract_path, contract_name), contract_entries in sorted(compiler_by_contract.items()):
+        emit_order_edges(contract_name, contract_entries)
+    for (_contract_path, contract_name), fallback_contract_entries in groupby(
+        fallback_entries(),
+        key=lambda item: (item.path, item.contract_name),
+    ):
+        emit_order_edges(contract_name, fallback_contract_entries)
+    edges.extend(_versioned_layout_edges(compiler_layout, edge_sink=edge_sink))
+    # Storage-order and version-comparison edges are emitted after direct layout edges
+    # and carry higher risk. Replay the node facts only after all those edges have
+    # established the bounded final endpoint priorities.
+    nodes.extend(_storage_entry_node(entry) for entry in compiler_layout)
+    nodes.extend(_storage_entry_node(entry) for entry in fallback_entries())
+    return entries, local_edges, local_nodes
 
 
 def _initializer_guard_resolution(source: str) -> str:
@@ -2203,60 +3515,83 @@ def _storage_entries_overlap(
 
 def _versioned_layout_edges(
     entries: list[SolidityStorageEntry],
+    *,
+    edge_sink: _EdgeSink | None = None,
 ) -> list[SolidityGraphEdge]:
-    compiler_entries = [
-        entry for entry in entries if entry.provenance is SolidityProvenance.COMPILER
-    ]
-    families: dict[str, dict[int, dict[str, list[SolidityStorageEntry]]]] = {}
-    for entry in compiler_entries:
+    families: dict[
+        tuple[str, str],
+        dict[int, dict[str, list[SolidityStorageEntry]]],
+    ] = {}
+    for entry in entries:
+        if entry.provenance is not SolidityProvenance.COMPILER:
+            continue
         version = _layout_version(entry.contract_name)
         if version is None:
             continue
         family, number = version
-        families.setdefault(family, {}).setdefault(number, {}).setdefault(
+        families.setdefault((entry.path, family), {}).setdefault(number, {}).setdefault(
             entry.contract_name,
             [],
         ).append(entry)
 
-    edges: list[SolidityGraphEdge] = []
-    for family, versions in families.items():
+    local_edges: list[SolidityGraphEdge] = []
+    edges: list[SolidityGraphEdge] | _EdgeSink = local_edges if edge_sink is None else edge_sink
+    for (source_path, family), versions in sorted(families.items()):
         for current_version in sorted(versions):
             earlier_versions = [version for version in versions if version < current_version]
             if not earlier_versions:
                 continue
             prior_version = max(earlier_versions)
-            for prior_contract, prior_entries in versions[prior_version].items():
-                for current_contract, current_entries in versions[current_version].items():
+            for prior_contract, prior_entries in sorted(versions[prior_version].items()):
+                for current_contract, current_entries in sorted(versions[current_version].items()):
                     edges.extend(
                         _compare_versioned_layouts(
                             family=family,
+                            source_path=source_path,
                             prior_contract=prior_contract,
                             prior_version=prior_version,
-                            prior_entries=prior_entries,
+                            prior_entries=sorted(
+                                prior_entries,
+                                key=lambda item: (
+                                    _slot_number(item.slot),
+                                    item.offset,
+                                    item.variable_name,
+                                    item.id,
+                                ),
+                            ),
                             current_contract=current_contract,
                             current_version=current_version,
-                            current_entries=current_entries,
+                            current_entries=sorted(
+                                current_entries,
+                                key=lambda item: (
+                                    _slot_number(item.slot),
+                                    item.offset,
+                                    item.variable_name,
+                                    item.id,
+                                ),
+                            ),
                         )
                     )
-    return edges
+    return local_edges
 
 
 def _compare_versioned_layouts(
     *,
     family: str,
+    source_path: str,
     prior_contract: str,
     prior_version: int,
     prior_entries: list[SolidityStorageEntry],
     current_contract: str,
     current_version: int,
     current_entries: list[SolidityStorageEntry],
-) -> list[SolidityGraphEdge]:
+) -> Iterator[SolidityGraphEdge]:
     prior_by_name = {entry.variable_name: entry for entry in prior_entries}
     current_by_name = {entry.variable_name: entry for entry in current_entries}
-    edges: list[SolidityGraphEdge] = []
     common_metadata = {
         "comparison": "versioned_layout",
         "family": family,
+        "source_path": source_path,
         "from_contract": prior_contract,
         "from_version": prior_version,
         "to_contract": current_contract,
@@ -2277,21 +3612,19 @@ def _compare_versioned_layouts(
                 and prior.type_name == current.type_name
             )
             change_kind = "stable_variable"
-        edges.append(
-            _layout_comparison_edge(
-                prior,
-                current,
-                label=(f"{family} {variable_name} layout v{prior_version} to v{current_version}"),
-                metadata={
-                    **common_metadata,
-                    "variable": variable_name,
-                    "change_kind": change_kind,
-                    "slot_changed": prior.slot != current.slot,
-                    "offset_changed": prior.offset != current.offset,
-                    "type_changed": prior.type_name != current.type_name,
-                    "compatibility": "compatible" if compatible else "incompatible",
-                },
-            )
+        yield _layout_comparison_edge(
+            prior,
+            current,
+            label=(f"{family} {variable_name} layout v{prior_version} to v{current_version}"),
+            metadata={
+                **common_metadata,
+                "variable": variable_name,
+                "change_kind": change_kind,
+                "slot_changed": prior.slot != current.slot,
+                "offset_changed": prior.offset != current.offset,
+                "type_changed": prior.type_name != current.type_name,
+                "compatibility": "compatible" if compatible else "incompatible",
+            },
         )
 
     prior_gap = prior_by_name.get("__gap")
@@ -2318,24 +3651,19 @@ def _compare_versioned_layouts(
             and current_span[0] >= prior_max_end
         )
         compatible = consumes_gap or appended
-        edges.append(
-            _layout_comparison_edge(
-                prior_anchor,
-                current,
-                label=(
-                    f"{family} new variable {variable_name} v{prior_version} to v{current_version}"
-                ),
-                metadata={
-                    **common_metadata,
-                    "variable": variable_name,
-                    "change_kind": "new_variable",
-                    "storage_gap_consumption": consumes_gap,
-                    "append_only": appended,
-                    "compatibility": "compatible" if compatible else "incompatible",
-                },
-            )
+        yield _layout_comparison_edge(
+            prior_anchor,
+            current,
+            label=(f"{family} new variable {variable_name} v{prior_version} to v{current_version}"),
+            metadata={
+                **common_metadata,
+                "variable": variable_name,
+                "change_kind": "new_variable",
+                "storage_gap_consumption": consumes_gap,
+                "append_only": appended,
+                "compatibility": "compatible" if compatible else "incompatible",
+            },
         )
-    return edges
 
 
 def _layout_comparison_edge(
@@ -2511,7 +3839,7 @@ def _ast_edge(
         path=file.relative_path,
         start_line=start_line,
         end_line=end_line,
-        source_hash=line_range_hash(file.content, start_line, end_line),
+        source_hash=_line_range_hash(file.content, start_line, end_line),
         confidence=confidence,
         transformation=transformation,
         metadata=metadata or {},
@@ -2543,7 +3871,7 @@ def _ast_sequence_edge(
         path=file.relative_path,
         start_line=start_line,
         end_line=end_line,
-        source_hash=line_range_hash(file.content, start_line, end_line),
+        source_hash=_line_range_hash(file.content, start_line, end_line),
         confidence=confidence,
         transformation=transformation,
         metadata=metadata,
@@ -2571,7 +3899,7 @@ def _source_edge(
         path=source.path,
         start_line=source.start_line,
         end_line=source.end_line,
-        source_hash=line_range_hash(file.content, source.start_line, source.end_line),
+        source_hash=_line_range_hash(file.content, source.start_line, source.end_line),
         confidence=confidence,
         transformation=transformation,
         metadata=metadata or {},
@@ -2613,7 +3941,7 @@ def _source_occurrence_edge(
         path=source.path,
         start_line=start_line,
         end_line=max(start_line, end_line),
-        source_hash=line_range_hash(file.content, start_line, max(start_line, end_line)),
+        source_hash=_line_range_hash(file.content, start_line, max(start_line, end_line)),
         confidence=confidence,
         transformation=transformation,
         metadata=occurrence_metadata,
@@ -2646,7 +3974,7 @@ def _source_sequence_edge(
         path=source.path,
         start_line=start_line,
         end_line=max(start_line, end_line),
-        source_hash=line_range_hash(file.content, start_line, max(start_line, end_line)),
+        source_hash=_line_range_hash(file.content, start_line, max(start_line, end_line)),
         confidence=confidence,
         transformation="bounded_source_ordering_regex",
         metadata=metadata,
@@ -2672,6 +4000,36 @@ def _entity_node(entity: SolidityEntity) -> SolidityGraphNode:
     )
 
 
+def _storage_entry_node(entry: SolidityStorageEntry) -> SolidityGraphNode:
+    estimated = entry.provenance is not SolidityProvenance.COMPILER
+    return SolidityGraphNode(
+        id=entry.id,
+        kind=SolidityGraphNodeKind.STORAGE_SLOT,
+        label=(
+            f"{entry.contract_name}.{entry.variable_name}@slot?{entry.slot}"
+            if estimated
+            else f"{entry.contract_name}.{entry.variable_name}@{entry.slot}:{entry.offset}"
+        ),
+        path=entry.path,
+        start_line=entry.start_line,
+        end_line=entry.end_line,
+        source_hash=entry.source_hash,
+        provenance=entry.provenance,
+        confidence=entry.confidence,
+        transformation=(f"{entry.transformation}.node" if estimated else entry.transformation),
+        metadata={
+            "slot": entry.slot,
+            "offset": entry.offset,
+            "type": entry.type_name,
+            "byte_size": entry.byte_size,
+            "declaring_contract": entry.declaring_contract_name,
+            "ast_id": entry.ast_id,
+            "estimated": estimated,
+            "layout_resolution": "unknown_estimate" if estimated else "compiler",
+        },
+    )
+
+
 def _synthetic_node(
     node_id: str,
     kind: SolidityGraphNodeKind,
@@ -2692,7 +4050,7 @@ def _synthetic_node(
         path=file.relative_path,
         start_line=start_line,
         end_line=end_line,
-        source_hash=line_range_hash(file.content, start_line, end_line),
+        source_hash=_line_range_hash(file.content, start_line, end_line),
         provenance=provenance,
         confidence=confidence,
         transformation=transformation,
@@ -2733,13 +4091,13 @@ def _line_range(content: str, src: str) -> tuple[int, int]:
     if parsed is None:
         raise ValueError("compiler source range is malformed")
     start, length, source_id = parsed
-    encoded = content.encode()
+    encoded, starts = _source_coordinates(content)
     end = start + length
     if source_id < 0 or start < 0 or length < 0 or start >= len(encoded) or end > len(encoded):
         raise ValueError("compiler source range is outside the source bytes")
-    start_line = encoded[:start].count(b"\n") + 1
+    start_line = bisect_right(starts, start)
     end_position = start if length == 0 else end - 1
-    end_line = encoded[:end_position].count(b"\n") + 1
+    end_line = bisect_right(starts, end_position)
     return start_line, max(start_line, end_line)
 
 
@@ -2786,15 +4144,31 @@ def _entity_id_for_node(
     return build.ast_entity_ids.get((source_path, ast_id)) if ast_id is not None else None
 
 
-def _first_modifier(entities: list[SolidityEntity], name: str) -> str | None:
-    return next(
-        (
-            entity.id
-            for entity in entities
-            if entity.kind is SolidityEntityKind.MODIFIER and entity.name == name
-        ),
-        None,
-    )
+def _named_entity_id(
+    entities: list[SolidityEntity],
+    *,
+    path: str,
+    contract_name: str | None,
+    name: str,
+    kinds: frozenset[SolidityEntityKind],
+) -> str | None:
+    """Resolve an AST name without coalescing same-named symbols across paths."""
+
+    candidates = [entity for entity in entities if entity.kind in kinds and entity.name == name]
+    path_matches = [
+        entity
+        for entity in candidates
+        if entity.path == path and entity.contract_name == contract_name
+    ]
+    if len(path_matches) == 1:
+        return path_matches[0].id
+
+    contract_matches = [entity for entity in candidates if entity.contract_name == contract_name]
+    if len(contract_matches) == 1:
+        return contract_matches[0].id
+    if len(candidates) == 1:
+        return candidates[0].id
+    return None
 
 
 def _entity_by_id(
@@ -3289,7 +4663,12 @@ def _function_asset_edges(
     confidence: float,
 ) -> tuple[list[SolidityGraphEdge], list[SolidityGraphNode]]:
     direction = _asset_flow_direction(operation)
-    target_id = _synthetic_id("asset-operation", function.id, operation)
+    target_id = _synthetic_id(
+        "asset-operation",
+        function.path,
+        function.id,
+        operation,
+    )
     metadata = {
         "target": function.contract_name or "contract",
         "member": function.name,
@@ -3351,17 +4730,7 @@ def _int_or_none(value: Any) -> int | None:
 def _unique_edges(edges: list[SolidityGraphEdge]) -> list[SolidityGraphEdge]:
     by_key: dict[tuple[str, str, str, str, str, int, int, int | None], SolidityGraphEdge] = {}
     for edge in edges:
-        occurrence_start = _int_or_none(edge.metadata.get("occurrence_relative_start"))
-        key = (
-            edge.graph.value,
-            edge.source_id,
-            edge.target_id,
-            edge.label,
-            edge.path,
-            edge.start_line,
-            edge.end_line,
-            occurrence_start,
-        )
+        key = _edge_key(edge)
         previous = by_key.get(key)
         if previous is None or edge.confidence > previous.confidence:
             by_key[key] = edge

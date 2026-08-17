@@ -16,8 +16,10 @@
 `solidity-evm` capability profile combines deterministic scanners and Solidity program modelling
 with independent base and specialist model roles, typed stateful/invariant testing, optional formal
 engines, adversarial verification and falsification, deterministic location and consensus checks,
-and an evidence-capped final judge. The full maximum-assurance portfolio is available only for a
-detected Solidity/EVM project and only when every required runtime gate passes.
+and an evidence-capped final judge. A run may report the full maximum-assurance portfolio only for a
+detected Solidity/EVM project and only when every required runtime gate passes. The current product
+evidence is `INCOMPLETE`: no real audit has completed, no production model ensemble is qualified, and
+model superiority remains `NOT_DEMONSTRATED`.
 
 An explicitly selected `generic-source-review` profile provides reduced source review for other
 repositories. It does not execute or claim the Solidity/EVM compilation, invariant, economic,
@@ -142,15 +144,18 @@ mmaudit models list --config mmaudit.toml --refresh
 
 Replace every obvious placeholder in `mmaudit.toml` with an exact OpenRouter
 `provider/model` identifier. Use at least three genuinely independent model families across the base
-analysis roles. Deep and maximum-assurance configurations add narrowly scoped specialists; maximum
-assurance requires at least five independent families, all configured specialist responsibilities,
-and at least eight unique high-quality slots unless an explicit downgrade is allowed. Quality tiers
-are operator-maintained capability labels, not a claim that a changing model is permanently
-“frontier.” The verifier, falsifier, and judge should be independent from proposing roles. The
-catalog list reports the strongest advertised output mode: native JSON Schema, JSON object, or
-strictly validated text JSON. Exact endpoint discovery is authoritative because catalog and endpoint
-capabilities may differ. Validate exact identity, duplication, family diversity, endpoint output
-mode, and current privacy eligibility:
+analysis roles. Deep and maximum-assurance configurations add narrowly scoped specialists. The
+maximum-assurance configuration preflight requires at least five declared families, all configured
+specialist responsibilities, and at least eight unique slots unless an explicit downgrade is
+allowed. Those configuration counts are not qualification evidence. Certified production selection
+separately requires at least eight exact, current Tier A models and six independently approved root
+lineages. No exact production model is currently qualified. Quality tiers are operator-maintained
+capability labels, not a claim that a changing model is permanently “frontier.” The verifier,
+falsifier, and judge should be independent from proposing roles. The catalog list reports the
+strongest advertised output mode: native JSON Schema, JSON object, or strictly validated text JSON.
+Exact endpoint discovery is authoritative because catalog and endpoint capabilities may differ.
+Validate exact identity, duplication, family diversity, endpoint output mode, and current privacy
+eligibility:
 
 ```bash
 mmaudit doctor --allow-code-egress
@@ -170,6 +175,11 @@ hash, routing metadata, usage, cost, and prompt/response hashes.
 
 Run `mmaudit init` to create `mmaudit.toml` and `.mmauditignore`. Existing files are never replaced
 unless `--force` is supplied. The example documents all fields.
+
+`repository.ignore_file` is resolved relative to the directory containing the selected
+`mmaudit.toml`; its patterns are evaluated against paths in the target repository. CLI runs do not
+read or merge a same-named ignore file from the target root. This lets an operator keep configuration
+and exclusions together when auditing a separate repository.
 
 `language_profile` is a separate capability choice from audit depth. The default and production
 profile is `solidity-evm`; it requires a detected Solidity/EVM project before EVM analysis can run.
@@ -210,12 +220,17 @@ Useful environment overrides are `MMAUDIT_BUDGET_USD`, `MMAUDIT_CONCURRENCY`,
 `MMAUDIT_FORK_BLOCK_NUMBER`, and `MMAUDIT_FORK_CHAIN_ID`. The API key is accepted only through
 `OPENROUTER_API_KEY`, never a CLI argument.
 
-Defaults limit files to 2,000, filesystem walk entries to 50,000, individual files to 250 KB,
-retained discovery content to 50 MB, total role-context allocations to 2 MB, parallel requests to
-three, serialized model requests to 4 MB, scanner execution to 15 minutes, model requests to three
-minutes, model retries to two, JSON repair to one, and total accounted spend to USD 20. Conservative
-pre-request reservations include the maximum response allowance. A request is refused if its
-worst-case estimate does not fit the remaining run budget.
+Defaults limit files to 2,000, filesystem walk entries to 50,000, individual files to 250 KB, and
+retained discovery content to 50 MB. `repository.max_total_context_bytes` is a 2 MB ceiling for each
+independently built context package, not a shared run-wide role pool. Exact-route token planning uses
+a `0.70` usable-input fraction, a 200,000 estimated-source-token per-request ceiling, and aggregate
+ceilings of 8,000,000 input and 2,000,000 output tokens. Serialized model requests are capped at 4 MB
+and configured responses at 32,768 tokens. Parallel requests default to three, scanner execution to
+15 minutes, model requests to three minutes, model retries to two, and total accounted spend to USD
+20. JSON repair is disabled by default and maximum assurance forces it off; outside that profile at
+most one syntax-envelope repair may be enabled. Conservative pre-request reservations include the
+maximum response allowance. A request is refused if its token or worst-case cost estimate does not
+fit the remaining run budget.
 
 Audit-depth profiles are explicit: `quick`, `standard`, `deep`, and `maximum-assurance`. The default
 `standard` depth preserves bounded analysis within the selected language capability.
@@ -226,6 +241,31 @@ review, evidence-capped judgment, coverage reporting, and the current required b
 silently downgrades. `--allow-maximum-assurance-downgrade` is the only downgrade path and the result
 is labelled `DOWNGRADED` in Markdown, JSON, and SARIF. Without that flag, a skipped, unavailable,
 failed, timed-out, or under-covered mandatory stage prevents `COMPLETE`.
+
+## Queue-derived capability status
+
+These are implementation-work statuses, not claims that an external engine ran for a particular
+audit. The ticket identifier and raw status in each row are checked against the authoritative work
+queue so a documentation claim cannot silently outrun its evidence.
+
+**Repository release status:** `INCOMPLETE`
+
+The current token-planning defaults are `repository.max_total_context_bytes = 2000000` per context
+package, `token_budgets.maximum_source_tokens_per_request = 200000` per request,
+`token_budgets.global_input_token_budget = 8000000` per run, and
+`token_budgets.global_output_token_budget = 2000000` per run. Exact endpoint limits may reduce the
+usable request capacity further.
+
+| Capability | Governing ticket | Queue status | Evidence boundary |
+| --- | --- | --- | --- |
+| Endpoint-aware token and context planning | `V3-TOKENS-001` | `COMPLETE` | Deterministic and fake-provider validation; no completed paid audit. |
+| Coherent semantic sharding | `V3-SHARD-001` | `COMPLETE` | Stable source-bound local artifacts; bounded omissions remain explicit. |
+| Resumable seven-pass scheduler | `V3-SCHEDULER-001` | `COMPLETE` | Model passes have deterministic fake-provider evidence, not real multi-lineage credit. |
+| Execution-originated candidates | `V3-EXECORIGIN-001` | `COMPLETE` | Exact local provenance and source validation; unavailable engines receive no credit. |
+| Repository-suite fork execution | `V3-FORKSUITE-001` | `PARTIAL` | Foundry path validated; real Hardhat execution remains technically blocked. |
+| Audited-suite coverage and assertion strength | `V3-TESTQUALITY-001` | `PARTIAL` | Source populations and gaps exist; trusted statement coverage and a real mutation kill artifact do not. |
+| Bounded omission accounting | `V3-OMISSION-001` | `COMPLETE` | Local scale regressions prove bounded degradation; omitted source is never counted as reviewed. |
+| Bounded semantic graph generation | `V3-GRAPHBOUND-001` | `COMPLETE` | Synthetic over-100 MB pipeline evidence; no claim of unbounded or universal coverage. |
 
 ## Quick start from a Solidity/EVM repository
 
@@ -285,6 +325,24 @@ public-entry-point-to-sensitive-sink graphs. Every edge records its path/range, 
 provenance, confidence, and producing transformation. Compiler AST event and signature facts remain
 distinguishable from fallback source-pattern edges; heuristic edges are never promoted to compiler
 facts.
+
+`solidity-graphs.json` is bounded during generation to the same 100 MB ceiling enforced by run
+manifest validation. Under pressure, mmaudit retains privilege, asset-flow,
+sensitive-reachability, and state-dependency evidence ahead of informational edges. The artifact,
+coverage report, shard inventory, and report metadata retain typed per-kind edge and non-edge
+omission commitments. A bounded per-record inventory preserves exact retained candidate-occurrence
+counts, including normalized duplicates, so omitted facts remain in homogeneous denominators and
+prevent a complete assurance claim.
+
+`solidity-shards.json` records deterministic file-primary review units bound to exact source,
+semantic facts, cross-shard boundaries, explicit overlap, risk surfaces, and omissions. The
+maximum-depth scheduler then executes the closed ordered passes: whole-protocol orientation, blind
+shard review, finding reduction, cross-shard integration, adversarial cross-examination,
+multi-lineage validation and falsification, and evidence-capped judgment. Stable task, result, shard,
+activation, and journal identities permit resuming unfinished work. This is implemented local
+orchestration, but its model passes have fake-provider evidence only; they do not establish a real
+qualified multi-lineage audit. Automated child-resharding and retry of truncated model responses is
+separate queued work and must not be inferred from semantic source sharding.
 
 Compilation is disabled by default because build systems can execute project code. Hardhat
 configuration and plugins are permitted only through a digest-pinned rootless container with no
@@ -431,9 +489,27 @@ minimality claim must carry matching bounded evidence. A positive or negative ex
 fails one of those checks remains unverified and cannot confirm or falsify a finding. This source
 binding does not claim that configured deployed bytecode is equivalent to the audited source.
 
-The legacy `[scanners.foundry_fork]` adapter is only for pre-existing `test/audit/*.t.sol` suites.
-Candidate-specific generated reproduction is controlled by `[reproduction]` and is the Solidity
-evidence gate used by the pipeline.
+The legacy `[scanners.foundry_fork]` adapter remains limited to pre-existing
+`test/audit/*.t.sol` suites. Separately, `[smart_contracts.repository_suite]` supports bounded,
+explicit Foundry or Hardhat path and test-name selection with per-test and aggregate ceilings. The
+Foundry path has real local pinned-fork integration evidence when its compiler, local RPC, and
+hardened isolation prerequisites are available. The Hardhat adapter validates selection and reporter
+evidence, but real Hardhat suite execution receives no credit until the required process-attested,
+digest-pinned rootless single-loopback toolchain is supplied. Missing prerequisites are
+`unavailable`, never a pass. Candidate-specific generated reproduction remains controlled by
+`[reproduction]`.
+
+A current, hash-bound deterministic execution that violates an invariant may originate a typed
+candidate without model attribution. Models may analyze its impact, exploitability, and remediation,
+but cannot create, delete, or relocate it; deterministic evidence remains the confirmation cap.
+Reports distinguish execution-originated evidence from review-originated findings, and a passing
+suite is never evidence of safety.
+
+Audited-suite reporting currently preserves exact source populations, selected/executed/failed test
+counts, conservative critical-surface classification, and source-bound coverage gaps that are
+explicitly not vulnerability findings. Trusted statement coverage remains `NOT_ANALYZED` without a
+trusted normalizer, and no decisive production mutation executor or real mutation kill artifact has
+run. Assertion-strength and mutation coverage therefore remain partial capabilities.
 
 Reports include a Solidity coverage section with concrete denominators: projects, Solidity files,
 contracts, functions, model-reviewed functions, Slither-covered functions, compilation failures,
@@ -509,21 +585,27 @@ Each invocation creates:
 ├── repository-map.json
 ├── language-capability.json # requested/achieved profile and source-bound evidence
 ├── scanner-results.json
+├── repository-suite-differential.json # when an applicable suite matrix ran
 ├── solidity-projects.json
 ├── dependency-preparation.json
 ├── dependency-sbom.json
 ├── solidity-compilation.json
 ├── solidity-index.json
 ├── solidity-graphs.json
+├── solidity-shards.json
 ├── solidity-invariants.json
 ├── invariant-review.json
 ├── invariant-execution-results.json
 ├── economic-simulation-plan.json
 ├── formal-results.json
 ├── solidity-coverage.json     # legacy coverage compatibility output
+├── model-review-coverage.json
 ├── candidate-findings.json
+├── execution-origin-dispositions.json
 ├── verification-results.json
 ├── reproduction-results.json
+├── context-manifest.json
+├── scheduler-state.json      # when the seven-pass scheduler ran
 ├── maximum_assurance_traceability.json
 ├── run-evidence-manifest.json
 ├── client-report.md          # concise Corrovera client assessment

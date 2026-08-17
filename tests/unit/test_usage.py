@@ -31,7 +31,11 @@ from mmaudit.models.token_planning import (
     RequestTokenPlan,
     build_request_token_plan,
 )
-from mmaudit.models.usage import is_creditable_usage_record, request_token_plan_from_usage
+from mmaudit.models.usage import (
+    is_creditable_usage_record,
+    request_token_plan_from_usage,
+    usage_requires_audit_policy_evidence,
+)
 from mmaudit.orchestration.budgets import AtomicTokenReservationEvidence
 from mmaudit.orchestration.context_manifest import ContextManifestError, build_context_manifest
 from mmaudit.orchestration.manifest import canonical_sha256
@@ -871,6 +875,110 @@ def test_consent_free_synthetic_zdr_usage_is_creditable() -> None:
             }
         )
     )
+
+
+def test_private_real_usage_requires_policy_evidence_when_all_policy_keys_are_stripped() -> None:
+    record = _creditable_record(execution_evidence=ExecutionEvidenceKind.REAL)
+    routing = {
+        key: value
+        for key, value in record.routing.items()
+        if "qualification" not in key
+        and "certification" not in key
+        and not key.startswith("audit_")
+    }
+    stripped = record.model_copy(update={"routing": routing})
+
+    assert stripped.routing["privacy_source_classification"] == (
+        PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE.value
+    )
+    assert usage_requires_audit_policy_evidence(stripped)
+
+
+@pytest.mark.parametrize(
+    "source_classification",
+    (
+        PrivacySourceClassification.PUBLIC_BENCHMARK,
+        PrivacySourceClassification.SYNTHETIC_COMMITTED,
+    ),
+)
+def test_detached_prequalification_claim_cannot_recreate_live_policy_exemption(
+    source_classification: PrivacySourceClassification,
+) -> None:
+    record = _creditable_record(execution_evidence=ExecutionEvidenceKind.REAL)
+    prequalification = record.model_copy(
+        update={
+            "role": "model_benchmark",
+            "routing": {
+                **record.routing,
+                "privacy_profile": PrivacyProfile.SYNTHETIC_BENCHMARK.value,
+                "privacy_source_classification": source_classification.value,
+                "privacy_source_proof_kind": "RELEASE_PINNED_MODEL_BENCHMARK",
+            },
+        }
+    )
+
+    assert usage_requires_audit_policy_evidence(prequalification)
+    token_plan, reservation = _token_plan_for_record(prequalification)
+    prequalification = prequalification.model_copy(
+        update={
+            "routing": {
+                **prequalification.routing,
+                "request_token_plan": token_plan.model_dump(mode="json"),
+                "request_token_plan_sha256": token_plan.plan_sha256,
+                "atomic_token_reservations": [reservation.model_dump(mode="json")],
+                "atomic_token_reservation_sha256s": [reservation.evidence_sha256],
+                "atomic_token_reservation": reservation.model_dump(mode="json"),
+                "atomic_token_reservation_sha256": reservation.evidence_sha256,
+            }
+        }
+    )
+    reparsed = UsageRecord.model_validate_json(prequalification.model_dump_json())
+    assert usage_requires_audit_policy_evidence(reparsed)
+
+
+@pytest.mark.parametrize(
+    "source_proof_kind",
+    (
+        "PACKAGE_PINNED_SYNTHETIC",
+        "DISTRIBUTION_COMMITTED_SYNTHETIC",
+    ),
+)
+def test_generic_synthetic_prequalification_proof_does_not_grant_policy_exemption(
+    source_proof_kind: str,
+) -> None:
+    record = _creditable_record(execution_evidence=ExecutionEvidenceKind.REAL)
+    prequalification = record.model_copy(
+        update={
+            "role": "model_benchmark",
+            "routing": {
+                **record.routing,
+                "privacy_profile": PrivacyProfile.SYNTHETIC_BENCHMARK.value,
+                "privacy_source_classification": (
+                    PrivacySourceClassification.SYNTHETIC_COMMITTED.value
+                ),
+                "privacy_source_proof_kind": source_proof_kind,
+            },
+        }
+    )
+
+    assert usage_requires_audit_policy_evidence(prequalification)
+
+
+def test_prequalification_role_string_does_not_exempt_private_real_usage() -> None:
+    record = _creditable_record(execution_evidence=ExecutionEvidenceKind.REAL)
+    role_only = record.model_copy(update={"role": "model_benchmark"})
+
+    assert usage_requires_audit_policy_evidence(role_only)
+
+
+def test_usage_subclass_cannot_bypass_detached_policy_custody() -> None:
+    class UsageRecordSubclass(UsageRecord):
+        pass
+
+    record = _creditable_record(execution_evidence=ExecutionEvidenceKind.REAL)
+    subclass_record = UsageRecordSubclass.model_validate(record.model_dump(mode="python"))
+
+    assert usage_requires_audit_policy_evidence(subclass_record)
 
 
 def test_profileless_legacy_usage_is_not_creditable() -> None:

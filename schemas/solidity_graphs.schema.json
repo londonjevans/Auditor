@@ -1,0 +1,700 @@
+{
+  "$defs": {
+    "SolidityGraphEdge": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "end_line": {
+          "minimum": 1,
+          "title": "End Line",
+          "type": "integer"
+        },
+        "graph": {
+          "$ref": "#/$defs/SolidityGraphKind"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/SolidityProvenance"
+        },
+        "source_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Hash",
+          "type": "string"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "start_line": {
+          "minimum": 1,
+          "title": "Start Line",
+          "type": "integer"
+        },
+        "target_id": {
+          "title": "Target Id",
+          "type": "string"
+        },
+        "transformation": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Transformation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "graph",
+        "source_id",
+        "target_id",
+        "label",
+        "provenance",
+        "path",
+        "start_line",
+        "end_line",
+        "source_hash",
+        "confidence",
+        "transformation"
+      ],
+      "title": "SolidityGraphEdge",
+      "type": "object"
+    },
+    "SolidityGraphFactKind": {
+      "description": "Non-edge semantic graph populations subject to the same artifact bound.",
+      "enum": [
+        "graph_node",
+        "storage_entry",
+        "warning"
+      ],
+      "title": "SolidityGraphFactKind",
+      "type": "string"
+    },
+    "SolidityGraphFactOmission": {
+      "additionalProperties": false,
+      "description": "Bounded evidence for emitted non-edge candidates excluded during generation.",
+      "properties": {
+        "candidate_count": {
+          "exclusiveMinimum": 0,
+          "maximum": 9223372036854775807,
+          "title": "Candidate Count",
+          "type": "integer"
+        },
+        "commitment_scheme": {
+          "const": "count-xor-sum-v1",
+          "default": "count-xor-sum-v1",
+          "title": "Commitment Scheme",
+          "type": "string"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "fact_kind": {
+          "$ref": "#/$defs/SolidityGraphFactKind"
+        },
+        "omitted_canonical_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 9223372036854775807,
+          "title": "Omitted Canonical Bytes",
+          "type": "integer"
+        },
+        "omitted_count": {
+          "exclusiveMinimum": 0,
+          "maximum": 9223372036854775807,
+          "title": "Omitted Count",
+          "type": "integer"
+        },
+        "omitted_sample_sha256s": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Omitted Sample Sha256S",
+          "type": "array"
+        },
+        "omitted_stream_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Omitted Stream Sha256",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/SolidityGraphOmissionReason",
+          "default": "artifact_budget_excluded"
+        },
+        "retained_count": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Retained Count",
+          "type": "integer"
+        },
+        "retained_occurrence_count": {
+          "default": 0,
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Retained Occurrence Count",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fact_kind",
+        "candidate_count",
+        "retained_count",
+        "omitted_count",
+        "omitted_canonical_bytes",
+        "omitted_stream_sha256",
+        "evidence_sha256"
+      ],
+      "title": "SolidityGraphFactOmission",
+      "type": "object"
+    },
+    "SolidityGraphKind": {
+      "enum": [
+        "inheritance",
+        "modifier",
+        "internal_call",
+        "external_call",
+        "low_level_call",
+        "delegatecall",
+        "contract_creation",
+        "state_read",
+        "state_write",
+        "state_dependency",
+        "asset_flow",
+        "privilege",
+        "governance",
+        "dependency",
+        "proxy",
+        "storage_layout",
+        "upgrade_compatibility",
+        "initializer",
+        "oracle_dependency",
+        "event_state",
+        "event_flow",
+        "cross_chain",
+        "offchain_dependency",
+        "signature_replay",
+        "reentrancy",
+        "state_growth",
+        "sensitive_reachability"
+      ],
+      "title": "SolidityGraphKind",
+      "type": "string"
+    },
+    "SolidityGraphNode": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "end_line": {
+          "minimum": 1,
+          "title": "End Line",
+          "type": "integer"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/SolidityGraphNodeKind"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/SolidityProvenance"
+        },
+        "source_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Hash",
+          "type": "string"
+        },
+        "start_line": {
+          "minimum": 1,
+          "title": "Start Line",
+          "type": "integer"
+        },
+        "transformation": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Transformation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "label",
+        "path",
+        "start_line",
+        "end_line",
+        "source_hash",
+        "provenance",
+        "confidence",
+        "transformation"
+      ],
+      "title": "SolidityGraphNode",
+      "type": "object"
+    },
+    "SolidityGraphNodeKind": {
+      "enum": [
+        "entity",
+        "external_target",
+        "state_variable",
+        "role",
+        "asset",
+        "storage_slot",
+        "proxy",
+        "oracle",
+        "governance",
+        "message",
+        "offchain_actor",
+        "signature_domain",
+        "unknown"
+      ],
+      "title": "SolidityGraphNodeKind",
+      "type": "string"
+    },
+    "SolidityGraphOccurrenceKind": {
+      "description": "Retained normalized graph populations with exact emitted-occurrence counts.",
+      "enum": [
+        "edge",
+        "graph_node",
+        "storage_entry",
+        "warning"
+      ],
+      "title": "SolidityGraphOccurrenceKind",
+      "type": "string"
+    },
+    "SolidityGraphOmission": {
+      "additionalProperties": false,
+      "description": "Bounded commitment to emitted edge candidates excluded during generation.",
+      "properties": {
+        "analytical_omitted_count": {
+          "default": 0,
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Analytical Omitted Count",
+          "type": "integer"
+        },
+        "analytical_population_sample_sha256s": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Analytical Population Sample Sha256S",
+          "type": "array"
+        },
+        "candidate_count": {
+          "exclusiveMinimum": 0,
+          "maximum": 9223372036854775807,
+          "title": "Candidate Count",
+          "type": "integer"
+        },
+        "commitment_scheme": {
+          "const": "count-xor-sum-and-analytic-populations-v1",
+          "default": "count-xor-sum-and-analytic-populations-v1",
+          "title": "Commitment Scheme",
+          "type": "string"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "graph": {
+          "$ref": "#/$defs/SolidityGraphKind"
+        },
+        "omitted_canonical_bytes": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Omitted Canonical Bytes",
+          "type": "integer"
+        },
+        "omitted_count": {
+          "exclusiveMinimum": 0,
+          "maximum": 9223372036854775807,
+          "title": "Omitted Count",
+          "type": "integer"
+        },
+        "omitted_sample_sha256s": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Omitted Sample Sha256S",
+          "type": "array"
+        },
+        "omitted_stream_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Omitted Stream Sha256",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/SolidityGraphOmissionReason",
+          "default": "artifact_budget_excluded"
+        },
+        "retained_count": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Retained Count",
+          "type": "integer"
+        },
+        "retained_occurrence_count": {
+          "default": 0,
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Retained Occurrence Count",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "graph",
+        "candidate_count",
+        "retained_count",
+        "omitted_count",
+        "omitted_canonical_bytes",
+        "omitted_stream_sha256",
+        "evidence_sha256"
+      ],
+      "title": "SolidityGraphOmission",
+      "type": "object"
+    },
+    "SolidityGraphOmissionReason": {
+      "description": "Typed reason that a generated semantic-graph edge population is incomplete.",
+      "enum": [
+        "artifact_budget_excluded"
+      ],
+      "title": "SolidityGraphOmissionReason",
+      "type": "string"
+    },
+    "SolidityGraphRetainedOccurrence": {
+      "additionalProperties": false,
+      "description": "Exact bounded occurrence count for one retained normalized graph record.",
+      "properties": {
+        "occurrence_count": {
+          "maximum": 9223372036854775807,
+          "minimum": 1,
+          "title": "Occurrence Count",
+          "type": "integer"
+        },
+        "subject_kind": {
+          "$ref": "#/$defs/SolidityGraphOccurrenceKind"
+        },
+        "subject_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Subject Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject_kind",
+        "subject_sha256",
+        "occurrence_count"
+      ],
+      "title": "SolidityGraphRetainedOccurrence",
+      "type": "object"
+    },
+    "SolidityGraphSet": {
+      "additionalProperties": false,
+      "properties": {
+        "analyzed_graphs": {
+          "items": {
+            "$ref": "#/$defs/SolidityGraphKind"
+          },
+          "title": "Analyzed Graphs",
+          "type": "array"
+        },
+        "artifact_byte_limit": {
+          "default": 100000000,
+          "maximum": 100000000,
+          "minimum": 1024,
+          "title": "Artifact Byte Limit",
+          "type": "integer"
+        },
+        "coverage": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Coverage",
+          "type": "object"
+        },
+        "edge_omissions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SolidityGraphOmission"
+          },
+          "maxItems": 64,
+          "title": "Edge Omissions",
+          "type": "array"
+        },
+        "edges": {
+          "items": {
+            "$ref": "#/$defs/SolidityGraphEdge"
+          },
+          "title": "Edges",
+          "type": "array"
+        },
+        "fact_omissions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SolidityGraphFactOmission"
+          },
+          "maxItems": 3,
+          "title": "Fact Omissions",
+          "type": "array"
+        },
+        "generation_complete": {
+          "default": true,
+          "title": "Generation Complete",
+          "type": "boolean"
+        },
+        "nodes": {
+          "items": {
+            "$ref": "#/$defs/SolidityGraphNode"
+          },
+          "title": "Nodes",
+          "type": "array"
+        },
+        "retained_occurrences": {
+          "items": {
+            "$ref": "#/$defs/SolidityGraphRetainedOccurrence"
+          },
+          "maxItems": 850256,
+          "title": "Retained Occurrences",
+          "type": "array"
+        },
+        "selection_algorithm": {
+          "const": "mmaudit.semantic-graph-risk-order.v1",
+          "default": "mmaudit.semantic-graph-risk-order.v1",
+          "title": "Selection Algorithm",
+          "type": "string"
+        },
+        "storage_layout": {
+          "items": {
+            "$ref": "#/$defs/SolidityStorageEntry"
+          },
+          "title": "Storage Layout",
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "edges",
+        "retained_occurrences"
+      ],
+      "title": "SolidityGraphSet",
+      "type": "object"
+    },
+    "SolidityProvenance": {
+      "enum": [
+        "compiler",
+        "fallback",
+        "static_tool",
+        "heuristic",
+        "model_suggested"
+      ],
+      "title": "SolidityProvenance",
+      "type": "string"
+    },
+    "SolidityStorageEntry": {
+      "additionalProperties": false,
+      "description": "Compiler-derived or explicitly lower-confidence storage layout entry.",
+      "properties": {
+        "ast_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ast Id"
+        },
+        "byte_size": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Byte Size"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "contract_name": {
+          "title": "Contract Name",
+          "type": "string"
+        },
+        "declaring_contract_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Declaring Contract Name"
+        },
+        "end_line": {
+          "minimum": 1,
+          "title": "End Line",
+          "type": "integer"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "offset": {
+          "minimum": 0,
+          "title": "Offset",
+          "type": "integer"
+        },
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/SolidityProvenance"
+        },
+        "slot": {
+          "title": "Slot",
+          "type": "string"
+        },
+        "source_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Hash",
+          "type": "string"
+        },
+        "start_line": {
+          "minimum": 1,
+          "title": "Start Line",
+          "type": "integer"
+        },
+        "transformation": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Transformation",
+          "type": "string"
+        },
+        "type_name": {
+          "title": "Type Name",
+          "type": "string"
+        },
+        "variable_name": {
+          "title": "Variable Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "contract_name",
+        "variable_name",
+        "type_name",
+        "slot",
+        "offset",
+        "path",
+        "start_line",
+        "end_line",
+        "source_hash",
+        "provenance",
+        "confidence",
+        "transformation"
+      ],
+      "title": "SolidityStorageEntry",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/solidity_graphs.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Typed envelope matching the emitted ``solidity-graphs.json`` artifact.",
+  "properties": {
+    "graphs": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SolidityGraphSet"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "graphs"
+  ],
+  "title": "mmaudit bounded Solidity semantic graphs artifact",
+  "type": "object"
+}

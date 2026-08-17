@@ -7,6 +7,7 @@ import os
 import stat
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -432,17 +433,44 @@ def test_private_portfolio_round_trip_binds_exact_set_and_usage(
     assert portfolio.corpus_sha256 == inputs.suite.corpus_sha256
     assert portfolio.ground_truth_sha256 == inputs.suite.ground_truth_sha256
     assert portfolio.execution_evidence is ExecutionEvidenceKind.MOCK
-    assert portfolio.usage.report_count == 2
-    assert portfolio.usage.usage_record_count == 32
-    assert portfolio.usage.prompt_tokens == 3_200
-    assert portfolio.usage.completion_tokens == 800
-    assert portfolio.usage.total_tokens == 4_000
-    assert portfolio.usage.reported_cost_usd == "0.32"
-    assert portfolio.usage.accounted_cost_usd == "0.32"
-    assert portfolio.usage.total_latency_ms == 4_000
-    assert portfolio.usage.maximum_latency_ms == 125
-    assert portfolio.started_at == NOW + timedelta(hours=1)
-    assert portfolio.ended_at == NOW + timedelta(hours=1, seconds=115, milliseconds=125)
+    retained_usage = tuple(
+        case.usage_record
+        for report in inputs.reports
+        for result in report.results
+        for case in result.cases
+        if case.usage_record is not None
+    )
+    assert all(record.reported_cost_usd is not None for record in retained_usage)
+    assert all(record.latency_ms is not None for record in retained_usage)
+    assert all(record.started_at is not None for record in retained_usage)
+    assert all(record.ended_at is not None for record in retained_usage)
+    assert portfolio.usage.report_count == len(inputs.reports)
+    assert portfolio.usage.usage_record_count == len(retained_usage)
+    assert portfolio.usage.prompt_tokens == sum(record.prompt_tokens for record in retained_usage)
+    assert portfolio.usage.completion_tokens == sum(
+        record.completion_tokens for record in retained_usage
+    )
+    assert portfolio.usage.total_tokens == sum(record.total_tokens for record in retained_usage)
+    assert Decimal(portfolio.usage.reported_cost_usd) == sum(
+        (Decimal(str(record.reported_cost_usd)) for record in retained_usage),
+        Decimal(0),
+    )
+    assert Decimal(portfolio.usage.accounted_cost_usd) == sum(
+        (Decimal(str(record.accounted_cost_usd)) for record in retained_usage),
+        Decimal(0),
+    )
+    assert portfolio.usage.total_latency_ms == sum(
+        record.latency_ms for record in retained_usage if record.latency_ms is not None
+    )
+    assert portfolio.usage.maximum_latency_ms == max(
+        record.latency_ms for record in retained_usage if record.latency_ms is not None
+    )
+    assert portfolio.started_at == min(
+        record.started_at for record in retained_usage if record.started_at is not None
+    )
+    assert portfolio.ended_at == max(
+        record.ended_at for record in retained_usage if record.ended_at is not None
+    )
     assert stat.S_IMODE(path.stat().st_mode) == 0o700
     assert all(stat.S_IMODE(item.stat().st_mode) == 0o600 for item in path.iterdir())
     for artifact in portfolio.report_artifacts:

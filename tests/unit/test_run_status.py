@@ -1,11 +1,18 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import timedelta
+from functools import cache
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 from pydantic import ValidationError
 
 from mmaudit.constants import ANALYSIS_ROLES
+from mmaudit.models.policy_selection import (
+    AuditModelSelection,
+    VerifiedAuditModelSelection,
+)
 from mmaudit.models.schemas import (
     AnalysisState,
     AuditProfile,
@@ -46,8 +53,30 @@ from tests.language_capability_support import (
     language_capability_for_files,
     matched_solidity_language_capability,
 )
+from tests.unit.test_model_policy_selection import (
+    BASE_TIME,
+    _policy_authority,
+    _policy_bundle,
+    _resolve,
+    _technical_qualification,
+)
 
-NOW = datetime(2026, 7, 29, 12, 0, tzinfo=UTC)
+NOW = BASE_TIME + timedelta(hours=2)
+
+
+@cache
+def _report_policy_selection() -> tuple[AuditModelSelection, VerifiedAuditModelSelection]:
+    """Issue one real test-only policy selection for typed report fixtures."""
+
+    technical = _technical_qualification()
+    policy = _policy_bundle(
+        technical,
+        excluded_ids=frozenset({technical.models[-1].exact_model_id}),
+    )
+    with TemporaryDirectory(prefix="mmaudit-run-status-policy-") as directory:
+        authority = _policy_authority(Path(directory), policy)
+    selection, _evidence_bundle, capability = _resolve(technical, policy, authority)
+    return selection, capability
 
 
 def _repository() -> RepositoryMap:
@@ -145,8 +174,8 @@ def _usage(
     *,
     execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.REAL,
 ) -> UsageRecord:
-    model = "synthetic/model"
-    endpoint = "synthetic-provider"
+    model = "alpha/atlas-secure"
+    endpoint = "openrouter/provider-a"
     generation_id = f"generation-{role}"
     record = UsageRecord(
         request_id=f"request-{role}",
@@ -212,6 +241,30 @@ def _usage(
         attempts=1,
     )
     return bind_synthetic_usage_identity(record)
+
+
+def _bind_report_usage_to_policy_selection(record: UsageRecord) -> UsageRecord:
+    selection, capability = _report_policy_selection()
+    evidence = capability.routing_evidence(
+        record.requested_model,
+        now=record.started_at or record.timestamp,
+        expected_audit_scope_sha256=selection.audit_scope_sha256,
+        expected_source_sha256=selection.source_sha256,
+        expected_audit_context_sha256=selection.audit_context_sha256,
+        expected_client_constraints_sha256=selection.client_constraints_sha256,
+    )
+    routing = dict(record.routing)
+    metadata = dict(evidence.request_metadata())
+    routing_evidence_sha256 = metadata.pop("routing_evidence_sha256")
+    routing.update(
+        {
+            **metadata,
+            "audit_policy_routing_evidence_sha256": routing_evidence_sha256,
+            "audit_selection_capability_sha256": capability.capability_sha256,
+            "audit_model_routing_evidence": evidence.model_dump(mode="json"),
+        }
+    )
+    return record.model_copy(update={"routing": routing})
 
 
 def _assessment(
@@ -452,6 +505,8 @@ def _typed_report_payload(
     coverage: dict[str, CoverageMetric],
 ) -> dict[str, object]:
     compilation = _compilation()
+    selection, _capability = _report_policy_selection()
+    policy_bound_usage = [_bind_report_usage_to_policy_selection(record) for record in usage]
     project = SolidityProjectMetadata(
         project_type=SolidityProjectType.FOUNDRY,
         project_root=".",
@@ -473,7 +528,8 @@ def _typed_report_payload(
         ).assessment,
         "quality_gates": [minimum_analysis_floor_quality_gate(floor)],
         "scanner_runs": scanner_runs,
-        "usage": usage,
+        "usage": policy_bound_usage,
+        "audit_model_selection": selection,
         "solidity_coverage": SolidityCoverage(quality_metrics=coverage),
         "metadata": {
             "scanner_only": floor.scanner_only,

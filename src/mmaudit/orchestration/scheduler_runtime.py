@@ -13,7 +13,7 @@ from enum import Enum
 from functools import cache
 from importlib.resources import files
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
@@ -112,6 +112,9 @@ from mmaudit.orchestration.scheduler import (
     resume_scheduler_journal,
 )
 from mmaudit.repository.discovery import DiscoveryResult
+
+if TYPE_CHECKING:
+    from mmaudit.models.policy_selection import AuditModelSelectionEvidenceBundle
 
 _HOST_PROMPT_SHA256 = scheduler_canonical_sha256(
     {"domain": "mmaudit.scheduler.host-computation-prompt.v1"}
@@ -475,6 +478,7 @@ def build_scheduler_bindings(
     analysis_input_sha256: str,
     cost_ledger_baseline: SchedulerCostLedgerBaseline | None = None,
     privacy_evidence_custody: SchedulerPrivacyEvidenceCustody | None = None,
+    audit_model_selection_evidence: AuditModelSelectionEvidenceBundle | None = None,
 ) -> SchedulerBindings:
     """Build independently reproducible immutable campaign bindings."""
 
@@ -499,6 +503,7 @@ def build_scheduler_bindings(
             if privacy_evidence_custody is not None
             else ABSENT_PRIVACY_EVIDENCE_CUSTODY_SHA256
         ),
+        audit_model_selection_evidence=audit_model_selection_evidence,
     )
 
 

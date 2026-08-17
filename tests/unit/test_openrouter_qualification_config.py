@@ -36,8 +36,8 @@ def test_qualification_runtime_config_loads_without_secrets_or_claims() -> None:
     assert config.execution.max_model_retries == 1
     assert config.execution.max_output_tokens_per_request == 4_096
     assert config.effective_reserved_output_tokens == 4_096
-    assert config.execution.max_requests_per_agent == 512
-    assert 12 * 16 * (config.execution.max_model_retries + 1) <= (
+    assert config.execution.max_requests_per_agent == 576
+    assert 12 * 24 * (config.execution.max_model_retries + 1) == (
         config.execution.max_requests_per_agent
     )
     assert config.privacy.allow_code_egress is False
@@ -82,9 +82,9 @@ def test_unbound_qualification_config_cannot_qualify_an_ordinary_audit() -> None
 def test_qualification_request_limit_is_explicitly_bounded() -> None:
     assert ExecutionConfig().max_output_tokens_per_request == 32_768
     assert ExecutionConfig().max_requests_per_agent == 2
-    assert ExecutionConfig(max_requests_per_agent=512).max_requests_per_agent == 512
-    with pytest.raises(ValidationError, match="less than or equal to 512"):
-        ExecutionConfig(max_requests_per_agent=513)
+    assert ExecutionConfig(max_requests_per_agent=640).max_requests_per_agent == 640
+    with pytest.raises(ValidationError, match="less than or equal to 640"):
+        ExecutionConfig(max_requests_per_agent=641)
 
 
 def test_endpoint_token_budget_defaults_are_high_capacity_and_bounded() -> None:

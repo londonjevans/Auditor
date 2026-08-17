@@ -240,19 +240,16 @@ def _scanner_variant(
 
 
 def _failed_usage() -> UsageRecord:
-    return UsageRecord(
-        request_id="request-failed",
-        role="source_audit",
-        execution_evidence=ExecutionEvidenceKind.REAL,
-        requested_model="synthetic/failed",
-        model_family="synthetic-failed",
-        timestamp=NOW,
-        prompt_sha256="f" * 64,
-        validation_status=ModelRequestValidationStatus.PROVIDER_ERROR,
-        provider_error_classification="provider_unavailable",
-        status="failed",
-        attempts=1,
+    payload = _usage("verifier").model_dump(mode="python")
+    payload.update(
+        {
+            "identity_strength": ModelIdentityStrength.UNBOUND,
+            "validation_status": ModelRequestValidationStatus.PROVIDER_ERROR,
+            "provider_error_classification": "provider_unavailable",
+            "status": "failed",
+        }
     )
+    return UsageRecord.model_validate(payload)
 
 
 def _unverified_usage() -> UsageRecord:
@@ -658,15 +655,30 @@ def test_completed_analysis_credits_only_structurally_qualifying_real_evidence()
         ),
     ]
     finding = _finding(FindingStatus.STRONGLY_SUPPORTED)
-    report = _report(findings=[finding]).model_copy(
-        update={
-            "scanner_runs": scanner_runs,
-            "usage": usage,
+    coverage = _coverage()
+    floor = _assessment(
+        scanner_runs=scanner_runs,
+        usage=usage,
+        coverage=coverage,
+        required_model_roles=ANALYSIS_ROLES,
+    )
+    base_report = _report(findings=[finding])
+    payload = _typed_report_payload(
+        floor=floor,
+        scanner_runs=scanner_runs,
+        usage=usage,
+        coverage=coverage,
+    )
+    payload.update(
+        {
+            "repository": base_report.repository,
+            "findings": [finding],
             "invariant_executions": invariant_executions,
             "formal_runs": formal_runs,
             "reproductions": reproductions,
         }
     )
+    report = AuditReport.model_validate(payload)
 
     rendered = _render_client(report, {SOURCE_PATH: SOURCE})
 

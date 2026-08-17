@@ -251,7 +251,6 @@
       "description": "Non-vacuous exact-denominator coverage summary for one inventory.",
       "properties": {
         "complete": {
-          "const": true,
           "default": true,
           "title": "Complete",
           "type": "boolean"
@@ -266,6 +265,16 @@
           "title": "Entities Total",
           "type": "integer"
         },
+        "graph_edge_candidate_occurrences_covered": {
+          "minimum": 0,
+          "title": "Graph Edge Candidate Occurrences Covered",
+          "type": "integer"
+        },
+        "graph_edge_candidate_occurrences_total": {
+          "minimum": 0,
+          "title": "Graph Edge Candidate Occurrences Total",
+          "type": "integer"
+        },
         "graph_edges_covered": {
           "minimum": 0,
           "title": "Graph Edges Covered",
@@ -276,6 +285,16 @@
           "title": "Graph Edges Total",
           "type": "integer"
         },
+        "graph_node_candidate_occurrences_covered": {
+          "minimum": 0,
+          "title": "Graph Node Candidate Occurrences Covered",
+          "type": "integer"
+        },
+        "graph_node_candidate_occurrences_total": {
+          "minimum": 0,
+          "title": "Graph Node Candidate Occurrences Total",
+          "type": "integer"
+        },
         "graph_nodes_covered": {
           "minimum": 0,
           "title": "Graph Nodes Covered",
@@ -284,6 +303,26 @@
         "graph_nodes_total": {
           "minimum": 0,
           "title": "Graph Nodes Total",
+          "type": "integer"
+        },
+        "graph_warning_candidate_occurrences_covered": {
+          "minimum": 0,
+          "title": "Graph Warning Candidate Occurrences Covered",
+          "type": "integer"
+        },
+        "graph_warning_candidate_occurrences_total": {
+          "minimum": 0,
+          "title": "Graph Warning Candidate Occurrences Total",
+          "type": "integer"
+        },
+        "graph_warnings_covered": {
+          "minimum": 0,
+          "title": "Graph Warnings Covered",
+          "type": "integer"
+        },
+        "graph_warnings_total": {
+          "minimum": 0,
+          "title": "Graph Warnings Total",
           "type": "integer"
         },
         "source_bytes_covered": {
@@ -315,6 +354,16 @@
           "minimum": 0,
           "title": "Storage Entries Total",
           "type": "integer"
+        },
+        "storage_entry_candidate_occurrences_covered": {
+          "minimum": 0,
+          "title": "Storage Entry Candidate Occurrences Covered",
+          "type": "integer"
+        },
+        "storage_entry_candidate_occurrences_total": {
+          "minimum": 0,
+          "title": "Storage Entry Candidate Occurrences Total",
+          "type": "integer"
         }
       },
       "required": [
@@ -326,10 +375,20 @@
         "entities_covered",
         "graph_nodes_total",
         "graph_nodes_covered",
+        "graph_node_candidate_occurrences_total",
+        "graph_node_candidate_occurrences_covered",
         "graph_edges_total",
         "graph_edges_covered",
+        "graph_edge_candidate_occurrences_total",
+        "graph_edge_candidate_occurrences_covered",
         "storage_entries_total",
-        "storage_entries_covered"
+        "storage_entries_covered",
+        "storage_entry_candidate_occurrences_total",
+        "storage_entry_candidate_occurrences_covered",
+        "graph_warnings_total",
+        "graph_warnings_covered",
+        "graph_warning_candidate_occurrences_total",
+        "graph_warning_candidate_occurrences_covered"
       ],
       "title": "SolidityShardCoverage",
       "type": "object"
@@ -504,7 +563,6 @@
         },
         "evidence_authority": {
           "const": "comparison_required",
-          "default": "comparison_required",
           "title": "Evidence Authority",
           "type": "string"
         },
@@ -644,6 +702,7 @@
         }
       },
       "required": [
+        "evidence_authority",
         "policy",
         "source_inventory_sha256",
         "symbol_index_context_sha256",

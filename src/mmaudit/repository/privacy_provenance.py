@@ -10,10 +10,11 @@ import stat
 import subprocess
 import threading
 import weakref
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, Self, cast
+from typing import Any, Literal, Self, SupportsIndex, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -32,8 +33,41 @@ _PACKAGE_SYNTHETIC_DECLARATION_RELATIVE_PATH = "resources/privacy-synthetic-sour
 _TRUSTED_SYNTHETIC_DECLARATION_SHA256 = (
     "7bca2ce44d14f9844f61a8434277f88b443c0992a8df5d811db6794513a9fb6b"
 )
-_TRUSTED_PROVENANCE_ISSUER = object()
-_PROVENANCE_LOCK = threading.Lock()
+
+
+def _build_release_pinned_model_benchmark_validator() -> Callable[
+    [tuple[str, str, str, str]],
+    tuple[str, str, str, str],
+]:
+    from mmaudit.config import (
+        MAXIMUM_ASSURANCE_BENCHMARK_CORPUS_SHA256,
+        MAXIMUM_ASSURANCE_BENCHMARK_CORPUS_VERSION,
+        MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_SHA256,
+        MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_VERSION,
+    )
+
+    compiled_pins = (
+        MAXIMUM_ASSURANCE_BENCHMARK_CORPUS_VERSION,
+        MAXIMUM_ASSURANCE_BENCHMARK_CORPUS_SHA256,
+        MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_VERSION,
+        MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_SHA256,
+    )
+
+    def require_exact(
+        observed: tuple[str, str, str, str],
+    ) -> tuple[str, str, str, str]:
+        if observed != compiled_pins:
+            raise ValueError(
+                "model benchmark corpus and ground truth differ from the release-pinned "
+                "synthetic prequalification source"
+            )
+        return compiled_pins
+
+    return require_exact
+
+
+_TRUSTED_REQUIRE_RELEASE_PINNED_MODEL_BENCHMARK = _build_release_pinned_model_benchmark_validator()
+del _build_release_pinned_model_benchmark_validator
 
 PrivacySourceClassificationValue = Literal[
     "PRIVATE_OPERATOR_SOURCE",
@@ -125,6 +159,7 @@ class PrivacySourceProvenanceEvidence(BaseModel):
         "PRIVATE_DEFAULT",
         "DISTRIBUTION_COMMITTED_SYNTHETIC",
         "PACKAGE_PINNED_SYNTHETIC",
+        "RELEASE_PINNED_MODEL_BENCHMARK",
     ]
     distribution_commit: str | None = Field(
         default=None,
@@ -149,6 +184,15 @@ class PrivacySourceProvenanceEvidence(BaseModel):
         default=None,
         pattern=_SHA256_PATTERN,
     )
+    release_pin_set_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+    )
+    provider_visible_case_count: int = Field(default=0, ge=0, le=10_000)
+    provider_visible_case_inventory_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+    )
     observed_at: datetime
     limitations: tuple[str, ...] = Field(min_length=1, max_length=8)
     evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -162,22 +206,29 @@ class PrivacySourceProvenanceEvidence(BaseModel):
 
     @model_validator(mode="after")
     def evidence_is_coherent_and_self_hashed(self) -> Self:
-        synthetic = self.proof_kind in {
+        committed_synthetic = self.proof_kind in {
             "DISTRIBUTION_COMMITTED_SYNTHETIC",
             "PACKAGE_PINNED_SYNTHETIC",
         }
-        synthetic_values = (
+        committed_synthetic_values = (
             self.distribution_scope,
             self.committed_file_inventory_sha256,
             self.synthetic_declaration_path,
             self.synthetic_declaration_sha256,
             self.synthetic_declaration_entry_sha256,
         )
-        if synthetic:
+        release_pinned_benchmark = self.proof_kind == "RELEASE_PINNED_MODEL_BENCHMARK"
+        release_values = (
+            self.release_pin_set_sha256,
+            self.provider_visible_case_inventory_sha256,
+        )
+        if committed_synthetic:
             if (
                 self.source_classification != "SYNTHETIC_COMMITTED"
-                or any(value is None for value in synthetic_values)
+                or any(value is None for value in committed_synthetic_values)
                 or self.committed_file_count < 1
+                or any(value is not None for value in release_values)
+                or self.provider_visible_case_count
             ):
                 raise ValueError("synthetic source provenance is incomplete")
             if (
@@ -190,11 +241,27 @@ class PrivacySourceProvenanceEvidence(BaseModel):
                 and self.distribution_commit is not None
             ):
                 raise ValueError("package-pinned synthetic provenance cannot claim a commit")
+        elif release_pinned_benchmark:
+            if (
+                self.source_classification != "SYNTHETIC_COMMITTED"
+                or self.distribution_commit is not None
+                or self.distribution_scope != "benchmarks/model_corpus"
+                or self.committed_file_count
+                or self.committed_file_inventory_sha256 is not None
+                or self.synthetic_declaration_path is not None
+                or self.synthetic_declaration_sha256 is not None
+                or self.synthetic_declaration_entry_sha256 is not None
+                or any(value is None for value in release_values)
+                or self.provider_visible_case_count < 1
+            ):
+                raise ValueError("release-pinned model benchmark provenance is incomplete")
         elif (
             self.source_classification != "PRIVATE_OPERATOR_SOURCE"
             or self.distribution_commit is not None
-            or any(value is not None for value in synthetic_values)
+            or any(value is not None for value in committed_synthetic_values)
             or self.committed_file_count
+            or any(value is not None for value in release_values)
+            or self.provider_visible_case_count
         ):
             raise ValueError("private source provenance cannot claim committed benchmark proof")
         if self.limitations != tuple(sorted(set(self.limitations))):
@@ -205,30 +272,23 @@ class PrivacySourceProvenanceEvidence(BaseModel):
         return self
 
 
-@dataclass(frozen=True, slots=True)
-class _ProvenanceBinding:
-    evidence: PrivacySourceProvenanceEvidence = field(repr=False, compare=False)
-    evidence_sha256: str
-    evidence_content_sha256: str
-
-
-@dataclass(frozen=True, slots=True, init=False, eq=False, weakref_slot=True)
 class PrivacySourceProvenanceObservation:
     """Opaque live observation issued only by the trusted provenance prover."""
 
-    evidence: PrivacySourceProvenanceEvidence
-    _issuer: object = field(repr=False, compare=False)
+    __slots__ = ("__weakref__",)
 
-    def __init__(
-        self,
-        *,
-        evidence: PrivacySourceProvenanceEvidence,
-        _issuer: object | None = None,
-    ) -> None:
-        if _issuer is not _TRUSTED_PROVENANCE_ISSUER:
-            raise TypeError("source provenance observations are issued only by the trusted prover")
-        object.__setattr__(self, "evidence", evidence)
-        object.__setattr__(self, "_issuer", _issuer)
+    def __new__(cls, *_args: object, **_kwargs: object) -> PrivacySourceProvenanceObservation:
+        del cls
+        raise TypeError("source provenance observation cannot be constructed directly")
+
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        del self, _args, _kwargs
+
+    @property
+    def evidence(self) -> PrivacySourceProvenanceEvidence:
+        """Return the immutable non-secret evidence behind this live observation."""
+
+        return _privacy_source_provenance_observation_evidence(self)
 
     def __copy__(self) -> PrivacySourceProvenanceObservation:
         raise TypeError("source provenance observations cannot be copied")
@@ -240,20 +300,18 @@ class PrivacySourceProvenanceObservation:
     def __reduce__(self) -> Any:
         raise TypeError("source provenance observations cannot be serialized")
 
-
-_LIVE_PROVENANCE_OBSERVATIONS: weakref.WeakKeyDictionary[
-    PrivacySourceProvenanceObservation,
-    _ProvenanceBinding,
-] = weakref.WeakKeyDictionary()
+    def __reduce_ex__(self, protocol: SupportsIndex) -> Any:
+        del protocol
+        raise TypeError("source provenance observations cannot be serialized")
 
 
-def prove_privacy_source_classification(
+def _build_privacy_source_classification_evidence(
     discovery: DiscoveryResult,
     *,
     requested_classification: str,
     source_sha256: str,
     now: datetime,
-) -> PrivacySourceProvenanceObservation:
+) -> tuple[PrivacySourceProvenanceEvidence, frozenset[str]]:
     """Prove a safe effective classification for the exact provider-visible scope."""
 
     classification = _classification_value(requested_classification)
@@ -278,7 +336,7 @@ def prove_privacy_source_classification(
         raise ValueError("privacy source provenance binds a different source inventory")
 
     if classification == "PRIVATE_OPERATOR_SOURCE":
-        return _issue_observation(
+        return (
             _seal(
                 {
                     "schema_version": "1.0",
@@ -292,12 +350,16 @@ def prove_privacy_source_classification(
                     "synthetic_declaration_path": None,
                     "synthetic_declaration_sha256": None,
                     "synthetic_declaration_entry_sha256": None,
+                    "release_pin_set_sha256": None,
+                    "provider_visible_case_count": 0,
+                    "provider_visible_case_inventory_sha256": None,
                     "observed_at": observed_at,
                     "limitations": (
                         "Private is the fail-closed default; no public or synthetic provenance is claimed.",
                     ),
                 }
-            )
+            ),
+            frozenset(),
         )
     if classification == "PUBLIC_BENCHMARK":
         raise ValueError(
@@ -488,7 +550,7 @@ def prove_privacy_source_classification(
         if package_mode
         else "Committed distribution provenance proves fixture custody, not real-world publication."
     )
-    return _issue_observation(
+    return (
         _seal(
             {
                 "schema_version": "1.0",
@@ -504,67 +566,341 @@ def prove_privacy_source_classification(
                 "synthetic_declaration_entry_sha256": _canonical_sha256(
                     declared_entry.model_dump(mode="json")
                 ),
+                "release_pin_set_sha256": None,
+                "provider_visible_case_count": 0,
+                "provider_visible_case_inventory_sha256": None,
                 "observed_at": observed_at,
                 "limitations": (limitations,),
             }
-        )
+        ),
+        frozenset(),
     )
 
 
-def validate_privacy_source_provenance_observation(
-    observation: PrivacySourceProvenanceObservation,
+def _build_release_pinned_model_benchmark_evidence(
+    benchmark_suite: object,
     *,
-    source_sha256: str,
-    source_classification: str,
-) -> PrivacySourceProvenanceEvidence:
-    """Return a fresh evidence snapshot only for a live exact provenance observation."""
+    now: datetime,
+    _require_exact_pins: Callable[
+        [tuple[str, str, str, str]],
+        tuple[str, str, str, str],
+    ] = _TRUSTED_REQUIRE_RELEASE_PINNED_MODEL_BENCHMARK,
+) -> tuple[PrivacySourceProvenanceEvidence, frozenset[str]]:
+    """Prove the exact release-pinned semantic corpus used for provider-visible benchmarking."""
 
-    classification = _classification_value(source_classification)
-    if classification is None:
-        raise ValueError("privacy source classification must be typed")
-    if re.fullmatch(_SHA256_PATTERN, source_sha256) is None:
-        raise ValueError("privacy source inventory hash is invalid")
-    if type(observation) is not PrivacySourceProvenanceObservation:
-        raise ValueError("privacy source provenance observation is not trusted")
-    with _PROVENANCE_LOCK:
-        binding = _LIVE_PROVENANCE_OBSERVATIONS.get(observation)
-    if (
-        binding is None
-        or observation._issuer is not _TRUSTED_PROVENANCE_ISSUER
-        or observation.evidence is not binding.evidence
-    ):
-        raise ValueError("privacy source provenance observation was not issued in this process")
+    from mmaudit.benchmark.models import (
+        MODEL_BENCHMARK_SCHEMA_NAME,
+        ModelBenchmarkResponse,
+        ModelBenchmarkSuite,
+        blinded_model_benchmark_request,
+        model_benchmark_provider_request_commitment,
+        model_benchmark_system_prompt,
+    )
+    from mmaudit.models.output_modes import StructuredOutputMode
+
+    if type(benchmark_suite) is not ModelBenchmarkSuite:
+        raise ValueError("release-pinned model benchmark source must be a typed suite")
     try:
-        validated = PrivacySourceProvenanceEvidence.model_validate(
-            observation.evidence.model_dump(mode="python"),
+        canonical_suite = ModelBenchmarkSuite.model_validate_json(
+            benchmark_suite.model_dump_json(),
             strict=True,
         )
     except Exception:
-        raise ValueError("privacy source provenance observation binding is inconsistent") from None
-    if (
-        validated.evidence_sha256 != binding.evidence_sha256
-        or _model_content_sha256(validated) != binding.evidence_content_sha256
-        or validated.source_sha256 != source_sha256
-        or validated.source_classification != classification
-    ):
-        raise ValueError("privacy source provenance observation binding is inconsistent")
-    return validated
+        raise ValueError("release-pinned model benchmark source is structurally invalid") from None
+    if canonical_suite != benchmark_suite:
+        raise ValueError("release-pinned model benchmark source changed during validation")
 
-
-def _issue_observation(
-    evidence: PrivacySourceProvenanceEvidence,
-) -> PrivacySourceProvenanceObservation:
-    observation = PrivacySourceProvenanceObservation(
-        evidence=evidence,
-        _issuer=_TRUSTED_PROVENANCE_ISSUER,
+    observed_pins = (
+        canonical_suite.corpus.schema_version,
+        canonical_suite.corpus_sha256,
+        canonical_suite.ground_truth.schema_version,
+        canonical_suite.ground_truth_sha256,
     )
-    with _PROVENANCE_LOCK:
-        _LIVE_PROVENANCE_OBSERVATIONS[observation] = _ProvenanceBinding(
-            evidence=evidence,
-            evidence_sha256=evidence.evidence_sha256,
-            evidence_content_sha256=_model_content_sha256(evidence),
+    expected_pins = _require_exact_pins(
+        observed_pins,
+    )
+
+    provider_visible_cases = []
+    provider_visible_case_commitment_sha256s: set[str] = set()
+    for case in canonical_suite.cases:
+        user_prompt = blinded_model_benchmark_request(case)
+        request_bytes = user_prompt.encode("utf-8")
+        case_commitment_sha256, _request_commitment_sha256 = (
+            model_benchmark_provider_request_commitment(
+                request_role="model_benchmark",
+                system_prompt=model_benchmark_system_prompt(),
+                user_prompt=user_prompt,
+                response_model=ModelBenchmarkResponse,
+                schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
+                structured_output_mode=StructuredOutputMode.NATIVE_JSON_SCHEMA,
+                context_package=None,
+            )
         )
-    return observation
+        provider_visible_case_commitment_sha256s.add(case_commitment_sha256)
+        provider_visible_cases.append(
+            {
+                "case_id": case.case_id,
+                "source_path": case.source_path,
+                "case_commitment_sha256": case_commitment_sha256,
+                "request_size": len(request_bytes),
+            }
+        )
+    if len(provider_visible_case_commitment_sha256s) != len(provider_visible_cases):
+        raise ValueError("release-pinned benchmark provider requests are not unique")
+    provider_visible_inventory_sha256 = _canonical_sha256(provider_visible_cases)
+    release_pin_set_sha256 = _canonical_sha256(
+        {
+            "schema_version": "1.0",
+            "benchmark_corpus_version": expected_pins[0],
+            "benchmark_corpus_sha256": expected_pins[1],
+            "benchmark_ground_truth_version": expected_pins[2],
+            "benchmark_ground_truth_sha256": expected_pins[3],
+        }
+    )
+    observed_at = _whole_second_utc(now)
+    return (
+        _seal(
+            {
+                "schema_version": "1.0",
+                "source_classification": "SYNTHETIC_COMMITTED",
+                "source_sha256": canonical_suite.corpus_sha256,
+                "proof_kind": "RELEASE_PINNED_MODEL_BENCHMARK",
+                "distribution_commit": None,
+                "distribution_scope": "benchmarks/model_corpus",
+                "committed_file_count": 0,
+                "committed_file_inventory_sha256": None,
+                "synthetic_declaration_path": None,
+                "synthetic_declaration_sha256": None,
+                "synthetic_declaration_entry_sha256": None,
+                "release_pin_set_sha256": release_pin_set_sha256,
+                "provider_visible_case_count": len(provider_visible_cases),
+                "provider_visible_case_inventory_sha256": (provider_visible_inventory_sha256),
+                "observed_at": observed_at,
+                "limitations": (
+                    "Release pins prove this reviewed semantic benchmark suite, not arbitrary custom corpus data.",
+                    "The provider-visible inventory binds blinded requests; ground truth remains local.",
+                ),
+            }
+        ),
+        frozenset(provider_visible_case_commitment_sha256s),
+    )
+
+
+def _build_privacy_source_provenance_authority(
+    source_builder: Callable[..., tuple[PrivacySourceProvenanceEvidence, frozenset[str]]],
+    release_builder: Callable[..., tuple[PrivacySourceProvenanceEvidence, frozenset[str]]],
+) -> tuple[
+    Callable[..., PrivacySourceProvenanceObservation],
+    Callable[..., PrivacySourceProvenanceObservation],
+    Callable[..., PrivacySourceProvenanceObservation],
+    Callable[..., PrivacySourceProvenanceEvidence],
+    Callable[..., PrivacySourceProvenanceEvidence],
+    Callable[[PrivacySourceProvenanceObservation], PrivacySourceProvenanceEvidence],
+]:
+    """Keep provenance issuance state unreachable behind validated proof operations."""
+
+    @dataclass(frozen=True, slots=True)
+    class Binding:
+        evidence: PrivacySourceProvenanceEvidence
+        evidence_sha256: str
+        evidence_content_sha256: str
+        provider_visible_case_commitment_sha256s: frozenset[str]
+
+    registry: dict[
+        int,
+        tuple[weakref.ReferenceType[PrivacySourceProvenanceObservation], Binding],
+    ] = {}
+    lock = threading.RLock()
+    classification_value = _classification_value
+    model_content_sha256 = _model_content_sha256
+
+    def state_for(observation: PrivacySourceProvenanceObservation) -> Binding:
+        if type(observation) is not PrivacySourceProvenanceObservation:
+            raise ValueError("privacy source provenance observation is not trusted")
+        with lock:
+            registered = registry.get(id(observation))
+        if registered is None or registered[0]() is not observation:
+            raise ValueError("privacy source provenance observation was not issued in this process")
+        return registered[1]
+
+    def issue(
+        evidence: PrivacySourceProvenanceEvidence,
+        provider_visible_case_commitment_sha256s: frozenset[str],
+    ) -> PrivacySourceProvenanceObservation:
+        validated = PrivacySourceProvenanceEvidence.model_validate(
+            evidence.model_dump(mode="python"),
+            strict=True,
+        )
+        observation = object.__new__(PrivacySourceProvenanceObservation)
+        key = id(observation)
+        state = Binding(
+            evidence=validated,
+            evidence_sha256=validated.evidence_sha256,
+            evidence_content_sha256=model_content_sha256(validated),
+            provider_visible_case_commitment_sha256s=(provider_visible_case_commitment_sha256s),
+        )
+
+        def discard(reference: weakref.ReferenceType[PrivacySourceProvenanceObservation]) -> None:
+            with lock:
+                current = registry.get(key)
+                if current is not None and current[0] is reference:
+                    registry.pop(key, None)
+
+        reference = weakref.ref(observation, discard)
+        with lock:
+            registry[key] = (reference, state)
+        return observation
+
+    def prove_source(
+        discovery: DiscoveryResult,
+        *,
+        requested_classification: str,
+        source_sha256: str,
+        now: datetime,
+    ) -> PrivacySourceProvenanceObservation:
+        evidence, request_sha256s = source_builder(
+            discovery,
+            requested_classification=requested_classification,
+            source_sha256=source_sha256,
+            now=now,
+        )
+        return issue(evidence, request_sha256s)
+
+    def prove_release(
+        benchmark_suite: object,
+        *,
+        now: datetime,
+    ) -> PrivacySourceProvenanceObservation:
+        evidence, request_sha256s = release_builder(benchmark_suite, now=now)
+        return issue(evidence, request_sha256s)
+
+    def reobserve_retained(
+        current_observation: PrivacySourceProvenanceObservation,
+        retained_evidence: PrivacySourceProvenanceEvidence,
+    ) -> PrivacySourceProvenanceObservation:
+        """Reissue exact retained evidence only from a matching current live observation."""
+
+        current_binding = state_for(current_observation)
+        if type(retained_evidence) is not PrivacySourceProvenanceEvidence:
+            raise ValueError("retained source provenance evidence must be exact and typed")
+        try:
+            current = PrivacySourceProvenanceEvidence.model_validate(
+                current_binding.evidence.model_dump(mode="python"),
+                strict=True,
+            )
+            retained = PrivacySourceProvenanceEvidence.model_validate(
+                retained_evidence.model_dump(mode="python"),
+                strict=True,
+            )
+        except Exception:
+            raise ValueError("retained source provenance evidence is invalid") from None
+        if (
+            current.evidence_sha256 != current_binding.evidence_sha256
+            or model_content_sha256(current) != current_binding.evidence_content_sha256
+        ):
+            raise ValueError("current source provenance observation binding is inconsistent")
+        projection_exclusions = {"observed_at", "evidence_sha256"}
+        if (
+            retained != retained_evidence
+            or retained.observed_at > current.observed_at
+            or retained.model_dump(mode="json", exclude=projection_exclusions)
+            != current.model_dump(mode="json", exclude=projection_exclusions)
+        ):
+            raise ValueError("retained source provenance differs from the current live observation")
+        return issue(
+            retained,
+            current_binding.provider_visible_case_commitment_sha256s,
+        )
+
+    def validate(
+        observation: PrivacySourceProvenanceObservation,
+        *,
+        source_sha256: str,
+        source_classification: str,
+    ) -> PrivacySourceProvenanceEvidence:
+        classification = classification_value(source_classification)
+        if classification is None:
+            raise ValueError("privacy source classification must be typed")
+        if re.fullmatch(_SHA256_PATTERN, source_sha256) is None:
+            raise ValueError("privacy source inventory hash is invalid")
+        binding = state_for(observation)
+        try:
+            validated = PrivacySourceProvenanceEvidence.model_validate(
+                binding.evidence.model_dump(mode="python"),
+                strict=True,
+            )
+        except Exception:
+            raise ValueError(
+                "privacy source provenance observation binding is inconsistent"
+            ) from None
+        if (
+            validated.evidence_sha256 != binding.evidence_sha256
+            or model_content_sha256(validated) != binding.evidence_content_sha256
+            or validated.source_sha256 != source_sha256
+            or validated.source_classification != classification
+        ):
+            raise ValueError("privacy source provenance observation binding is inconsistent")
+        return validated
+
+    def validate_request(
+        observation: PrivacySourceProvenanceObservation,
+        *,
+        request_role: str,
+        system_prompt: str,
+        user_prompt: str,
+        response_model: type[BaseModel],
+        schema_name: str,
+        structured_output_mode: object,
+        context_package: object | None,
+    ) -> PrivacySourceProvenanceEvidence:
+        from mmaudit.benchmark.models import model_benchmark_provider_request_commitment
+        from mmaudit.models.output_modes import StructuredOutputMode
+        from mmaudit.privacy import PrivacySourceClassification
+
+        binding = state_for(observation)
+        evidence = validate(
+            observation,
+            source_sha256=binding.evidence.source_sha256,
+            source_classification=PrivacySourceClassification.SYNTHETIC_COMMITTED,
+        )
+        if type(structured_output_mode) is not StructuredOutputMode:
+            raise ValueError("release-pinned benchmark structured-output mode is invalid")
+        case_commitment_sha256, _request_commitment_sha256 = (
+            model_benchmark_provider_request_commitment(
+                request_role=request_role,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                structured_output_mode=structured_output_mode,
+                context_package=context_package,
+            )
+        )
+        if (
+            evidence.proof_kind != "RELEASE_PINNED_MODEL_BENCHMARK"
+            or len(binding.provider_visible_case_commitment_sha256s)
+            != evidence.provider_visible_case_count
+            or case_commitment_sha256 not in binding.provider_visible_case_commitment_sha256s
+        ):
+            raise ValueError(
+                "request is absent from the live release-pinned provider-visible "
+                "benchmark inventory"
+            )
+        return evidence
+
+    def evidence_for(
+        observation: PrivacySourceProvenanceObservation,
+    ) -> PrivacySourceProvenanceEvidence:
+        return state_for(observation).evidence
+
+    return (
+        prove_source,
+        prove_release,
+        reobserve_retained,
+        validate,
+        validate_request,
+        evidence_for,
+    )
 
 
 def _classification_value(value: object) -> PrivacySourceClassificationValue | None:
@@ -841,3 +1177,20 @@ def _json_default(value: object) -> str:
 
 def _model_content_sha256(value: BaseModel) -> str:
     return _canonical_sha256(value.model_dump(mode="json"))
+
+
+(
+    prove_privacy_source_classification,
+    prove_release_pinned_model_benchmark_source,
+    reobserve_retained_privacy_source_provenance,
+    validate_privacy_source_provenance_observation,
+    validate_release_pinned_model_benchmark_request,
+    _privacy_source_provenance_observation_evidence,
+) = _build_privacy_source_provenance_authority(
+    _build_privacy_source_classification_evidence,
+    _build_release_pinned_model_benchmark_evidence,
+)
+del _build_privacy_source_provenance_authority
+del _build_privacy_source_classification_evidence
+del _build_release_pinned_model_benchmark_evidence
+del _TRUSTED_REQUIRE_RELEASE_PINNED_MODEL_BENCHMARK

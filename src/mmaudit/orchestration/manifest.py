@@ -8,7 +8,8 @@ import math
 import os
 import stat
 import unicodedata
-from collections.abc import Iterable, Iterator
+from collections import Counter
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -23,6 +24,7 @@ from mmaudit.agents.verifier import (
     normalize_cross_examination_response,
     normalize_verification_response,
 )
+from mmaudit.artifact_limits import MAX_JSON_ARTIFACT_BYTES as _MAX_JSON_ARTIFACT_BYTES
 from mmaudit.config import (
     AuditConfig,
     AuditConfigOverrides,
@@ -60,6 +62,7 @@ from mmaudit.models.scheduler import (
     scheduler_canonical_sha256,
 )
 from mmaudit.models.schemas import (
+    AnalysisState,
     AuditProfile,
     AuditReport,
     AuditRunStatus,
@@ -98,13 +101,21 @@ from mmaudit.models.schemas import (
     ScannerRun,
     ScannerStatus,
     Severity,
+    SolidityGraphFactKind,
+    SolidityGraphKind,
+    SolidityGraphOccurrenceKind,
+    SolidityGraphSet,
+    SoliditySymbolIndex,
     StrictModel,
     VerificationBatch,
+    solidity_graph_occurrence_sha256,
+    validate_audit_model_selection_usage_custody,
 )
 from mmaudit.models.schemas import (
     ContextRequestEvidence as ProviderContextRequestEvidence,
 )
 from mmaudit.models.sharding import (
+    SolidityCoverageArtifact,
     SolidityGraphsArtifact,
     SolidityIndexArtifact,
     SolidityShardPolicy,
@@ -171,6 +182,7 @@ from mmaudit.solidity.sharding import (
 )
 
 if TYPE_CHECKING:
+    from mmaudit.models.policy_selection import AuditModelSelectionEvidenceBundle
     from mmaudit.models.qualification import (
         QualifiedReasoningRoleBinding,
         VerifiedProductionQualification,
@@ -184,10 +196,23 @@ _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _MAX_SCHEDULER_PRIVACY_EVIDENCE_BYTES = 1_048_576
 _MAX_MANIFEST_FILES = 100_000
 _MAX_MANIFEST_BYTES = 4 * 1024**3
-_MAX_JSON_ARTIFACT_BYTES = 100_000_000
 LANGUAGE_CAPABILITY_ARTIFACT_PATH = "language-capability.json"
+AUDIT_MODEL_SELECTION_EVIDENCE_PATH = "audit-model-selection-evidence.json"
 _CURRENT_SCANNER_REPLAY_AUTHORITY = frozenset({"gitleaks", "osv", "semgrep", "slither", "trivy"})
 SCHEDULER_RETAINED_JOURNAL_REFERENCE_FILENAME = "scheduler-journal-reference.json"
+AUDIT_MODEL_SELECTION_BINDING_IDS = frozenset(
+    {
+        "audit-model-selection/audit-scope",
+        "audit-model-selection/bundle",
+        "audit-model-selection/eligible-route-set",
+        "audit-model-selection/evidence-file",
+        "audit-model-selection/policy-exclusion-set",
+        "audit-model-selection/selected-model-set",
+        "audit-model-selection/selection",
+        "audit-model-selection/source",
+        "audit-model-selection/technical-route-set",
+    }
+)
 
 
 class ManifestFileBinding(StrictModel):
@@ -387,6 +412,15 @@ class RunEvidenceManifest(StrictModel):
         artifact_paths = [binding.path for binding in self.artifacts]
         if artifact_paths != sorted(set(artifact_paths)):
             raise ValueError("manifest artifact paths must be unique and sorted")
+        model_binding_ids = {binding.identifier for binding in self.bindings.models}
+        selection_binding_ids = model_binding_ids & AUDIT_MODEL_SELECTION_BINDING_IDS
+        selection_artifact_present = AUDIT_MODEL_SELECTION_EVIDENCE_PATH in artifact_paths
+        if selection_binding_ids and selection_binding_ids != AUDIT_MODEL_SELECTION_BINDING_IDS:
+            raise ValueError("manifest audit model-selection bindings are incomplete")
+        if selection_artifact_present != bool(selection_binding_ids):
+            raise ValueError(
+                "manifest audit model-selection artifact and typed bindings must be retained together"
+            )
         if self.schema_version == "1.2":
             missing_report_artifacts = sorted(
                 (
@@ -693,6 +727,11 @@ def _build_run_evidence_manifest(
         if qualification_path.exists()
         else None
     )
+    audit_model_selection_evidence = _validate_audit_model_selection_evidence(
+        root=root,
+        report=report,
+        qualification_runtime=qualification_runtime,
+    )
     scheduler_path = root / "scheduler-state.json"
     if (
         sealed_verification_manifest is None
@@ -730,6 +769,10 @@ def _build_run_evidence_manifest(
             effective_config,
             report,
             qualification_runtime=qualification_runtime,
+            audit_model_selection_evidence=audit_model_selection_evidence,
+            audit_model_selection_root=(
+                root if audit_model_selection_evidence is not None else None
+            ),
             production_qualification=production_qualification,
             sealed_verification_bindings=(
                 sealed_verification_manifest.bindings.models
@@ -1920,6 +1963,11 @@ def _validate_report_artifact_consistency(
     scanner_results = _read_json_artifact(root, "scanner-results.json")
     if scanner_results.get("runs") != [run.model_dump(mode="json") for run in report.scanner_runs]:
         raise ValueError("scanner-results.json differs from the final report")
+    solidity_coverage = SolidityCoverageArtifact.model_validate(
+        _read_json_artifact(root, "solidity-coverage.json")
+    )
+    if solidity_coverage.coverage != report.solidity_coverage:
+        raise ValueError("persisted Solidity coverage differs from the final report")
     if report.schema_version == "1.2":
         solidity_metadata = report.metadata.get("solidity")
         if not isinstance(solidity_metadata, dict):
@@ -2760,9 +2808,12 @@ def validate_solidity_shard_artifacts(
     index_artifact = SolidityIndexArtifact.model_validate(
         _read_json_artifact(root, "solidity-index.json")
     )
-    graphs_artifact = SolidityGraphsArtifact.model_validate(
-        _read_json_artifact(root, "solidity-graphs.json")
-    )
+    with _open_json_artifact_observation(
+        root,
+        "solidity-graphs.json",
+        payload_max_bytes=_solidity_graph_payload_byte_limit,
+    ) as graphs_payload:
+        graphs_artifact = SolidityGraphsArtifact.model_validate(graphs_payload)
     shards_artifact = SolidityShardsArtifact.model_validate(
         _read_json_artifact(root, "solidity-shards.json")
     )
@@ -2777,16 +2828,66 @@ def validate_solidity_shard_artifacts(
             len(index_artifact.index.fallback_sources) if index_artifact.index is not None else 0
         ),
     }
+    retained_edge_occurrences, retained_fact_occurrences = (
+        _solidity_graph_retained_occurrence_counts(graphs_artifact.graphs)
+    )
+    retained_edge_occurrence_total = sum(retained_edge_occurrences.values())
+    omitted_edge_occurrence_total = (
+        sum(item.omitted_count for item in graphs_artifact.graphs.edge_omissions)
+        if graphs_artifact.graphs is not None
+        else 0
+    )
+    omitted_fact_occurrences = (
+        {item.fact_kind.value: item.omitted_count for item in graphs_artifact.graphs.fact_omissions}
+        if graphs_artifact.graphs is not None
+        else {}
+    )
     expected_graph_summary = {
         "edges": len(graphs_artifact.graphs.edges) if graphs_artifact.graphs is not None else 0,
         "warnings": (
             len(graphs_artifact.graphs.warnings) if graphs_artifact.graphs is not None else 0
+        ),
+        **(
+            {
+                "generation_complete": False,
+                "retained_edge_occurrences": retained_edge_occurrence_total,
+                "candidate_edges": (retained_edge_occurrence_total + omitted_edge_occurrence_total),
+                "omitted_edges": omitted_edge_occurrence_total,
+                "omission_evidence_sha256s": sorted(
+                    item.evidence_sha256 for item in graphs_artifact.graphs.edge_omissions
+                ),
+                "retained_facts": {
+                    SolidityGraphFactKind.GRAPH_NODE.value: len(graphs_artifact.graphs.nodes),
+                    SolidityGraphFactKind.STORAGE_ENTRY.value: len(
+                        graphs_artifact.graphs.storage_layout
+                    ),
+                    SolidityGraphFactKind.WARNING.value: len(graphs_artifact.graphs.warnings),
+                },
+                "retained_fact_occurrences": retained_fact_occurrences,
+                "candidate_facts": {
+                    kind.value: retained_fact_occurrences[kind.value]
+                    + omitted_fact_occurrences.get(kind.value, 0)
+                    for kind in SolidityGraphFactKind
+                },
+                "omitted_facts": omitted_fact_occurrences,
+                "fact_omission_evidence_sha256s": sorted(
+                    item.evidence_sha256 for item in graphs_artifact.graphs.fact_omissions
+                ),
+                "artifact_byte_limit": graphs_artifact.graphs.artifact_byte_limit,
+            }
+            if graphs_artifact.graphs is not None and not graphs_artifact.graphs.generation_complete
+            else {}
         ),
     }
     if solidity_metadata.get("index_summary") != expected_index_summary:
         raise ValueError("Solidity index report summary differs from its typed artifact")
     if solidity_metadata.get("graph_summary") != expected_graph_summary:
         raise ValueError("Solidity graph report summary differs from its typed artifact")
+    _validate_solidity_graph_report_coverage(
+        report=report,
+        index=index_artifact.index,
+        graphs=graphs_artifact.graphs,
+    )
     inventory = shards_artifact.inventory
     if inventory is None:
         if shard_summary is not None:
@@ -2818,6 +2919,174 @@ def validate_solidity_shard_artifacts(
         expected_policy=SolidityShardPolicy.build(),
         report_binding=report_binding,
     )
+
+
+def _solidity_graph_retained_occurrence_counts(
+    graphs: SolidityGraphSet | None,
+) -> tuple[dict[str, int], dict[str, int]]:
+    """Return authoritative edge and fact occurrence counts for a graph artifact."""
+
+    if graphs is None:
+        return {}, {}
+    occurrence_counts = {
+        (item.subject_kind, item.subject_sha256): item.occurrence_count
+        for item in graphs.retained_occurrences
+    }
+    edge_counts = {kind.value: 0 for kind in SolidityGraphKind}
+    for edge in graphs.edges:
+        subject_sha256 = solidity_graph_occurrence_sha256(
+            SolidityGraphOccurrenceKind.EDGE,
+            edge,
+        )
+        edge_counts[edge.graph.value] += occurrence_counts[
+            (SolidityGraphOccurrenceKind.EDGE, subject_sha256)
+        ]
+    fact_counts = {
+        kind.value: sum(
+            item.occurrence_count
+            for item in graphs.retained_occurrences
+            if item.subject_kind.value == kind.value
+        )
+        for kind in SolidityGraphFactKind
+    }
+    return edge_counts, fact_counts
+
+
+def _validate_solidity_graph_report_coverage(
+    *,
+    report: AuditReport,
+    index: SoliditySymbolIndex | None,
+    graphs: SolidityGraphSet | None,
+) -> None:
+    """Bind final-report graph accounting to exact retained and omitted graph evidence."""
+
+    coverage = report.solidity_coverage
+    if coverage is None:
+        if report.schema_version == "1.2" and graphs is not None:
+            raise ValueError("current Solidity graph artifact lacks report coverage evidence")
+        return
+
+    graph_evidence = (
+        graphs
+        if graphs is not None
+        and (
+            graphs.nodes
+            or graphs.edges
+            or graphs.storage_layout
+            or graphs.warnings
+            or graphs.edge_omissions
+            or graphs.fact_omissions
+            or (
+                index is not None
+                and (
+                    index.projects
+                    or index.entities
+                    or index.ast_sources
+                    or index.fallback_sources
+                    or index.warnings
+                )
+            )
+        )
+        else None
+    )
+    if graph_evidence is None:
+        expected_retained: dict[str, int] = {}
+        expected_candidates: dict[str, int] = {}
+        expected_omitted: dict[str, int] = {}
+        expected_retained_occurrences: dict[str, int] = {}
+        expected_omission_sha256s: list[str] = []
+        expected_state = AnalysisState.NOT_ANALYZED
+    else:
+        expected_retained = {
+            kind.value: sum(edge.graph is kind for edge in graph_evidence.edges)
+            for kind in SolidityGraphKind
+        }
+        if graph_evidence.coverage != expected_retained:
+            raise ValueError("Solidity graph retained counts differ from retained edge evidence")
+        edge_omissions = {
+            omission.graph.value: omission for omission in graph_evidence.edge_omissions
+        }
+        expected_omitted = {
+            kind: omission.omitted_count for kind, omission in edge_omissions.items()
+        }
+        expected_retained_occurrences, expected_fact_retained_occurrences = (
+            _solidity_graph_retained_occurrence_counts(graph_evidence)
+        )
+        expected_candidates = {
+            kind.value: expected_retained_occurrences[kind.value]
+            + expected_omitted.get(kind.value, 0)
+            for kind in SolidityGraphKind
+        }
+        expected_omission_sha256s = sorted(
+            omission.evidence_sha256 for omission in graph_evidence.edge_omissions
+        )
+        expected_fact_retained = {
+            SolidityGraphFactKind.GRAPH_NODE.value: len(graph_evidence.nodes),
+            SolidityGraphFactKind.STORAGE_ENTRY.value: len(graph_evidence.storage_layout),
+            SolidityGraphFactKind.WARNING.value: len(graph_evidence.warnings),
+        }
+        fact_omissions = {
+            omission.fact_kind.value: omission for omission in graph_evidence.fact_omissions
+        }
+        expected_fact_omitted = {
+            kind: omission.omitted_count for kind, omission in fact_omissions.items()
+        }
+        expected_fact_candidates = {
+            kind.value: expected_fact_retained_occurrences[kind.value]
+            + expected_fact_omitted.get(kind.value, 0)
+            for kind in SolidityGraphFactKind
+        }
+        expected_fact_omission_sha256s = sorted(
+            omission.evidence_sha256 for omission in graph_evidence.fact_omissions
+        )
+        if not graph_evidence.generation_complete:
+            expected_state = AnalysisState.ATTEMPTED_FAILED
+        elif index is not None and index.fallback_sources:
+            expected_state = AnalysisState.FALLBACK_PARSER
+        else:
+            expected_state = AnalysisState.DETERMINISTIC
+
+    if coverage.graph_edge_counts != expected_retained:
+        raise ValueError("Solidity report retained graph counts differ from graph evidence")
+    if coverage.graph_retained_edge_occurrence_counts != expected_retained_occurrences:
+        raise ValueError("Solidity report retained graph occurrences differ from graph evidence")
+    if coverage.graph_omitted_edge_counts != expected_omitted:
+        raise ValueError("Solidity report omitted graph counts differ from graph evidence")
+    if coverage.graph_candidate_edge_counts != expected_candidates:
+        raise ValueError("Solidity report candidate graph counts differ from graph evidence")
+    if coverage.graph_omission_evidence_sha256s != expected_omission_sha256s:
+        raise ValueError("Solidity report graph omission hashes differ from graph evidence")
+    if graph_evidence is None:
+        expected_fact_retained = {}
+        expected_fact_retained_occurrences = {}
+        expected_fact_candidates = {}
+        expected_fact_omitted = {}
+        expected_fact_omission_sha256s = []
+        expected_node_counts: dict[str, int] = {}
+        expected_warnings: list[str] = []
+    else:
+        expected_node_counts = dict(
+            sorted(Counter(node.kind.value for node in graph_evidence.nodes).items())
+        )
+        expected_warnings = list(graph_evidence.warnings)
+    if coverage.graph_node_counts != expected_node_counts:
+        raise ValueError("Solidity report retained graph-node counts differ from graph evidence")
+    if coverage.graph_warnings != expected_warnings:
+        raise ValueError("Solidity report graph warnings differ from graph evidence")
+    if coverage.graph_fact_retained_counts != expected_fact_retained:
+        raise ValueError("Solidity report retained graph-fact counts differ from graph evidence")
+    if coverage.graph_fact_retained_occurrence_counts != expected_fact_retained_occurrences:
+        raise ValueError(
+            "Solidity report retained graph-fact occurrences differ from graph evidence"
+        )
+    if coverage.graph_fact_candidate_counts != expected_fact_candidates:
+        raise ValueError("Solidity report candidate graph-fact counts differ from graph evidence")
+    if coverage.graph_fact_omitted_counts != expected_fact_omitted:
+        raise ValueError("Solidity report omitted graph-fact counts differ from graph evidence")
+    if coverage.graph_fact_omission_evidence_sha256s != expected_fact_omission_sha256s:
+        raise ValueError("Solidity report graph-fact omission hashes differ from graph evidence")
+    if coverage.graph_analysis_state is not expected_state:
+        raise ValueError("Solidity report graph analysis state differs from graph evidence")
 
 
 def validate_scheduler_artifact(
@@ -4690,6 +4959,13 @@ def validate_manifest_artifacts(
                 if qualification_path.exists()
                 else None
             )
+            _validate_audit_model_selection_evidence(
+                root=root,
+                report=report,
+                qualification_runtime=qualification_runtime,
+                expected_binding=expected.get(AUDIT_MODEL_SELECTION_EVIDENCE_PATH),
+                expected_manifest_bindings=manifest.bindings.models,
+            )
             scheduler_artifact = validate_scheduler_artifact(
                 root,
                 report,
@@ -4705,6 +4981,13 @@ def validate_manifest_artifacts(
                 effective_config,
             )
         else:
+            _validate_audit_model_selection_evidence(
+                root=root,
+                report=report,
+                qualification_runtime=None,
+                expected_binding=expected.get(AUDIT_MODEL_SELECTION_EVIDENCE_PATH),
+                expected_manifest_bindings=manifest.bindings.models,
+            )
             scheduler_artifact = validate_scheduler_artifact(
                 root,
                 report,
@@ -4810,11 +5093,273 @@ def _prompt_bindings(report: AuditReport) -> list[ManifestHashBinding]:
     return sorted(bindings, key=lambda item: item.identifier)
 
 
+def _audit_model_selection_file_binding(root: Path) -> ManifestFileBinding:
+    """Return exact byte custody for the canonical durable selection bundle."""
+
+    sha256, size = _file_sha256(
+        root / AUDIT_MODEL_SELECTION_EVIDENCE_PATH,
+        max_bytes=_MAX_JSON_ARTIFACT_BYTES,
+    )
+    return ManifestFileBinding(
+        path=AUDIT_MODEL_SELECTION_EVIDENCE_PATH,
+        sha256=sha256,
+        size=size,
+    )
+
+
+def _audit_model_selection_bindings(
+    *,
+    root: Path,
+    evidence: AuditModelSelectionEvidenceBundle,
+) -> list[ManifestHashBinding]:
+    """Project comparison-required manifest joins without minting authority."""
+
+    selection = evidence.selection
+    file_binding = _audit_model_selection_file_binding(root)
+    reasons = sorted(
+        {reason.value for exclusion in selection.policy_exclusions for reason in exclusion.reasons}
+    )
+    common = {
+        "authority": "structural_hash_custody",
+        "external_comparison_required": "true",
+        "technical_tier_a_models": str(len(selection.technical_model_ids)),
+        "policy_selected_models": str(len(selection.selected_model_ids)),
+        "policy_excluded_models": str(len(selection.policy_excluded_model_ids)),
+    }
+    values = {
+        "audit-model-selection/audit-scope": (
+            selection.audit_scope_sha256,
+            {**common, "kind": "audit_scope"},
+        ),
+        "audit-model-selection/bundle": (
+            evidence.bundle_sha256,
+            {**common, "kind": "non_authorizing_evidence_bundle"},
+        ),
+        "audit-model-selection/eligible-route-set": (
+            selection.eligible_route_set_sha256,
+            {**common, "kind": "policy_eligible_route_set"},
+        ),
+        "audit-model-selection/evidence-file": (
+            file_binding.sha256,
+            {
+                **common,
+                "kind": "artifact_bytes",
+                "path": file_binding.path,
+                "size": str(file_binding.size),
+            },
+        ),
+        "audit-model-selection/policy-exclusion-set": (
+            selection.policy_exclusion_set_sha256,
+            {
+                **common,
+                "kind": "typed_policy_exclusion_set",
+                "reasons": ",".join(reasons) or "none",
+            },
+        ),
+        "audit-model-selection/selected-model-set": (
+            selection.selected_model_set_sha256,
+            {**common, "kind": "policy_selected_technical_model_set"},
+        ),
+        "audit-model-selection/selection": (
+            selection.selection_sha256,
+            {**common, "kind": "non_authorizing_audit_selection"},
+        ),
+        "audit-model-selection/source": (
+            selection.source_sha256,
+            {**common, "kind": "audited_source"},
+        ),
+        "audit-model-selection/technical-route-set": (
+            selection.technical_route_set_sha256,
+            {**common, "kind": "technical_tier_a_route_set"},
+        ),
+    }
+    return [
+        ManifestHashBinding(identifier=identifier, sha256=sha256, details=details)
+        for identifier, (sha256, details) in sorted(values.items())
+    ]
+
+
+def _validate_audit_model_selection_technical_join(
+    *,
+    evidence: AuditModelSelectionEvidenceBundle,
+    qualification: ProductionQualificationValidation | None,
+) -> None:
+    """Join policy-selected evidence to the existing technical runtime projection."""
+
+    if qualification is None or not qualification.valid:
+        raise ValueError(
+            "audit model selection lacks valid technical qualification runtime evidence"
+        )
+    selection = evidence.selection
+    expected_hashes = {
+        "technical qualification capability": qualification.qualification_capability_sha256,
+        "technical qualification artifact": qualification.qualification_artifact_sha256,
+        "technical qualification verification": (qualification.qualification_verification_sha256),
+        "technical production selection": qualification.production_selection_sha256,
+        "technical selection verification": qualification.selection_verification_sha256,
+        "technical production configuration": (qualification.production_effective_config_sha256),
+        "technical candidate registry": qualification.candidate_registry_sha256,
+        "technical qualification policy": qualification.qualification_policy_sha256,
+        "technical release observation": qualification.release_observation_sha256,
+    }
+    observed_hashes = {
+        "technical qualification capability": (selection.technical_qualification_capability_sha256),
+        "technical qualification artifact": selection.technical_qualification_artifact_sha256,
+        "technical qualification verification": (
+            selection.technical_qualification_verification_sha256
+        ),
+        "technical production selection": selection.technical_production_selection_sha256,
+        "technical selection verification": selection.technical_selection_verification_sha256,
+        "technical production configuration": (
+            selection.technical_production_effective_config_sha256
+        ),
+        "technical candidate registry": selection.technical_candidate_registry_sha256,
+        "technical qualification policy": selection.technical_qualification_policy_sha256,
+        "technical release observation": selection.technical_release_observation_sha256,
+    }
+    if any(
+        expected is None or expected != observed
+        for label, expected in expected_hashes.items()
+        for observed in (observed_hashes[label],)
+    ):
+        raise ValueError(
+            "audit model selection differs from technical qualification runtime evidence"
+        )
+    if selection.technical_model_ids != qualification.qualified_model_ids:
+        raise ValueError(
+            "audit selection technical Tier-A population differs from runtime qualification"
+        )
+    runtime_models = {model.exact_model_id: model for model in qualification.model_bindings}
+    common_fields = (
+        "exact_model_id",
+        "canonical_model_slug",
+        "root_lineage",
+        "approved_provider_endpoint",
+        "approved_provider_name",
+        "endpoint_snapshot_sha256",
+        "output_capability_sha256",
+        "model_metadata_snapshot_sha256",
+        "pricing_snapshot_sha256",
+        "structured_output_mode",
+        "approved_roles",
+        "overall_score",
+        "quality_measurement_sha256",
+        "qualification_result_sha256",
+        "benchmark_report_sha256",
+        "benchmark_verification_sha256",
+        "fresh_benchmark_evidence_sha256",
+        "reasoning_bindings",
+        "evaluated_at",
+        "expires_at",
+        "benchmark_case_count",
+    )
+    for selected in selection.models:
+        runtime = runtime_models.get(selected.exact_model_id)
+        if runtime is None or any(
+            getattr(selected, field_name) != getattr(runtime, field_name)
+            for field_name in common_fields
+        ):
+            raise ValueError(
+                "policy-selected model differs from technical qualification runtime evidence"
+            )
+    for exclusion in selection.policy_exclusions:
+        runtime = runtime_models.get(exclusion.route.exact_model_id)
+        if runtime is None or exclusion.route.identity != (
+            runtime.exact_model_id,
+            runtime.approved_provider_name,
+            runtime.approved_provider_endpoint,
+        ):
+            raise ValueError(
+                "policy-excluded route differs from technical qualification runtime evidence"
+            )
+
+
+def _validate_audit_model_selection_evidence(
+    *,
+    root: Path,
+    report: AuditReport,
+    qualification_runtime: dict[str, Any] | None,
+    expected_binding: ManifestFileBinding | None = None,
+    expected_manifest_bindings: list[ManifestHashBinding] | None = None,
+) -> AuditModelSelectionEvidenceBundle | None:
+    """Validate structural/hash custody while explicitly withholding authority."""
+
+    from mmaudit.models.policy_selection import AuditModelSelectionEvidenceBundle
+
+    path = root / AUDIT_MODEL_SELECTION_EVIDENCE_PATH
+    present = path.exists() or path.is_symlink() or path.is_junction()
+    required = report.audit_model_selection is not None
+    if present != required:
+        raise ValueError("audit model-selection evidence presence differs from the final report")
+    if not present:
+        if expected_manifest_bindings is not None and any(
+            binding.identifier in AUDIT_MODEL_SELECTION_BINDING_IDS
+            for binding in expected_manifest_bindings
+        ):
+            raise ValueError("manifest retains audit model-selection bindings without evidence")
+        return None
+    raw = _read_json_artifact(
+        root,
+        AUDIT_MODEL_SELECTION_EVIDENCE_PATH,
+        expected_binding=expected_binding,
+    )
+    evidence = AuditModelSelectionEvidenceBundle.model_validate_json(
+        json.dumps(
+            raw,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ),
+        strict=True,
+    )
+    if evidence.selection != report.audit_model_selection:
+        raise ValueError("audit model-selection bundle differs from the final report")
+    source_projection = sorted(
+        (
+            ManifestFileBinding(path=item.path, sha256=item.sha256, size=item.size)
+            for item in report.repository.files
+        ),
+        key=lambda item: item.path,
+    )
+    if evidence.selection.source_sha256 != canonical_sha256(
+        [item.model_dump(mode="json") for item in source_projection]
+    ):
+        raise ValueError("audit model selection differs from the final audited source")
+    validate_audit_model_selection_usage_custody(
+        audit_model_selection=evidence.selection,
+        usage=report.usage,
+        expected_bundle_sha256=evidence.bundle_sha256,
+    )
+    qualification = _qualification_validation(qualification_runtime)
+    _validate_audit_model_selection_technical_join(
+        evidence=evidence,
+        qualification=qualification,
+    )
+    if expected_manifest_bindings is not None:
+        actual = {
+            binding.identifier: binding
+            for binding in expected_manifest_bindings
+            if binding.identifier in AUDIT_MODEL_SELECTION_BINDING_IDS
+        }
+        expected = {
+            binding.identifier: binding
+            for binding in _audit_model_selection_bindings(root=root, evidence=evidence)
+        }
+        if actual != expected:
+            raise ValueError(
+                "manifest audit model-selection bindings differ from structural custody"
+            )
+    return evidence
+
+
 def _model_bindings(
     config: AuditConfig,
     report: AuditReport,
     *,
     qualification_runtime: dict[str, Any] | None,
+    audit_model_selection_evidence: AuditModelSelectionEvidenceBundle | None = None,
+    audit_model_selection_root: Path | None = None,
     production_qualification: VerifiedProductionQualification | None = None,
     sealed_verification_bindings: list[ManifestHashBinding] | None = None,
 ) -> list[ManifestHashBinding]:
@@ -4992,6 +5537,18 @@ def _model_bindings(
             opaque_authority_sha256=issuance_authority_sha256,
         )
     )
+    if (audit_model_selection_evidence is None) != (audit_model_selection_root is None):
+        raise ValueError(
+            "audit model-selection evidence and artifact root must be supplied together"
+        )
+    if audit_model_selection_evidence is not None:
+        assert audit_model_selection_root is not None
+        bindings.extend(
+            _audit_model_selection_bindings(
+                root=audit_model_selection_root,
+                evidence=audit_model_selection_evidence,
+            )
+        )
     return sorted(bindings, key=lambda item: item.identifier)
 
 
@@ -6081,11 +6638,13 @@ def _read_json_artifact(
     name: str,
     *,
     expected_binding: ManifestFileBinding | None = None,
+    max_bytes: int = _MAX_JSON_ARTIFACT_BYTES,
 ) -> dict[str, Any]:
     with _open_json_artifact_observation(
         run_dir,
         name,
         expected_binding=expected_binding,
+        max_bytes=max_bytes,
     ) as payload:
         return payload
 
@@ -6097,6 +6656,7 @@ def _open_json_artifact_observation(
     *,
     expected_binding: ManifestFileBinding | None = None,
     max_bytes: int = _MAX_JSON_ARTIFACT_BYTES,
+    payload_max_bytes: Callable[[dict[str, Any]], int] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Hold one stable no-follow artifact descriptor across semantic validation."""
 
@@ -6157,6 +6717,16 @@ def _open_json_artifact_observation(
             ):
                 raise ValueError(f"run JSON artifact differs from its sealed binding: {name}")
             payload = _parse_json_artifact_content(content, name=name)
+            if payload_max_bytes is not None:
+                declared_max_bytes = payload_max_bytes(payload)
+                if (
+                    type(declared_max_bytes) is not int
+                    or declared_max_bytes <= 0
+                    or declared_max_bytes > max_bytes
+                ):
+                    raise ValueError(f"run JSON artifact declares an invalid byte limit: {name}")
+                if size > declared_max_bytes:
+                    raise ValueError(f"run JSON artifact exceeds its declared byte limit: {name}")
         except OSError as exc:
             raise ValueError(f"run JSON artifact could not be read safely: {name}") from exc
 
@@ -6187,6 +6757,18 @@ def _open_json_artifact_observation(
                 raise ValueError(f"run JSON artifact changed during semantic validation: {name}")
     finally:
         os.close(descriptor)
+
+
+def _solidity_graph_payload_byte_limit(payload: dict[str, Any]) -> int:
+    """Extract the declared graph limit before one full typed validation."""
+
+    graphs = payload.get("graphs")
+    if graphs is None:
+        return _MAX_JSON_ARTIFACT_BYTES
+    if not isinstance(graphs, dict):
+        return 0
+    limit = graphs.get("artifact_byte_limit", _MAX_JSON_ARTIFACT_BYTES)
+    return limit if type(limit) is int else 0
 
 
 def _parse_json_artifact_content(content: bytes, *, name: str) -> dict[str, Any]:

@@ -12,6 +12,7 @@ from typing import Any, Literal, Self, cast
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from mmaudit.models.schemas import (
+    SolidityCoverage,
     SolidityEntityKind,
     SolidityGraphKind,
     SolidityGraphSet,
@@ -568,7 +569,7 @@ class SolidityShardCoverage(StrictModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    complete: Literal[True] = True
+    complete: bool = True
     source_units_total: int = Field(gt=0)
     source_units_covered: int = Field(gt=0)
     source_bytes_total: int = Field(ge=0)
@@ -577,10 +578,20 @@ class SolidityShardCoverage(StrictModel):
     entities_covered: int = Field(ge=0)
     graph_nodes_total: int = Field(ge=0)
     graph_nodes_covered: int = Field(ge=0)
+    graph_node_candidate_occurrences_total: int = Field(ge=0)
+    graph_node_candidate_occurrences_covered: int = Field(ge=0)
     graph_edges_total: int = Field(ge=0)
     graph_edges_covered: int = Field(ge=0)
+    graph_edge_candidate_occurrences_total: int = Field(ge=0)
+    graph_edge_candidate_occurrences_covered: int = Field(ge=0)
     storage_entries_total: int = Field(ge=0)
     storage_entries_covered: int = Field(ge=0)
+    storage_entry_candidate_occurrences_total: int = Field(ge=0)
+    storage_entry_candidate_occurrences_covered: int = Field(ge=0)
+    graph_warnings_total: int = Field(ge=0)
+    graph_warnings_covered: int = Field(ge=0)
+    graph_warning_candidate_occurrences_total: int = Field(ge=0)
+    graph_warning_candidate_occurrences_covered: int = Field(ge=0)
 
     @model_validator(mode="after")
     def all_denominators_are_exact(self) -> Self:
@@ -589,11 +600,33 @@ class SolidityShardCoverage(StrictModel):
             (self.source_bytes_covered, self.source_bytes_total),
             (self.entities_covered, self.entities_total),
             (self.graph_nodes_covered, self.graph_nodes_total),
+            (
+                self.graph_node_candidate_occurrences_covered,
+                self.graph_node_candidate_occurrences_total,
+            ),
             (self.graph_edges_covered, self.graph_edges_total),
+            (
+                self.graph_edge_candidate_occurrences_covered,
+                self.graph_edge_candidate_occurrences_total,
+            ),
             (self.storage_entries_covered, self.storage_entries_total),
+            (
+                self.storage_entry_candidate_occurrences_covered,
+                self.storage_entry_candidate_occurrences_total,
+            ),
+            (self.graph_warnings_covered, self.graph_warnings_total),
+            (
+                self.graph_warning_candidate_occurrences_covered,
+                self.graph_warning_candidate_occurrences_total,
+            ),
         )
-        if any(covered != total for covered, total in pairs):
+        if any(covered > total for covered, total in pairs):
+            raise ValueError("Solidity shard covered counts cannot exceed their denominators")
+        has_gap = any(covered != total for covered, total in pairs)
+        if self.complete and has_gap:
             raise ValueError("Solidity shard coverage cannot claim complete with a gap")
+        if not self.complete and not has_gap:
+            raise ValueError("partial Solidity shard coverage requires a measured gap")
         return self
 
 
@@ -606,7 +639,7 @@ class SolidityShardInventory(StrictModel):
     algorithm_version: Literal["mmaudit.solidity-file-shards.v1"] = (
         "mmaudit.solidity-file-shards.v1"
     )
-    evidence_authority: Literal["comparison_required"] = "comparison_required"
+    evidence_authority: Literal["comparison_required"]
     git_commit: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
     policy: SolidityShardPolicy
     source_inventory_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -684,6 +717,7 @@ class SolidityShardInventory(StrictModel):
         self._require_boundary_evidence(shards)
         self._require_exact_semantics(shards, source_owner=source_owner)
         expected_coverage = SolidityShardCoverage(
+            complete=self.coverage.complete,
             source_units_total=len(self.source_units),
             source_units_covered=len(source_owner),
             source_bytes_total=sum(item.utf8_bytes for item in self.source_units),
@@ -692,11 +726,37 @@ class SolidityShardInventory(StrictModel):
             entities_covered=sum(len(shard.primary_entity_ids) for shard in self.shards),
             graph_nodes_total=len(self.graph_node_ids),
             graph_nodes_covered=sum(len(shard.primary_graph_node_ids) for shard in self.shards),
+            graph_node_candidate_occurrences_total=(
+                self.coverage.graph_node_candidate_occurrences_total
+            ),
+            graph_node_candidate_occurrences_covered=(
+                self.coverage.graph_node_candidate_occurrences_covered
+            ),
             graph_edges_total=len(self.graph_edge_ids),
             graph_edges_covered=sum(len(shard.primary_graph_edge_ids) for shard in self.shards),
+            graph_edge_candidate_occurrences_total=(
+                self.coverage.graph_edge_candidate_occurrences_total
+            ),
+            graph_edge_candidate_occurrences_covered=(
+                self.coverage.graph_edge_candidate_occurrences_covered
+            ),
             storage_entries_total=len(self.storage_entry_ids),
             storage_entries_covered=sum(
                 len(shard.primary_storage_entry_ids) for shard in self.shards
+            ),
+            storage_entry_candidate_occurrences_total=(
+                self.coverage.storage_entry_candidate_occurrences_total
+            ),
+            storage_entry_candidate_occurrences_covered=(
+                self.coverage.storage_entry_candidate_occurrences_covered
+            ),
+            graph_warnings_total=self.coverage.graph_warnings_total,
+            graph_warnings_covered=self.coverage.graph_warnings_covered,
+            graph_warning_candidate_occurrences_total=(
+                self.coverage.graph_warning_candidate_occurrences_total
+            ),
+            graph_warning_candidate_occurrences_covered=(
+                self.coverage.graph_warning_candidate_occurrences_covered
             ),
         )
         if self.coverage != expected_coverage:
@@ -1237,6 +1297,16 @@ class SolidityGraphsArtifact(StrictModel):
 
     schema_version: Literal["1.0"] = "1.0"
     graphs: SolidityGraphSet | None
+
+
+class SolidityCoverageArtifact(StrictModel):
+    """Typed envelope matching the emitted ``solidity-coverage.json`` artifact."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    evidence_authority: Literal["comparison_required"]
+    coverage: SolidityCoverage | None
 
 
 class SolidityShardReportBinding(StrictModel):

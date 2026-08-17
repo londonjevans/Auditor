@@ -1,0 +1,221 @@
+{
+  "$defs": {
+    "ModelPolicyEligibilityAuthorityStatement": {
+      "additionalProperties": false,
+      "description": "Canonical domain-separated statement signed by the policy operator.",
+      "properties": {
+        "artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Artifact Sha256",
+          "type": "string"
+        },
+        "audit_context_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Context Sha256",
+          "type": "string"
+        },
+        "candidate_route_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 512,
+          "minItems": 1,
+          "title": "Candidate Route Sha256S",
+          "type": "array"
+        },
+        "client_constraints_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Client Constraints Sha256",
+          "type": "string"
+        },
+        "eligible_model_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 512,
+          "minItems": 1,
+          "title": "Eligible Model Ids",
+          "type": "array"
+        },
+        "eligible_route_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Eligible Route Set Sha256",
+          "type": "string"
+        },
+        "eligible_route_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 512,
+          "minItems": 1,
+          "title": "Eligible Route Sha256S",
+          "type": "array"
+        },
+        "evaluation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evaluation Sha256",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "general_production_authorized": {
+          "const": false,
+          "default": false,
+          "title": "General Production Authorized",
+          "type": "boolean"
+        },
+        "initial_source_observation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Initial Source Observation Sha256",
+          "type": "string"
+        },
+        "operator_decision_authenticity": {
+          "const": "SSHSIG_ED25519_VERIFIED",
+          "default": "SSHSIG_ED25519_VERIFIED",
+          "title": "Operator Decision Authenticity",
+          "type": "string"
+        },
+        "operator_principal": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._@+-]{0,127}$",
+          "title": "Operator Principal",
+          "type": "string"
+        },
+        "policy_selection_authorized": {
+          "const": true,
+          "default": true,
+          "title": "Policy Selection Authorized",
+          "type": "boolean"
+        },
+        "purpose": {
+          "const": "POLICY_SELECTION_ONLY",
+          "default": "POLICY_SELECTION_ONLY",
+          "title": "Purpose",
+          "type": "string"
+        },
+        "qualification_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Qualification Authorized",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "signature_namespace": {
+          "const": "mmaudit-model-policy-eligibility-v1",
+          "default": "mmaudit-model-policy-eligibility-v1",
+          "title": "Signature Namespace",
+          "type": "string"
+        },
+        "signed_at": {
+          "format": "date-time",
+          "title": "Signed At",
+          "type": "string"
+        },
+        "source_commitment_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Commitment Set Sha256",
+          "type": "string"
+        },
+        "source_egress_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Source Egress Authorized",
+          "type": "boolean"
+        },
+        "source_observation_expires_at": {
+          "format": "date-time",
+          "title": "Source Observation Expires At",
+          "type": "string"
+        },
+        "statement_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Statement Sha256",
+          "type": "string"
+        },
+        "technical_route_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Technical Route Set Sha256",
+          "type": "string"
+        },
+        "trust_anchor_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Trust Anchor Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "signed_at",
+        "expires_at",
+        "operator_principal",
+        "trust_anchor_sha256",
+        "artifact_sha256",
+        "evaluation_sha256",
+        "audit_context_sha256",
+        "client_constraints_sha256",
+        "technical_route_set_sha256",
+        "eligible_route_set_sha256",
+        "initial_source_observation_sha256",
+        "source_commitment_set_sha256",
+        "source_observation_expires_at",
+        "candidate_route_sha256s",
+        "eligible_route_sha256s",
+        "eligible_model_ids",
+        "statement_sha256"
+      ],
+      "title": "ModelPolicyEligibilityAuthorityStatement",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/model_policy_eligibility_authority.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Bounded detached SSHSIG envelope for one exact policy statement.",
+  "properties": {
+    "authority_envelope_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Authority Envelope Sha256",
+      "type": "string"
+    },
+    "detached_signature": {
+      "maxLength": 16384,
+      "minLength": 100,
+      "title": "Detached Signature",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "signature_algorithm": {
+      "const": "SSHSIG_ED25519",
+      "default": "SSHSIG_ED25519",
+      "title": "Signature Algorithm",
+      "type": "string"
+    },
+    "signature_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Signature Sha256",
+      "type": "string"
+    },
+    "statement": {
+      "$ref": "#/$defs/ModelPolicyEligibilityAuthorityStatement"
+    }
+  },
+  "required": [
+    "statement",
+    "detached_signature",
+    "signature_sha256",
+    "authority_envelope_sha256"
+  ],
+  "title": "mmaudit signed model policy eligibility authority",
+  "type": "object"
+}

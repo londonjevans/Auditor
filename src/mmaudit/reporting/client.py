@@ -34,6 +34,7 @@ from mmaudit.reporting.bundle import (
     source_symbol_is_present,
 )
 from mmaudit.reporting.markdown import (
+    _audit_model_selection_report_lines,
     _capability_report_lines,
     _capability_report_title,
     _inline,
@@ -833,6 +834,7 @@ def _render_client_markdown_from_artifact(
             "",
             *_completed_analysis_summary(report),
             "",
+            *_audit_model_selection_report_lines(report),
             "## Finding summary",
             "",
         ]
@@ -919,6 +921,11 @@ def _render_client_markdown_from_artifact(
             "- `audit-results.sarif`",
             "- `coverage.json`",
             "- `model-execution.json`",
+            *(
+                ["- `audit-model-selection-evidence.json`"]
+                if report.audit_model_selection is not None
+                else []
+            ),
             "- `run-evidence-manifest.json`",
             "",
         ]

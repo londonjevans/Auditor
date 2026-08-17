@@ -1,0 +1,398 @@
+{
+  "$defs": {
+    "ModelPolicyEligibilityDetermination": {
+      "additionalProperties": false,
+      "description": "Unauthenticated operator/legal decision for one exact route.",
+      "properties": {
+        "applicable_client_entity_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "title": "Applicable Client Entity Sha256S",
+          "type": "array"
+        },
+        "applicable_client_jurisdictions": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "title": "Applicable Client Jurisdictions",
+          "type": "array"
+        },
+        "applicable_operator_entity_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "title": "Applicable Operator Entity Sha256S",
+          "type": "array"
+        },
+        "applicable_operator_jurisdictions": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "title": "Applicable Operator Jurisdictions",
+          "type": "array"
+        },
+        "assessments": {
+          "items": {
+            "$ref": "#/$defs/PolicyCriterionAssessment"
+          },
+          "maxItems": 8,
+          "minItems": 8,
+          "title": "Assessments",
+          "type": "array"
+        },
+        "decision": {
+          "$ref": "#/$defs/PolicyEligibilityDecision"
+        },
+        "determination_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Determination Sha256",
+          "type": "string"
+        },
+        "effective_at": {
+          "format": "date-time",
+          "title": "Effective At",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "intended_use": {
+          "$ref": "#/$defs/PolicyUsePurpose"
+        },
+        "review_record_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Review Record Sha256",
+          "type": "string"
+        },
+        "reviewed_at": {
+          "format": "date-time",
+          "title": "Reviewed At",
+          "type": "string"
+        },
+        "reviewed_by": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._@:/-]{0,199}$",
+          "title": "Reviewed By",
+          "type": "string"
+        },
+        "route": {
+          "$ref": "#/$defs/PolicyEligibilityRoute"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "route",
+        "decision",
+        "intended_use",
+        "applicable_client_entity_sha256s",
+        "applicable_client_jurisdictions",
+        "applicable_operator_entity_sha256s",
+        "applicable_operator_jurisdictions",
+        "assessments",
+        "reviewed_by",
+        "reviewed_at",
+        "effective_at",
+        "expires_at",
+        "review_record_sha256",
+        "determination_sha256"
+      ],
+      "title": "ModelPolicyEligibilityDetermination",
+      "type": "object"
+    },
+    "OfficialPolicyEvidenceReference": {
+      "additionalProperties": false,
+      "description": "Self-hashed reference to exact operator-supplied official evidence bytes.",
+      "properties": {
+        "byte_count": {
+          "maximum": 20000000,
+          "minimum": 1,
+          "title": "Byte Count",
+          "type": "integer"
+        },
+        "content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/PolicyEvidenceKind"
+        },
+        "official_source_url": {
+          "maxLength": 2048,
+          "minLength": 9,
+          "title": "Official Source Url",
+          "type": "string"
+        },
+        "publisher": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Publisher",
+          "type": "string"
+        },
+        "reference_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reference Sha256",
+          "type": "string"
+        },
+        "retrieved_at": {
+          "format": "date-time",
+          "title": "Retrieved At",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_version": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Version"
+        }
+      },
+      "required": [
+        "kind",
+        "publisher",
+        "official_source_url",
+        "retrieved_at",
+        "content_sha256",
+        "byte_count",
+        "reference_sha256"
+      ],
+      "title": "OfficialPolicyEvidenceReference",
+      "type": "object"
+    },
+    "PolicyCriterionAssessment": {
+      "additionalProperties": false,
+      "description": "One evidence-bound answer to a fixed legal criterion.",
+      "properties": {
+        "assessment_record_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Assessment Record Sha256",
+          "type": "string"
+        },
+        "assessment_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Assessment Sha256",
+          "type": "string"
+        },
+        "criterion": {
+          "$ref": "#/$defs/PolicyLegalCriterion"
+        },
+        "disposition": {
+          "$ref": "#/$defs/PolicyCriterionDisposition"
+        },
+        "evidence_reference_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Evidence Reference Sha256S",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "criterion",
+        "disposition",
+        "evidence_reference_sha256s",
+        "assessment_record_sha256",
+        "assessment_sha256"
+      ],
+      "title": "PolicyCriterionAssessment",
+      "type": "object"
+    },
+    "PolicyCriterionDisposition": {
+      "description": "Operator/legal conclusion for one required criterion.",
+      "enum": [
+        "AMBIGUOUS",
+        "PERMITTED",
+        "PROHIBITED"
+      ],
+      "title": "PolicyCriterionDisposition",
+      "type": "string"
+    },
+    "PolicyEligibilityDecision": {
+      "description": "Recorded decision; only ELIGIBLE can pass structural evaluation.",
+      "enum": [
+        "ELIGIBLE",
+        "INELIGIBLE",
+        "REVIEW_REQUIRED"
+      ],
+      "title": "PolicyEligibilityDecision",
+      "type": "string"
+    },
+    "PolicyEligibilityRoute": {
+      "additionalProperties": false,
+      "description": "One exact model/provider/endpoint identity.",
+      "properties": {
+        "exact_model_id": {
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "provider_name": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Provider Name",
+          "type": "string"
+        },
+        "route_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Route Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "provider_name",
+        "provider_endpoint",
+        "route_sha256"
+      ],
+      "title": "PolicyEligibilityRoute",
+      "type": "object"
+    },
+    "PolicyEvidenceKind": {
+      "description": "Bounded kind of official material reviewed by the operator.",
+      "enum": [
+        "ACCEPTABLE_USE_POLICY",
+        "COMMERCIAL_TERMS",
+        "MODEL_LICENSE",
+        "MODEL_PROVIDER_TERMS",
+        "REGIONAL_TERMS",
+        "ROUTING_PROVIDER_TERMS"
+      ],
+      "title": "PolicyEvidenceKind",
+      "type": "string"
+    },
+    "PolicyLegalCriterion": {
+      "description": "Exact legal questions required for one global model/endpoint decision.",
+      "enum": [
+        "CLIENT_ENTITY_AND_JURISDICTION",
+        "COMMERCIAL_CUSTOMER_FACING_USE",
+        "COMMERCIAL_REPORT_INCORPORATION",
+        "DEFENSIVE_SECURITY_ANALYSIS",
+        "DEFENSIVE_TASK_SCOPE",
+        "NO_RELEVANT_PROVIDER_OR_MODEL_RESTRICTION",
+        "OPERATOR_ENTITY_AND_JURISDICTION",
+        "SOURCE_CODE_ANALYSIS"
+      ],
+      "title": "PolicyLegalCriterion",
+      "type": "string"
+    },
+    "PolicyUsePurpose": {
+      "description": "Exact commercial purpose that one determination may authorize structurally.",
+      "enum": [
+        "PAID_CUSTOMER_FACING_DEFENSIVE_SOURCE_AUDIT",
+        "PUBLIC_OR_SYNTHETIC_DEFENSIVE_EVALUATION"
+      ],
+      "title": "PolicyUsePurpose",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/model_policy_eligibility.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Provider-free structural registry that explicitly carries no authority.",
+  "properties": {
+    "artifact_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Artifact Sha256",
+      "type": "string"
+    },
+    "automated_eligibility_inference": {
+      "const": false,
+      "default": false,
+      "title": "Automated Eligibility Inference",
+      "type": "boolean"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "determinations": {
+      "items": {
+        "$ref": "#/$defs/ModelPolicyEligibilityDetermination"
+      },
+      "maxItems": 128,
+      "title": "Determinations",
+      "type": "array"
+    },
+    "official_evidence": {
+      "items": {
+        "$ref": "#/$defs/OfficialPolicyEvidenceReference"
+      },
+      "maxItems": 256,
+      "title": "Official Evidence",
+      "type": "array"
+    },
+    "operator_decision_authenticity": {
+      "const": "NOT_INDEPENDENTLY_PROVEN",
+      "default": "NOT_INDEPENDENTLY_PROVEN",
+      "title": "Operator Decision Authenticity",
+      "type": "string"
+    },
+    "production_selection_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Production Selection Authorized",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "created_at",
+    "official_evidence",
+    "determinations",
+    "artifact_sha256"
+  ],
+  "title": "mmaudit model policy eligibility artifact",
+  "type": "object"
+}

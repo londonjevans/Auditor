@@ -121,7 +121,7 @@ class IgnoreMatcher:
 
 
 def safe_ignore_file(root: Path, configured_path: str) -> Path:
-    """Resolve an optional ignore file without permitting repository escape."""
+    """Resolve an optional ignore file without permitting trusted-root escape."""
 
     relative = normalize_relative_path(configured_path)
     if is_sensitive_workspace_path(relative):
@@ -137,5 +137,5 @@ def safe_ignore_file(root: Path, configured_path: str) -> Path:
         resolved = candidate.resolve(strict=candidate.exists())
         resolved.relative_to(repository_root)
     except (OSError, ValueError) as exc:
-        raise ValueError("ignore file must remain inside the repository") from exc
+        raise ValueError("ignore file must remain inside its trusted root") from exc
     return resolved

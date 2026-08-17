@@ -1,0 +1,837 @@
+{
+  "$defs": {
+    "AuditSelectedTechnicalModel": {
+      "additionalProperties": false,
+      "description": "Exact durable projection of one policy-eligible Tier-A technical model.",
+      "properties": {
+        "approved_provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$",
+          "title": "Approved Provider Endpoint",
+          "type": "string"
+        },
+        "approved_provider_name": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:/()&+-]{0,199}$",
+          "title": "Approved Provider Name",
+          "type": "string"
+        },
+        "approved_roles": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "title": "Approved Roles",
+          "type": "array"
+        },
+        "benchmark_case_count": {
+          "minimum": 1,
+          "title": "Benchmark Case Count",
+          "type": "integer"
+        },
+        "benchmark_report_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Benchmark Report Sha256",
+          "type": "string"
+        },
+        "benchmark_verification_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Benchmark Verification Sha256",
+          "type": "string"
+        },
+        "canonical_model_slug": {
+          "title": "Canonical Model Slug",
+          "type": "string"
+        },
+        "endpoint_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Snapshot Sha256",
+          "type": "string"
+        },
+        "evaluated_at": {
+          "format": "date-time",
+          "title": "Evaluated At",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "fresh_benchmark_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Fresh Benchmark Evidence Sha256",
+          "type": "string"
+        },
+        "model_metadata_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Model Metadata Snapshot Sha256",
+          "type": "string"
+        },
+        "output_capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Output Capability Sha256",
+          "type": "string"
+        },
+        "overall_score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Overall Score",
+          "type": "number"
+        },
+        "policy_eligibility_status": {
+          "const": "ELIGIBLE",
+          "default": "ELIGIBLE",
+          "title": "Policy Eligibility Status",
+          "type": "string"
+        },
+        "policy_route_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Route Sha256",
+          "type": "string"
+        },
+        "pricing_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Pricing Snapshot Sha256",
+          "type": "string"
+        },
+        "qualification_disposition": {
+          "const": "tier_a",
+          "default": "tier_a",
+          "title": "Qualification Disposition",
+          "type": "string"
+        },
+        "qualification_result_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Qualification Result Sha256",
+          "type": "string"
+        },
+        "quality_measurement_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Quality Measurement Sha256",
+          "type": "string"
+        },
+        "reasoning_bindings": {
+          "items": {
+            "$ref": "#/$defs/QualifiedReasoningRoleBinding"
+          },
+          "maxItems": 1024,
+          "minItems": 1,
+          "title": "Reasoning Bindings",
+          "type": "array"
+        },
+        "root_lineage": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Root Lineage",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "selected_model_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Selected Model Sha256",
+          "type": "string"
+        },
+        "structured_output_mode": {
+          "$ref": "#/$defs/StructuredOutputMode"
+        },
+        "technical_qualification_status": {
+          "const": "VERIFIED_TIER_A",
+          "default": "VERIFIED_TIER_A",
+          "title": "Technical Qualification Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "canonical_model_slug",
+        "root_lineage",
+        "approved_provider_endpoint",
+        "approved_provider_name",
+        "endpoint_snapshot_sha256",
+        "output_capability_sha256",
+        "model_metadata_snapshot_sha256",
+        "pricing_snapshot_sha256",
+        "structured_output_mode",
+        "approved_roles",
+        "overall_score",
+        "quality_measurement_sha256",
+        "qualification_result_sha256",
+        "benchmark_report_sha256",
+        "benchmark_verification_sha256",
+        "fresh_benchmark_evidence_sha256",
+        "reasoning_bindings",
+        "evaluated_at",
+        "expires_at",
+        "benchmark_case_count",
+        "policy_route_sha256",
+        "selected_model_sha256"
+      ],
+      "title": "AuditSelectedTechnicalModel",
+      "type": "object"
+    },
+    "PolicyEligibilityExclusion": {
+      "additionalProperties": false,
+      "description": "Canonical route-specific structural exclusion.",
+      "properties": {
+        "determination_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Determination Sha256"
+        },
+        "exclusion_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Exclusion Sha256",
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "$ref": "#/$defs/PolicyExclusionReason"
+          },
+          "minItems": 1,
+          "title": "Reasons",
+          "type": "array"
+        },
+        "route": {
+          "$ref": "#/$defs/PolicyEligibilityRoute"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "route",
+        "reasons",
+        "exclusion_sha256"
+      ],
+      "title": "PolicyEligibilityExclusion",
+      "type": "object"
+    },
+    "PolicyEligibilityRoute": {
+      "additionalProperties": false,
+      "description": "One exact model/provider/endpoint identity.",
+      "properties": {
+        "exact_model_id": {
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "provider_name": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Provider Name",
+          "type": "string"
+        },
+        "route_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Route Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "provider_name",
+        "provider_endpoint",
+        "route_sha256"
+      ],
+      "title": "PolicyEligibilityRoute",
+      "type": "object"
+    },
+    "PolicyExclusionReason": {
+      "description": "Canonical reasons why one technically supplied route is structurally excluded.",
+      "enum": [
+        "AUDIT_SCOPE_RESTRICTED",
+        "CLIENT_CONSTRAINTS_EXPIRED",
+        "CLIENT_CONSTRAINTS_FUTURE",
+        "CLIENT_ENDPOINT_RESTRICTED",
+        "CLIENT_ENTITY_RESTRICTED",
+        "CLIENT_JURISDICTION_RESTRICTED",
+        "CLIENT_MODEL_RESTRICTED",
+        "CLIENT_PROVIDER_RESTRICTED",
+        "DECISION_INELIGIBLE",
+        "DECISION_REVIEW_REQUIRED",
+        "DETERMINATION_EXPIRED",
+        "DETERMINATION_FUTURE",
+        "MISSING_DETERMINATION",
+        "OPERATOR_ENTITY_RESTRICTED",
+        "OPERATOR_JURISDICTION_RESTRICTED",
+        "ROUTE_MISMATCH",
+        "SOURCE_RESTRICTED",
+        "USE_PURPOSE_RESTRICTED"
+      ],
+      "title": "PolicyExclusionReason",
+      "type": "string"
+    },
+    "QualifiedReasoningRoleBinding": {
+      "additionalProperties": false,
+      "description": "Immutable exact-profile qualification evidence without selection authority.\n\nA whole effective-configuration hash is intentionally insufficient here. The\nbinding joins one exact model/provider/qualified-role/policy-role tuple to the\nexact reasoning profile and endpoint capability that the benchmark qualified.\n``selection_authority`` is permanently false: callers must still match every\nfield through :meth:`require_exact` and consume the separate production\nqualification capability.",
+      "properties": {
+        "approved_provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$",
+          "title": "Approved Provider Endpoint",
+          "type": "string"
+        },
+        "approved_provider_name": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:/()&+-]{0,199}$",
+          "title": "Approved Provider Name",
+          "type": "string"
+        },
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "binding_status": {
+          "const": "exact_evidence_bound",
+          "default": "exact_evidence_bound",
+          "title": "Binding Status",
+          "type": "string"
+        },
+        "configured_policy_role": {
+          "pattern": "^[a-z][a-z0-9_:.-]{0,127}$",
+          "title": "Configured Policy Role",
+          "type": "string"
+        },
+        "control_profile": {
+          "$ref": "#/$defs/ReasoningControlProfile"
+        },
+        "control_profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Control Profile Sha256",
+          "type": "string"
+        },
+        "endpoint_reasoning_capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Reasoning Capability Sha256",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "maxLength": 300,
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "qualification_report_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Qualification Report Sha256",
+          "type": "string"
+        },
+        "qualification_result_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Qualification Result Sha256",
+          "type": "string"
+        },
+        "qualification_verification_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Qualification Verification Sha256",
+          "type": "string"
+        },
+        "qualified_role": {
+          "pattern": "^[a-z][a-z0-9_:.-]{0,127}$",
+          "title": "Qualified Role",
+          "type": "string"
+        },
+        "reasoning_benchmark_fresh_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Benchmark Fresh Evidence Sha256",
+          "type": "string"
+        },
+        "reasoning_benchmark_report_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Benchmark Report Sha256",
+          "type": "string"
+        },
+        "reasoning_benchmark_verification_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Benchmark Verification Sha256",
+          "type": "string"
+        },
+        "reasoning_policy_artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Policy Artifact Sha256",
+          "type": "string"
+        },
+        "reasoning_policy_role_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Policy Role Binding Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "selection_authority": {
+          "const": false,
+          "default": false,
+          "title": "Selection Authority",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "approved_provider_endpoint",
+        "approved_provider_name",
+        "qualified_role",
+        "configured_policy_role",
+        "control_profile",
+        "control_profile_sha256",
+        "reasoning_policy_artifact_sha256",
+        "reasoning_policy_role_binding_sha256",
+        "endpoint_reasoning_capability_sha256",
+        "reasoning_benchmark_report_sha256",
+        "reasoning_benchmark_verification_sha256",
+        "reasoning_benchmark_fresh_evidence_sha256",
+        "qualification_report_sha256",
+        "qualification_result_sha256",
+        "qualification_verification_sha256",
+        "binding_sha256"
+      ],
+      "title": "QualifiedReasoningRoleBinding",
+      "type": "object"
+    },
+    "ReasoningControlProfile": {
+      "additionalProperties": false,
+      "description": "One effective reasoning control with an explicit token reservation.",
+      "properties": {
+        "effort": {
+          "anyOf": [
+            {
+              "enum": [
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effort"
+        },
+        "exclude": {
+          "default": false,
+          "title": "Exclude",
+          "type": "boolean"
+        },
+        "max_tokens": {
+          "anyOf": [
+            {
+              "maximum": 65536,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Tokens"
+        },
+        "mode": {
+          "enum": [
+            "disabled",
+            "default",
+            "effort",
+            "max_tokens"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Profile Sha256",
+          "type": "string"
+        },
+        "reserved_reasoning_tokens": {
+          "maximum": 65536,
+          "minimum": 0,
+          "title": "Reserved Reasoning Tokens",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "reserved_reasoning_tokens",
+        "profile_sha256"
+      ],
+      "title": "ReasoningControlProfile",
+      "type": "object"
+    },
+    "StructuredOutputMode": {
+      "description": "One exact request/validation protocol for model output.",
+      "enum": [
+        "NATIVE_JSON_SCHEMA",
+        "JSON_OBJECT",
+        "VALIDATED_TEXT_JSON"
+      ],
+      "title": "StructuredOutputMode",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/audit_model_selection.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Self-hashed audit record; possession of this record grants no authority.",
+  "properties": {
+    "audit_context_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Audit Context Sha256",
+      "type": "string"
+    },
+    "audit_scope_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Audit Scope Sha256",
+      "type": "string"
+    },
+    "client_constraints_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Client Constraints Sha256",
+      "type": "string"
+    },
+    "eligible_route_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Eligible Route Set Sha256",
+      "type": "string"
+    },
+    "expires_at": {
+      "format": "date-time",
+      "title": "Expires At",
+      "type": "string"
+    },
+    "general_production_authorized": {
+      "const": false,
+      "default": false,
+      "title": "General Production Authorized",
+      "type": "boolean"
+    },
+    "models": {
+      "items": {
+        "$ref": "#/$defs/AuditSelectedTechnicalModel"
+      },
+      "maxItems": 128,
+      "minItems": 8,
+      "title": "Models",
+      "type": "array"
+    },
+    "policy_artifact_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Policy Artifact Sha256",
+      "type": "string"
+    },
+    "policy_authority_envelope_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Policy Authority Envelope Sha256",
+      "type": "string"
+    },
+    "policy_authority_expires_at": {
+      "format": "date-time",
+      "title": "Policy Authority Expires At",
+      "type": "string"
+    },
+    "policy_authority_initial_source_observation_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Policy Authority Initial Source Observation Sha256",
+      "type": "string"
+    },
+    "policy_authority_receipt_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Policy Authority Receipt Sha256",
+      "type": "string"
+    },
+    "policy_authority_statement_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Policy Authority Statement Sha256",
+      "type": "string"
+    },
+    "policy_authority_trust_anchor_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Policy Authority Trust Anchor Sha256",
+      "type": "string"
+    },
+    "policy_authority_verified_at": {
+      "format": "date-time",
+      "title": "Policy Authority Verified At",
+      "type": "string"
+    },
+    "policy_evaluated_at": {
+      "format": "date-time",
+      "title": "Policy Evaluated At",
+      "type": "string"
+    },
+    "policy_evaluation_expires_at": {
+      "format": "date-time",
+      "title": "Policy Evaluation Expires At",
+      "type": "string"
+    },
+    "policy_evaluation_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Policy Evaluation Sha256",
+      "type": "string"
+    },
+    "policy_excluded_model_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 128,
+      "title": "Policy Excluded Model Ids",
+      "type": "array"
+    },
+    "policy_exclusion_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Policy Exclusion Set Sha256",
+      "type": "string"
+    },
+    "policy_exclusion_sha256s": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 128,
+      "title": "Policy Exclusion Sha256S",
+      "type": "array"
+    },
+    "policy_exclusions": {
+      "items": {
+        "$ref": "#/$defs/PolicyEligibilityExclusion"
+      },
+      "maxItems": 128,
+      "title": "Policy Exclusions",
+      "type": "array"
+    },
+    "policy_selection_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Policy Selection Authorized",
+      "type": "boolean"
+    },
+    "policy_source_commitment_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Policy Source Commitment Set Sha256",
+      "type": "string"
+    },
+    "policy_source_observation_expires_at": {
+      "format": "date-time",
+      "title": "Policy Source Observation Expires At",
+      "type": "string"
+    },
+    "policy_source_observation_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Policy Source Observation Sha256",
+      "type": "string"
+    },
+    "policy_source_observed_at": {
+      "format": "date-time",
+      "title": "Policy Source Observed At",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "selected_at": {
+      "format": "date-time",
+      "title": "Selected At",
+      "type": "string"
+    },
+    "selected_model_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 128,
+      "minItems": 8,
+      "title": "Selected Model Ids",
+      "type": "array"
+    },
+    "selected_model_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Selected Model Set Sha256",
+      "type": "string"
+    },
+    "selection_policy": {
+      "const": "verified_technical_and_policy_eligible",
+      "default": "verified_technical_and_policy_eligible",
+      "title": "Selection Policy",
+      "type": "string"
+    },
+    "selection_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Selection Sha256",
+      "type": "string"
+    },
+    "source_egress_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Source Egress Authorized",
+      "type": "boolean"
+    },
+    "source_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Sha256",
+      "type": "string"
+    },
+    "technical_candidate_registry_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Technical Candidate Registry Sha256",
+      "type": "string"
+    },
+    "technical_model_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 128,
+      "minItems": 8,
+      "title": "Technical Model Ids",
+      "type": "array"
+    },
+    "technical_production_effective_config_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Technical Production Effective Config Sha256",
+      "type": "string"
+    },
+    "technical_production_selection_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Technical Production Selection Sha256",
+      "type": "string"
+    },
+    "technical_qualification_artifact_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Technical Qualification Artifact Sha256",
+      "type": "string"
+    },
+    "technical_qualification_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Technical Qualification Authorized",
+      "type": "boolean"
+    },
+    "technical_qualification_capability_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Technical Qualification Capability Sha256",
+      "type": "string"
+    },
+    "technical_qualification_expires_at": {
+      "format": "date-time",
+      "title": "Technical Qualification Expires At",
+      "type": "string"
+    },
+    "technical_qualification_policy_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Technical Qualification Policy Sha256",
+      "type": "string"
+    },
+    "technical_qualification_verification_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Technical Qualification Verification Sha256",
+      "type": "string"
+    },
+    "technical_qualification_verified_at": {
+      "format": "date-time",
+      "title": "Technical Qualification Verified At",
+      "type": "string"
+    },
+    "technical_release_observation_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Technical Release Observation Sha256",
+      "type": "string"
+    },
+    "technical_route_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Technical Route Set Sha256",
+      "type": "string"
+    },
+    "technical_selection_verification_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Technical Selection Verification Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "audit_scope_sha256",
+    "source_sha256",
+    "audit_context_sha256",
+    "client_constraints_sha256",
+    "technical_qualification_capability_sha256",
+    "technical_qualification_artifact_sha256",
+    "technical_qualification_verification_sha256",
+    "technical_production_selection_sha256",
+    "technical_selection_verification_sha256",
+    "technical_production_effective_config_sha256",
+    "technical_candidate_registry_sha256",
+    "technical_qualification_policy_sha256",
+    "technical_release_observation_sha256",
+    "policy_artifact_sha256",
+    "policy_evaluation_sha256",
+    "policy_source_observation_sha256",
+    "policy_source_commitment_set_sha256",
+    "policy_authority_receipt_sha256",
+    "policy_authority_statement_sha256",
+    "policy_authority_envelope_sha256",
+    "policy_authority_trust_anchor_sha256",
+    "policy_authority_initial_source_observation_sha256",
+    "technical_route_set_sha256",
+    "eligible_route_set_sha256",
+    "technical_model_ids",
+    "selected_model_ids",
+    "policy_excluded_model_ids",
+    "models",
+    "policy_exclusions",
+    "policy_exclusion_sha256s",
+    "selected_model_set_sha256",
+    "policy_exclusion_set_sha256",
+    "technical_qualification_verified_at",
+    "policy_evaluated_at",
+    "policy_source_observed_at",
+    "policy_authority_verified_at",
+    "selected_at",
+    "technical_qualification_expires_at",
+    "policy_evaluation_expires_at",
+    "policy_source_observation_expires_at",
+    "policy_authority_expires_at",
+    "expires_at",
+    "selection_sha256"
+  ],
+  "title": "mmaudit audit-scoped model selection",
+  "type": "object"
+}

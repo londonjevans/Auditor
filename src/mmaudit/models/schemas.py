@@ -12,18 +12,24 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from itertools import pairwise
-from typing import Any, Literal, Self
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Self, cast
 
 from pydantic import (
     AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
+    GetCoreSchemaHandler,
+    GetJsonSchemaHandler,
+    GetPydanticSchema,
     StrictInt,
     field_validator,
     model_validator,
 )
+from pydantic.json_schema import JsonSchemaValue
+from pydantic_core import CoreSchema, core_schema
 
+from mmaudit.artifact_limits import MAX_JSON_ARTIFACT_BYTES
 from mmaudit.constants import (
     ANALYSIS_ROLES,
     SPECIALIST_INVESTIGATOR_ROLES,
@@ -45,6 +51,9 @@ from mmaudit.models.token_planning import (
     RequestTokenPlan,
 )
 from mmaudit.scanners.diagnostics import validated_public_tool_version
+
+if TYPE_CHECKING:
+    from mmaudit.models.policy_selection import AuditModelSelection as AuditModelSelection
 
 
 def _require_public_tool_version(value: str) -> str:
@@ -79,6 +88,73 @@ class StrictModel(BaseModel):
     """Base model that rejects unknown fields in security-sensitive data."""
 
     model_config = ConfigDict(extra="forbid")
+
+
+def _validate_audit_model_selection(value: object) -> object:
+    """Lazily validate an exact durable audit selection without an import cycle."""
+
+    from mmaudit.models.policy_selection import AuditModelSelection as SelectionModel
+
+    if type(value) is SelectionModel:
+        return SelectionModel.model_validate_json(value.model_dump_json(), strict=True)
+    if not isinstance(value, Mapping):
+        raise ValueError("audit model selection must be a JSON object")
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    if len(encoded) > MAX_JSON_ARTIFACT_BYTES:
+        raise ValueError("audit model selection exceeds the JSON artifact byte limit")
+    return SelectionModel.model_validate_json(encoded, strict=True)
+
+
+def _serialize_audit_model_selection(value: object) -> object:
+    """Serialize only the exact durable selection type accepted by the lazy adapter."""
+
+    from mmaudit.models.policy_selection import AuditModelSelection as SelectionModel
+
+    if type(value) is not SelectionModel:
+        raise TypeError("audit model selection has an invalid exact type")
+    return value.model_dump(mode="json")
+
+
+def _audit_model_selection_core_schema(
+    _source_type: Any,
+    _handler: GetCoreSchemaHandler,
+) -> CoreSchema:
+    """Build a cycle-free runtime adapter for the durable selection model."""
+
+    return core_schema.no_info_plain_validator_function(
+        _validate_audit_model_selection,
+        json_schema_input_schema=core_schema.dict_schema(),
+        serialization=core_schema.plain_serializer_function_ser_schema(
+            _serialize_audit_model_selection
+        ),
+    )
+
+
+def _audit_model_selection_json_schema(
+    _schema: CoreSchema,
+    handler: GetJsonSchemaHandler,
+) -> JsonSchemaValue:
+    """Expose the exact selection schema when a public artifact schema is generated."""
+
+    from mmaudit.models.policy_selection import AuditModelSelection as SelectionModel
+
+    return handler(SelectionModel.__pydantic_core_schema__)
+
+
+if not TYPE_CHECKING:
+    AuditModelSelection = Annotated[
+        Any,
+        GetPydanticSchema(
+            _audit_model_selection_core_schema,
+            _audit_model_selection_json_schema,
+        ),
+    ]
 
 
 class StructuredOutputResponseFormat(StrEnum):
@@ -886,6 +962,29 @@ class SolidityGraphKind(StrEnum):
     REENTRANCY = "reentrancy"
     STATE_GROWTH = "state_growth"
     SENSITIVE_REACHABILITY = "sensitive_reachability"
+
+
+class SolidityGraphOmissionReason(StrEnum):
+    """Typed reason that a generated semantic-graph edge population is incomplete."""
+
+    ARTIFACT_BUDGET_EXCLUDED = "artifact_budget_excluded"
+
+
+class SolidityGraphFactKind(StrEnum):
+    """Non-edge semantic graph populations subject to the same artifact bound."""
+
+    GRAPH_NODE = "graph_node"
+    STORAGE_ENTRY = "storage_entry"
+    WARNING = "warning"
+
+
+class SolidityGraphOccurrenceKind(StrEnum):
+    """Retained normalized graph populations with exact emitted-occurrence counts."""
+
+    EDGE = "edge"
+    GRAPH_NODE = "graph_node"
+    STORAGE_ENTRY = "storage_entry"
+    WARNING = "warning"
 
 
 class SolidityGraphNodeKind(StrEnum):
@@ -7907,13 +8006,366 @@ class SolidityGraphEdge(StrictModel):
         return self
 
 
+def solidity_graph_edge_logical_key(
+    edge: SolidityGraphEdge,
+) -> tuple[str, str, str, str, str, int, int, int | None]:
+    """Return the normalized edge identity used by bounded generation and accounting."""
+
+    relative_start: int | None
+    try:
+        relative_start = int(cast(Any, edge.metadata.get("occurrence_relative_start")))
+    except (TypeError, ValueError):
+        relative_start = None
+    return (
+        edge.graph.value,
+        edge.source_id,
+        edge.target_id,
+        edge.label,
+        edge.path,
+        edge.start_line,
+        edge.end_line,
+        relative_start,
+    )
+
+
+def solidity_graph_occurrence_sha256(
+    subject_kind: SolidityGraphOccurrenceKind,
+    subject: SolidityGraphEdge | SolidityGraphNode | SolidityStorageEntry | str,
+) -> str:
+    """Return the canonical retained-occurrence identity for one normalized graph fact."""
+
+    type_matches = (
+        (
+            subject_kind is SolidityGraphOccurrenceKind.EDGE
+            and isinstance(subject, SolidityGraphEdge)
+        )
+        or (
+            subject_kind is SolidityGraphOccurrenceKind.GRAPH_NODE
+            and isinstance(subject, SolidityGraphNode)
+        )
+        or (
+            subject_kind is SolidityGraphOccurrenceKind.STORAGE_ENTRY
+            and isinstance(subject, SolidityStorageEntry)
+        )
+        or (subject_kind is SolidityGraphOccurrenceKind.WARNING and isinstance(subject, str))
+    )
+    if not type_matches:
+        raise TypeError(f"{subject_kind.value} occurrence identity has the wrong record type")
+    record: Any = (
+        subject.model_dump(mode="json")
+        if isinstance(subject, (SolidityGraphEdge, SolidityGraphNode, SolidityStorageEntry))
+        else subject
+    )
+    return _canonical_model_sha256(
+        {
+            "subject_kind": subject_kind.value,
+            "record": record,
+        }
+    )
+
+
+class SolidityGraphRetainedOccurrence(StrictModel):
+    """Exact bounded occurrence count for one retained normalized graph record."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    subject_kind: SolidityGraphOccurrenceKind
+    subject_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    occurrence_count: StrictInt = Field(ge=1, le=2**63 - 1)
+
+
+class SolidityGraphOmission(StrictModel):
+    """Bounded commitment to emitted edge candidates excluded during generation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    graph: SolidityGraphKind
+    reason: SolidityGraphOmissionReason = SolidityGraphOmissionReason.ARTIFACT_BUDGET_EXCLUDED
+    candidate_count: StrictInt = Field(gt=0, le=2**63 - 1)
+    retained_count: StrictInt = Field(ge=0, le=2**63 - 1)
+    retained_occurrence_count: StrictInt = Field(default=0, ge=0, le=2**63 - 1)
+    omitted_count: StrictInt = Field(gt=0, le=2**63 - 1)
+    omitted_canonical_bytes: StrictInt = Field(ge=0, le=2**63 - 1)
+    analytical_omitted_count: StrictInt = Field(default=0, ge=0, le=2**63 - 1)
+    analytical_population_sample_sha256s: tuple[str, ...] = Field(default=(), max_length=16)
+    commitment_scheme: Literal["count-xor-sum-and-analytic-populations-v1"] = (
+        "count-xor-sum-and-analytic-populations-v1"
+    )
+    omitted_stream_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    omitted_sample_sha256s: tuple[str, ...] = Field(default=(), max_length=16)
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_retained_occurrences(cls, values: Any) -> Any:
+        if isinstance(values, dict) and "retained_occurrence_count" not in values:
+            values = {**values, "retained_occurrence_count": values.get("retained_count", 0)}
+        return values
+
+    @classmethod
+    def build(cls, **values: Any) -> SolidityGraphOmission:
+        """Validate and self-hash one bounded graph-omission commitment."""
+
+        if "evidence_sha256" in values:
+            raise ValueError("evidence_sha256 is derived and cannot be supplied to build()")
+        values.setdefault("retained_occurrence_count", values.get("retained_count", 0))
+        provisional = cls.model_construct(**values, evidence_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"evidence_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "evidence_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @field_validator("omitted_sample_sha256s")
+    @classmethod
+    def sample_hashes_are_bounded_unique_and_canonical(
+        cls,
+        value: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if any(re.fullmatch(r"[0-9a-f]{64}", item) is None for item in value):
+            raise ValueError("omitted graph samples must contain only SHA-256 digests")
+        if value != tuple(sorted(set(value))):
+            raise ValueError("omitted graph samples must be unique and canonically sorted")
+        return value
+
+    @field_validator("analytical_population_sample_sha256s")
+    @classmethod
+    def analytical_hashes_are_bounded_unique_and_canonical(
+        cls,
+        value: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if any(re.fullmatch(r"[0-9a-f]{64}", item) is None for item in value):
+            raise ValueError("analytical graph populations must contain only SHA-256 digests")
+        if value != tuple(sorted(set(value))):
+            raise ValueError("analytical graph populations must be unique and canonically sorted")
+        return value
+
+    @model_validator(mode="after")
+    def counts_and_commitment_are_consistent(self) -> SolidityGraphOmission:
+        if self.retained_occurrence_count < self.retained_count:
+            raise ValueError("retained edge occurrences cannot be fewer than retained records")
+        if self.candidate_count != self.retained_occurrence_count + self.omitted_count:
+            raise ValueError(
+                "graph omission candidate count differs from retained occurrences plus omitted"
+            )
+        if self.analytical_omitted_count > self.omitted_count:
+            raise ValueError("analytical graph omission count exceeds total omissions")
+        enumerated_count = self.omitted_count - self.analytical_omitted_count
+        if bool(self.analytical_omitted_count) is not bool(
+            self.analytical_population_sample_sha256s
+        ):
+            raise ValueError("analytical graph omission count differs from its population evidence")
+        if enumerated_count and self.omitted_canonical_bytes == 0:
+            raise ValueError("enumerated graph omissions require canonical byte accounting")
+        if len(self.omitted_sample_sha256s) > self.omitted_count:
+            raise ValueError("graph omission exposes more samples than omitted edge records")
+        expected = _canonical_model_sha256(
+            self.model_dump(mode="json", exclude={"evidence_sha256"})
+        )
+        if self.evidence_sha256 != expected:
+            raise ValueError("graph omission evidence hash is inconsistent")
+        return self
+
+
+class SolidityGraphFactOmission(StrictModel):
+    """Bounded evidence for emitted non-edge candidates excluded during generation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    fact_kind: SolidityGraphFactKind
+    reason: SolidityGraphOmissionReason = SolidityGraphOmissionReason.ARTIFACT_BUDGET_EXCLUDED
+    candidate_count: StrictInt = Field(gt=0, le=2**63 - 1)
+    retained_count: StrictInt = Field(ge=0, le=2**63 - 1)
+    retained_occurrence_count: StrictInt = Field(default=0, ge=0, le=2**63 - 1)
+    omitted_count: StrictInt = Field(gt=0, le=2**63 - 1)
+    omitted_canonical_bytes: StrictInt = Field(gt=0, le=2**63 - 1)
+    commitment_scheme: Literal["count-xor-sum-v1"] = "count-xor-sum-v1"
+    omitted_stream_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    omitted_sample_sha256s: tuple[str, ...] = Field(default=(), max_length=16)
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_retained_occurrences(cls, values: Any) -> Any:
+        if isinstance(values, dict) and "retained_occurrence_count" not in values:
+            values = {**values, "retained_occurrence_count": values.get("retained_count", 0)}
+        return values
+
+    @classmethod
+    def build(cls, **values: Any) -> SolidityGraphFactOmission:
+        """Validate and self-hash one non-edge omission record."""
+
+        if "evidence_sha256" in values:
+            raise ValueError("evidence_sha256 is derived and cannot be supplied to build()")
+        values.setdefault("retained_occurrence_count", values.get("retained_count", 0))
+        provisional = cls.model_construct(**values, evidence_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"evidence_sha256"})
+        return cls.model_validate({**payload, "evidence_sha256": _canonical_model_sha256(payload)})
+
+    @field_validator("omitted_sample_sha256s")
+    @classmethod
+    def samples_are_bounded_unique_and_canonical(
+        cls,
+        value: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if any(re.fullmatch(r"[0-9a-f]{64}", item) is None for item in value):
+            raise ValueError("omitted graph-fact samples must contain only SHA-256 digests")
+        if value != tuple(sorted(set(value))):
+            raise ValueError("omitted graph-fact samples must be unique and canonically sorted")
+        return value
+
+    @model_validator(mode="after")
+    def counts_and_hash_are_exact(self) -> SolidityGraphFactOmission:
+        if self.retained_occurrence_count < self.retained_count:
+            raise ValueError("retained fact occurrences cannot be fewer than retained records")
+        if self.candidate_count != self.retained_occurrence_count + self.omitted_count:
+            raise ValueError(
+                "graph-fact candidate count differs from retained occurrences plus omitted"
+            )
+        if len(self.omitted_sample_sha256s) > self.omitted_count:
+            raise ValueError("graph-fact omission exposes more samples than omitted records")
+        expected = _canonical_model_sha256(
+            self.model_dump(mode="json", exclude={"evidence_sha256"})
+        )
+        if self.evidence_sha256 != expected:
+            raise ValueError("graph-fact omission evidence hash is inconsistent")
+        return self
+
+
 class SolidityGraphSet(StrictModel):
     nodes: list[SolidityGraphNode] = Field(default_factory=list)
     edges: list[SolidityGraphEdge]
     storage_layout: list[SolidityStorageEntry] = Field(default_factory=list)
+    retained_occurrences: tuple[SolidityGraphRetainedOccurrence, ...] = Field(max_length=850_256)
     analyzed_graphs: list[SolidityGraphKind] = Field(default_factory=list)
     coverage: dict[str, int] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
+    generation_complete: bool = True
+    artifact_byte_limit: StrictInt = Field(
+        default=MAX_JSON_ARTIFACT_BYTES,
+        ge=1_024,
+        le=MAX_JSON_ARTIFACT_BYTES,
+    )
+    selection_algorithm: Literal["mmaudit.semantic-graph-risk-order.v1"] = (
+        "mmaudit.semantic-graph-risk-order.v1"
+    )
+    edge_omissions: tuple[SolidityGraphOmission, ...] = Field(default=(), max_length=64)
+    fact_omissions: tuple[SolidityGraphFactOmission, ...] = Field(default=(), max_length=3)
+
+    @model_validator(mode="after")
+    def omission_accounting_is_canonical_and_honest(self) -> SolidityGraphSet:
+        if len(self.analyzed_graphs) != len(set(self.analyzed_graphs)):
+            raise ValueError("analyzed graph kinds must be unique")
+        canonical = tuple(sorted(self.edge_omissions, key=lambda item: item.graph.value))
+        omitted_kinds = tuple(item.graph for item in canonical)
+        if self.edge_omissions != canonical or len(omitted_kinds) != len(set(omitted_kinds)):
+            raise ValueError("graph omissions must be unique and canonically sorted by graph kind")
+        fact_kinds = tuple(item.fact_kind for item in self.fact_omissions)
+        if self.fact_omissions != tuple(
+            sorted(self.fact_omissions, key=lambda item: item.fact_kind.value)
+        ) or len(fact_kinds) != len(set(fact_kinds)):
+            raise ValueError("graph-fact omissions must be unique and canonically sorted")
+        if self.generation_complete is bool(self.edge_omissions or self.fact_omissions):
+            raise ValueError("graph generation completeness differs from typed omission evidence")
+
+        occurrence_keys = tuple(
+            (item.subject_kind.value, item.subject_sha256) for item in self.retained_occurrences
+        )
+        if occurrence_keys != tuple(sorted(occurrence_keys)) or len(occurrence_keys) != len(
+            set(occurrence_keys)
+        ):
+            raise ValueError("retained graph occurrences must be unique and canonically sorted")
+        expected_occurrence_keys = {
+            *(
+                (
+                    SolidityGraphOccurrenceKind.EDGE.value,
+                    solidity_graph_occurrence_sha256(SolidityGraphOccurrenceKind.EDGE, edge),
+                )
+                for edge in self.edges
+            ),
+            *(
+                (
+                    SolidityGraphOccurrenceKind.GRAPH_NODE.value,
+                    solidity_graph_occurrence_sha256(SolidityGraphOccurrenceKind.GRAPH_NODE, node),
+                )
+                for node in self.nodes
+            ),
+            *(
+                (
+                    SolidityGraphOccurrenceKind.STORAGE_ENTRY.value,
+                    solidity_graph_occurrence_sha256(
+                        SolidityGraphOccurrenceKind.STORAGE_ENTRY, entry
+                    ),
+                )
+                for entry in self.storage_layout
+            ),
+            *(
+                (
+                    SolidityGraphOccurrenceKind.WARNING.value,
+                    solidity_graph_occurrence_sha256(SolidityGraphOccurrenceKind.WARNING, warning),
+                )
+                for warning in self.warnings
+            ),
+        }
+        if len(expected_occurrence_keys) != (
+            len(self.edges) + len(self.nodes) + len(self.storage_layout) + len(self.warnings)
+        ):
+            raise ValueError("retained graph records must have unique normalized identities")
+        if set(occurrence_keys) != expected_occurrence_keys:
+            raise ValueError("retained graph occurrence inventory differs from serialized records")
+        occurrence_counts = {
+            (item.subject_kind, item.subject_sha256): item.occurrence_count
+            for item in self.retained_occurrences
+        }
+
+        analyzed = set(self.analyzed_graphs)
+        for omission in self.edge_omissions:
+            if omission.graph in analyzed:
+                raise ValueError("an omitted graph kind cannot be claimed as fully analyzed")
+            retained_count = sum(edge.graph is omission.graph for edge in self.edges)
+            if omission.retained_count != retained_count:
+                raise ValueError("graph omission retained count differs from retained graph edges")
+            if omission.graph.value not in self.coverage:
+                raise ValueError("an omitted graph kind requires an explicit coverage count")
+            if self.coverage[omission.graph.value] != retained_count:
+                raise ValueError("graph omission retained count differs from graph coverage")
+            retained_occurrence_count = sum(
+                occurrence_counts[
+                    (
+                        SolidityGraphOccurrenceKind.EDGE,
+                        solidity_graph_occurrence_sha256(SolidityGraphOccurrenceKind.EDGE, edge),
+                    )
+                ]
+                for edge in self.edges
+                if edge.graph is omission.graph
+            )
+            if omission.retained_occurrence_count != retained_occurrence_count:
+                raise ValueError(
+                    "graph omission retained occurrence count differs from its inventory"
+                )
+        observed_fact_counts = {
+            SolidityGraphFactKind.GRAPH_NODE: len(self.nodes),
+            SolidityGraphFactKind.STORAGE_ENTRY: len(self.storage_layout),
+            SolidityGraphFactKind.WARNING: len(self.warnings),
+        }
+        for fact_omission in self.fact_omissions:
+            if fact_omission.retained_count != observed_fact_counts[fact_omission.fact_kind]:
+                raise ValueError("graph-fact omission retained count differs from graph facts")
+            occurrence_kind = SolidityGraphOccurrenceKind(fact_omission.fact_kind.value)
+            retained_occurrence_count = sum(
+                item.occurrence_count
+                for item in self.retained_occurrences
+                if item.subject_kind is occurrence_kind
+            )
+            if fact_omission.retained_occurrence_count != retained_occurrence_count:
+                raise ValueError(
+                    "graph-fact omission retained occurrence count differs from its inventory"
+                )
+        return self
 
 
 class InvariantSpec(StrictModel):
@@ -10351,6 +10803,10 @@ class EconomicTemplateExecutionCoverage(StrictModel):
         return self
 
 
+SolidityCoverageCount = Annotated[StrictInt, Field(ge=0, le=2**63 - 1)]
+SolidityCoverageSha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+
 class SolidityCoverage(StrictModel):
     projects_discovered: int = 0
     project_types: list[str] = Field(default_factory=list)
@@ -10362,14 +10818,27 @@ class SolidityCoverage(StrictModel):
     state_variables_indexed: int = 0
     ast_backed_files: int = 0
     fallback_parser_files: int = 0
-    graph_edge_counts: dict[str, int] = Field(default_factory=dict)
-    graph_node_counts: dict[str, int] = Field(default_factory=dict)
-    asset_flow_operation_counts: dict[str, int] = Field(default_factory=dict)
-    asset_flow_direction_counts: dict[str, int] = Field(default_factory=dict)
-    control_resolution_counts: dict[str, int] = Field(default_factory=dict)
-    governance_stage_counts: dict[str, int] = Field(default_factory=dict)
-    dependency_resolution_counts: dict[str, int] = Field(default_factory=dict)
-    oracle_freshness_counts: dict[str, int] = Field(default_factory=dict)
+    graph_edge_counts: dict[str, SolidityCoverageCount] = Field(default_factory=dict)
+    graph_retained_edge_occurrence_counts: dict[str, SolidityCoverageCount] = Field(
+        default_factory=dict
+    )
+    graph_candidate_edge_counts: dict[str, SolidityCoverageCount] = Field(default_factory=dict)
+    graph_omitted_edge_counts: dict[str, SolidityCoverageCount] = Field(default_factory=dict)
+    graph_omission_evidence_sha256s: list[SolidityCoverageSha256] = Field(default_factory=list)
+    graph_node_counts: dict[str, SolidityCoverageCount] = Field(default_factory=dict)
+    graph_fact_retained_counts: dict[str, SolidityCoverageCount] = Field(default_factory=dict)
+    graph_fact_retained_occurrence_counts: dict[str, SolidityCoverageCount] = Field(
+        default_factory=dict
+    )
+    graph_fact_candidate_counts: dict[str, SolidityCoverageCount] = Field(default_factory=dict)
+    graph_fact_omitted_counts: dict[str, SolidityCoverageCount] = Field(default_factory=dict)
+    graph_fact_omission_evidence_sha256s: list[SolidityCoverageSha256] = Field(default_factory=list)
+    asset_flow_operation_counts: dict[str, SolidityCoverageCount] = Field(default_factory=dict)
+    asset_flow_direction_counts: dict[str, SolidityCoverageCount] = Field(default_factory=dict)
+    control_resolution_counts: dict[str, SolidityCoverageCount] = Field(default_factory=dict)
+    governance_stage_counts: dict[str, SolidityCoverageCount] = Field(default_factory=dict)
+    dependency_resolution_counts: dict[str, SolidityCoverageCount] = Field(default_factory=dict)
+    oracle_freshness_counts: dict[str, SolidityCoverageCount] = Field(default_factory=dict)
     graph_analysis_state: AnalysisState = AnalysisState.NOT_ANALYZED
     invariants_discovered: int = 0
     executable_invariants: int = 0
@@ -10412,6 +10881,151 @@ class SolidityCoverage(StrictModel):
 
     @model_validator(mode="after")
     def nested_coverage_matches_top_level_counts(self) -> SolidityCoverage:
+        if self.graph_omission_evidence_sha256s != sorted(
+            set(self.graph_omission_evidence_sha256s)
+        ) or any(
+            re.fullmatch(r"[0-9a-f]{64}", value) is None
+            for value in self.graph_omission_evidence_sha256s
+        ):
+            raise ValueError("graph omission evidence hashes must be unique sorted SHA-256")
+        if self.graph_fact_omission_evidence_sha256s != sorted(
+            set(self.graph_fact_omission_evidence_sha256s)
+        ) or any(
+            re.fullmatch(r"[0-9a-f]{64}", value) is None
+            for value in self.graph_fact_omission_evidence_sha256s
+        ):
+            raise ValueError("graph-fact omission hashes must be unique sorted SHA-256")
+
+        graph_maps = {
+            "graph_edge_counts": self.graph_edge_counts,
+            "graph_retained_edge_occurrence_counts": (self.graph_retained_edge_occurrence_counts),
+            "graph_candidate_edge_counts": self.graph_candidate_edge_counts,
+            "graph_omitted_edge_counts": self.graph_omitted_edge_counts,
+            "graph_node_counts": self.graph_node_counts,
+            "graph_fact_retained_counts": self.graph_fact_retained_counts,
+            "graph_fact_retained_occurrence_counts": (self.graph_fact_retained_occurrence_counts),
+            "graph_fact_candidate_counts": self.graph_fact_candidate_counts,
+            "graph_fact_omitted_counts": self.graph_fact_omitted_counts,
+            "asset_flow_operation_counts": self.asset_flow_operation_counts,
+            "asset_flow_direction_counts": self.asset_flow_direction_counts,
+            "control_resolution_counts": self.control_resolution_counts,
+            "governance_stage_counts": self.governance_stage_counts,
+            "dependency_resolution_counts": self.dependency_resolution_counts,
+            "oracle_freshness_counts": self.oracle_freshness_counts,
+        }
+        graph_lists = {
+            "graph_omission_evidence_sha256s": self.graph_omission_evidence_sha256s,
+            "graph_fact_omission_evidence_sha256s": (self.graph_fact_omission_evidence_sha256s),
+            "graph_warnings": self.graph_warnings,
+        }
+        if self.graph_analysis_state is AnalysisState.NOT_ANALYZED:
+            nonempty_graph_fields = sorted(
+                name for name, values in (*graph_maps.items(), *graph_lists.items()) if values
+            )
+            if nonempty_graph_fields:
+                raise ValueError(
+                    "not-analyzed Solidity graph coverage cannot contain graph evidence: "
+                    + ", ".join(nonempty_graph_fields)
+                )
+        else:
+            supported_graph_states = {
+                AnalysisState.ATTEMPTED_FAILED,
+                AnalysisState.FALLBACK_PARSER,
+                AnalysisState.DETERMINISTIC,
+            }
+            if self.graph_analysis_state not in supported_graph_states:
+                raise ValueError("Solidity graph coverage has an unsupported analysis state")
+            edge_kinds = {kind.value for kind in SolidityGraphKind}
+            dense_edge_maps = {
+                "retained edge records": self.graph_edge_counts,
+                "retained edge occurrences": self.graph_retained_edge_occurrence_counts,
+                "candidate edge occurrences": self.graph_candidate_edge_counts,
+            }
+            for label, counts in dense_edge_maps.items():
+                if set(counts) != edge_kinds:
+                    raise ValueError(
+                        f"Solidity graph {label} must contain every canonical graph kind"
+                    )
+            if not set(self.graph_omitted_edge_counts) <= edge_kinds:
+                raise ValueError("Solidity graph omitted counts contain an unknown graph kind")
+            if any(count == 0 for count in self.graph_omitted_edge_counts.values()):
+                raise ValueError("Solidity graph omitted counts must be strictly positive")
+            if len(self.graph_omission_evidence_sha256s) != len(self.graph_omitted_edge_counts):
+                raise ValueError(
+                    "Solidity graph omission hashes must match omitted graph kinds one-for-one"
+                )
+            for kind in edge_kinds:
+                retained_records = self.graph_edge_counts[kind]
+                retained_occurrences = self.graph_retained_edge_occurrence_counts[kind]
+                if retained_occurrences < retained_records:
+                    raise ValueError(
+                        "retained edge occurrences cannot be fewer than retained records"
+                    )
+                omitted = self.graph_omitted_edge_counts.get(kind, 0)
+                if self.graph_candidate_edge_counts[kind] != retained_occurrences + omitted:
+                    raise ValueError(
+                        "Solidity graph candidate counts must equal retained occurrences plus omitted"
+                    )
+
+            fact_kinds = {kind.value for kind in SolidityGraphFactKind}
+            dense_fact_maps = {
+                "retained fact records": self.graph_fact_retained_counts,
+                "retained fact occurrences": self.graph_fact_retained_occurrence_counts,
+                "candidate fact occurrences": self.graph_fact_candidate_counts,
+            }
+            for label, counts in dense_fact_maps.items():
+                if set(counts) != fact_kinds:
+                    raise ValueError(
+                        f"Solidity graph {label} must contain every canonical fact kind"
+                    )
+            if not set(self.graph_fact_omitted_counts) <= fact_kinds:
+                raise ValueError("Solidity graph-fact omitted counts contain an unknown fact kind")
+            if any(count == 0 for count in self.graph_fact_omitted_counts.values()):
+                raise ValueError("Solidity graph-fact omitted counts must be strictly positive")
+            if len(self.graph_fact_omission_evidence_sha256s) != len(
+                self.graph_fact_omitted_counts
+            ):
+                raise ValueError(
+                    "Solidity graph-fact omission hashes must match omitted fact kinds one-for-one"
+                )
+            for fact_kind in fact_kinds:
+                retained_records = self.graph_fact_retained_counts[fact_kind]
+                retained_occurrences = self.graph_fact_retained_occurrence_counts[fact_kind]
+                if retained_occurrences < retained_records:
+                    raise ValueError(
+                        "retained graph-fact occurrences cannot be fewer than retained records"
+                    )
+                omitted = self.graph_fact_omitted_counts.get(fact_kind, 0)
+                if self.graph_fact_candidate_counts[fact_kind] != (retained_occurrences + omitted):
+                    raise ValueError(
+                        "Solidity graph-fact candidate counts must equal retained occurrences "
+                        "plus omitted"
+                    )
+
+            node_kinds = {kind.value for kind in SolidityGraphNodeKind}
+            if not set(self.graph_node_counts) <= node_kinds:
+                raise ValueError("Solidity graph-node counts contain an unknown node kind")
+            if (
+                sum(self.graph_node_counts.values())
+                != self.graph_fact_retained_counts[SolidityGraphFactKind.GRAPH_NODE.value]
+            ):
+                raise ValueError(
+                    "Solidity graph-node counts differ from retained graph-node records"
+                )
+            if (
+                len(self.graph_warnings)
+                != self.graph_fact_retained_counts[SolidityGraphFactKind.WARNING.value]
+            ):
+                raise ValueError("Solidity graph warnings differ from retained warning records")
+            has_typed_omissions = bool(
+                self.graph_omitted_edge_counts or self.graph_fact_omitted_counts
+            )
+            if (self.graph_analysis_state is AnalysisState.ATTEMPTED_FAILED) is not (
+                has_typed_omissions
+            ):
+                raise ValueError(
+                    "Solidity graph attempted-failed state must match typed omission evidence"
+                )
         if any(
             kind != evidence.kind for kind, evidence in self.economic_template_execution.items()
         ):
@@ -11129,6 +11743,197 @@ class UsageRecord(StrictModel):
         return self
 
 
+def validate_audit_model_selection_usage_custody(
+    *,
+    audit_model_selection: AuditModelSelection | None,
+    usage: Sequence[UsageRecord],
+    expected_bundle_sha256: str | None = None,
+) -> None:
+    """Bind every retained paid-audit route to one exact durable selection.
+
+    This is structural custody only. Neither a self-hashed selection, its routing
+    projection, nor an expected bundle hash supplied by a resealable manifest is
+    treated as independent runtime or legal authority.
+    """
+
+    from mmaudit.models.policy_selection import (
+        AuditModelRoutingEvidence,
+    )
+    from mmaudit.models.policy_selection import (
+        AuditModelSelection as SelectionModel,
+    )
+    from mmaudit.models.usage import usage_requires_audit_policy_evidence
+
+    if (
+        expected_bundle_sha256 is not None
+        and re.fullmatch(r"[0-9a-f]{64}", expected_bundle_sha256) is None
+    ):
+        raise ValueError("expected audit model-selection bundle hash is invalid")
+    if audit_model_selection is not None and type(audit_model_selection) is not SelectionModel:
+        raise ValueError("audit model selection has an invalid exact type")
+
+    scalar_keys = set(AuditModelRoutingEvidence.model_fields) - {
+        "schema_version",
+        "route",
+        "expires_at",
+        "runtime_authorized",
+        "routing_evidence_sha256",
+    }
+    scalar_keys.update(
+        {
+            "exact_model_id",
+            "provider_name",
+            "provider_endpoint",
+            "policy_route_sha256",
+            "selection_expires_at",
+            "audit_policy_routing_evidence_sha256",
+            "audit_selection_capability_sha256",
+        }
+    )
+    selected_by_id = (
+        {model.exact_model_id: model for model in audit_model_selection.models}
+        if audit_model_selection is not None
+        else {}
+    )
+    for record in usage:
+        routing = record.routing
+        raw_evidence = routing.get("audit_model_routing_evidence")
+        has_detached_fragments = raw_evidence is not None or any(
+            key in routing for key in scalar_keys
+        )
+        required = usage_requires_audit_policy_evidence(record)
+        if raw_evidence is None:
+            if has_detached_fragments:
+                raise ValueError("usage retains incomplete typed audit routing evidence")
+            if required:
+                raise ValueError("REAL paid-audit usage lacks typed audit routing evidence")
+            continue
+        if audit_model_selection is None:
+            raise ValueError("typed audit routing evidence lacks report model selection")
+        try:
+            encoded_evidence = json.dumps(
+                raw_evidence,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+            if len(encoded_evidence) > MAX_JSON_ARTIFACT_BYTES:
+                raise ValueError("usage typed audit routing evidence exceeds the byte limit")
+            evidence = AuditModelRoutingEvidence.model_validate_json(
+                encoded_evidence,
+                strict=True,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("usage typed audit routing evidence is invalid") from exc
+        metadata = dict(evidence.request_metadata())
+        routing_evidence_sha256 = metadata.pop("routing_evidence_sha256")
+        if (
+            routing.get("audit_model_routing_evidence") != evidence.model_dump(mode="json")
+            or routing.get("audit_policy_routing_evidence_sha256") != routing_evidence_sha256
+            or any(routing.get(key) != value for key, value in metadata.items())
+        ):
+            raise ValueError("usage scalar audit routing joins differ from typed evidence")
+
+        selection = audit_model_selection
+        selected = selected_by_id.get(evidence.route.exact_model_id)
+        if selected is None:
+            raise ValueError("usage audit route is absent from policy-selected models")
+        capability_payload = {
+            "selected_at": selection.selected_at.isoformat().replace("+00:00", "Z"),
+            "expires_at": selection.expires_at.isoformat().replace("+00:00", "Z"),
+            "audit_scope_sha256": selection.audit_scope_sha256,
+            "source_sha256": selection.source_sha256,
+            "audit_context_sha256": selection.audit_context_sha256,
+            "audit_selection_sha256": selection.selection_sha256,
+            "technical_qualification_capability_sha256": (
+                selection.technical_qualification_capability_sha256
+            ),
+            "technical_production_selection_sha256": (
+                selection.technical_production_selection_sha256
+            ),
+            "policy_artifact_sha256": selection.policy_artifact_sha256,
+            "policy_evaluation_sha256": selection.policy_evaluation_sha256,
+            "policy_authority_receipt_sha256": selection.policy_authority_receipt_sha256,
+            "policy_source_observation_sha256": selection.policy_source_observation_sha256,
+            "models": [
+                model.model_dump(
+                    mode="json",
+                    exclude={
+                        "schema_version",
+                        "policy_route_sha256",
+                        "technical_qualification_status",
+                        "policy_eligibility_status",
+                        "selected_model_sha256",
+                    },
+                )
+                for model in selection.models
+            ],
+        }
+        expected_capability_sha256 = hashlib.sha256(
+            json.dumps(
+                capability_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        if (
+            evidence.audit_selection_sha256 != selection.selection_sha256
+            or evidence.selected_model_set_sha256 != selection.selected_model_set_sha256
+            or evidence.audit_scope_sha256 != selection.audit_scope_sha256
+            or evidence.source_sha256 != selection.source_sha256
+            or evidence.audit_context_sha256 != selection.audit_context_sha256
+            or evidence.client_constraints_sha256 != selection.client_constraints_sha256
+            or evidence.technical_production_selection_sha256
+            != selection.technical_production_selection_sha256
+            or evidence.technical_qualification_capability_sha256
+            != selection.technical_qualification_capability_sha256
+            or evidence.policy_artifact_sha256 != selection.policy_artifact_sha256
+            or evidence.policy_evaluation_sha256 != selection.policy_evaluation_sha256
+            or evidence.policy_authority_receipt_sha256 != selection.policy_authority_receipt_sha256
+            or evidence.policy_authority_statement_sha256
+            != selection.policy_authority_statement_sha256
+            or evidence.policy_authority_envelope_sha256
+            != selection.policy_authority_envelope_sha256
+            or evidence.policy_authority_trust_anchor_sha256
+            != selection.policy_authority_trust_anchor_sha256
+            or evidence.policy_source_observation_sha256
+            != selection.policy_source_observation_sha256
+            or evidence.policy_source_commitment_set_sha256
+            != selection.policy_source_commitment_set_sha256
+            or evidence.selected_model_sha256 != selected.selected_model_sha256
+            or evidence.route.exact_model_id != selected.exact_model_id
+            or evidence.route.provider_name != selected.approved_provider_name
+            or evidence.route.provider_endpoint != selected.approved_provider_endpoint
+            or evidence.route.route_sha256 != selected.policy_route_sha256
+            or evidence.expires_at != selection.expires_at
+            or record.requested_model != selected.exact_model_id
+            or record.returned_model != selected.canonical_model_slug
+            or record.actual_model != selected.canonical_model_slug
+            or record.provider != selected.approved_provider_name
+            or record.configured_provider_endpoints != [selected.approved_provider_endpoint]
+            or (
+                record.actual_provider_endpoint is not None
+                and record.actual_provider_endpoint != selected.approved_provider_endpoint
+            )
+            or (
+                routing.get("audit_selection_capability_sha256") is not None
+                and routing.get("audit_selection_capability_sha256") != expected_capability_sha256
+            )
+        ):
+            raise ValueError("usage typed audit routing evidence differs from report selection")
+        request_time = record.started_at or record.timestamp
+        if request_time < selection.selected_at or request_time >= selection.expires_at:
+            raise ValueError("usage audit route is outside its durable selection window")
+        if (
+            expected_bundle_sha256 is not None
+            and evidence.audit_model_selection_bundle_sha256 != expected_bundle_sha256
+        ):
+            raise ValueError("usage audit routing differs from the exact evidence bundle")
+
+
 class RepositoryFile(StrictModel):
     path: str
     size: int = Field(ge=0)
@@ -11657,6 +12462,10 @@ class AuditReport(StrictModel):
     language_capability: LanguageCapabilityAssessment | None = None
     scope_assessment: AuditScopeAssessment | None = None
     prior_audit_comparison: PriorAuditComparison | None = None
+    audit_model_selection: AuditModelSelection | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     maximum_assurance: MaximumAssuranceAssessment | None = None
     verification_decisions: list[VerificationDecision] = Field(default_factory=list)
     cross_examination_decisions: list[CandidateCrossExaminationDecision] = Field(
@@ -11677,6 +12486,18 @@ class AuditReport(StrictModel):
     model_review_coverage: ModelReviewCoverage | None = None
     report_quality_review: ReportQualityReview | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def audit_model_selection_matches_usage(self) -> AuditReport:
+        """Retain exact paid-audit routing custody without granting runtime authority."""
+
+        if self.schema_version != "1.2" and self.audit_model_selection is not None:
+            raise ValueError("typed audit model-selection evidence requires report schema 1.2")
+        validate_audit_model_selection_usage_custody(
+            audit_model_selection=self.audit_model_selection,
+            usage=self.usage,
+        )
+        return self
 
     @model_validator(mode="after")
     def run_status_matches_minimum_analysis_floor(self) -> AuditReport:

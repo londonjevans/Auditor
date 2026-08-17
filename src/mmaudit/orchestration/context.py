@@ -281,13 +281,27 @@ class _ContextInventorySnapshot:
                 "nodes",
                 "edges",
                 "storage_layout",
+                "retained_occurrences",
                 "analyzed_graphs",
+                "edge_omissions",
+                "fact_omissions",
                 "warnings",
             ):
                 bind(
                     f"solidity_graphs.{field_name}",
                     getattr(solidity_graphs, field_name),
                     provider_field=field_name,
+                )
+            for field_name in (
+                "generation_complete",
+                "artifact_byte_limit",
+                "selection_algorithm",
+            ):
+                bind(
+                    f"solidity_graphs.{field_name}",
+                    (getattr(solidity_graphs, field_name),),
+                    provider_field=field_name,
+                    map_value=True,
                 )
         return cls(
             entries=tuple(entries),
@@ -416,6 +430,36 @@ def _solidity_graph_compaction_inventory(
         binding_field="solidity_graphs.storage_layout",
         snapshot=snapshot,
     )
+    yield from _tagged_inventory(
+        "retained_occurrences",
+        graphs.retained_occurrences,
+        binding_field="solidity_graphs.retained_occurrences",
+        snapshot=snapshot,
+    )
+    yield from _tagged_inventory(
+        "analyzed_graphs",
+        graphs.analyzed_graphs,
+        binding_field="solidity_graphs.analyzed_graphs",
+        snapshot=snapshot,
+    )
+    yield from _tagged_inventory(
+        "coverage",
+        ({"name": name, "count": count} for name, count in sorted(graphs.coverage.items())),
+        binding_field="solidity_graphs.coverage",
+        snapshot=snapshot,
+    )
+    yield from _tagged_inventory(
+        "edge_omissions",
+        graphs.edge_omissions,
+        binding_field="solidity_graphs.edge_omissions",
+        snapshot=snapshot,
+    )
+    yield from _tagged_inventory(
+        "fact_omissions",
+        graphs.fact_omissions,
+        binding_field="solidity_graphs.fact_omissions",
+        snapshot=snapshot,
+    )
 
 
 def _retained_solidity_graph_inventory(
@@ -427,24 +471,17 @@ def _retained_solidity_graph_inventory(
     """Return every original graph item retained in one compact candidate."""
 
     yield from _solidity_graph_compaction_inventory(graphs, snapshot=snapshot)
-    yield from _tagged_inventory(
-        "analyzed_graphs",
-        graphs.analyzed_graphs,
-        binding_field="solidity_graphs.analyzed_graphs",
-        snapshot=snapshot,
-    )
-    yield from _tagged_inventory(
-        "coverage",
-        (
-            {
-                "name": name,
-                "count": count,
-            }
-            for name, count in sorted(graphs.coverage.items())
-        ),
-        binding_field="solidity_graphs.coverage",
-        snapshot=snapshot,
-    )
+    for field_name in (
+        "generation_complete",
+        "artifact_byte_limit",
+        "selection_algorithm",
+    ):
+        yield from _tagged_inventory(
+            field_name,
+            (getattr(graphs, field_name),),
+            binding_field=f"solidity_graphs.{field_name}",
+            snapshot=snapshot,
+        )
     yield from _tagged_inventory(
         "warnings",
         graphs.warnings[: len(original.warnings)],

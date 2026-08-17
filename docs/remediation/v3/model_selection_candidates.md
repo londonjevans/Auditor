@@ -52,9 +52,10 @@ All rows below are ZDR-eligible with structured output and reasoning support.
 | Z-AI / Zhipu | `z-ai/glm-5.2` | 1,048,576 | 0.68 | 2.13 |
 | MiniMax | `minimax/minimax-m3` | 1,048,576 | 0.30 | 1.20 |
 
-That is **eight distinct root lineages**, against a maximum-assurance requirement of at least
-five independent families and at least eight unique high-quality slots. The requirement is
-satisfiable entirely within the ZDR set.
+Those rows span **eight proposed lab groupings**, not eight proven independent root lineages.
+The observation is useful for candidate planning, but it does not establish that the
+maximum-assurance independence requirement is satisfiable within the ZDR set; exact ancestry,
+qualification, and policy eligibility remain unproven.
 
 ## Operator model preference, recorded 2026-08-04
 
@@ -75,10 +76,11 @@ mechanical passes such as classification or deduplication if a role split is lat
 justify it. Only the qualification benchmark decides this; the note records the tier distinction
 so it is not lost in a "use the newest" selection.
 
-Both lineages — `moonshotai` and `deepseek` — are already authorised in
-`docs/remediation/v3/model_lineage_review.md`, so no further lineage decision is needed for
-either. They also count as two distinct root lineages, against a maximum-assurance requirement
-of at least five independent families, so they cannot satisfy the ensemble requirement alone.
+The provisional documentary review groups Moonshot and DeepSeek separately, but grants no runtime
+authority. Its assignment table also omits the exact
+`deepseek/deepseek-v4-flash-0731` candidate. A current exact-set review must therefore cover both
+proposed groups and every selected exact model before either receives independence or
+source-egress credit; these rows cannot satisfy any ensemble requirement on their own.
 
 ## Observed as NOT ZDR-eligible
 
@@ -91,13 +93,13 @@ excluded while its base model is included — `openai/gpt-5.5` is ZDR-eligible a
 
 Independence must be established per root lineage, not per vendor string.
 
-- `x-ai/grok-4.5` and `x-ai/grok-4.20` share one root lineage. Selecting both yields one
-  independent vote, not two.
-- `anthropic/claude-opus-5` and `anthropic/claude-sonnet-5` share one root lineage.
+- `x-ai/grok-4.5` and `x-ai/grok-4.20` are conservatively grouped until exact ancestry evidence
+  exists. Selecting both receives one independent vote, not two.
+- `anthropic/claude-opus-5` and `anthropic/claude-sonnet-5` are likewise conservatively grouped
+  and receive no extra independence credit.
 - Among the previously frozen set, `deepcogito/cogito-v2.1-671b` and
-  `nvidia/nemotron-3-super-120b` require particular care: their vendor prefixes imply
-  independence while their bases may derive from DeepSeek and Llama respectively. Derivation
-  must be evidenced, not inferred from the name.
+  `nvidia/nemotron-3-super-120b` lack complete ancestry evidence in this record. Independence or
+  collision must be evidenced, not inferred from a vendor prefix, model name, or parameter count.
 - `:batch` and `-fast` variants of one model are the same lineage and the same model.
 
 ## Cost and variant observations
@@ -118,11 +120,14 @@ Independence must be established per root lineage, not per vendor string.
 
 ## Required next steps
 
-1. Re-run discovery through the pipeline so the candidate set carries hash-bound evidence
-   (`V3-QUALIFY-001`). Nothing in this document is admissible as that evidence.
-2. Perform the root-lineage review for the newly discovered set (`V3-LINEAGE-001`), applying
-   the cautions above.
-3. Calibrate thresholds before paid qualification (`V3-CALIBRATE-001`); the current
-   all-dimension `1.0` policy would reject every model regardless of capability.
-4. Stand up daily catalogue refresh and drift detection (`V3-MODELREFRESH-001`), because this
-   observation is already stale by construction.
+1. Complete a current exact discovery/refresh observation under `V3-MODELREFRESH-001` so the
+   candidate set carries hash-bound evidence. Nothing in this document is admissible as that
+   evidence.
+2. Perform and independently authenticate the complete exact-set root-lineage review under
+   `V3-LINEAGE-001`, applying the cautions above.
+3. Execute real non-dispositive calibration against the frozen 24-case predecessor policy,
+   then freeze measured schema-v2 thresholds through the authenticated two-campaign lifecycle
+   (`V3-CALIBRATE-001`). No candidate pass or failure is asserted before measurement.
+4. Run staged real qualification (`V3-QUALIFY-001`) only after the refreshed identity, lineage,
+   calibrated-policy, and commercial-policy prerequisites are satisfied. Continue daily refresh
+   and drift detection because every observation becomes stale by construction.

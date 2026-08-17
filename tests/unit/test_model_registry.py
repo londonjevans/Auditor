@@ -21,6 +21,7 @@ from mmaudit.models.qualification import (
 from mmaudit.models.registry import ModelRegistry, ProductionQualificationValidation
 from mmaudit.models.schemas import AuditProfile
 from tests.conftest import MODEL_IDS, base_config_data, model_registry_entry
+from tests.qualification_support import synthetic_production_qualification
 from tests.unit import test_model_qualification as qualification_fixtures
 
 
@@ -37,6 +38,14 @@ def _metadata(config: AuditConfig) -> list[dict[str, Any]]:
 def _verified_production_config_and_capability() -> tuple[
     AuditConfig, VerifiedProductionQualification, datetime
 ]:
+    """Build a registered opaque capability for registry and manifest boundary tests.
+
+    Resolver and release-pinned calibrated-policy issuance are covered by the
+    qualification modules.  This cross-module fixture deliberately uses the bounded
+    test-only opaque capability issuer; it is not evidence of a current production v2
+    release.
+    """
+
     bundle = qualification_fixtures._bundle()
     observed_at = qualification_fixtures._NOW + timedelta(hours=4)
     results = bundle.artifact.results
@@ -81,10 +90,11 @@ def _verified_production_config_and_capability() -> tuple[
         }
     )
     config = AuditConfig.model_validate(data)
-    assert bundle.bindings.effective_config_sha256 != config.stable_hash()
-    qualification = qualification_fixtures._resolve_for_test(
-        bundle,
-        production_effective_config_sha256=config.stable_hash(),
+    qualification = synthetic_production_qualification(
+        config,
+        observed_at,
+        provider_endpoint=results[0].approved_provider_endpoint,
+        provider_name=results[0].approved_provider_name,
     )
     return config, qualification, observed_at
 
@@ -494,7 +504,7 @@ def test_verified_production_selection_resolves_every_exact_model_and_role() -> 
 
     assert evidence.valid
     assert not errors
-    assert qualification.bindings.effective_config_sha256 != config.stable_hash()
+    assert qualification.bindings.effective_config_sha256 == config.stable_hash()
     assert qualification.production_effective_config_sha256 == config.stable_hash()
     assert evidence.production_effective_config_sha256 == config.stable_hash()
     assert evidence.configured_model_ids == evidence.qualified_model_ids
@@ -648,7 +658,7 @@ def test_production_selection_rejects_effective_config_binding_mismatch() -> Non
     )
 
 
-def test_maximum_assurance_rejects_alternate_self_hashed_quality_inputs() -> None:
+def test_maximum_assurance_rejects_qualification_bound_to_different_effective_config() -> None:
     config, qualification, observed_at = _verified_production_config_and_capability()
     maximum = config.model_copy(update={"profile": AuditProfile.MAXIMUM_ASSURANCE})
 
@@ -659,9 +669,19 @@ def test_maximum_assurance_rejects_alternate_self_hashed_quality_inputs() -> Non
     )
 
     assert not evidence.valid
-    assert any("qualification policy differs" in error for error in evidence.errors)
-    assert any("benchmark corpus differs" in error for error in evidence.errors)
-    assert any("benchmark ground truth differs" in error for error in evidence.errors)
+    pins = maximum.maximum_assurance.qualification
+    assert qualification.policy_sha256 == pins.policy_sha256
+    assert (
+        qualification.bindings.benchmark_corpus_version,
+        qualification.bindings.benchmark_corpus_sha256,
+    ) == (pins.corpus_version, pins.corpus_sha256)
+    assert (
+        qualification.bindings.benchmark_ground_truth_version,
+        qualification.bindings.benchmark_ground_truth_sha256,
+    ) == (pins.ground_truth_version, pins.ground_truth_sha256)
+    assert "verified production qualification binds a different effective configuration" in (
+        evidence.errors
+    )
 
 
 def test_production_selection_rejects_selected_alias_inheritance() -> None:

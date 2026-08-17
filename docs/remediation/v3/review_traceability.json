@@ -1,6 +1,9 @@
 {
   "schema_version": "1.0.0",
+  "objective_path": "docs/remediation/v3/product_completion_goal.txt",
   "objective_sha256": "f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43",
+  "product_vision_path": "product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.md",
+  "product_vision_sha256": "b699e3b037b72298608928eb485c6f06cf82766c874716faaa2fd88b3504e0ce",
   "baseline_commit": "6465bb5824903180f2fc631663ab327993c36a20",
   "evidence_classes": [
     "REAL_RUNTIME",
@@ -157,19 +160,20 @@
       "status": "PARTIAL",
       "current_evidence_class": "LOCAL_IMPLEMENTATION",
       "evidence": [
-        "Typed implementation paths and synthetic local regressions prove that non-dispositive calibration artifacts bind complete live candidate campaigns, exact frozen inputs, REAL-report exclusions, campaign-timely approved root lineages, and per-dimension distributions; no real calibration artifact is claimed.",
-        "Qualification policy schema v2 requires calibrated rationales and distribution hashes, non-absolute judgment thresholds with nontrivial denominators, designated absolute hard gates, and role-scoped investigator/verifier/falsifier/judge policies.",
-        "Final v2 qualification and production resolution require live calibration and calibrated-policy authority; raw calibration and campaign capability registration paths are not module-reachable.",
-        "Implementation: src/mmaudit/models/calibration.py, src/mmaudit/models/qualification.py, src/mmaudit/models/qualification_workflow.py, src/mmaudit/benchmark/model_portfolio.py, and src/mmaudit/cli.py; published schemas: schemas/model_calibration.schema.json and schemas/model_qualification.schema.json.",
-        "Synthetic/local tests: tests/unit/test_model_calibration.py, tests/unit/test_model_calibration_cli.py, tests/unit/test_qualification_policy_calibration.py, tests/unit/test_role_qualification.py, and tests/unit/test_candidate_benchmark_campaign.py. The exact joined acceptance command passed 130 tests in 317.29 seconds; the full local suite passed 3464 tests with 11 explicit prerequisite skips.",
+        "Typed implementation paths and synthetic local regressions prove that non-dispositive calibration artifacts bind complete live candidate campaigns, exact frozen inputs, REAL-report exclusions, signed campaign-timely root-lineage decisions, and per-dimension distributions; no real calibration artifact is claimed.",
+        "The frozen synthetic corpus has 24 materially distinct cases and 85 scored observations per model: all fourteen judgment dimensions have four cases, exact source location has two, prompt-injection resistance has three, and structured output has twenty-four.",
+        "Qualification policy schema v2 is a deterministic calibration projection: global support requires eight exact models across six roots, role support uses frozen four/two/two/two root floors, judgment thresholds are the greatest supported non-perfect lattice score, deterministic gates remain 1.0, and every global and role vector must be jointly reachable.",
+        "Calibration A is persisted before P2 derivation; both artifacts use bounded descriptor-relative private publication. Exact R0-to-R1 lineage and P1/C1-to-A-to-P2/C2 transition records plus successor-release pins are required before final v2 qualification and production resolution. Schema-v1 policy is non-dispositive.",
+        "Implementation: src/mmaudit/models/lineage_authority.py, src/mmaudit/models/lineage_transition.py, src/mmaudit/models/calibration.py, src/mmaudit/models/calibration_transition.py, src/mmaudit/models/qualification.py, src/mmaudit/models/qualification_workflow.py, src/mmaudit/benchmark/model_portfolio.py, and src/mmaudit/cli.py; published schemas include schemas/model_lineage_authority.schema.json, schemas/model_lineage_trust_anchor.schema.json, schemas/model_calibration.schema.json, schemas/model_qualification_policy.schema.json, and schemas/model_qualification.schema.json.",
+        "Synthetic/local tests cover lineage authority and transition, calibration and policy derivation, release transition, qualification/workflow, CLI ordering and artifact publication, and release schemas. The current merged affected matrix passed 297 tests without provider, network, credential, source-egress, or paid execution.",
         "Source implementation checkpoint: 937d97e1d337305ac56cd792fe0d6c2b8bd50674.",
         "Provider-free catalogue refresh now retains and replays strict v2 source, snapshot, semantic diff, terminal attempt, freshness, and staging evidence with exact route identity, live capability provenance, paired prior evidence, trusted staging time, exact per-artifact self-hash binding, and fail-closed selected-route bootstrap behavior.",
         "Two materially different authenticated metadata-only attempts failed closed before a usable snapshot and created no model usage record; no successful current provider snapshot or provider-authored signature is claimed.",
         "The final model-refresh touched matrix passed 354 tests; the complete corrected tree passed 3602 tests with 11 explicit external-prerequisite skips.",
         "A provider-free lineage overlay now binds an exact pending/rootless discovery registry, replayed refresh source and snapshot, explicit trusted freshness policy, bounded raw decision evidence, immutable per-candidate review decisions, route identity, canonical and routing-variant collisions, and one-review-per-root constraints.",
-        "The lineage artifact is schema-fixed to PROVIDER_FREE_STRUCTURAL and NOT_EVALUATED, marks provider and operator authenticity NOT_INDEPENDENTLY_PROVEN, and hard-codes production-selection and source-egress authority false. All eight approval-dependent consumers have negative coverage.",
+        "The structural lineage artifact is schema-fixed to PROVIDER_FREE_STRUCTURAL and NOT_EVALUATED, marks provider and operator authenticity NOT_INDEPENDENTLY_PROVEN, and hard-codes production-selection and source-egress authority false. A separate SSHSIG envelope and opaque capability can authorize only calibration identity credit; all ten approval-dependent consumers remain fail-closed and the two previously missing revocation regressions are present.",
         "The joined lineage, discovery, refresh, qualification, and consumer matrix passed 565 tests; the complete suite passed all non-loopback groups and the sandbox-denied read-only bridge group passed 76 tests when rerun with local-loopback permission. No provider or credential access occurred.",
-        "No exact production model is currently qualified."
+        "The empirical support rules are not statistical-significance claims. A representative randomized independently adjudicated holdout, current refresh and actual signed lineage decision, real calibration, source-pinned measured P2/C2, and independent qualification campaign are absent. No exact production model is currently qualified."
       ],
       "remaining_proof": "Complete a successful current refresh; retain and consume durable prior evidence across reviewed registry evolution; authenticate a complete exact operator decision and bind it without inventing quality; expand judgment denominators; bind per-role reasoning effort; execute real calibration; freeze its measured policy; and complete staged real role/whole-protocol qualification and promotion."
     },
@@ -229,10 +233,13 @@
       "id": "Q",
       "title": "Honest Solidity/EVM product scope",
       "tickets": ["V3-SCOPE-001"],
-      "status": "QUEUED",
-      "current_evidence_class": "MISSING",
-      "evidence": [],
-      "remaining_proof": "Solidity-EVM and generic-source-review profiles, plugin interface, language mismatch gates, and corrected README/CLI claims."
+      "status": "COMPLETE",
+      "current_evidence_class": "LOCAL_IMPLEMENTATION",
+      "evidence": [
+        "The source-bound Solidity/EVM capability profile and explicitly reduced generic-source-review boundary are implemented across CLI, reports, manifests, release verification, schemas, and tests.",
+        "Language mismatch, generic-profile EVM-stage suppression, and false maximum-assurance projections fail closed; the terminal ticket suite passed 4846 tests with 11 explicit unavailable-prerequisite skips."
+      ],
+      "remaining_proof": null
     },
     {
       "id": "R",
@@ -247,10 +254,12 @@
       "id": "S",
       "title": "Required real end-to-end runs",
       "tickets": ["V3-SMOKE-001", "V3-SINGLE-AUDIT-001", "V3-MULTI-AUDIT-001", "V3-BENCHMARK-001"],
-      "status": "QUEUED",
-      "current_evidence_class": "MISSING",
-      "evidence": [],
-      "remaining_proof": "Real provider smoke, sharded single-model audit, multi-model audit, maximum-assurance benchmark audit, and privacy-gated operator repository run when eligible."
+      "status": "PARTIAL",
+      "current_evidence_class": "REAL_RUNTIME",
+      "evidence": [
+        "V3-SMOKE-001 completed one exact identity-bound real synthetic provider call under STRICT_ZDR with reconciled cost; it is component evidence, not a completed product audit."
+      ],
+      "remaining_proof": "Complete the real sharded single-model audit, multi-model audit, maximum-assurance benchmark audit, and privacy-gated operator repository run when eligible."
     },
     {
       "id": "T",

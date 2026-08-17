@@ -187,11 +187,11 @@ ci_mode = false
 [maximum_assurance.qualification]
 # Release-owned immutable inputs for production model qualification. A target
 # repository cannot replace these with a weaker self-hashed policy or corpus.
-policy_sha256 = "f36e89643bb9c74c607222ac6690a5a2dc3d2ac98f0e36b941d3d1cccc293c83"
+policy_sha256 = "1df14052e97a8ceb2cf3ec9fd25637f5f2f3a821818a54382a7c1f241059da8c"
 corpus_version = "2.0"
-corpus_sha256 = "524f4c37c41d8178c6e159a5d7d67bf0b3fe33c83015c8a8401006f6fbd1ce3b"
+corpus_sha256 = "f92ff08ffff2de6fc4b8a4be547d2a0aef45990f7090f734c551ec696ca33e38"
 ground_truth_version = "2.0"
-ground_truth_sha256 = "09c86d16caa05c9602fa8082a46b2dc438f92cc0b668fe7ce7d001e4a9358c92"
+ground_truth_sha256 = "246f5f84aac6aaeecf20a017c9bd5a0f1897e56d54c82ce5ba75a02751d7118c"
 
 [invariants]
 enabled = true

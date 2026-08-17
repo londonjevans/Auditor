@@ -29,8 +29,8 @@ budget_usd = 250.0
 # requires an explicit existing operator-controlled ledger at invocation time.
 max_request_bytes = 4000000
 max_output_tokens_per_request = 4096
-# Covers the 12-candidate x 16-case inventory plus one bounded retry per case.
-max_requests_per_agent = 512
+# Covers the 12-candidate x 24-case inventory plus one bounded retry per case.
+max_requests_per_agent = 576
 conservative_usd_per_million_tokens = 60.0
 
 [models]

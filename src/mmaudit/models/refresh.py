@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Any, Literal, Self
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Self
 
 from pydantic import (
     BaseModel,
@@ -49,6 +49,9 @@ from mmaudit.models.identifiers import (
     is_openrouter_catalog_model_id,
     require_exact_openrouter_model_id,
 )
+
+if TYPE_CHECKING:
+    from mmaudit.models.policy_eligibility_refresh import ModelPolicyEligibilityRefreshArtifact
 from mmaudit.models.output_modes import (
     StructuredOutputMode,
     mutually_supported_output_modes,
@@ -2102,6 +2105,7 @@ def write_model_refresh_success(
     diff: ModelRefreshDiff,
     attempt: ModelRefreshAttempt,
     freshness: ModelRefreshFreshness,
+    policy_eligibility_refresh: ModelPolicyEligibilityRefreshArtifact | None = None,
 ) -> None:
     """Create a fresh private exact-inventory success directory."""
 
@@ -2121,6 +2125,35 @@ def write_model_refresh_success(
         or freshness.snapshot_sha256 != snapshot.snapshot_sha256
     ):
         raise ModelRefreshValidationError("refresh success artifacts are not hash-bound")
+    validated_policy_refresh = None
+    if policy_eligibility_refresh is not None:
+        from mmaudit.models.policy_eligibility_refresh import (
+            ModelPolicyEligibilityRefreshArtifact,
+        )
+
+        try:
+            validated_policy_refresh = ModelPolicyEligibilityRefreshArtifact.model_validate_json(
+                policy_eligibility_refresh.model_dump_json(),
+                strict=True,
+            )
+        except (AttributeError, ValueError) as exc:
+            raise ModelRefreshValidationError("policy refresh projection is invalid") from exc
+        if (
+            validated_policy_refresh.observed_at != snapshot.retrieved_at
+            or validated_policy_refresh.refresh_retrieved_at != snapshot.retrieved_at
+            or validated_policy_refresh.refresh_snapshot_sha256 != snapshot.snapshot_sha256
+            or validated_policy_refresh.refresh_source_evidence_sha256
+            != snapshot.source_evidence_sha256
+            or validated_policy_refresh.refresh_semantic_sha256 != snapshot.semantic_sha256
+            or validated_policy_refresh.refresh_catalog_snapshot_sha256
+            != snapshot.catalog_snapshot_sha256
+            or validated_policy_refresh.refresh_zdr_snapshot_sha256 != snapshot.zdr_snapshot_sha256
+            or validated_policy_refresh.refresh_candidate_registry_sha256
+            != snapshot.candidate_registry_sha256
+        ):
+            raise ModelRefreshValidationError(
+                "policy refresh projection differs from the exact refresh snapshot"
+            )
     root = _create_private_output_directory(output_dir)
     try:
         _write_private_artifact(root / SOURCE_EVIDENCE_FILENAME, source_evidence)
@@ -2128,6 +2161,15 @@ def write_model_refresh_success(
         _write_private_artifact(root / DIFF_FILENAME, diff)
         _write_private_artifact(root / ATTEMPT_FILENAME, attempt)
         _write_private_artifact(root / FRESHNESS_FILENAME, freshness)
+        if validated_policy_refresh is not None:
+            from mmaudit.models.policy_eligibility_refresh import (
+                POLICY_ELIGIBILITY_REFRESH_FILENAME,
+            )
+
+            _write_private_artifact(
+                root / POLICY_ELIGIBILITY_REFRESH_FILENAME,
+                validated_policy_refresh,
+            )
     except Exception:
         _remove_fresh_output(root)
         raise
@@ -2843,6 +2885,7 @@ def _remove_fresh_output(path: Path) -> None:
         DIFF_FILENAME,
         ATTEMPT_FILENAME,
         FRESHNESS_FILENAME,
+        "model-policy-eligibility-refresh.json",
     ):
         candidate = path / name
         try:

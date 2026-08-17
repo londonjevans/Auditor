@@ -4,9 +4,16 @@ import json
 from collections import Counter
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from mmaudit.benchmark.models import (
+    DETERMINISTIC_MODEL_BENCHMARK_DIMENSIONS,
+    MIN_BENCHMARK_JUDGMENT_CASES,
     ModelBenchmarkClassification,
+    ModelBenchmarkCorpusPayload,
     ModelBenchmarkDimension,
+    ModelBenchmarkGroundTruthPayload,
     blinded_model_benchmark_request,
     load_model_benchmark_corpus,
 )
@@ -17,27 +24,27 @@ CORPUS_PATH = ROOT / "benchmarks" / "model_corpus" / "manifest.json"
 POLICY_PATH = ROOT / "config" / "models.maximum-assurance.toml"
 
 EXPECTED_DENOMINATORS = {
-    ModelBenchmarkDimension.ACCESS_CONTROL: 3,
-    ModelBenchmarkDimension.ACCOUNTING_CONSERVATION: 2,
-    ModelBenchmarkDimension.CROSS_CONTRACT_BUSINESS_LOGIC: 2,
+    ModelBenchmarkDimension.ACCESS_CONTROL: 4,
+    ModelBenchmarkDimension.ACCOUNTING_CONSERVATION: 4,
+    ModelBenchmarkDimension.CROSS_CONTRACT_BUSINESS_LOGIC: 4,
     ModelBenchmarkDimension.EXACT_SOURCE_LOCATION: 2,
-    ModelBenchmarkDimension.FALSE_POSITIVE_REJECTION: 2,
-    ModelBenchmarkDimension.FALSIFIER_QUALITY: 2,
-    ModelBenchmarkDimension.INVARIANT_GENERATION: 2,
-    ModelBenchmarkDimension.ORACLE_ASSUMPTIONS: 2,
+    ModelBenchmarkDimension.FALSE_POSITIVE_REJECTION: 4,
+    ModelBenchmarkDimension.FALSIFIER_QUALITY: 4,
+    ModelBenchmarkDimension.INVARIANT_GENERATION: 4,
+    ModelBenchmarkDimension.ORACLE_ASSUMPTIONS: 4,
     ModelBenchmarkDimension.PROMPT_INJECTION_RESISTANCE: 3,
-    ModelBenchmarkDimension.REPORT_QUALITY: 2,
-    ModelBenchmarkDimension.SAFE_NEAR_MISS_REJECTION: 2,
-    ModelBenchmarkDimension.SIGNATURE_REPLAY: 2,
-    ModelBenchmarkDimension.SOLIDITY_SECURITY_REASONING: 2,
-    ModelBenchmarkDimension.STRUCTURED_OUTPUT_COMPLIANCE: 16,
-    ModelBenchmarkDimension.UNSUPPORTED_ASSUMPTION_DISCLOSURE: 2,
-    ModelBenchmarkDimension.UPGRADE_STORAGE: 2,
-    ModelBenchmarkDimension.VERIFIER_QUALITY: 2,
+    ModelBenchmarkDimension.REPORT_QUALITY: 4,
+    ModelBenchmarkDimension.SAFE_NEAR_MISS_REJECTION: 4,
+    ModelBenchmarkDimension.SIGNATURE_REPLAY: 4,
+    ModelBenchmarkDimension.SOLIDITY_SECURITY_REASONING: 4,
+    ModelBenchmarkDimension.STRUCTURED_OUTPUT_COMPLIANCE: 24,
+    ModelBenchmarkDimension.UNSUPPORTED_ASSUMPTION_DISCLOSURE: 4,
+    ModelBenchmarkDimension.UPGRADE_STORAGE: 4,
+    ModelBenchmarkDimension.VERIFIER_QUALITY: 4,
 }
 
 
-def test_semantic_denominators_are_disjoint_non_vacuous_and_policy_bound() -> None:
+def test_semantic_denominators_are_distinct_source_non_vacuous_and_policy_bound() -> None:
     suite = load_model_benchmark_corpus(CORPUS_PATH)
     policy = load_qualification_policy(POLICY_PATH)
     observed = Counter(
@@ -46,15 +53,25 @@ def test_semantic_denominators_are_disjoint_non_vacuous_and_policy_bound() -> No
     observed[ModelBenchmarkDimension.STRUCTURED_OUTPUT_COMPLIANCE] = len(suite.cases)
     thresholds = {threshold.dimension: threshold.minimum_cases for threshold in policy.thresholds}
 
-    assert len(suite.cases) == 16
+    assert len(suite.cases) == 24
+    assert suite.corpus_sha256 == (
+        "f92ff08ffff2de6fc4b8a4be547d2a0aef45990f7090f734c551ec696ca33e38"
+    )
+    assert suite.ground_truth_sha256 == (
+        "246f5f84aac6aaeecf20a017c9bd5a0f1897e56d54c82ce5ba75a02751d7118c"
+    )
     assert dict(observed) == EXPECTED_DENOMINATORS
     assert thresholds == EXPECTED_DENOMINATORS
-    assert all(
-        count >= 2
-        for dimension, count in observed.items()
-        if dimension is not ModelBenchmarkDimension.STRUCTURED_OUTPUT_COMPLIANCE
+    judgment_dimensions = set(ModelBenchmarkDimension) - set(
+        DETERMINISTIC_MODEL_BENCHMARK_DIMENSIONS
     )
+    assert all(
+        observed[dimension] >= MIN_BENCHMARK_JUDGMENT_CASES for dimension in judgment_dimensions
+    )
+    assert max(len(case.dimensions) for case in suite.ground_truth.cases) <= 5
     assert observed[ModelBenchmarkDimension.PROMPT_INJECTION_RESISTANCE] >= 3
+    assert len({case.source_path for case in suite.cases}) == len(suite.cases)
+    assert len({case.source_excerpt for case in suite.cases}) == len(suite.cases)
     assert all(case.training_exposure == "unknown" for case in suite.ground_truth.cases)
 
 
@@ -112,6 +129,88 @@ def test_ambiguous_cases_contain_visible_evidence_for_their_answer_key() -> None
     assert "beforeAssets" in observed_accounting
     assert "afterAssets" in observed_accounting
     assert "credit[msg.sender] += amount;" in observed_accounting
+
+    expanded_accounting = sources["synthetic/C0017.sol"]
+    assert "credit[msg.sender] -= amount;" in expanded_accounting
+    assert "credit[to] += amount;" in expanded_accounting
+    assert "totalCredit += amount;" in expanded_accounting
+
+    remediated_accounting = sources["synthetic/C0018.sol"]
+    assert "credit[msg.sender] -= amount;" in remediated_accounting
+    assert "credit[to] += amount;" in remediated_accounting
+    assert remediated_accounting.count("totalCredit +=") == 1
+    assert "address(this).balance >= totalCredit" in remediated_accounting
+
+    oracle_vulnerability = sources["synthetic/C0019.sol"]
+    assert "cumulativePriceSeconds" in oracle_vulnerability
+    assert "uint256 elapsed = block.timestamp - priorTimestamp;" in oracle_vulnerability
+    assert "return delta / 1 hours;" in oracle_vulnerability
+
+    oracle_boundary = sources["synthetic/C0020.sol"]
+    assert "adapter.quote(asset)" in oracle_boundary
+    assert "require(price > 0" in oracle_boundary
+    assert "block.timestamp <= validUntil" in oracle_boundary
+
+    upgrade_vulnerability = sources["synthetic/C0021.sol"]
+    assert "function setImplementation(address next) external" in upgrade_vulnerability
+    assert "beacon.implementation()" in upgrade_vulnerability
+    assert "delegatecall(msg.data)" in upgrade_vulnerability
+
+    upgrade_boundary = sources["synthetic/C0022.sol"]
+    assert "_authorizeUpgrade(msg.sender, next)" in upgrade_boundary
+    assert "_proxiableUUID(next) == SLOT" in upgrade_boundary
+    assert "internal view virtual" in upgrade_boundary
+
+    signature_vulnerability = sources["synthetic/C0023.sol"]
+    assert "usedByRelayer[msg.sender][nonce]" in signature_vulnerability
+    assert "block.chainid, address(this), recipient, amount, nonce" in signature_vulnerability
+    assert "executedAmount[recipient] += amount;" in signature_vulnerability
+
+    signature_boundary = sources["synthetic/C0024.sol"]
+    assert "isValidSignature" in signature_boundary
+    assert "mapping(bytes32 => bool) public consumed" in signature_boundary
+    assert "block.chainid, address(this), recipient, amount, nonce" in signature_boundary
+
+
+def test_corpus_rejects_duplicate_source_or_excerpt_and_underfilled_judgment() -> None:
+    suite = load_model_benchmark_corpus(CORPUS_PATH)
+    corpus = suite.corpus.model_dump(mode="json", exclude={"corpus_sha256"})
+
+    duplicate_path = json.loads(json.dumps(corpus))
+    duplicate_path["cases"][1]["source_path"] = duplicate_path["cases"][0]["source_path"]
+    with pytest.raises(ValidationError, match="distinct source paths"):
+        ModelBenchmarkCorpusPayload.model_validate(duplicate_path)
+
+    duplicate_excerpt = json.loads(json.dumps(corpus))
+    duplicate_excerpt["cases"][1]["source_excerpt"] = duplicate_excerpt["cases"][0][
+        "source_excerpt"
+    ]
+    with pytest.raises(ValidationError, match="distinct source excerpts"):
+        ModelBenchmarkCorpusPayload.model_validate(duplicate_excerpt)
+
+    ground_truth = suite.ground_truth.model_dump(
+        mode="json",
+        exclude={"ground_truth_sha256"},
+    )
+    access_case = next(
+        case for case in ground_truth["cases"] if case["case_id"] == "case-ecf501a2e15c8c5a"
+    )
+    access_case["dimensions"].remove(ModelBenchmarkDimension.ACCESS_CONTROL.value)
+    with pytest.raises(ValidationError, match="at least four distinct cases"):
+        ModelBenchmarkGroundTruthPayload.model_validate(ground_truth)
+
+
+def test_ground_truth_rejects_more_than_five_dimensions_per_case() -> None:
+    suite = load_model_benchmark_corpus(CORPUS_PATH)
+    ground_truth = suite.ground_truth.model_dump(
+        mode="json",
+        exclude={"ground_truth_sha256"},
+    )
+    ground_truth["cases"][0]["dimensions"] = sorted(
+        dimension.value for dimension in ModelBenchmarkDimension
+    )[:6]
+    with pytest.raises(ValidationError, match="at most 5 items"):
+        ModelBenchmarkGroundTruthPayload.model_validate(ground_truth)
 
 
 def test_injection_cases_cover_comment_unicode_and_schema_styles() -> None:

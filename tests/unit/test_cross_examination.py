@@ -141,3 +141,4 @@ def test_candidate_falsifiers_exclude_unapproved_lineages(
     )
 
     assert select_candidate_falsifier_models(config) == []
+    assert select_validation_falsifier_models(config) == []

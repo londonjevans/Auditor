@@ -81,6 +81,7 @@ class ProductionModelQualificationBinding(StrictModel):
     model_metadata_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     pricing_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     approved_roles: tuple[str, ...] = Field(min_length=1, max_length=128)
+    overall_score: float = Field(strict=True, ge=0, le=1)
     quality_measurement_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     qualification_result_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     benchmark_report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -541,6 +542,7 @@ class ModelRegistry:
                             model_metadata_snapshot_sha256=(model.model_metadata_snapshot_sha256),
                             pricing_snapshot_sha256=model.pricing_snapshot_sha256,
                             approved_roles=model.approved_roles,
+                            overall_score=model.overall_score,
                             quality_measurement_sha256=model.quality_measurement_sha256,
                             qualification_result_sha256=model.qualification_result_sha256,
                             benchmark_report_sha256=model.benchmark_report_sha256,

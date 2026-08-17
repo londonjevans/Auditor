@@ -1,0 +1,289 @@
+{
+  "$defs": {
+    "ModelBenchmarkDimension": {
+      "description": "Independent quality dimensions; aggregates never replace these scores.",
+      "enum": [
+        "solidity_security_reasoning",
+        "cross_contract_business_logic",
+        "accounting_conservation",
+        "access_control",
+        "oracle_assumptions",
+        "upgrade_storage",
+        "signature_replay",
+        "invariant_generation",
+        "false_positive_rejection",
+        "safe_near_miss_rejection",
+        "exact_source_location",
+        "structured_output_compliance",
+        "prompt_injection_resistance",
+        "unsupported_assumption_disclosure",
+        "verifier_quality",
+        "falsifier_quality",
+        "report_quality"
+      ],
+      "title": "ModelBenchmarkDimension",
+      "type": "string"
+    },
+    "QualificationDimensionThreshold": {
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QualificationThresholdBasis"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "calibration_distribution_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Calibration Distribution Sha256"
+        },
+        "dimension": {
+          "$ref": "#/$defs/ModelBenchmarkDimension"
+        },
+        "minimum_cases": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Minimum Cases",
+          "type": "integer"
+        },
+        "minimum_score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Minimum Score",
+          "type": "number"
+        },
+        "rationale": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "minLength": 20,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rationale"
+        }
+      },
+      "required": [
+        "dimension",
+        "minimum_cases",
+        "minimum_score"
+      ],
+      "title": "QualificationDimensionThreshold",
+      "type": "object"
+    },
+    "QualificationRoleClass": {
+      "description": "Security-sensitive role classes with independently measured quality gates.",
+      "enum": [
+        "investigator",
+        "verifier",
+        "falsifier",
+        "judge"
+      ],
+      "title": "QualificationRoleClass",
+      "type": "string"
+    },
+    "QualificationThresholdBasis": {
+      "description": "Why a frozen qualification threshold has its selected value.",
+      "enum": [
+        "deterministic_requirement",
+        "calibrated_distribution"
+      ],
+      "title": "QualificationThresholdBasis",
+      "type": "string"
+    },
+    "RoleQualificationPolicy": {
+      "additionalProperties": false,
+      "description": "A non-vacuous secondary quality gate for one security-sensitive role class.",
+      "properties": {
+        "minimum_overall_rationale": {
+          "maxLength": 2000,
+          "minLength": 20,
+          "title": "Minimum Overall Rationale",
+          "type": "string"
+        },
+        "minimum_overall_score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Minimum Overall Score",
+          "type": "number"
+        },
+        "role_class": {
+          "$ref": "#/$defs/QualificationRoleClass"
+        },
+        "thresholds": {
+          "items": {
+            "$ref": "#/$defs/QualificationDimensionThreshold"
+          },
+          "maxItems": 17,
+          "minItems": 1,
+          "title": "Thresholds",
+          "type": "array"
+        }
+      },
+      "required": [
+        "role_class",
+        "thresholds",
+        "minimum_overall_score",
+        "minimum_overall_rationale"
+      ],
+      "title": "RoleQualificationPolicy",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/model_qualification_policy.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Self-hashed, non-vacuous Tier A policy.",
+  "properties": {
+    "calibration_artifact_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Calibration Artifact Sha256"
+    },
+    "calibration_included_candidate_count": {
+      "anyOf": [
+        {
+          "maximum": 128,
+          "minimum": 8,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Calibration Included Candidate Count"
+    },
+    "calibration_included_root_lineage_count": {
+      "anyOf": [
+        {
+          "maximum": 128,
+          "minimum": 6,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Calibration Included Root Lineage Count"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "maximum_benchmark_evidence_age_days": {
+      "maximum": 30,
+      "minimum": 1,
+      "title": "Maximum Benchmark Evidence Age Days",
+      "type": "integer"
+    },
+    "maximum_validity_days": {
+      "maximum": 90,
+      "minimum": 1,
+      "title": "Maximum Validity Days",
+      "type": "integer"
+    },
+    "policy_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Policy Sha256",
+      "type": "string"
+    },
+    "require_certification_routing": {
+      "const": true,
+      "default": true,
+      "title": "Require Certification Routing",
+      "type": "boolean"
+    },
+    "require_real_execution": {
+      "const": true,
+      "default": true,
+      "title": "Require Real Execution",
+      "type": "boolean"
+    },
+    "role_policies": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RoleQualificationPolicy"
+      },
+      "maxItems": 4,
+      "title": "Role Policies",
+      "type": "array"
+    },
+    "schema_version": {
+      "default": "1.0",
+      "enum": [
+        "1.0",
+        "2.0"
+      ],
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "thresholds": {
+      "items": {
+        "$ref": "#/$defs/QualificationDimensionThreshold"
+      },
+      "maxItems": 17,
+      "minItems": 17,
+      "title": "Thresholds",
+      "type": "array"
+    },
+    "tier_a_minimum_overall_score": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Tier A Minimum Overall Score",
+      "type": "number"
+    },
+    "tier_a_overall_rationale": {
+      "anyOf": [
+        {
+          "maxLength": 2000,
+          "minLength": 20,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Tier A Overall Rationale"
+    }
+  },
+  "required": [
+    "created_at",
+    "thresholds",
+    "tier_a_minimum_overall_score",
+    "maximum_validity_days",
+    "maximum_benchmark_evidence_age_days",
+    "policy_sha256"
+  ],
+  "title": "mmaudit model qualification policy",
+  "type": "object"
+}

@@ -1090,6 +1090,7 @@ class SchedulerJournal:
             task=task,
             activation=self._activation_for_task(task_id),
             usage_record=usage_record,
+            audit_model_selection=self.manifest.bindings.audit_model_selection,
         )
         _write_model(
             self._root_descriptor,
@@ -2601,11 +2602,12 @@ def _validate_loaded_state(
             raise ValueError(
                 "scheduler provider attempt is duplicated, credited, unplanned, or unactivated"
             )
-        task, _plan = task_lookup[attempt.task_id]
+        task, plan = task_lookup[attempt.task_id]
         expected_attempt = SchedulerProviderAttemptEvidence.build(
             task=task,
             activation=attempt_activation,
             usage_record=attempt.usage_record,
+            audit_model_selection=plan.manifest.bindings.audit_model_selection,
         )
         if attempt != expected_attempt:
             raise ValueError("scheduler provider attempt differs from exact task evidence")

@@ -1263,7 +1263,11 @@ def _write_replay_run(
             "falsification_decisions": [],
         },
         "formal-results.json": {"schema_version": "1.0", "runs": []},
-        "solidity-coverage.json": {"schema_version": "1.0", "coverage": None},
+        "solidity-coverage.json": {
+            "schema_version": "1.0",
+            "evidence_authority": "comparison_required",
+            "coverage": None,
+        },
         "model-review-coverage.json": {"schema_version": "1.0", "coverage": None},
         "scope-assessment.json": {"schema_version": "1.0", "assessment": None},
     }

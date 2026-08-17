@@ -1,0 +1,572 @@
+{
+  "$defs": {
+    "PolicyEligibilityRefreshRouteDisposition": {
+      "description": "Refresh-only route states; deliberately contains no eligibility state.",
+      "enum": [
+        "NO_REVIEW_SIGNAL",
+        "REDETERMINATION_REQUIRED"
+      ],
+      "title": "PolicyEligibilityRefreshRouteDisposition",
+      "type": "string"
+    },
+    "PolicyEligibilityRefreshRouteRecord": {
+      "additionalProperties": false,
+      "description": "Exact classification of one checked route in one refresh projection.",
+      "properties": {
+        "automated_eligibility_inference": {
+          "const": false,
+          "default": false,
+          "title": "Automated Eligibility Inference",
+          "type": "boolean"
+        },
+        "disposition": {
+          "$ref": "#/$defs/PolicyEligibilityRefreshRouteDisposition"
+        },
+        "policy_selection_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Policy Selection Authorized",
+          "type": "boolean"
+        },
+        "production_selection_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Production Selection Authorized",
+          "type": "boolean"
+        },
+        "record_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Record Sha256",
+          "type": "string"
+        },
+        "redetermination_required": {
+          "title": "Redetermination Required",
+          "type": "boolean"
+        },
+        "refresh_route_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Refresh Route Sha256",
+          "type": "string"
+        },
+        "review_reasons": {
+          "items": {
+            "$ref": "#/$defs/PolicyReviewReason"
+          },
+          "maxItems": 4,
+          "title": "Review Reasons",
+          "type": "array"
+        },
+        "review_signal_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Review Signal Sha256"
+        },
+        "route": {
+          "$ref": "#/$defs/PolicyEligibilityRoute"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_commitment_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Commitment Sha256"
+        }
+      },
+      "required": [
+        "route",
+        "refresh_route_sha256",
+        "disposition",
+        "review_reasons",
+        "redetermination_required",
+        "record_sha256"
+      ],
+      "title": "PolicyEligibilityRefreshRouteRecord",
+      "type": "object"
+    },
+    "PolicyEligibilityRoute": {
+      "additionalProperties": false,
+      "description": "One exact model/provider/endpoint identity.",
+      "properties": {
+        "exact_model_id": {
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "provider_name": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Provider Name",
+          "type": "string"
+        },
+        "route_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Route Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "provider_name",
+        "provider_endpoint",
+        "route_sha256"
+      ],
+      "title": "PolicyEligibilityRoute",
+      "type": "object"
+    },
+    "PolicyEligibilitySourceCommitment": {
+      "additionalProperties": false,
+      "description": "Per-reference current source observations for one exact eligible route.",
+      "properties": {
+        "commitment_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Commitment Sha256",
+          "type": "string"
+        },
+        "determination_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Determination Sha256",
+          "type": "string"
+        },
+        "route": {
+          "$ref": "#/$defs/PolicyEligibilityRoute"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_reference_observations": {
+          "items": {
+            "$ref": "#/$defs/PolicyEligibilitySourceReferenceObservation"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Source Reference Observations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "route",
+        "determination_sha256",
+        "source_reference_observations",
+        "commitment_sha256"
+      ],
+      "title": "PolicyEligibilitySourceCommitment",
+      "type": "object"
+    },
+    "PolicyEligibilitySourceObservation": {
+      "additionalProperties": false,
+      "description": "Bounded current-source observation required at issue and every use.",
+      "properties": {
+        "artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Artifact Sha256",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "observation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Observation Sha256",
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_commitment_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Commitment Set Sha256",
+          "type": "string"
+        },
+        "source_commitments": {
+          "items": {
+            "$ref": "#/$defs/PolicyEligibilitySourceCommitment"
+          },
+          "maxItems": 128,
+          "minItems": 0,
+          "title": "Source Commitments",
+          "type": "array"
+        }
+      },
+      "required": [
+        "artifact_sha256",
+        "observed_at",
+        "expires_at",
+        "source_commitments",
+        "source_commitment_set_sha256",
+        "observation_sha256"
+      ],
+      "title": "PolicyEligibilitySourceObservation",
+      "type": "object"
+    },
+    "PolicyEligibilitySourceReferenceObservation": {
+      "additionalProperties": false,
+      "description": "One explicit current-content observation for one cited official reference.",
+      "properties": {
+        "current_content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Current Content Sha256",
+          "type": "string"
+        },
+        "expected_content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Expected Content Sha256",
+          "type": "string"
+        },
+        "observation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Observation Sha256",
+          "type": "string"
+        },
+        "reference_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reference Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reference_sha256",
+        "expected_content_sha256",
+        "current_content_sha256",
+        "observation_sha256"
+      ],
+      "title": "PolicyEligibilitySourceReferenceObservation",
+      "type": "object"
+    },
+    "PolicyReviewReason": {
+      "description": "Refresh-safe states; this enum intentionally has no eligible state.",
+      "enum": [
+        "EXPIRED",
+        "MISSING",
+        "REVIEW_REQUIRED",
+        "SOURCE_CHANGED"
+      ],
+      "title": "PolicyReviewReason",
+      "type": "string"
+    },
+    "PolicyReviewSignal": {
+      "additionalProperties": false,
+      "description": "Non-authorizing refresh signal that can only request review.",
+      "properties": {
+        "artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Artifact Sha256",
+          "type": "string"
+        },
+        "automated_eligibility_inference": {
+          "const": false,
+          "default": false,
+          "title": "Automated Eligibility Inference",
+          "type": "boolean"
+        },
+        "determination_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Determination Sha256"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "production_selection_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Production Selection Authorized",
+          "type": "boolean"
+        },
+        "reasons": {
+          "items": {
+            "$ref": "#/$defs/PolicyReviewReason"
+          },
+          "maxItems": 4,
+          "minItems": 1,
+          "title": "Reasons",
+          "type": "array"
+        },
+        "route": {
+          "$ref": "#/$defs/PolicyEligibilityRoute"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "signal_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Signal Sha256",
+          "type": "string"
+        },
+        "source_reference_observations": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/PolicyEligibilitySourceReferenceObservation"
+              },
+              "maxItems": 32,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Reference Observations"
+        }
+      },
+      "required": [
+        "observed_at",
+        "artifact_sha256",
+        "route",
+        "reasons",
+        "signal_sha256"
+      ],
+      "title": "PolicyReviewSignal",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/model_policy_eligibility_refresh.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Self-hashed daily review-signal projection with no positive authority.",
+  "properties": {
+    "artifact_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Artifact Sha256",
+      "type": "string"
+    },
+    "automated_eligibility_inference": {
+      "const": false,
+      "default": false,
+      "title": "Automated Eligibility Inference",
+      "type": "boolean"
+    },
+    "checked_route_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Checked Route Set Sha256",
+      "type": "string"
+    },
+    "checked_routes": {
+      "items": {
+        "$ref": "#/$defs/PolicyEligibilityRoute"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "title": "Checked Routes",
+      "type": "array"
+    },
+    "daily_refresh_max_age_hours": {
+      "const": 24,
+      "default": 24,
+      "title": "Daily Refresh Max Age Hours",
+      "type": "integer"
+    },
+    "evidence_fresh_until": {
+      "format": "date-time",
+      "title": "Evidence Fresh Until",
+      "type": "string"
+    },
+    "observed_at": {
+      "format": "date-time",
+      "title": "Observed At",
+      "type": "string"
+    },
+    "policy_artifact_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Policy Artifact Sha256",
+      "type": "string"
+    },
+    "policy_selection_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Policy Selection Authorized",
+      "type": "boolean"
+    },
+    "production_selection_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Production Selection Authorized",
+      "type": "boolean"
+    },
+    "projection_kind": {
+      "const": "POLICY_REDETERMINATION_SIGNAL_ONLY",
+      "default": "POLICY_REDETERMINATION_SIGNAL_ONLY",
+      "title": "Projection Kind",
+      "type": "string"
+    },
+    "qualification_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Qualification Authorized",
+      "type": "boolean"
+    },
+    "redetermination_required": {
+      "title": "Redetermination Required",
+      "type": "boolean"
+    },
+    "refresh_candidate_registry_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Refresh Candidate Registry Sha256",
+      "type": "string"
+    },
+    "refresh_catalog_snapshot_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Refresh Catalog Snapshot Sha256",
+      "type": "string"
+    },
+    "refresh_retrieved_at": {
+      "format": "date-time",
+      "title": "Refresh Retrieved At",
+      "type": "string"
+    },
+    "refresh_route_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Refresh Route Set Sha256",
+      "type": "string"
+    },
+    "refresh_semantic_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Refresh Semantic Sha256",
+      "type": "string"
+    },
+    "refresh_snapshot_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Refresh Snapshot Sha256",
+      "type": "string"
+    },
+    "refresh_source_evidence_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Refresh Source Evidence Sha256",
+      "type": "string"
+    },
+    "refresh_zdr_snapshot_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Refresh Zdr Snapshot Sha256",
+      "type": "string"
+    },
+    "review_signal_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Review Signal Set Sha256",
+      "type": "string"
+    },
+    "review_signals": {
+      "items": {
+        "$ref": "#/$defs/PolicyReviewSignal"
+      },
+      "maxItems": 128,
+      "title": "Review Signals",
+      "type": "array"
+    },
+    "route_record_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Route Record Set Sha256",
+      "type": "string"
+    },
+    "route_records": {
+      "items": {
+        "$ref": "#/$defs/PolicyEligibilityRefreshRouteRecord"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "title": "Route Records",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_egress_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Source Egress Authorized",
+      "type": "boolean"
+    },
+    "source_observation": {
+      "$ref": "#/$defs/PolicyEligibilitySourceObservation"
+    }
+  },
+  "required": [
+    "observed_at",
+    "refresh_retrieved_at",
+    "evidence_fresh_until",
+    "refresh_snapshot_sha256",
+    "refresh_source_evidence_sha256",
+    "refresh_semantic_sha256",
+    "refresh_catalog_snapshot_sha256",
+    "refresh_zdr_snapshot_sha256",
+    "refresh_candidate_registry_sha256",
+    "policy_artifact_sha256",
+    "source_observation",
+    "checked_route_set_sha256",
+    "checked_routes",
+    "refresh_route_set_sha256",
+    "route_records",
+    "route_record_set_sha256",
+    "review_signals",
+    "review_signal_set_sha256",
+    "redetermination_required",
+    "artifact_sha256"
+  ],
+  "title": "mmaudit model policy eligibility refresh artifact",
+  "type": "object"
+}

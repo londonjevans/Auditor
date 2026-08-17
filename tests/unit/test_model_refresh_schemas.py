@@ -211,7 +211,7 @@ def test_refresh_workflow_status_schema_binds_disposition_inventory_and_identity
     status = _published("model_refresh_workflow_status.schema.json")
     artifact = status["$defs"]["StagedModelRefreshArtifact"]
 
-    assert status["properties"]["schema_version"]["const"] == "2.0"
+    assert status["properties"]["schema_version"]["const"] == "3.0"
     assert status["properties"]["validated_at"]["format"] == "date-time"
     assert status["$defs"]["ModelRefreshWorkflowDisposition"]["enum"] == [
         "COMPLETED",
@@ -226,6 +226,7 @@ def test_refresh_workflow_status_schema_binds_disposition_inventory_and_identity
         "model-refresh-diff.json",
         "model-refresh-attempt.json",
         "model-refresh-freshness.json",
+        "model-policy-eligibility-refresh.json",
     ]
     assert set(artifact["required"]) == {
         "filename",
@@ -240,3 +241,5 @@ def test_refresh_workflow_status_schema_binds_disposition_inventory_and_identity
     assert status["properties"]["workflow_status_sha256"]["pattern"] == r"^[0-9a-f]{64}$"
     assert status["properties"]["workflow_run_id"]["pattern"] == r"^[1-9][0-9]{0,19}$"
     assert status["properties"]["workflow_run_attempt"]["pattern"] == r"^[1-9][0-9]{0,19}$"
+    assert status["properties"]["policy_projection_expected"]["type"] == "boolean"
+    assert "policy_projection_expected" in status["required"]

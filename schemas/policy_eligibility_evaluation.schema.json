@@ -1,0 +1,242 @@
+{
+  "$defs": {
+    "PolicyEligibilityExclusion": {
+      "additionalProperties": false,
+      "description": "Canonical route-specific structural exclusion.",
+      "properties": {
+        "determination_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Determination Sha256"
+        },
+        "exclusion_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Exclusion Sha256",
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "$ref": "#/$defs/PolicyExclusionReason"
+          },
+          "minItems": 1,
+          "title": "Reasons",
+          "type": "array"
+        },
+        "route": {
+          "$ref": "#/$defs/PolicyEligibilityRoute"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "route",
+        "reasons",
+        "exclusion_sha256"
+      ],
+      "title": "PolicyEligibilityExclusion",
+      "type": "object"
+    },
+    "PolicyEligibilityRoute": {
+      "additionalProperties": false,
+      "description": "One exact model/provider/endpoint identity.",
+      "properties": {
+        "exact_model_id": {
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "provider_name": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Provider Name",
+          "type": "string"
+        },
+        "route_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Route Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "provider_name",
+        "provider_endpoint",
+        "route_sha256"
+      ],
+      "title": "PolicyEligibilityRoute",
+      "type": "object"
+    },
+    "PolicyExclusionReason": {
+      "description": "Canonical reasons why one technically supplied route is structurally excluded.",
+      "enum": [
+        "AUDIT_SCOPE_RESTRICTED",
+        "CLIENT_CONSTRAINTS_EXPIRED",
+        "CLIENT_CONSTRAINTS_FUTURE",
+        "CLIENT_ENDPOINT_RESTRICTED",
+        "CLIENT_ENTITY_RESTRICTED",
+        "CLIENT_JURISDICTION_RESTRICTED",
+        "CLIENT_MODEL_RESTRICTED",
+        "CLIENT_PROVIDER_RESTRICTED",
+        "DECISION_INELIGIBLE",
+        "DECISION_REVIEW_REQUIRED",
+        "DETERMINATION_EXPIRED",
+        "DETERMINATION_FUTURE",
+        "MISSING_DETERMINATION",
+        "OPERATOR_ENTITY_RESTRICTED",
+        "OPERATOR_JURISDICTION_RESTRICTED",
+        "ROUTE_MISMATCH",
+        "SOURCE_RESTRICTED",
+        "USE_PURPOSE_RESTRICTED"
+      ],
+      "title": "PolicyExclusionReason",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/policy_eligibility_evaluation.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Deterministic structural projection; never a production capability.",
+  "properties": {
+    "artifact_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Artifact Sha256",
+      "type": "string"
+    },
+    "audit_context_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Audit Context Sha256",
+      "type": "string"
+    },
+    "automated_eligibility_inference": {
+      "const": false,
+      "default": false,
+      "title": "Automated Eligibility Inference",
+      "type": "boolean"
+    },
+    "client_constraints_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Client Constraints Sha256",
+      "type": "string"
+    },
+    "eligible_model_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 128,
+      "title": "Eligible Model Ids",
+      "type": "array"
+    },
+    "eligible_route_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Eligible Route Set Sha256",
+      "type": "string"
+    },
+    "eligible_routes": {
+      "items": {
+        "$ref": "#/$defs/PolicyEligibilityRoute"
+      },
+      "maxItems": 128,
+      "title": "Eligible Routes",
+      "type": "array"
+    },
+    "evaluated_at": {
+      "format": "date-time",
+      "title": "Evaluated At",
+      "type": "string"
+    },
+    "evaluation_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Evaluation Sha256",
+      "type": "string"
+    },
+    "exclusions": {
+      "items": {
+        "$ref": "#/$defs/PolicyEligibilityExclusion"
+      },
+      "maxItems": 128,
+      "title": "Exclusions",
+      "type": "array"
+    },
+    "expires_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Expires At"
+    },
+    "operator_decision_authenticity": {
+      "const": "NOT_INDEPENDENTLY_PROVEN",
+      "default": "NOT_INDEPENDENTLY_PROVEN",
+      "title": "Operator Decision Authenticity",
+      "type": "string"
+    },
+    "production_selection_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Production Selection Authorized",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "technical_route_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Technical Route Set Sha256",
+      "type": "string"
+    },
+    "technical_routes": {
+      "items": {
+        "$ref": "#/$defs/PolicyEligibilityRoute"
+      },
+      "maxItems": 128,
+      "title": "Technical Routes",
+      "type": "array"
+    }
+  },
+  "required": [
+    "evaluated_at",
+    "expires_at",
+    "artifact_sha256",
+    "client_constraints_sha256",
+    "audit_context_sha256",
+    "technical_route_set_sha256",
+    "eligible_route_set_sha256",
+    "technical_routes",
+    "eligible_routes",
+    "eligible_model_ids",
+    "exclusions",
+    "evaluation_sha256"
+  ],
+  "title": "mmaudit model policy eligibility evaluation",
+  "type": "object"
+}

@@ -322,6 +322,7 @@ class EffectivePrivacyPolicyEvidence(BaseModel):
         "PRIVATE_DEFAULT",
         "DISTRIBUTION_COMMITTED_SYNTHETIC",
         "PACKAGE_PINNED_SYNTHETIC",
+        "RELEASE_PINNED_MODEL_BENCHMARK",
     ]
     source_distribution_commit: str | None = Field(
         default=None,
@@ -424,33 +425,44 @@ class EffectivePrivacyPolicyEvidence(BaseModel):
 
     @model_validator(mode="after")
     def evidence_is_coherent_and_self_hashed(self) -> Self:
-        synthetic_provenance = (
-            self.source_distribution_scope,
+        synthetic_declaration_provenance = (
             self.source_synthetic_declaration_sha256,
             self.source_synthetic_declaration_entry_sha256,
         )
         if self.source_classification is PrivacySourceClassification.SYNTHETIC_COMMITTED:
-            if (
-                self.source_proof_kind
-                not in {
-                    "DISTRIBUTION_COMMITTED_SYNTHETIC",
-                    "PACKAGE_PINNED_SYNTHETIC",
-                }
-                or any(value is None for value in synthetic_provenance)
-                or (
-                    self.source_proof_kind == "DISTRIBUTION_COMMITTED_SYNTHETIC"
-                    and self.source_distribution_commit is None
-                )
-                or (
-                    self.source_proof_kind == "PACKAGE_PINNED_SYNTHETIC"
-                    and self.source_distribution_commit is not None
-                )
-            ):
+            if self.source_proof_kind in {
+                "DISTRIBUTION_COMMITTED_SYNTHETIC",
+                "PACKAGE_PINNED_SYNTHETIC",
+            }:
+                if (
+                    self.source_distribution_scope is None
+                    or any(value is None for value in synthetic_declaration_provenance)
+                    or (
+                        self.source_proof_kind == "DISTRIBUTION_COMMITTED_SYNTHETIC"
+                        and self.source_distribution_commit is None
+                    )
+                    or (
+                        self.source_proof_kind == "PACKAGE_PINNED_SYNTHETIC"
+                        and self.source_distribution_commit is not None
+                    )
+                ):
+                    raise ValueError("synthetic privacy policy lacks approved source provenance")
+            elif self.source_proof_kind == "RELEASE_PINNED_MODEL_BENCHMARK":
+                if (
+                    self.source_distribution_scope != "benchmarks/model_corpus"
+                    or self.source_distribution_commit is not None
+                    or any(value is not None for value in synthetic_declaration_provenance)
+                ):
+                    raise ValueError(
+                        "release-pinned benchmark privacy policy has invalid source provenance"
+                    )
+            else:
                 raise ValueError("synthetic privacy policy lacks approved source provenance")
         elif self.source_classification is PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE and (
             self.source_proof_kind != "PRIVATE_DEFAULT"
             or self.source_distribution_commit is not None
-            or any(value is not None for value in synthetic_provenance)
+            or self.source_distribution_scope is not None
+            or any(value is not None for value in synthetic_declaration_provenance)
         ):
             raise ValueError("private privacy policy cannot claim committed source provenance")
         elif self.source_classification is PrivacySourceClassification.PUBLIC_BENCHMARK:

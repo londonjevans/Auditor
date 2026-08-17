@@ -134,6 +134,40 @@ def _capability_report_lines(report: AuditReport) -> list[str]:
     return lines
 
 
+def _audit_model_selection_report_lines(report: AuditReport) -> list[str]:
+    """Render the exact technical-versus-policy population without granting authority."""
+
+    selection = report.audit_model_selection
+    if selection is None:
+        return []
+    selected_ids = ", ".join(_inline(model_id) for model_id in selection.selected_model_ids)
+    lines = [
+        "## Audit model eligibility and selection",
+        "",
+        "> **NON-AUTHORIZING CUSTODY:** this section records structural, hash-bound model "
+        "selection evidence. It does not grant runtime, legal, source-egress, or general "
+        "production authority.",
+        "",
+        f"- Technically qualified Tier-A population: **{len(selection.technical_model_ids)}**",
+        f"- Policy-selected models for this audit: **{len(selection.selected_model_ids)}**",
+        f"- Policy-excluded technical models: **{len(selection.policy_excluded_model_ids)}**",
+        f"- Policy-selected exact model IDs: {selected_ids}",
+        f"- Selection SHA-256: {_inline(selection.selection_sha256)}",
+        "",
+    ]
+    if selection.policy_exclusions:
+        lines.extend(["Typed policy exclusions:", ""])
+        lines.extend(
+            "- "
+            + _inline(exclusion.route.exact_model_id)
+            + ": "
+            + _text(", ".join(reason.value for reason in exclusion.reasons))
+            for exclusion in selection.policy_exclusions
+        )
+        lines.append("")
+    return lines
+
+
 def _economic_metrics_summary(metrics: EconomicMetrics | None) -> str:
     if metrics is None:
         return ""
@@ -907,6 +941,7 @@ def render_markdown(
             "",
         ]
     )
+    lines.extend(_audit_model_selection_report_lines(report))
     if report.scope_assessment is not None:
         scope = report.scope_assessment
         lines.extend(

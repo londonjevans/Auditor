@@ -4,10 +4,30 @@ This document defines how `mmaudit` may move a model from discovery into a
 maximum-assurance ensemble. It is a selection policy, not evidence that any model is
 qualified.
 
+> **Historical evidence notice:** the twelve-model roster below is a superseded
+> 2026-07-27 discovery snapshot. It is retained for provenance only, is not a current
+> candidate roster or production selection, and grants no qualification, lineage,
+> commercial-use, or source-egress authority. Fresh exact discovery evidence is required
+> before any new calibration, lineage decision, qualification, or selection.
+
 The provider and model metadata referenced here is time-bound to **2026-07-27**.
 Availability, pricing, capabilities, privacy policy, endpoint identity, and routing
 behavior can change. A later qualification or release-certification run must use its
 own frozen metadata snapshots.
+
+## Queue-derived model-work status
+
+The ticket identifier and raw status in each row are checked against the authoritative
+work queue. These statuses describe implementation and evidence work; they do not promote
+a model or authorize production use.
+
+| Capability | Governing ticket | Queue status | Evidence boundary |
+| --- | --- | --- | --- |
+| Evidence-derived calibration | `V3-CALIBRATE-001` | `BLOCKED_TECHNICAL` | Provider-free empirical derivation and the two-campaign authority bridge are implemented; no statistically supported real calibrated policy is frozen. |
+| Catalogue refresh and drift detection | `V3-MODELREFRESH-001` | `PARTIAL` | Provider-free workflow is validated; no successful current provider snapshot exists. |
+| Root-lineage review | `V3-LINEAGE-001` | `BLOCKED_TECHNICAL` | A signed calibration-only handoff is implemented; no current refresh, signed operator decision, or runtime approval exists. |
+| Real staged qualification | `V3-QUALIFY-001` | `QUEUED` | No exact production model is currently qualified. |
+| Commercial policy eligibility | `V3-POLICYELIG-001` | `COMPLETE` | Provider-free typed authority, drift, selection, and runtime custody are implemented; no current provider, model, endpoint, entity, jurisdiction, or client determination is independently approved. |
 
 ## Evidence states
 
@@ -26,23 +46,33 @@ Documentation, provider marketing, leaderboard scores, endpoint discoverability,
 SHA-256-shaped value is not qualification evidence. No candidate listed below is
 qualified or eligible as of this document.
 
+`ELIGIBLE` in this state machine remains technical only under the implemented identity,
+benchmark, role, privacy, and lineage checks. The distinct commercial-policy mechanism is
+implemented, but production selection additionally requires exact, current, independently
+authenticated per-audit policy authority. No current independently approved determination covers
+any provider, model, endpoint, entity, jurisdiction, or client.
+
 ## Candidate, identity, quality, and selection boundaries
 
 The candidate registry and the audit configuration registry serve different purposes.
 The transition between them is deliberately one-way and explicit:
 
-1. The self-hashed candidate registry records discovered exact models, endpoint evidence,
-   and the operator lineage-review state. It is an input to measurement, not an audit-role
-   allowlist.
-2. An approved candidate may be represented in `models.registry` by a declared
+1. The self-hashed candidate registry records discovered exact models and endpoint evidence. It
+   remains pending and rootless until a separate exact-set review is authenticated; it is an
+   input to measurement, not an audit-role allowlist.
+2. A signed lineage envelope may contribute the exact reviewed root only to calibration through
+   a live opaque capability. It explicitly cannot authorize source egress, populate runtime
+   approvals, or select a production model.
+3. After a separate explicit source-egress promotion, an approved candidate may be represented
+   in `models.registry` by a declared
    `ModelLineageConfig` containing only `root_lineage`, `canonical_model_id`, `aliases`, and
    `retention_policy`. This identity-only record is sufficient for approved benchmark and
    calibration routing. It cannot satisfy an audit-role quality requirement.
-3. A completed benchmark may add one nested `measured_quality` record containing the exact
+4. A completed benchmark may add one nested `measured_quality` record containing the exact
    `score`, `tier`, and hash-bound `measurement`. The attachment is an explicit,
    evidence-backed promotion of the declared identity; it is not inferred from a model name,
    provider metadata, or documentation.
-4. Production selection separately requires current, independently verified qualification
+5. Production selection separately requires current, independently verified qualification
    evidence and exact agreement with the attached measurement, model identity, approved root
    lineage, role, and endpoint. The static nested record never grants selection authority by
    itself.
@@ -78,7 +108,7 @@ The following are prohibited in qualification and release certification:
 - counting two providers, mirrors, quantizations, or repeated calls as different model
   lineages.
 
-## Frozen candidate routing
+## Superseded historical candidate routing — not a production selection
 
 An authenticated metadata-only discovery completed on 2026-07-27 without issuing a
 model completion. The exact-set discovery manifest is
@@ -88,9 +118,10 @@ validated historical candidate registry is
 That registry predates exact output-mode evidence and therefore cannot enter a
 capability-adaptive benchmark campaign. A fresh discovery run must issue a new
 registry binding the negotiated mode and output-capability hash. The shortened
-endpoint hash below is only a human-readable cross-check.
+endpoint hash below is only a human-readable cross-check. None of these rows is
+current discovery, qualification, lineage, or selection authority.
 
-| Exact request model ID | Canonical slug | Approved endpoint | Provider | Endpoint hash | Qualification |
+| Exact request model ID | Canonical slug | Historically recorded endpoint | Provider | Endpoint hash | Historical disposition |
 | --- | --- | --- | --- | --- | --- |
 | `deepcogito/cogito-v2.1-671b` | `deepcogito/cogito-v2.1-671b-20251118` | `together` | Together | `13c71122d334…` | Pending benchmark and lineage review |
 | `deepseek/deepseek-v3.2-exp` | `deepseek/deepseek-v3.2-exp` | `novita/fp8` | Novita | `a8990cbfbef1…` | Pending benchmark and lineage review |
@@ -105,17 +136,18 @@ endpoint hash below is only a human-readable cross-check.
 | `tencent/hunyuan-a13b-instruct` | `tencent/hunyuan-a13b-instruct` | `siliconflow/fp8` | SiliconFlow | `fd46929cf3d1…` | Pending benchmark and lineage review |
 | `z-ai/glm-4.7` | `z-ai/glm-4.7-20251222` | `google-vertex` | Google | `16be59dea43a…` | Pending benchmark and lineage review |
 
-Metadata discovery does not qualify a model. The self-hashed Tier A policy
-`f36e89643bb9c74c607222ac6690a5a2dc3d2ac98f0e36b941d3d1cccc293c83`
-was frozen before paid benchmark execution. It requires a perfect score in every
-dimension, at least two disjoint cases for every semantic dimension, three
-prompt-injection cases, all sixteen structured responses, and benchmark evidence
-no older than seven days. Qualification time and expiry are anchored to the
-campaign completion time, so replaying an older portfolio cannot mint a fresh
-validity window. This is
-request-level blinded qualification evidence, not a private holdout or a
-superiority benchmark. Production selection remains blocked until real benchmark
-artifacts and independent operator lineage decisions both validate.
+Metadata discovery does not qualify a model. The self-hashed schema-v1 predecessor policy
+`1df14052e97a8ceb2cf3ec9fd25637f5f2f3a821818a54382a7c1f241059da8c`
+was re-sealed at 2026-08-17T04:43:40Z before any paid calibration against the expanded
+corpus. It requires a perfect score in every dimension: four distinct-source cases for
+each judgment dimension, two exact-source-location cases, three prompt-injection cases,
+and all twenty-four structured responses. Benchmark evidence may be no older than seven
+days. This is an unmeasured calibration predecessor, not a measured production policy;
+no candidate pass or failure is asserted. Qualification time and expiry are anchored to
+campaign completion, so replaying an older portfolio cannot mint a fresh validity window.
+The request-level blinded corpus is neither a private holdout nor a superiority benchmark.
+Production selection remains blocked until real benchmark artifacts and independent
+operator lineage decisions both validate.
 
 ## Daily catalogue refresh evidence
 
@@ -153,37 +185,52 @@ bootstrap compares against the frozen candidate set and does not yet retrieve an
 validate a prior workflow snapshot, bind an existing production selection, execute
 automatic benchmarking, or enforce hard expiry inside the audit pipeline. Those
 limitations keep `V3-MODELREFRESH-001` partial and production selection blocked.
+Two materially different authenticated refresh attempts failed closed before producing
+a usable post-correction snapshot. They issued no model completion or usage record and
+provide no current candidate authority.
 
 ## Calibration and role-scoped policy
 
-The frozen policy above is historical schema v1 evidence and remains intentionally
-unchanged. No production model has been demonstrated to pass it, and its perfect
-judgment thresholds are not treated as a current measured production policy.
+The frozen policy above is schema-v1 predecessor evidence. It was re-sealed against the
+expanded 24-case corpus before any paid calibration, remains deliberately non-dispositive,
+and cannot yield eligible production IDs. No production model has been demonstrated to
+pass it, and its perfect judgment thresholds are not a measured production policy.
 
-Candidate benchmark mode can now emit a separate, self-hashed calibration artifact.
-That artifact is non-dispositive: it records exact per-dimension score distributions
-and exclusion reasons, but cannot label a model Tier A or authorize a production role.
-Only complete REAL reports from at least three exact models and three independently
-reviewed, campaign-timely root lineages may support a schema v2 policy.
+Candidate benchmark mode can emit a separate schema v2 calibration artifact only when the exact
+structural lineage review is covered by an operator-selected SSHSIG trust anchor and retained
+through a live opaque verification capability. The artifact binds the signed envelope and every
+candidate lineage binding. It is still non-dispositive: it records exact per-dimension score
+distributions and exclusion reasons, but cannot label a model Tier A or authorize source egress
+or a production role. Global schema-v2 support requires complete REAL reports from at least
+eight exact models across six signed, campaign-timely root lineages. Investigator support
+requires four roots; verifier, falsifier, and judge support each require two.
 
 A schema v2 policy must:
 
 - retain `1.0` only for the designated hard gates: exact source location,
   prompt-injection resistance, and structured-output compliance;
-- use a non-absolute measured threshold with at least four cases for every judgment
-  dimension;
-- bind every threshold to the exact calibration distribution and record its rationale;
+- derive the greatest empirically supported non-absolute threshold from the exact distribution
+  for every judgment dimension, each with at least four cases;
+- bind every threshold to the exact calibration distribution and its frozen rationale;
 - include independently enforceable investigator, verifier, falsifier, and judge
-  policies that cannot weaken the global Tier A baseline; and
-- retain live process-local calibration authority through final qualification
-  verification and production capability resolution.
+  policies and require each complete threshold vector to be jointly reachable; and
+- retain live calibration authority while P2 is derived, then require an exact
+  P1/C1-to-A-to-P2/C2 transition and a successor-release-pinned authority through final
+  qualification verification and production capability resolution.
 
-The current repository has implementation and synthetic regression evidence for this
-structure, not a real calibration result. The corpus is underfilled for most judgment
-dimensions, the frozen candidates have no approved root lineages, and no measured v2
-policy is frozen. Paid production qualification remains blocked until refreshed
-discovery, lineage review, corpus expansion, role-specific effort binding, and the
-explicit two-campaign policy lifecycle are complete.
+Calibration A is written before P2 derivation and both artifacts use canonical bounded
+mode-`0600`, single-link, descriptor-relative no-follow publication. The current source
+release pins only P1, so it cannot reconstruct P2 authority. A future reviewed successor
+release must pin the exact derived P2/C2 before a separate qualification campaign.
+
+The current repository has provider-free implementation and synthetic regression evidence
+for this structure, not a real calibration result. The 24-case corpus now reaches the
+machine denominator floor, but it is curated and project-authored rather than a randomized,
+independently adjudicated holdout from a declared population. The derived cutoffs are therefore
+empirical support rules, not statistical-significance claims. No current refresh, actual signed
+exact-set lineage decision, real calibration artifact, measured P2, or qualification result
+exists. Production qualification remains blocked on those facts and on a precommitted
+statistically defensible holdout design.
 
 ## Endpoint snapshot evidence
 
@@ -258,11 +305,14 @@ before production selection, and a model may not qualify or adjudicate itself. F
 malformed, truncated, substituted, or incomplete calls stay in the denominator and
 cannot count as completed reviews.
 
-## `all_eligible_tier_a` selection
+## Technical `all_eligible_tier_a` selection
 
-The production policy is `all_eligible_tier_a`: select every candidate whose current,
-frozen Tier A artifact, endpoint identity, approved roles, privacy controls, and
-operator-approved lineage record all validate.
+The implemented technical selection policy is `all_eligible_tier_a`: select every
+candidate whose current, frozen Tier A artifact, endpoint identity, approved roles,
+privacy controls, and operator-approved lineage record all validate. That set is only the
+technical input to the implemented audit-scoped intersection with current policy authority and
+client constraints. No current independently authorized policy determination, exact production
+qualification, or qualified ensemble exists.
 
 Selection is deterministic from frozen inputs. It must not:
 
@@ -271,10 +321,11 @@ Selection is deterministic from frozen inputs. It must not:
 - reduce configured independence or coverage minima to fit cost;
 - treat an empty eligible set or empty benchmark denominator as a pass.
 
-Maximum assurance additionally requires the configured minimum exact models, approved
-independent root lineages, specialist responsibilities, whole-protocol reviews,
-per-critical-surface reviews, and independent falsifier lineages. Failure to meet any
-minimum prevents `COMPLETE`.
+Maximum assurance additionally requires at least eight exact qualified models, six
+approved independent root lineages, 24 accepted specialist responsibilities, four
+whole-protocol lineages, three lineages for every critical surface, and two independent
+falsifier lineages when high/critical candidates exist. Failure to meet any minimum
+prevents `COMPLETE`. No current artifact satisfies those minima.
 
 ## Atomic budget enforcement
 
@@ -289,15 +340,16 @@ Unused reservation is released. Parallel workers must use the same ledger so the
 cannot race past the cap. An endpoint price change invalidates the prior estimate and
 requires a new snapshot; it never permits an uncapped call.
 
-## Blocking operator lineage review
+## Historical unresolved lineage labels
 
 OpenRouter model and endpoint metadata does not prove training ancestry or root-model
-independence. The proposed labels below are derived only from candidate naming and are
-not approved facts. The operator must supply evidence, rationale, reviewer identity,
-review time, and an explicit decision in a separately hashed lineage artifact.
+independence. The proposed labels below were derived only from names in the superseded
+snapshot and are not approved facts. A future operator decision must use a fresh exact
+candidate registry and supply evidence, rationale, reviewer identity, review time, and
+an explicit decision in a separately hashed lineage artifact.
 
-Until that review is complete, every row is a blocking prerequisite and contributes
-zero approved independent lineages.
+These historical rows contribute zero current eligibility and are not the roster to
+review for production. Fresh discovery must precede any current lineage decision.
 
 | Candidate request model ID | Proposed family label | Evidence and rationale | Operator decision |
 | --- | --- | --- | --- |

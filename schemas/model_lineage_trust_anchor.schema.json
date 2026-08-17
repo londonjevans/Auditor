@@ -1,0 +1,49 @@
+{
+  "$id": "https://mmaudit.local/schemas/model_lineage_trust_anchor.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Operator-pinned SSH Ed25519 identity and verifier executable.",
+  "properties": {
+    "operator_principal": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._@+-]{0,127}$",
+      "title": "Operator Principal",
+      "type": "string"
+    },
+    "public_key": {
+      "maxLength": 256,
+      "minLength": 68,
+      "title": "Public Key",
+      "type": "string"
+    },
+    "public_key_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Public Key Sha256",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "trust_anchor_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Trust Anchor Sha256",
+      "type": "string"
+    },
+    "verifier_executable_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Verifier Executable Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "operator_principal",
+    "public_key",
+    "public_key_sha256",
+    "verifier_executable_sha256",
+    "trust_anchor_sha256"
+  ],
+  "title": "mmaudit model lineage trust anchor",
+  "type": "object"
+}

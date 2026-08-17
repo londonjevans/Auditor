@@ -9,15 +9,32 @@ from contextlib import nullcontext
 from dataclasses import FrozenInstanceError, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
 
 import mmaudit.models.generation_evidence as generation_evidence_module
-from mmaudit.benchmark.models import ModelBenchmarkDimension, load_model_benchmark_corpus
+from mmaudit.benchmark.models import (
+    DETERMINISTIC_MODEL_BENCHMARK_DIMENSIONS,
+    ModelBenchmarkDimension,
+    ModelBenchmarkDimensionScore,
+    load_model_benchmark_corpus,
+)
 from mmaudit.constants import ALL_MODEL_ROLES, ALL_SPECIALIST_ROLES
+from mmaudit.models.calibration import (
+    ModelCalibrationArtifact,
+    ModelCalibrationCandidateObservation,
+    ModelCalibrationDimensionDistribution,
+    ModelCalibrationDimensionObservation,
+    ModelCalibrationScoreFrequency,
+    TrustedModelCalibrationVerification,
+    derive_calibrated_qualification_policy,
+)
 from mmaudit.models.candidate_benchmark import (
+    CandidateBenchmarkDiagnostic,
+    CandidateBenchmarkRunState,
     CandidateReasoningProfileBenchmarkPlan,
     CandidateReasoningProfileBenchmarkRoute,
 )
@@ -56,14 +73,19 @@ from mmaudit.models.qualification import (
     QualificationDimensionThreshold,
     QualificationDisposition,
     QualificationPolicy,
+    QualificationRoleClass,
     QualificationVerification,
     SelectionVerification,
     TrustedBenchmarkVerificationEvidence,
+    TrustedCalibratedQualificationPolicy,
     VerifiedProductionQualification,
     VerifiedTierAModelQualification,
     _freshly_reverify_production_benchmarks,
     _stable_generation_binding,
+    derive_approved_roles_for_role_qualification,
     evaluate_certified_ensemble,
+    evaluate_role_qualification_results,
+    issue_trusted_calibrated_qualification_policy,
     load_candidate_registry,
     resolve_verified_production_qualification,
     seal_candidate_registry,
@@ -109,6 +131,77 @@ from tests.qualification_support import synthetic_release_observation
 
 _NOW = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
 _ROOT = Path(__file__).parents[2]
+_BENCHMARK_SUITE = load_model_benchmark_corpus(
+    _ROOT / "benchmarks" / "model_corpus" / "manifest.json"
+)
+_BENCHMARK_CASE_IDS = tuple(case.case_id for case in _BENCHMARK_SUITE.cases)
+_BENCHMARK_DIMENSION_CASE_COUNTS = {
+    dimension: (
+        len(_BENCHMARK_CASE_IDS)
+        if dimension is ModelBenchmarkDimension.STRUCTURED_OUTPUT_COMPLIANCE
+        else sum(
+            dimension in ground_truth.dimensions
+            for ground_truth in _BENCHMARK_SUITE.ground_truth.cases
+        )
+    )
+    for dimension in ModelBenchmarkDimension
+}
+_ROLE_POLICY_DIMENSIONS = {
+    QualificationRoleClass.INVESTIGATOR: (
+        ModelBenchmarkDimension.EXACT_SOURCE_LOCATION,
+        ModelBenchmarkDimension.FALSE_POSITIVE_REJECTION,
+        ModelBenchmarkDimension.SOLIDITY_SECURITY_REASONING,
+    ),
+    QualificationRoleClass.VERIFIER: (ModelBenchmarkDimension.VERIFIER_QUALITY,),
+    QualificationRoleClass.FALSIFIER: (ModelBenchmarkDimension.FALSIFIER_QUALITY,),
+    QualificationRoleClass.JUDGE: (
+        ModelBenchmarkDimension.FALSIFIER_QUALITY,
+        ModelBenchmarkDimension.REPORT_QUALITY,
+        ModelBenchmarkDimension.VERIFIER_QUALITY,
+    ),
+}
+_CALIBRATION_STRONG_JUDGMENT_DIMENSIONS = frozenset(
+    dimension
+    for dimensions in _ROLE_POLICY_DIMENSIONS.values()
+    for dimension in dimensions
+    if dimension not in DETERMINISTIC_MODEL_BENCHMARK_DIMENSIONS
+)
+_CALIBRATED_POLICY_FIXTURES: dict[
+    str,
+    tuple[QualificationPolicy, TrustedCalibratedQualificationPolicy],
+] = {}
+
+
+@pytest.fixture(autouse=True)
+def _treat_synthetic_live_policy_as_release_pinned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Isolate legacy synthetic production fixtures from the real release-pin issuer."""
+
+    def require_synthetic_release(
+        capability: TrustedCalibratedQualificationPolicy,
+        *,
+        policy: QualificationPolicy,
+        calibration_artifact_sha256: str,
+        release_bindings_sha256: str,
+        candidate_registry_sha256: str,
+        calibration_release_transition_sha256: str,
+    ) -> None:
+        del (
+            calibration_artifact_sha256,
+            release_bindings_sha256,
+            candidate_registry_sha256,
+            calibration_release_transition_sha256,
+        )
+        capability.require_for(policy)
+
+    monkeypatch.setattr(
+        TrustedCalibratedQualificationPolicy,
+        "require_release_pinned_for",
+        require_synthetic_release,
+    )
+
+
 _ROLES = tuple(
     sorted(
         {
@@ -278,16 +371,186 @@ def _discovery_run(
     return manifest, evidence
 
 
-def _dimension_results(*, failed_dimension: ModelBenchmarkDimension | None = None):
+def _dimension_results(
+    *,
+    failed_dimension: ModelBenchmarkDimension | None = None,
+) -> tuple[QualificationDimensionResult, ...]:
     return tuple(
         QualificationDimensionResult(
             dimension=dimension,
-            passed=0 if dimension is failed_dimension else 1,
-            evaluated=1,
+            passed=(
+                0 if dimension is failed_dimension else _BENCHMARK_DIMENSION_CASE_COUNTS[dimension]
+            ),
+            evaluated=_BENCHMARK_DIMENSION_CASE_COUNTS[dimension],
             score=0 if dimension is failed_dimension else 1,
         )
         for dimension in sorted(ModelBenchmarkDimension, key=lambda item: item.value)
     )
+
+
+def _calibration_dimension_scores() -> tuple[ModelBenchmarkDimensionScore, ...]:
+    scores: list[ModelBenchmarkDimensionScore] = []
+    for dimension in sorted(ModelBenchmarkDimension, key=lambda item: item.value):
+        evaluated = _BENCHMARK_DIMENSION_CASE_COUNTS[dimension]
+        if dimension in DETERMINISTIC_MODEL_BENCHMARK_DIMENSIONS:
+            passed = evaluated
+        elif dimension in _CALIBRATION_STRONG_JUDGMENT_DIMENSIONS:
+            passed = evaluated - 1
+        else:
+            passed = 1
+        scores.append(
+            ModelBenchmarkDimensionScore(
+                dimension=dimension,
+                passed=passed,
+                evaluated=evaluated,
+                score=round(passed / evaluated, 6),
+            )
+        )
+    return tuple(scores)
+
+
+def _typed_synthetic_calibration(registry: CandidateRegistry) -> ModelCalibrationArtifact:
+    """Build a typed, internally consistent predecessor calibration fixture."""
+
+    dimension_scores = _calibration_dimension_scores()
+    observations: list[ModelCalibrationCandidateObservation] = []
+    for index, candidate in enumerate(registry.candidates):
+        report_sha256 = _sha(f"calibration-report-{candidate.exact_model_id}")
+        observations.append(
+            ModelCalibrationCandidateObservation(
+                exact_model_id=candidate.exact_model_id,
+                root_lineage=_root(index if index < 6 else index - 6),
+                lineage_binding_sha256=_sha(f"calibration-lineage-{candidate.exact_model_id}"),
+                report_sha256=report_sha256,
+                report_execution_evidence=ExecutionEvidenceKind.REAL,
+                diagnostic=CandidateBenchmarkDiagnostic(
+                    exact_model_id=candidate.exact_model_id,
+                    approved_provider_endpoint=candidate.approved_provider_endpoint,
+                    endpoint_snapshot_sha256=candidate.endpoint_snapshot_sha256,
+                    report_sha256=report_sha256,
+                    execution_evidence=ExecutionEvidenceKind.REAL,
+                    state=CandidateBenchmarkRunState.COMPLETE,
+                    reasoning_suppressed=True,
+                    corpus_cases=len(_BENCHMARK_CASE_IDS),
+                    requests_observed=len(_BENCHMARK_CASE_IDS),
+                    logical_request_count=len(_BENCHMARK_CASE_IDS),
+                    provider_attempt_count=len(_BENCHMARK_CASE_IDS),
+                    successful_request_count=len(_BENCHMARK_CASE_IDS),
+                    successful_cases=len(_BENCHMARK_CASE_IDS),
+                    failed_cases=0,
+                    error_kinds=(),
+                ),
+                included_in_distribution=True,
+                dimensions=dimension_scores,
+                overall_score=round(
+                    sum(item.score for item in dimension_scores) / len(dimension_scores),
+                    6,
+                ),
+            )
+        )
+    candidates = tuple(observations)
+    distributions: list[ModelCalibrationDimensionDistribution] = []
+    for dimension in sorted(ModelBenchmarkDimension, key=lambda item: item.value):
+        dimension_observations = tuple(
+            ModelCalibrationDimensionObservation(
+                exact_model_id=candidate.exact_model_id,
+                root_lineage=candidate.root_lineage or _root(0),
+                passed=next(
+                    item.passed for item in candidate.dimensions if item.dimension is dimension
+                ),
+                evaluated=next(
+                    item.evaluated for item in candidate.dimensions if item.dimension is dimension
+                ),
+                score=next(
+                    item.score for item in candidate.dimensions if item.dimension is dimension
+                ),
+            )
+            for candidate in candidates
+        )
+        score = dimension_observations[0].score
+        distributions.append(
+            ModelCalibrationDimensionDistribution(
+                dimension=dimension,
+                candidate_count=len(candidates),
+                included_candidate_count=len(candidates),
+                excluded_candidate_count=0,
+                observations=dimension_observations,
+                score_frequencies=(
+                    ModelCalibrationScoreFrequency(
+                        score=score,
+                        candidate_count=len(candidates),
+                    ),
+                ),
+                mean_score=score,
+            )
+        )
+    payload = {
+        "schema_version": "2.0",
+        "created_at": _NOW.isoformat().replace("+00:00", "Z"),
+        "candidate_registry_sha256": registry.registry_sha256,
+        "discovery_manifest_sha256": _sha("calibration-discovery-manifest"),
+        "candidate_set_sha256": canonical_sha256(
+            [candidate.exact_model_id for candidate in candidates]
+        ),
+        "lineage_review_artifact_sha256": _sha("calibration-lineage-review"),
+        "lineage_authority_envelope_sha256": _sha("calibration-lineage-authority"),
+        "benchmark_corpus_version": _BENCHMARK_SUITE.corpus.schema_version,
+        "benchmark_corpus_sha256": _BENCHMARK_SUITE.corpus_sha256,
+        "benchmark_ground_truth_version": _BENCHMARK_SUITE.ground_truth.schema_version,
+        "benchmark_ground_truth_sha256": _BENCHMARK_SUITE.ground_truth_sha256,
+        "benchmark_portfolio_sha256": _sha("calibration-portfolio"),
+        "benchmark_policy_sha256": _sha("calibration-predecessor-policy"),
+        "effective_config_sha256": _sha("calibration-effective-config"),
+        "campaign_journal_sha256": _sha("calibration-campaign-journal"),
+        "included_root_lineage_count": 6,
+        "candidates": [candidate.model_dump(mode="json") for candidate in candidates],
+        "distributions": [item.model_dump(mode="json") for item in distributions],
+    }
+    return ModelCalibrationArtifact.model_validate(
+        {**payload, "artifact_sha256": canonical_sha256(payload)}
+    )
+
+
+def _calibrated_policy_and_authority(
+    registry: CandidateRegistry,
+) -> tuple[QualificationPolicy, TrustedCalibratedQualificationPolicy]:
+    """Issue production-shaped policy authority from typed synthetic calibration.
+
+    The fixture exercises the real threshold-derivation verifier. Only the separate
+    process-local calibration capability check is patched because this test module has
+    no live campaign; calibration-specific tests cover that issuer boundary directly.
+    """
+
+    cached = _CALIBRATED_POLICY_FIXTURES.get(registry.registry_sha256)
+    if cached is not None:
+        return cached
+
+    calibration = _typed_synthetic_calibration(registry)
+    live_calibration = object.__new__(TrustedModelCalibrationVerification)
+    with patch(
+        "mmaudit.models.calibration._require_trusted_calibration_capability"
+    ) as require_live_calibration:
+        policy = derive_calibrated_qualification_policy(
+            calibration=calibration,
+            trusted_calibration_verification=live_calibration,
+        )
+    assert require_live_calibration.call_count >= 1
+    with patch(
+        "mmaudit.models.calibration.verify_calibrated_qualification_policy"
+    ) as calibration_verifier:
+        authority = issue_trusted_calibrated_qualification_policy(
+            policy=policy,
+            calibration=calibration,
+            trusted_calibration_verification=None,
+        )
+    calibration_verifier.assert_called_once_with(
+        calibration=calibration,
+        policy=policy,
+        trusted_calibration_verification=None,
+    )
+    fixture = (policy, authority)
+    _CALIBRATED_POLICY_FIXTURES[registry.registry_sha256] = fixture
+    return fixture
 
 
 def _usage_record(
@@ -551,7 +814,9 @@ def _test_trusted_benchmark_evidence(
 @dataclass(frozen=True)
 class _Bundle:
     registry: CandidateRegistry
+    lineage_registry: CandidateRegistry
     policy: QualificationPolicy
+    trusted_calibrated_policy: TrustedCalibratedQualificationPolicy | None
     bindings: QualificationBindings
     benchmark_evidence: tuple[TrustedBenchmarkVerificationEvidence, ...]
     artifact: ModelQualificationArtifact
@@ -562,6 +827,7 @@ class _Bundle:
 
 def _bundle(
     *,
+    policy_schema_version: Literal["1.0", "2.0"] = "2.0",
     review_status: LineageReviewStatus = LineageReviewStatus.APPROVED,
     root_count: int = 6,
     failed_dimension: ModelBenchmarkDimension | None = None,
@@ -652,19 +918,39 @@ def _bundle(
         discovery_run_sha256=_sha("discovery-run"),
         candidates=candidates,
     )
-    policy = seal_qualification_policy(
-        created_at=_NOW,
-        thresholds=tuple(
-            QualificationDimensionThreshold(
-                dimension=dimension,
-                minimum_cases=1,
-                minimum_score=1,
+    lineage_registry = seal_candidate_registry(
+        created_at=registry.created_at,
+        discovery_run_sha256=registry.discovery_run_sha256,
+        candidates=tuple(
+            CandidateModel.model_validate(
+                candidate.model_copy(
+                    update={
+                        "benchmark_status": CandidateBenchmarkStatus.PENDING,
+                        "benchmark_artifact_sha256": None,
+                        "qualification_expires_at": None,
+                    }
+                ).model_dump(mode="json")
             )
-            for dimension in sorted(ModelBenchmarkDimension, key=lambda item: item.value)
+            for candidate in registry.candidates
         ),
-        tier_a_minimum_overall_score=1,
-        maximum_validity_days=30,
     )
+    trusted_calibrated_policy: TrustedCalibratedQualificationPolicy | None = None
+    if policy_schema_version == "2.0":
+        policy, trusted_calibrated_policy = _calibrated_policy_and_authority(registry)
+    else:
+        policy = seal_qualification_policy(
+            created_at=_NOW,
+            thresholds=tuple(
+                QualificationDimensionThreshold(
+                    dimension=dimension,
+                    minimum_cases=_BENCHMARK_DIMENSION_CASE_COUNTS[dimension],
+                    minimum_score=1,
+                )
+                for dimension in sorted(ModelBenchmarkDimension, key=lambda item: item.value)
+            ),
+            tier_a_minimum_overall_score=1,
+            maximum_validity_days=30,
+        )
     bindings = QualificationBindings(
         source_commit="1" * 40,
         source_tree_sha256=_sha("source-tree"),
@@ -673,13 +959,19 @@ def _bundle(
         response_schema_sha256=_sha("response-schema"),
         toolchain_sha256=_sha("toolchain"),
         isolation_sha256=_sha("isolation"),
-        benchmark_corpus_version="2.0",
-        benchmark_corpus_sha256=_sha("corpus"),
-        benchmark_ground_truth_version="2.0",
-        benchmark_ground_truth_sha256=_sha("ground-truth"),
+        benchmark_corpus_version=_BENCHMARK_SUITE.corpus.schema_version,
+        benchmark_corpus_sha256=_BENCHMARK_SUITE.corpus_sha256,
+        benchmark_ground_truth_version=_BENCHMARK_SUITE.ground_truth.schema_version,
+        benchmark_ground_truth_sha256=_BENCHMARK_SUITE.ground_truth_sha256,
         benchmark_portfolio_sha256=_sha("benchmark-portfolio"),
+        lineage_candidate_registry_sha256=(
+            lineage_registry.registry_sha256 if policy.schema_version == "2.0" else None
+        ),
         candidate_registry_sha256=registry.registry_sha256,
         qualification_policy_sha256=policy.policy_sha256,
+        calibration_release_transition_sha256=(
+            _sha("calibration-release-transition") if policy.schema_version == "2.0" else None
+        ),
     )
     dimensions = _dimension_results(failed_dimension=failed_dimension)
     real_benchmark_evidence = tuple(
@@ -691,7 +983,7 @@ def _bundle(
             prompt_sha256=bindings.prompt_sha256,
             response_schema_sha256=bindings.response_schema_sha256,
             parsed_responses_sha256=_sha(f"parsed-{candidate.exact_model_id}"),
-            case_ids=(f"case-{index}",),
+            case_ids=_BENCHMARK_CASE_IDS,
             usage_records=(
                 _usage_record(
                     candidate=candidate,
@@ -720,6 +1012,15 @@ def _bundle(
             for evidence in real_benchmark_evidence
         )
     )
+    role_results = (
+        evaluate_role_qualification_results(
+            global_disposition=QualificationDisposition.TIER_A,
+            dimensions=dimensions,
+            role_policies=policy.role_policies,
+        )
+        if policy.schema_version == "2.0"
+        else ()
+    )
     results = tuple(
         seal_model_qualification_result(
             exact_model_id=candidate.exact_model_id,
@@ -740,7 +1041,17 @@ def _bundle(
                 sum(result.score for result in dimensions) / len(dimensions),
                 6,
             ),
-            approved_roles=candidate.approved_roles,
+            approved_roles=(
+                derive_approved_roles_for_role_qualification(
+                    declared_roles=candidate.approved_roles,
+                    global_disposition=QualificationDisposition.TIER_A,
+                    role_results=role_results,
+                )
+                if policy.schema_version == "2.0"
+                else candidate.approved_roles
+            ),
+            declared_roles=(candidate.approved_roles if policy.schema_version == "2.0" else ()),
+            role_results=role_results,
             evaluated_at=_NOW + timedelta(hours=1),
             expires_at=_NOW + timedelta(days=validity_days),
         )
@@ -758,6 +1069,8 @@ def _bundle(
         expected_bindings=bindings,
         trusted_benchmark_evidence=benchmark_evidence,
         now=_NOW + timedelta(hours=3),
+        trusted_calibrated_policy=trusted_calibrated_policy,
+        lineage_candidate_registry=(lineage_registry if policy.schema_version == "2.0" else None),
     )
     selection: ProductionModelSelection | None = None
     selection_verification: SelectionVerification | None = None
@@ -777,7 +1090,9 @@ def _bundle(
         )
     return _Bundle(
         registry=registry,
+        lineage_registry=lineage_registry,
         policy=policy,
+        trusted_calibrated_policy=trusted_calibrated_policy,
         bindings=bindings,
         benchmark_evidence=benchmark_evidence,
         artifact=artifact,
@@ -800,7 +1115,9 @@ def _resolve_for_test(
     arguments: dict[str, object] = {
         "artifact": bundle.artifact,
         "registry": bundle.registry,
+        "lineage_candidate_registry": bundle.lineage_registry,
         "policy": bundle.policy,
+        "trusted_calibrated_policy": bundle.trusted_calibrated_policy,
         "expected_bindings": bundle.bindings,
         "benchmark_reports": (),
         "benchmark_corpus": None,
@@ -897,9 +1214,25 @@ def test_qualification_policy_rejects_an_empty_dimension() -> None:
         QualificationPolicy.model_validate(payload)
 
 
+def test_v1_complete_real_tier_a_artifact_is_non_dispositive() -> None:
+    bundle = _bundle(policy_schema_version="1.0")
+
+    assert bundle.verification.valid
+    assert bundle.policy.schema_version == "1.0"
+    assert not bundle.verification.production_selection_ready
+    assert bundle.verification.eligible_tier_a_model_ids == ()
+    assert bundle.verification.eligible_root_lineages == ()
+    assert bundle.selection is None
+    assert bundle.selection_verification is None
+    with pytest.raises(ValueError, match="calibrated qualification policy v2"):
+        _resolve_for_test(bundle)
+
+
 def test_complete_real_tier_a_artifact_and_all_eligible_selection_verify() -> None:
     bundle = _bundle()
 
+    assert bundle.policy.schema_version == "2.0"
+    assert bundle.trusted_calibrated_policy is not None
     assert bundle.verification.valid
     assert bundle.verification.production_selection_ready
     assert len(bundle.verification.eligible_tier_a_model_ids) == 8
@@ -910,6 +1243,123 @@ def test_complete_real_tier_a_artifact_and_all_eligible_selection_verify() -> No
     assert {model.exact_model_id for model in bundle.selection.models} == set(
         bundle.verification.eligible_tier_a_model_ids
     )
+
+
+def test_release_authority_boundary_binds_exact_r1_and_transition_in_direct_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authorized = _bundle()
+    spliced = _bundle(
+        structured_output_supported=False,
+        structured_output_mode=StructuredOutputMode.VALIDATED_TEXT_JSON,
+    )
+    authorized_registry_sha256 = authorized.bindings.lineage_candidate_registry_sha256
+    assert authorized_registry_sha256 is not None
+    authorized_transition_sha256 = authorized.bindings.calibration_release_transition_sha256
+    assert authorized_transition_sha256 is not None
+    observed_bindings: list[tuple[str, str]] = []
+
+    def require_exact_synthetic_release(
+        capability: TrustedCalibratedQualificationPolicy,
+        *,
+        policy: QualificationPolicy,
+        calibration_artifact_sha256: str,
+        release_bindings_sha256: str,
+        candidate_registry_sha256: str,
+        calibration_release_transition_sha256: str,
+    ) -> None:
+        del (
+            capability,
+            policy,
+            calibration_artifact_sha256,
+            release_bindings_sha256,
+        )
+        observed_bindings.append((candidate_registry_sha256, calibration_release_transition_sha256))
+        if candidate_registry_sha256 != authorized_registry_sha256:
+            raise ValueError("trusted calibrated policy authority candidate registry is mismatched")
+        if calibration_release_transition_sha256 != authorized_transition_sha256:
+            raise ValueError(
+                "trusted calibrated policy authority calibration transition is mismatched"
+            )
+
+    monkeypatch.setattr(
+        TrustedCalibratedQualificationPolicy,
+        "require_release_pinned_for",
+        require_exact_synthetic_release,
+    )
+    verified = verify_model_qualification(
+        artifact=authorized.artifact,
+        registry=authorized.registry,
+        policy=authorized.policy,
+        expected_bindings=authorized.bindings,
+        trusted_benchmark_evidence=authorized.benchmark_evidence,
+        now=_NOW + timedelta(hours=3),
+        trusted_calibrated_policy=authorized.trusted_calibrated_policy,
+        lineage_candidate_registry=authorized.lineage_registry,
+    )
+    assert verified.valid
+    _resolve_for_test(authorized)
+
+    spliced_verification = verify_model_qualification(
+        artifact=spliced.artifact,
+        registry=spliced.registry,
+        policy=spliced.policy,
+        expected_bindings=spliced.bindings,
+        trusted_benchmark_evidence=spliced.benchmark_evidence,
+        now=_NOW + timedelta(hours=3),
+        trusted_calibrated_policy=authorized.trusted_calibrated_policy,
+        lineage_candidate_registry=spliced.lineage_registry,
+    )
+    assert not spliced_verification.valid
+    assert spliced_verification.eligible_tier_a_model_ids == ()
+    assert any("release authority is mismatched" in error for error in spliced_verification.errors)
+    with pytest.raises(ValueError, match="candidate registry is mismatched"):
+        _resolve_for_test(
+            spliced,
+            trusted_calibrated_policy=authorized.trusted_calibrated_policy,
+        )
+    transition_spliced_bindings = authorized.bindings.model_copy(
+        update={"calibration_release_transition_sha256": _sha("spliced-transition")}
+    )
+    transition_spliced_artifact = seal_model_qualification_artifact(
+        created_at=authorized.artifact.created_at,
+        bindings=transition_spliced_bindings,
+        results=authorized.artifact.results,
+    )
+    transition_spliced_verification = verify_model_qualification(
+        artifact=transition_spliced_artifact,
+        registry=authorized.registry,
+        policy=authorized.policy,
+        expected_bindings=transition_spliced_bindings,
+        trusted_benchmark_evidence=authorized.benchmark_evidence,
+        now=_NOW + timedelta(hours=3),
+        trusted_calibrated_policy=authorized.trusted_calibrated_policy,
+        lineage_candidate_registry=authorized.lineage_registry,
+    )
+    assert not transition_spliced_verification.valid
+    assert transition_spliced_verification.eligible_tier_a_model_ids == ()
+    with pytest.raises(ValueError, match="calibration transition is mismatched"):
+        _resolve_for_test(
+            authorized,
+            artifact=transition_spliced_artifact,
+            expected_bindings=transition_spliced_bindings,
+        )
+
+    assert observed_bindings == [
+        (authorized_registry_sha256, authorized_transition_sha256),
+        (authorized_registry_sha256, authorized_transition_sha256),
+        (authorized_registry_sha256, authorized_transition_sha256),
+        (
+            spliced.bindings.lineage_candidate_registry_sha256,
+            authorized_transition_sha256,
+        ),
+        (
+            spliced.bindings.lineage_candidate_registry_sha256,
+            authorized_transition_sha256,
+        ),
+        (authorized_registry_sha256, _sha("spliced-transition")),
+        (authorized_registry_sha256, _sha("spliced-transition")),
+    ]
 
 
 def test_tier_a_eligibility_uses_measured_output_reliability_not_native_flag() -> None:
@@ -1366,6 +1816,8 @@ def test_quality_measurement_is_stable_across_verification_and_time_refresh() ->
         dimensions=original.dimensions,
         overall_score=original.overall_score,
         approved_roles=original.approved_roles,
+        declared_roles=original.declared_roles,
+        role_results=original.role_results,
         evaluated_at=original.evaluated_at + timedelta(days=1),
         expires_at=original.expires_at + timedelta(days=1) if original.expires_at else None,
     )
@@ -1547,6 +1999,8 @@ def test_serialized_qualification_bundle_alone_cannot_mint_production_capability
             artifact=bundle.artifact,
             registry=bundle.registry,
             policy=bundle.policy,
+            trusted_calibrated_policy=bundle.trusted_calibrated_policy,
+            lineage_candidate_registry=bundle.lineage_registry,
             expected_bindings=bundle.bindings,
             benchmark_reports=(),
             benchmark_corpus=corpus,
@@ -1692,6 +2146,8 @@ def test_unresolved_or_mock_benchmark_evidence_cannot_validate(mode: str) -> Non
         expected_bindings=bundle.bindings,
         trusted_benchmark_evidence=evidence,
         now=_NOW + timedelta(hours=3),
+        trusted_calibrated_policy=bundle.trusted_calibrated_policy,
+        lineage_candidate_registry=bundle.lineage_registry,
     )
 
     assert not verification.valid
@@ -1725,6 +2181,8 @@ def test_missing_generation_attestation_invalidates_trusted_benchmark_evidence()
         expected_bindings=bundle.bindings,
         trusted_benchmark_evidence=malformed,
         now=_NOW + timedelta(hours=3),
+        trusted_calibrated_policy=bundle.trusted_calibrated_policy,
+        lineage_candidate_registry=bundle.lineage_registry,
     )
 
     assert not verification.valid
@@ -1756,6 +2214,8 @@ def test_private_ground_truth_hash_is_required_at_qualification_boundary() -> No
         expected_bindings=bundle.bindings,
         trusted_benchmark_evidence=evidence,
         now=_NOW + timedelta(hours=3),
+        trusted_calibrated_policy=bundle.trusted_calibrated_policy,
+        lineage_candidate_registry=bundle.lineage_registry,
     )
 
     assert not verification.valid
@@ -1790,6 +2250,8 @@ def test_candidate_benchmark_metadata_must_match_qualification_result() -> None:
         expected_bindings=bindings,
         trusted_benchmark_evidence=bundle.benchmark_evidence,
         now=_NOW + timedelta(hours=3),
+        trusted_calibrated_policy=bundle.trusted_calibrated_policy,
+        lineage_candidate_registry=bundle.lineage_registry,
     )
 
     assert not verification.valid
@@ -1916,6 +2378,8 @@ def test_wrong_release_binding_fails_closed() -> None:
         expected_bindings=mismatched,
         trusted_benchmark_evidence=bundle.benchmark_evidence,
         now=_NOW + timedelta(hours=3),
+        trusted_calibrated_policy=bundle.trusted_calibrated_policy,
+        lineage_candidate_registry=bundle.lineage_registry,
     )
 
     assert not verification.valid

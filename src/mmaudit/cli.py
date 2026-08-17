@@ -79,6 +79,9 @@ from mmaudit.forensic_export import (
 from mmaudit.logging import configure_logging
 from mmaudit.models.calibration import (
     build_model_calibration_artifact,
+    derive_calibrated_qualification_policy,
+    issue_trusted_model_calibration_verification,
+    write_calibrated_qualification_policy,
     write_model_calibration_artifact,
 )
 from mmaudit.models.candidate_benchmark import (
@@ -101,6 +104,13 @@ from mmaudit.models.endpoint_snapshots import (
 )
 from mmaudit.models.generation_evidence import TrustedGenerationVerification
 from mmaudit.models.identifiers import is_exact_openrouter_model_id
+from mmaudit.models.lineage_authority import (
+    TrustedModelLineageReviewVerification,
+    load_model_lineage_authority_bundle,
+    load_model_lineage_trust_anchor,
+    verify_operator_model_lineage_authority,
+)
+from mmaudit.models.lineage_review import ModelLineageReviewArtifact
 from mmaudit.models.openrouter import (
     OpenRouterAuthenticationError,
     OpenRouterClient,
@@ -110,6 +120,14 @@ from mmaudit.models.openrouter import (
     OpenRouterTimeoutError,
 )
 from mmaudit.models.output_modes import supported_output_modes
+from mmaudit.models.policy_eligibility_refresh import (
+    ModelPolicyEligibilityRefreshError,
+    build_model_policy_eligibility_refresh_artifact,
+    load_model_policy_eligibility_artifact,
+    load_policy_eligibility_checked_routes,
+    load_policy_eligibility_source_observation,
+    validate_model_policy_eligibility_refresh_inputs,
+)
 from mmaudit.models.qualification import (
     CandidateRegistry,
     QualificationPolicy,
@@ -196,8 +214,12 @@ from mmaudit.privacy import (
     PrivacyRetentionConsentObservation,
     PrivacySourceClassification,
     load_privacy_retention_consent,
+    resolve_effective_privacy_policy,
 )
 from mmaudit.repository.discovery import RepositorySafetyError, safe_repository_root
+from mmaudit.repository.privacy_provenance import (
+    prove_release_pinned_model_benchmark_source,
+)
 from mmaudit.repository.secrets import is_sensitive_workspace_name
 from mmaudit.scanners.diagnostics import ScannerExecutablePreflight, ScannerExecutableState
 from mmaudit.scanners.runner import (
@@ -913,6 +935,27 @@ def models_refresh(
             help="Canonical Decimal fraction; exact increases beyond it block selected routes.",
         ),
     ] = "0.05",
+    policy_eligibility_artifact: Annotated[
+        Path | None,
+        typer.Option(
+            "--policy-eligibility-artifact",
+            help="Explicit canonical operator/legal policy artifact; never fetched automatically.",
+        ),
+    ] = None,
+    policy_source_observation: Annotated[
+        Path | None,
+        typer.Option(
+            "--policy-source-observation",
+            help="Explicit current-source observation paired with the policy artifact.",
+        ),
+    ] = None,
+    policy_checked_routes: Annotated[
+        Path | None,
+        typer.Option(
+            "--policy-checked-routes",
+            help="Explicit canonical JSON array of exact policy routes to classify.",
+        ),
+    ] = None,
     no_color: Annotated[bool, typer.Option("--no-color")] = False,
 ) -> None:
     """Refresh authenticated metadata without completions, qualification, or promotion."""
@@ -921,6 +964,37 @@ def models_refresh(
 
     async def execute() -> None:
         registry = load_candidate_registry(candidate_registry)
+        policy_paths = (
+            policy_eligibility_artifact,
+            policy_source_observation,
+            policy_checked_routes,
+        )
+        if any(path is not None for path in policy_paths) and not all(
+            path is not None for path in policy_paths
+        ):
+            raise ConfigError(
+                "--policy-eligibility-artifact, --policy-source-observation, and "
+                "--policy-checked-routes must be supplied together"
+            )
+        policy_inputs = None
+        if all(path is not None for path in policy_paths):
+            assert policy_eligibility_artifact is not None
+            assert policy_source_observation is not None
+            assert policy_checked_routes is not None
+            try:
+                policy_inputs = (
+                    load_model_policy_eligibility_artifact(policy_eligibility_artifact),
+                    load_policy_eligibility_source_observation(policy_source_observation),
+                    load_policy_eligibility_checked_routes(policy_checked_routes),
+                )
+                validate_model_policy_eligibility_refresh_inputs(
+                    policy_artifact=policy_inputs[0],
+                    source_observation=policy_inputs[1],
+                    checked_routes=policy_inputs[2],
+                    refresh_retrieved_at=datetime.now(UTC).replace(microsecond=0),
+                )
+            except ModelPolicyEligibilityRefreshError as exc:
+                raise ConfigError("models refresh policy evidence is invalid") from exc
         if (previous_snapshot is None) is not (previous_source_evidence is None):
             raise ConfigError(
                 "--previous-snapshot and --previous-source-evidence must be supplied together"
@@ -955,6 +1029,20 @@ def models_refresh(
         ):
             raise ConfigError(
                 "models refresh selected route is absent from the frozen candidate registry"
+            )
+        approved_policy_routes = {
+            (
+                candidate.exact_model_id,
+                candidate.approved_provider_name,
+                candidate.approved_provider_endpoint,
+            )
+            for candidate in registry.candidates
+        }
+        if policy_inputs is not None and any(
+            route.identity not in approved_policy_routes for route in policy_inputs[2]
+        ):
+            raise ConfigError(
+                "models refresh checked policy route is absent from the frozen candidate registry"
             )
         if OpenRouterClient is not _TRUSTED_OPENROUTER_CLIENT_TYPE:
             raise ConfigError("models refresh requires the trusted concrete OpenRouter client")
@@ -1065,6 +1153,16 @@ def models_refresh(
                 hard_max_age_hours=hard_max_age_hours,
                 production_selection_present=bool(selected),
             )
+            policy_refresh = (
+                None
+                if policy_inputs is None
+                else build_model_policy_eligibility_refresh_artifact(
+                    refresh_snapshot=snapshot,
+                    policy_artifact=policy_inputs[0],
+                    source_observation=policy_inputs[1],
+                    checked_routes=policy_inputs[2],
+                )
+            )
         except ValueError:
             failure = seal_model_refresh_attempt(
                 attempted_at=attempted_at,
@@ -1091,6 +1189,7 @@ def models_refresh(
                 diff=diff,
                 attempt=attempt,
                 freshness=freshness,
+                policy_eligibility_refresh=policy_refresh,
             )
         except (OSError, ValueError):
             local_console.print(
@@ -1252,6 +1351,30 @@ def models_benchmark(
             ),
         ),
     ] = None,
+    calibrated_policy_output: Annotated[
+        Path | None,
+        typer.Option(
+            "--calibrated-policy-output",
+            help=(
+                "Fresh private P2 successor candidate derived from --calibration-output; "
+                "requires review, commit, and release pinning before qualification."
+            ),
+        ),
+    ] = None,
+    lineage_review_bundle: Annotated[
+        Path | None,
+        typer.Option(
+            "--lineage-review-bundle",
+            help="Signed operator lineage-review bundle required for calibration.",
+        ),
+    ] = None,
+    lineage_trust_anchor: Annotated[
+        Path | None,
+        typer.Option(
+            "--lineage-trust-anchor",
+            help="Pinned operator lineage trust-anchor JSON required for calibration.",
+        ),
+    ] = None,
     resume_campaign: Annotated[
         bool,
         typer.Option(
@@ -1297,8 +1420,27 @@ def models_benchmark(
             or qualification_policy is not None
             or resume_campaign
             or calibration_output is not None
+            or calibrated_policy_output is not None
+            or lineage_review_bundle is not None
+            or lineage_trust_anchor is not None
         ):
             raise ConfigError("candidate campaign options require candidate-registry mode")
+        if calibrated_policy_output is not None and calibration_output is None:
+            raise ConfigError(
+                "--calibrated-policy-output requires --calibration-output from the same campaign"
+            )
+        calibration_inputs = (
+            calibration_output,
+            lineage_review_bundle,
+            lineage_trust_anchor,
+        )
+        if any(value is not None for value in calibration_inputs) and not all(
+            value is not None for value in calibration_inputs
+        ):
+            raise ConfigError(
+                "--calibration-output, --lineage-review-bundle, and "
+                "--lineage-trust-anchor must be supplied together"
+            )
         if calibration_output is not None and resume_campaign:
             raise ConfigError("calibration requires one fresh same-process candidate campaign")
         config = load_config(config_path)
@@ -1319,11 +1461,19 @@ def models_benchmark(
                 resume_campaign=resume_campaign,
                 qualification_policy_path=qualification_policy,
                 calibration_output=calibration_output,
+                calibrated_policy_output=calibrated_policy_output,
+                lineage_review_bundle=lineage_review_bundle,
+                lineage_trust_anchor=lineage_trust_anchor,
                 cost_ledger=cost_ledger,
                 allow_code_egress=allow_code_egress,
                 no_color=no_color,
             )
             return
+        privacy_observed_at = datetime.now(UTC).replace(microsecond=0)
+        source_provenance_observation = prove_release_pinned_model_benchmark_source(
+            benchmark_corpus,
+            now=privacy_observed_at,
+        )
         targets = select_model_benchmark_targets(config, model)
         validate_model_benchmark_egress(
             config,
@@ -1347,6 +1497,18 @@ def models_benchmark(
             config,
             certification=True,
         )
+        effective_privacy_policy = resolve_effective_privacy_policy(
+            profile=config.privacy.profile,
+            require_zdr=config.privacy.require_zdr,
+            consent_observation=None,
+            source_sha256=benchmark_corpus.corpus_sha256,
+            source_classification=PrivacySourceClassification.SYNTHETIC_COMMITTED,
+            source_provenance_observation=source_provenance_observation,
+            configured_model_ids=tuple(target.model_id for target in targets),
+            configured_provider_endpoints=(controls.provider_policy.configured_endpoints),
+            requested_budget_usd=Decimal(str(config.execution.budget_usd)),
+            now=privacy_observed_at,
+        )
         with load_operator_secrets(secrets_env_file, required=True) as operator_secrets:
             if not operator_secrets.openrouter_api_key_present:
                 raise ConfigError("OPENROUTER_API_KEY is missing from the operator secret file")
@@ -1358,6 +1520,8 @@ def models_benchmark(
                 usage=usage,
                 provider_policy=controls.provider_policy,
                 reasoning_policy=controls.reasoning_policy,
+                effective_privacy_policy=effective_privacy_policy,
+                source_provenance_observation=source_provenance_observation,
             )
             try:
                 await client.validate_authentication()
@@ -1454,6 +1618,9 @@ async def _execute_candidate_registry_benchmark(
     resume_campaign: bool,
     qualification_policy_path: Path,
     calibration_output: Path | None,
+    calibrated_policy_output: Path | None,
+    lineage_review_bundle: Path | None,
+    lineage_trust_anchor: Path | None,
     cost_ledger: Path | None,
     allow_code_egress: bool,
     no_color: bool,
@@ -1488,6 +1655,44 @@ async def _execute_candidate_registry_benchmark(
             "candidate benchmark requires an existing --cost-ledger initialized "
             "with models init-cost-ledger or execution.cost_ledger_path"
         )
+    if calibration_output is not None:
+        _preflight_model_calibration_output(
+            calibration_output,
+            cost_ledger_path=ledger_path,
+            portfolio_output=output,
+            campaign_journal=campaign_journal_path,
+        )
+    if calibrated_policy_output is not None:
+        assert calibration_output is not None
+        _preflight_calibrated_policy_output(
+            calibrated_policy_output,
+            cost_ledger_path=ledger_path,
+            portfolio_output=output,
+            campaign_journal=campaign_journal_path,
+            calibration_output=calibration_output,
+        )
+    lineage_review_artifact: ModelLineageReviewArtifact | None = None
+    trusted_lineage_verification: TrustedModelLineageReviewVerification | None = None
+    if calibration_output is not None:
+        assert lineage_review_bundle is not None
+        assert lineage_trust_anchor is not None
+        lineage_review_artifact, authority_envelope = load_model_lineage_authority_bundle(
+            lineage_review_bundle
+        )
+        trust_anchor = load_model_lineage_trust_anchor(lineage_trust_anchor)
+        lineage_observed_at = datetime.now(UTC).replace(microsecond=0)
+        trusted_lineage_verification = verify_operator_model_lineage_authority(
+            artifact=lineage_review_artifact,
+            envelope=authority_envelope,
+            trust_anchor=trust_anchor,
+            observed_at=lineage_observed_at,
+        )
+        trusted_lineage_verification.require_for(
+            candidate_registry=registry,
+            discovery_manifest=discovery_manifest,
+            campaign_started_at=lineage_observed_at,
+            observed_at=lineage_observed_at,
+        )
     budget, usage = _budget_and_usage(
         config,
         ledger_path=ledger_path,
@@ -1495,13 +1700,6 @@ async def _execute_candidate_registry_benchmark(
     )
     assert budget.atomic_ledger is not None
     _preflight_model_benchmark_portfolio_output(output, budget.atomic_ledger)
-    if calibration_output is not None:
-        _preflight_model_calibration_output(
-            calibration_output,
-            ledger=budget.atomic_ledger,
-            portfolio_output=output,
-            campaign_journal=campaign_journal_path,
-        )
     if Path(os.path.abspath(output)) == Path(os.path.abspath(campaign_journal_path)):
         raise ConfigError("candidate campaign journal and final portfolio must be distinct")
     effective_config_sha256 = config.stable_hash()
@@ -1548,13 +1746,20 @@ async def _execute_candidate_registry_benchmark(
         campaign=campaign,
     )
     if calibration_output is not None:
+        assert lineage_review_artifact is not None
+        assert trusted_lineage_verification is not None
         trusted_campaign = issue_trusted_candidate_benchmark_campaign_verification(
             campaign=campaign,
             portfolio=portfolio,
             reports=execution.reports,
         )
+        campaign_anchor = portfolio.ended_at or registry.created_at
+        calibration_created_at = max(
+            datetime.now(UTC).replace(microsecond=0),
+            campaign_anchor.replace(microsecond=0),
+        )
         calibration = build_model_calibration_artifact(
-            created_at=datetime.now(UTC).replace(microsecond=0),
+            created_at=calibration_created_at,
             candidate_registry=registry,
             discovery_run_manifest=discovery_manifest,
             benchmark_suite=benchmark_corpus,
@@ -1563,14 +1768,47 @@ async def _execute_candidate_registry_benchmark(
             benchmark_policy_sha256=qualification_policy.policy_sha256,
             effective_config_sha256=effective_config_sha256,
             trusted_campaign_verification=trusted_campaign,
+            lineage_review_artifact=lineage_review_artifact,
+            trusted_lineage_verification=trusted_lineage_verification,
         )
         write_model_calibration_artifact(calibration_output, calibration)
+        calibrated_policy: QualificationPolicy | None = None
+        if calibrated_policy_output is not None:
+            trusted_calibration = issue_trusted_model_calibration_verification(
+                artifact=calibration,
+                candidate_registry=registry,
+                discovery_run_manifest=discovery_manifest,
+                benchmark_suite=benchmark_corpus,
+                benchmark_portfolio=portfolio,
+                benchmark_reports=execution.reports,
+                benchmark_policy_sha256=qualification_policy.policy_sha256,
+                effective_config_sha256=effective_config_sha256,
+                trusted_campaign_verification=trusted_campaign,
+                lineage_review_artifact=lineage_review_artifact,
+                trusted_lineage_verification=trusted_lineage_verification,
+            )
+            calibrated_policy = derive_calibrated_qualification_policy(
+                calibration=calibration,
+                trusted_calibration_verification=trusted_calibration,
+            )
+        if calibrated_policy is not None:
+            assert calibrated_policy_output is not None
+            write_calibrated_qualification_policy(
+                calibrated_policy_output,
+                calibrated_policy,
+            )
         local_console.print(
             f"Calibration: {calibration.artifact_sha256}; "
             f"included_models="
             f"{sum(item.included_in_distribution for item in calibration.candidates)}",
             markup=False,
         )
+        if calibrated_policy is not None:
+            local_console.print(
+                f"P2 successor candidate: {calibrated_policy.policy_sha256}; "
+                "review, commit, and release-pin it before J2 qualification.",
+                markup=False,
+            )
     _print_candidate_benchmark_diagnostics(execution, target=local_console)
     local_console.print(
         f"Portfolio: {portfolio.portfolio_sha256}; "
@@ -3402,6 +3640,7 @@ def _execute_audit(
             config,
             repo=repo_path,
             output=output_path,
+            configuration_root=config_path.resolve().parent,
             file_config=loaded_config.file_config,
             environment_overrides=loaded_config.environment_overrides,
             cli_overrides=cli_overrides,
@@ -4182,11 +4421,11 @@ def _preflight_model_benchmark_portfolio_output(
 def _preflight_model_calibration_output(
     output: Path,
     *,
-    ledger: AtomicCostLedger,
+    cost_ledger_path: Path,
     portfolio_output: Path,
     campaign_journal: Path,
 ) -> None:
-    """Prove the fresh private calibration file can be published before paid work."""
+    """Prove the fresh private calibration file can be published before ledger access."""
 
     absolute = Path(os.path.abspath(output))
     if is_sensitive_workspace_name(absolute.name):
@@ -4198,9 +4437,10 @@ def _preflight_model_calibration_output(
         raise ConfigError("model calibration output may not traverse filesystem links")
     if os.path.lexists(absolute):
         raise ConfigError("model calibration output must be a fresh file")
+    ledger = Path(os.path.abspath(cost_ledger_path))
     protected = (
-        ledger.path.resolve(strict=True),
-        ledger.lock_path.resolve(strict=True),
+        ledger,
+        ledger.parent / f".{ledger.name}.lock",
         Path(os.path.abspath(portfolio_output)),
         Path(os.path.abspath(campaign_journal)),
     )
@@ -4225,6 +4465,60 @@ def _preflight_model_calibration_output(
             pass
     except OSError as exc:
         raise ConfigError("model calibration output directory is not writable") from exc
+
+
+def _preflight_calibrated_policy_output(
+    output: Path,
+    *,
+    cost_ledger_path: Path,
+    portfolio_output: Path,
+    campaign_journal: Path,
+    calibration_output: Path,
+) -> None:
+    """Reject an unsafe P2 destination before opening paid ledger or secret state."""
+
+    absolute = Path(os.path.abspath(output))
+    if is_sensitive_workspace_name(absolute.name):
+        raise ConfigError("refusing a sensitive calibrated policy output filename")
+    if any(
+        candidate.is_symlink() or candidate.is_junction()
+        for candidate in (absolute, *absolute.parents)
+    ):
+        raise ConfigError("calibrated policy output may not traverse filesystem links")
+    if os.path.lexists(absolute):
+        raise ConfigError("calibrated policy output must be a fresh file")
+
+    ledger = Path(os.path.abspath(cost_ledger_path))
+    ledger_lock = ledger.parent / f".{ledger.name}.lock"
+    protected = (
+        ledger,
+        ledger_lock,
+        Path(os.path.abspath(portfolio_output)),
+        Path(os.path.abspath(campaign_journal)),
+        Path(os.path.abspath(calibration_output)),
+    )
+    if any(
+        absolute == candidate
+        or absolute.is_relative_to(candidate)
+        or candidate.is_relative_to(absolute)
+        for candidate in protected
+    ):
+        raise ConfigError(
+            "calibrated policy output must be distinct from calibration, campaign, "
+            "portfolio, and ledger state"
+        )
+    absolute.parent.mkdir(parents=True, exist_ok=True)
+    if absolute.parent.is_symlink() or absolute.parent.is_junction():
+        raise ConfigError("calibrated policy output parent must be a regular directory")
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=absolute.parent,
+            prefix=".mmaudit-calibrated-policy-preflight-",
+            delete=True,
+        ):
+            pass
+    except OSError as exc:
+        raise ConfigError("calibrated policy output directory is not writable") from exc
 
 
 def _print_candidate_benchmark_diagnostics(

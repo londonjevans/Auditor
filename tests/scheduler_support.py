@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -12,12 +12,16 @@ from decimal import Decimal
 from pydantic import BaseModel
 
 from mmaudit.models.openrouter import strict_json_schema
+from mmaudit.models.policy_eligibility import build_policy_eligibility_route
+from mmaudit.models.policy_selection import AuditModelRoutingEvidence
 from mmaudit.models.scheduler import (
     SCHEDULER_ANALYSIS_INPUT_LABELS,
     SCHEDULER_PASS_ORDER,
     SchedulerAnalysisInputDescriptor,
     SchedulerAnalysisInputInventory,
     SchedulerArtifact,
+    SchedulerAuditModelSelectionBinding,
+    SchedulerAuditSelectedRouteBinding,
     SchedulerBindings,
     SchedulerCampaignManifest,
     SchedulerCampaignSummary,
@@ -575,6 +579,121 @@ def build_scheduler_test_usage(
     )
 
 
+def build_scheduler_test_audit_model_selection_binding(
+    *,
+    source_sha256: str,
+    selected_routes: Iterable[tuple[str, str, str, str]],
+    seed: str = "scheduler-test-audit-selection",
+) -> SchedulerAuditModelSelectionBinding:
+    """Build hash-only synthetic campaign comparison evidence without authority."""
+
+    routes = tuple(
+        SchedulerAuditSelectedRouteBinding.build(
+            exact_model_id=model_id,
+            root_lineage=root_lineage,
+            provider_name=provider_name,
+            provider_endpoint=provider_endpoint,
+            policy_route_sha256=build_policy_eligibility_route(
+                exact_model_id=model_id,
+                provider_name=provider_name,
+                provider_endpoint=provider_endpoint,
+            ).route_sha256,
+            selected_model_sha256=_sha256(f"{seed}:selected-model:{model_id}"),
+        )
+        for model_id, root_lineage, provider_name, provider_endpoint in selected_routes
+    )
+    return SchedulerAuditModelSelectionBinding.build(
+        audit_model_selection_bundle_sha256=_sha256(f"{seed}:bundle"),
+        audit_selection_sha256=_sha256(f"{seed}:selection"),
+        selected_model_set_sha256=_sha256(f"{seed}:selected-set"),
+        selected_routes=routes,
+        audit_scope_sha256=_sha256(f"{seed}:scope"),
+        source_sha256=source_sha256,
+        audit_context_sha256=_sha256(f"{seed}:context"),
+        client_constraints_sha256=_sha256(f"{seed}:constraints"),
+        technical_route_set_sha256=_sha256(f"{seed}:technical-routes"),
+        eligible_route_set_sha256=_sha256(f"{seed}:eligible-routes"),
+        policy_exclusion_set_sha256=_sha256(f"{seed}:policy-exclusions"),
+        technical_production_selection_sha256=_sha256(f"{seed}:technical-selection"),
+        technical_qualification_capability_sha256=_sha256(f"{seed}:technical-capability"),
+        policy_artifact_sha256=_sha256(f"{seed}:policy-artifact"),
+        policy_evaluation_sha256=_sha256(f"{seed}:policy-evaluation"),
+        policy_authority_receipt_sha256=_sha256(f"{seed}:policy-receipt"),
+        policy_authority_statement_sha256=_sha256(f"{seed}:policy-statement"),
+        policy_authority_envelope_sha256=_sha256(f"{seed}:policy-envelope"),
+        policy_authority_trust_anchor_sha256=_sha256(f"{seed}:policy-anchor"),
+        policy_source_observation_sha256=_sha256(f"{seed}:source-observation"),
+        policy_source_commitment_set_sha256=_sha256(f"{seed}:source-commitments"),
+        selection_expires_at=datetime(2099, 1, 1, tzinfo=UTC),
+    )
+
+
+def bind_scheduler_test_usage_to_audit_selection(
+    record: UsageRecord,
+    binding: SchedulerAuditModelSelectionBinding,
+) -> UsageRecord:
+    """Attach exact non-authorizing routing evidence to synthetic usage."""
+
+    selected = binding.route_for(record.requested_model)
+    route = build_policy_eligibility_route(
+        exact_model_id=selected.exact_model_id,
+        provider_name=selected.provider_name,
+        provider_endpoint=selected.provider_endpoint,
+    )
+    values: dict[str, object] = {
+        "schema_version": "1.0",
+        "audit_model_selection_bundle_sha256": (binding.audit_model_selection_bundle_sha256),
+        "audit_selection_sha256": binding.audit_selection_sha256,
+        "selected_model_set_sha256": binding.selected_model_set_sha256,
+        "audit_scope_sha256": binding.audit_scope_sha256,
+        "source_sha256": binding.source_sha256,
+        "audit_context_sha256": binding.audit_context_sha256,
+        "client_constraints_sha256": binding.client_constraints_sha256,
+        "intended_use": binding.intended_use,
+        "technical_production_selection_sha256": (binding.technical_production_selection_sha256),
+        "technical_qualification_capability_sha256": (
+            binding.technical_qualification_capability_sha256
+        ),
+        "policy_artifact_sha256": binding.policy_artifact_sha256,
+        "policy_evaluation_sha256": binding.policy_evaluation_sha256,
+        "policy_authority_receipt_sha256": binding.policy_authority_receipt_sha256,
+        "policy_authority_statement_sha256": binding.policy_authority_statement_sha256,
+        "policy_authority_envelope_sha256": binding.policy_authority_envelope_sha256,
+        "policy_authority_trust_anchor_sha256": (binding.policy_authority_trust_anchor_sha256),
+        "policy_source_observation_sha256": binding.policy_source_observation_sha256,
+        "policy_source_commitment_set_sha256": (binding.policy_source_commitment_set_sha256),
+        "route": route,
+        "selected_model_sha256": selected.selected_model_sha256,
+        "expires_at": binding.selection_expires_at,
+        "runtime_authorized": False,
+    }
+    provisional = AuditModelRoutingEvidence.model_construct(
+        **values,
+        routing_evidence_sha256="0" * 64,
+    )
+    values["routing_evidence_sha256"] = scheduler_canonical_sha256(
+        provisional.model_dump(mode="json", exclude={"routing_evidence_sha256"})
+    )
+    evidence = AuditModelRoutingEvidence.model_validate(values)
+    metadata = dict(evidence.request_metadata())
+    routing_sha256 = metadata.pop("routing_evidence_sha256")
+    return record.model_copy(
+        update={
+            "provider": selected.provider_name,
+            "configured_provider_endpoints": [selected.provider_endpoint],
+            "actual_provider_endpoint": selected.provider_endpoint,
+            "routing": {
+                **record.routing,
+                **metadata,
+                "selected_provider_name": selected.provider_name,
+                "selected_provider_endpoint": selected.provider_endpoint,
+                "audit_policy_routing_evidence_sha256": routing_sha256,
+                "audit_model_routing_evidence": evidence.model_dump(mode="json"),
+            },
+        }
+    )
+
+
 def build_scheduler_test_real_usage(
     task: SchedulerTaskPlan,
     activation: SchedulerTaskActivation,
@@ -583,6 +702,7 @@ def build_scheduler_test_real_usage(
     validated_output: object,
     cost_usd_exact: str = "0",
     privacy_evidence_custody: SchedulerPrivacyEvidenceCustody | None = None,
+    audit_model_selection: SchedulerAuditModelSelectionBinding | None = None,
 ) -> UsageRecord:
     """Build runtime-attested but wholly synthetic REAL-shaped scheduler evidence."""
 
@@ -624,18 +744,22 @@ def build_scheduler_test_real_usage(
         "request_ended_at": provisional.ended_at.isoformat(),
         "latency_ms": provisional.latency_ms,
     }
-    bound = bind_synthetic_usage_identity(
-        provisional.model_copy(
-            update={
-                "execution_evidence": ExecutionEvidenceKind.REAL,
-                "reported_cost_usd": float(exact_cost),
-                "reported_cost_usd_exact": cost_usd_exact,
-                "accounted_cost_usd": float(exact_cost),
-                "accounted_cost_usd_exact": cost_usd_exact,
-                "routing": routing,
-            }
-        )
+    real_shaped = provisional.model_copy(
+        update={
+            "execution_evidence": ExecutionEvidenceKind.REAL,
+            "reported_cost_usd": float(exact_cost),
+            "reported_cost_usd_exact": cost_usd_exact,
+            "accounted_cost_usd": float(exact_cost),
+            "accounted_cost_usd_exact": cost_usd_exact,
+            "routing": routing,
+        }
     )
+    if audit_model_selection is not None:
+        real_shaped = bind_scheduler_test_usage_to_audit_selection(
+            real_shaped,
+            audit_model_selection,
+        )
+    bound = bind_synthetic_usage_identity(real_shaped)
     plan = request_token_plan_from_usage(bound)
     assert plan is not None
     request_limit = AtomicRequestLimitReservationEvidence.build(
@@ -1262,6 +1386,7 @@ def build_complete_scheduler_fixture(
             tool_policy_sha256=bindings.tool_policy_sha256,
             cost_ledger_baseline_sha256=bindings.cost_ledger_baseline_sha256,
             privacy_evidence_custody_sha256=bindings.privacy_evidence_custody_sha256,
+            audit_model_selection=bindings.audit_model_selection,
         )
         exact_manifest = SchedulerCampaignManifest.build(
             bindings=exact_bindings,
@@ -1360,16 +1485,23 @@ def build_complete_scheduler_fixture(
             usage = None
             if task.task_kind is SchedulerTaskKind.MODEL_REQUEST:
                 payload = build_scheduler_test_model_payload(plan, task)
-                usage_builder = (
-                    build_scheduler_test_real_usage if real_usage else build_scheduler_test_usage
-                )
-                usage = usage_builder(
-                    task,
-                    activation,
-                    seed=seed,
-                    validated_output=payload,
-                    privacy_evidence_custody=exact_manifest.privacy_evidence_custody,
-                )
+                if real_usage:
+                    usage = build_scheduler_test_real_usage(
+                        task,
+                        activation,
+                        seed=seed,
+                        validated_output=payload,
+                        privacy_evidence_custody=exact_manifest.privacy_evidence_custody,
+                        audit_model_selection=(exact_manifest.bindings.audit_model_selection),
+                    )
+                else:
+                    usage = build_scheduler_test_usage(
+                        task,
+                        activation,
+                        seed=seed,
+                        validated_output=payload,
+                        privacy_evidence_custody=exact_manifest.privacy_evidence_custody,
+                    )
                 if usage_transform is not None:
                     transformed_usage = usage_transform(task, activation, usage)
                     usage = UsageRecord.model_validate(transformed_usage.model_dump(mode="python"))

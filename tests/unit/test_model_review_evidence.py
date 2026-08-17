@@ -36,10 +36,13 @@ from mmaudit.models.schemas import (
     SolidityEntityKind,
     SolidityGraphEdge,
     SolidityGraphKind,
+    SolidityGraphOccurrenceKind,
+    SolidityGraphRetainedOccurrence,
     SolidityGraphSet,
     SolidityProvenance,
     SoliditySymbolIndex,
     UsageRecord,
+    solidity_graph_occurrence_sha256,
 )
 from mmaudit.models.token_planning import (
     ContextOmissionCategory,
@@ -119,6 +122,27 @@ def _canonical_sha256(value: object) -> str:
             allow_nan=False,
         ).encode()
     ).hexdigest()
+
+
+def _edge_occurrences(
+    edges: list[SolidityGraphEdge],
+) -> tuple[SolidityGraphRetainedOccurrence, ...]:
+    return tuple(
+        sorted(
+            (
+                SolidityGraphRetainedOccurrence(
+                    subject_kind=SolidityGraphOccurrenceKind.EDGE,
+                    subject_sha256=solidity_graph_occurrence_sha256(
+                        SolidityGraphOccurrenceKind.EDGE,
+                        edge,
+                    ),
+                    occurrence_count=1,
+                )
+                for edge in edges
+            ),
+            key=lambda item: (item.subject_kind.value, item.subject_sha256),
+        )
+    )
 
 
 def _location() -> Location:
@@ -333,7 +357,10 @@ def _state_context(
     return _context(
         (request,),
         index=index,
-        graphs=SolidityGraphSet(edges=edges),
+        graphs=SolidityGraphSet(
+            edges=edges,
+            retained_occurrences=_edge_occurrences(edges),
+        ),
     )
 
 
@@ -429,7 +456,7 @@ def _context(
         ],
         requested_model_surfaces=list(requests),
         solidity_index=resolved_index,
-        solidity_graphs=graphs or SolidityGraphSet(edges=[]),
+        solidity_graphs=graphs or SolidityGraphSet(edges=[], retained_occurrences=()),
     )
     return _with_exact_context_bytes(package)
 
@@ -866,11 +893,13 @@ def test_canonical_invariant_reachability_uses_exact_request_bound_entities() ->
             transformation="synthetic_ambiguous_invariant_reachability",
         )
 
+    edges = [
+        state_write(safe_entry, safe_state),
+        state_write(fee_entry, fee_state),
+    ]
     graphs = SolidityGraphSet(
-        edges=[
-            state_write(safe_entry, safe_state),
-            state_write(fee_entry, fee_state),
-        ]
+        edges=edges,
+        retained_occurrences=_edge_occurrences(edges),
     )
     allowed_locations = tuple(
         sorted(

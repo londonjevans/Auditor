@@ -7,7 +7,13 @@ from typing import Any
 import pytest
 
 from mmaudit.agents.specialists import specialist_context_budget
-from mmaudit.models.schemas import ContextPackage, SolidityCoverage, SolidityGraphKind
+from mmaudit.models.schemas import (
+    AnalysisState,
+    ContextPackage,
+    SolidityCoverage,
+    SolidityGraphFactKind,
+    SolidityGraphKind,
+)
 from mmaudit.models.sharding import SolidityShardRiskSurface
 from mmaudit.models.token_planning import (
     CONTEXT_OMISSION_GROUP_CAP,
@@ -43,6 +49,12 @@ EXPECTED_GRAPH_KINDS = {
     SolidityGraphKind.PRIVILEGE,
     SolidityGraphKind.PROXY,
     SolidityGraphKind.STATE_WRITE,
+}
+MANDATED_RISK_GRAPH_KINDS = {
+    SolidityGraphKind.ASSET_FLOW,
+    SolidityGraphKind.PRIVILEGE,
+    SolidityGraphKind.SENSITIVE_REACHABILITY,
+    SolidityGraphKind.STATE_DEPENDENCY,
 }
 
 
@@ -98,19 +110,31 @@ def test_realistic_scale_index_graph_and_coverage_populations_are_monotonic(
         }
         indexed_paths = {entity.path for entity in index_build.index.entities}
         populated_graphs = {edge.graph for edge in graphs.edges}
+        candidate_graphs = {
+            SolidityGraphKind(kind)
+            for kind, count in coverage.graph_candidate_edge_counts.items()
+            if count
+        }
 
         assert not discovery.omitted
         assert len(projects) == 1
         assert len(solidity_paths) == manifest["actual"]["solidity_file_count"]
         assert set(index_build.index.fallback_sources) == solidity_paths
         assert solidity_paths <= indexed_paths
-        assert populated_graphs >= EXPECTED_GRAPH_KINDS
+        assert candidate_graphs >= EXPECTED_GRAPH_KINDS
+        assert populated_graphs >= MANDATED_RISK_GRAPH_KINDS
+        assert populated_graphs <= candidate_graphs
+        assert coverage.graph_analysis_state is (
+            AnalysisState.FALLBACK_PARSER
+            if graphs.generation_complete
+            else AnalysisState.ATTEMPTED_FAILED
+        )
         assert coverage.files_discovered == len(solidity_paths)
         assert coverage.solidity_files_analyzed == len(solidity_paths)
         assert coverage.contracts_indexed >= manifest["structure"]["abstract_contracts"]
         assert coverage.functions_indexed >= manifest["structure"]["functions"]
         assert coverage.graph_edge_counts[SolidityGraphKind.ASSET_FLOW.value] > 0
-        assert coverage.graph_edge_counts[SolidityGraphKind.EXTERNAL_CALL.value] > 0
+        assert coverage.graph_candidate_edge_counts[SolidityGraphKind.EXTERNAL_CALL.value] > 0
 
         public_review = coverage.quality_metrics["public_external_entry_points_reviewed"]
         privileged_review = coverage.quality_metrics["privileged_entry_points_reviewed"]
@@ -126,7 +150,7 @@ def test_realistic_scale_index_graph_and_coverage_populations_are_monotonic(
             coverage.files_discovered,
             coverage.contracts_indexed,
             coverage.functions_indexed,
-            len(graphs.edges),
+            sum(coverage.graph_candidate_edge_counts.values()),
         )
         assert all(
             current > previous
@@ -175,13 +199,13 @@ def test_realistic_scale_has_stable_bounded_semantic_sharding_inputs(
 
 
 @pytest.mark.parametrize("profile_id", PROFILE_IDS)
-def test_realistic_scale_builds_stable_complete_semantic_shards(
+def test_realistic_scale_builds_stable_exact_semantic_shards_under_graph_pressure(
     profile_id: str,
     config_factory,
 ) -> None:
     """Prove actual shard coverage without treating graph truncation as sharding."""
 
-    _, discovery, _, index_build, graphs, _ = _analyze(profile_id, config_factory)
+    _, discovery, _, index_build, graphs, coverage = _analyze(profile_id, config_factory)
     first = build_solidity_shard_inventory(discovery, index_build.index, graphs)
     second = build_solidity_shard_inventory(discovery, index_build.index, graphs)
     solidity_files = [item for item in discovery.files if item.language == "Solidity"]
@@ -195,8 +219,58 @@ def test_realistic_scale_builds_stable_complete_semantic_shards(
     assert first.coverage.graph_nodes_total == len(graphs.nodes)
     assert first.coverage.graph_edges_total == len(graphs.edges)
     assert first.coverage.storage_entries_total == len(graphs.storage_layout)
-    assert first.coverage.complete is True
-    assert first.overlaps
+    assert first.coverage.complete is graphs.generation_complete
+    assert first.coverage.graph_edge_candidate_occurrences_covered == sum(
+        coverage.graph_retained_edge_occurrence_counts.values()
+    )
+    assert first.coverage.graph_edge_candidate_occurrences_total == sum(
+        coverage.graph_candidate_edge_counts.values()
+    )
+    assert first.coverage.graph_edge_candidate_occurrences_total == (
+        first.coverage.graph_edge_candidate_occurrences_covered
+        + sum(item.omitted_count for item in graphs.edge_omissions)
+    )
+    assert (
+        first.coverage.graph_node_candidate_occurrences_covered
+        == (coverage.graph_fact_retained_occurrence_counts[SolidityGraphFactKind.GRAPH_NODE.value])
+    )
+    assert (
+        first.coverage.storage_entry_candidate_occurrences_covered
+        == (
+            coverage.graph_fact_retained_occurrence_counts[
+                SolidityGraphFactKind.STORAGE_ENTRY.value
+            ]
+        )
+    )
+    assert (
+        first.coverage.graph_warning_candidate_occurrences_covered
+        == (coverage.graph_fact_retained_occurrence_counts[SolidityGraphFactKind.WARNING.value])
+    )
+    candidate_pairs = (
+        (
+            first.coverage.graph_edge_candidate_occurrences_covered,
+            first.coverage.graph_edge_candidate_occurrences_total,
+        ),
+        (
+            first.coverage.graph_node_candidate_occurrences_covered,
+            first.coverage.graph_node_candidate_occurrences_total,
+        ),
+        (
+            first.coverage.storage_entry_candidate_occurrences_covered,
+            first.coverage.storage_entry_candidate_occurrences_total,
+        ),
+        (
+            first.coverage.graph_warning_candidate_occurrences_covered,
+            first.coverage.graph_warning_candidate_occurrences_total,
+        ),
+    )
+    assert any(covered < total for covered, total in candidate_pairs) is (
+        not graphs.generation_complete
+    )
+    # Fallback identities are path-scoped, so unrelated same-named facts cannot create
+    # synthetic cross-file boundaries or overlap memberships.
+    assert not first.boundaries
+    assert not first.overlaps
     assert all(
         boundary.graph_kind is not SolidityGraphKind.ASSET_FLOW for boundary in first.boundaries
     )
@@ -204,12 +278,24 @@ def test_realistic_scale_builds_stable_complete_semantic_shards(
     assert risks >= {
         SolidityShardRiskSurface.ASSET_FLOW,
         SolidityShardRiskSurface.AUTHORITY_GOVERNANCE,
-        SolidityShardRiskSurface.CALL_FLOW,
         SolidityShardRiskSurface.CONTRACTS,
         SolidityShardRiskSurface.INHERITANCE_UPGRADE,
-        SolidityShardRiskSurface.ORACLE_DEPENDENCY,
         SolidityShardRiskSurface.STATE_ACCOUNTING,
     }
+    retained_kinds = {edge.graph for edge in graphs.edges}
+    assert (SolidityShardRiskSurface.CALL_FLOW in risks) is bool(
+        retained_kinds
+        & {
+            SolidityGraphKind.INTERNAL_CALL,
+            SolidityGraphKind.EXTERNAL_CALL,
+            SolidityGraphKind.LOW_LEVEL_CALL,
+            SolidityGraphKind.DELEGATECALL,
+            SolidityGraphKind.CONTRACT_CREATION,
+        }
+    )
+    assert (SolidityShardRiskSurface.ORACLE_DEPENDENCY in risks) is (
+        SolidityGraphKind.ORACLE_DEPENDENCY in retained_kinds
+    )
 
 
 @pytest.mark.parametrize(

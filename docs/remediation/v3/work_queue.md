@@ -1,7 +1,8 @@
 # mmaudit v3 Product Remediation Queue
 
-This queue implements the externally reviewed v3 product objective captured by
-SHA-256 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
+This queue implements the externally reviewed v3 product objective committed at
+`docs/remediation/v3/product_completion_goal.txt`, with SHA-256
+`f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Historical evaluation artifacts remain immutable. A unit test, mock, declaration,
 or configured adapter is not real runtime evidence.
 
@@ -443,9 +444,16 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   aggregate USD 250 cap.
 - **Acceptance criteria:** Staged funnel, atomic reservations, exact identities,
   endpoint/privacy eligibility, non-empty benchmark dimensions, frozen selection,
-  actual cost, and rejection reasons are recorded; no model self-qualifies.
-- **Dependencies:** `V3-SCOPE-001`.
+  actual cost, and rejection reasons are recorded; no model self-qualifies. The same process that
+  issues `VerifiedProductionQualification` must cryptographically verify independently pinned
+  policy authority and trust, resolve the exact `VerifiedAuditModelSelection`, and pass both
+  opaque capabilities plus their exact durable evidence bundle into `AuditPipeline`. Persisted
+  artifacts alone never authorize a REAL audit.
+- **Dependencies:** `V3-SCOPE-001`, `V3-LINEAGE-001`, `V3-CALIBRATE-001`, and
+  `V3-POLICYELIG-001`.
 - **Status:** `QUEUED`
+- **Current blocker:** Lineage and calibration remain `BLOCKED_TECHNICAL`, and no current
+  independently authenticated policy determination or real qualification evidence exists.
 
 ## V3-SINGLE-AUDIT-001 — Real sharded single-model audit
 
@@ -586,7 +594,7 @@ are invisible to source review by construction.
   `src/mmaudit/config.py`, `src/mmaudit/orchestration/pipeline.py`, scanner and finding
   schemas, `mmaudit.example.toml`, unit and local integration regressions.
 - **Dependencies:** `V3-TOKENS-001`.
-- **Status:** `IN_PROGRESS`
+- **Status:** `PARTIAL`
 - **Validated result:** The Foundry path is complete for the bounded pinned-fork
   scope: compiler-backed inherited-test inventory, exact selection, hardened
   loopback-only execution, per-test evidence, typed findings, cumulative output
@@ -600,7 +608,8 @@ are invisible to source review by construction.
   image-baked reporter described in `operator_prerequisites.md` are supplied.
 - **Next action:** None in the currently available environment. Safe Foundry work is complete;
   resume only the Hardhat integration subtask when its external isolation and toolchain
-  prerequisites exist. Continue with authoritative execution-order ticket `V3-OBJECTIVE-001`.
+  prerequisites exist. `V3-POLICYELIG-001` is complete; `V3-QUALIFY-001` is next in model-ticket
+  order but remains non-actionable while lineage and calibration are blocked.
 
 ## V3-FORKDIFF-001 — Differential and multi-state fork matrix
 
@@ -683,8 +692,8 @@ are invisible to source review by construction.
   `src/mmaudit/solidity/coverage.py`, `src/mmaudit/orchestration/model_coverage.py`,
   reporting, regressions.
 - **Dependencies:** `V3-EXECORIGIN-001`; reuse `V3-MUTATION-001` work where already built.
-- **Status:** `COMPLETE`
-- **Validated result:** Source-only audited contract/function denominators,
+- **Status:** `PARTIAL`
+- **Validated implementation slice:** Source-only audited contract/function denominators,
   source-hash-bound non-finding gaps, conservative critical classification,
   per-graph/invariant/economic applicability, and elevated model-review routing
   are typed and reportable. Repository-suite credit now requires an immutable
@@ -744,11 +753,10 @@ are invisible to source review by construction.
 
 - **Objective:** Replace the aspirational all-dimension `1.0` policy with thresholds derived
   from measurement, so qualification is a meaningful filter rather than an unreachable gate.
-  `config/models.maximum-assurance.toml` currently requires `minimum_score = 1.0` across 17
-  dimensions over 16 cases that produce 50 scored dimension observations, with
-  `tier_a_minimum_overall_score = 1.0`; the disposition enum offers only `TIER_A`,
-  `NOT_QUALIFIED`, and `INCONCLUSIVE`. The frozen policy is not empirically calibrated and may
-  reject every candidate, but that outcome is not asserted before a real campaign.
+  At ticket start, `config/models.maximum-assurance.toml` required `minimum_score = 1.0`
+  across 17 dimensions over 16 cases that produced 50 scored observations, with
+  `tier_a_minimum_overall_score = 1.0`. The predecessor remains deliberately non-dispositive;
+  no candidate result is inferred before a real campaign.
 - **Acceptance criteria:** A calibration mode runs the frozen corpus against candidate models
   and records observed per-dimension pass distributions without asserting a disposition. The
   resulting policy keeps `1.0` only where determinism is genuinely required — for example
@@ -764,69 +772,89 @@ are invisible to source review by construction.
   benchmark corpus, regressions.
 - **Dependencies:** `V3-TOKENS-001`.
 - **Unblocks:** `V3-QUALIFY-001`, which must not begin before this completes.
-- **Status:** `PARTIAL`
-- **Starting evidence:** The committed policy still requires `1.0` on every one of seventeen
-  dimensions and an overall `1.0`, while the qualification conclusion has no role-scoped
-  secondary disposition and no calibration artifact or non-dispositive calibration mode exists.
-- **Implemented safe slice:** Candidate-registry benchmark mode can now atomically emit a
-  mode-0600, self-hashed, non-dispositive calibration artifact from the exact live campaign
-  capability. It retains excluded models, credits only complete REAL reports from
-  operator-approved, campaign-timely lineages, records exact per-dimension distributions, and
-  binds candidate, discovery, corpus, truth, portfolio, policy, configuration, and journal
-  evidence. Qualification policy v2 requires per-threshold rationales and distribution hashes,
-  at least three complete models from three reviewed root lineages, four or more cases for every
-  judgment dimension, absolute `1.0` gates only for the three designated hard-gate dimensions, and
-  mandatory investigator/verifier/falsifier/judge semantic dimensions. Role results can remove
-  validator authority without promoting a model above its global Tier A result. Final
-  qualification verification and production capability resolution require a process-local
-  calibrated-policy authority; raw hash-only issuers are not module-reachable. Campaign authority
-  is attached only to an exact fresh journal, so replaying a persisted campaign cannot recreate
-  live response provenance.
-- **Validation:** The authority-hardened focused matrix passed `130` tests. Ruff formatting and
-  checking passed, strict mypy passed all `152` source files, release-schema generation verified,
-  JSON/diff integrity passed, and the full suite passed `3464` tests with `11` explicit
-  external-prerequisite skips in `781.73s`. The implementation checkpoint is
-  `937d97e1d337305ac56cd792fe0d6c2b8bd50674`.
-- **Remaining acceptance blockers:** No real calibration campaign has run and the frozen v1
-  policy remains unchanged. The current corpus has only two cases for most judgment dimensions;
-  all frozen candidates lack approved root lineages and omit literal verifier/judge declarations;
-  production reasoning effort is not yet role-bound. A secure CLI path for reviewing and freezing
-  a measured policy remains unresolved because the calibration campaign binds its predecessor
-  policy/config while the later qualification campaign must bind the derived v2 policy/config.
-  These gaps cannot be truthfully closed with synthetic thresholds or a self-attested hash.
-- **Next action:** Complete `V3-MODELREFRESH-001` discovery/diff, `V3-LINEAGE-001`, and
-  `V3-EFFORT-001`; expand the frozen corpus to nontrivial judgment denominators; then return here
-  to run a real non-dispositive calibration, freeze its measured policy before qualification,
-  and validate the full two-campaign lifecycle.
+- **Status:** `BLOCKED_TECHNICAL`
+- **Starting evidence:** At ticket start, the committed policy required `1.0` on every one of
+  seventeen dimensions and an overall `1.0`, while the qualification conclusion had no
+  role-scoped secondary disposition and no calibration artifact or non-dispositive calibration
+  mode existed.
+- **Implemented safe slice:** The frozen synthetic corpus now contains `24` materially distinct
+  cases and `85` scored observations per model: every one of the fourteen judgment dimensions has
+  four distinct-source cases, exact-source location has two, prompt-injection resistance has
+  three, and structured-output compliance covers all twenty-four. The re-sealed schema-v1
+  predecessor policy `1df14052e97a8ceb2cf3ec9fd25637f5f2f3a821818a54382a7c1f241059da8c`
+  records those exact denominators but remains non-dispositive and production-ineligible.
+  Candidate mode emits a canonical private calibration artifact only from a complete live
+  campaign and an exact operator-signed, campaign-timely lineage decision. Caller-self-sealed
+  lineage receives no calibration credit.
+
+  Schema-v2 policy derivation is now a single deterministic projection from that calibration:
+  global support requires at least eight exact candidates across six reviewed roots; investigator
+  support requires four roots; verifier, falsifier, and judge support each require two. The
+  greatest supported non-perfect score is selected for judgment dimensions, the three designated
+  deterministic gates remain `1.0`, aggregate thresholds are derived rather than caller supplied,
+  and the complete global and role vectors must be jointly reachable. Timestamp, `30`-day policy
+  validity, `7`-day evidence age, dimensions, denominators, distribution hashes, and rationales are
+  frozen. These are explicitly empirical support cutoffs, not statistical-significance claims.
+
+  Calibration A is published before P2 derivation, so an under-supported paid campaign retains
+  its non-dispositive evidence. Both A and P2 use bounded canonical mode-`0600`, single-link,
+  descriptor-relative no-follow publication and loading, and P2 has a generated strict release
+  schema. The durable bridge exact-joins rootless R0, the authenticated lineage decision, reviewed
+  R1, predecessor P1/C1, A, derived P2/C2, and the later post-campaign R2. Only a successor source
+  release that pins P2/C2 can reconstruct the opaque release authority; the current P1 source
+  release cannot, and schema-v1 policy can never produce eligible production IDs.
+- **Validation (2026-08-17):** The merged corpus, lineage, calibration, transition, qualification,
+  workflow, CLI, and release-schema matrix passed `297` tests in `122.46s`. Repository Ruff
+  reported `458 files already formatted` and passed all checks; strict mypy passed `176` source
+  files; generated schemas, JSON parsing, and `git diff --check` passed. This is focused local
+  evidence, not a new complete-suite or real-provider result. No provider, network, credential,
+  source-egress, paid-call, runtime-approval, checkpoint, or release operation occurred.
+- **Remaining acceptance blockers:** No current authenticated provider refresh, complete actual
+  operator-signed exact-set lineage decision, or real calibration campaign exists. More
+  importantly, the curated project-authored corpus is not a randomized, independently adjudicated
+  holdout from a declared population. Four cases per judgment dimension cannot support the
+  ticket's required statistically meaningful thresholds; the implemented cutoffs are deliberately
+  labelled empirical. No measured P2/C2 is reviewed and source-pinned, and no independent J2
+  qualification campaign has run. Synthetic data, self-hashes, or a caller-selected threshold
+  cannot truthfully close those gaps.
+- **Next action:** None in the current environment. Resume only with a precommitted representative
+  holdout and statistical plan, a current refresh plus authorized signed lineage decision, and a
+  real calibration campaign. `V3-POLICYELIG-001` is complete, but do not begin
+  `V3-QUALIFY-001` or grant production selection while this ticket is blocked.
 
 ## V3-LINEAGE-001 — Operator root-lineage review record
 
 - **Objective:** Perform and record the independent root-lineage review that
   `privacy.approved_model_lineages` requires, so source egress is not blocked for every
-  candidate. The list is currently empty and is a hard fail-closed gate in eight call sites;
-  all twelve candidates carry `lineage_review.status = "pending"`.
+  candidate. The list is currently empty. Ten direct fail-closed decision points consume it:
+  candidate-falsifier selection, validation-falsifier selection, benchmark egress, registry
+  source-egress validation, production-qualification validation, surface-assignment planning,
+  surface-assignment feasibility, substantive surface-review credit, assurance revalidation, and
+  scheduler-manifest validation. All twelve candidates in the obsolete frozen registry carry
+  `lineage_review.status = "pending"`.
 - **Acceptance criteria:** Each candidate carries a dated operator review, rationale, and
   evidence hash. Approved root lineages are committed. Distinct vendor aliases of one root
   model do not count as independent lineages. An unreviewed or rejected lineage remains
   fail-closed at every existing call site.
 - **Files expected to change:** `config/models.candidates.toml`, operator configuration,
   lineage evidence artifacts, regressions.
-- **Dependencies:** None beyond current `HEAD` for the decision itself. A refreshed candidate
-  registry can bind the operator review before calibration; the production
-  `ModelLineageConfig` binding additionally requires qualification output.
-- **Status:** `PARTIAL`
-- **Operator decision recorded:** `docs/remediation/v3/model_lineage_review.md` authorises
-  eight root lineages — anthropic, openai, google, x-ai, moonshotai, deepseek, z-ai, minimax —
-  with per-model derivation evidence from catalogue `hugging_face_id` and HuggingFace
-  `cardData.base_model`, a reproducible identifier derivation, and the declared collisions.
-  The basis is that audited targets are public open-source code; the record states that this
-  authorisation does not extend to private pre-deployment client source and must be re-taken
-  before the first such audit.
-- **Remaining gap:** Production `ModelLineageConfig` also requires `measured_quality_score`,
-  `measured_quality_tier`, and a `quality_measurement` hash, which are qualification outputs.
-  Therefore `approved_model_lineages` stays empty and production source egress stays fail-closed
-  until qualification completes. The reviewed lineage decision must first be joined to the
-  refreshed candidates for calibration; do not hand-author production quality entries early.
+- **Dependencies:** A real binding requires a successful current exact discovery/refresh bundle
+  and a complete independently authenticated operator decision. `ModelLineageConfig` no longer
+  requires qualification output for an identity-only entry; production role selection remains
+  separately qualification-gated.
+- **Status:** `BLOCKED_TECHNICAL`
+- **Provisional documentary review:** `docs/remediation/v3/model_lineage_review.md` records eight
+  proposed conservative lab groupings — anthropic, openai, google, x-ai, moonshotai, deepseek,
+  z-ai, minimax — and a public-source scope rationale. Catalogue `hugging_face_id`, absent
+  HuggingFace `cardData.base_model`, first-party publication, closed weights, and a reproducible
+  lab-label hash do not prove ancestry. The record is incomplete, unauthenticated, and grants no
+  source-egress or runtime approval.
+- **Bootstrap correction:** `ModelLineageConfig.measured_quality` is an optional nested record.
+  A complete authoritative review can populate identity-only `models.registry` entries and
+  `privacy.approved_model_lineages` for separately approved benchmark/calibration routing before
+  qualification, without making a model selectable for an audit role. Those collections remain
+  empty because the current refresh and operator-decision evidence is unavailable, not because
+  qualification-derived quality is mandatory. Do not hand-author quality entries early.
 - **Provider-free implementation evidence:** A separate frozen, self-hashed review overlay now
   revalidates the pending/rootless discovery registry, replays exact refresh source into its
   snapshot, binds a caller-independent trusted freshness policy, verifies bounded raw decision
@@ -835,26 +863,40 @@ are invisible to source review by construction.
   open-source identity review, its quality to `NOT_EVALUATED`, its evidence class to
   `PROVIDER_FREE_STRUCTURAL`, both provider and operator authenticity to
   `NOT_INDEPENDENTLY_PROVEN`, and both source-egress and production-selection authority to
-  literal `false`. All eight approval-dependent consumer paths now have negative coverage;
+  literal `false`. The ten approval-dependent decision points named above fail closed;
   unregistered vendor labels receive no independence credit and unapproved falsifier lineages
   are excluded.
-- **Validation:** The overlay/schema focused gate passed `16` tests; the joined
-  lineage/discovery/refresh/qualification/consumer matrix passed `565`. Repository Ruff, strict
-  mypy over `155` source files, generated-schema synchronization, and diff integrity passed. The
-  complete suite reached `3549 passed, 15 skipped` with exactly `71` setup errors caused by the
-  managed sandbox denying `127.0.0.1` listener creation; the exact affected bridge file then
-  passed all `76` tests with local-loopback permission, yielding effective full coverage of
-  `3620` passing tests and `15` explicit external-prerequisite skips. No provider call, secret
-  access, or spend occurred.
+- **Authenticated calibration-only handoff:** `mmaudit.models.lineage_authority` verifies a
+  bounded SSHSIG Ed25519 envelope against an explicit out-of-band operator trust anchor and a
+  pinned root-owned system verifier. The signed statement binds the exact structural artifact,
+  candidate/discovery/refresh evidence, candidate decisions, roots, validity window, and literal
+  calibration-only authority. It issues an opaque process-local capability; calibration schema
+  v2 now derives all root credit from that capability and records the exact review, envelope, and
+  per-candidate binding hashes. Caller-self-sealed candidate roots receive no credit. The CLI
+  requires the signed bundle and trust anchor with calibration output and validates them before
+  ledger use, secret loading, campaign creation, or provider dispatch. The envelope cannot
+  authorize source egress or production selection and no signing/private-key command exists.
+- **Validation:** The final affected lineage, calibration, CLI, policy, consumer, schema, and
+  documentation matrix passed `214` tests. Focused signature verification used only an ephemeral
+  local synthetic Ed25519 key. Ruff formatting/checking, strict mypy over the four affected
+  production/generator files, generated-schema synchronization, CLI help, and diff integrity
+  passed. No provider call, network operation, credential read, private key from the repository,
+  source egress, or spend occurred.
 - **Remaining gap:** No successful post-correction real refresh bundle exists; the documentary
-  decision lacks a whole-second UTC time, omits one documentary candidate, and is not
-  independently authenticated. The frozen candidate registry is obsolete. Therefore no real
-  review artifact, production quality entry, or runtime approval can be emitted honestly, and
-  `approved_model_lineages` remains empty.
-- **Next action:** Continue with `V3-EFFORT-001`, then calibration and qualification. Return here
-  only after a successful exact refreshed candidate bundle and a complete authenticated operator
-  decision exist; do not infer authenticity from a self-hash or activate private-source egress
-  from this public-only record.
+  decision lacks a whole-second UTC time, omits two documentary candidates
+  (`openai/gpt-5.6-sol-pro` and `deepseek/deepseek-v4-flash-0731`), and is not independently
+  authenticated. The frozen candidate registry is obsolete. Therefore no real review artifact,
+  identity-only runtime entry, production quality entry, or runtime approval can be emitted
+  honestly, and `approved_model_lineages` remains empty.
+- **Blocked boundary (2026-08-17):** The provider-free authentication contract and calibration
+  consumer are implemented, but the acceptance criteria still require evidence only an external
+  refresh and authorized operator can supply: a successful current exact provider refresh and a
+  complete signed decision over that exact candidate set. The repository cannot fabricate either
+  or infer authenticity from a self-hash. Keep runtime approvals empty; the completed
+  `V3-POLICYELIG-001` mechanism does not grant this blocked ticket completion credit.
+- **Next action:** None in the current environment. Resume only after a successful current exact
+  refresh and an authorized operator-signed decision are supplied. `V3-QUALIFY-001` remains
+  non-actionable without lineage completion or runtime approval.
 
 ## V3-INTAKE-001 — Untrusted client repository intake
 
@@ -1602,11 +1644,11 @@ are invisible to source review by construction.
 - **Priority:** High and nearly free. Do it at the next clean boundary.
 - **Objective:** Place the authoritative v3 product objective under version control so the
   requirement this queue implements is readable inside the repository.
-- **Why this is needed.** The queue, worklog, and `review_traceability.json` all reference the
-  objective only as SHA-256 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
-  Hashing every non-ignored file in the repository returns no match, so the document is not
-  present. The hash provides integrity for a copy someone already holds; it conveys no
-  content. Consequences:
+- **Why this is needed.** At discovery, the queue, worklog, and `review_traceability.json`
+  referenced the objective only as SHA-256
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`. Hashing every
+  non-ignored file in the repository returned no match, so the document was not present. The hash
+  provided integrity for a copy someone already held but conveyed no content. Consequences were:
   - Nobody reading the repository can determine what the product is required to become, and
     no reviewer can check whether these tickets are *sufficient* to deliver it — only that
     they are internally consistent.
@@ -1617,7 +1659,7 @@ are invisible to source review by construction.
     is therefore a commit, not an authoring task.
 - **Acceptance criteria:**
   - The complete objective is committed verbatim, byte-for-byte, at a stable repository path.
-  - Its committed SHA-256 is recomputed and equals
+  - The committed `docs/remediation/v3/product_completion_goal.txt` SHA-256 is recomputed and equals
     `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`. A mismatch fails the
     ticket; it must not be "fixed" by editing the document or by updating the expected hash.
   - No credential, secret path, private prompt, or provider completion is introduced. If the
@@ -1631,34 +1673,42 @@ are invisible to source review by construction.
 - **Explicitly out of scope:** reconstructing, summarising, paraphrasing, or regenerating the
   objective. Only the exact held document is acceptable. A reconstruction would fail the hash
   and would assert authority it does not have.
-- **Files expected to change:** new objective document, `docs/remediation/v3/work_queue.md`,
-  `docs/remediation/v3/worklog.md`, `docs/remediation/v3/review_traceability.json`, regression.
+- **Files changed:** the previously committed objective remains byte-unchanged; `.gitattributes`,
+  `docs/remediation/v3/work_queue.md`, `docs/remediation/v3/worklog.md`,
+  `docs/remediation/v3/runtime_status.json`, `docs/remediation/v3/review_traceability.json`, and
+  `tests/unit/test_product_objective.py` carry its current authority and regression.
 - **Dependencies:** None.
 - **Unblocks:** `V3-TARGETSPEC-001`.
-- **Status:** `QUEUED`
+- **Status:** `COMPLETE`
 - **Blocker resolved 2026-08-03.** The exact source was recovered from the Codex attachment
-  store at `~/.codex/attachments/6ff75eba-8253-42af-aa8e-968c7adc883f/pasted-text-1.txt`
-  (1,418 lines, 40,779 bytes) and copied byte-for-byte to
+  store under operator control (1,418 lines, 40,779 bytes) and copied byte-for-byte to
   `docs/remediation/v3/product_completion_goal.txt`. Its SHA-256 was recomputed after the copy
   and equals `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`. The document
   begins `AUTHORIZED DEFENSIVE MMAUDIT PRODUCT-COMPLETION GOAL`. A secret scan before placement
   found no key, token, private-key block, credential assignment, or absolute host path. The
   file is plain text with no Markdown structure; it must not be reformatted, re-wrapped, or
   converted, because any such change breaks the hash.
-- **Remaining work for this ticket:** update the digest references in this queue, the worklog,
-  and `review_traceability.json` to name the committed path alongside the hash, and add the
-  regression asserting the committed file still matches it.
+- **Completion evidence (2026-08-17):** The exact objective remains the tracked regular-file blob
+  `360944d9a44cadfbb7134b23175aa04749994be6`, introduced by commit
+  `517559e5c9526f78e516374ebc194933d01eac7f` and contained by both `main` and `origin/main`.
+  The current file is byte-identical: `40,779` bytes, `1,418` logical lines, no terminal newline,
+  and the required SHA-256. Current queue/worklog prologues and `review_traceability.json` bind the
+  stable path beside the full digest. A path-specific Git `-text` rule prevents checkout EOL
+  normalization, and the regression rejects a missing, symlinked, non-regular, multiply-linked,
+  resized, relined, or rehashed objective. The related objective/traceability/static-release group
+  passed `17` tests; repository Ruff, strict mypy over `173` source files, schema verification,
+  JSON parsing, authority/queue assertions, frozen root-ledger protection, and diff integrity
+  passed. Production code is unchanged from the preceding `4,920`-pass complete-suite gate; this
+  docs-and-regression ticket does not claim a new full-suite run.
 - **Superseded blocker evidence:** On 2026-08-03, the exact digest scan hashed all `918`
   tracked/untracked nonignored repository files and found `0` matches. The digest occurs only as
   a reference in this queue, the worklog, and `review_traceability.json`; no canonical source
   path is recorded. The distinct Corrovera product vision was restored byte-for-byte and hashes
   to `77e5ab93225377e86e4ad08f09775deaac86b927a6817b8dca9eaa6f81b8a2a6`.
-- **Required operator prerequisite:** Supply the exact objective byte stream or a canonical
-  readable source path whose SHA-256 is
-  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
-  The document will not be reconstructed or replaced with the different product vision.
-- **Next action:** Resume this ticket only when that exact source is available; continue now
-  with dependency-free `V3-BOOTSTRAP-001`.
+- **Source availability:** The exact hash-matching source is now present at the stable path above;
+  no operator prerequisite remains.
+- **Next action:** None; `V3-TARGETSPEC-001` and `V3-POLICYELIG-001` are complete.
+  `V3-QUALIFY-001` remains non-actionable while lineage and calibration are externally blocked.
 
 ## V3-TARGETSPEC-001 — Reconcile the product vision with the objective and correct the README
 
@@ -1670,15 +1720,17 @@ are invisible to source review by construction.
   scope, principles, client journey, architecture, model intelligence, audit orchestration,
   finding lifecycle, coverage semantics, deliverables, benchmarking, release gates, permitted
   and forbidden claims, and a completion definition. The authoring work is substantially done.
-  What remains is reconciliation, four commercial gaps, and the README correction.
-- **Defect 1 — two authoritative documents, no precedence rule.** The product vision hashes to
+  What remained was reconciliation, five commercial gaps, and the README correction.
+- **Pre-reconciliation defect 1 — two authoritative documents, no precedence rule.** Before reconciliation, the
+  product vision hashed to
   `77e5ab93225377e86e4ad08f09775deaac86b927a6817b8dca9eaa6f81b8a2a6`. The objective this queue
   implements hashes to `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
   They are different documents, and the vision states it should guide "product design, system
   architecture, implementation priorities, testing, release gates, marketing claims, and
   independent evaluation" — overlapping the objective's role. Nothing states which governs on
   conflict. Resolve explicitly in the vision document itself.
-- **Defect 2 — commercial gaps.** Measured by keyword presence in the vision document:
+- **Pre-reconciliation defect 2 — commercial gaps.** At discovery, measured by keyword presence in
+  the then-current vision document:
   - Turnaround and SLA: absent. Section 4 claims superiority in "time to completion" without
     defining it. A self-serve product must state expected turnaround, concurrency, and what
     happens when a run exceeds it.
@@ -1692,23 +1744,24 @@ are invisible to source review by construction.
   - Optional human review: absent. The vision commits to completion "without an internal
     operator", which implicitly forecloses a premium expert-review tier. Record whether that
     exclusion is deliberate.
-- **Defect 3 — unacknowledged tension.** Section 9.6 requires "every qualified, policy-eligible
+- **Pre-reconciliation defect 3 — unacknowledged tension.** Section 9.6 requires "every qualified, policy-eligible
   Tier-A frontier model"; section 23 requires never silently reducing model coverage to fit
   cost and failing preflight when quality cannot fit the approved budget. Together these mean
   an under-funded audit fails rather than degrades. That is defensible and should be stated as
   a deliberate choice, since it determines the tier definitions section 23 demands.
-- **Defect 4 — ingestion paths conflated.** Sections 3 and 7.2 offer "connect a Git provider"
+- **Pre-reconciliation defect 4 — ingestion paths conflated.** Sections 3 and 7.2 offer "connect a Git provider"
   and "upload an immutable repository snapshot" as equivalent. A read token into a client's
   Git provider is a materially larger attack surface than an uploaded snapshot. Section 21
   treats the auditor as a high-risk system but does not separate these. Give each its own
   threat treatment, or defer provider connection to a later phase.
-- **Defect 5 — the README contradicts the built system.** It contains no mention of sharding,
-  the seven-pass scheduler, execution-originated findings, repository-suite fork execution,
-  assertion-strength measurement, or token budgets. It still documents "total role-context
-  allocations to 2 MB" as a design default; that is the depleting shared context pool removed
-  by `V3-TOKENS-001` and `V3-OMISSION-001` — a corrected defect presented as intended
-  behaviour. `docs/models/model_selection.md` still presents the superseded twelve-model
-  roster as the selection.
+- **Pre-reconciliation defect 5 — the README did not accurately explain the built system.** It mentioned selected
+  graph/shard, repository-suite, and budget surfaces but does not describe the ordered seven-pass
+  scheduler, execution-originated findings, the Foundry-versus-Hardhat repository-suite boundary,
+  or the current assertion-strength limitation. It still documents "total role-context
+  allocations to 2 MB" as a design default even though that value is now an independent
+  per-package serialization ceiling and endpoint-aware token budgets govern requests.
+  `docs/models/model_selection.md` still visually presents the superseded twelve-model snapshot
+  in a way that can be mistaken for a current production selection.
 - **Acceptance criteria:**
   - The vision document states its precedence relationship to the committed objective, and the
     objective's hash is referenced from it.
@@ -1724,12 +1777,43 @@ are invisible to source review by construction.
   - Capability markings derive from ticket status rather than assertion, and a regression fails
     when a marking disagrees with its ticket status, so the documents cannot drift again.
 - **Dependencies:** `V3-OBJECTIVE-001`.
-- **Status:** `BLOCKED_TECHNICAL`
-- **Blocker:** Its authoritative precedence and reconciliation work requires the exact objective
-  document, while `V3-OBJECTIVE-001` is blocked on the absent hash-matching source. No safe
-  reconciliation can infer the missing document's content from its digest.
-- **Next action:** Resume after `V3-OBJECTIVE-001`; continue with dependency-free
-  `V3-BOOTSTRAP-001`.
+- **Status:** `COMPLETE`
+- **Blocker resolved 2026-08-17:** `V3-OBJECTIVE-001` is complete; the exact tracked objective,
+  path/digest authorities, checkout-byte policy, and drift regression are present.
+- **Files changed:** `.gitattributes`, `README.md`,
+  `product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.md`,
+  `docs/models/model_selection.md`, `docs/remediation/v3/work_queue.md`,
+  `docs/remediation/v3/worklog.md`, `docs/remediation/v3/runtime_status.json`,
+  `docs/remediation/v3/review_traceability.json`, and
+  `tests/unit/test_product_documentation.py`.
+- **Completion evidence (2026-08-17):** The vision now binds the exact committed objective and
+  precedence rule; enumerates four target offerings; freezes required coverage before budget
+  feasibility; separates immutable-snapshot intake from a deferred credential-bearing connector;
+  and records accountable role owners, interim claim rules, and first-sale gates for catalogue,
+  turnaround/service level, liability/insurance/indemnity, incident response, and optional expert
+  review decisions. Its exact current SHA-256 is
+  `b699e3b037b72298608928eb485c6f06cf82766c874716faaa2fd88b3504e0ce`, bound in the governing
+  table and review traceability and protected from Git EOL conversion.
+- **Documentation evidence:** The README now states release `INCOMPLETE`, zero completed real
+  audits, no qualified production ensemble, and the exact token/context defaults and current
+  implementation limitations. The model guide marks the twelve-model roster superseded and
+  distinguishes technical from commercial-policy eligibility. Queue-derived tables carry raw
+  ticket statuses, and a pure-stdlib regression parses all `60` unique ticket blocks, requires one
+  canonical status per block, derives the complete A-V traceability projection, and binds both
+  governing documents to their exact paths and hashes.
+- **Validation:** The exact final related documentation/configuration/capability/model matrix passed
+  `367` tests in `36.39s`. Repository Ruff format reported `452 files already formatted`, Ruff
+  check passed, strict mypy passed over `178` source files, release schemas verified, both current
+  ledger JSON files parsed, frozen root ledgers remained unchanged, exact Git attributes and
+  digest checks passed, and `git diff --check` passed. Three independent read-only audits found no
+  remaining blocker or high-severity acceptance gap.
+- **Remaining limitation:** This ticket changes target-state decisions, documentation authority,
+  and drift regressions only. It does not implement the website/service, make a commercial-policy
+  decision, qualify a model, complete a real audit, demonstrate superiority, create a checkpoint,
+  or change repository release state from `INCOMPLETE`.
+- **Next action:** `V3-POLICYELIG-001` is complete. Keep production selection and private-source
+  egress fail-closed; `V3-QUALIFY-001` remains non-actionable while lineage and calibration are
+  blocked and current policy/qualification evidence is absent.
 
 ## V3-POLICYELIG-001 — Provider terms and jurisdictional eligibility for model use
 
@@ -1739,11 +1823,12 @@ are invisible to source review by construction.
 - **Why this is needed.** Section 9.2 of the product vision requires current evidence that the
   provider's terms permit the intended defensive security analysis, that commercial
   customer-facing use is permitted, that source-code analysis is permitted, and that both the
-  client's and Corrovera's entity and location are permitted. **No ticket in this queue covers
-  any of it.** The implemented eligibility gates are technical and privacy-based — ZDR,
-  data-collection denial, retention policy, structured output, endpoint pinning. A model can
-  satisfy every one of those and still be contractually ineligible for commercial resale of
-  its output, or unavailable to a client in a particular jurisdiction.
+  client's and Corrovera's entity and location are permitted. At ticket start, no queue ticket or
+  implemented gate covered those provider-terms, commercial-use, source-analysis, entity,
+  jurisdiction, or client-contract constraints. The prior eligibility gates were technical and
+  privacy-based — ZDR, data-collection denial, retention policy, structured output, and endpoint
+  pinning. A model can satisfy every one of those and still be contractually ineligible for
+  commercial resale of its output, or unavailable to a client in a particular jurisdiction.
 - **Acceptance criteria:**
   - Policy eligibility is a distinct, recorded, typed gate, separate from privacy and technical
     eligibility, and evaluated per exact model and provider endpoint.
@@ -1760,8 +1845,47 @@ are invisible to source review by construction.
     requiring re-determination.
 - **Dependencies:** None for the mechanism. The determinations themselves are an operator and
   legal task and can proceed alongside.
-- **Unblocks:** honest use of `V3-QUALIFY-001` output in a commercial, customer-facing audit.
-- **Status:** `QUEUED`
+- **Establishes prerequisite:** Provides the provider-free enforcement mechanism required before
+  `V3-QUALIFY-001` output can be used in a commercial, customer-facing audit. Actual use remains
+  blocked until current independently authenticated operator/legal determinations, qualification,
+  and all other production prerequisites exist.
+- **Status:** `COMPLETE`
+- **Starting evidence (2026-08-17):** Existing selection gates cover technical qualification,
+  endpoint capability, privacy/ZDR, retention, root lineage, and production-release bindings.
+  They do not represent or authenticate provider-terms, commercial-use, source-analysis, entity,
+  jurisdiction, or per-client contractual determinations. The current technical
+  `all_eligible_tier_a` name therefore must not be interpreted as commercial eligibility.
+- **Implementation evidence (2026-08-17):** Added strict frozen policy-evidence, audit-context,
+  client-constraint, evaluation, review-signal, current-source-observation, signed authority,
+  trust-anchor, and non-authorizing receipt contracts. Exact model/endpoint/use/entity/
+  jurisdiction applicability, eight evidence-linked legal criteria, evidence freshness, expiry,
+  independently expected operator principal/key, deterministic evaluation replay, current-source
+  drift replay, and opaque live selection authority all fail closed. Eight generated release
+  schemas and adversarial regressions cover forged anchors, fabricated eligibility, stale or
+  changed sources, applicability drift, unsafe files, and capability forgery. The focused core,
+  authority, schema, and documentation matrix passed 65 tests; Ruff, strict mypy, schema
+  synchronization, JSON parsing, and diff integrity passed. No legal determination, provider
+  access, network call, credential, or production-selection authority was created.
+- **Completion evidence (2026-08-17):** The exact audit-scoped `technical Tier-A ∩
+  policy-eligible` selection retains typed exclusions and the eight-model/six-root floor without
+  changing technical scores. Independently pinned signed authority, exact applicability and
+  client constraints, per-source-reference observation multiplicity and drift replay, and opaque
+  live capabilities fail closed. OpenRouter rechecks exact request shape and policy authority
+  before spend and transport; every detached REAL usage record requires exact policy custody.
+  Pipeline, scheduler success and failure evidence, assurance credit, reports, run status,
+  manifests, refresh staging, and generated release schemas preserve the exact selection,
+  authority, route-set, scope, source, and evidence-bundle joins. The repaired Python 3.13.15
+  environment passed the complete repository gate with `5155 passed, 21 skipped in 1207.75s`;
+  Ruff format reported `469 files already formatted`, Ruff check passed, strict mypy passed over
+  `180` source files, release schemas verified, both V3 JSON ledgers parsed, and `git diff
+  --check` passed.
+- **Remaining limitation:** The provider-free mechanism is complete. It creates no legal
+  determination, provider approval, source-egress authority, qualified model, production
+  ensemble, completed audit, provider call, release claim, or checkpoint. The 21 skipped tests
+  remain explicit, non-crediting external or opt-in prerequisites.
+- **Next action:** None for this ticket. `V3-QUALIFY-001` is next in model-ticket order but is not
+  actionable while `V3-LINEAGE-001` and `V3-CALIBRATE-001` remain blocked and current
+  independently authenticated policy determinations and real qualification evidence are absent.
 
 
 ## V3-TOOLDIAG-002 — Complete deterministic scanner execution on macOS
@@ -1928,10 +2052,32 @@ are invisible to source review by construction.
   `src/mmaudit/orchestration/manifest.py`, `src/mmaudit/repository/ignore.py`, graph and
   omission schemas, large-repository regression.
 - **Dependencies:** None.
-- **Status:** `IN_PROGRESS`
-- **Next action:** Reproduce the graph-size amplification with a bounded test ceiling, then add
-  generation-time risk-ordered edge selection, typed omission evidence, and configuration-relative
-  ignore handling without weakening manifest or coverage authority.
+- **Status:** `COMPLETE`
+- **Completion evidence (2026-08-16):**
+  - Generation uses bounded, deterministic collectors for edges, nodes, storage entries, and
+    warnings. Exact-byte bounded publication rejects oversize output before touching the
+    destination and preserves the previous file across write or atomic-replace failure.
+  - Pressure selection is globally deterministic and risk ordered. Permutation regressions cover
+    mandated high-risk retention, omission-frontier purging, duplicate logical facts, variant byte
+    pressure, late endpoints, and bounded omission samples.
+  - Edge and non-edge omissions are typed, bounded, self-hashed evidence. A required retained-
+    occurrence inventory gives homogeneous, exact edge/fact denominators through graph, context,
+    shard, coverage, report, standalone coverage artifact, manifest, and assurance validation.
+  - The unpatched full-pipeline regression generates more than `100,000,000` candidate canonical
+    edge bytes under the production ceiling, completes with typed partial status, keeps every
+    manifest-bound JSON artifact at or below the ceiling, and passes detached manifest and shard
+    validation with exact size, SHA-256, and occurrence arithmetic.
+  - Configuration-relative ignore behavior is implemented end to end: the selected config
+    directory is authoritative, a same-named target-root file is not silently merged, and the
+    rule is documented in the README.
+  - Terminal validation passed `4,920` tests with `21` explicit unavailable/opt-in integration
+    skips in `1,163.66s`; Ruff formatting/checking, strict mypy over `173` source files, release-
+    schema synchronization, and `git diff --check` also passed.
+- **Remaining limitation:** The skipped external engines, rootless image, explicit compiler/fork
+  integrations, and paid-provider test remain unavailable prerequisites outside this graph-bound
+  ticket; none received passing credit.
+- **Next action:** None; `V3-POLICYELIG-001` is complete. `V3-QUALIFY-001` remains
+  non-actionable while `V3-LINEAGE-001` and `V3-CALIBRATE-001` are blocked.
 
 ## V3-BOOTSTRAP-001 — Separate declared model identity from measured model quality
 
@@ -2127,10 +2273,10 @@ are invisible to source review by construction.
   refresh freshness or production selection; refreshed pricing is not runtime budget authority;
   and automatic benchmark reservation/execution, lineage re-evaluation, qualification, and
   promotion are not implemented.
-- **Next action:** Continue with the provider-free reviewed-lineage binding in
-  `V3-LINEAGE-001`. Keep production lineages and quality fields fail-closed until real calibration
-  and qualification evidence exists; do not make a third authenticated refresh attempt as part of
-  this ticket.
+- **Next action:** `V3-POLICYELIG-001` is complete. Keep production lineages and quality fields
+  fail-closed until a current refresh, signed lineage decision, real calibration, and qualification
+  evidence exist; do not make a third authenticated refresh attempt as part of this ticket or begin
+  `V3-QUALIFY-001` while those prerequisites are absent.
 
 ## V3-BATCH-001 — Asynchronous batch routing for eligible inference
 
@@ -2289,20 +2435,21 @@ no duplicate, and no ticket scheduled before a declared dependency completes.
    while production selection remains bound to current opaque qualification evidence.
 4. `V3-TOOLDIAG-002` — complete; the real macOS matrix distinguishes honest scanner outcomes and
    Slither produces the full 213-finding reference set inside the unchanged isolation boundary.
-5. `V3-GRAPHBOUND-001` — blocking real targets: a run against an external protocol wrote a
-   2.33 GB graph artifact and then failed. No real repository can complete a run until this lands.
-6. `V3-FIXTURE-001` — close-out only. Its sole remaining gap was that `V3-SHARD-001` had to
-   consume the scale corpus; `V3-SHARD-001` is `COMPLETE` and its evidence records the
-   4,952/15,116/35,444-line corpus passing deterministic sharding. Verify and mark `COMPLETE`.
+5. `V3-GRAPHBOUND-001` — complete. Generation and publication are bounded, pressure selection is
+   deterministic and risk ordered, typed edge/fact omissions preserve exact denominators, and the
+   literal over-100 MB candidate regression completes below the production artifact ceiling.
+6. `V3-FIXTURE-001` — complete. `V3-SHARD-001` consumes the 4,952/15,116/35,444-line scale corpus
+   with deterministic pressure-aware sharding evidence.
 
 ### Phase 2 — the shippable deterministic product
 
-7. `V3-REPORT-001` — client-facing deliverable. Needed by every product variant.
-8. `V3-SCOPE-001` — claims match capability.
-9. `V3-OBJECTIVE-001` — blocked technical: the exact hash-matching byte stream is absent and
-   reconstruction is forbidden. Resume only when the operator supplies it.
-10. `V3-TARGETSPEC-001` — blocked technical on `V3-OBJECTIVE-001`; reconciliation cannot infer
-   the missing objective from its hash.
+7. `V3-REPORT-001` — complete; the client-facing and forensic deliverables are evidence-bound.
+8. `V3-SCOPE-001` — complete; claims match the declared Solidity/EVM capability boundary.
+9. `V3-OBJECTIVE-001` — complete. The exact tracked bytes, stable path, full digest authorities,
+   checkout policy, and drift regression are bound and validated.
+10. `V3-TARGETSPEC-001` — complete. The objective/vision precedence, commercial and intake
+    decisions, current capability claims, model-guide boundary, and status-derived drift
+    regression are reconciled.
 
 Only when `M1-DETERMINISTIC-PRODUCT` is `REACHED` may the deterministic offering be described as
 complete and saleable: pinned-fork suite execution, local-versus-fork divergence,
@@ -2314,13 +2461,16 @@ status, and full evidence — with no model, qualification, or provider spend an
 11. `V3-MODELREFRESH-001` — **discovery, diff, and alerting portion only.** Its declared
    dependencies cover the promotion path; the ticket states the discovery portion "can land
    before either and is useful immediately". Expect it to stay `PARTIAL` until step 13.
-12. `V3-LINEAGE-001` — join the recorded operator authorisation to the refreshed candidate set.
-13. `V3-CALIBRATE-001` — reachable thresholds. Must precede qualification: the frozen
-    all-dimension `1.0` policy would otherwise reject every model regardless of capability,
-    after spending real budget. Close the `V3-MODELREFRESH-001` promotion path here.
-14. `V3-POLICYELIG-001` — provider terms and jurisdictional eligibility. A model can pass
-   every privacy and technical gate and still be contractually ineligible for commercial use.
-15. `V3-QUALIFY-001` — first qualified models.
+12. `V3-LINEAGE-001` — `BLOCKED_TECHNICAL` pending a current refresh and authorized signed
+    exact-set decision; its provider-free calibration-only authentication contract is complete.
+13. `V3-CALIBRATE-001` — `BLOCKED_TECHNICAL`. Provider-free empirical derivation and the exact
+    two-campaign authority bridge are implemented, but statistically meaningful thresholds require
+    a representative independently adjudicated holdout plus real refreshed/signed/calibration
+    evidence. It still must complete before qualification.
+14. `V3-POLICYELIG-001` — `COMPLETE` at the provider-free mechanism boundary. No actual
+    provider/model/entity/jurisdiction/client determination or production authority exists.
+15. `V3-QUALIFY-001` — next queued model ticket, but not actionable until its blocked lineage,
+    calibration, current policy-determination, and real-evidence prerequisites resolve.
 16. `V3-LEARNING-001` phase 1 (capture only) — **must precede the first real audit.**
     Capture cannot be done retroactively; evidence not written during a run is gone. Moved
     ahead of `V3-SINGLE-AUDIT-001` on 2026-08-04: it previously sat after it, which meant the
@@ -2397,9 +2547,11 @@ prevents `REACHED`. Re-evaluate the milestone whenever any member status changes
 - **`M1-DETERMINISTIC-PRODUCT`.** Members are the operator-defined original steps 4–7:
   `V3-TOOLDIAG-002`, `V3-FIXTURE-001`, `V3-REPORT-001`, and `V3-SCOPE-001`. The subsequently
   inserted `V3-GRAPHBOUND-001` is also a member because its recorded evidence establishes that
-  real dependency-bearing targets cannot complete without it. State: `ACTIVE`; the next action is
-  `V3-GRAPHBOUND-001`. The milestone may be marked `REACHED` only when all five members are
-  `COMPLETE`.
+  real dependency-bearing targets cannot complete without it. State: `REACHED`; all five members
+  are `COMPLETE`, so no milestone member remains as a next action. `V3-POLICYELIG-001` is
+  `COMPLETE` at the provider-free mechanism boundary. `V3-QUALIFY-001` is next in order but is
+  not currently actionable because lineage, calibration, current policy determinations, and real
+  qualification evidence remain unavailable.
 
 ### Completion discipline
 
@@ -2445,8 +2597,8 @@ relationship is now fixed.
 
 | document | sha256 | authority |
 |---|---|---|
-| `docs/remediation/v3/product_completion_goal.txt` | `f77db665…` | the **current phase**: what to build now, in what order, within the USD 250 remediation budget, to reach a credible working engine |
-| `product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.md` | `77e5ab93…` | the **target state**: what the product must ultimately become |
+| `docs/remediation/v3/product_completion_goal.txt` | `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43` | the **current phase**: what to build now, in what order, within the USD 250 remediation budget, to reach a credible working engine |
+| `product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.md` | `b699e3b037b72298608928eb485c6f06cf82766c874716faaa2fd88b3504e0ce` | the **target state**: what the product must ultimately become |
 
 Resolution on conflict: the objective governs sequencing and scope during remediation; the
 vision governs the destination. Neither silently overrides the other, and a ticket must not
@@ -2464,12 +2616,13 @@ vision document alone.
 ### Sufficiency audit result, 2026-08-03
 
 Every one of the objective's twenty-two lettered requirements (A–V) maps to at least one
-ticket; none is unmapped. **The queue is sufficient to satisfy the objective.** By requirement:
-eight complete, five partial, one in progress, eight queued. The largest incomplete cluster is
-requirement L, qualified model selection, at zero of six tickets done — the model track.
+ticket; none is unmapped. **The queue is sufficient to satisfy the objective.** Current requirement
+statuses are stored in `review_traceability.json` and are derived from the authoritative ticket
+statuses by regression rather than repeated as hand-maintained aggregate prose. Requirement L,
+qualified model selection, remains the largest incomplete cluster.
 
-Twenty-five of the fifty-five tickets have **no basis in the objective**. They arise from three
-legitimate sources and must be labelled as such rather than treated as objective requirements:
+Tickets outside the A–V objective mapping arise from three legitimate sources and must be labelled
+as such rather than treated as objective requirements:
 
 - **Defects found during execution**, which no document predicted: `V3-BOOTSTRAP-001`,
   `V3-TOOLDIAG-001`, `V3-TOOLDIAG-002`, `V3-OMISSION-001`, `V3-FIXTURE-001`.
@@ -2479,18 +2632,15 @@ legitimate sources and must be labelled as such rather than treated as objective
 - **Quality work** beyond the remediation bar: `V3-EFFORT-001`, `V3-ENSEMBLE-001`,
   `V3-TAXONOMY-001`, `V3-RETRIEVAL-001`, `V3-HARDHAT-001`.
 
-### Requirements absent from both governing documents
+### Requirement still absent from both governing documents
 
-Two capabilities in this queue have no authority in either document and need one:
+One capability in this queue has no authority in either document and needs one:
 
 - **Continuous integration.** Both documents mention CI zero times. The vision covers
   fork-based validation extensively but not fork execution as a continuous, per-commit
   capability. `V3-CI-001` therefore rests on operator instruction alone, following the
   operator's observation that a CI fork-test run surfaced defects nine prior review passes had
   missed. Anchor it in the vision or record it as a standing operator requirement.
-- **Turnaround and SLA.** Zero mentions in both. The vision claims superiority in "time to
-  completion" without defining it, and a self-serve product cannot be sold without a stated
-  expectation. Tracked in `V3-TARGETSPEC-001`.
 
 ## Operator decisions required
 

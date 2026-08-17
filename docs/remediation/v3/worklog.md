@@ -1,16 +1,16 @@
 # mmaudit v3 Product Remediation Worklog
 
-The objective source has SHA-256
+The objective source is `docs/remediation/v3/product_completion_goal.txt`, with SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED
-CURRENT_MILESTONE: M1-DETERMINISTIC-PRODUCT (ACTIVE)
-CURRENT_TICKET: NONE (V3-TOOLDIAG-002 COMPLETE and checkpointed)
-LAST_COMPLETED_TICKET: V3-TOOLDIAG-002 (COMPLETE)
-NEXT_ACTION: On operator resume, begin active-milestone member V3-GRAPHBOUND-001 from clean `origin/main`; do not advance outside M1-DETERMINISTIC-PRODUCT first.
-LAST_COMMAND: `git push origin main`
-LAST_RESULT: PASS — SSH push advanced `origin/main` from `11a8020` to the validated V3-TOOLDIAG-002 checkpoint `97f9de0`.
+AUTORUN_STATUS: PAUSED_AT_TICKET_BOUNDARY
+CURRENT_MILESTONE: M1-DETERMINISTIC-PRODUCT (REACHED)
+CURRENT_TICKET: NONE
+LAST_COMPLETED_TICKET: V3-POLICYELIG-001 (COMPLETE)
+NEXT_ACTION: V3-QUALIFY-001 is next in model-ticket order but is not actionable until blocked lineage and calibration, current independently authenticated policy determinations, and real qualification evidence exist.
+LAST_COMMAND: Run `.venv/bin/pytest -q`; `.venv/bin/ruff format --check .`; `.venv/bin/ruff check .`; `.venv/bin/mypy src`; `.venv/bin/python scripts/generate_release_schemas.py`; JSON parse and diff-integrity checks.
+LAST_RESULT: PASS — 5155 tests passed with 21 explicit non-crediting skips in 1207.75s; 469 files were already formatted; Ruff, strict mypy over 180 source files, release schemas, both V3 JSON ledgers, and diff integrity passed.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -18,8 +18,447 @@ OPENROUTER_COST_USED_USD: 0.0033415625
 OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
-BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
+BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
 LAST_CHECKPOINT_COMMIT: 97f9de051e977fa0c6cd6750fa79df9f3e974f79
+
+## 2026-08-17T11:15:01Z — V3-POLICYELIG-001 COMPLETE at provider-free mechanism boundary
+
+- Implemented strict typed and expiring policy evidence, eight evidence-linked legal criteria,
+  exact intended-use/entity/jurisdiction/client applicability, independently pinned signed
+  operator authority, and per-source-reference observation and drift replay. Serialized records
+  remain non-authorizing; only the exact live opaque authority can permit selection.
+- Implemented the exact audit-scoped technical-policy intersection with typed exclusions and the
+  existing eight-model/six-root floor. OpenRouter checks the full release-pinned benchmark request
+  or the exact audit selection before claim, reservation, and transport. Detached REAL usage,
+  pipeline, scheduler success/failure custody, assurance credit, reports, run status, manifests,
+  refresh staging, and release schemas all fail closed on missing or mismatched policy evidence.
+- Restored and pinned Homebrew Python 3.13.15 after the Python 3.14.7 upgrade removed the virtual
+  environment's base interpreter; refreshed the editable install and pytest/mypy launchers.
+  `pydantic_core 2.46.4`, a typed Pydantic model, `mmaudit`, and the CLI import path all execute
+  under the repaired `.venv`.
+- Terminal validation: `.venv/bin/pytest -q` passed `5155` tests with `21` explicit unavailable or
+  opt-in skips in `1207.75s`; Ruff format reported `469 files already formatted`; Ruff check
+  passed; strict mypy passed over `180` source files; release-schema verification, V3 JSON parses,
+  and `git diff --check` passed.
+- No real legal determination, provider/network call, credential access, source-egress authority,
+  qualified production ensemble, completed real audit, checkpoint, superiority demonstration, or
+  release claim occurred. The repository remains `INCOMPLETE`; the existing call, cost, and audit
+  counters are unchanged.
+- `V3-QUALIFY-001` is the next queued model ticket, but it remains non-actionable while
+  `V3-LINEAGE-001` and `V3-CALIBRATE-001` are blocked and actual policy/qualification evidence is
+  absent.
+
+## 2026-08-17T07:38:56Z — V3-POLICYELIG-001 selection and refresh slices validated
+
+- Added the exact audit-scoped technical-policy intersection, typed per-model exclusions,
+  eight-model/six-root floor, non-authorizing durable record, and opaque live selection
+  capability. Every runtime selector use must reassert the exact audit scope, source, policy
+  context, and client constraints, preventing an unexpired capability from crossing audits.
+- Added an explicit all-or-none policy input set to model refresh. The projection can only report
+  missing or re-determination-required evidence, never infer eligibility, and the actual provider
+  refresh timestamp remains authoritative. Success staging rebuilds and binds the optional sixth
+  artifact and rejects its omission, unexpected presence, or tampering; legacy five-file refresh
+  behavior remains exact when no policy inputs are supplied.
+- Focused local results were `8 passed` for audit selection, `63 passed` for refresh CLI/staging
+  and projection, and `97 passed` for the combined policy/authority/refresh/selection/schema
+  matrix. Scoped Ruff, strict mypy, schema synchronization, and diff integrity passed. The full
+  suite was not run for this in-progress slice.
+- No legal determination, provider or network call, credential access, production model
+  authority, completed audit, checkpoint, or release claim occurred.
+- Remaining work is live OpenRouter and pipeline enforcement plus scheduler, assurance, report,
+  and manifest custody.
+
+## 2026-08-17T07:10:45Z — V3-POLICYELIG-001 core and signed authority slice validated
+
+- Added strict frozen policy determination, evidence, audit-context, client-constraint,
+  evaluation, exclusion, refresh-signal, and current-source observation models. Every decision is
+  exact-model/endpoint/use/entity/jurisdiction scoped, covers eight evidence-linked criteria,
+  expires, and remains explicitly non-authorizing when merely serialized or self-hashed.
+- Added SSHSIG Ed25519 operator authority with independently expected principal/key identity,
+  exact deterministic evaluation replay, current-source commitment replay, bounded safe evidence
+  I/O, a non-authorizing durable receipt, and an opaque live selection-only capability.
+- Published eight strict schemas and adversarial regressions. The focused matrix passed `65`
+  tests; scoped Ruff, strict mypy, schema synchronization, JSON parsing, and diff integrity passed.
+- No provider, network, credential, legal determination, source egress, model qualification,
+  production selection, paid action, checkpoint, complete-suite, or release claim occurred.
+- Remaining work is the exact technical-policy audit intersection, non-authorizing daily-refresh
+  projection, and live transport/scheduler/assurance/report/manifest custody.
+
+## 2026-08-17T06:18:06Z — V3-POLICYELIG-001 started
+
+- Began the next bounded ticket only after V3-CALIBRATE-001 was tested and recorded as
+  `BLOCKED_TECHNICAL`. Inspected the current technical qualification, registry source-egress,
+  endpoint/privacy, production-selection, scheduler, assurance, and model-guide boundaries.
+- Confirmed there is no typed provider-terms, commercial-use, source-analysis, entity,
+  jurisdiction, or client contractual determination. Current `ELIGIBLE` and
+  `all_eligible_tier_a` values remain technical only.
+- The implementation scope is one provider-free evidence and enforcement slice. It will not make
+  a legal determination, access provider terms, contact a provider, approve a jurisdiction,
+  qualify a model, read a credential, or grant source-egress/production authority from metadata.
+- Next, freeze the exact evidence/expiry/client-constraint contract and its fail-closed final
+  selection join, then add focused positive and adversarial regressions plus a strict schema.
+
+## 2026-08-17T06:15:34Z — V3-CALIBRATE-001 BLOCKED_TECHNICAL
+
+- **Defensive objective:** Make calibration non-dispositive, evidence-bound, and incapable of
+  granting production authority from caller-selected thresholds, self-sealed lineage, or a
+  predecessor policy.
+- **Completed provider-free slice:** Expanded the synthetic corpus to 24 materially distinct
+  cases and 85 scored observations/model, with four cases for every judgment dimension. Re-sealed
+  the exact schema-v1 predecessor policy and made v1 permanently production-ineligible. Added
+  signed-lineage-only calibration credit, exact 8-model/6-root global support, role-scoped
+  4/2/2/2 root support, deterministic non-perfect judgment cutoffs, derived aggregates, and joint
+  vector reachability. Thresholds are explicitly empirical, not statistical.
+- **Authority and publication:** Added exact R0-to-R1 lineage and P1/C1-to-A-to-P2/C2 transition
+  joins, distinct pre/post-campaign registry bindings, and successor-release-pinned opaque policy
+  authority. The current P1 source release cannot mint P2 authority. Calibration A is retained
+  before any P2 derivation failure; A and P2 use bounded canonical mode-0600 single-link,
+  descriptor-relative no-follow publication/loading. A strict generated P2 schema is published.
+- **Files changed:** benchmark corpus/ground truth and maximum-assurance predecessor policy;
+  calibration, lineage transition, calibration transition, qualification, workflow, release
+  attestation, CLI, configuration and schema-generation code; generated schemas; focused corpus,
+  lineage, calibration, transition, qualification, workflow, CLI, release-attestation and schema
+  tests; current queue, model-selection, traceability, worklog, and runtime evidence.
+- **Validation:** `/private/tmp/mmaudit-py312/bin/pytest -q -x` over the 17 merged affected unit
+  modules passed `297` tests in `122.46s`. Repository Ruff format reported `458 files already
+  formatted`; Ruff check passed; strict mypy passed `176` source files; schema verification, JSON
+  parsing, and `git diff --check` passed. This ticket did not run a new complete suite.
+- **Blocked acceptance:** No current authenticated provider refresh, actual complete
+  operator-signed exact-set lineage decision, or real calibration campaign exists. The 24-case
+  corpus is curated and project-authored, not a randomized independently adjudicated holdout from
+  a declared population, so four cases per judgment dimension cannot support the required
+  statistically meaningful thresholds. No measured P2/C2 is reviewed and source-pinned and no
+  independent J2 qualification campaign has run.
+- No provider call, network operation, credential read, source egress, paid action, runtime
+  approval, checkpoint, complete-suite, production-selection, or release claim occurred.
+- **Next ticket:** `V3-POLICYELIG-001`; keep `V3-QUALIFY-001` queued while calibration and lineage
+  remain blocked.
+
+## 2026-08-17T04:07:43Z — V3-CALIBRATE-001 resumed
+
+- Began the next bounded execution-order audit only after recording the signed-lineage slice and
+  its external authority blocker. The active scope is calibration schema integrity, exact signed
+  lineage joins, frozen corpus denominators, and the predecessor-policy-to-measured-policy
+  lifecycle.
+- No real calibration, threshold change, model disposition, provider call, secret read, network
+  operation, paid action, source egress, runtime approval, checkpoint, or release claim occurred.
+- Next, map the remaining acceptance criteria to current implementation and tests, then implement
+  one provider-free evidence improvement if one remains.
+
+## 2026-08-17T04:07:42Z — V3-LINEAGE-001 BLOCKED_TECHNICAL
+
+- **Defensive objective:** Prevent caller-self-sealed lineage fields from earning calibration or
+  calibrated-policy credit while preserving the separate source-egress and production-selection
+  gates.
+- **Completed safe slice:** Added a canonical SSHSIG Ed25519 operator statement and envelope,
+  explicit out-of-band trust-anchor model, root-owned pinned verifier checks, bounded private
+  verification files, and an opaque noncopyable process-local capability. The statement binds the
+  exact structural review, candidate/discovery/refresh evidence, candidate decisions, roots,
+  validity window, and literal calibration-only authority; source-egress and production-selection
+  authority remain false.
+- **Calibration/CLI result:** Calibration schema v2 derives root credit only from the signed
+  capability and retains exact review, envelope, and candidate-binding hashes. Candidate mode
+  requires the lineage bundle and trust anchor with calibration output and verifies them before
+  cost-ledger use, campaign creation, secret loading, or provider dispatch. Legacy structural
+  lineage reads were not represented as signature-authenticated.
+- **Files changed:** `src/mmaudit/models/lineage_authority.py`,
+  `src/mmaudit/models/calibration.py`, `src/mmaudit/cli.py`,
+  `scripts/generate_release_schemas.py`, lineage/calibration schemas, focused lineage,
+  calibration, CLI, policy, consumer-revocation, and schema regressions, plus the V3 lineage and
+  model-selection evidence documents.
+- **Validation:** The final affected matrix passed `214` tests. Repository Ruff reported `454
+  files already formatted` and passed all checks; strict mypy passed `174` source files; release
+  schema generation, both live JSON parses, and `git diff --check` passed. Two independent
+  read-only reviews found no blocker/high defect in the provider-free slice. A complete suite was
+  started separately and receives no terminal credit in this boundary record unless its result is
+  added later.
+- **Blocked acceptance:** No successful current exact provider refresh or actual complete
+  operator-signed exact-set decision exists. The caller-selected trust-anchor file is an explicit
+  out-of-band trust decision; its self-hash alone does not establish operator identity. Authority
+  may also expire during a paid campaign, which fails closed at final calibration but can waste
+  spend. The repository cannot fabricate these external/operator facts, so runtime approvals
+  remain empty and the ticket receives no completion credit.
+- No provider call, network operation, credential read, repository private key, source egress,
+  paid action, runtime approval, checkpoint, or release claim occurred.
+- **Next ticket:** `V3-CALIBRATE-001`.
+
+## 2026-08-17T03:20:45Z — V3-LINEAGE-001 resumed
+
+- Re-read the full ticket and its dated implementation record, the operator documentary review,
+  current candidate and qualification configuration, the frozen non-authorizing overlay model and
+  schema, and its focused adversarial tests. `V3-EFFORT-001` and `V3-TARGETSPEC-001` are now
+  complete, so the previously deferred lineage boundary is being re-evaluated directly.
+- Confirmed that the existing overlay deliberately cannot grant source-egress, production,
+  quality, provider-authenticity, or operator-authenticity authority. Runtime
+  `approved_model_lineages` remains empty, which is the honest state while the frozen candidates
+  are obsolete and no successful post-correction refresh plus complete authenticated operator
+  decision exists.
+- Started independent read-only audits of the decision/authentication boundary, all
+  approval-dependent consumers, and queue/dependency honesty. No source-egress or production
+  selection is being enabled during this preflight.
+- No provider call, credential read, network operation, paid action, source-egress change,
+  checkpoint, or release claim occurred.
+- Next, identify one bounded implementable closure slice or record the exact external authority
+  blocker and continue safe adjacent work without weakening the existing gates.
+
+## 2026-08-17T03:18:08Z — V3-TARGETSPEC-001 COMPLETE
+
+- **Defensive objective:** Establish one coherent objective/vision precedence rule, make the
+  target-state commercial and intake decisions explicit without presenting them as current
+  capability, and make README/model-selection capability claims derive from live queue evidence.
+- **Completed changes:** Bound the full immutable objective path/hash and current vision path/hash;
+  added the precedence rule, four target offerings, budget-before-feasibility rule, snapshot-first
+  intake and deferred connector threat boundary, incident process, and named commercial
+  owners/deferrals. Corrected current README defaults and evidence boundaries, marked the old model
+  roster historical, corrected the false `V3-TESTQUALITY-001` completion claim, and reconciled
+  review-traceability requirements Q and S.
+- **Files changed:** `.gitattributes`, `README.md`,
+  `product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.md`,
+  `docs/models/model_selection.md`, the four active v3 queue/worklog/runtime/traceability files,
+  and `tests/unit/test_product_documentation.py`.
+- **Authority evidence:** The current vision is a regular single-linked file of `68,903` bytes and
+  `2,066` newline-terminated lines with SHA-256
+  `b699e3b037b72298608928eb485c6f06cf82766c874716faaa2fd88b3504e0ce`. The governing-doc table,
+  traceability JSON, regression literal, and effective `-text` Git rule agree. The immutable
+  objective remains unchanged at its required `f77db665...32e43` digest.
+- **Regression evidence:** `tests/unit/test_product_documentation.py` anchors all `60` ticket
+  blocks to one allowed raw status, derives the canonical complete A-V traceability projection,
+  requires exact queue-derived README/model tables, couples README release status to runtime,
+  binds both governing paths/digests in the live authority table, and verifies documented token
+  defaults from the configuration AST. Historical prose cannot satisfy these current joins.
+- **Commands and results:** The exact final documentation/configuration/token/sharding/scheduler/
+  execution-origin/audited-suite/qualification/refresh/lineage matrix passed `367` tests in
+  `36.39s`. `/private/tmp/mmaudit-py312/bin/ruff format --check .` reported `452 files already
+  formatted`; `ruff check .` passed; strict `mypy` passed `178` source files;
+  `scripts/generate_release_schemas.py` verified committed schemas; both current JSON ledgers
+  parsed; effective Git attributes, exact digests, one-ticket status, frozen root ledgers, and
+  `git diff --check` passed.
+- **Independent review:** Separate vision, claim/source, and regression/ledger audits found no
+  remaining blocker or high-severity gap. Their two future false-green findings—a stale governing
+  vision row and a missing A-V traceability member—were closed and revalidated before completion.
+- **Safety and external effects:** No provider call, credential read, public RPC, live target,
+  external engine, container, network operation, paid action, checkpoint commit, push, or release
+  action occurred. No completed-real-audit, qualified-model, SLA, price, insurance, indemnity, or
+  superiority claim was made.
+- **Remaining limitations:** Repository release state remains `INCOMPLETE`; completed real audits
+  remain zero; model qualification, commercial policy eligibility, unavailable engines, private
+  holdout, and professional comparison retain their existing honest states. The prior complete
+  suite remains the production baseline; this docs-and-regression ticket does not claim a new full
+  suite or checkpoint.
+- **Ticket result:** `V3-TARGETSPEC-001` is `COMPLETE`. This is a validated ticket boundary.
+- **Next ticket:** `V3-LINEAGE-001`, following the already-completed provider-free discovery slice
+  of partial `V3-MODELREFRESH-001`.
+
+## 2026-08-17T03:13:19Z — V3-TARGETSPEC-001 implementation slice validated
+
+- Reconciled the target-state vision with the committed objective and bound the full objective path
+  and digest in the vision preamble. The vision now distinguishes current remediation authority
+  from target-state authority and records the exact conflict rule.
+- Added four named product offerings, a deliberate budget-independent coverage rule, separate
+  immutable-snapshot and deferred Git-connector threat boundaries, and explicit first-sale
+  decisions for catalogue ownership, turnaround/service levels, liability/insurance/indemnity,
+  post-audit incidents, and optional expert review. These are target requirements or deliberate
+  deferrals, not current availability, price, SLA, insurance, or release claims.
+- Corrected the README's stale context-budget explanation and added source-backed current
+  capability boundaries for token planning, semantic graphs/shards, the seven-pass scheduler,
+  execution-originated findings, repository suites, assertion strength, and bounded omissions.
+  Marked the model-selection roster historical and made technical versus commercial eligibility
+  explicit.
+- Added an anchored parser regression that derives README/model-guide markings and every
+  review-traceability requirement status from the queue's unique raw ticket statuses. Bound the
+  current vision path and exact SHA-256
+  `b699e3b037b72298608928eb485c6f06cf82766c874716faaa2fd88b3504e0ce` in traceability and the
+  governing-doc table, and disabled Git EOL normalization for the byte-authoritative vision.
+- **Validation:** The focused authority pair passed `9` tests. The broader documentation,
+  configuration, token, sharding, scheduler, execution-origin, audited-suite, qualification,
+  refresh, and lineage matrix passed `367` tests in `37.16s`.
+- No provider call, credential read, public RPC, live target, external engine, network operation,
+  paid action, checkpoint commit, push, release action, or new completed-real-audit claim occurred.
+- Next, run repository static/schema/JSON/diff gates and complete independent acceptance review.
+
+## 2026-08-17T02:56:19Z — V3-TARGETSPEC-001 started
+
+- Re-read the repository instructions, frozen root queue/worklog, active V3 queue/worklog/runtime,
+  target-spec acceptance criteria, and current shared worktree before changing any product claim.
+- Confirmed the exact committed objective dependency is complete and the target-spec ticket is the
+  sole authoritative next work unit. Marked only `V3-TARGETSPEC-001` `IN_PROGRESS`.
+- Started independent read-only audits of objective/vision reconciliation, README/model-selection
+  claim accuracy, and the required status-derived drift regression. Existing operator changes and
+  the completed graph/objective work remain preserved.
+- The audits found and this slice corrected one material authority contradiction:
+  `V3-TESTQUALITY-001` now remains `PARTIAL`, matching its own missing trusted statement-coverage
+  and real mutation-execution evidence. The review-traceability projection now derives requirement
+  Q as `COMPLETE` from `V3-SCOPE-001` and requirement S as `PARTIAL` from its one completed real
+  smoke component plus three queued end-to-end tickets. Stale hand-maintained aggregate counts were
+  removed from the queue in favor of the forthcoming parser-based regression.
+- No provider call, credential read, objective mutation, network operation, external engine, live
+  target, deployment, paid action, commit, push, or release claim occurred.
+- Next, map every acceptance criterion to current evidence and implement one cohesive,
+  evidence-supported target-spec reconciliation.
+
+## 2026-08-17T02:52:48Z — V3-OBJECTIVE-001 COMPLETE
+
+- **Defensive objective:** Make the exact product-completion objective independently readable and
+  byte-verifiable at a stable repository path, with fail-closed drift detection and current
+  authority references that cannot be satisfied by historical digest mentions.
+- **Completed changes:** Preserved the previously committed objective byte-for-byte; bound its
+  stable path beside the full digest in the queue/worklog prologues and top-level review
+  traceability fields; added a pure-stdlib custody regression; and disabled Git text normalization
+  for only that byte-authoritative path. Removed the operator-local attachment-store identifier
+  from current provenance without rewriting dated historical evidence.
+- **Files changed:** `.gitattributes`, `docs/remediation/v3/work_queue.md`,
+  `docs/remediation/v3/worklog.md`, `docs/remediation/v3/runtime_status.json`,
+  `docs/remediation/v3/review_traceability.json`, and
+  `tests/unit/test_product_objective.py`. The objective file itself is unchanged.
+- **Custody evidence:** The tracked mode-`100644` objective is a regular, single-linked file of
+  `40,779` bytes and `1,418` logical lines, with no terminal newline and exact SHA-256
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`. Git blob
+  `360944d9a44cadfbb7134b23175aa04749994be6` was introduced by commit
+  `517559e5c9526f78e516374ebc194933d01eac7f`, which is contained by `main` and `origin/main`;
+  the current bytes remain identical. `git check-attr` reports `text: unset` for the exact path.
+- **Validation:** The objective, unit traceability, and static-release group passed `17` tests;
+  repository Ruff format reported `451 files already formatted`, Ruff check passed, strict mypy
+  passed over `173` source files, release-schema verification passed, both current ledger JSON
+  files parsed, and objective/history/authority, frozen root-ledger, and `git diff --check` gates
+  passed. Production code is unchanged from the preceding terminal suite result of `4,920` passed
+  and `21` explicit skips; this docs/attribute/regression ticket does not claim a new full-suite run.
+- **Safety and external effects:** Count-only checks found no recognized private-key block,
+  provider-token shape, credential assignment, or absolute host path in the objective. No external
+  attachment was reopened, and no provider call, credential read, public RPC, live target,
+  deployment, network operation, paid action, commit, push, or release claim occurred.
+- **Remaining limitations:** Repository release state remains `INCOMPLETE`; unavailable engines,
+  model qualification, private holdouts, and professional comparison retain their existing honest
+  states. No new checkpoint commit exists, so `LAST_CHECKPOINT_COMMIT` remains unchanged.
+- **Ticket result:** `V3-OBJECTIVE-001` is `COMPLETE`; `V3-TARGETSPEC-001` is dependency-unblocked
+  and queued. This is a ticket boundary, not the start of the next major work unit.
+- **Next ticket:** `V3-TARGETSPEC-001`.
+
+## 2026-08-17T02:39:33Z — V3-OBJECTIVE-001 started
+
+- Re-read the repository instructions and the frozen root EVAL queue/worklog, then re-read the
+  active V3 queue, worklog, runtime state, objective ticket, and current worktree status.
+- Verified `docs/remediation/v3/product_completion_goal.txt` without rewriting it: tracked mode
+  `100644`, regular non-link file, `40,779` bytes, `1,418` logical lines, unchanged from its
+  introducing commit `517559e5c9526f78e516374ebc194933d01eac7f`, and exact SHA-256
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
+- Current authority gaps are bounded to the queue/worklog header references and the typed JSON
+  review-traceability reference. Historical worklog observations will remain immutable history.
+- No provider call, network access, credential read, source reconstruction, or objective-content
+  mutation occurred. Next, bind the stable path to those authorities and add the drift regression.
+- Bound the stable path and full digest in the current queue and worklog prologues, the live queue
+  acceptance criterion, and top-level `review_traceability.json` fields. Dated historical worklog
+  observations remain unchanged rather than being rewritten to satisfy the current authority.
+- Added `tests/unit/test_product_objective.py` with independent hard-coded authority: `lstat`
+  rejects symlinks/non-regular files and multiple hard links; exact byte, logical-line, and raw
+  SHA-256 checks reject content or final-newline drift; and current queue/worklog/JSON joins must
+  all bind the same path and digest.
+- Added a path-specific `.gitattributes` `-text` rule so Git cannot rewrite the byte-authoritative
+  objective through checkout EOL normalization. `git check-attr` reports `text: unset`.
+- Removed the operator-local attachment-store path from the recovery note while retaining bounded
+  provenance, size, line count, commit, and digest. A count-only scan found no private-key block,
+  provider-token shape, credential assignment, or absolute host path in the objective bytes.
+- Corrected the composite `V3-FORKSUITE-001` row from stale `IN_PROGRESS` to its already-documented
+  `PARTIAL` state; `V3-OBJECTIVE-001` is now the sole active queue ticket.
+- Focused validation passed `2` tests in `0.02s`; focused Ruff format/check, JSON parsing, exact
+  active-ticket/privacy assertions, and `git diff --check` passed.
+- Next, run the related traceability/static-release group and repository-level static/schema/ledger
+  gates before deciding ticket completion.
+
+## 2026-08-16T20:37:22Z — V3-GRAPHBOUND-001 COMPLETE
+
+- **Defensive objective:** Bound semantic-graph generation and exact JSON publication before disk
+  exhaustion, degrade under pressure with typed evidence, and keep every downstream denominator
+  honest rather than failing after analysis completes.
+- **Completed changes:**
+  - Added one shared `100,000,000`-byte JSON ceiling, exact stable-UTF-8 preflight sizing, private
+    atomic publication, old-destination preservation, and temp cleanup on write/replace failure.
+  - Reworked semantic graph construction around bounded deterministic collectors for edge, node,
+    storage, and warning populations. Global stable risk ordering retains privilege, asset-flow,
+    sensitive-reachability, and state-dependency evidence ahead of lower-value classes; duplicate
+    logical facts and larger canonical variants have order-independent occurrence accounting.
+  - Added bounded typed edge and fact omission evidence plus a required hash-bound retained-
+    occurrence inventory. Exact record and occurrence populations now propagate through context
+    compaction, semantic shards, coverage, report metadata, the standalone comparison-required
+    coverage artifact, detached manifest validation, and maximum-assurance failure gates.
+  - Preserved endpoint feasibility with bounded pin refcounts and a node-only replay after final
+    edge selection; streamed storage candidates and versioned-layout comparison into the bounded
+    collectors instead of materializing the global candidate population.
+  - Made the selected configuration directory the sole `.mmauditignore` authority for CLI runs;
+    target-root rules are not silently merged, and the README records the resolution rule.
+- **Acceptance mapping:**
+  - Generation-time and publication bounds are exercised at injected limits and at the unpatched
+    production ceiling. The literal pipeline fixture emits more than `100,000,000` candidate
+    canonical edge bytes, persists a graph no larger than the ceiling, completes with typed partial
+    status, binds the exact graph size/SHA-256 in the manifest, validates graph/shard/report
+    arithmetic, and asserts every manifest-bound JSON artifact is within the global limit.
+  - Deterministic pressure tests cover forward/reverse input, omission-frontier purging, duplicate
+    reappearance after eviction, differing same-key variants, byte-capacity changes, warnings,
+    facts, storage endpoints, and exact bounded omission samples.
+  - Required retained-occurrence entries form an exact bijection with serialized graph records.
+    Edge and fact candidate populations equal retained occurrences plus typed omissions across
+    graph, context, shard, coverage, report, and manifest boundaries; tamper and coherent-reseal
+    negatives fail closed.
+  - Configuration-relative ignore behavior passes through the real pipeline and CLI handoff, and
+    the target-root same-name negative proves there is no implicit merge.
+- **Files changed:** `README.md`; `src/mmaudit/artifact_limits.py`, `cli.py`, model schemas,
+  orchestration assurance/context/manifest/pipeline, bounded JSON reporting, repository ignore,
+  and Solidity graph/coverage/retrieval/sharding modules; `scripts/generate_release_schemas.py`;
+  Solidity graph, coverage, shard, and forensic coverage schemas; graph/omission/publication,
+  assurance, context, manifest, replay, reporting, release-artifact, scale, CLI, scheduler, and
+  full-pipeline tests; and this V3 queue/worklog/runtime ledger.
+- **Validation:**
+  - `/private/tmp/mmaudit-py312/bin/pytest -q` — PASS: `4,920 passed, 21 skipped in 1,163.66s`.
+    Skips remain explicit for unavailable rootless images/external engines/compilers, configured
+    fork integrations, the paid-provider opt-in, and other documented host prerequisites.
+  - `/private/tmp/mmaudit-py312/bin/ruff format --check .` — PASS: `450 files already formatted`;
+    Ruff check — PASS; strict mypy — PASS over `173` source files; release-schema verification —
+    PASS; `git diff --check` — PASS.
+  - Focused real-ceiling pipeline coverage passed together with the injected partial-pipeline case;
+    atomic exact-limit, oversize, partial-write, replace-failure, and invalid-limit regressions all
+    passed within the complete suite.
+- **Remaining limitations:** This ticket proves bounded local deterministic construction,
+  publication, and evidence accounting. It does not make unavailable external engines, rootless
+  images, explicit compiler/fork integrations, real provider qualification, private holdouts, or
+  professional comparison available, and it does not support a broader security-completeness
+  claim. Those prerequisites retain their existing blocked or incomplete states.
+- **External effects:** No provider call, credential or `.env` read, public RPC, live target,
+  deployment, paid action, or repository publication occurred. The complete suite used elevated
+  host permission only for its synthetic local-loopback isolation tests. No checkpoint commit was
+  created, so `LAST_CHECKPOINT_COMMIT` remains unchanged.
+- **Ticket result:** `V3-GRAPHBOUND-001` is `COMPLETE`; all five members of
+  `M1-DETERMINISTIC-PRODUCT` are complete and the milestone is `REACHED` without changing the
+  repository-wide `INCOMPLETE` release status.
+- **Next ticket:** `V3-OBJECTIVE-001`.
+
+## 2026-08-04T15:49:57Z — V3-GRAPHBOUND-001 graceful WIP pause
+
+- Paused immediately at the operator's request. No test, scanner, provider, container, network,
+  model, or background process remains active.
+- Preserved the in-progress bounded graph implementation and all independently reviewed slices:
+  atomic bounded JSON publication; config-relative ignore resolution; typed edge and non-edge
+  omission schemas; omitted-edge coverage and assurance failure accounting; exact persisted shard
+  denominators; report/manifest graph cross-binding; declared graph-byte-limit validation;
+  path-scoped synthetic identities; and deterministic versioned-layout grouping.
+- The literal direct 100 MB graph-pressure assay previously passed `1 passed in 18.98s`. A broader
+  run after the conservative downstream-safe reservoir change stopped at one expected test update:
+  `5 passed, 1 failed in 24.33s`; sensitive-reachability now has honest omissions at the injected
+  2 MB test ceiling. This is an active implementation/test reconciliation, not a completed ticket.
+- The streaming storage collector refactor is syntactically incomplete as a work slice and has not
+  received test credit. On resume, finish its call-site integration before running formatting or
+  tests; then propagate non-edge omission denominators and run a real-ceiling full-pipeline assay.
+- No production claim, milestone-reached claim, checkpoint commit, or push was made for this
+  incomplete worktree. The last validated and pushed implementation checkpoint remains
+  `97f9de051e977fa0c6cd6750fa79df9f3e974f79`.
+
+## 2026-08-04T14:34:19Z — V3-GRAPHBOUND-001 resumed
+
+- Resumed from clean `main`/`origin/main` at `45a1d424e52a4a2bcd5edc5a13a7f5c7466e67a0`.
+- Re-read the operator objective, repository instructions, active queue/worklog, execution order,
+  milestone gate, and current Git state. `M1-DETERMINISTIC-PRODUCT` remains `ACTIVE`, and its
+  queued blocker `V3-GRAPHBOUND-001` is now `IN_PROGRESS`.
+- Started parallel read-only reviews of graph amplification, reusable typed omission/coverage
+  authority, and configuration-relative ignore plus bounded scale-regression seams. No provider
+  call, secret access, live target, public RPC, or implementation mutation occurred in this slice.
 
 ## 2026-08-04T14:30:45Z — graceful pause after V3-TOOLDIAG-002 checkpoint
 

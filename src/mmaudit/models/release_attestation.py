@@ -17,6 +17,10 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
+import weakref
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from importlib import metadata
 from pathlib import Path
@@ -56,7 +60,6 @@ _QUALIFICATION_DISTRIBUTIONS = (
     "rich",
     "typer",
 )
-_TRUSTED_RELEASE_OBSERVATION_ISSUER = object()
 
 
 class ReleaseEnvironmentMeasurement(StrictModel):
@@ -85,120 +88,49 @@ class ReleaseEnvironmentMeasurement(StrictModel):
         return self
 
 
+@dataclass(frozen=True, slots=True)
+class _TrustedReleaseObservationState:
+    bindings_sha256: str
+    measurement_sha256: str
+    observed_at: datetime
+    source_commit: str
+    source_tree_sha256: str
+    toolchain_sha256: str
+    isolation_sha256: str
+
+
 class TrustedReleaseBindingObservation:
     """Opaque proof that release declarations matched fresh local observations."""
 
-    __slots__ = (
-        "__bindings_sha256",
-        "__isolation_sha256",
-        "__issuer",
-        "__measurement_sha256",
-        "__observed_at",
-        "__source_commit",
-        "__source_tree_sha256",
-        "__toolchain_sha256",
-    )
+    __slots__ = ("__weakref__",)
 
-    def __init__(
-        self,
-        *,
-        bindings_sha256: str,
-        measurement: ReleaseEnvironmentMeasurement,
-        issuer: object,
-    ) -> None:
-        if issuer is not _TRUSTED_RELEASE_OBSERVATION_ISSUER:
-            raise TypeError("trusted release observation cannot be constructed directly")
-        self.__bindings_sha256 = bindings_sha256
-        self.__measurement_sha256 = measurement.measurement_sha256
-        self.__observed_at = measurement.observed_at
-        self.__source_commit = measurement.source_commit
-        self.__source_tree_sha256 = measurement.source_tree_sha256
-        self.__toolchain_sha256 = measurement.toolchain_sha256
-        self.__isolation_sha256 = measurement.isolation_sha256
-        self.__issuer = issuer
+    def __new__(
+        cls,
+        *_args: object,
+        **_kwargs: object,
+    ) -> TrustedReleaseBindingObservation:
+        del cls
+        raise TypeError("trusted release observation cannot be constructed directly")
+
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        del self, _args, _kwargs
 
     @property
     def measurement_sha256(self) -> str:
         """Return the non-secret digest retained in runtime evidence."""
 
-        self.__require_integrity()
-        return self.__measurement_sha256
+        return _trusted_release_observation_measurement_sha256(self)
 
     @property
     def observed_at(self) -> datetime:
         """Return when the process-local release measurements completed."""
 
-        self.__require_integrity()
-        return self.__observed_at
+        return _trusted_release_observation_observed_at(self)
 
     def require_for(self, bindings: object) -> None:
         """Reject any reconstructed capability or release-binding drift."""
 
-        from mmaudit.models.qualification import QualificationBindings
-        from mmaudit.models.qualification_workflow import QualificationReleaseBindings
-
-        self.__require_integrity()
-        if type(bindings) is QualificationReleaseBindings:
-            bindings_sha256 = bindings.bindings_sha256
-        elif type(bindings) is QualificationBindings:
-            bindings_sha256 = canonical_sha256(
-                {
-                    "schema_version": "1.0",
-                    "source_commit": bindings.source_commit,
-                    "source_tree_sha256": bindings.source_tree_sha256,
-                    "effective_config_sha256": bindings.effective_config_sha256,
-                    "prompt_sha256": bindings.prompt_sha256,
-                    "response_schema_sha256": bindings.response_schema_sha256,
-                    "toolchain_sha256": bindings.toolchain_sha256,
-                    "isolation_sha256": bindings.isolation_sha256,
-                    "benchmark_corpus_version": bindings.benchmark_corpus_version,
-                    "benchmark_ground_truth_version": bindings.benchmark_ground_truth_version,
-                }
-            )
-        else:
-            raise ValueError("release observation requires exact typed qualification bindings")
-        if (
-            self.__bindings_sha256 != bindings_sha256
-            or self.__source_commit != bindings.source_commit
-            or self.__source_tree_sha256 != bindings.source_tree_sha256
-            or self.__toolchain_sha256 != bindings.toolchain_sha256
-            or self.__isolation_sha256 != bindings.isolation_sha256
-        ):
-            raise ValueError("trusted release observation differs from qualification bindings")
-
-    def __require_integrity(self) -> None:
-        """Revalidate every retained measurement field before granting authority."""
-
-        if (
-            type(self) is not TrustedReleaseBindingObservation
-            or getattr(self, "_TrustedReleaseBindingObservation__issuer", None)
-            is not _TRUSTED_RELEASE_OBSERVATION_ISSUER
-        ):
-            raise ValueError("release observation capability is not trusted")
-        try:
-            measurement = ReleaseEnvironmentMeasurement.model_validate(
-                {
-                    "schema_version": "1.0",
-                    "source_commit": self.__source_commit,
-                    "source_tree_sha256": self.__source_tree_sha256,
-                    "toolchain_sha256": self.__toolchain_sha256,
-                    "isolation_sha256": self.__isolation_sha256,
-                    "observed_at": self.__observed_at,
-                    "measurement_sha256": self.__measurement_sha256,
-                }
-            )
-        except (AttributeError, TypeError, ValueError) as exc:
-            raise ValueError("release observation capability integrity check failed") from exc
-        if (
-            measurement.source_commit != self.__source_commit
-            or measurement.source_tree_sha256 != self.__source_tree_sha256
-            or measurement.toolchain_sha256 != self.__toolchain_sha256
-            or measurement.isolation_sha256 != self.__isolation_sha256
-            or measurement.observed_at != self.__observed_at
-            or measurement.measurement_sha256 != self.__measurement_sha256
-            or re.fullmatch(_SHA256_PATTERN, self.__bindings_sha256) is None
-        ):
-            raise ValueError("release observation capability integrity check failed")
+        _require_trusted_release_observation(self, bindings)
 
     def __copy__(self) -> Never:
         raise TypeError("trusted release observation cannot be copied")
@@ -242,45 +174,155 @@ def measure_qualification_release_environment(
     return ReleaseEnvironmentMeasurement.model_validate(payload)
 
 
-def observe_and_verify_qualification_release(
-    *,
-    release_bindings: object,
-    source_root: Path,
-    isolation_backend: object | None,
-) -> TrustedReleaseBindingObservation:
-    """Issue process-local authority only when every measured release field matches."""
+def _build_release_observation_authority() -> tuple[
+    Callable[..., TrustedReleaseBindingObservation],
+    Callable[[TrustedReleaseBindingObservation], str],
+    Callable[[TrustedReleaseBindingObservation], datetime],
+    Callable[[TrustedReleaseBindingObservation, object], None],
+]:
+    """Keep issuance state unreachable except through fresh release measurement."""
 
-    from mmaudit.models.qualification_workflow import QualificationReleaseBindings
+    registry: dict[
+        int,
+        tuple[
+            weakref.ReferenceType[TrustedReleaseBindingObservation],
+            _TrustedReleaseObservationState,
+        ],
+    ] = {}
+    lock = threading.RLock()
 
-    if type(release_bindings) is not QualificationReleaseBindings:
-        raise ValueError("release observation requires exact typed release bindings")
-    started_at = _utc_now()
-    measurement = measure_qualification_release_environment(
-        source_root=source_root,
-        isolation_backend=isolation_backend,
-    )
-    completed_at = _utc_now()
-    if measurement.observed_at < started_at or measurement.observed_at > completed_at:
-        raise ValueError("release environment measurement time is not freshly observed")
-    expected = (
-        release_bindings.source_commit,
-        release_bindings.source_tree_sha256,
-        release_bindings.toolchain_sha256,
-        release_bindings.isolation_sha256,
-    )
-    actual = (
-        measurement.source_commit,
-        measurement.source_tree_sha256,
-        measurement.toolchain_sha256,
-        measurement.isolation_sha256,
-    )
-    if actual != expected:
-        raise ValueError("measured release environment differs from declared bindings")
-    return TrustedReleaseBindingObservation(
-        bindings_sha256=release_bindings.bindings_sha256,
-        measurement=measurement,
-        issuer=_TRUSTED_RELEASE_OBSERVATION_ISSUER,
-    )
+    def state_for(
+        capability: TrustedReleaseBindingObservation,
+    ) -> _TrustedReleaseObservationState:
+        if type(capability) is not TrustedReleaseBindingObservation:
+            raise ValueError("release observation capability is not trusted")
+        with lock:
+            registered = registry.get(id(capability))
+        if registered is None or registered[0]() is not capability:
+            raise ValueError("release observation capability is not trusted")
+        return registered[1]
+
+    def observe_and_issue(
+        *,
+        release_bindings: object,
+        source_root: Path,
+        isolation_backend: object | None,
+    ) -> TrustedReleaseBindingObservation:
+        from mmaudit.models.qualification_workflow import QualificationReleaseBindings
+
+        if type(release_bindings) is not QualificationReleaseBindings:
+            raise ValueError("release observation requires exact typed release bindings")
+        bindings = QualificationReleaseBindings.model_validate(
+            release_bindings.model_dump(mode="json")
+        )
+        started_at = _utc_now()
+        measured = measure_qualification_release_environment(
+            source_root=source_root,
+            isolation_backend=isolation_backend,
+        )
+        completed_at = _utc_now()
+        if type(measured) is not ReleaseEnvironmentMeasurement:
+            raise ValueError("release environment measurement has an invalid type")
+        measurement = ReleaseEnvironmentMeasurement.model_validate(measured.model_dump(mode="json"))
+        if measurement.observed_at < started_at or measurement.observed_at > completed_at:
+            raise ValueError("release environment measurement time is not freshly observed")
+        expected = (
+            bindings.source_commit,
+            bindings.source_tree_sha256,
+            bindings.toolchain_sha256,
+            bindings.isolation_sha256,
+        )
+        actual = (
+            measurement.source_commit,
+            measurement.source_tree_sha256,
+            measurement.toolchain_sha256,
+            measurement.isolation_sha256,
+        )
+        if actual != expected:
+            raise ValueError("measured release environment differs from declared bindings")
+
+        capability = object.__new__(TrustedReleaseBindingObservation)
+        key = id(capability)
+        state = _TrustedReleaseObservationState(
+            bindings_sha256=bindings.bindings_sha256,
+            measurement_sha256=measurement.measurement_sha256,
+            observed_at=measurement.observed_at,
+            source_commit=measurement.source_commit,
+            source_tree_sha256=measurement.source_tree_sha256,
+            toolchain_sha256=measurement.toolchain_sha256,
+            isolation_sha256=measurement.isolation_sha256,
+        )
+
+        def discard(reference: weakref.ReferenceType[TrustedReleaseBindingObservation]) -> None:
+            with lock:
+                current = registry.get(key)
+                if current is not None and current[0] is reference:
+                    registry.pop(key, None)
+
+        reference = weakref.ref(capability, discard)
+        with lock:
+            registry[key] = (reference, state)
+        return capability
+
+    def measurement_sha256(capability: TrustedReleaseBindingObservation) -> str:
+        return state_for(capability).measurement_sha256
+
+    def observed_at(capability: TrustedReleaseBindingObservation) -> datetime:
+        return state_for(capability).observed_at
+
+    def require(capability: TrustedReleaseBindingObservation, bindings: object) -> None:
+        from mmaudit.models.qualification import QualificationBindings
+        from mmaudit.models.qualification_workflow import QualificationReleaseBindings
+
+        state = state_for(capability)
+        if type(bindings) is QualificationReleaseBindings:
+            release = QualificationReleaseBindings.model_validate(bindings.model_dump(mode="json"))
+            bindings_sha256 = release.bindings_sha256
+            source_commit = release.source_commit
+            source_tree_sha256 = release.source_tree_sha256
+            toolchain_sha256 = release.toolchain_sha256
+            isolation_sha256 = release.isolation_sha256
+        elif type(bindings) is QualificationBindings:
+            qualification = QualificationBindings.model_validate(bindings.model_dump(mode="json"))
+            bindings_sha256 = canonical_sha256(
+                {
+                    "schema_version": "1.0",
+                    "source_commit": qualification.source_commit,
+                    "source_tree_sha256": qualification.source_tree_sha256,
+                    "effective_config_sha256": qualification.effective_config_sha256,
+                    "prompt_sha256": qualification.prompt_sha256,
+                    "response_schema_sha256": qualification.response_schema_sha256,
+                    "toolchain_sha256": qualification.toolchain_sha256,
+                    "isolation_sha256": qualification.isolation_sha256,
+                    "benchmark_corpus_version": qualification.benchmark_corpus_version,
+                    "benchmark_ground_truth_version": qualification.benchmark_ground_truth_version,
+                }
+            )
+            source_commit = qualification.source_commit
+            source_tree_sha256 = qualification.source_tree_sha256
+            toolchain_sha256 = qualification.toolchain_sha256
+            isolation_sha256 = qualification.isolation_sha256
+        else:
+            raise ValueError("release observation requires exact typed qualification bindings")
+        if (
+            state.bindings_sha256 != bindings_sha256
+            or state.source_commit != source_commit
+            or state.source_tree_sha256 != source_tree_sha256
+            or state.toolchain_sha256 != toolchain_sha256
+            or state.isolation_sha256 != isolation_sha256
+        ):
+            raise ValueError("trusted release observation differs from qualification bindings")
+
+    return observe_and_issue, measurement_sha256, observed_at, require
+
+
+(
+    observe_and_verify_qualification_release,
+    _trusted_release_observation_measurement_sha256,
+    _trusted_release_observation_observed_at,
+    _require_trusted_release_observation,
+) = _build_release_observation_authority()
+del _build_release_observation_authority
 
 
 def _utc_now() -> datetime:

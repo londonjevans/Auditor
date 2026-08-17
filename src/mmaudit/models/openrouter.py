@@ -104,7 +104,16 @@ from mmaudit.models.reasoning import (
 )
 
 if TYPE_CHECKING:
+    from mmaudit.models.policy_eligibility import (
+        ClientPolicyConstraints,
+        PolicyAuditContext,
+    )
+    from mmaudit.models.policy_selection import (
+        AuditModelRoutingEvidence,
+        VerifiedAuditModelSelection,
+    )
     from mmaudit.models.qualification import VerifiedProductionQualification
+    from mmaudit.repository.privacy_provenance import PrivacySourceProvenanceObservation
 from mmaudit.models.schemas import (
     ContextPackage,
     ContextRequestEvidence,
@@ -164,6 +173,7 @@ from mmaudit.orchestration.context_manifest import (
 from mmaudit.privacy import (
     EffectivePrivacyPolicyEvidence,
     EndpointPolicyClass,
+    PrivacySourceClassification,
     TrustedPrivacyAuthorization,
     validate_trusted_privacy_authorization,
 )
@@ -347,6 +357,40 @@ def _canonical_effective_privacy_policy(
         )
     except (AttributeError, ValidationError):
         raise OpenRouterPrivacyError("effective privacy evidence is invalid") from None
+
+
+def _validate_live_privacy_source_provenance(
+    observation: PrivacySourceProvenanceObservation,
+    *,
+    policy: EffectivePrivacyPolicyEvidence,
+) -> PrivacySourceProvenanceObservation:
+    """Revalidate the live opaque provenance behind one effective privacy policy."""
+
+    from mmaudit.repository.privacy_provenance import (
+        validate_privacy_source_provenance_observation,
+    )
+
+    try:
+        evidence = validate_privacy_source_provenance_observation(
+            observation,
+            source_sha256=policy.source_sha256,
+            source_classification=policy.source_classification,
+        )
+    except (TypeError, ValueError) as exc:
+        raise OpenRouterPrivacyError(f"live privacy source provenance is invalid: {exc}") from None
+    if (
+        evidence.evidence_sha256 != policy.source_provenance_sha256
+        or evidence.proof_kind != policy.source_proof_kind
+        or evidence.distribution_commit != policy.source_distribution_commit
+        or evidence.distribution_scope != policy.source_distribution_scope
+        or evidence.synthetic_declaration_sha256 != policy.source_synthetic_declaration_sha256
+        or evidence.synthetic_declaration_entry_sha256
+        != policy.source_synthetic_declaration_entry_sha256
+    ):
+        raise OpenRouterPrivacyError(
+            "live privacy source provenance differs from effective privacy evidence"
+        )
+    return observation
 
 
 def _model_request_privacy_binding(
@@ -901,6 +945,120 @@ def _require_exact_qualification_routing_authority(
     return verified
 
 
+def _require_exact_audit_model_selection_authority(
+    *,
+    selection: VerifiedAuditModelSelection,
+    binding: _OpenRouterAuditPolicyBinding,
+    now: datetime,
+) -> VerifiedAuditModelSelection:
+    """Require one resolver-issued, current audit-scoped selection capability."""
+
+    # Local import avoids openrouter -> policy_selection -> manifest -> agents -> openrouter
+    # at module-import time.
+    from mmaudit.models.policy_selection import VerifiedAuditModelSelection
+
+    if type(selection) is not VerifiedAuditModelSelection:
+        raise OpenRouterPolicyEligibilityError(
+            "audit model selection authority has an invalid opaque type"
+        )
+    try:
+        verified = selection.require_current(
+            now=now,
+            expected_audit_scope_sha256=binding.audit_context.audit_scope_sha256,
+            expected_source_sha256=binding.audit_context.source_sha256,
+            expected_audit_context_sha256=binding.audit_context.context_sha256,
+            expected_client_constraints_sha256=(binding.client_constraints.constraints_sha256),
+        )
+    except ValueError as exc:
+        raise OpenRouterPolicyEligibilityError(
+            f"audit model selection authority rejected use: {exc}"
+        ) from exc
+    if verified is not selection:
+        raise OpenRouterPolicyEligibilityError(
+            "audit model selection authority returned a different capability"
+        )
+    return verified
+
+
+@dataclass(frozen=True, slots=True)
+class _OpenRouterAuditPolicyBinding:
+    """Independent current audit facts supplied by the request-owning runtime."""
+
+    audit_context: PolicyAuditContext
+    client_constraints: ClientPolicyConstraints
+
+
+def _canonical_audit_policy_binding(
+    *,
+    policy_audit_context: PolicyAuditContext | None,
+    client_policy_constraints: ClientPolicyConstraints | None,
+    effective_privacy_policy: EffectivePrivacyPolicyEvidence | None,
+) -> _OpenRouterAuditPolicyBinding | None:
+    """Validate audit facts independently of any model-selection capability."""
+
+    from mmaudit.models.policy_eligibility import (
+        ClientPolicyConstraints,
+        PolicyAuditContext,
+        PolicyUsePurpose,
+    )
+
+    if policy_audit_context is None and client_policy_constraints is None:
+        return None
+    if policy_audit_context is None or client_policy_constraints is None:
+        raise OpenRouterPolicyEligibilityError(
+            "audit model selection requires both audit context and client constraints"
+        )
+    if (
+        type(policy_audit_context) is not PolicyAuditContext
+        or type(client_policy_constraints) is not ClientPolicyConstraints
+    ):
+        raise OpenRouterPolicyEligibilityError(
+            "audit policy runtime binding has an invalid evidence type"
+        )
+    try:
+        context = PolicyAuditContext.model_validate_json(
+            policy_audit_context.model_dump_json(),
+            strict=True,
+        )
+        constraints = ClientPolicyConstraints.model_validate_json(
+            client_policy_constraints.model_dump_json(),
+            strict=True,
+        )
+    except (AttributeError, ValueError) as exc:
+        raise OpenRouterPolicyEligibilityError(
+            "audit policy runtime binding is structurally invalid"
+        ) from exc
+    if (
+        context != policy_audit_context
+        or constraints != client_policy_constraints
+        or constraints.audit_context != context
+        or context.intended_use is not PolicyUsePurpose.PAID_CUSTOMER_FACING_DEFENSIVE_SOURCE_AUDIT
+    ):
+        raise OpenRouterPolicyEligibilityError(
+            "audit policy runtime binding differs from the exact paid audit context"
+        )
+    if effective_privacy_policy is None:
+        raise OpenRouterPolicyEligibilityError(
+            "audit policy runtime binding requires effective privacy evidence"
+        )
+    canonical_privacy_policy = _canonical_effective_privacy_policy(effective_privacy_policy)
+    if canonical_privacy_policy != effective_privacy_policy:
+        raise OpenRouterPolicyEligibilityError(
+            "effective privacy evidence changed during audit policy binding"
+        )
+    if (
+        canonical_privacy_policy.source_sha256 != context.source_sha256
+        or canonical_privacy_policy.source_classification is not context.source_classification
+    ):
+        raise OpenRouterPolicyEligibilityError(
+            "audit policy source differs from the effective privacy request source"
+        )
+    return _OpenRouterAuditPolicyBinding(
+        audit_context=context,
+        client_constraints=constraints,
+    )
+
+
 @dataclass(frozen=True)
 class OpenRouterReasoning:
     """Bounded reasoning controls supported by OpenRouter."""
@@ -1134,6 +1292,10 @@ class OpenRouterUnboundIdentityError(OpenRouterModelError):
 
 class OpenRouterQualificationError(OpenRouterModelError):
     """Raised when certification lacks current exact qualification routing evidence."""
+
+
+class OpenRouterPolicyEligibilityError(OpenRouterModelError):
+    """Raised when a paid audit route lacks current policy-selection authority."""
 
 
 class OpenRouterProviderPolicyError(OpenRouterModelError):
@@ -2071,7 +2233,11 @@ class OpenRouterClient:
         token_budgets: TokenBudgetConfig | None = None,
         qualification_routing: tuple[OpenRouterQualificationRoutingEvidence, ...] = (),
         production_qualification: VerifiedProductionQualification | None = None,
+        audit_model_selection: VerifiedAuditModelSelection | None = None,
+        policy_audit_context: PolicyAuditContext | None = None,
+        client_policy_constraints: ClientPolicyConstraints | None = None,
         effective_privacy_policy: EffectivePrivacyPolicyEvidence | None = None,
+        source_provenance_observation: PrivacySourceProvenanceObservation | None = None,
         privacy_authorization: TrustedPrivacyAuthorization | None = None,
         context_preflight_ledger: ContextPreflightLedger | None = None,
         test_only_mock_handler: (
@@ -2149,6 +2315,19 @@ class OpenRouterClient:
             if effective_privacy_policy is not None
             else None
         )
+        if source_provenance_observation is not None and self.effective_privacy_policy is None:
+            raise OpenRouterPrivacyError(
+                "live privacy source provenance requires effective privacy evidence"
+            )
+        self._privacy_source_provenance_observation = (
+            _validate_live_privacy_source_provenance(
+                source_provenance_observation,
+                policy=self.effective_privacy_policy,
+            )
+            if source_provenance_observation is not None
+            and self.effective_privacy_policy is not None
+            else None
+        )
         self._privacy_authorization = privacy_authorization
         self._endpoint_pricing: dict[str, _RegisteredEndpointPolicy] = {}
         self._model_identities: dict[str, _RegisteredModelIdentity] = {}
@@ -2173,6 +2352,26 @@ class OpenRouterClient:
             if production_qualification is not None
             else None
         )
+        self._audit_policy_binding = _canonical_audit_policy_binding(
+            policy_audit_context=policy_audit_context,
+            client_policy_constraints=client_policy_constraints,
+            effective_privacy_policy=self.effective_privacy_policy,
+        )
+        if (audit_model_selection is None) != (self._audit_policy_binding is None):
+            raise OpenRouterPolicyEligibilityError(
+                "audit model selection and independent audit policy binding must be supplied "
+                "together"
+            )
+        self._audit_model_selection: VerifiedAuditModelSelection | None
+        if audit_model_selection is not None:
+            assert self._audit_policy_binding is not None
+            self._audit_model_selection = _require_exact_audit_model_selection_authority(
+                selection=audit_model_selection,
+                binding=self._audit_policy_binding,
+                now=datetime.now(UTC).replace(microsecond=0),
+            )
+        else:
+            self._audit_model_selection = None
         self._metadata_observations: dict[str, str] = {}
         self._unbound_completions: dict[str, StructuredCompletion[Any]] = {}
         self._claimed_request_ids: set[str] = set()
@@ -2534,11 +2733,16 @@ class OpenRouterClient:
         self,
         *,
         effective_privacy_policy: EffectivePrivacyPolicyEvidence,
+        source_provenance_observation: PrivacySourceProvenanceObservation | None = None,
         privacy_authorization: TrustedPrivacyAuthorization | None,
     ) -> None:
         """Bind one canonical source policy before any provider state is observed."""
 
-        if self.effective_privacy_policy is not None or self._privacy_authorization is not None:
+        if (
+            self.effective_privacy_policy is not None
+            or self._privacy_source_provenance_observation is not None
+            or self._privacy_authorization is not None
+        ):
             raise OpenRouterPrivacyError("provider privacy context is already bound")
         if (
             self._endpoint_pricing
@@ -2551,6 +2755,14 @@ class OpenRouterClient:
                 "provider privacy context must be bound before provider state"
             )
         policy = _canonical_effective_privacy_policy(effective_privacy_policy)
+        provenance_observation = (
+            _validate_live_privacy_source_provenance(
+                source_provenance_observation,
+                policy=policy,
+            )
+            if source_provenance_observation is not None
+            else None
+        )
         if (
             policy.privacy_profile is not self.privacy.profile
             or policy.require_zdr is not self.privacy.require_zdr
@@ -2562,12 +2774,14 @@ class OpenRouterClient:
             if privacy_authorization is not None:
                 raise OpenRouterPrivacyError("ZDR privacy context rejects retention authorization")
             self.effective_privacy_policy = policy
+            self._privacy_source_provenance_observation = provenance_observation
             return
         if privacy_authorization is None:
             raise OpenRouterPrivacyError(
                 "non-ZDR privacy evidence and live authorization must be supplied together"
             )
         self.effective_privacy_policy = policy
+        self._privacy_source_provenance_observation = provenance_observation
         self._privacy_authorization = privacy_authorization
         try:
             self._validate_non_zdr_privacy_authorization(
@@ -2576,6 +2790,7 @@ class OpenRouterClient:
             )
         except Exception:
             self.effective_privacy_policy = None
+            self._privacy_source_provenance_observation = None
             self._privacy_authorization = None
             raise
 
@@ -3807,26 +4022,126 @@ class OpenRouterClient:
             ),
         )
 
-    def _is_real_postqualification_certification(self, role: str) -> bool:
-        """Return whether one request must consume sealed production reasoning authority."""
+    def _selected_structured_output_mode(self, model: str) -> StructuredOutputMode:
+        endpoint_policy = self._endpoint_pricing.get(model)
+        return (
+            endpoint_policy.structured_output_mode
+            if endpoint_policy is not None
+            else StructuredOutputMode.NATIVE_JSON_SCHEMA
+        )
+
+    def _requires_real_audit_policy_selection(
+        self,
+        role: str,
+        *,
+        system_prompt: str | None = None,
+        user_prompt: str | None = None,
+        response_model: type[BaseModel] | None = None,
+        schema_name: str | None = None,
+        structured_output_mode: StructuredOutputMode | None = None,
+        context_package: ContextPackage | None = None,
+    ) -> bool:
+        """Require audit policy for every REAL request lacking proven prequalification scope."""
 
         return (
             trusted_openrouter_execution_evidence(self) is ExecutionEvidenceKind.REAL
-            and self.provider_policy.certification
-            and not _is_prequalification_provider_role(role)
+            and not OpenRouterClient._is_trusted_prequalification_request(
+                self,
+                role,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                structured_output_mode=structured_output_mode,
+                context_package=context_package,
+            )
         )
+
+    def _is_trusted_prequalification_request(
+        self,
+        role: str,
+        *,
+        system_prompt: str | None = None,
+        user_prompt: str | None = None,
+        response_model: type[BaseModel] | None = None,
+        schema_name: str | None = None,
+        structured_output_mode: StructuredOutputMode | None = None,
+        context_package: ContextPackage | None = None,
+    ) -> bool:
+        """Limit policy exemption to a closed role on a non-private benchmark source."""
+
+        policy = self.effective_privacy_policy
+        if policy is None:
+            return False
+        canonical_policy = _canonical_effective_privacy_policy(policy)
+        if canonical_policy != policy:
+            raise OpenRouterPrivacyError(
+                "prequalification privacy evidence changed after canonicalization"
+            )
+        observation = self._privacy_source_provenance_observation
+        if (
+            observation is None
+            or system_prompt is None
+            or user_prompt is None
+            or response_model is None
+            or schema_name is None
+            or structured_output_mode is None
+            or canonical_policy.source_proof_kind != "RELEASE_PINNED_MODEL_BENCHMARK"
+        ):
+            return False
+        _validate_live_privacy_source_provenance(
+            observation,
+            policy=canonical_policy,
+        )
+        from mmaudit.repository.privacy_provenance import (
+            validate_release_pinned_model_benchmark_request,
+        )
+
+        try:
+            validate_release_pinned_model_benchmark_request(
+                observation,
+                request_role=role,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                structured_output_mode=structured_output_mode,
+                context_package=context_package,
+            )
+        except ValueError:
+            return False
+        trusted_prequalification_source = (
+            canonical_policy.source_classification
+            is PrivacySourceClassification.SYNTHETIC_COMMITTED
+        )
+        return _is_prequalification_provider_role(role) and trusted_prequalification_source
 
     def _require_real_postqualification_routing(
         self,
         *,
         role: str,
         model: str,
+        system_prompt: str,
+        user_prompt: str,
+        response_model: type[BaseModel],
+        schema_name: str,
+        structured_output_mode: StructuredOutputMode,
+        context_package: ContextPackage | None,
         checked_at: datetime,
         require_runtime_snapshots: bool,
     ) -> OpenRouterQualificationRoutingEvidence:
         """Revalidate opaque production authority and its exact request projection."""
 
-        if not self._is_real_postqualification_certification(role):
+        if not _TRUSTED_REQUIRES_REAL_AUDIT_POLICY_SELECTION(
+            self,
+            role,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_model=response_model,
+            schema_name=schema_name,
+            structured_output_mode=structured_output_mode,
+            context_package=context_package,
+        ):
             raise OpenRouterQualificationError(
                 "post-qualification routing authority was requested outside its real "
                 "certification boundary"
@@ -3861,16 +4176,164 @@ class OpenRouterClient:
         )
         return binding
 
+    def _require_real_audit_model_selection(
+        self,
+        *,
+        role: str,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        response_model: type[BaseModel],
+        schema_name: str,
+        structured_output_mode: StructuredOutputMode,
+        context_package: ContextPackage | None,
+        checked_at: datetime,
+        qualification_binding: OpenRouterQualificationRoutingEvidence | None,
+        provider_policy: OpenRouterProviderPolicy,
+    ) -> AuditModelRoutingEvidence:
+        """Recheck exact audit policy authority at one paid transport boundary."""
+
+        from mmaudit.models.policy_selection import AuditModelRoutingEvidence
+
+        if not _TRUSTED_REQUIRES_REAL_AUDIT_POLICY_SELECTION(
+            self,
+            role,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_model=response_model,
+            schema_name=schema_name,
+            structured_output_mode=structured_output_mode,
+            context_package=context_package,
+        ):
+            raise OpenRouterPolicyEligibilityError(
+                "audit policy selection was requested outside its paid audit boundary"
+            )
+        if self._audit_model_selection is None:
+            raise OpenRouterPolicyEligibilityError(
+                "real post-qualification certification requires verified audit model selection"
+            )
+        audit_policy_binding = _canonical_audit_policy_binding(
+            policy_audit_context=(
+                self._audit_policy_binding.audit_context
+                if self._audit_policy_binding is not None
+                else None
+            ),
+            client_policy_constraints=(
+                self._audit_policy_binding.client_constraints
+                if self._audit_policy_binding is not None
+                else None
+            ),
+            effective_privacy_policy=self.effective_privacy_policy,
+        )
+        if audit_policy_binding is None:
+            raise OpenRouterPolicyEligibilityError(
+                "real post-qualification certification lacks independent audit policy binding"
+            )
+        if qualification_binding is None or self._production_qualification is None:
+            raise OpenRouterPolicyEligibilityError(
+                "audit model selection lacks its exact technical qualification binding"
+            )
+        used_at = checked_at.replace(microsecond=0)
+        selection = _require_exact_audit_model_selection_authority(
+            selection=self._audit_model_selection,
+            binding=audit_policy_binding,
+            now=used_at,
+        )
+        try:
+            raw_evidence = selection.routing_evidence(
+                model,
+                now=used_at,
+                expected_audit_scope_sha256=(audit_policy_binding.audit_context.audit_scope_sha256),
+                expected_source_sha256=audit_policy_binding.audit_context.source_sha256,
+                expected_audit_context_sha256=(audit_policy_binding.audit_context.context_sha256),
+                expected_client_constraints_sha256=(
+                    audit_policy_binding.client_constraints.constraints_sha256
+                ),
+            )
+            evidence = AuditModelRoutingEvidence.model_validate_json(
+                raw_evidence.model_dump_json(),
+                strict=True,
+            )
+        except (AttributeError, ValueError) as exc:
+            raise OpenRouterPolicyEligibilityError(
+                f"audit model selection rejected exact route: {exc}"
+            ) from exc
+        route = evidence.route
+        if (
+            raw_evidence != evidence
+            or evidence.audit_scope_sha256 != audit_policy_binding.audit_context.audit_scope_sha256
+            or evidence.source_sha256 != audit_policy_binding.audit_context.source_sha256
+            or evidence.audit_context_sha256 != audit_policy_binding.audit_context.context_sha256
+            or evidence.client_constraints_sha256
+            != audit_policy_binding.client_constraints.constraints_sha256
+            or route.exact_model_id != model
+            or route.provider_endpoint != qualification_binding.approved_provider_endpoint
+            or route.provider_name != qualification_binding.approved_provider_name
+            or provider_policy.configured_endpoints != (route.provider_endpoint,)
+            or evidence.technical_production_selection_sha256
+            != self._production_qualification.production_selection_sha256
+            or evidence.technical_qualification_capability_sha256
+            != self._production_qualification.capability_sha256
+        ):
+            raise OpenRouterPolicyEligibilityError(
+                "audit model selection differs from the exact technical provider route"
+            )
+        return evidence
+
+    def require_audit_policy_binding(
+        self,
+        *,
+        audit_model_selection: VerifiedAuditModelSelection,
+        policy_audit_context: PolicyAuditContext,
+        client_policy_constraints: ClientPolicyConstraints,
+        checked_at: datetime,
+    ) -> None:
+        """Verify exact independently supplied audit authority without exposing it."""
+
+        supplied_binding = _canonical_audit_policy_binding(
+            policy_audit_context=policy_audit_context,
+            client_policy_constraints=client_policy_constraints,
+            effective_privacy_policy=self.effective_privacy_policy,
+        )
+        if (
+            supplied_binding is None
+            or supplied_binding != self._audit_policy_binding
+            or audit_model_selection is not self._audit_model_selection
+        ):
+            raise OpenRouterPolicyEligibilityError(
+                "OpenRouter client binds different audit policy authority"
+            )
+        _require_exact_audit_model_selection_authority(
+            selection=audit_model_selection,
+            binding=supplied_binding,
+            now=checked_at.replace(microsecond=0),
+        )
+
     def _require_real_postqualification_reasoning_plan(
         self,
         *,
         role: str,
         model: str,
+        system_prompt: str,
+        user_prompt: str,
+        response_model: type[BaseModel],
+        schema_name: str,
+        structured_output_mode: StructuredOutputMode,
+        context_package: ContextPackage | None,
         qualification_binding: OpenRouterQualificationRoutingEvidence | None,
     ) -> ReasoningRequestPlanEvidence:
         """Require one exact policy-, capability-, and qualification-bound request plan."""
 
-        if not self._is_real_postqualification_certification(role):
+        if not _TRUSTED_REQUIRES_REAL_AUDIT_POLICY_SELECTION(
+            self,
+            role,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_model=response_model,
+            schema_name=schema_name,
+            structured_output_mode=structured_output_mode,
+            context_package=context_package,
+        ):
             raise OpenRouterQualificationError(
                 "post-qualification reasoning authority was requested outside its real "
                 "certification boundary"
@@ -4538,6 +5001,7 @@ class OpenRouterClient:
         user_prompt: str,
         response_model: type[BaseModel],
         schema_name: str,
+        context_package: ContextPackage | None = None,
         request_metadata: Mapping[str, str] | None = None,
         provider_policy: OpenRouterProviderPolicy | None = None,
         structured_output_mode: StructuredOutputMode | None = None,
@@ -4608,7 +5072,15 @@ class OpenRouterClient:
             raise OpenRouterRequestLimitError(
                 "sealed per-role reasoning plan has no active client policy"
             )
-        if self._is_real_postqualification_certification(effective_request_role or "") and (
+        if self._requires_real_audit_policy_selection(
+            effective_request_role or "",
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_model=response_model,
+            schema_name=schema_name,
+            structured_output_mode=selected_mode,
+            context_package=context_package,
+        ) and (
             sealed_reasoning_plan is None
             or sealed_reasoning_plan.binding_state != "qualification_bound"
         ):
@@ -4811,7 +5283,20 @@ class OpenRouterClient:
             str,
             ReasoningRequestPlanEvidence,
         ] = {}
-        if self._is_real_postqualification_certification(role):
+        requested_output_modes = {self._selected_structured_output_mode(model) for model in models}
+        prequalification_output_mode = (
+            next(iter(requested_output_modes)) if len(requested_output_modes) == 1 else None
+        )
+        if _TRUSTED_REQUIRES_REAL_AUDIT_POLICY_SELECTION(
+            self,
+            role,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_model=response_model,
+            schema_name=schema_name,
+            structured_output_mode=prequalification_output_mode,
+            context_package=context_package,
+        ):
             if self.reasoning is not None:
                 raise OpenRouterQualificationError(
                     "real post-qualification certification rejects legacy global reasoning"
@@ -4825,6 +5310,12 @@ class OpenRouterClient:
                 preflight_binding = self._require_real_postqualification_routing(
                     role=role,
                     model=model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    response_model=response_model,
+                    schema_name=schema_name,
+                    structured_output_mode=self._selected_structured_output_mode(model),
+                    context_package=context_package,
                     checked_at=checked_at,
                     require_runtime_snapshots=False,
                 )
@@ -4832,6 +5323,12 @@ class OpenRouterClient:
                     self._require_real_postqualification_reasoning_plan(
                         role=role,
                         model=model,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        response_model=response_model,
+                        schema_name=schema_name,
+                        structured_output_mode=self._selected_structured_output_mode(model),
+                        context_package=context_package,
                         qualification_binding=preflight_binding,
                     )
                 )
@@ -4879,7 +5376,8 @@ class OpenRouterClient:
                     "real provider completion requires frozen model identity metadata"
                 )
         qualification_bindings: dict[str, OpenRouterQualificationRoutingEvidence | None] = {}
-        for model in models:
+        audit_routing_bindings: dict[str, AuditModelRoutingEvidence | None] = {}
+        for model_index, model in enumerate(models):
             binding = self._qualification_routing.get(model)
             if (
                 self.provider_policy.certification
@@ -4910,6 +5408,76 @@ class OpenRouterClient:
                     ),
                 )
             qualification_bindings[model] = binding
+            try:
+                audit_routing_bindings[model] = (
+                    _TRUSTED_REQUIRE_REAL_AUDIT_MODEL_SELECTION(
+                        self,
+                        role=role,
+                        model=model,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        response_model=response_model,
+                        schema_name=schema_name,
+                        structured_output_mode=self._selected_structured_output_mode(model),
+                        context_package=context_package,
+                        checked_at=checked_at,
+                        qualification_binding=binding,
+                        provider_policy=(
+                            binding.request_provider_policy()
+                            if binding is not None and self.provider_policy.certification
+                            else self.provider_policy
+                        ),
+                    )
+                    if _TRUSTED_REQUIRES_REAL_AUDIT_POLICY_SELECTION(
+                        self,
+                        role,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        response_model=response_model,
+                        schema_name=schema_name,
+                        structured_output_mode=self._selected_structured_output_mode(model),
+                        context_package=context_package,
+                    )
+                    else None
+                )
+            except OpenRouterPolicyEligibilityError as exc:
+                diagnostic_provider_policy = (
+                    binding.request_provider_policy()
+                    if binding is not None and self.provider_policy.certification
+                    else self.provider_policy
+                )
+                planning_snapshot = self._diagnostic_planning_snapshot(
+                    request_id=request_ids[model_index],
+                    role=role,
+                    model=model,
+                    reason=ContextPreflightReason.ROUTE_UNAVAILABLE,
+                    provider_policy=diagnostic_provider_policy,
+                    structured_output_plan=None,
+                    original_system_prompt=system_prompt,
+                    response_model=response_model,
+                    schema_name=schema_name,
+                    context_package=context_package,
+                )
+                self._record_context_preflight(
+                    request_id=request_ids[model_index],
+                    logical_request_id=request_ids[model_index],
+                    role=role,
+                    model=model,
+                    requested_completion_tokens=(
+                        self._required_output_tokens()
+                        + self._reserved_reasoning_tokens(
+                            self._required_output_tokens(),
+                            role=role,
+                        )
+                    ),
+                    request_plan=None,
+                    planning_snapshot=planning_snapshot,
+                    decision_source=ContextPreflightSource.TOKEN_PLANNER,
+                    reason=ContextPreflightReason.ROUTE_UNAVAILABLE,
+                    error=exc,
+                    decision_evidence_sha256s=(self._audit_policy_decision_evidence_sha256s(None)),
+                )
+                raise
         self._claim_request_ids(request_ids)
         last_error: OpenRouterError | None = None
         for index, model in enumerate(models):
@@ -4925,6 +5493,7 @@ class OpenRouterClient:
                     schema_name=schema_name,
                     fallback_used=index > 0,
                     qualification_binding=qualification_bindings[model],
+                    audit_routing_evidence=audit_routing_bindings[model],
                     qualification_bound_reasoning_plan=(
                         qualification_bound_reasoning_plans.get(model)
                     ),
@@ -5147,6 +5716,7 @@ class OpenRouterClient:
         schema_name: str,
         fallback_used: bool,
         qualification_binding: OpenRouterQualificationRoutingEvidence | None,
+        audit_routing_evidence: AuditModelRoutingEvidence | None = None,
         qualification_bound_reasoning_plan: ReasoningRequestPlanEvidence | None = None,
     ) -> StructuredCompletion[ResponseT]:
         request_id = _request_ids_for_routes(
@@ -5161,13 +5731,30 @@ class OpenRouterClient:
         )
         response_schema_generation = _pydantic_schema_generation(response_model)
         request_provider_policy = _canonical_provider_policy(self.provider_policy)
+        endpoint_policy = self._endpoint_pricing.get(model)
+        structured_output_mode = self._selected_structured_output_mode(model)
         structured_output_plan: _StructuredOutputRequestPlan | None = None
         reasoning_plan: ReasoningRequestPlanEvidence | None = None
         try:
-            if self._is_real_postqualification_certification(role):
+            if _TRUSTED_REQUIRES_REAL_AUDIT_POLICY_SELECTION(
+                self,
+                role,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                structured_output_mode=structured_output_mode,
+                context_package=context_package,
+            ):
                 current_qualification_binding = self._require_real_postqualification_routing(
                     role=role,
                     model=model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    response_model=response_model,
+                    schema_name=schema_name,
+                    structured_output_mode=structured_output_mode,
+                    context_package=context_package,
                     checked_at=datetime.now(UTC),
                     require_runtime_snapshots=True,
                 )
@@ -5178,6 +5765,12 @@ class OpenRouterClient:
                 current_reasoning_plan = self._require_real_postqualification_reasoning_plan(
                     role=role,
                     model=model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    response_model=response_model,
+                    schema_name=schema_name,
+                    structured_output_mode=structured_output_mode,
+                    context_package=context_package,
                     qualification_binding=current_qualification_binding,
                 )
                 if qualification_bound_reasoning_plan != current_reasoning_plan:
@@ -5201,17 +5794,43 @@ class OpenRouterClient:
                 else self.provider_policy
             )
             request_provider_policy = _canonical_provider_policy(request_provider_policy)
+            if _TRUSTED_REQUIRES_REAL_AUDIT_POLICY_SELECTION(
+                self,
+                role,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                structured_output_mode=structured_output_mode,
+                context_package=context_package,
+            ):
+                current_audit_routing_evidence = _TRUSTED_REQUIRE_REAL_AUDIT_MODEL_SELECTION(
+                    self,
+                    role=role,
+                    model=model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    response_model=response_model,
+                    schema_name=schema_name,
+                    structured_output_mode=structured_output_mode,
+                    context_package=context_package,
+                    checked_at=datetime.now(UTC),
+                    qualification_binding=qualification_binding,
+                    provider_policy=request_provider_policy,
+                )
+                if audit_routing_evidence != current_audit_routing_evidence:
+                    raise OpenRouterPolicyEligibilityError(
+                        "sealed audit model selection changed before request planning"
+                    )
+            elif audit_routing_evidence is not None:
+                raise OpenRouterPolicyEligibilityError(
+                    "audit model routing evidence is invalid outside a paid audit request"
+                )
             if self._requires_paid_controls:
                 self._validate_paid_privacy_policy(
                     (model,),
                     request_provider_endpoints=request_provider_policy.configured_endpoints,
                 )
-            endpoint_policy = self._endpoint_pricing.get(model)
-            structured_output_mode = (
-                endpoint_policy.structured_output_mode
-                if endpoint_policy is not None
-                else StructuredOutputMode.NATIVE_JSON_SCHEMA
-            )
             structured_output_plan = _structured_output_request_plan(
                 mode=structured_output_mode,
                 system_prompt=system_prompt,
@@ -5250,6 +5869,11 @@ class OpenRouterClient:
                 decision_source=ContextPreflightSource.TOKEN_PLANNER,
                 reason=reason,
                 error=exc,
+                decision_evidence_sha256s=(
+                    self._audit_policy_decision_evidence_sha256s(
+                        audit_routing_evidence,
+                    )
+                ),
             )
             raise
         prompt_hash = _structured_output_prompt_sha256_from_plan(structured_output_plan)
@@ -5387,6 +6011,17 @@ class OpenRouterClient:
             )
         if qualification_binding is not None:
             request_metadata.update(qualification_binding.request_metadata())
+        if audit_routing_evidence is not None:
+            request_metadata.update(
+                {
+                    f"mmaudit_policy_{key}": value
+                    for key, value in audit_routing_evidence.request_metadata().items()
+                }
+            )
+            assert self._audit_model_selection is not None
+            request_metadata["mmaudit_policy_selection_capability_sha256"] = (
+                self._audit_model_selection.capability_sha256
+            )
         try:
             body = self.build_request(
                 model=model,
@@ -5394,6 +6029,7 @@ class OpenRouterClient:
                 user_prompt=user_prompt,
                 response_model=response_model,
                 schema_name=schema_name,
+                context_package=context_package,
                 request_metadata=request_metadata,
                 provider_policy=request_provider_policy,
                 structured_output_mode=structured_output_mode,
@@ -5443,6 +6079,7 @@ class OpenRouterClient:
         accounted_cost_usd_exact = Decimal(0)
         active_reservation: Reservation | None = None
         attempt_reservations: list[Reservation] = []
+        last_dispatched_audit_routing_evidence: AuditModelRoutingEvidence | None = None
         active_network_attempted = False
         active_actual_cost: Decimal | None = None
         active_actual_prompt_tokens: int | None = None
@@ -5506,6 +6143,36 @@ class OpenRouterClient:
                 next_attempt = attempts + 1
                 reservation_id = _attempt_request_id(request_id, next_attempt)
                 try:
+                    if _TRUSTED_REQUIRES_REAL_AUDIT_POLICY_SELECTION(
+                        self,
+                        role,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        response_model=response_model,
+                        schema_name=schema_name,
+                        structured_output_mode=structured_output_mode,
+                        context_package=context_package,
+                    ):
+                        current_audit_routing_evidence = (
+                            _TRUSTED_REQUIRE_REAL_AUDIT_MODEL_SELECTION(
+                                self,
+                                role=role,
+                                model=model,
+                                system_prompt=system_prompt,
+                                user_prompt=user_prompt,
+                                response_model=response_model,
+                                schema_name=schema_name,
+                                structured_output_mode=structured_output_mode,
+                                context_package=context_package,
+                                checked_at=datetime.now(UTC),
+                                qualification_binding=qualification_binding,
+                                provider_policy=request_provider_policy,
+                            )
+                        )
+                        if current_audit_routing_evidence != audit_routing_evidence:
+                            raise OpenRouterPolicyEligibilityError(
+                                "sealed audit model selection changed before budget reservation"
+                            )
                     active_reservation = await self.budget.reserve(
                         reservation_id,
                         role,
@@ -5527,13 +6194,26 @@ class OpenRouterClient:
                         model=model,
                         requested_completion_tokens=requested_completion_tokens,
                         request_plan=request_token_plan,
-                        decision_source=ContextPreflightSource.BUDGET_MANAGER,
+                        decision_source=(
+                            ContextPreflightSource.TOKEN_PLANNER
+                            if isinstance(exc, OpenRouterPolicyEligibilityError)
+                            else ContextPreflightSource.BUDGET_MANAGER
+                        ),
                         reason=(
                             self._budget_preflight_reason(request_token_plan)
                             if isinstance(exc, BudgetExhaustedError)
-                            else ContextPreflightReason.CONTEXT_PLAN_INVALID
+                            else (
+                                ContextPreflightReason.ROUTE_UNAVAILABLE
+                                if isinstance(exc, OpenRouterPolicyEligibilityError)
+                                else ContextPreflightReason.CONTEXT_PLAN_INVALID
+                            )
                         ),
                         error=exc,
+                        decision_evidence_sha256s=(
+                            (audit_routing_evidence.routing_evidence_sha256,)
+                            if audit_routing_evidence is not None
+                            else ()
+                        ),
                     )
                     raise
                 active_network_attempted = False
@@ -5591,6 +6271,70 @@ class OpenRouterClient:
                         response_model,
                         phase="before provider transport",
                     )
+                    if _TRUSTED_REQUIRES_REAL_AUDIT_POLICY_SELECTION(
+                        self,
+                        role,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        response_model=response_model,
+                        schema_name=schema_name,
+                        structured_output_mode=structured_output_mode,
+                        context_package=context_package,
+                    ):
+                        try:
+                            current_audit_routing_evidence = (
+                                _TRUSTED_REQUIRE_REAL_AUDIT_MODEL_SELECTION(
+                                    self,
+                                    role=role,
+                                    model=model,
+                                    system_prompt=system_prompt,
+                                    user_prompt=user_prompt,
+                                    response_model=response_model,
+                                    schema_name=schema_name,
+                                    structured_output_mode=structured_output_mode,
+                                    context_package=context_package,
+                                    checked_at=datetime.now(UTC),
+                                    qualification_binding=qualification_binding,
+                                    provider_policy=request_provider_policy,
+                                )
+                            )
+                            if current_audit_routing_evidence != audit_routing_evidence:
+                                raise OpenRouterPolicyEligibilityError(
+                                    "sealed audit model selection changed before provider transport"
+                                )
+                        except OpenRouterPolicyEligibilityError as exc:
+                            reservation_evidence = active_reservation.token_reservation_evidence
+                            self._record_context_preflight(
+                                request_id=(
+                                    request_id if attempts == 0 else f"{reservation_id}:preflight"
+                                ),
+                                logical_request_id=request_id,
+                                role=role,
+                                model=model,
+                                requested_completion_tokens=requested_completion_tokens,
+                                request_plan=request_token_plan,
+                                decision_source=ContextPreflightSource.TOKEN_PLANNER,
+                                reason=ContextPreflightReason.ROUTE_UNAVAILABLE,
+                                error=exc,
+                                decision_evidence_sha256s=tuple(
+                                    evidence_sha256
+                                    for evidence_sha256 in (
+                                        (
+                                            audit_routing_evidence.routing_evidence_sha256
+                                            if audit_routing_evidence is not None
+                                            else None
+                                        ),
+                                        (
+                                            reservation_evidence.evidence_sha256
+                                            if reservation_evidence is not None
+                                            else None
+                                        ),
+                                    )
+                                    if evidence_sha256 is not None
+                                ),
+                            )
+                            raise
+                        last_dispatched_audit_routing_evidence = current_audit_routing_evidence
                     attempt_reservations.append(active_reservation)
                     attempts = next_attempt
                     if observer is not None and attempts == 1:
@@ -5751,6 +6495,7 @@ class OpenRouterClient:
                 request_token_plan=request_token_plan,
                 token_reservations=attempt_reservations,
                 context_request_evidence=context_request_evidence,
+                audit_routing_evidence=last_dispatched_audit_routing_evidence,
             )
             reasoning_execution_evidence = (
                 ReasoningExecutionEvidence.build(
@@ -5938,6 +6683,7 @@ class OpenRouterClient:
                         request_token_plan=request_token_plan,
                         token_reservations=attempt_reservations,
                         context_request_evidence=context_request_evidence,
+                        audit_routing_evidence=last_dispatched_audit_routing_evidence,
                     ),
                     prompt_sha256=prompt_hash,
                     user_prompt_sha256=user_prompt_hash,
@@ -6299,6 +7045,7 @@ class OpenRouterClient:
             "privacy_source_classification": (
                 policy.source_classification.value if policy is not None else None
             ),
+            "privacy_source_proof_kind": policy.source_proof_kind if policy is not None else None,
             "privacy_consent_file_sha256": (
                 policy.consent_file_sha256 if policy is not None else None
             ),
@@ -6310,6 +7057,64 @@ class OpenRouterClient:
             ),
             "privacy_endpoint_policy_class": endpoint_policy_class,
         }
+
+    def _audit_model_selection_routing_evidence(
+        self,
+        binding: AuditModelRoutingEvidence | None,
+    ) -> dict[str, Any]:
+        """Project one checked audit route without treating serialized evidence as authority."""
+
+        if binding is None:
+            return {}
+        from mmaudit.models.policy_selection import AuditModelRoutingEvidence
+
+        if self._audit_model_selection is None:
+            raise OpenRouterPolicyEligibilityError(
+                "audit routing evidence lacks its live selection authority"
+            )
+        try:
+            validated = AuditModelRoutingEvidence.model_validate_json(
+                binding.model_dump_json(),
+                strict=True,
+            )
+        except (AttributeError, ValueError) as exc:
+            raise OpenRouterPolicyEligibilityError(
+                "audit routing evidence is structurally invalid"
+            ) from exc
+        if validated != binding:
+            raise OpenRouterPolicyEligibilityError(
+                "audit routing evidence changed during usage projection"
+            )
+        metadata = dict(validated.request_metadata())
+        routing_evidence_sha256 = metadata.pop("routing_evidence_sha256")
+        return {
+            **metadata,
+            "audit_policy_routing_evidence_sha256": routing_evidence_sha256,
+            "audit_selection_capability_sha256": (self._audit_model_selection.capability_sha256),
+            "audit_model_routing_evidence": validated.model_dump(mode="json"),
+        }
+
+    def _audit_policy_decision_evidence_sha256s(
+        self,
+        routing_evidence: AuditModelRoutingEvidence | None,
+    ) -> tuple[str, ...]:
+        """Return hash-only joins for a policy routing decision or refusal."""
+
+        hashes: set[str] = set()
+        if self._audit_model_selection is not None:
+            hashes.add(self._audit_model_selection.capability_sha256)
+        if self._audit_policy_binding is not None:
+            hashes.update(
+                {
+                    self._audit_policy_binding.audit_context.audit_scope_sha256,
+                    self._audit_policy_binding.audit_context.source_sha256,
+                    self._audit_policy_binding.audit_context.context_sha256,
+                    self._audit_policy_binding.client_constraints.constraints_sha256,
+                }
+            )
+        if routing_evidence is not None:
+            hashes.add(routing_evidence.routing_evidence_sha256)
+        return tuple(sorted(hashes))
 
     def _routing_evidence(
         self,
@@ -6334,6 +7139,7 @@ class OpenRouterClient:
         request_token_plan: RequestTokenPlan,
         token_reservations: Sequence[Reservation],
         context_request_evidence: ContextRequestEvidence | None,
+        audit_routing_evidence: AuditModelRoutingEvidence | None,
         repair_request: bool = False,
     ) -> dict[str, Any]:
         usage = envelope.usage
@@ -6411,6 +7217,16 @@ class OpenRouterClient:
             raise OpenRouterResponseIdentityError(
                 "provider response differs from the qualification provider binding",
                 diagnostic_code="qualification_provider_mismatch",
+                validation_status=ModelRequestValidationStatus.PROVIDER_MISMATCH,
+            )
+        if audit_routing_evidence is not None and (
+            audit_routing_evidence.route.exact_model_id != envelope.requested_model
+            or audit_routing_evidence.route.provider_endpoint != envelope.selected_provider
+            or audit_routing_evidence.route.provider_name != envelope.selected_provider_name
+        ):
+            raise OpenRouterResponseIdentityError(
+                "provider response differs from the policy-eligible audit route",
+                diagnostic_code="policy_eligible_route_mismatch",
                 validation_status=ModelRequestValidationStatus.PROVIDER_MISMATCH,
             )
         evidence: dict[str, Any] = {
@@ -6560,6 +7376,7 @@ class OpenRouterClient:
         )
         if qualification_binding is not None:
             evidence.update(qualification_binding.routing_evidence())
+        evidence.update(self._audit_model_selection_routing_evidence(audit_routing_evidence))
         return evidence
 
     def _failure_routing_evidence(
@@ -6583,6 +7400,7 @@ class OpenRouterClient:
         request_token_plan: RequestTokenPlan,
         token_reservations: Sequence[Reservation],
         context_request_evidence: ContextRequestEvidence | None,
+        audit_routing_evidence: AuditModelRoutingEvidence | None,
     ) -> dict[str, Any]:
         router_metadata = payload.get("openrouter_metadata") if isinstance(payload, dict) else None
         finish_reason = _optional_finish_reason(payload)
@@ -6683,6 +7501,7 @@ class OpenRouterClient:
             )
         if qualification_binding is not None:
             evidence.update(qualification_binding.routing_evidence())
+        evidence.update(self._audit_model_selection_routing_evidence(audit_routing_evidence))
         return evidence
 
     async def _backoff(self, attempt: int, retry_after: str | None) -> None:
@@ -6924,6 +7743,12 @@ _TRUSTED_FETCH_GENERATION_ATTESTATIONS = (
 _TRUSTED_REQUEST_METADATA = OpenRouterClient._request_metadata
 _TRUSTED_BOUNDED_REQUEST = OpenRouterClient._bounded_request
 _TRUSTED_VALIDATE_TRANSPORT_PROVENANCE = OpenRouterClient._validate_transport_provenance
+_TRUSTED_REQUIRES_REAL_AUDIT_POLICY_SELECTION = (
+    OpenRouterClient._requires_real_audit_policy_selection
+)
+_TRUSTED_IS_TRUSTED_PREQUALIFICATION_REQUEST = OpenRouterClient._is_trusted_prequalification_request
+_TRUSTED_REQUIRE_REAL_AUDIT_MODEL_SELECTION = OpenRouterClient._require_real_audit_model_selection
+_TRUSTED_REQUIRE_AUDIT_POLICY_BINDING = OpenRouterClient.require_audit_policy_binding
 
 
 def _openrouter_client_callables_are_pristine() -> bool:
@@ -6946,6 +7771,19 @@ def _openrouter_client_callables_are_pristine() -> bool:
         )
         and OpenRouterClient._request_metadata is _TRUSTED_REQUEST_METADATA
         and OpenRouterClient._bounded_request is _TRUSTED_BOUNDED_REQUEST
+        and (
+            OpenRouterClient._requires_real_audit_policy_selection
+            is _TRUSTED_REQUIRES_REAL_AUDIT_POLICY_SELECTION
+        )
+        and (
+            OpenRouterClient._is_trusted_prequalification_request
+            is _TRUSTED_IS_TRUSTED_PREQUALIFICATION_REQUEST
+        )
+        and (
+            OpenRouterClient._require_real_audit_model_selection
+            is _TRUSTED_REQUIRE_REAL_AUDIT_MODEL_SELECTION
+        )
+        and (OpenRouterClient.require_audit_policy_binding is _TRUSTED_REQUIRE_AUDIT_POLICY_BINDING)
         and (
             OpenRouterClient._validate_transport_provenance
             is _TRUSTED_VALIDATE_TRANSPORT_PROVENANCE

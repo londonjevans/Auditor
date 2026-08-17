@@ -122,6 +122,7 @@ def _bundle(
     model_ids: tuple[str, ...] = ("alpha/atlas",),
     *,
     canonical_slugs: dict[str, str] | None = None,
+    approved_roles: tuple[str, ...] = (),
 ) -> _Bundle:
     canonical_slugs = canonical_slugs or {}
     catalogs = tuple(
@@ -208,7 +209,8 @@ def _bundle(
         artifacts=artifacts,
     )
     candidates = tuple(
-        _pending_candidate(item) for item in sorted(evidence, key=lambda item: item.exact_model_id)
+        _pending_candidate(item, approved_roles=approved_roles)
+        for item in sorted(evidence, key=lambda item: item.exact_model_id)
     )
     registry = seal_candidate_registry(
         created_at=DISCOVERED_AT,
@@ -256,7 +258,11 @@ def _bundle(
     )
 
 
-def _pending_candidate(evidence: OpenRouterModelDiscoveryEvidence) -> CandidateModel:
+def _pending_candidate(
+    evidence: OpenRouterModelDiscoveryEvidence,
+    *,
+    approved_roles: tuple[str, ...] = (),
+) -> CandidateModel:
     endpoint = evidence.endpoint_snapshot.endpoint(evidence.approved_provider_endpoint)
     review = seal_operator_lineage_review(
         status=LineageReviewStatus.PENDING,
@@ -295,6 +301,7 @@ def _pending_candidate(evidence: OpenRouterModelDiscoveryEvidence) -> CandidateM
         ),
         operational_status=CandidateOperationalStatus.AVAILABLE,
         benchmark_status=CandidateBenchmarkStatus.PENDING,
+        approved_roles=approved_roles,
     )
 
 

@@ -19,6 +19,238 @@
       "title": "SchedulerActivationStatus",
       "type": "string"
     },
+    "SchedulerAuditModelSelectionBinding": {
+      "additionalProperties": false,
+      "description": "Hash-only campaign join to one durable audit policy-selection bundle.\n\nThis record is comparison evidence, not runtime authority. The live opaque\nselection capability is deliberately absent.",
+      "properties": {
+        "audit_context_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Context Sha256",
+          "type": "string"
+        },
+        "audit_model_selection_bundle_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Model Selection Bundle Sha256",
+          "type": "string"
+        },
+        "audit_scope_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Scope Sha256",
+          "type": "string"
+        },
+        "audit_selection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Selection Sha256",
+          "type": "string"
+        },
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "client_constraints_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Client Constraints Sha256",
+          "type": "string"
+        },
+        "eligible_route_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Eligible Route Set Sha256",
+          "type": "string"
+        },
+        "evidence_authority": {
+          "const": "comparison_required",
+          "default": "comparison_required",
+          "title": "Evidence Authority",
+          "type": "string"
+        },
+        "intended_use": {
+          "const": "PAID_CUSTOMER_FACING_DEFENSIVE_SOURCE_AUDIT",
+          "default": "PAID_CUSTOMER_FACING_DEFENSIVE_SOURCE_AUDIT",
+          "title": "Intended Use",
+          "type": "string"
+        },
+        "policy_artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Artifact Sha256",
+          "type": "string"
+        },
+        "policy_authority_envelope_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Authority Envelope Sha256",
+          "type": "string"
+        },
+        "policy_authority_receipt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Authority Receipt Sha256",
+          "type": "string"
+        },
+        "policy_authority_statement_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Authority Statement Sha256",
+          "type": "string"
+        },
+        "policy_authority_trust_anchor_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Authority Trust Anchor Sha256",
+          "type": "string"
+        },
+        "policy_evaluation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Evaluation Sha256",
+          "type": "string"
+        },
+        "policy_exclusion_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Exclusion Set Sha256",
+          "type": "string"
+        },
+        "policy_source_commitment_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Source Commitment Set Sha256",
+          "type": "string"
+        },
+        "policy_source_observation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Source Observation Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "selected_model_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "title": "Selected Model Ids",
+          "type": "array"
+        },
+        "selected_model_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Selected Model Set Sha256",
+          "type": "string"
+        },
+        "selected_routes": {
+          "items": {
+            "$ref": "#/$defs/SchedulerAuditSelectedRouteBinding"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "title": "Selected Routes",
+          "type": "array"
+        },
+        "selection_expires_at": {
+          "format": "date-time",
+          "title": "Selection Expires At",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "technical_production_selection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Technical Production Selection Sha256",
+          "type": "string"
+        },
+        "technical_qualification_capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Technical Qualification Capability Sha256",
+          "type": "string"
+        },
+        "technical_route_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Technical Route Set Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "audit_model_selection_bundle_sha256",
+        "audit_selection_sha256",
+        "selected_model_set_sha256",
+        "selected_model_ids",
+        "selected_routes",
+        "audit_scope_sha256",
+        "source_sha256",
+        "audit_context_sha256",
+        "client_constraints_sha256",
+        "technical_route_set_sha256",
+        "eligible_route_set_sha256",
+        "policy_exclusion_set_sha256",
+        "technical_production_selection_sha256",
+        "technical_qualification_capability_sha256",
+        "policy_artifact_sha256",
+        "policy_evaluation_sha256",
+        "policy_authority_receipt_sha256",
+        "policy_authority_statement_sha256",
+        "policy_authority_envelope_sha256",
+        "policy_authority_trust_anchor_sha256",
+        "policy_source_observation_sha256",
+        "policy_source_commitment_set_sha256",
+        "selection_expires_at",
+        "binding_sha256"
+      ],
+      "title": "SchedulerAuditModelSelectionBinding",
+      "type": "object"
+    },
+    "SchedulerAuditSelectedRouteBinding": {
+      "additionalProperties": false,
+      "description": "Minimal non-authorizing identity for one policy-selected audit route.",
+      "properties": {
+        "exact_model_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "policy_route_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Route Sha256",
+          "type": "string"
+        },
+        "provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$",
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "provider_name": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:/()&+-]{0,199}$",
+          "title": "Provider Name",
+          "type": "string"
+        },
+        "root_lineage": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Root Lineage",
+          "type": "string"
+        },
+        "route_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Route Binding Sha256",
+          "type": "string"
+        },
+        "selected_model_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Selected Model Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "root_lineage",
+        "provider_name",
+        "provider_endpoint",
+        "policy_route_sha256",
+        "selected_model_sha256",
+        "route_binding_sha256"
+      ],
+      "title": "SchedulerAuditSelectedRouteBinding",
+      "type": "object"
+    },
     "SchedulerBindings": {
       "additionalProperties": false,
       "description": "Immutable hash-only inputs that define one scheduler campaign.",
@@ -33,6 +265,17 @@
           "pattern": "^[0-9a-f]{64}$",
           "title": "Analysis Input Sha256",
           "type": "string"
+        },
+        "audit_model_selection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SchedulerAuditModelSelectionBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "bindings_sha256": {
           "pattern": "^[0-9a-f]{64}$",
@@ -929,6 +1172,110 @@
           ],
           "default": null,
           "title": "Actual Input Sha256"
+        },
+        "audit_model_selection_bundle_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Model Selection Bundle Sha256"
+        },
+        "audit_policy_routing_evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Policy Routing Evidence Sha256"
+        },
+        "audit_policy_selection_binding_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Policy Selection Binding Sha256"
+        },
+        "audit_scope_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Scope Sha256"
+        },
+        "audit_selected_model_set_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Selected Model Set Sha256"
+        },
+        "audit_selection_expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Selection Expires At"
+        },
+        "audit_selection_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Selection Sha256"
+        },
+        "audit_source_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Source Sha256"
         },
         "campaign_id": {
           "pattern": "^scheduler-campaign-[0-9a-f]{64}$",
@@ -2008,6 +2355,110 @@
           ],
           "default": null,
           "title": "Activation Sha256"
+        },
+        "audit_model_selection_bundle_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Model Selection Bundle Sha256"
+        },
+        "audit_policy_routing_evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Policy Routing Evidence Sha256"
+        },
+        "audit_policy_selection_binding_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Policy Selection Binding Sha256"
+        },
+        "audit_scope_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Scope Sha256"
+        },
+        "audit_selected_model_set_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Selected Model Set Sha256"
+        },
+        "audit_selection_expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Selection Expires At"
+        },
+        "audit_selection_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Selection Sha256"
+        },
+        "audit_source_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Source Sha256"
         },
         "campaign_id": {
           "pattern": "^scheduler-campaign-[0-9a-f]{64}$",

@@ -6,6 +6,7 @@ module converts actual engine results into explicit, machine-readable clauses.
 
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter
 from collections.abc import Iterable
@@ -25,6 +26,11 @@ from mmaudit.constants import (
     SPECIALIST_AUXILIARY_ROLES,
     SPECIALIST_INVESTIGATOR_ROLES,
 )
+from mmaudit.models.policy_selection import (
+    AuditModelRoutingEvidence,
+    AuditModelSelectionEvidenceBundle,
+    VerifiedAuditModelSelection,
+)
 from mmaudit.models.qualification import (
     VerifiedProductionQualification,
     VerifiedTierAModelQualification,
@@ -36,6 +42,7 @@ from mmaudit.models.reasoning import (
 )
 from mmaudit.models.scheduler import (
     SchedulerArtifact,
+    SchedulerAuditModelSelectionBinding,
     SchedulerBindings,
     SchedulerCampaignStatus,
     SchedulerCostLedgerBaseline,
@@ -96,6 +103,7 @@ from mmaudit.models.usage import (
     candidate_falsifier_role_prefix,
     is_creditable_usage_record,
     source_backed_whole_protocol_context,
+    usage_requires_audit_policy_evidence,
 )
 from mmaudit.orchestration.replay import (
     OfflineReplay,
@@ -250,6 +258,8 @@ class AssuranceRuntime:
     model_usage: list[UsageRecord] = field(default_factory=list)
     provider_session: ProviderSessionProvenance | None = None
     production_qualification: VerifiedProductionQualification | None = None
+    audit_model_selection_evidence: AuditModelSelectionEvidenceBundle | None = None
+    verified_audit_model_selection: VerifiedAuditModelSelection | None = None
     language_capability: LanguageCapabilityAssessment | None = None
     scope_assessment: AuditScopeAssessment | None = None
     benchmark_verification: BenchmarkCertificateVerification | None = None
@@ -269,9 +279,201 @@ class AssuranceRuntime:
     expected_scheduler_cost_ledger_baseline: SchedulerCostLedgerBaseline | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _CurrentAuditModelSelection:
+    """Independently revalidated policy selection used only for assurance comparison."""
+
+    evidence_bundle: AuditModelSelectionEvidenceBundle
+    capability: VerifiedAuditModelSelection
+    binding: SchedulerAuditModelSelectionBinding
+    selected_model_ids: frozenset[str]
+
+
+def _routing_evidence_matches_audit_selection(
+    evidence: AuditModelRoutingEvidence,
+    binding: SchedulerAuditModelSelectionBinding,
+) -> bool:
+    try:
+        route = binding.route_for(evidence.route.exact_model_id)
+    except ValueError:
+        return False
+    return (
+        evidence.audit_model_selection_bundle_sha256 == binding.audit_model_selection_bundle_sha256
+        and evidence.audit_selection_sha256 == binding.audit_selection_sha256
+        and evidence.selected_model_set_sha256 == binding.selected_model_set_sha256
+        and evidence.audit_scope_sha256 == binding.audit_scope_sha256
+        and evidence.source_sha256 == binding.source_sha256
+        and evidence.audit_context_sha256 == binding.audit_context_sha256
+        and evidence.client_constraints_sha256 == binding.client_constraints_sha256
+        and evidence.intended_use.value == binding.intended_use
+        and evidence.technical_production_selection_sha256
+        == binding.technical_production_selection_sha256
+        and evidence.technical_qualification_capability_sha256
+        == binding.technical_qualification_capability_sha256
+        and evidence.policy_artifact_sha256 == binding.policy_artifact_sha256
+        and evidence.policy_evaluation_sha256 == binding.policy_evaluation_sha256
+        and evidence.policy_authority_receipt_sha256 == binding.policy_authority_receipt_sha256
+        and evidence.policy_authority_statement_sha256 == binding.policy_authority_statement_sha256
+        and evidence.policy_authority_envelope_sha256 == binding.policy_authority_envelope_sha256
+        and evidence.policy_authority_trust_anchor_sha256
+        == binding.policy_authority_trust_anchor_sha256
+        and evidence.policy_source_observation_sha256 == binding.policy_source_observation_sha256
+        and evidence.policy_source_commitment_set_sha256
+        == binding.policy_source_commitment_set_sha256
+        and evidence.expires_at == binding.selection_expires_at
+        and evidence.route.provider_name == route.provider_name
+        and evidence.route.provider_endpoint == route.provider_endpoint
+        and evidence.route.route_sha256 == route.policy_route_sha256
+        and evidence.selected_model_sha256 == route.selected_model_sha256
+    )
+
+
+def _current_audit_model_selection(
+    evidence_bundle: AuditModelSelectionEvidenceBundle | None,
+    capability: VerifiedAuditModelSelection | None,
+    technical_qualification: VerifiedProductionQualification | None,
+) -> _CurrentAuditModelSelection | None:
+    """Return a current opaque authority joined to the exact durable policy bundle."""
+
+    if (
+        type(evidence_bundle) is not AuditModelSelectionEvidenceBundle
+        or type(capability) is not VerifiedAuditModelSelection
+        or type(technical_qualification) is not VerifiedProductionQualification
+    ):
+        return None
+    try:
+        bundle = AuditModelSelectionEvidenceBundle.model_validate_json(
+            evidence_bundle.model_dump_json(),
+            strict=True,
+        )
+        selection = bundle.selection
+        now = datetime.now(UTC).replace(microsecond=0)
+        technical_qualification.require_current(now=now)
+        if (
+            selection.technical_qualification_capability_sha256
+            != technical_qualification.capability_sha256
+            or selection.technical_qualification_artifact_sha256
+            != technical_qualification.artifact_sha256
+            or selection.technical_qualification_verification_sha256
+            != technical_qualification.qualification_verification_sha256
+            or selection.technical_production_selection_sha256
+            != technical_qualification.production_selection_sha256
+            or selection.technical_selection_verification_sha256
+            != technical_qualification.selection_verification_sha256
+            or selection.technical_production_effective_config_sha256
+            != technical_qualification.production_effective_config_sha256
+            or selection.technical_candidate_registry_sha256
+            != technical_qualification.candidate_registry_sha256
+            or selection.technical_qualification_policy_sha256
+            != technical_qualification.policy_sha256
+            or selection.technical_release_observation_sha256
+            != technical_qualification.release_observation_sha256
+        ):
+            return None
+        capability.require_current(
+            now=now,
+            expected_audit_scope_sha256=selection.audit_scope_sha256,
+            expected_source_sha256=selection.source_sha256,
+            expected_audit_context_sha256=selection.audit_context_sha256,
+            expected_client_constraints_sha256=selection.client_constraints_sha256,
+        )
+        binding = SchedulerAuditModelSelectionBinding.from_evidence_bundle(bundle)
+        selected_ids = frozenset(selection.selected_model_ids)
+        if (
+            selected_ids != frozenset(model.exact_model_id for model in capability.models)
+            or selected_ids != frozenset(binding.selected_model_ids)
+            or selection.expires_at <= now
+        ):
+            return None
+        capability_by_id = {model.exact_model_id: model for model in capability.models}
+        if any(
+            capability_by_id[model.exact_model_id].root_lineage != model.root_lineage
+            or capability_by_id[model.exact_model_id].approved_provider_name
+            != model.approved_provider_name
+            or capability_by_id[model.exact_model_id].approved_provider_endpoint
+            != model.approved_provider_endpoint
+            for model in selection.models
+        ):
+            return None
+        routing = capability.routing_evidence(
+            binding.selected_model_ids[0],
+            now=now,
+            expected_audit_scope_sha256=selection.audit_scope_sha256,
+            expected_source_sha256=selection.source_sha256,
+            expected_audit_context_sha256=selection.audit_context_sha256,
+            expected_client_constraints_sha256=selection.client_constraints_sha256,
+        )
+        if not _routing_evidence_matches_audit_selection(routing, binding):
+            return None
+    except (TypeError, ValueError):
+        return None
+    return _CurrentAuditModelSelection(
+        evidence_bundle=bundle,
+        capability=capability,
+        binding=binding,
+        selected_model_ids=selected_ids,
+    )
+
+
+def _usage_audit_routing_evidence(record: UsageRecord) -> AuditModelRoutingEvidence | None:
+    raw = record.routing.get("audit_model_routing_evidence")
+    if not isinstance(raw, dict):
+        return None
+    try:
+        evidence = AuditModelRoutingEvidence.model_validate_json(
+            json.dumps(
+                raw,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ),
+            strict=True,
+        )
+    except (TypeError, ValueError):
+        return None
+    if evidence.model_dump(mode="json") != raw:
+        return None
+    metadata = dict(evidence.request_metadata())
+    routing_sha256 = metadata.pop("routing_evidence_sha256")
+    if record.routing.get("audit_policy_routing_evidence_sha256") != routing_sha256 or any(
+        record.routing.get(key) != value for key, value in metadata.items()
+    ):
+        return None
+    return evidence
+
+
+def _usage_matches_audit_model_selection(
+    record: UsageRecord,
+    selection: _CurrentAuditModelSelection | None,
+) -> bool:
+    if selection is None or not usage_requires_audit_policy_evidence(record):
+        return False
+    evidence = _usage_audit_routing_evidence(record)
+    if evidence is None or not _routing_evidence_matches_audit_selection(
+        evidence,
+        selection.binding,
+    ):
+        return False
+    try:
+        route = selection.binding.route_for(record.requested_model)
+    except ValueError:
+        return False
+    return (
+        evidence.route.exact_model_id == record.requested_model
+        and record.provider == route.provider_name
+        and record.actual_provider_endpoint == route.provider_endpoint
+        and record.started_at is not None
+        and record.ended_at is not None
+        and record.started_at < selection.binding.selection_expires_at
+        and record.ended_at < selection.binding.selection_expires_at
+    )
+
+
 def _scheduler_assurance_errors(
     config: AuditConfig,
     runtime: AssuranceRuntime,
+    audit_selection: _CurrentAuditModelSelection | None,
 ) -> tuple[str, ...]:
     """Return fail-closed scheduler binding and real-provider evidence defects."""
 
@@ -287,6 +489,8 @@ def _scheduler_assurance_errors(
     except ValueError:
         return ("seven-pass scheduler evidence is structurally invalid",)
     errors: list[str] = []
+    if audit_selection is None:
+        errors.append("current audit policy-selected model authority was not supplied")
     if artifact.summary.status is not SchedulerCampaignStatus.COMPLETE:
         errors.append(f"seven-pass scheduler did not complete: {artifact.summary.status.value}")
     if expected_bindings is None:
@@ -310,6 +514,12 @@ def _scheduler_assurance_errors(
         errors.append("scheduler artifact bindings differ from trusted runtime bindings")
     if expected_inventory is not None and manifest.shard_inventory != expected_inventory:
         errors.append("scheduler artifact shard inventory differs from trusted runtime inventory")
+    if audit_selection is not None and (
+        manifest.bindings.audit_model_selection != audit_selection.binding
+        or expected_bindings is None
+        or expected_bindings.audit_model_selection != audit_selection.binding
+    ):
+        errors.append("scheduler audit-selection binding differs from current policy authority")
     if manifest.cost_ledger_baseline != expected_cost_baseline:
         errors.append(
             "scheduler artifact cost-ledger baseline differs from trusted runtime baseline"
@@ -333,6 +543,9 @@ def _scheduler_assurance_errors(
                 analysis_input_sha256=expected_analysis_input_sha256,
                 cost_ledger_baseline=expected_cost_baseline,
                 privacy_evidence_custody=privacy_custody,
+                audit_model_selection_evidence=(
+                    audit_selection.evidence_bundle if audit_selection is not None else None
+                ),
             )
         except ValueError:
             errors.append("trusted runtime scheduler analysis-input binding is invalid")
@@ -459,10 +672,31 @@ def _scheduler_assurance_errors(
             config,
             production_qualification,
             runtime.provider_session,
+            audit_selection,
         ):
             errors.append(
                 f"scheduler model request {request_id} lacks current qualified "
                 "certification-grade provider evidence"
+            )
+            continue
+        if audit_selection is None:
+            errors.append(f"scheduler model request {request_id} lacks audit policy authority")
+            continue
+        policy_binding = audit_selection.binding
+        if (
+            request.audit_policy_selection_binding_sha256 != policy_binding.binding_sha256
+            or request.audit_model_selection_bundle_sha256
+            != policy_binding.audit_model_selection_bundle_sha256
+            or request.audit_selection_sha256 != policy_binding.audit_selection_sha256
+            or request.audit_selected_model_set_sha256 != policy_binding.selected_model_set_sha256
+            or request.audit_scope_sha256 != policy_binding.audit_scope_sha256
+            or request.audit_source_sha256 != policy_binding.source_sha256
+            or request.audit_selection_expires_at != policy_binding.selection_expires_at
+            or request.audit_policy_routing_evidence_sha256
+            != usage.routing.get("audit_policy_routing_evidence_sha256")
+        ):
+            errors.append(
+                f"scheduler model request {request_id} differs from audit policy selection"
             )
             continue
         assert production_qualification is not None
@@ -857,6 +1091,39 @@ class MaximumAssuranceContract:
         )
         analyzed_graphs = set(runtime.graphs.analyzed_graphs) if runtime.graphs else set()
         missing_graphs = sorted(graph.value for graph in FULL_SEMANTIC_GRAPHS - analyzed_graphs)
+        omitted_graphs = sorted(
+            omission.graph.value
+            for omission in (runtime.graphs.edge_omissions if runtime.graphs else ())
+        )
+        omitted_graph_facts = sorted(
+            f"{omission.fact_kind.value}={omission.omitted_count}"
+            for omission in (runtime.graphs.fact_omissions if runtime.graphs else ())
+        )
+        graph_generation_complete = bool(
+            runtime.graphs is not None
+            and runtime.graphs.generation_complete
+            and not runtime.graphs.edge_omissions
+            and not runtime.graphs.fact_omissions
+        )
+        semantic_graphs_complete = not missing_graphs and graph_generation_complete
+        semantic_graph_failure_details = [
+            *(
+                ["missing graph transformations: " + ", ".join(missing_graphs)]
+                if missing_graphs
+                else []
+            ),
+            *(
+                ["semantic graph generation is incomplete"]
+                if runtime.graphs is not None and not runtime.graphs.generation_complete
+                else []
+            ),
+            *(["typed graph omissions: " + ", ".join(omitted_graphs)] if omitted_graphs else []),
+            *(
+                ["typed graph-fact omissions: " + ", ".join(omitted_graph_facts)]
+                if omitted_graph_facts
+                else []
+            ),
+        ]
         real_scanners = [run for run in runtime.scanners if _is_real_scanner_run(run)]
         slither_records = [run for run in runtime.scanners if run.scanner == "slither"]
         real_slither = (
@@ -1065,6 +1332,11 @@ class MaximumAssuranceContract:
         production_qualification = _current_production_qualification(
             runtime.production_qualification
         )
+        audit_selection = _current_audit_model_selection(
+            runtime.audit_model_selection_evidence,
+            runtime.verified_audit_model_selection,
+            production_qualification,
+        )
         real_provider_session = _real_provider_session_is_qualifying(runtime.provider_session)
         real_model_records = [
             record
@@ -1074,13 +1346,12 @@ class MaximumAssuranceContract:
                 self.config,
                 production_qualification,
                 runtime.provider_session,
+                audit_selection,
             )
         ]
         real_model_roles = {record.role for record in real_model_records}
         qualified_selection_model_ids = (
-            {model.exact_model_id for model in production_qualification.models}
-            if production_qualification is not None
-            else set()
+            set(audit_selection.selected_model_ids) if audit_selection is not None else set()
         )
         executed_qualified_model_ids = {record.requested_model for record in real_model_records}
         qualified_selection_execution_complete = bool(qualified_selection_model_ids) and (
@@ -1093,13 +1364,14 @@ class MaximumAssuranceContract:
             self.config,
             production_qualification,
             runtime.provider_session,
+            audit_selection,
         )
         if runtime.model_review_coverage is None:
             model_coverage_detail = "per-surface model review coverage was not produced"
         elif not model_coverage_backed_by_real_usage:
             model_coverage_detail = (
-                "model surface credits are not backed by matching "
-                "certification-grade real-provider usage"
+                "model surface credits are not backed by matching certification-grade "
+                "technical qualification and audit-policy-selected real-provider usage"
             )
         elif runtime.model_review_coverage.critical.denominator == 0:
             model_coverage_detail = (
@@ -1110,7 +1382,7 @@ class MaximumAssuranceContract:
             model_coverage_detail = (
                 f"{runtime.model_review_coverage.critical.numerator}/"
                 f"{runtime.model_review_coverage.critical.denominator} critical "
-                "surface(s) received independent certification-grade "
+                "surface(s) received independent technical-qualified, policy-selected "
                 "registered-lineage review"
             )
         qualified_candidate_falsifier_lineages = {
@@ -1242,7 +1514,11 @@ class MaximumAssuranceContract:
             completed_specialist_evidence & set(SPECIALIST_AUXILIARY_ROLES) & real_specialist_roles
         )
         missing_investigators = set(SPECIALIST_INVESTIGATOR_ROLES) - completed_specialists
-        scheduler_errors = _scheduler_assurance_errors(self.config, runtime)
+        scheduler_errors = _scheduler_assurance_errors(
+            self.config,
+            runtime,
+            audit_selection,
+        )
         scheduler_complete = not scheduler_errors
         language_capability_complete = (
             runtime.language_capability is not None
@@ -1388,11 +1664,11 @@ class MaximumAssuranceContract:
             ),
             _requirement(
                 "full_semantic_graphs",
-                not missing_graphs,
+                semantic_graphs_complete,
                 (
                     "all required semantic graph transformations completed"
-                    if not missing_graphs
-                    else "missing graph transformations: " + ", ".join(missing_graphs)
+                    if semantic_graphs_complete
+                    else "; ".join(semantic_graph_failure_details)
                 ),
                 artifacts=_present(runtime.artifacts, "solidity-graphs.json"),
             ),
@@ -1815,7 +2091,7 @@ class MaximumAssuranceContract:
                     f"{len(production_qualification.models)} exact Tier A model(s) across "
                     f"{len({model.root_lineage for model in production_qualification.models})} "
                     "independently reviewed root lineage(s) are bound to current real "
-                    "benchmark and all-eligible selection evidence"
+                    "technical benchmark evidence"
                     if production_qualification is not None
                     else (
                         "no current verified production qualification capability was supplied; "
@@ -1859,10 +2135,10 @@ class MaximumAssuranceContract:
                 qualified_selection_execution_complete,
                 (
                     f"{len(executed_qualified_model_ids)}/"
-                    f"{len(qualified_selection_model_ids)} exact all-eligible Tier A model(s) "
-                    "have successful certification-grade real-provider usage"
+                    f"{len(qualified_selection_model_ids)} exact audit-policy-selected "
+                    "Tier A model(s) have successful policy-bound real-provider usage"
                     if qualified_selection_model_ids
-                    else "no current all-eligible Tier A production selection was available"
+                    else "no current audit policy-selected model authority was available"
                 ),
                 state=(
                     AnalysisState.MODEL_ONLY
@@ -1873,18 +2149,19 @@ class MaximumAssuranceContract:
                         else AnalysisState.NOT_ANALYZED
                     )
                 ),
-                artifacts=_present(
-                    runtime.artifacts,
-                    "model-qualification-runtime.json",
+                artifacts=sorted(
+                    _present(runtime.artifacts, "model-qualification-runtime.json")
+                    + _present(runtime.artifacts, "audit-model-selection-evidence.json")
                 ),
             ),
             _requirement(
                 "real_model_execution",
                 bool(real_model_records),
                 (
-                    f"{len(real_model_records)} validated real-provider model request(s) completed"
+                    f"{len(real_model_records)} policy-selected real-provider model request(s) "
+                    "completed"
                     if real_model_records
-                    else "no validated real-provider model request completed"
+                    else "no audit-policy-selected real-provider model request completed"
                 ),
                 state=(
                     AnalysisState.MODEL_ONLY if real_model_records else AnalysisState.NOT_ANALYZED
@@ -2803,8 +3080,13 @@ def _is_real_model_usage(
     config: AuditConfig,
     qualification: VerifiedProductionQualification | None,
     provider_session: ProviderSessionProvenance | None,
+    audit_selection: _CurrentAuditModelSelection | None = None,
 ) -> bool:
-    if qualification is None or not _real_provider_session_is_qualifying(provider_session):
+    if (
+        qualification is None
+        or not _real_provider_session_is_qualifying(provider_session)
+        or not _usage_matches_audit_model_selection(record, audit_selection)
+    ):
         return False
     try:
         role_resolution = resolve_reasoning_request_role(record.role)
@@ -2934,6 +3216,7 @@ def _model_coverage_is_backed_by_real_usage(
     config: AuditConfig,
     qualification: VerifiedProductionQualification | None,
     provider_session: ProviderSessionProvenance | None,
+    audit_selection: _CurrentAuditModelSelection | None,
 ) -> bool:
     if coverage is None:
         return False
@@ -2976,6 +3259,7 @@ def _model_coverage_is_backed_by_real_usage(
                 config,
                 qualification,
                 provider_session,
+                audit_selection,
             ):
                 return False
 

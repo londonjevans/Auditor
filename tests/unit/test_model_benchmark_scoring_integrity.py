@@ -56,11 +56,20 @@ def _response_for(case: ModelBenchmarkGroundTruthCase) -> ModelBenchmarkResponse
         if expectation.invariant_kind is not None
         else None
     )
+    evidence_terms = " ".join(expectation.required_analysis_terms)
     verifier_evidence = (
         ModelBenchmarkVerifierEvidence(
-            claim="The authorization claim is supported by the cited source behavior.",
-            evidence="The source evidence shows an unguarded externally reachable update.",
-            reachable_path="An external caller directly reaches the unsafe state transition.",
+            claim=(
+                f"The claimed {evidence_terms} condition follows from the supplied source "
+                "transition."
+            ),
+            evidence=(
+                f"The cited lines retain concrete source evidence for {evidence_terms} behavior."
+            ),
+            reachable_path=(
+                f"An external caller reaches the {evidence_terms} transition through the "
+                "visible function."
+            ),
             locations=expectation.locations,
         )
         if expectation.expected_verifier_conclusion is not None
@@ -68,9 +77,17 @@ def _response_for(case: ModelBenchmarkGroundTruthCase) -> ModelBenchmarkResponse
     )
     falsifier_test = (
         ModelBenchmarkFalsifierTest(
-            counterhypothesis="The counterhypothesis is that missing-state prevents confirmation.",
-            test_performed="The test searched the supplied excerpt for a concrete state witness.",
-            observed_result="No decisive state-transition witness exists in the supplied evidence.",
+            counterhypothesis=(
+                f"The counterhypothesis is that {evidence_terms} cannot be confirmed from the "
+                "supplied state."
+            ),
+            test_performed=(
+                f"The test searched the supplied excerpt for a concrete {evidence_terms} state "
+                "witness."
+            ),
+            observed_result=(
+                f"No decisive {evidence_terms} transition witness exists in the supplied evidence."
+            ),
             locations=expectation.locations,
         )
         if expectation.expected_falsifier_conclusion is not None

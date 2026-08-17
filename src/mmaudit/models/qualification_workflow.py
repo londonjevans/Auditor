@@ -30,7 +30,9 @@ from mmaudit.config import ModelLineageConfig, ModelQualityMeasurementConfig
 from mmaudit.models.calibration import (
     ModelCalibrationArtifact,
     TrustedModelCalibrationVerification,
+    verify_calibrated_qualification_policy_structure,
 )
+from mmaudit.models.calibration_transition import CalibrationReleaseTransitionArtifact
 from mmaudit.models.candidate_benchmark import (
     CandidateBenchmarkRunState,
     CandidateReasoningProfileBenchmarkPlan,
@@ -43,6 +45,12 @@ from mmaudit.models.generation_evidence import (
     GenerationVerificationRequest,
     TrustedGenerationVerification,
 )
+from mmaudit.models.lineage_authority import (
+    ModelLineageAuthorityEnvelope,
+    TrustedModelLineageReviewVerification,
+)
+from mmaudit.models.lineage_review import ModelLineageReviewArtifact
+from mmaudit.models.lineage_transition import build_identity_reviewed_candidate_registry
 from mmaudit.models.openrouter import OpenRouterClient
 from mmaudit.models.qualification import (
     CandidateBenchmarkStatus,
@@ -58,9 +66,9 @@ from mmaudit.models.qualification import (
     RoleQualificationDisposition,
     RoleQualificationResult,
     TrustedBenchmarkVerificationEvidence,
+    TrustedCalibratedQualificationPolicy,
     derive_approved_roles_for_role_qualification,
     evaluate_role_qualification_results,
-    issue_trusted_calibrated_qualification_policy,
     qualification_role_class_for_declared_role,
     seal_candidate_registry,
     seal_model_qualification_artifact,
@@ -800,6 +808,83 @@ def write_qualification_workflow_bundle(
             temporary.unlink(missing_ok=True)
 
 
+def validate_calibrated_successor_qualification_inputs(
+    *,
+    candidate_registry: CandidateRegistry,
+    calibration_candidate_registry: CandidateRegistry,
+    discovery_run_manifest: OpenRouterModelDiscoveryRunManifest,
+    lineage_review_artifact: ModelLineageReviewArtifact,
+    lineage_authority_envelope: ModelLineageAuthorityEnvelope,
+    trusted_lineage_verification: TrustedModelLineageReviewVerification,
+    calibration_artifact: ModelCalibrationArtifact,
+    calibration_release_transition: CalibrationReleaseTransitionArtifact,
+    policy: QualificationPolicy,
+    benchmark_suite: ModelBenchmarkSuite,
+    release_bindings: QualificationReleaseBindings,
+    campaign_started_at: datetime,
+    observed_at: datetime,
+) -> ModelCalibrationArtifact:
+    """Validate the durable A/R0-to-R1/P2/C2 join without granting authority."""
+
+    registry = CandidateRegistry.model_validate(candidate_registry.model_dump(mode="json"))
+    manifest = OpenRouterModelDiscoveryRunManifest.model_validate(
+        discovery_run_manifest.model_dump(mode="json")
+    )
+    calibration = ModelCalibrationArtifact.model_validate(
+        calibration_artifact.model_dump(mode="json")
+    )
+    if type(calibration_release_transition) is not CalibrationReleaseTransitionArtifact:
+        raise ValueError("successor qualification requires a typed calibration transition")
+    transition = CalibrationReleaseTransitionArtifact.model_validate(
+        calibration_release_transition.model_dump(mode="json")
+    )
+    successor_policy = QualificationPolicy.model_validate(policy.model_dump(mode="json"))
+    suite = ModelBenchmarkSuite.model_validate(benchmark_suite.model_dump(mode="json"))
+    bindings = QualificationReleaseBindings.model_validate(release_bindings.model_dump(mode="json"))
+    verify_calibrated_qualification_policy_structure(
+        calibration=calibration,
+        policy=successor_policy,
+    )
+    reviewed_registry = build_identity_reviewed_candidate_registry(
+        candidate_registry=calibration_candidate_registry,
+        lineage_review_artifact=lineage_review_artifact,
+        lineage_authority_envelope=lineage_authority_envelope,
+        calibration_artifact=calibration,
+        discovery_run_manifest=manifest,
+        trusted_lineage_verification=trusted_lineage_verification,
+        campaign_started_at=campaign_started_at,
+        observed_at=observed_at,
+    )
+    if reviewed_registry != registry:
+        raise ValueError(
+            "qualification candidate registry differs from the exact R0 lineage transition"
+        )
+    if (
+        transition.predecessor_policy_sha256 != calibration.benchmark_policy_sha256
+        or transition.predecessor_effective_config_sha256 != calibration.effective_config_sha256
+        or transition.calibration_artifact_sha256 != calibration.artifact_sha256
+        or transition.successor_policy_sha256 != successor_policy.policy_sha256
+        or transition.successor_effective_config_sha256 != bindings.effective_config_sha256
+        or transition.successor_release_bindings_sha256 != bindings.bindings_sha256
+    ):
+        raise ValueError(
+            "calibration release transition differs from exact predecessor and successor inputs"
+        )
+    if (
+        calibration.discovery_manifest_sha256 != manifest.manifest_sha256
+        or calibration.candidate_set_sha256
+        != canonical_sha256([candidate.exact_model_id for candidate in registry.candidates])
+        or calibration.benchmark_corpus_version != suite.corpus.schema_version
+        or calibration.benchmark_corpus_sha256 != suite.corpus_sha256
+        or calibration.benchmark_ground_truth_version != suite.ground_truth.schema_version
+        or calibration.benchmark_ground_truth_sha256 != suite.ground_truth_sha256
+        or bindings.benchmark_corpus_version != suite.corpus.schema_version
+        or bindings.benchmark_ground_truth_version != suite.ground_truth.schema_version
+    ):
+        raise ValueError("calibration evidence differs from successor qualification inputs")
+    return calibration
+
+
 def run_qualification_workflow(
     *,
     candidate_registry: CandidateRegistry,
@@ -807,7 +892,13 @@ def run_qualification_workflow(
     discovery_evidence: tuple[OpenRouterModelDiscoveryEvidence, ...],
     policy: QualificationPolicy,
     calibration_artifact: ModelCalibrationArtifact | None = None,
+    calibration_release_transition: CalibrationReleaseTransitionArtifact | None = None,
     trusted_calibration_verification: TrustedModelCalibrationVerification | None = None,
+    calibration_candidate_registry: CandidateRegistry | None = None,
+    lineage_review_artifact: ModelLineageReviewArtifact | None = None,
+    lineage_authority_envelope: ModelLineageAuthorityEnvelope | None = None,
+    trusted_lineage_verification: TrustedModelLineageReviewVerification | None = None,
+    trusted_calibrated_policy: TrustedCalibratedQualificationPolicy | None = None,
     benchmark_suite: ModelBenchmarkSuite,
     benchmark_portfolio: ModelBenchmarkPortfolio,
     benchmark_reports: tuple[ModelBenchmarkReport, ...],
@@ -834,24 +925,66 @@ def run_qualification_workflow(
         label="qualification expiry",
     )
     policy = QualificationPolicy.model_validate(policy.model_dump(mode="json"))
-    trusted_calibrated_policy = None
-    validated_calibration: ModelCalibrationArtifact | None = None
-    if policy.schema_version == "2.0":
-        if calibration_artifact is None or trusted_calibration_verification is None:
-            raise ValueError("calibrated qualification policy requires live calibration evidence")
-        validated_calibration = ModelCalibrationArtifact.model_validate(
-            calibration_artifact.model_dump(mode="json")
-        )
-        trusted_calibrated_policy = issue_trusted_calibrated_qualification_policy(
-            policy=policy,
-            calibration=validated_calibration,
-            trusted_calibration_verification=trusted_calibration_verification,
-        )
-    elif calibration_artifact is not None or trusted_calibration_verification is not None:
-        raise ValueError("legacy qualification policy cannot consume calibration evidence")
     candidate_registry = CandidateRegistry.model_validate(
         candidate_registry.model_dump(mode="json")
     )
+    release_bindings = QualificationReleaseBindings.model_validate(
+        release_bindings.model_dump(mode="json")
+    )
+    validated_calibration: ModelCalibrationArtifact | None = None
+    validated_transition: CalibrationReleaseTransitionArtifact | None = None
+    if policy.schema_version == "2.0":
+        if (
+            calibration_artifact is None
+            or calibration_release_transition is None
+            or calibration_candidate_registry is None
+            or lineage_review_artifact is None
+            or lineage_authority_envelope is None
+            or trusted_lineage_verification is None
+            or trusted_calibrated_policy is None
+        ):
+            raise ValueError(
+                "calibrated qualification workflow requires exact predecessor calibration, "
+                "R0, lineage review, envelope, and release-pinned policy authority"
+            )
+        if trusted_calibration_verification is not None:
+            raise ValueError(
+                "calibrated qualification workflow requires release-pinned successor "
+                "authority, not live calibration authority"
+            )
+        validated_calibration = ModelCalibrationArtifact.model_validate(
+            calibration_artifact.model_dump(mode="json")
+        )
+        if type(calibration_release_transition) is not CalibrationReleaseTransitionArtifact:
+            raise ValueError("calibrated qualification workflow requires an exact transition")
+        validated_transition = CalibrationReleaseTransitionArtifact.model_validate(
+            calibration_release_transition.model_dump(mode="json")
+        )
+        verify_calibrated_qualification_policy_structure(
+            calibration=validated_calibration,
+            policy=policy,
+        )
+        trusted_calibrated_policy.require_release_pinned_for(
+            policy=policy,
+            calibration_artifact_sha256=validated_calibration.artifact_sha256,
+            release_bindings_sha256=release_bindings.bindings_sha256,
+            candidate_registry_sha256=candidate_registry.registry_sha256,
+            calibration_release_transition_sha256=validated_transition.artifact_sha256,
+        )
+    elif any(
+        value is not None
+        for value in (
+            calibration_artifact,
+            calibration_release_transition,
+            trusted_calibration_verification,
+            calibration_candidate_registry,
+            lineage_review_artifact,
+            lineage_authority_envelope,
+            trusted_lineage_verification,
+            trusted_calibrated_policy,
+        )
+    ):
+        raise ValueError("legacy qualification policy cannot consume calibration evidence")
     discovery_run_manifest = OpenRouterModelDiscoveryRunManifest.model_validate(
         discovery_run_manifest.model_dump(mode="json")
     )
@@ -863,25 +996,6 @@ def run_qualification_workflow(
     benchmark_portfolio = ModelBenchmarkPortfolio.model_validate(
         benchmark_portfolio.model_dump(mode="json")
     )
-    release_bindings = QualificationReleaseBindings.model_validate(
-        release_bindings.model_dump(mode="json")
-    )
-    if validated_calibration is not None and (
-        validated_calibration.candidate_registry_sha256 != candidate_registry.registry_sha256
-        or validated_calibration.discovery_manifest_sha256 != discovery_run_manifest.manifest_sha256
-        or validated_calibration.candidate_set_sha256
-        != canonical_sha256(
-            [candidate.exact_model_id for candidate in candidate_registry.candidates]
-        )
-        or validated_calibration.benchmark_corpus_version != benchmark_suite.corpus.schema_version
-        or validated_calibration.benchmark_corpus_sha256 != benchmark_suite.corpus_sha256
-        or validated_calibration.benchmark_ground_truth_version
-        != benchmark_suite.ground_truth.schema_version
-        or validated_calibration.benchmark_ground_truth_sha256
-        != benchmark_suite.ground_truth_sha256
-        or validated_calibration.effective_config_sha256 != release_bindings.effective_config_sha256
-    ):
-        raise ValueError("calibration evidence differs from qualification inputs")
     if type(trusted_release_observation) is not TrustedReleaseBindingObservation:
         raise ValueError("qualification requires a trusted release observation")
     trusted_release_observation.require_for(release_bindings)
@@ -891,6 +1005,31 @@ def run_qualification_workflow(
             "qualification workflow evaluation time differs from the trusted release observation"
         )
     campaign_completed_at = _portfolio_completion_anchor(benchmark_portfolio)
+    if policy.schema_version == "2.0":
+        assert validated_calibration is not None
+        assert validated_transition is not None
+        assert calibration_candidate_registry is not None
+        assert lineage_review_artifact is not None
+        assert lineage_authority_envelope is not None
+        assert trusted_lineage_verification is not None
+        campaign_started_at = benchmark_portfolio.started_at
+        if campaign_started_at is None:
+            raise ValueError("calibrated qualification campaign has no start timestamp")
+        validated_calibration = validate_calibrated_successor_qualification_inputs(
+            candidate_registry=candidate_registry,
+            calibration_candidate_registry=calibration_candidate_registry,
+            lineage_review_artifact=lineage_review_artifact,
+            lineage_authority_envelope=lineage_authority_envelope,
+            calibration_artifact=validated_calibration,
+            calibration_release_transition=validated_transition,
+            discovery_run_manifest=discovery_run_manifest,
+            trusted_lineage_verification=trusted_lineage_verification,
+            policy=policy,
+            benchmark_suite=benchmark_suite,
+            release_bindings=release_bindings,
+            campaign_started_at=campaign_started_at,
+            observed_at=observed_at,
+        )
     if campaign_completed_at > observed_at + _FUTURE_SKEW:
         raise ValueError("qualification benchmark campaign completion is future-dated")
     if observed_at - campaign_completed_at > timedelta(
@@ -1192,8 +1331,12 @@ def run_qualification_workflow(
         benchmark_ground_truth_version=(release_bindings.benchmark_ground_truth_version),
         benchmark_ground_truth_sha256=benchmark_suite.ground_truth_sha256,
         benchmark_portfolio_sha256=benchmark_portfolio.portfolio_sha256,
+        lineage_candidate_registry_sha256=candidate_registry.registry_sha256,
         candidate_registry_sha256=updated_registry.registry_sha256,
         qualification_policy_sha256=policy.policy_sha256,
+        calibration_release_transition_sha256=(
+            validated_transition.artifact_sha256 if validated_transition is not None else None
+        ),
     )
     artifact = seal_model_qualification_artifact(
         created_at=campaign_completed_at,
@@ -1209,6 +1352,7 @@ def run_qualification_workflow(
         trusted_benchmark_evidence=trusted_tuple,
         now=observed_at,
         trusted_calibrated_policy=trusted_calibrated_policy,
+        lineage_candidate_registry=(candidate_registry if policy.schema_version == "2.0" else None),
     )
     if validated_reasoning_plan is not None:
         results_by_model = {result.exact_model_id: result for result in artifact.results}

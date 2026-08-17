@@ -18,9 +18,12 @@ from mmaudit.models.schemas import (
     SolidityGraphKind,
     SolidityGraphNode,
     SolidityGraphNodeKind,
+    SolidityGraphOccurrenceKind,
+    SolidityGraphRetainedOccurrence,
     SolidityGraphSet,
     SolidityProvenance,
     SoliditySymbolIndex,
+    solidity_graph_occurrence_sha256,
 )
 from mmaudit.models.token_planning import ContextOmissionReason
 from mmaudit.orchestration.context import (
@@ -170,9 +173,41 @@ def _internal_call_surface_builder(
         entities=[entry, internal],
         ast_sources=["NestedCall.sol"],
     )
+    graph_nodes = [node(entry), node(internal)]
+    graph_edges = [requested_edge, upstream]
+    retained_occurrences = tuple(
+        sorted(
+            (
+                *(
+                    SolidityGraphRetainedOccurrence(
+                        subject_kind=SolidityGraphOccurrenceKind.EDGE,
+                        subject_sha256=solidity_graph_occurrence_sha256(
+                            SolidityGraphOccurrenceKind.EDGE,
+                            edge,
+                        ),
+                        occurrence_count=1,
+                    )
+                    for edge in graph_edges
+                ),
+                *(
+                    SolidityGraphRetainedOccurrence(
+                        subject_kind=SolidityGraphOccurrenceKind.GRAPH_NODE,
+                        subject_sha256=solidity_graph_occurrence_sha256(
+                            SolidityGraphOccurrenceKind.GRAPH_NODE,
+                            graph_node,
+                        ),
+                        occurrence_count=1,
+                    )
+                    for graph_node in graph_nodes
+                ),
+            ),
+            key=lambda item: (item.subject_kind.value, item.subject_sha256),
+        )
+    )
     graphs = SolidityGraphSet(
-        nodes=[node(entry), node(internal)],
-        edges=[requested_edge, upstream],
+        nodes=graph_nodes,
+        edges=graph_edges,
+        retained_occurrences=retained_occurrences,
         analyzed_graphs=[SolidityGraphKind.LOW_LEVEL_CALL, SolidityGraphKind.STATE_DEPENDENCY],
         coverage={SolidityGraphKind.LOW_LEVEL_CALL.value: 1},
     )
@@ -257,10 +292,23 @@ def test_provider_preflight_rejects_nested_call_fact_removal(
         package.solidity_graphs.edges = [
             edge for edge in package.solidity_graphs.edges if edge != requested_edge
         ]
+        removed_kind = SolidityGraphOccurrenceKind.EDGE
+        removed_subject: SolidityGraphEdge | SolidityGraphNode = requested_edge
     else:
+        removed_node = next(
+            node for node in package.solidity_graphs.nodes if node.id == requested_edge.source_id
+        )
         package.solidity_graphs.nodes = [
             node for node in package.solidity_graphs.nodes if node.id != requested_edge.source_id
         ]
+        removed_kind = SolidityGraphOccurrenceKind.GRAPH_NODE
+        removed_subject = removed_node
+    removed_sha256 = solidity_graph_occurrence_sha256(removed_kind, removed_subject)
+    package.solidity_graphs.retained_occurrences = tuple(
+        item
+        for item in package.solidity_graphs.retained_occurrences
+        if (item.subject_kind, item.subject_sha256) != (removed_kind, removed_sha256)
+    )
     package = package.model_copy(update={"bytes_used": len(render_context(package).encode())})
 
     with pytest.raises(ContextBoundaryError, match="model-surface custody"):

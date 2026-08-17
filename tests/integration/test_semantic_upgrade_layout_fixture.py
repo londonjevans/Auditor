@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -17,6 +18,22 @@ from mmaudit.solidity.projects import discover_solidity_projects
 FIXTURE = Path("tests/fixtures/solidity/semantic_upgrade_layout")
 
 
+def _external_solc() -> Path | None:
+    candidates = (
+        Path.home() / "Library" / "Application Support" / "svm" / "0.8.20" / "solc-0.8.20",
+        Path.home() / ".local" / "share" / "svm" / "0.8.20" / "solc-0.8.20",
+        Path.home() / ".svm" / "0.8.20" / "solc-0.8.20",
+    )
+    return next(
+        (
+            candidate
+            for candidate in candidates
+            if candidate.is_file() and os.access(candidate, os.X_OK)
+        ),
+        None,
+    )
+
+
 def test_real_foundry_storage_layout_artifacts_drive_compatibility_graphs(
     tmp_path: Path,
     config_factory,
@@ -24,7 +41,11 @@ def test_real_foundry_storage_layout_artifacts_drive_compatibility_graphs(
     forge = shutil.which("forge")
     if forge is None:
         pytest.skip("forge is not installed")
+    solc = _external_solc()
+    if solc is None:
+        pytest.skip("external Foundry-managed solc 0.8.20 is not installed")
     assert not Path(forge).resolve().is_relative_to(FIXTURE.resolve())
+    assert not solc.resolve().is_relative_to(FIXTURE.resolve())
     source = FIXTURE / "src" / "UpgradeLayouts.sol"
     source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
     out = tmp_path / "out"
@@ -36,6 +57,8 @@ def test_real_foundry_storage_layout_artifacts_drive_compatibility_graphs(
             "--root",
             str(FIXTURE),
             "--offline",
+            "--use",
+            str(solc),
             "--color",
             "never",
             "--cache-path",

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -34,14 +34,33 @@ from mmaudit.models.schemas import (
     RepositoryMap,
     UsageRecord,
 )
-from tests.identity_fixtures import bind_synthetic_usage_identity
+from tests.identity_fixtures import (
+    bind_synthetic_usage_identity,
+    reattest_synthetic_real_usage,
+)
+from tests.unit.test_run_status import NOW as REPORT_NOW
+from tests.unit.test_run_status import _assessment as _minimum_floor_assessment
+from tests.unit.test_run_status import _coverage as _minimum_floor_coverage
+from tests.unit.test_run_status import _real_scanner, _typed_report_payload
 
 ROOT = Path(__file__).parents[2]
 SURFACE_ID = "model-surface:" + ("a" * 64)
-MODEL_A = "synthetic/model-a"
-MODEL_B = "synthetic/model-b"
-ROOT_A = "sha256:" + ("a" * 64)
-ROOT_B = "sha256:" + ("b" * 64)
+MODEL_A = "alpha/atlas-secure"
+MODEL_B = "bravo/borealis-secure"
+ROOT_A = "sha256:" + hashlib.sha256(b"root-0").hexdigest()
+ROOT_B = "sha256:" + hashlib.sha256(b"root-1").hexdigest()
+FLOOR_ROLE_MODELS = {
+    "threat_model": ("alpha/atlas-secure", ROOT_A),
+    "source_audit": ("bravo/borealis-secure", ROOT_B),
+    "business_logic": (
+        "charlie/cirrus-secure",
+        "sha256:" + hashlib.sha256(b"root-2").hexdigest(),
+    ),
+    "configuration": (
+        "delta/denali-secure",
+        "sha256:" + hashlib.sha256(b"root-3").hexdigest(),
+    ),
+}
 
 
 def _identity_sha256(*, model: str, canonical_model: str) -> str:
@@ -61,10 +80,10 @@ def _usage(
     root_lineage: str = ROOT_A,
     role: str = "source_audit",
 ) -> UsageRecord:
-    started_at = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+    started_at = REPORT_NOW
     ended_at = started_at + timedelta(milliseconds=25)
     generation_id = f"generation-{request_id}-{model.rsplit('/', maxsplit=1)[-1]}"
-    endpoint = "Synthetic"
+    endpoint = "openrouter/provider-a"
     schema_sha256 = "1" * 64
     routing = {
         "generation_id": generation_id,
@@ -255,58 +274,75 @@ def _report(
     *,
     critical: bool = False,
 ) -> AuditReport:
-    return AuditReport(
-        schema_version="1.1",
-        run_id=f"benchmark-model-evidence-{repository_id}",
-        generated_at=datetime(2026, 7, 28, 12, 1, tzinfo=UTC),
-        completed=True,
-        incomplete_reasons=[],
-        repository=RepositoryMap(
-            root_name=repository_id,
-            languages={"Solidity": 1},
-            frameworks=["Foundry"],
-            manifests=["foundry.toml"],
-            entry_points=[],
-            api_surfaces=[],
-            auth_components=[],
-            data_layers=[],
-            network_clients=[],
-            file_handlers=[],
-            configuration_files=[],
-            sensitive_processing=[],
-            security_tests=[],
-            files=[],
+    scanner = _real_scanner()
+    floor_usage = [
+        *usage,
+        *(
+            _usage(
+                f"floor-{repository_id}-{role}",
+                model=model,
+                root_lineage=root_lineage,
+                role=role,
+            )
+            for role, (model, root_lineage) in FLOOR_ROLE_MODELS.items()
         ),
-        configuration_hash="a" * 64,
-        model_configuration_hash="b" * 64,
-        privacy={"code_egress_enabled": True},
-        scanner_runs=[],
-        usage=usage,
-        budget_usd=1,
-        accounted_cost_usd=sum(item.accounted_cost_usd for item in usage),
-        findings=[],
-        rejected_findings=[],
-        audit_profile=AuditProfile.MAXIMUM_ASSURANCE,
-        maximum_assurance=MaximumAssuranceAssessment(
-            requested=True,
-            required=True,
-            downgrade_allowed=False,
-            downgraded=False,
-            status=MaximumAssuranceStatus.COMPLETE,
-            requirements=[
-                MaximumAssuranceRequirement(
-                    engine=engine,
-                    required=True,
-                    passed=True,
-                    blocking=False,
-                    state=AnalysisState.DETERMINISTIC,
-                    detail=f"synthetic passing core clause: {engine}",
-                )
-                for engine in MAXIMUM_ASSURANCE_CORE_CLAUSES
-            ],
-        ),
-        model_review_coverage=_coverage(references, critical=critical),
+    ]
+    floor = _minimum_floor_assessment(
+        scanner_runs=[scanner],
+        usage=floor_usage,
+        required_model_roles=tuple(FLOOR_ROLE_MODELS),
     )
+    payload = _typed_report_payload(
+        floor=floor,
+        scanner_runs=[scanner],
+        usage=floor_usage,
+        coverage=_minimum_floor_coverage(),
+    )
+    retained_usage = payload["usage"]
+    assert isinstance(retained_usage, list)
+    payload["usage"] = [
+        reattest_synthetic_real_usage(record)
+        for record in retained_usage
+        if isinstance(record, UsageRecord)
+    ]
+    repository = payload["repository"]
+    assert isinstance(repository, RepositoryMap)
+    payload.update(
+        {
+            "run_id": f"benchmark-model-evidence-{repository_id}",
+            "repository": repository.model_copy(update={"root_name": repository_id}),
+            "configuration_hash": "a" * 64,
+            "model_configuration_hash": "b" * 64,
+            "privacy": {"code_egress_enabled": True},
+            "budget_usd": 1,
+            "accounted_cost_usd": sum(item.accounted_cost_usd for item in floor_usage),
+            "audit_profile": AuditProfile.MAXIMUM_ASSURANCE,
+            "maximum_assurance": MaximumAssuranceAssessment(
+                requested=True,
+                required=True,
+                downgrade_allowed=False,
+                downgraded=False,
+                status=(
+                    MaximumAssuranceStatus.COMPLETE
+                    if floor.minimum_floor_met
+                    else MaximumAssuranceStatus.INCONCLUSIVE
+                ),
+                requirements=[
+                    MaximumAssuranceRequirement(
+                        engine=engine,
+                        required=True,
+                        passed=True,
+                        blocking=False,
+                        state=AnalysisState.DETERMINISTIC,
+                        detail=f"synthetic passing core clause: {engine}",
+                    )
+                    for engine in MAXIMUM_ASSURANCE_CORE_CLAUSES
+                ],
+            ),
+            "model_review_coverage": _coverage(references, critical=critical),
+        }
+    )
+    return AuditReport.model_validate(payload)
 
 
 def _evaluate(
@@ -481,7 +517,12 @@ def test_duplicate_request_ids_are_ambiguous_and_earn_no_surface_credit() -> Non
 
     result = _evaluate([first, second], [_reference(first)])
 
-    assert result.metrics.model_call_success_rate.numerator == 0
+    assert result.metrics.model_call_success_rate.numerator == len(FLOOR_ROLE_MODELS) * 2
+    assert (
+        result.metrics.model_call_success_rate.denominator
+        == result.metrics.model_call_success_rate.numerator + 4
+    )
+    assert result.metrics.model_call_success_rate.state is BenchmarkMetricState.FAIL
     assert result.metrics.model_review_coverage.numerator == 0
     assert result.metrics.model_review_coverage.state is not BenchmarkMetricState.PASS
 
@@ -517,7 +558,7 @@ def test_missing_report_remains_in_model_call_and_surface_denominators() -> None
 
     assert result.metrics.model_call_success_rate.state is BenchmarkMetricState.INCONCLUSIVE
     assert result.metrics.model_review_coverage.state is BenchmarkMetricState.INCONCLUSIVE
-    assert result.metrics.model_call_success_rate.denominator == 2
+    assert result.metrics.model_call_success_rate.denominator == len(FLOOR_ROLE_MODELS) + 2
     assert result.metrics.model_review_coverage.denominator == 2
     assert not next(
         gate for gate in result.gates if gate.name == "maximum_assurance_substantive_model_review"

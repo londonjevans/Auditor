@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import pickle
-from dataclasses import replace
-from datetime import UTC, datetime
+import tempfile
+from dataclasses import dataclass, fields, replace
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -27,6 +29,11 @@ from mmaudit.constants import (
     SPECIALIST_INVESTIGATOR_ROLES,
 )
 from mmaudit.models.output_modes import StructuredOutputMode
+from mmaudit.models.policy_selection import (
+    AuditModelRoutingEvidence,
+    AuditModelSelectionEvidenceBundle,
+    VerifiedAuditModelSelection,
+)
 from mmaudit.models.qualification import (
     QualifiedReasoningRoleBinding,
     VerifiedProductionQualification,
@@ -142,6 +149,10 @@ from mmaudit.models.schemas import (
     SolidityCoverage,
     SolidityEntity,
     SolidityEntityKind,
+    SolidityGraphFactKind,
+    SolidityGraphFactOmission,
+    SolidityGraphKind,
+    SolidityGraphOmission,
     SolidityGraphSet,
     SolidityProjectMetadata,
     SolidityProjectType,
@@ -164,6 +175,7 @@ from mmaudit.orchestration.assurance import (
     AssuranceRuntime,
     MaximumAssuranceContract,
     ProviderSessionProvenance,
+    _current_audit_model_selection,
     _is_real_model_usage,
     _issue_provider_session_provenance,
     is_qualifying_real_foundry_portfolio,
@@ -204,6 +216,11 @@ from tests.scheduler_support import (
     SchedulerFixtureModelTask,
     build_complete_scheduler_artifact,
     build_complete_scheduler_fixture,
+)
+from tests.unit.test_model_policy_selection import (
+    _policy_authority,
+    _policy_bundle,
+    _resolve,
 )
 
 
@@ -762,11 +779,7 @@ def _complete_specialist_execution_records(
     return records
 
 
-def _complete_assurance_scheduler_fixture(
-    config: AuditConfig,
-    qualification: VerifiedProductionQualification,
-    now: datetime,
-) -> CompleteSchedulerFixture:
+def _assurance_scheduler_inventory() -> SchedulerShardInventory:
     source = SchedulerSourceDescriptor.build(
         path="src/Vault.sol",
         sha256="a" * 64,
@@ -777,10 +790,73 @@ def _complete_assurance_scheduler_fixture(
         semantic_shard_sha256=hashlib.sha256(b"assurance:semantic-shard").hexdigest(),
         sources=(source,),
     )
-    inventory = SchedulerShardInventory.build(
+    return SchedulerShardInventory.build(
         semantic_inventory_sha256=hashlib.sha256(b"assurance:semantic-shard-inventory").hexdigest(),
         shards=(shard,),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _AssurancePolicySelectionFixture:
+    qualification: VerifiedProductionQualification
+    evidence_bundle: AuditModelSelectionEvidenceBundle
+    capability: VerifiedAuditModelSelection
+
+
+_ASSURANCE_POLICY_SELECTION_CACHE: dict[str, _AssurancePolicySelectionFixture] = {}
+_COMPLETE_ASSURANCE_RUNTIME_CACHE: dict[str, AssuranceRuntime] = {}
+
+
+def _clone_assurance_runtime(runtime: AssuranceRuntime) -> AssuranceRuntime:
+    values: dict[str, object] = {}
+    for runtime_field in fields(AssuranceRuntime):
+        value = getattr(runtime, runtime_field.name)
+        if isinstance(value, list):
+            value = list(value)
+        elif isinstance(value, set):
+            value = set(value)
+        elif isinstance(value, dict):
+            value = {
+                key: set(item) if isinstance(item, set) else item for key, item in value.items()
+            }
+        values[runtime_field.name] = value
+    return AssuranceRuntime(**values)  # type: ignore[arg-type]
+
+
+def _assurance_policy_selection(
+    config: AuditConfig,
+    now: datetime,
+) -> _AssurancePolicySelectionFixture:
+    cache_key = config.stable_hash()
+    cached = _ASSURANCE_POLICY_SELECTION_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    authority_base = now - timedelta(hours=2)
+    qualification = _synthetic_production_qualification(config, authority_base)
+    policy = _policy_bundle(
+        qualification,
+        source_sha256_override=_assurance_scheduler_inventory().source_tree_sha256,
+        base_time=authority_base,
+    )
+    with tempfile.TemporaryDirectory(prefix="mmaudit-assurance-policy-") as directory:
+        authority = _policy_authority(Path(directory), policy)
+    _selection, evidence_bundle, capability = _resolve(qualification, policy, authority)
+    fixture = _AssurancePolicySelectionFixture(
+        qualification=qualification,
+        evidence_bundle=evidence_bundle,
+        capability=capability,
+    )
+    _ASSURANCE_POLICY_SELECTION_CACHE[cache_key] = fixture
+    return fixture
+
+
+def _complete_assurance_scheduler_fixture(
+    config: AuditConfig,
+    qualification: VerifiedProductionQualification,
+    audit_model_selection_evidence: AuditModelSelectionEvidenceBundle,
+    now: datetime,
+) -> CompleteSchedulerFixture:
+    inventory = _assurance_scheduler_inventory()
     cost_baseline = SchedulerCostLedgerBaseline.build(
         cap_usd_exact="250",
         spent_usd_exact="0",
@@ -813,6 +889,7 @@ def _complete_assurance_scheduler_fixture(
         analysis_input_sha256=hashlib.sha256(b"assurance:analysis-input").hexdigest(),
         cost_ledger_baseline=cost_baseline,
         privacy_evidence_custody=privacy_custody,
+        audit_model_selection_evidence=audit_model_selection_evidence,
     )
     manifest = SchedulerCampaignManifest.build(
         bindings=bindings,
@@ -837,7 +914,7 @@ def _complete_assurance_scheduler_fixture(
             scope=scope,
         )
 
-    single_shard = SchedulerScope.single_shard(shard.shard_id)
+    single_shard = SchedulerScope.single_shard(inventory.shards[0].shard_id)
     blind_tasks = [
         assignment("business_logic", single_shard, task_key="blind-business-logic"),
         assignment("configuration", single_shard, task_key="blind-configuration"),
@@ -1815,11 +1892,31 @@ def _real_slither_scanner(now: datetime) -> ScannerRun:
 
 
 def _complete_runtime(config: AuditConfig | None = None) -> AssuranceRuntime:
+    cache_key = (
+        ":".join(
+            (
+                config.stable_hash(),
+                str(id(scheduler_support.build_scheduler_test_model_payload)),
+                str(id(scheduler_support._scheduler_test_specialist_outcome)),
+                str(id(SchedulerTaskOutput.__dict__["build"])),
+            )
+        )
+        if config is not None
+        else None
+    )
+    if cache_key is not None and cache_key in _COMPLETE_ASSURANCE_RUNTIME_CACHE:
+        return _clone_assurance_runtime(_COMPLETE_ASSURANCE_RUNTIME_CACHE[cache_key])
     now = datetime.now(UTC).replace(microsecond=0)
-    qualification = _synthetic_production_qualification(config, now) if config is not None else None
+    policy_selection = _assurance_policy_selection(config, now) if config is not None else None
+    qualification = policy_selection.qualification if policy_selection is not None else None
     scheduler_fixture = (
-        _complete_assurance_scheduler_fixture(config, qualification, now)
-        if config is not None and qualification is not None
+        _complete_assurance_scheduler_fixture(
+            config,
+            qualification,
+            policy_selection.evidence_bundle,
+            now,
+        )
+        if config is not None and qualification is not None and policy_selection is not None
         else None
     )
     model_usage = (
@@ -1924,7 +2021,11 @@ def _complete_runtime(config: AuditConfig | None = None) -> AssuranceRuntime:
             ],
             ast_sources=["src/Vault.sol"],
         ),
-        graphs=SolidityGraphSet(edges=[], analyzed_graphs=list(FULL_SEMANTIC_GRAPHS)),
+        graphs=SolidityGraphSet(
+            edges=[],
+            retained_occurrences=(),
+            analyzed_graphs=list(FULL_SEMANTIC_GRAPHS),
+        ),
         scanners=[_real_slither_scanner(now), _real_foundry_scanner(now, config)],
         invariants=InvariantSuite(
             invariants=[invariant],
@@ -2046,6 +2147,12 @@ def _complete_runtime(config: AuditConfig | None = None) -> AssuranceRuntime:
         model_surface_review_artifacts=model_surface_review_artifacts,
         model_usage=model_usage,
         production_qualification=qualification,
+        audit_model_selection_evidence=(
+            policy_selection.evidence_bundle if policy_selection is not None else None
+        ),
+        verified_audit_model_selection=(
+            policy_selection.capability if policy_selection is not None else None
+        ),
         provider_session=_issue_provider_session_provenance(
             execution_evidence=ExecutionEvidenceKind.REAL,
             pipeline_owned=True,
@@ -2098,7 +2205,11 @@ def _complete_runtime(config: AuditConfig | None = None) -> AssuranceRuntime:
         candidate_role_prefix = candidate_falsifier_role("candidate-critical", 1).rsplit(":", 1)[0]
         runtime = replace(
             runtime,
-            artifacts={*runtime.artifacts, "model-qualification-runtime.json"},
+            artifacts={
+                *runtime.artifacts,
+                "model-qualification-runtime.json",
+                "audit-model-selection-evidence.json",
+            },
             eligible_high_critical_ids={"candidate-critical"},
             documented_infeasible_ids={"candidate-critical"},
             candidate_falsifier_request_ids={
@@ -2109,6 +2220,9 @@ def _complete_runtime(config: AuditConfig | None = None) -> AssuranceRuntime:
                 }
             },
         )
+    if cache_key is not None:
+        _COMPLETE_ASSURANCE_RUNTIME_CACHE[cache_key] = runtime
+        return _clone_assurance_runtime(runtime)
     return runtime
 
 
@@ -2244,6 +2358,83 @@ def test_maximum_assurance_complete_requires_all_runtime_clauses(config_factory)
     assert "candidate falsifier lineages=minimum=2/2 across 1 candidate(s)" in (
         certified_ensemble.detail
     )
+
+
+@pytest.mark.parametrize(
+    "omitted_kind",
+    [SolidityGraphKind.PRIVILEGE, SolidityGraphKind.GOVERNANCE],
+)
+def test_maximum_assurance_rejects_typed_semantic_graph_omission(
+    config_factory,
+    omitted_kind: SolidityGraphKind,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    omission = SolidityGraphOmission.build(
+        graph=omitted_kind,
+        candidate_count=1,
+        retained_count=0,
+        omitted_count=1,
+        omitted_canonical_bytes=320,
+        omitted_stream_sha256="a" * 64,
+        omitted_sample_sha256s=("b" * 64,),
+    )
+    partial_graphs = SolidityGraphSet(
+        edges=[],
+        retained_occurrences=(),
+        analyzed_graphs=sorted(FULL_SEMANTIC_GRAPHS - {omitted_kind}, key=str),
+        coverage={kind.value: 0 for kind in FULL_SEMANTIC_GRAPHS | {omitted_kind}},
+        generation_complete=False,
+        edge_omissions=(omission,),
+    )
+
+    assessment = MaximumAssuranceContract(config).evaluate(replace(runtime, graphs=partial_graphs))
+
+    semantic_graphs = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "full_semantic_graphs"
+    )
+    assert semantic_graphs.passed is False
+    assert omitted_kind.value in semantic_graphs.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+@pytest.mark.parametrize("fact_kind", list(SolidityGraphFactKind))
+def test_maximum_assurance_rejects_typed_semantic_graph_fact_omission(
+    config_factory,
+    fact_kind: SolidityGraphFactKind,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    omission = SolidityGraphFactOmission.build(
+        fact_kind=fact_kind,
+        candidate_count=1,
+        retained_count=0,
+        omitted_count=1,
+        omitted_canonical_bytes=128,
+        omitted_stream_sha256="a" * 64,
+        omitted_sample_sha256s=("b" * 64,),
+    )
+    partial_graphs = SolidityGraphSet(
+        edges=[],
+        retained_occurrences=(),
+        analyzed_graphs=sorted(FULL_SEMANTIC_GRAPHS, key=str),
+        coverage={kind.value: 0 for kind in FULL_SEMANTIC_GRAPHS},
+        generation_complete=False,
+        fact_omissions=(omission,),
+    )
+
+    assessment = MaximumAssuranceContract(config).evaluate(replace(runtime, graphs=partial_graphs))
+
+    semantic_graphs = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "full_semantic_graphs"
+    )
+    assert semantic_graphs.passed is False
+    assert f"{fact_kind.value}=1" in semantic_graphs.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
 
 
 def test_maximum_assurance_rejects_missing_scheduler_artifact(config_factory) -> None:
@@ -3408,6 +3599,107 @@ def test_each_missing_usage_qualification_join_revokes_surface_credit(
     )
     assert not critical_review.passed
     assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+@pytest.mark.parametrize(
+    "fault",
+    (
+        "missing",
+        "audit_model_selection_bundle_sha256",
+        "selected_model_set_sha256",
+        "audit_scope_sha256",
+        "source_sha256",
+        "selection_expires_at",
+    ),
+)
+def test_audit_policy_routing_fault_revokes_usage_and_surface_credit(
+    config_factory,
+    fault: str,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    original = next(record for record in runtime.model_usage if record.role == "source_audit")
+    assert runtime.expected_scheduler_bindings is not None
+    binding = runtime.expected_scheduler_bindings.audit_model_selection
+    assert binding is not None
+    if fault == "missing":
+        evidence = AuditModelRoutingEvidence.model_validate_json(
+            json.dumps(original.routing["audit_model_routing_evidence"]),
+            strict=True,
+        )
+        routing = dict(original.routing)
+        for key in evidence.request_metadata():
+            routing.pop(key, None)
+        routing.pop("audit_policy_routing_evidence_sha256", None)
+        routing.pop("audit_model_routing_evidence", None)
+        corrupted = reattest_synthetic_real_usage(original.model_copy(update={"routing": routing}))
+    else:
+        replacement: object = (
+            binding.selection_expires_at - timedelta(seconds=1)
+            if fault == "selection_expires_at"
+            else hashlib.sha256(f"mismatched-policy:{fault}".encode()).hexdigest()
+        )
+        mismatched_binding = binding.model_copy(update={fault: replacement})
+        corrupted = reattest_synthetic_real_usage(
+            scheduler_support.bind_scheduler_test_usage_to_audit_selection(
+                original,
+                mismatched_binding,
+            )
+        )
+    current_selection = _current_audit_model_selection(
+        runtime.audit_model_selection_evidence,
+        runtime.verified_audit_model_selection,
+        runtime.production_qualification,
+    )
+    assert current_selection is not None
+    assert not _is_real_model_usage(
+        corrupted,
+        config,
+        qualification=runtime.production_qualification,
+        provider_session=runtime.provider_session,
+        audit_selection=current_selection,
+    )
+
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(
+            runtime,
+            model_usage=[
+                corrupted if record.request_id == original.request_id else record
+                for record in runtime.model_usage
+            ],
+        )
+    )
+    requirements = {item.engine: item for item in assessment.requirements}
+    assert not requirements["seven_pass_scheduler"].passed
+    assert not requirements["critical_model_surface_review"].passed
+    assert not requirements["certified_model_ensemble"].passed
+
+
+@pytest.mark.parametrize("missing", ("bundle", "capability"))
+def test_missing_audit_policy_authority_preserves_technical_status_but_revokes_policy_credit(
+    config_factory,
+    missing: str,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    runtime = replace(
+        runtime,
+        audit_model_selection_evidence=(
+            None if missing == "bundle" else runtime.audit_model_selection_evidence
+        ),
+        verified_audit_model_selection=(
+            None if missing == "capability" else runtime.verified_audit_model_selection
+        ),
+    )
+
+    assessment = MaximumAssuranceContract(config).evaluate(runtime)
+    requirements = {item.engine: item for item in assessment.requirements}
+    assert requirements["production_model_qualification"].passed
+    assert not requirements["qualified_model_selection_execution"].passed
+    assert not requirements["real_model_execution"].passed
+    assert not requirements["critical_model_surface_review"].passed
+    assert not requirements["certified_model_ensemble"].passed
+    assert not requirements["seven_pass_scheduler"].passed
 
 
 def test_public_qualification_hashes_without_reasoning_evidence_receive_no_credit(

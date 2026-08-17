@@ -278,6 +278,224 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "artifacts": {
+            "contains": {
+              "properties": {
+                "path": {
+                  "const": "audit-model-selection-evidence.json"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          }
+        },
+        "required": [
+          "artifacts"
+        ]
+      },
+      "then": {
+        "properties": {
+          "bindings": {
+            "properties": {
+              "models": {
+                "allOf": [
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-selection/audit-scope"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-selection/bundle"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-selection/eligible-route-set"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-selection/evidence-file"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-selection/policy-exclusion-set"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-selection/selected-model-set"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-selection/selection"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-selection/source"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-selection/technical-route-set"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  }
+                ]
+              }
+            },
+            "required": [
+              "models"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "bindings": {
+            "properties": {
+              "models": {
+                "contains": {
+                  "properties": {
+                    "identifier": {
+                      "enum": [
+                        "audit-model-selection/audit-scope",
+                        "audit-model-selection/bundle",
+                        "audit-model-selection/eligible-route-set",
+                        "audit-model-selection/evidence-file",
+                        "audit-model-selection/policy-exclusion-set",
+                        "audit-model-selection/selected-model-set",
+                        "audit-model-selection/selection",
+                        "audit-model-selection/source",
+                        "audit-model-selection/technical-route-set"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "identifier"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "models"
+            ]
+          }
+        },
+        "required": [
+          "bindings"
+        ]
+      },
+      "then": {
+        "properties": {
+          "artifacts": {
+            "contains": {
+              "properties": {
+                "path": {
+                  "const": "audit-model-selection-evidence.json"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            },
+            "maxContains": 1,
+            "minContains": 1
+          }
+        }
+      }
     }
   ],
   "$defs": {

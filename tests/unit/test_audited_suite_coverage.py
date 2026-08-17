@@ -64,8 +64,14 @@ from mmaudit.models.schemas import (
     SolidityCoverage,
     SolidityEntity,
     SolidityEntityKind,
+    SolidityGraphEdge,
     SolidityGraphKind,
+    SolidityGraphOccurrenceKind,
+    SolidityGraphRetainedOccurrence,
+    SolidityGraphSet,
     SolidityProvenance,
+    solidity_graph_edge_logical_key,
+    solidity_graph_occurrence_sha256,
 )
 from mmaudit.orchestration.model_coverage import build_model_surface_requests
 from mmaudit.repository.discovery import discover_repository
@@ -82,6 +88,56 @@ from mmaudit.solidity.index import build_solidity_index
 from mmaudit.solidity.projects import discover_solidity_projects
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "solidity" / "foundry"
+
+
+def _replace_graph_edges(
+    graphs: SolidityGraphSet,
+    edges: list[SolidityGraphEdge],
+    **updates: object,
+) -> SolidityGraphSet:
+    retained_counts = {
+        item.subject_sha256: item.occurrence_count
+        for item in graphs.retained_occurrences
+        if item.subject_kind is SolidityGraphOccurrenceKind.EDGE
+    }
+    logical_counts = {
+        solidity_graph_edge_logical_key(edge): retained_counts[
+            solidity_graph_occurrence_sha256(SolidityGraphOccurrenceKind.EDGE, edge)
+        ]
+        for edge in graphs.edges
+    }
+    retained_occurrences = [
+        item
+        for item in graphs.retained_occurrences
+        if item.subject_kind is not SolidityGraphOccurrenceKind.EDGE
+    ]
+    retained_occurrences.extend(
+        SolidityGraphRetainedOccurrence(
+            subject_kind=SolidityGraphOccurrenceKind.EDGE,
+            subject_sha256=solidity_graph_occurrence_sha256(
+                SolidityGraphOccurrenceKind.EDGE,
+                edge,
+            ),
+            occurrence_count=logical_counts.get(solidity_graph_edge_logical_key(edge), 1),
+        )
+        for edge in edges
+    )
+    coverage_keys = {*graphs.coverage, *(edge.graph.value for edge in edges)}
+    return graphs.model_copy(
+        update={
+            **updates,
+            "edges": edges,
+            "coverage": {
+                key: sum(edge.graph.value == key for edge in edges) for key in sorted(coverage_keys)
+            },
+            "retained_occurrences": tuple(
+                sorted(
+                    retained_occurrences,
+                    key=lambda item: (item.subject_kind.value, item.subject_sha256),
+                )
+            ),
+        }
+    )
 
 
 class _SyntheticRunnerIsolation:
@@ -624,20 +680,19 @@ def test_auxiliary_graph_nodes_do_not_invalidate_critical_source_classification(
             "target_id": "graph:synthetic-upgrade-target",
         }
     )
-    graphs = graphs.model_copy(
-        update={
-            "edges": [*graphs.edges, auxiliary_edge],
-            "analyzed_graphs": sorted(
-                {
-                    *graphs.analyzed_graphs,
-                    SolidityGraphKind.PRIVILEGE,
-                    SolidityGraphKind.ASSET_FLOW,
-                    SolidityGraphKind.SENSITIVE_REACHABILITY,
-                    SolidityGraphKind.UPGRADE_COMPATIBILITY,
-                },
-                key=lambda item: item.value,
-            ),
-        }
+    graphs = _replace_graph_edges(
+        graphs,
+        [*graphs.edges, auxiliary_edge],
+        analyzed_graphs=sorted(
+            {
+                *graphs.analyzed_graphs,
+                SolidityGraphKind.PRIVILEGE,
+                SolidityGraphKind.ASSET_FLOW,
+                SolidityGraphKind.SENSITIVE_REACHABILITY,
+                SolidityGraphKind.UPGRADE_COMPATIBILITY,
+            },
+            key=lambda item: item.value,
+        ),
     )
 
     coverage = build_solidity_coverage(
@@ -829,8 +884,9 @@ def test_critical_graph_edge_requires_current_contained_hash_bound_source_range(
         if item.graph in critical_kinds and item.source_id in audited_function_ids
     )
     stale_edge = edge.model_copy(update={"source_hash": "f" * 64})
-    graphs = graphs.model_copy(
-        update={"edges": [stale_edge if item is edge else item for item in graphs.edges]}
+    graphs = _replace_graph_edges(
+        graphs,
+        [stale_edge if item is edge else item for item in graphs.edges],
     )
 
     coverage = build_solidity_coverage(
@@ -867,14 +923,13 @@ def test_contract_state_and_location_invariants_share_exact_critical_contracts(
         SolidityGraphKind.ASSET_FLOW,
         SolidityGraphKind.SENSITIVE_REACHABILITY,
     }
-    graphs = graphs.model_copy(
-        update={
-            "edges": [edge for edge in graphs.edges if edge.graph not in critical_graphs],
-            "analyzed_graphs": sorted(
-                {*graphs.analyzed_graphs, *critical_graphs},
-                key=lambda item: item.value,
-            ),
-        }
+    graphs = _replace_graph_edges(
+        graphs,
+        [edge for edge in graphs.edges if edge.graph not in critical_graphs],
+        analyzed_graphs=sorted(
+            {*graphs.analyzed_graphs, *critical_graphs},
+            key=lambda item: item.value,
+        ),
     )
     vault = next(
         entity
