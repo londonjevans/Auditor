@@ -1,9 +1,19 @@
 {
   "schema_version": "1.0.0",
   "objective_path": "docs/remediation/v3/product_completion_goal.txt",
-  "objective_sha256": "f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43",
+  "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
+  "objective_supersession": {
+    "prior_path": "docs/remediation/v3/product_completion_goal.txt",
+    "prior_sha256": "f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43",
+    "prior_git_blob": "360944d9a44cadfbb7134b23175aa04749994be6",
+    "prior_introduced_commit": "517559e5c9526f78e516374ebc194933d01eac7f",
+    "successor_path": "docs/remediation/v3/product_completion_goal.txt",
+    "successor_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
+    "authorized_at": "2026-08-17T20:06:41Z",
+    "decision": "EXPLICIT_OPERATOR_TARGET_CHANGE"
+  },
   "product_vision_path": "product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.md",
-  "product_vision_sha256": "b699e3b037b72298608928eb485c6f06cf82766c874716faaa2fd88b3504e0ce",
+  "product_vision_sha256": "8b878b665e636b3b48500fefe2967394b2abdd69ce2ebfa0033d04542d2965e1",
   "baseline_commit": "6465bb5824903180f2fc631663ab327993c36a20",
   "evidence_classes": [
     "REAL_RUNTIME",
@@ -139,24 +149,32 @@
       "id": "J",
       "title": "Truncation resharding",
       "tickets": ["V3-TRUNCATION-001"],
-      "status": "QUEUED",
-      "current_evidence_class": "MISSING",
-      "evidence": ["Historical truncated call was rejected and cost-accounted but not recovered."],
-      "remaining_proof": "Provisional complete-record retention, deterministic child shards, bounded retries, and separate finding/coverage/summary validity."
+      "status": "PARTIAL",
+      "current_evidence_class": "LOCAL_IMPLEMENTATION",
+      "evidence": [
+        "Strict framed truncation evidence retains only complete independently valid records; deterministic direct children cover unfinished work under compiled request, token, and USD limits; typed append-only journal, resume, shared-root cost, opaque promotion, and public accounting/report/manifest/floor/coverage/qualification/assurance joins fail closed. The original parent remains TRUNCATED, and incomplete, unpromoted, serialized, or MOCK evidence receives no credit.",
+        "Final blocker/HIGH review was CLEAN after reproduced unbounded recovery-root and recovery-usage iterable seams were bounded. Validation passed 170 recovery tests, 678 cross-artifact/accounting/assurance/schema tests, 117 scheduler/status tests after the final bounds, 58 scheduler-model tests, 6 local synthetic pipeline integrations, schema generation and 16 schema tests, Ruff format/check, strict mypy, strict duplicate-key parsing of both JSON ledgers, 11 product documentation/objective tests, and diff integrity.",
+        "The implemented pipeline is direct-child and provider-free: specialist roles and parent projections with retained surface records stay incomplete, a truncated recovery child is not recursively consumed, and no positive full-pipeline REAL promotion is claimed."
+      ],
+      "remaining_proof": "Add fail-closed specialist and retained-parent-surface composition, bounded recursive recovery-child consumption, and positive full-pipeline REAL promotion evidence before claiming the original objective complete."
     },
     {
       "id": "K",
       "title": "Risk-tiered substantive surface coverage",
       "tickets": ["V3-COVERAGE-001"],
-      "status": "QUEUED",
+      "status": "PARTIAL",
       "current_evidence_class": "LOCAL_IMPLEMENTATION",
-      "evidence": ["Response-backed surface records exist, but current all-requested-surface expectations are infeasible for large repositories."],
-      "remaining_proof": "T0-T3 tiers, lineage-aware gates, compact gap-fill tasks, and mathematical/cost feasibility preflight."
+      "evidence": [
+        "V3-COVERAGE-001 implemented a versioned T0-T3 policy, independently replayed completion gate, deterministic distinct-root gap assignments, 32-surface compact tasks, exact context/pricing previews, and nonauthorizing request/token/USD preflight evidence with private byte-stable zero-transport resume.",
+        "The exact candidate-independent portfolio is 22 source-backed investigators plus invariant_review and report_quality (24). Candidate-dependent roles, aliases, retries, and repeated shards cannot substitute. Graph edge/fact omissions now keep critical classification incomplete, and trusted captured-descriptor preview/completion dispatch rejects mutable client or class dispatch seams.",
+        "Final root matrices passed 129 coverage tests, 42 trusted-dispatch tests, 29 documentation/schema tests, and 5 coverage integrations. Exact post-hardening integrations passed for generic fallback (1 in 147.48 seconds), enabled-specialist fallback (1 in 234.14 seconds), and compact no-duplication plus byte-identical zero-transport resume (1 in 123.19 seconds); its focused unit/shadow slice passed 5 in 4.06 seconds. Ruff, strict mypy over 11 coverage/pipeline source files, schema generation/verification, and diff integrity passed."
+      ],
+      "remaining_proof": "Move aggregate preflight before paid orientation; include supplemental source_audit/whole_protocol spend; add atomic all-task reservation; prove the exact 24 candidate-independent responsibilities in a clean/no-candidate full runtime; and execute a REAL coverage run."
     },
     {
       "id": "L",
       "title": "Qualified model selection and responsibilities",
-      "tickets": ["V3-CALIBRATE-001", "V3-MODELREFRESH-001", "V3-LINEAGE-001", "V3-QUALIFY-001", "V3-SINGLE-AUDIT-001", "V3-MULTI-AUDIT-001"],
+      "tickets": ["V3-AUTHSEAL-001", "V3-AUTHLINEAGE-001", "V3-AUTHLINEAGE-PUBLIC-001", "V3-AUTHLINEAGE-RECEIPT-001", "V3-AUTHRUNNER-001", "V3-CALIBRATE-001", "V3-MODELREFRESH-001", "V3-LINEAGE-001", "V3-QUALIFY-001", "V3-SINGLE-AUDIT-001", "V3-MULTI-AUDIT-001"],
       "status": "PARTIAL",
       "current_evidence_class": "LOCAL_IMPLEMENTATION",
       "evidence": [
@@ -167,15 +185,23 @@
         "Implementation: src/mmaudit/models/lineage_authority.py, src/mmaudit/models/lineage_transition.py, src/mmaudit/models/calibration.py, src/mmaudit/models/calibration_transition.py, src/mmaudit/models/qualification.py, src/mmaudit/models/qualification_workflow.py, src/mmaudit/benchmark/model_portfolio.py, and src/mmaudit/cli.py; published schemas include schemas/model_lineage_authority.schema.json, schemas/model_lineage_trust_anchor.schema.json, schemas/model_calibration.schema.json, schemas/model_qualification_policy.schema.json, and schemas/model_qualification.schema.json.",
         "Synthetic/local tests cover lineage authority and transition, calibration and policy derivation, release transition, qualification/workflow, CLI ordering and artifact publication, and release schemas. The current merged affected matrix passed 297 tests without provider, network, credential, source-egress, or paid execution.",
         "Source implementation checkpoint: 937d97e1d337305ac56cd792fe0d6c2b8bd50674.",
-        "Provider-free catalogue refresh now retains and replays strict v2 source, snapshot, semantic diff, terminal attempt, freshness, and staging evidence with exact route identity, live capability provenance, paired prior evidence, trusted staging time, exact per-artifact self-hash binding, and fail-closed selected-route bootstrap behavior.",
+        "Provider-free catalogue refresh retains and replays exact source, snapshot, semantic diff, terminal attempt, freshness, staging, and immediate-predecessor evidence across reviewed registry evolution; bounded scheduled history retrieval fails closed on custody, chronology, publication, and commit-lineage gaps.",
+        "An opaque runtime refresh guard and separate opaque pricing authority join independently pinned workflow identity to live technical qualification and audit selection. Accepted canonical tolerance-bounded current prices drive exact provider caps, reservations, retries, reconciliation, scheduler recovery, usage, report, manifest, and assurance custody while qualified baselines remain immutable and durable artifacts remain non-authorizing.",
         "Two materially different authenticated metadata-only attempts failed closed before a usable snapshot and created no model usage record; no successful current provider snapshot or provider-authored signature is claimed.",
-        "The final model-refresh touched matrix passed 354 tests; the complete corrected tree passed 3602 tests with 11 explicit external-prerequisite skips.",
+        "The final provider-free model-refresh tree passed 5392 tests with 21 explicit unavailable/opt-in skips; Ruff, strict mypy over 181 source files, generated schemas, V3 JSON, diff integrity, and independent no-blocker/HIGH review passed.",
+        "Verifier-compiled provenance now binds all 24 planted synthetic cases to exact objective, source revision, construction files, corpus, truth, and excerpt hashes. Strict same-root, replay, and append-only prefix comparison evidence is schema-fixed as non-authorizing; independent review prevented MOCK runner labels or a local Merkle prefix from minting runtime authority.",
+        "The frozen-lineage mechanism derives conservative roots from exact complete membership in a reserved non-deployable synthetic namespace and exposes only an opaque PID-bound resolver. Raw provenance 44a916b74457b51b486ca98954fc0a1280e45187e4e20c2c048b7f597fa9bf98, semantic provenance 7b36005d5ee33f31db8edf056b5d2dbe035c901de70eaa7c940153e69d9acbb5, regression-contract 65ca78292f7465045f58cc7676cee41708ab362dea3595756f640cf127a051e9, and binding-set 609895321edfcdc1e10dcf663517117321ae2bfb7e9d1f6713bfcb3607e2621a are exact-pinned. Every external-authorship, provider, runner, qualification, selection, egress, completion, release, and authority flag remains false.",
+        "The synthetic lineage fixture was authored during the current Codex run and is evidence only for LOCAL_SYNTHETIC_MECHANISM_TEST behavior, not non-model authorship, public/provider ancestry, or external provenance. The final 118-test combined matrix, release-schema generation/verification, Ruff, strict mypy over 185 source files, and diff integrity passed; independent review found the documented mechanism boundary clean. Same-interpreter reflection remains outside the trusted-Python boundary.",
         "A provider-free lineage overlay now binds an exact pending/rootless discovery registry, replayed refresh source and snapshot, explicit trusted freshness policy, bounded raw decision evidence, immutable per-candidate review decisions, route identity, canonical and routing-variant collisions, and one-review-per-root constraints.",
         "The structural lineage artifact is schema-fixed to PROVIDER_FREE_STRUCTURAL and NOT_EVALUATED, marks provider and operator authenticity NOT_INDEPENDENTLY_PROVEN, and hard-codes production-selection and source-egress authority false. A separate SSHSIG envelope and opaque capability can authorize only calibration identity credit; all ten approval-dependent consumers remain fail-closed and the two previously missing revocation regressions are present.",
         "The joined lineage, discovery, refresh, qualification, and consumer matrix passed 565 tests; the complete suite passed all non-loopback groups and the sandbox-denied read-only bridge group passed 76 tests when rerun with local-loopback permission. No provider or credential access occurred.",
-        "The empirical support rules are not statistical-significance claims. A representative randomized independently adjudicated holdout, current refresh and actual signed lineage decision, real calibration, source-pinned measured P2/C2, and independent qualification campaign are absent. No exact production model is currently qualified."
+        "The empirical support rules are not statistical-significance claims. A representative randomized independently adjudicated holdout, current refresh and actual signed lineage decision, real calibration, source-pinned measured P2/C2, and independent qualification campaign are absent. No exact production model is currently qualified.",
+        "Corrected V3-AUTHLINEAGE-PUBLIC-001 is complete at the documentary identity-only boundary. Thirteen bounded first-party source files totaling 358646 bytes and 14 exact nonoverlapping spans are bound by canonical manifest SHA-256 6ca0ec6407d7006ac7b9d6c101a8140c2dfaa21449bdb8219ecb5758db199182 and semantic bundle SHA-256 92659a13c48223709eaca814c4a182b7ee7662fc8350fbced7b84955cd2ae7a4. The replayed evidence confirms 8 exact configured identities across 7 roots and excludes Hunyuan, Mistral, GPT-OSS, and Z.AI as VAGUE-only UNCONFIRMED; all four conservative collision constraints remain explicit and negative-only.",
+        "The opaque public-lineage resolver and its separate nonauthorizing configuration projection fail closed on stale, synthetic, serialized, caller-root, module-retarget, clock, and output-constructor substitution. Final validation passed 83 ticket tests, 197 compatibility tests, release-schema generation, full Ruff, strict mypy over 194 source files plus focused tests, strict governance-JSON parsing, diff integrity, and two independent no-blocker/HIGH reviews. This grants no provider, egress, runner, qualification, selection, seal, release, external-log, or benchmark authority.",
+        "The provider-free one-PID AUTHRUNNER path now joins exact candidate campaigns, distinct-root judge adjudications, owned-REAL usage and generation origin, fresh lineage replay, and one closed atomic-ledger interval before opaque runner issuance. Strict durable PRIMARY/REPLAY evidence remains nonauthorizing; explicit egress custody, pre-reservation per-attempt ceilings, exact callback-ledger fail-stop, and namespace-stable fresh-only publication with non-deleting rollback close six reproduced provider-free HIGHs. A descriptor-safe offline verifier replays the private canonical bundle without config, secrets, provider, ledger mutation, or capability issuance.",
+        "Runner lifecycle disposal is locally closed at a nonauthorizing boundary: an exact PID-local lease is removed after the sole AUTHSEAL attempt, require rechecks concurrent revocation, negative custody is confirmed, and returned runs are newly revalidated durable-only report snapshots with no live runner, campaign, generation, interval, or projection capability. Independent review reproduced and closed mutation-before-disposal and nested-capability-leak HIGHs. The final 216-test affected matrix, 104-test broader CLI matrix, independent 100-test audit, schema generation, full Ruff, strict mypy over 201 sources, governance parsing, documentation checks, and diff integrity passed without provider, credential, network, or ledger access."
       ],
-      "remaining_proof": "Complete a successful current refresh; retain and consume durable prior evidence across reviewed registry evolution; authenticate a complete exact operator decision and bind it without inventing quality; expand judgment denominators; bind per-role reasoning effort; execute real calibration; freeze its measured policy; and complete staged real role/whole-protocol qualification and promotion."
+      "remaining_proof": "Authenticate exact REAL runner/egress evidence under V3-AUTHRUNNER-001 using the opaque public-lineage capability and prove the genuine issued-capability transition through internal AUTHSEAL consumption, exactly-once revocation, and direct/AUTHSEAL post-revoke rejection; then publish the frozen authority seal externally. Also complete a successful current provider refresh, construct the stock live technical/policy-selection/refresh/pricing authority quartet, expand judgment denominators, execute real calibration, freeze its measured policy, and complete staged real role/whole-protocol qualification and promotion."
     },
     {
       "id": "M",
@@ -183,13 +209,13 @@
       "tickets": ["V3-SMOKE-001", "V3-QUALIFY-001", "V3-MULTI-AUDIT-001"],
       "status": "PARTIAL",
       "current_evidence_class": "REAL_RUNTIME",
-      "evidence": ["The ten-entry atomic ledger is fully terminal; used 0.0033415625 USD, reserved 0, and remaining 249.9966584375 USD. Attempt ten reconciled actual and accounted cost at 0.00006484 USD."],
+      "evidence": ["The eleven-entry atomic ledger is fully terminal; used 0.0034764325 USD, reserved 0, and remaining 249.9965235675 USD. Attempt eleven reached a REAL SYNTHETIC_BENCHMARK completion and reconciled 0.00013487 USD, but provider identity remained UNBOUND and the attempt is non-crediting."],
       "remaining_proof": "Preflight/reservation/reconciliation evidence for every future real call and aggregate final reconciliation."
     },
     {
       "id": "N",
       "title": "Deterministic consensus and cross-examination",
-      "tickets": ["V3-EXECORIGIN-001", "V3-CONSENSUS-001"],
+      "tickets": ["V3-AUTHSEAL-001", "V3-AUTHLINEAGE-001", "V3-AUTHLINEAGE-PUBLIC-001", "V3-AUTHLINEAGE-RECEIPT-001", "V3-AUTHRUNNER-001", "V3-BENCHSCORE-001", "V3-AUTHVERDICT-001", "V3-EXECORIGIN-001", "V3-CONSENSUS-001"],
       "status": "PARTIAL",
       "current_evidence_class": "LOCAL_IMPLEMENTATION",
       "evidence": [
@@ -197,9 +223,15 @@
         "Host-owned candidate linking and grouping preserve execution identity and location, retain existing similarity and location constraints, and reject unrelated model-candidate merges.",
         "Impact, exploitability, remediation, verifier, falsifier, and judge roles have analysis-only authority over an execution-originated candidate; deterministic evidence remains the confirmation cap.",
         "JSON, Markdown, SARIF, manifest, and replay evidence preserve execution origin and require coherent terminal candidate resolution; resealed semantic splices fail closed.",
-        "The final focused matrix passed 154 tests; schemas, Ruff, strict mypy over 149 source files, and diff integrity passed; the complete local suite passed 3203 tests with 11 explicit prerequisite skips."
+        "The provider-free evidence-seal layer enforces exact candidate-by-judge collision maps, voids every same-root contribution, requires distinct report hashes and runner roots, and requires byte-identical deterministic replay output, while deliberately granting no runtime authority.",
+        "Frozen product-benchmark credit now requires exact positive classification, category, canonical CWE inventory, severity and hash-valid location, with one globally bounded deterministic maximum finding/case assignment. Safe controls remain conservative negatives; detached reuse and unbounded matching fail closed.",
+        "The frozen autonomous comparison policy fixes all 17 model-benchmark dimension denominators and perfect-score floors, exact primary/replay and case/dimension joins, and a strict closed-ledger campaign cost below USD 250. Missing baseline, trusted time, REAL runner custody, or closed cost evidence stays unevaluable; every durable authority flag is false.",
+        "A mechanism-only frozen-lineage resolver now derives exact alias/root collisions from verifier-pinned complete synthetic membership and rejects unknown/provider IDs, same-root pairs, fixture drift, forged or serialized capabilities, public placeholders, and post-fork use. Its current-run synthetic source cannot prove non-model authorship or external ancestry, so runner authority remains unavailable.",
+        "The final focused matrix passed 154 tests; schemas, Ruff, strict mypy over 149 source files, and diff integrity passed; the complete local suite passed 3203 tests with 11 explicit prerequisite skips.",
+        "Corrected documentary lineage now confirms 8 exact identities across 7 roots, excludes 4 ambiguous identities, and preserves all four negative-only collision constraints. The provider-free one-PID AUTHRUNNER path exact-joins two candidate campaigns, two distinct-root judge adjudications, fresh generation evidence, and one closed ledger interval; rejects raw structural REAL labels, altered frozen truth, same-root judges, stale lineage, detached evidence, absent egress authorization, over-ceiling reservations, nonterminal callback deltas, and unsafe output publication; and retains strict PRIMARY/REPLAY replay artifacts. A descriptor-safe offline command revalidates the canonical durable evidence without issuing capability.",
+        "The local runner lease is now one-way and removed after the sole AUTHSEAL comparison attempt; replay detects concurrent revocation, negative custody is checked before return, and detached durable report copies prevent live nested capabilities or owned-REAL object identities from escaping. The final independent lifecycle audit found no blocker/HIGH after two reproduced defects were fixed. Durable evidence remains nonauthorizing; authenticated REAL runner evidence and the positive issued-capability consume/revoke/reject assay have not been produced."
       ],
-      "remaining_proof": "Independent SUPPORT/DISPUTE/INCONCLUSIVE matrix and multiple-lineage adjudication."
+      "remaining_proof": "Authenticated REAL cross-lineage runner/egress evidence from the settled one-PID path; a genuine issued-capability internal-consume, exactly-once-revoke, direct/AUTHSEAL-reject proof; a separately source-pinned baseline; trusted evaluation time; and independently verified external-log inclusion."
     },
     {
       "id": "O",
@@ -244,11 +276,16 @@
     {
       "id": "R",
       "title": "Blind end-to-end product benchmarks",
-      "tickets": ["V3-BENCHMARK-001", "V3-CERTIFICATE-001"],
-      "status": "QUEUED",
-      "current_evidence_class": "MISSING",
-      "evidence": ["Existing Foundry harnesses are component property evidence, not automated discovery recall."],
-      "remaining_proof": "Frozen-before-ground-truth product reports for both required repositories, non-zero scoring, and a current certificate."
+      "tickets": ["V3-AUTHSEAL-001", "V3-BENCHSCORE-001", "V3-AUTHVERDICT-001", "V3-BENCHMARK-001", "V3-HUMANCMP-001", "V3-CERTIFICATE-001"],
+      "status": "PARTIAL",
+      "current_evidence_class": "LOCAL_IMPLEMENTATION",
+      "evidence": [
+        "Existing Foundry harnesses are component property evidence, not automated discovery recall.",
+        "The frozen product scorer now denies recall and precision credit to wrong classification/category/CWE identities and uses a bounded deterministic maximum one-to-one assignment; the 297-test benchmark/authority/schema matrix passed.",
+        "The objective-pinned autonomous verdict policy deterministically binds all 17 frozen model-benchmark dimensions, primary/replay equality, case outcomes, lineage structure, and strict campaign-budget closure. The 354-test affected matrix passed, while absent REAL runner custody, trusted time, and a frozen baseline remain explicitly unevaluable.",
+        "The downstream target definition BEST-IN-CLASS-PROOF-protocol-2026-08-18.md is pinned at 7900 bytes and SHA-256 d4097606321210f6ff432490fe517a1e2c1a727b792852528c59d262061ac4e7. It requires pre-registration, pre-truth external-log inclusion, contamination controls, at least 25 blind comparisons for Tier 1, best-firm plus independently adjudicated tool-only evidence for Tier 2, and mutually blind prospective human comparison for Tier 3; no such run has begun."
+      ],
+      "remaining_proof": "Corrected documentary public-lineage authority is complete. Next complete authenticated REAL egress and independent external-log inclusion in that order; then build and execute the contamination-controlled frozen benchmark harness on at least 25 category-spanning targets, independently adjudicate the human comparisons, publish favourable and unfavourable outcomes, and issue a current certificate. Until then Tier 1-3 and superiority remain NOT_DEMONSTRATED."
     },
     {
       "id": "S",
@@ -259,7 +296,7 @@
       "evidence": [
         "V3-SMOKE-001 completed one exact identity-bound real synthetic provider call under STRICT_ZDR with reconciled cost; it is component evidence, not a completed product audit."
       ],
-      "remaining_proof": "Complete the real sharded single-model audit, multi-model audit, maximum-assurance benchmark audit, and privacy-gated operator repository run when eligible."
+      "remaining_proof": "Complete the real sharded single-model audit, multi-model audit, and maximum-assurance synthetic/public benchmark audit. Private-repository execution is opt-in and is not a completion requirement."
     },
     {
       "id": "T",
@@ -281,7 +318,7 @@
         "V3-FORKDIFF-001 reproduced two distinct replay defects, added fail-closed regressions, passed a real local clean/pinned Foundry matrix and manifest-bound default replay, then passed 574 focused tests, Ruff, strict mypy, schema synchronization, diff review, and the full 2992-test suite with 10 explicit prerequisite skips.",
         "V3-FIXTURE-001 is COMPLETE. Its historical PARTIAL checkpoint generated 196 deterministic files and passed a real local compiler integration; V3-OMISSION-001 subsequently removed the expected reds, V3-SHARD-001 consumed all three roots, and current close-out revalidation passed 8 generator, 8 marked scale, 57 shard, and 1 real offline compiler-backed tests without provider execution.",
         "V3-EXECORIGIN-001 closed two independent serialized-evidence false-complete gaps, passed its 154-test final focused matrix, schema synchronization, Ruff, strict mypy over 149 source files, diff and artifact review, and the complete local suite with 3203 tests and 11 explicit prerequisite skips. Paid-provider execution remained disabled.",
-        "V3-MODELREFRESH-001 completed its provider-free discovery/diff/workflow slice with independent adversarial replay, 354 touched tests, Ruff, strict mypy over 154 source files, generated-schema and workflow-shell verification, diff and artifact review, and a final complete result of 3602 passed with 11 explicit prerequisite skips. The paid-provider test remained disabled and the ticket stayed PARTIAL.",
+        "V3-MODELREFRESH-001 completed its provider-free discovery, durable-history, runtime-veto, and refreshed-pricing custody mechanism with independent adversarial replay. The final tree passed 5392 tests with 21 explicit unavailable/opt-in skips plus Ruff, strict mypy over 181 source files, generated schemas, JSON, and diff checks; the paid-provider test remained disabled and the ticket stayed PARTIAL pending live authority and provider evidence.",
         "V3-LINEAGE-001 completed its provider-free non-authorizing overlay and all eight consumer fail-closed regressions. The joined matrix passed 565 tests; repository Ruff, strict mypy over 155 source files, schema synchronization, and diff integrity passed; the complete local suite had only sandbox-denied loopback setup errors, and the exact 76-test bridge file passed with local-loopback permission. The ticket remains PARTIAL because no current real refresh or independently authenticated complete operator decision exists.",
         "V3-TOOLDIAG-002 followed reproduce, negative regression, remediation, focused/static/real integration, independent review, traceability, and full-suite sequencing. The final real macOS matrix passed 6 cases; the exact final tree passed 4501 tests with 11 explicit skips in 1430.04s, Ruff, strict mypy over 166 source files, release schemas, diff, artifact, and secret-boundary review.",
         "V3-REPORT-001 followed red-to-green report-quality assays, broad report/release and pipeline matrices, independent adversarial review, final rendering hardening, exact artifact-set traceability, schema/static/hygiene checks, and a definitive 4786-pass complete suite with 11 explicit external-prerequisite/opt-in skips. Checkpoint 487041a58431119ae2f52ae704dddd6b9b91170c contains the implementation; no provider call, secret access, public RPC, live target, or new real audit occurred."

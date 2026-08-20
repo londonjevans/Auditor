@@ -496,6 +496,593 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "artifacts": {
+            "contains": {
+              "properties": {
+                "path": {
+                  "const": "audit-model-refresh-evidence.json"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          }
+        },
+        "required": [
+          "artifacts"
+        ]
+      },
+      "then": {
+        "properties": {
+          "artifacts": {
+            "contains": {
+              "properties": {
+                "path": {
+                  "const": "audit-model-selection-evidence.json"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            },
+            "maxContains": 1,
+            "minContains": 1
+          },
+          "bindings": {
+            "properties": {
+              "models": {
+                "allOf": [
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh/audit-route-set"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh/audit-selection"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh/audit-selection-capability"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh/evidence"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh/evidence-file"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh/freshness"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh/snapshot"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh/technical-qualification-capability"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh/technical-route-set"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh/technical-selection"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh/workflow-status"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  }
+                ]
+              }
+            },
+            "required": [
+              "models"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "bindings": {
+            "properties": {
+              "models": {
+                "contains": {
+                  "properties": {
+                    "identifier": {
+                      "enum": [
+                        "audit-model-refresh/audit-route-set",
+                        "audit-model-refresh/audit-selection",
+                        "audit-model-refresh/audit-selection-capability",
+                        "audit-model-refresh/evidence",
+                        "audit-model-refresh/evidence-file",
+                        "audit-model-refresh/freshness",
+                        "audit-model-refresh/snapshot",
+                        "audit-model-refresh/technical-qualification-capability",
+                        "audit-model-refresh/technical-route-set",
+                        "audit-model-refresh/technical-selection",
+                        "audit-model-refresh/workflow-status"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "identifier"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "models"
+            ]
+          }
+        },
+        "required": [
+          "bindings"
+        ]
+      },
+      "then": {
+        "properties": {
+          "artifacts": {
+            "contains": {
+              "properties": {
+                "path": {
+                  "const": "audit-model-refresh-evidence.json"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            },
+            "maxContains": 1,
+            "minContains": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "artifacts": {
+            "contains": {
+              "properties": {
+                "path": {
+                  "const": "audit-model-refresh-pricing-evidence.json"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          }
+        },
+        "required": [
+          "artifacts"
+        ]
+      },
+      "then": {
+        "properties": {
+          "artifacts": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "path": {
+                      "const": "audit-model-selection-evidence.json"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "path": {
+                      "const": "audit-model-refresh-evidence.json"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 1
+              }
+            ]
+          },
+          "bindings": {
+            "properties": {
+              "models": {
+                "allOf": [
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh-pricing/audit-route-set"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh-pricing/audit-selection"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh-pricing/authority-comparison"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh-pricing/baseline-snapshot"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh-pricing/current-snapshot"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh-pricing/evidence"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh-pricing/evidence-file"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh-pricing/refresh-evidence"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh-pricing/refresh-guard-comparison"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh-pricing/technical-qualification-capability"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh-pricing/technical-route-set"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh-pricing/technical-selection"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh-pricing/tolerance"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "identifier": {
+                          "const": "audit-model-refresh-pricing/workflow-status"
+                        }
+                      },
+                      "required": [
+                        "identifier"
+                      ]
+                    },
+                    "maxContains": 1,
+                    "minContains": 1
+                  }
+                ]
+              }
+            },
+            "required": [
+              "models"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "bindings": {
+            "properties": {
+              "models": {
+                "contains": {
+                  "properties": {
+                    "identifier": {
+                      "enum": [
+                        "audit-model-refresh-pricing/audit-route-set",
+                        "audit-model-refresh-pricing/audit-selection",
+                        "audit-model-refresh-pricing/authority-comparison",
+                        "audit-model-refresh-pricing/baseline-snapshot",
+                        "audit-model-refresh-pricing/current-snapshot",
+                        "audit-model-refresh-pricing/evidence",
+                        "audit-model-refresh-pricing/evidence-file",
+                        "audit-model-refresh-pricing/refresh-evidence",
+                        "audit-model-refresh-pricing/refresh-guard-comparison",
+                        "audit-model-refresh-pricing/technical-qualification-capability",
+                        "audit-model-refresh-pricing/technical-route-set",
+                        "audit-model-refresh-pricing/technical-selection",
+                        "audit-model-refresh-pricing/tolerance",
+                        "audit-model-refresh-pricing/workflow-status"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "identifier"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "models"
+            ]
+          }
+        },
+        "required": [
+          "bindings"
+        ]
+      },
+      "then": {
+        "properties": {
+          "artifacts": {
+            "contains": {
+              "properties": {
+                "path": {
+                  "const": "audit-model-refresh-pricing-evidence.json"
+                }
+              },
+              "required": [
+                "path"
+              ]
+            },
+            "maxContains": 1,
+            "minContains": 1
+          }
+        }
+      }
     }
   ],
   "$defs": {

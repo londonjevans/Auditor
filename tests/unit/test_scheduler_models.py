@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from contextlib import suppress
 from dataclasses import dataclass
 
@@ -50,6 +50,7 @@ from mmaudit.models.scheduler import (
     SchedulerTerminalReportAuthority,
     SchedulerTerminalStatus,
     build_scheduler_model_request_evidence,
+    build_scheduler_truncation_recovery_model_request_evidence,
     repository_pseudo_shard_id,
     scheduler_canonical_sha256,
     scheduler_role_requires_specialist_accepted_outcome,
@@ -94,6 +95,20 @@ from tests.scheduler_support import (
 
 def _sha256(label: str) -> str:
     return hashlib.sha256(label.encode()).hexdigest()
+
+
+class _LyingInfiniteIterable[ItemT]:
+    """Yield forever while falsely advertising an empty inventory."""
+
+    def __init__(self, item: ItemT) -> None:
+        self._item = item
+
+    def __len__(self) -> int:
+        return 0
+
+    def __iter__(self) -> Iterator[ItemT]:
+        while True:
+            yield self._item
 
 
 def _analysis_inventory() -> SchedulerAnalysisInputInventory:
@@ -1745,6 +1760,37 @@ def test_reusable_complete_fixture_exposes_actual_hash_only_model_requests() -> 
     assert len(fixture.artifact.model_requests) == fixture.journal_evidence.model_request_count
     assert all(item.user_prompt_sha256 is not None for item in fixture.artifact.model_requests)
     assert all(item.result_sha256 is not None for item in fixture.artifact.model_requests)
+
+
+def test_recovery_public_projection_bounds_a_lying_infinite_parent_inventory() -> None:
+    fixture = build_complete_scheduler_fixture(seed="bounded-recovery-public-projection")
+    parent_request = fixture.artifact.model_requests[0]
+
+    with pytest.raises(ValueError, match="model-request inventory exceeds its item limit"):
+        build_scheduler_truncation_recovery_model_request_evidence(
+            manifest=fixture.summary.manifest,
+            model_requests=_LyingInfiniteIterable(parent_request),
+            truncation_recovery_entries=(),
+        )
+
+
+def test_scheduler_artifact_bounds_lying_infinite_request_inventories() -> None:
+    fixture = build_complete_scheduler_fixture(seed="bounded-scheduler-artifact")
+    model_request = fixture.artifact.model_requests[0]
+
+    with pytest.raises(ValueError, match="artifact model-request inventory exceeds"):
+        SchedulerArtifact.build(
+            summary=fixture.summary,
+            journal_evidence=fixture.journal_evidence,
+            model_requests=_LyingInfiniteIterable(model_request),
+        )
+    with pytest.raises(ValueError, match="artifact recovery-model-request inventory exceeds"):
+        SchedulerArtifact.build(
+            summary=fixture.summary,
+            journal_evidence=fixture.journal_evidence,
+            model_requests=fixture.artifact.model_requests,
+            recovery_model_requests=_LyingInfiniteIterable(object()),  # type: ignore[arg-type]
+        )
 
 
 def test_summary_only_or_incomplete_journal_cannot_publish_complete_artifact() -> None:

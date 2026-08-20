@@ -1095,7 +1095,10 @@ def _canonical_price(value: str) -> str:
         raise EndpointSnapshotValidationError("endpoint price must be finite and nonnegative")
     if parsed == 0:
         return "0"
-    return format(parsed.normalize(), "f")
+    canonical = format(parsed, "f")
+    if "." in canonical:
+        canonical = canonical.rstrip("0").rstrip(".")
+    return canonical
 
 
 def _validate_zdr_counterpart(

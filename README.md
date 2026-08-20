@@ -453,16 +453,18 @@ evidence.
 
 ### Specialist ensemble
 
-Maximum assurance requires 20 narrow investigator responsibilities: access control,
+Maximum assurance requires 22 narrow investigator responsibilities: access control,
 reentrancy/control flow, economic game theory, oracle manipulation, accounting/invariants, token
 standards, ERC4626, AMMs, lending, governance, upgradeability/storage,
 initialization/deployment, signatures/replay, MEV/ordering, denial of service/griefing,
-precision/rounding, bridges, dependency/supply chain, formal properties, and blind false-negative
-hunting. Separate auxiliary passes handle test generation, reproduction planning, non-finding
-invariant review, falsification, and report-quality review. Primary investigators run blind to one
-another; later stages receive grouped evidence. Duplicate model IDs or generic repeated agents do
-not satisfy missing responsibilities, do not create independent votes, and model agreement alone
-cannot confirm a Solidity finding.
+precision/rounding, bridges, dependency/supply chain, formal properties, lifecycle state machines,
+randomness/entropy/commit-reveal, and blind false-negative hunting. The exact 24-role
+candidate-independent certification portfolio is those 22 investigators plus non-finding invariant
+review and report-quality review. Test generation, reproduction planning, and falsification remain
+candidate-dependent extras and cannot replace a missing portfolio responsibility. Primary
+investigators run blind to one another; later stages receive grouped evidence. Duplicate model IDs,
+aliases, retries, or generic repeated agents do not satisfy missing responsibilities, do not create
+independent votes, and model agreement alone cannot confirm a Solidity finding.
 
 Generated executable verification is candidate-specific. Models may only emit a strict declarative
 Foundry test specification: actors, target aliases, ABI signatures, arguments, value, assertions,

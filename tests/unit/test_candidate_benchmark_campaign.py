@@ -32,6 +32,7 @@ from mmaudit.models.usage import UsageLedger
 from mmaudit.orchestration.budgets import BudgetManager
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.manifest import canonical_sha256
+from mmaudit.privacy import PrivacyProfile
 from tests.unit import test_candidate_benchmark as fixtures
 
 ROOT = Path(__file__).parents[2]
@@ -50,6 +51,7 @@ def test_campaign_authority_exposes_no_raw_capability_registrar() -> None:
 def _config(config_factory: Callable[..., AuditConfig]) -> AuditConfig:
     return config_factory(
         execution={"max_requests_per_agent": 512},
+        privacy={"profile": PrivacyProfile.SYNTHETIC_BENCHMARK},
         models={"reasoning": {"effort": "high", "reserved_tokens": 4_096}},
     )
 

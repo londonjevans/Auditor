@@ -22,7 +22,12 @@ from mmaudit.benchmark.models import (
     ModelBenchmarkDimensionScore,
     load_model_benchmark_corpus,
 )
-from mmaudit.constants import ALL_MODEL_ROLES, ALL_SPECIALIST_ROLES
+from mmaudit.constants import (
+    ALL_MODEL_ROLES,
+    ALL_SPECIALIST_ROLES,
+    CANDIDATE_DEPENDENT_SPECIALIST_ROLES,
+    CANDIDATE_INDEPENDENT_SPECIALIST_ROLES,
+)
 from mmaudit.models.calibration import (
     ModelCalibrationArtifact,
     ModelCalibrationCandidateObservation,
@@ -2636,7 +2641,7 @@ def _production_evidence(bundle: _Bundle):
     candidates = {candidate.exact_model_id: candidate for candidate in bundle.registry.candidates}
     records: list[UsageRecord] = []
     specialist_request_ids: list[str] = []
-    for index, role in enumerate(ALL_SPECIALIST_ROLES[:24]):
+    for index, role in enumerate(CANDIDATE_INDEPENDENT_SPECIALIST_ROLES):
         candidate = candidates[_model_id(index % 8)]
         request_id = f"specialist-{index}"
         specialist_request_ids.append(request_id)
@@ -2821,6 +2826,46 @@ def test_certified_ensemble_enforces_all_six_runtime_minima() -> None:
     assert len(evaluation.specialist_responsibilities) == 24
     assert len(evaluation.critical_surface_lineages["surface-critical"]) == 3
     assert len(evaluation.falsifier_candidate_lineages["candidate-high"]) == 2
+
+
+def test_candidate_dependent_specialists_cannot_replace_portfolio_responsibility() -> None:
+    bundle = _bundle()
+    assert bundle.selection is not None
+    records, _critical, _candidates, _falsifier = _production_evidence(bundle)
+    missing_role = "state_machine_lifecycle"
+    retained = [
+        record for record in records if record.role != _specialist_request_role(missing_role)
+    ]
+    candidates_by_id = {
+        candidate.exact_model_id: candidate for candidate in bundle.registry.candidates
+    }
+    for index, role in enumerate(CANDIDATE_DEPENDENT_SPECIALIST_ROLES, start=5):
+        retained.append(
+            _bind_ensemble_usage(
+                bundle,
+                _usage_record(
+                    candidate=candidates_by_id[_model_id(index)],
+                    role=_specialist_request_role(role),
+                    request_id=f"candidate-dependent-specialist-{index}",
+                    qualification_artifact_sha256=bundle.artifact.artifact_sha256,
+                    production_selection_sha256=bundle.selection.selection_sha256,
+                ),
+            )
+        )
+
+    evaluation = _evaluate(bundle, usage_records=tuple(retained))
+    requirement = next(
+        item
+        for item in evaluation.requirements
+        if item.requirement == "specialist_responsibilities"
+    )
+
+    assert not evaluation.passed
+    assert requirement.observed == 23
+    assert requirement.required == len(CANDIDATE_INDEPENDENT_SPECIALIST_ROLES)
+    assert requirement.state.value == "fail"
+    assert missing_role not in evaluation.specialist_responsibilities
+    assert set(CANDIDATE_DEPENDENT_SPECIALIST_ROLES) <= set(evaluation.specialist_responsibilities)
 
 
 def test_certified_ensemble_requires_exact_opaque_reasoning_authority() -> None:

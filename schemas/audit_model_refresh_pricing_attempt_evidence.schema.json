@@ -1,0 +1,308 @@
+{
+  "$defs": {
+    "EndpointRequestCostComponentEvidence": {
+      "additionalProperties": false,
+      "description": "Durable exact projection of one request cost-bound component.",
+      "properties": {
+        "maximum_units": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Maximum Units",
+          "type": "integer"
+        },
+        "pricing_field": {
+          "pattern": "^[a-z][a-z0-9_]{0,63}$",
+          "title": "Pricing Field",
+          "type": "string"
+        },
+        "unit_price_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,11}|(?:0|[1-9][0-9]{0,11})\\.[0-9]{0,35}[1-9])$",
+          "title": "Unit Price Usd Exact",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pricing_field",
+        "unit_price_usd_exact",
+        "maximum_units"
+      ],
+      "title": "EndpointRequestCostComponentEvidence",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/audit_model_refresh_pricing_attempt_evidence.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Non-authorizing price and cost-bound custody for one provider attempt.\n\nThe record is safe to retain in usage and report artifacts. Its hashes prove\nstructural consistency only; they cannot recreate the live refresh or pricing\ncapabilities required at the transport boundary.",
+  "properties": {
+    "attempt_index": {
+      "maximum": 32,
+      "minimum": 1,
+      "title": "Attempt Index",
+      "type": "integer"
+    },
+    "attempt_request_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Attempt Request Id",
+      "type": "string"
+    },
+    "authority_mode": {
+      "const": "NON_AUTHORIZING_REQUEST_COST_BOUND",
+      "default": "NON_AUTHORIZING_REQUEST_COST_BOUND",
+      "title": "Authority Mode",
+      "type": "string"
+    },
+    "baseline_pricing": {
+      "maxProperties": 64,
+      "minProperties": 2,
+      "patternProperties": {
+        "^[a-z][a-z0-9_]{0,63}$": {
+          "maxLength": 49,
+          "minLength": 1,
+          "pattern": "^(?:0|[1-9][0-9]{0,11}|(?:0|[1-9][0-9]{0,11})\\.[0-9]{0,35}[1-9])$",
+          "type": "string"
+        }
+      },
+      "propertyNames": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[a-z][a-z0-9_]{0,63}$"
+      },
+      "title": "Baseline Pricing",
+      "type": "object"
+    },
+    "baseline_pricing_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Baseline Pricing Sha256",
+      "type": "string"
+    },
+    "components": {
+      "items": {
+        "$ref": "#/$defs/EndpointRequestCostComponentEvidence"
+      },
+      "maxItems": 64,
+      "minItems": 2,
+      "title": "Components",
+      "type": "array"
+    },
+    "cost_bound_pricing_snapshot_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Cost Bound Pricing Snapshot Sha256",
+      "type": "string"
+    },
+    "current_endpoint_snapshot_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Current Endpoint Snapshot Sha256",
+      "type": "string"
+    },
+    "current_pricing": {
+      "maxProperties": 64,
+      "minProperties": 2,
+      "patternProperties": {
+        "^[a-z][a-z0-9_]{0,63}$": {
+          "maxLength": 49,
+          "minLength": 1,
+          "pattern": "^(?:0|[1-9][0-9]{0,11}|(?:0|[1-9][0-9]{0,11})\\.[0-9]{0,35}[1-9])$",
+          "type": "string"
+        }
+      },
+      "propertyNames": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[a-z][a-z0-9_]{0,63}$"
+      },
+      "title": "Current Pricing",
+      "type": "object"
+    },
+    "current_pricing_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Current Pricing Sha256",
+      "type": "string"
+    },
+    "evidence_authority": {
+      "const": "comparison_required",
+      "default": "comparison_required",
+      "title": "Evidence Authority",
+      "type": "string"
+    },
+    "evidence_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Evidence Sha256",
+      "type": "string"
+    },
+    "exact_model_id": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+      "title": "Exact Model Id",
+      "type": "string"
+    },
+    "logical_request_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Logical Request Id",
+      "type": "string"
+    },
+    "maximum_cost_usd_exact": {
+      "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,18})?$",
+      "title": "Maximum Cost Usd Exact",
+      "type": "string"
+    },
+    "pricing_authority_capability_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Pricing Authority Capability Sha256",
+      "type": "string"
+    },
+    "pricing_evidence_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Pricing Evidence Sha256",
+      "type": "string"
+    },
+    "pricing_expires_at": {
+      "format": "date-time",
+      "title": "Pricing Expires At",
+      "type": "string"
+    },
+    "pricing_route_evidence_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Pricing Route Evidence Sha256",
+      "type": "string"
+    },
+    "pricing_use_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Pricing Use Authorized",
+      "type": "boolean"
+    },
+    "pricing_verified_at": {
+      "format": "date-time",
+      "title": "Pricing Verified At",
+      "type": "string"
+    },
+    "provider_access_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Provider Access Authorized",
+      "type": "boolean"
+    },
+    "provider_endpoint": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,255}$",
+      "title": "Provider Endpoint",
+      "type": "string"
+    },
+    "provider_max_price": {
+      "maxProperties": 4,
+      "minProperties": 2,
+      "patternProperties": {
+        "^(?:completion|image|prompt|request)$": {
+          "maxLength": 55,
+          "minLength": 1,
+          "pattern": "^(?:0|[1-9][0-9]{0,17}|(?:0|[1-9][0-9]{0,17})\\.[0-9]{0,35}[1-9])$",
+          "type": "string"
+        }
+      },
+      "propertyNames": {
+        "maxLength": 10,
+        "minLength": 1,
+        "pattern": "^(?:completion|image|prompt|request)$"
+      },
+      "title": "Provider Max Price",
+      "type": "object"
+    },
+    "provider_max_price_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Provider Max Price Sha256",
+      "type": "string"
+    },
+    "qualified_pricing_snapshot_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Qualified Pricing Snapshot Sha256",
+      "type": "string"
+    },
+    "refresh_evidence_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Refresh Evidence Sha256",
+      "type": "string"
+    },
+    "refresh_guard_capability_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Refresh Guard Capability Sha256",
+      "type": "string"
+    },
+    "refresh_route_evidence_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Refresh Route Evidence Sha256",
+      "type": "string"
+    },
+    "request_body_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Request Body Sha256",
+      "type": "string"
+    },
+    "request_material_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Request Material Sha256",
+      "type": "string"
+    },
+    "reservation_checked_at": {
+      "format": "date-time",
+      "title": "Reservation Checked At",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "transport_attempted": {
+      "title": "Transport Attempted",
+      "type": "boolean"
+    },
+    "transport_checked_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Transport Checked At"
+    }
+  },
+  "required": [
+    "logical_request_id",
+    "attempt_request_id",
+    "attempt_index",
+    "reservation_checked_at",
+    "transport_attempted",
+    "pricing_verified_at",
+    "pricing_expires_at",
+    "exact_model_id",
+    "provider_endpoint",
+    "current_endpoint_snapshot_sha256",
+    "request_material_sha256",
+    "request_body_sha256",
+    "pricing_evidence_sha256",
+    "pricing_authority_capability_sha256",
+    "pricing_route_evidence_sha256",
+    "refresh_evidence_sha256",
+    "refresh_guard_capability_sha256",
+    "refresh_route_evidence_sha256",
+    "qualified_pricing_snapshot_sha256",
+    "baseline_pricing",
+    "baseline_pricing_sha256",
+    "current_pricing",
+    "current_pricing_sha256",
+    "cost_bound_pricing_snapshot_sha256",
+    "components",
+    "maximum_cost_usd_exact",
+    "provider_max_price",
+    "provider_max_price_sha256",
+    "evidence_sha256"
+  ],
+  "title": "mmaudit audit-scoped model refresh pricing attempt evidence",
+  "type": "object"
+}

@@ -9,6 +9,8 @@ from typing import Any
 
 import httpx
 
+from mmaudit.models.schemas import CandidateReviewBatch
+from mmaudit.models.truncation import CandidateReviewFramePhase, frame_candidate_review_batch
 from tests.conftest import MODEL_IDS
 
 _OUTPUT_PROTOCOL_OPEN = "<MMAUDIT_STRUCTURED_OUTPUT_PROTOCOL>"
@@ -39,6 +41,83 @@ def _request_schema_name(body: dict[str, Any]) -> str:
     if not isinstance(schema_name, str):
         raise AssertionError("synthetic request output protocol omitted schema name")
     return schema_name
+
+
+def _candidate_review_wire(content: dict[str, Any]) -> str:
+    """Encode one synthetic candidate batch through the production framed wire contract."""
+
+    batch = CandidateReviewBatch.model_validate(content)
+    document = frame_candidate_review_batch(batch)
+    return json.dumps(
+        document.model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+
+
+def _truncated_candidate_review_wire(
+    content: dict[str, Any],
+    *,
+    retained_surface_count: int | None = None,
+    retained_finding_count: int | None = None,
+) -> str:
+    """End one framed review inside the selected next record after a valid prefix."""
+
+    batch = CandidateReviewBatch.model_validate(content)
+    document = frame_candidate_review_batch(batch)
+    frames = tuple(document.frames)
+    if (retained_surface_count is None) == (retained_finding_count is None):
+        raise AssertionError("synthetic truncation requires one exact record channel")
+    phase = (
+        CandidateReviewFramePhase.SURFACE_REVIEW
+        if retained_surface_count is not None
+        else CandidateReviewFramePhase.FINDING
+    )
+    retained_count = (
+        retained_surface_count if retained_surface_count is not None else retained_finding_count
+    )
+    assert retained_count is not None
+    record_indexes = tuple(index for index, frame in enumerate(frames) if frame.phase is phase)
+    if retained_count < 0 or retained_count >= len(record_indexes):
+        raise AssertionError("synthetic truncation requires a subsequent unfinished record")
+    partial_index = record_indexes[retained_count]
+    serialized_prefix = tuple(
+        json.dumps(
+            frame.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+        for frame in frames[:partial_index]
+    )
+    sequence = frames[partial_index].sequence
+    partial_record = (
+        '"surface_id":"synthetic-private-tail'
+        if phase is CandidateReviewFramePhase.SURFACE_REVIEW
+        else '"candidate_id":"synthetic-private-tail'
+    )
+    return (
+        '{"frames":['
+        + ",".join(serialized_prefix)
+        + f',{{"schema_version":"1.0","sequence":{sequence},'
+        + f'"phase":"{phase.value}","record":{{{partial_record}'
+    )
+
+
+def _uses_candidate_review_wire(schema_name: str) -> bool:
+    return (
+        schema_name.startswith("mmaudit_whole_protocol_review_")
+        or schema_name
+        in {
+            "mmaudit_source_audit_findings",
+            "mmaudit_business_logic_findings",
+            "mmaudit_configuration_findings",
+        }
+        or schema_name.startswith("mmaudit_specialist_")
+    )
 
 
 def _candidate(
@@ -549,6 +628,106 @@ def _request_scoped_candidate_id(
     return f"{base_candidate_id}-{scope_sha256[:20]}"
 
 
+def _maximum_assurance_candidates(
+    user_prompt: str,
+    *,
+    logical_request_id: str,
+    role: str,
+    include_vulnerabilities: bool,
+    include_safe_control: bool,
+) -> list[dict[str, Any]]:
+    """Emit only planted findings whose exact source bytes reached this request."""
+
+    templates = (
+        (
+            False,
+            _candidate(
+                candidate_id="specialist-access",
+                role=role,
+                title="Anyone can drain the access vault",
+                path="src/AccessVault.sol",
+                start_line=12,
+                end_line=14,
+                cwe="CWE-862",
+                symbol="drain",
+            ),
+        ),
+        (
+            False,
+            _candidate(
+                candidate_id="specialist-reentrancy",
+                role=role,
+                title="External callback precedes balance clearing",
+                path="src/ReentrantBank.sol",
+                start_line=12,
+                end_line=17,
+                cwe="CWE-841",
+                symbol="withdraw",
+                severity="critical",
+            ),
+        ),
+        (
+            False,
+            _candidate(
+                candidate_id="specialist-oracle",
+                role=role,
+                title="Same-transaction spot price controls debt",
+                path="src/SpotOracleLender.sol",
+                start_line=17,
+                end_line=19,
+                cwe="CWE-20",
+                symbol="borrow",
+            ),
+        ),
+        (
+            False,
+            _candidate(
+                candidate_id="specialist-upgrade",
+                role=role,
+                title="Unrestricted UUPS implementation change",
+                path="src/UnsafeUUPS.sol",
+                start_line=9,
+                end_line=14,
+                cwe="CWE-862",
+                symbol="upgradeTo",
+                severity="critical",
+            ),
+        ),
+        (
+            True,
+            _candidate(
+                candidate_id="specialist-safe-control",
+                role=role,
+                title="Rescue may lack authorization",
+                path="src/SafeControls.sol",
+                start_line=26,
+                end_line=28,
+                cwe="CWE-862",
+                symbol="rescue",
+            ),
+        ),
+    )
+    findings: list[dict[str, Any]] = []
+    for is_safe_control, candidate in templates:
+        if is_safe_control and not include_safe_control:
+            continue
+        if not is_safe_control and not include_vulnerabilities:
+            continue
+        location = candidate["locations"][0]
+        candidate_id = _request_scoped_candidate_id(
+            candidate["candidate_id"],
+            user_prompt,
+            location["path"],
+            location["start_line"],
+            location["end_line"],
+            logical_request_id=logical_request_id,
+        )
+        if candidate_id is not None:
+            candidate["candidate_id"] = candidate_id
+            findings.append(candidate)
+    return findings
+
+
 def _entity_citation(entity: dict[str, Any], *, symbol: str | None = None) -> dict[str, Any]:
     resolved_symbol = symbol or entity["id"]
     return {
@@ -826,6 +1005,9 @@ class FakeOpenRouter:
     max_prompt_tokens: int = 180_000
     max_completion_tokens: int = 20_000
     chat_calls: int = 0
+    truncated_parent_calls: int = 0
+    recovery_child_calls: int = 0
+    specialist_truncation_calls: int = 0
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/models"):
@@ -908,6 +1090,61 @@ class FakeOpenRouter:
                 "findings": [],
                 "surface_reviews": _surface_reviews(user, role=request_role),
             }
+            logical_request_id = metadata.get("mmaudit_request_id")
+            if self.mode in {
+                "truncation_recovery",
+                "truncation_recovery_multiple",
+                "truncation_recovery_retained_surface",
+            } and isinstance(logical_request_id, str):
+                if logical_request_id.startswith("scheduler-recovery-request-"):
+                    self.recovery_child_calls += 1
+                    if (
+                        self.mode
+                        in {
+                            "truncation_recovery",
+                            "truncation_recovery_multiple",
+                        }
+                        and self.recovery_child_calls % 2 == 0
+                    ):
+                        return self._completion(
+                            body,
+                            _truncated_candidate_review_wire(
+                                content,
+                                retained_surface_count=0,
+                            ),
+                            finish_reason="length",
+                            native_finish_reason="max_tokens",
+                        )
+                elif logical_request_id.startswith("scheduler-request-") and (
+                    self.truncated_parent_calls == 0
+                    or (
+                        self.mode == "truncation_recovery_multiple"
+                        and self.truncated_parent_calls < 2
+                    )
+                ):
+                    content["findings"] = [
+                        _candidate(
+                            candidate_id=(
+                                f"raw-truncated-parent-{self.truncated_parent_calls}"
+                                if self.mode == "truncation_recovery_multiple"
+                                else "raw-truncated-parent"
+                            ),
+                            role=request_role,
+                        )
+                    ]
+                    retained_surface_count = (
+                        1 if self.mode == "truncation_recovery_retained_surface" else 0
+                    )
+                    self.truncated_parent_calls += 1
+                    return self._completion(
+                        body,
+                        _truncated_candidate_review_wire(
+                            content,
+                            retained_surface_count=retained_surface_count,
+                        ),
+                        finish_reason="length",
+                        native_finish_reason="max_tokens",
+                    )
         elif schema_name == "mmaudit_source_audit_findings":
             user = body["messages"][1]["content"]
             if self.mode in {
@@ -915,14 +1152,31 @@ class FakeOpenRouter:
                 "maximum_assurance",
                 "semantic_accounting",
             }:
+                findings: list[dict[str, Any]] = []
+                if self.mode == "maximum_assurance":
+                    metadata = body.get("metadata")
+                    logical_request_id = (
+                        metadata.get("mmaudit_request_id") if isinstance(metadata, dict) else None
+                    )
+                    if not isinstance(logical_request_id, str) or not logical_request_id:
+                        raise AssertionError(
+                            "maximum-assurance synthetic source audit omitted its logical request ID"
+                        )
+                    findings = _maximum_assurance_candidates(
+                        user,
+                        logical_request_id=logical_request_id,
+                        role="source_audit",
+                        include_vulnerabilities=True,
+                        include_safe_control=False,
+                    )
                 content = {
-                    "findings": [],
+                    "findings": findings,
                     "surface_reviews": _surface_reviews(
                         user,
                         role="source_audit",
                     ),
                 }
-                return self._completion(body, json.dumps(content, sort_keys=True))
+                return self._completion(body, _candidate_review_wire(content))
             reviews_vault = self.mode == "solidity_reproduction" and (
                 _requested_surface_covers_path(user, "src/Vault.sol")
             )
@@ -988,7 +1242,7 @@ class FakeOpenRouter:
                         ),
                     ),
                 }
-                return self._completion(body, json.dumps(content, sort_keys=True))
+                return self._completion(body, _candidate_review_wire(content))
             if self.mode in {"execution_origin_post_judge", "maximum_assurance"}:
                 content = {
                     "findings": [],
@@ -998,7 +1252,7 @@ class FakeOpenRouter:
                         force_inconclusive=self.mode == "execution_origin_post_judge",
                     ),
                 }
-                return self._completion(body, json.dumps(content, sort_keys=True))
+                return self._completion(body, _candidate_review_wire(content))
             reviews_vault = self.mode == "solidity_reproduction" and (
                 _requested_surface_covers_path(user, "src/Vault.sol")
             )
@@ -1195,63 +1449,8 @@ class FakeOpenRouter:
         elif schema_name.startswith("mmaudit_specialist_"):
             specialist = schema_name.removeprefix("mmaudit_specialist_")
             user = body["messages"][1]["content"]
-            candidate_by_role = {
-                "access_control": _candidate(
-                    candidate_id="specialist-access",
-                    role="specialist:access_control",
-                    title="Anyone can drain the access vault",
-                    path="src/AccessVault.sol",
-                    start_line=12,
-                    end_line=14,
-                    cwe="CWE-862",
-                    symbol="drain",
-                ),
-                "reentrancy_control_flow": _candidate(
-                    candidate_id="specialist-reentrancy",
-                    role="specialist:reentrancy_control_flow",
-                    title="External callback precedes balance clearing",
-                    path="src/ReentrantBank.sol",
-                    start_line=12,
-                    end_line=17,
-                    cwe="CWE-841",
-                    symbol="withdraw",
-                    severity="critical",
-                ),
-                "oracle_price_manipulation": _candidate(
-                    candidate_id="specialist-oracle",
-                    role="specialist:oracle_price_manipulation",
-                    title="Same-transaction spot price controls debt",
-                    path="src/SpotOracleLender.sol",
-                    start_line=17,
-                    end_line=19,
-                    cwe="CWE-20",
-                    symbol="borrow",
-                ),
-                "upgradeability_storage": _candidate(
-                    candidate_id="specialist-upgrade",
-                    role="specialist:upgradeability_storage",
-                    title="Unrestricted UUPS implementation change",
-                    path="src/UnsafeUUPS.sol",
-                    start_line=9,
-                    end_line=14,
-                    cwe="CWE-862",
-                    symbol="upgradeTo",
-                    severity="critical",
-                ),
-                "false_negative_hunter": _candidate(
-                    candidate_id="specialist-safe-control",
-                    role="specialist:false_negative_hunter",
-                    title="Rescue may lack authorization",
-                    path="src/SafeControls.sol",
-                    start_line=26,
-                    end_line=28,
-                    cwe="CWE-862",
-                    symbol="rescue",
-                ),
-            }
-            specialist_candidate = candidate_by_role.get(specialist)
             specialist_findings: list[dict[str, Any]] = []
-            if self.mode == "maximum_assurance" and specialist_candidate is not None:
+            if self.mode == "maximum_assurance" and specialist == "false_negative_hunter":
                 metadata = body.get("metadata")
                 logical_request_id = (
                     metadata.get("mmaudit_request_id") if isinstance(metadata, dict) else None
@@ -1260,20 +1459,13 @@ class FakeOpenRouter:
                     raise AssertionError(
                         "maximum-assurance synthetic specialist omitted its logical request ID"
                     )
-                candidate_path = specialist_candidate["locations"][0]["path"]
-                candidate_start_line = specialist_candidate["locations"][0]["start_line"]
-                candidate_end_line = specialist_candidate["locations"][0]["end_line"]
-                candidate_id = _request_scoped_candidate_id(
-                    specialist_candidate["candidate_id"],
+                specialist_findings = _maximum_assurance_candidates(
                     user,
-                    candidate_path,
-                    candidate_start_line,
-                    candidate_end_line,
                     logical_request_id=logical_request_id,
+                    role=f"specialist:{specialist}",
+                    include_vulnerabilities=False,
+                    include_safe_control=True,
                 )
-                if candidate_id is not None:
-                    specialist_candidate["candidate_id"] = candidate_id
-                    specialist_findings.append(specialist_candidate)
             content = {
                 "findings": specialist_findings,
                 "surface_reviews": _surface_reviews(
@@ -1282,6 +1474,35 @@ class FakeOpenRouter:
                     force_inconclusive=self.mode == "execution_origin_post_judge",
                 ),
             }
+            if self.mode == "truncation_recovery_specialist":
+                metadata = body.get("metadata") or {}
+                logical_request_id = metadata.get("mmaudit_request_id")
+                if not isinstance(logical_request_id, str) or not logical_request_id.startswith(
+                    "scheduler-request-"
+                ):
+                    raise AssertionError(
+                        "synthetic specialist truncation omitted its scheduler request"
+                    )
+                content["findings"] = [
+                    _candidate(
+                        candidate_id="raw-specialist-retained",
+                        role=f"specialist:{specialist}",
+                    ),
+                    _candidate(
+                        candidate_id="raw-specialist-private-tail",
+                        role=f"specialist:{specialist}",
+                    ),
+                ]
+                self.specialist_truncation_calls += 1
+                return self._completion(
+                    body,
+                    _truncated_candidate_review_wire(
+                        content,
+                        retained_finding_count=1,
+                    ),
+                    finish_reason="length",
+                    native_finish_reason="max_tokens",
+                )
         elif schema_name == "mmaudit_report_quality_review":
             content = {
                 "passed": True,
@@ -1293,7 +1514,12 @@ class FakeOpenRouter:
             }
         else:
             raise AssertionError(f"unexpected schema {schema_name}")
-        return self._completion(body, json.dumps(content, sort_keys=True))
+        serialized = (
+            _candidate_review_wire(content)
+            if _uses_candidate_review_wire(schema_name)
+            else json.dumps(content, sort_keys=True)
+        )
+        return self._completion(body, serialized)
 
     def _endpoint_record(self, model: str) -> dict[str, Any]:
         return {
@@ -1313,7 +1539,13 @@ class FakeOpenRouter:
         }
 
     @staticmethod
-    def _completion(body: dict[str, Any], content: str) -> httpx.Response:
+    def _completion(
+        body: dict[str, Any],
+        content: str,
+        *,
+        finish_reason: str = "stop",
+        native_finish_reason: str = "stop",
+    ) -> httpx.Response:
         return httpx.Response(
             200,
             headers={"X-Generation-Id": "synthetic-generation"},
@@ -1324,8 +1556,8 @@ class FakeOpenRouter:
                 "choices": [
                     {
                         "index": 0,
-                        "finish_reason": "stop",
-                        "native_finish_reason": "stop",
+                        "finish_reason": finish_reason,
+                        "native_finish_reason": native_finish_reason,
                         "message": {
                             "role": "assistant",
                             "content": content,

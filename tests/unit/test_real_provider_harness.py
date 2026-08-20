@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import inspect
 from collections.abc import Iterator, Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Literal, cast
 
 import pytest
 from pydantic import ValidationError
@@ -19,6 +22,10 @@ from mmaudit.models.identity import (
     seal_unbound_openrouter_identity,
 )
 from mmaudit.models.openrouter import OpenRouterGenerationReconciliationError
+from mmaudit.models.public_lineage_authority import (
+    VerifiedPublicModelLineage,
+    VerifiedPublicModelLineageBindingProjection,
+)
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     ModelIdentityStrength,
@@ -26,21 +33,31 @@ from mmaudit.models.schemas import (
     UsageRecord,
 )
 from mmaudit.models.usage import is_generation_bindable_usage_record
+from mmaudit.orchestration.budgets import BudgetManager
 from mmaudit.orchestration.cost_ledger import (
+    AtomicCostLedger,
     CostEntry,
     CostEntryStatus,
     CostLedgerSnapshot,
 )
 from mmaudit.orchestration.manifest import canonical_sha256
+from mmaudit.privacy import PrivacySourceClassification
 from mmaudit.release_io import read_json_evidence
+from mmaudit.repository.privacy_provenance import PrivacySourceProvenanceObservation
 from tests.identity_fixtures import (
     bind_synthetic_usage_identity,
     reattest_synthetic_real_usage,
 )
 from tests.integration.test_real_openrouter_provider import (
+    _preflight_real_provider_smoke_launch,
+    _refresh_smoke_public_lineage,
+    _resolve_smoke_privacy_preflight,
     _terminal_smoke_ledger_evidence,
     _write_generation_verification_smoke_rejection,
     _write_unbound_smoke_rejection,
+)
+from tests.integration.test_real_openrouter_provider import (
+    test_real_openrouter_exact_private_structured_smoke as _real_provider_smoke_test,
 )
 from tests.real_provider_harness import (
     REAL_PROVIDER_COST_CAP,
@@ -56,6 +73,7 @@ from tests.real_provider_harness import (
     SMOKE_FIXTURE_SHA256,
     SMOKE_MAX_OUTPUT_TOKENS,
     SMOKE_REASONING_EFFORT,
+    SMOKE_STAGE_CAP_USD,
     RealProviderSmokeEvidence,
     RealProviderSmokeRejectionEvidence,
     RealProviderSmokeVerificationRejectionEvidence,
@@ -63,6 +81,7 @@ from tests.real_provider_harness import (
     RealProviderTestSettings,
     SyntheticProviderSmokeResponse,
     _contains_forbidden_authorization_surface,
+    canonical_provider_attempt_request_id,
     load_pinned_synthetic_smoke_fixture,
     load_real_provider_test_settings,
     preflight_real_provider_smoke_output,
@@ -70,6 +89,7 @@ from tests.real_provider_harness import (
     real_provider_smoke_verification_rejection_output_path,
     real_provider_smoke_verification_subject_sha256,
     real_provider_tests_enabled,
+    recover_real_provider_smoke_budget_baseline,
     seal_real_provider_smoke_evidence,
     seal_real_provider_smoke_rejection_evidence,
     seal_real_provider_smoke_verification_rejection_evidence,
@@ -88,18 +108,32 @@ def test_authorization_scan_distinguishes_credentials_from_privacy_evidence() ->
     )
 
 
+def test_provider_attempt_request_id_matches_openrouter_ledger_convention() -> None:
+    logical_request_id = "request-smoke-1"
+
+    assert (
+        canonical_provider_attempt_request_id(logical_request_id, attempt=1) == logical_request_id
+    )
+    assert (
+        canonical_provider_attempt_request_id(logical_request_id, attempt=2)
+        == "request-smoke-1:attempt:2"
+    )
+    with pytest.raises(ValueError, match="positive integer"):
+        canonical_provider_attempt_request_id(logical_request_id, attempt=0)
+
+
 def _valid_environment() -> dict[str, str]:
     return {
         REAL_PROVIDER_OPT_IN: "1",
         REAL_PROVIDER_SECRET_FILE: "/operator/control/openrouter.env",
-        REAL_PROVIDER_COST_CAP: "1.25",
+        REAL_PROVIDER_COST_CAP: "250.00",
         REAL_PROVIDER_COST_LEDGER: "/operator/control/openrouter-cost-ledger.json",
         REAL_PROVIDER_MODEL: "acme/secure-reasoner-v1",
         REAL_PROVIDER_MODEL_ALLOWLIST: (
             "acme/secure-reasoner-v1,second-author/security-reviewer-v2"
         ),
         REAL_PROVIDER_ENDPOINT_ALLOWLIST: "approved-provider",
-        REAL_PROVIDER_PRIVACY_PROFILE: "STRICT_ZDR",
+        REAL_PROVIDER_PRIVACY_PROFILE: "SYNTHETIC_BENCHMARK",
         REAL_PROVIDER_EVIDENCE_OUTPUT: "/operator/control/provider-smoke.json",
     }
 
@@ -130,8 +164,11 @@ def test_disabled_gate_stops_before_other_environment_access() -> None:
         load_real_provider_test_settings(_OptInOnlyEnvironment())
 
 
-@pytest.mark.parametrize("cost", ["", "0", "-1", "nan", "1e2", "250.01", "251"])
-def test_real_provider_cost_cap_is_plain_bounded_decimal(cost: str) -> None:
+@pytest.mark.parametrize(
+    "cost",
+    ["", "0", "-1", "nan", "1e2", "1.25", "249.99", "250.01", "251"],
+)
+def test_real_provider_cost_cap_requires_existing_250_dollar_ledger(cost: str) -> None:
     environment = _valid_environment()
     environment[REAL_PROVIDER_COST_CAP] = cost
     with pytest.raises(RealProviderTestConfigurationError, match="COST_CAP"):
@@ -187,11 +224,12 @@ def test_real_provider_endpoint_allowlist_is_nonempty_exact_and_unique(
 def test_real_provider_gate_returns_only_non_secret_settings() -> None:
     settings = load_real_provider_test_settings(_valid_environment())
     assert settings.cost_cap_usd.as_tuple().exponent == -2
+    assert settings.cost_cap_usd == Decimal("250.00")
     assert settings.cost_ledger == Path("/operator/control/openrouter-cost-ledger.json")
     assert settings.model_id == "acme/secure-reasoner-v1"
     assert settings.model_id in settings.model_allowlist
     assert settings.provider_endpoint_allowlist == ("approved-provider",)
-    assert settings.privacy_profile == "STRICT_ZDR"
+    assert settings.privacy_profile == "SYNTHETIC_BENCHMARK"
     assert settings.evidence_output == Path("/operator/control/provider-smoke.json")
     assert "API_KEY" not in repr(settings)
 
@@ -204,12 +242,245 @@ def test_real_provider_evidence_output_is_explicit_and_absolute(path: str) -> No
         load_real_provider_test_settings(environment)
 
 
-@pytest.mark.parametrize("profile", ["", "strict_zdr", "SYNTHETIC_BENCHMARK"])
-def test_real_provider_privacy_profile_requires_explicit_strict_zdr(profile: str) -> None:
+@pytest.mark.parametrize("profile", ["", "strict_zdr", "STRICT_ZDR"])
+def test_real_provider_privacy_profile_requires_synthetic_benchmark(profile: str) -> None:
     environment = _valid_environment()
     environment[REAL_PROVIDER_PRIVACY_PROFILE] = profile
     with pytest.raises(RealProviderTestConfigurationError, match="PRIVACY_PROFILE"):
         load_real_provider_test_settings(environment)
+
+
+def _verified_public_lineage_projection(
+    *,
+    exact_model_id: str = "acme/secure-reasoner-v1",
+    root_lineage: str = f"sha256:{'1' * 64}",
+    bundle_sha256: str = "2" * 64,
+    manifest_file_sha256: str = "3" * 64,
+) -> VerifiedPublicModelLineageBindingProjection:
+    return VerifiedPublicModelLineageBindingProjection(
+        exact_model_id=exact_model_id,
+        documentary_model_id="Acme Secure Reasoner v1",
+        root_lineage=root_lineage,
+        decision_sha256="4" * 64,
+        bundle_sha256=bundle_sha256,
+        manifest_file_sha256=manifest_file_sha256,
+        lineage_identity_authorized=True,
+        provider_call_authorized=False,
+        source_egress_authorized=False,
+        runner_authority_authorized=False,
+        model_qualification_authorized=False,
+        production_selection_authorized=False,
+        seal_publication_authorized=False,
+        release_authorized=False,
+        benchmark_authorized=False,
+    )
+
+
+def _synthetic_lineage_capability() -> VerifiedPublicModelLineage:
+    return cast(VerifiedPublicModelLineage, object())
+
+
+def _require_synthetic_public_lineage(
+    _capability: VerifiedPublicModelLineage,
+    exact_model_id: str,
+) -> VerifiedPublicModelLineageBindingProjection:
+    return _verified_public_lineage_projection(exact_model_id=exact_model_id)
+
+
+def test_real_smoke_completes_authority_preflight_before_mutable_launch_state() -> None:
+    source = inspect.getsource(_real_provider_smoke_test)
+    preflight = source.index("launch_preflight = _preflight_real_provider_smoke_launch")
+
+    assert preflight < source.index("AtomicCostLedger.open_existing")
+    assert preflight < source.index("load_operator_secrets")
+    assert preflight < source.index("OpenRouterClient")
+    assert "total_usd=float(SMOKE_STAGE_CAP_USD)" in source
+    assert Decimal("5.00") == SMOKE_STAGE_CAP_USD
+
+
+@pytest.mark.asyncio
+async def test_real_smoke_recovers_nonempty_reconciled_ledger_before_new_reservation(
+    tmp_path: Path,
+) -> None:
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "cost-ledger.json",
+        cap_usd=Decimal("250"),
+    )
+    prior_reservation = ledger.reserve("prior:attempt:1", Decimal("0.002"))
+    ledger.reconcile(prior_reservation, Decimal("0.00113946"))
+    uncertain_reservation = ledger.reserve("prior:attempt:2", Decimal("0.002"))
+    ledger.reconcile(uncertain_reservation, None)
+    ledger_before = ledger.snapshot()
+    budget = BudgetManager(
+        total_usd=5,
+        max_output_tokens=10,
+        conservative_usd_per_million_tokens=1,
+        max_requests_per_agent=1,
+        atomic_ledger=ledger,
+    )
+
+    assert budget.recovery_required
+    await recover_real_provider_smoke_budget_baseline(
+        budget=budget,
+        atomic_ledger=ledger,
+        ledger_before=ledger_before,
+    )
+
+    assert not budget.recovery_required
+    assert budget.spent_usd_exact == Decimal("0.00313946")
+    assert ledger.snapshot() == ledger_before
+    smoke_reservation = await budget.reserve(
+        canonical_provider_attempt_request_id("smoke", attempt=1),
+        "real_provider_smoke",
+        "synthetic prompt",
+    )
+    reserved_snapshot = ledger.snapshot()
+    assert reserved_snapshot.entries[: len(ledger_before.entries)] == ledger_before.entries
+    assert len(reserved_snapshot.entries) == len(ledger_before.entries) + 1
+    assert reserved_snapshot.entries[-1].status is CostEntryStatus.RESERVED
+    await budget.release(smoke_reservation)
+
+
+@pytest.mark.asyncio
+async def test_real_smoke_budget_recovery_rejects_active_ledger_without_mutation(
+    tmp_path: Path,
+) -> None:
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "cost-ledger.json",
+        cap_usd=Decimal("250"),
+    )
+    ledger.reserve("prior:attempt:1", Decimal("0.002"))
+    ledger_before = ledger.snapshot()
+    budget = BudgetManager(
+        total_usd=5,
+        max_output_tokens=10,
+        conservative_usd_per_million_tokens=1,
+        max_requests_per_agent=1,
+        atomic_ledger=ledger,
+    )
+
+    with pytest.raises(RealProviderTestConfigurationError, match="terminally accounted"):
+        await recover_real_provider_smoke_budget_baseline(
+            budget=budget,
+            atomic_ledger=ledger,
+            ledger_before=ledger_before,
+        )
+
+    assert budget.recovery_required
+    assert ledger.snapshot() == ledger_before
+
+
+def test_real_smoke_invalid_profile_fails_before_lineage_or_mutable_state() -> None:
+    settings = replace(
+        load_real_provider_test_settings(_valid_environment()),
+        privacy_profile=cast(Literal["SYNTHETIC_BENCHMARK"], "STRICT_ZDR"),
+    )
+    lineage_resolved = False
+
+    def resolve_lineage() -> VerifiedPublicModelLineage:
+        nonlocal lineage_resolved
+        lineage_resolved = True
+        return _synthetic_lineage_capability()
+
+    with pytest.raises(RealProviderTestConfigurationError, match="SYNTHETIC_BENCHMARK"):
+        _preflight_real_provider_smoke_launch(
+            settings=settings,
+            fixture_source="synthetic fixture",
+            fixture_sha256=SMOKE_FIXTURE_SHA256,
+            observed_at=datetime(2026, 8, 18, tzinfo=UTC),
+            resolve_lineage=resolve_lineage,
+        )
+
+    assert not lineage_resolved
+
+
+def test_real_smoke_private_source_fails_before_policy_or_mutable_state() -> None:
+    settings = load_real_provider_test_settings(_valid_environment())
+
+    with pytest.raises(RealProviderTestConfigurationError, match="private"):
+        _resolve_smoke_privacy_preflight(
+            settings=settings,
+            source_sha256="a" * 64,
+            source_classification=PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
+            source_provenance=cast(PrivacySourceProvenanceObservation, object()),
+            observed_at=datetime(2026, 8, 18, tzinfo=UTC),
+        )
+
+
+def test_real_smoke_missing_provenance_fails_before_policy_or_mutable_state() -> None:
+    settings = load_real_provider_test_settings(_valid_environment())
+
+    with pytest.raises(RealProviderTestConfigurationError, match="provenance"):
+        _resolve_smoke_privacy_preflight(
+            settings=settings,
+            source_sha256="a" * 64,
+            source_classification=PrivacySourceClassification.SYNTHETIC_COMMITTED,
+            source_provenance=None,
+            observed_at=datetime(2026, 8, 18, tzinfo=UTC),
+        )
+
+
+def test_real_smoke_unconfirmed_lineage_fails_before_fixture_or_mutable_state() -> None:
+    settings = load_real_provider_test_settings(_valid_environment())
+    required_model_ids: list[str] = []
+
+    def require_unconfirmed(
+        _capability: VerifiedPublicModelLineage,
+        exact_model_id: str,
+    ) -> VerifiedPublicModelLineageBindingProjection:
+        required_model_ids.append(exact_model_id)
+        raise RealProviderTestConfigurationError("public lineage is unconfirmed")
+
+    with pytest.raises(RealProviderTestConfigurationError, match="unconfirmed"):
+        _preflight_real_provider_smoke_launch(
+            settings=settings,
+            fixture_source="must not be inspected",
+            fixture_sha256=SMOKE_FIXTURE_SHA256,
+            observed_at=datetime(2026, 8, 18, tzinfo=UTC),
+            resolve_lineage=_synthetic_lineage_capability,
+            require_lineage=require_unconfirmed,
+        )
+
+    assert required_model_ids == [settings.model_id]
+
+
+def test_real_smoke_swapped_lineage_fails_before_fixture_or_mutable_state() -> None:
+    settings = load_real_provider_test_settings(_valid_environment())
+
+    def require_swapped(
+        _capability: VerifiedPublicModelLineage,
+        _exact_model_id: str,
+    ) -> VerifiedPublicModelLineageBindingProjection:
+        return _verified_public_lineage_projection(exact_model_id="other/model-v1")
+
+    with pytest.raises(RealProviderTestConfigurationError, match="exact identity-only"):
+        _preflight_real_provider_smoke_launch(
+            settings=settings,
+            fixture_source="must not be inspected",
+            fixture_sha256=SMOKE_FIXTURE_SHA256,
+            observed_at=datetime(2026, 8, 18, tzinfo=UTC),
+            resolve_lineage=_synthetic_lineage_capability,
+            require_lineage=require_swapped,
+        )
+
+
+def test_real_smoke_rejects_lineage_swap_on_fresh_preseal_resolution() -> None:
+    settings = load_real_provider_test_settings(_valid_environment())
+    expected = _verified_public_lineage_projection()
+
+    def require_swapped_root(
+        _capability: VerifiedPublicModelLineage,
+        _exact_model_id: str,
+    ) -> VerifiedPublicModelLineageBindingProjection:
+        return _verified_public_lineage_projection(root_lineage=f"sha256:{'f' * 64}")
+
+    with pytest.raises(RealProviderTestConfigurationError, match="changed before"):
+        _refresh_smoke_public_lineage(
+            settings=settings,
+            expected=expected,
+            resolve_lineage=_synthetic_lineage_capability,
+            require_lineage=require_swapped_root,
+        )
 
 
 def test_committed_real_provider_fixture_matches_its_pinned_hash() -> None:
@@ -243,7 +514,7 @@ def test_smoke_reasoning_off_preflight_requires_optional_exact_model_control() -
 
     assert capabilities.mandatory is False
     assert capabilities.default_enabled is True
-    assert capabilities.supports_max_tokens is False
+    assert capabilities.supports_max_tokens is None
     assert SMOKE_REASONING_EFFORT == "none"
     assert SMOKE_MAX_OUTPUT_TOKENS == 1_024
 
@@ -253,7 +524,7 @@ def test_smoke_reasoning_off_preflight_requires_optional_exact_model_control() -
     [
         None,
         {"mandatory": True, "default_enabled": True},
-        {"mandatory": False},
+        {"mandatory": None, "default_enabled": True},
         {
             "mandatory": False,
             "default_enabled": True,
@@ -277,6 +548,29 @@ def test_smoke_reasoning_off_preflight_rejects_unproven_control(
             },
             exact_model_id="acme/secure-reasoner-v1",
         )
+
+
+def test_smoke_reasoning_off_preflight_accepts_optional_controls_with_unknown_defaults() -> None:
+    capabilities = validate_smoke_reasoning_off_preflight(
+        models_payload={
+            "data": [
+                {
+                    "id": "acme/secure-reasoner-v1",
+                    "supported_parameters": ["reasoning"],
+                    "reasoning": {
+                        "mandatory": False,
+                        "default_enabled": None,
+                        "supports_max_tokens": None,
+                    },
+                }
+            ]
+        },
+        exact_model_id="acme/secure-reasoner-v1",
+    )
+
+    assert capabilities.mandatory is False
+    assert capabilities.default_enabled is None
+    assert capabilities.supports_max_tokens is None
 
 
 def test_real_provider_smoke_output_preflight_rejects_collisions_and_existing_files(
@@ -347,6 +641,10 @@ def _valid_smoke_evidence_payload() -> dict[str, object]:
         "openrouter_generation_id": "generation-smoke-1",
         "requested_model_id": "qwen/qwen3.6-35b-a3b",
         "canonical_model_id": "qwen/qwen3.6-35b-a3b-20260415",
+        "public_lineage_exact_model_id": "qwen/qwen3.6-35b-a3b",
+        "public_lineage_root": f"sha256:{'1' * 64}",
+        "public_lineage_bundle_sha256": "2" * 64,
+        "public_lineage_manifest_file_sha256": "3" * 64,
         "returned_model_id": "qwen/qwen3.6-35b-a3b",
         "generation_model_id": "qwen/qwen3.6-35b-a3b-20260415",
         "approved_provider_endpoint": "akashml/fp8",
@@ -390,7 +688,7 @@ def _valid_smoke_evidence_payload() -> dict[str, object]:
         "ledger_remaining_usd": "249.99861326",
         "validation_status": "valid",
         "identity_strength": (ModelIdentityStrength.CANONICAL_MODEL_AND_ENDPOINT_BOUND.value),
-        "privacy_profile": "STRICT_ZDR",
+        "privacy_profile": "SYNTHETIC_BENCHMARK",
         "require_zdr": True,
         "data_collection": "deny",
         "allow_fallbacks": False,
@@ -459,6 +757,10 @@ def _valid_smoke_rejection_payload() -> dict[str, object]:
         "openrouter_generation_id": success["openrouter_generation_id"],
         "requested_model_id": success["requested_model_id"],
         "canonical_model_id": success["canonical_model_id"],
+        "public_lineage_exact_model_id": success["public_lineage_exact_model_id"],
+        "public_lineage_root": success["public_lineage_root"],
+        "public_lineage_bundle_sha256": success["public_lineage_bundle_sha256"],
+        "public_lineage_manifest_file_sha256": success["public_lineage_manifest_file_sha256"],
         "returned_model_id": success["returned_model_id"],
         "selected_model_id": success["canonical_model_id"],
         "approved_provider_endpoint": success["approved_provider_endpoint"],
@@ -500,7 +802,7 @@ def _valid_smoke_rejection_payload() -> dict[str, object]:
         "requested_reasoning_excluded": success["requested_reasoning_excluded"],
         "reasoning_control_satisfied": True,
         "output_control_satisfied": True,
-        "ledger_entry_request_id": f"{success['internal_request_id']}:attempt:1",
+        "ledger_entry_request_id": success["internal_request_id"],
         "ledger_entry_status": CostEntryStatus.RECONCILED.value,
         "reserved_cost_usd": "0.001",
         "provider_reported_cost_usd": success["actual_cost_usd"],
@@ -662,6 +964,51 @@ def _synthetic_unbound_real_smoke_record() -> UsageRecord:
     return reattest_synthetic_real_usage(unbound)
 
 
+def test_terminal_smoke_ledger_evidence_accepts_actual_one_attempt_base_id() -> None:
+    record = _synthetic_bound_real_smoke_record()
+    started_at = record.started_at or datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+    ended_at = record.ended_at or datetime(2026, 7, 28, 12, 0, 1, tzinfo=UTC)
+    entry = CostEntry(
+        request_id=record.request_id,
+        reservation_id="reservation-smoke-actual-shape",
+        status=CostEntryStatus.RECONCILED,
+        reserved_usd=Decimal("0.001"),
+        actual_cost_usd=Decimal("0.0002"),
+        accounted_cost_usd=Decimal("0.0002"),
+        release_reason=None,
+        created_at=started_at,
+        updated_at=ended_at,
+    )
+    ledger_before = CostLedgerSnapshot(
+        cap_usd=Decimal("250"),
+        spent_usd=Decimal("0"),
+        active_reserved_usd=Decimal("0"),
+        remaining_usd=Decimal("250"),
+        over_cap=False,
+        has_reservation_overrun=False,
+        entries=(),
+    )
+    snapshot = CostLedgerSnapshot(
+        cap_usd=Decimal("250"),
+        spent_usd=Decimal("0.0002"),
+        active_reserved_usd=Decimal("0"),
+        remaining_usd=Decimal("249.9998"),
+        over_cap=False,
+        has_reservation_overrun=False,
+        entries=(entry,),
+    )
+
+    evidence = _terminal_smoke_ledger_evidence(
+        snapshot=snapshot,
+        ledger_before=ledger_before,
+        record=record,
+    )
+
+    assert evidence.entry.request_id == record.request_id
+    assert evidence.spend_delta_usd == Decimal("0.0002")
+    assert evidence.delta_reconciled
+
+
 def _valid_smoke_verification_rejection_payload() -> dict[str, object]:
     success = _valid_smoke_evidence_payload()
     record = _synthetic_bound_real_smoke_record()
@@ -676,6 +1023,10 @@ def _valid_smoke_verification_rejection_payload() -> dict[str, object]:
         "fixture_path": SMOKE_FIXTURE_PATH,
         "fixture_sha256": SMOKE_FIXTURE_SHA256,
         "canonical_model_id": success["canonical_model_id"],
+        "public_lineage_exact_model_id": success["public_lineage_exact_model_id"],
+        "public_lineage_root": success["public_lineage_root"],
+        "public_lineage_bundle_sha256": success["public_lineage_bundle_sha256"],
+        "public_lineage_manifest_file_sha256": success["public_lineage_manifest_file_sha256"],
         "approved_provider_endpoint": success["approved_provider_endpoint"],
         "verification_subject_sha256": success["verification_subject_sha256"],
         "identity_binding_sha256": binding.binding_sha256,
@@ -685,7 +1036,7 @@ def _valid_smoke_verification_rejection_payload() -> dict[str, object]:
         "reconciliation_attempts": 4,
         "reconciliation_exhausted": True,
         "usage_record": record.model_dump(mode="json"),
-        "ledger_entry_request_id": f"{record.request_id}:attempt:1",
+        "ledger_entry_request_id": record.request_id,
         "ledger_entry_status": CostEntryStatus.RECONCILED.value,
         "reserved_cost_usd": "0.001",
         "actual_cost_usd": success["actual_cost_usd"],
@@ -716,6 +1067,16 @@ def _valid_smoke_verification_rejection_payload() -> dict[str, object]:
 
 
 def test_real_provider_smoke_evidence_rejects_unbound_or_substituted_identity() -> None:
+    payload = _valid_smoke_evidence_payload()
+    payload.pop("public_lineage_manifest_file_sha256")
+    with pytest.raises(ValidationError, match="complete public lineage"):
+        seal_real_provider_smoke_evidence(payload)
+
+    payload = _valid_smoke_evidence_payload()
+    payload["public_lineage_exact_model_id"] = "other-author/other-model"
+    with pytest.raises(ValidationError, match="lineage identity"):
+        seal_real_provider_smoke_evidence(payload)
+
     payload = _valid_smoke_evidence_payload()
     payload["identity_strength"] = ModelIdentityStrength.UNBOUND.value
     with pytest.raises(ValidationError, match="identity_strength"):
@@ -767,6 +1128,37 @@ def test_real_provider_smoke_evidence_is_self_hashed_and_typed() -> None:
     tampered["latency_ms"] = 999
     with pytest.raises(ValidationError, match="self-hash"):
         RealProviderSmokeEvidence.model_validate(tampered)
+
+
+def test_historical_strict_zdr_smoke_evidence_remains_read_only_parseable(
+    tmp_path: Path,
+) -> None:
+    historical = seal_real_provider_smoke_evidence(_valid_smoke_evidence_payload()).model_dump(
+        mode="json", exclude={"evidence_sha256"}
+    )
+    historical["privacy_profile"] = "STRICT_ZDR"
+    for key in (
+        "public_lineage_exact_model_id",
+        "public_lineage_root",
+        "public_lineage_bundle_sha256",
+        "public_lineage_manifest_file_sha256",
+    ):
+        historical.pop(key)
+    with pytest.raises(ValueError, match="read-only"):
+        seal_real_provider_smoke_evidence(historical)
+    historical["evidence_sha256"] = canonical_sha256(historical)
+
+    parsed = RealProviderSmokeEvidence.model_validate(historical)
+
+    assert parsed.privacy_profile == "STRICT_ZDR"
+    assert parsed.public_lineage_exact_model_id is None
+    with pytest.raises(ValueError, match="read-only"):
+        write_real_provider_smoke_evidence(
+            output_path=tmp_path / "historical.json",
+            evidence=parsed,
+            forbidden_values=(),
+        )
+    assert not (tmp_path / "historical.json").exists()
 
 
 def test_real_provider_smoke_evidence_writer_is_fresh_private_and_secret_free(
@@ -830,6 +1222,21 @@ def test_real_provider_smoke_rejection_is_typed_self_hashed_and_never_success() 
         RealProviderSmokeRejectionEvidence.model_validate(tampered)
 
 
+def test_smoke_rejection_evidence_rejects_legacy_first_attempt_suffix() -> None:
+    rejection_payload = _valid_smoke_rejection_payload()
+    rejection_payload["ledger_entry_request_id"] = (
+        f"{rejection_payload['internal_request_id']}:attempt:1"
+    )
+    with pytest.raises(ValidationError, match="first-attempt-bound"):
+        seal_real_provider_smoke_rejection_evidence(rejection_payload)
+
+    verification_payload = _valid_smoke_verification_rejection_payload()
+    record = UsageRecord.model_validate(verification_payload["usage_record"])
+    verification_payload["ledger_entry_request_id"] = f"{record.request_id}:attempt:1"
+    with pytest.raises(ValidationError, match="first-attempt-bound"):
+        seal_real_provider_smoke_verification_rejection_evidence(verification_payload)
+
+
 def test_real_provider_smoke_rejection_preserves_secondary_control_failures() -> None:
     payload = _valid_smoke_rejection_payload()
     payload["actual_provider_endpoint"] = "different-provider/fp8"
@@ -880,7 +1287,7 @@ def test_real_provider_smoke_rejection_preserves_uncertain_attempt_cost() -> Non
 
     rejection = seal_real_provider_smoke_rejection_evidence(payload)
 
-    assert rejection.ledger_entry_request_id.endswith(":attempt:1")
+    assert rejection.ledger_entry_request_id == payload["internal_request_id"]
     assert rejection.ledger_entry_status is CostEntryStatus.UNCERTAIN_ACCOUNTED
     assert rejection.actual_cost_usd is None
     assert rejection.cost_reconciled is False
@@ -1051,11 +1458,11 @@ def test_unbound_smoke_integration_branch_requires_live_real_evidence_and_writes
         model_id=record.requested_model,
         model_allowlist=(record.requested_model,),
         provider_endpoint_allowlist=(str(record.actual_provider_endpoint),),
-        privacy_profile="STRICT_ZDR",
+        privacy_profile="SYNTHETIC_BENCHMARK",
         evidence_output=tmp_path / "provider-smoke.json",
     )
     entry = CostEntry(
-        request_id=f"{record.request_id}:attempt:1",
+        request_id=record.request_id,
         reservation_id="reservation-smoke-1",
         status=CostEntryStatus.UNCERTAIN_ACCOUNTED,
         reserved_usd=Decimal("0.00072452"),
@@ -1117,6 +1524,7 @@ def test_unbound_smoke_integration_branch_requires_live_real_evidence_and_writes
 
     rejection_output, rejection = _write_unbound_smoke_rejection(
         settings=settings,
+        public_lineage=_verified_public_lineage_projection(exact_model_id=settings.model_id),
         fixture_source=fixture_source,
         fixture_sha256=fixture_sha256,
         user_prompt=user_prompt,
@@ -1134,10 +1542,14 @@ def test_unbound_smoke_integration_branch_requires_live_real_evidence_and_writes
         snapshot=snapshot,
         ledger_evidence=ledger_evidence,
         api_key="synthetic-api-key-canary",
+        resolve_lineage=_synthetic_lineage_capability,
+        require_lineage=_require_synthetic_public_lineage,
     )
 
     assert rejection.status == "REJECTED_IDENTITY_UNBOUND"
     assert rejection.creditable is False
+    assert ledger_evidence.entry.request_id == record.request_id
+    assert rejection.ledger_entry_request_id == record.request_id
     assert rejection.ledger_entry_status is CostEntryStatus.UNCERTAIN_ACCOUNTED
     assert rejection.actual_cost_usd is None
     assert rejection.accounted_cost_usd == "0.00072452"
@@ -1162,6 +1574,7 @@ def test_unbound_smoke_integration_branch_requires_live_real_evidence_and_writes
     with pytest.raises(AssertionError, match="concluded unbound"):
         _write_unbound_smoke_rejection(
             settings=settings,
+            public_lineage=_verified_public_lineage_projection(exact_model_id=settings.model_id),
             fixture_source=fixture_source,
             fixture_sha256=fixture_sha256,
             user_prompt=user_prompt,
@@ -1179,6 +1592,8 @@ def test_unbound_smoke_integration_branch_requires_live_real_evidence_and_writes
             snapshot=snapshot,
             ledger_evidence=ledger_evidence,
             api_key="synthetic-api-key-canary",
+            resolve_lineage=_synthetic_lineage_capability,
+            require_lineage=_require_synthetic_public_lineage,
         )
 
 
@@ -1251,7 +1666,7 @@ def test_bound_verification_failure_branch_writes_noncreditable_rejection(
         model_id=record.requested_model,
         model_allowlist=(record.requested_model,),
         provider_endpoint_allowlist=(str(record.actual_provider_endpoint),),
-        privacy_profile="STRICT_ZDR",
+        privacy_profile="SYNTHETIC_BENCHMARK",
         evidence_output=tmp_path / "provider-smoke.json",
     )
     prior = CostEntry(
@@ -1266,7 +1681,7 @@ def test_bound_verification_failure_branch_writes_noncreditable_rejection(
         updated_at=datetime(2026, 7, 28, 11, 0, 1, tzinfo=UTC),
     )
     entry = CostEntry(
-        request_id=f"{record.request_id}:attempt:1",
+        request_id=record.request_id,
         reservation_id="reservation-smoke",
         status=CostEntryStatus.RECONCILED,
         reserved_usd=Decimal("0.001"),
@@ -1305,6 +1720,7 @@ def test_bound_verification_failure_branch_writes_noncreditable_rejection(
 
     rejection_output, rejection = _write_generation_verification_smoke_rejection(
         settings=settings,
+        public_lineage=_verified_public_lineage_projection(exact_model_id=settings.model_id),
         fixture_source=fixture_source,
         fixture_sha256=fixture_sha256,
         user_prompt=user_prompt,
@@ -1321,6 +1737,8 @@ def test_bound_verification_failure_branch_writes_noncreditable_rejection(
         snapshot=snapshot,
         ledger_evidence=ledger_evidence,
         api_key="synthetic-api-key-canary",
+        resolve_lineage=_synthetic_lineage_capability,
+        require_lineage=_require_synthetic_public_lineage,
     )
 
     assert rejection.status == "REJECTED_GENERATION_VERIFICATION"
@@ -1339,6 +1757,7 @@ def test_bound_verification_failure_branch_writes_noncreditable_rejection(
     with pytest.raises(AssertionError, match="owned bound REAL"):
         _write_generation_verification_smoke_rejection(
             settings=settings,
+            public_lineage=_verified_public_lineage_projection(exact_model_id=settings.model_id),
             fixture_source=fixture_source,
             fixture_sha256=fixture_sha256,
             user_prompt=user_prompt,
@@ -1355,6 +1774,8 @@ def test_bound_verification_failure_branch_writes_noncreditable_rejection(
             snapshot=snapshot,
             ledger_evidence=ledger_evidence,
             api_key="synthetic-api-key-canary",
+            resolve_lineage=_synthetic_lineage_capability,
+            require_lineage=_require_synthetic_public_lineage,
         )
 
     unattested = UsageRecord.model_validate(record.model_dump(mode="json"))
@@ -1362,6 +1783,7 @@ def test_bound_verification_failure_branch_writes_noncreditable_rejection(
     with pytest.raises(AssertionError, match="concluded unbound"):
         _write_unbound_smoke_rejection(
             settings=settings,
+            public_lineage=_verified_public_lineage_projection(exact_model_id=settings.model_id),
             fixture_source=fixture_source,
             fixture_sha256=fixture_sha256,
             user_prompt=user_prompt,
@@ -1379,4 +1801,6 @@ def test_bound_verification_failure_branch_writes_noncreditable_rejection(
             snapshot=snapshot,
             ledger_evidence=ledger_evidence,
             api_key="synthetic-api-key-canary",
+            resolve_lineage=_synthetic_lineage_capability,
+            require_lineage=_require_synthetic_public_lineage,
         )

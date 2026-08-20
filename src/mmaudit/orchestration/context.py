@@ -675,6 +675,20 @@ _SPECIALIST_CATEGORY_WEIGHTS: dict[str, dict[str, int]] = {
         "smart_contract": 5,
     },
     "formal_methods_property": {"evm_storage": 10, "evm_auth": 9, "evm_value": 9},
+    "state_machine_lifecycle": {
+        "evm_storage": 12,
+        "business_logic": 11,
+        "evm_auth": 9,
+        "evm_external_call": 8,
+        "smart_contract": 8,
+    },
+    "randomness_entropy_commit_reveal": {
+        "smart_contract": 11,
+        "business_logic": 10,
+        "evm_value": 10,
+        "evm_oracle": 8,
+        "evm_signature": 7,
+    },
     "false_negative_hunter": {"smart_contract": 10, "changed": 8, "test": 5},
     "invariant_review": {
         "evm_storage": 12,

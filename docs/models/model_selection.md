@@ -24,7 +24,7 @@ a model or authorize production use.
 | Capability | Governing ticket | Queue status | Evidence boundary |
 | --- | --- | --- | --- |
 | Evidence-derived calibration | `V3-CALIBRATE-001` | `BLOCKED_TECHNICAL` | Provider-free empirical derivation and the two-campaign authority bridge are implemented; no statistically supported real calibrated policy is frozen. |
-| Catalogue refresh and drift detection | `V3-MODELREFRESH-001` | `PARTIAL` | Provider-free workflow is validated; no successful current provider snapshot exists. |
+| Catalogue refresh and drift detection | `V3-MODELREFRESH-001` | `PARTIAL` | Provider-free durable history, runtime veto, and refreshed-pricing custody are validated; no successful current provider snapshot or stock live authority quartet exists. |
 | Root-lineage review | `V3-LINEAGE-001` | `BLOCKED_TECHNICAL` | A signed calibration-only handoff is implemented; no current refresh, signed operator decision, or runtime approval exists. |
 | Real staged qualification | `V3-QUALIFY-001` | `QUEUED` | No exact production model is currently qualified. |
 | Commercial policy eligibility | `V3-POLICYELIG-001` | `COMPLETE` | Provider-free typed authority, drift, selection, and runtime custody are implemented; no current provider, model, endpoint, entity, jurisdiction, or client determination is independently approved. |
@@ -180,14 +180,17 @@ workflow-status artifact binds staged content hashes, the candidate-registry has
 source commit, and workflow identity.
 
 These artifacts remain structural discovery evidence, not provider-signed authority.
-They cannot qualify, promote, or assign a lineage to a model. The current scheduled
-bootstrap compares against the frozen candidate set and does not yet retrieve and
-validate a prior workflow snapshot, bind an existing production selection, execute
-automatic benchmarking, or enforce hard expiry inside the audit pipeline. Those
-limitations keep `V3-MODELREFRESH-001` partial and production selection blocked.
-Two materially different authenticated refresh attempts failed closed before producing
-a usable post-correction snapshot. They issued no model completion or usage record and
-provide no current candidate authority.
+They cannot qualify, promote, or assign a lineage to a model. Bounded scheduled history
+retrieval now validates exact immediate-predecessor workflow evidence, the audit pipeline
+enforces hard refresh expiry, and separate opaque refresh and pricing capabilities join
+current selected routes and exact tolerance-bounded prices through transport, reservation,
+recovery, usage, report, manifest, and assurance custody. Serialized records remain
+non-authorizing and cannot recreate either capability. Two materially different
+authenticated refresh attempts failed closed before producing a usable post-correction
+snapshot; they issued no model completion or usage record. The stock production path does
+not construct the live technical, policy-selection, refresh, and pricing authority quartet,
+and no authorized current provider evidence exists. Those limitations keep
+`V3-MODELREFRESH-001` `PARTIAL` and production selection blocked.
 
 ## Calibration and role-scoped policy
 
@@ -326,6 +329,20 @@ approved independent root lineages, 24 accepted specialist responsibilities, fou
 whole-protocol lineages, three lineages for every critical surface, and two independent
 falsifier lineages when high/critical candidates exist. Failure to meet any minimum
 prevents `COMPLETE`. No current artifact satisfies those minima.
+
+The specialist floor is the exact frozen candidate-independent portfolio, not an arbitrary count
+of 24 calls: `access_control`, `reentrancy_control_flow`, `economic_game_theory`,
+`oracle_price_manipulation`, `accounting_invariant`, `token_standard`, `erc4626_vault`,
+`amm_dex_liquidity`, `lending_liquidation`, `governance_timelock`, `upgradeability_storage`,
+`initialization_deployment`, `signature_permit_replay`, `mev_ordering`,
+`denial_of_service_griefing`, `precision_rounding`, `cross_chain_bridge`,
+`dependency_supply_chain`, `formal_methods_property`, `state_machine_lifecycle`,
+`randomness_entropy_commit_reveal`, `false_negative_hunter`, `invariant_review`, and
+`report_quality`. Every one must have accepted real-provider execution evidence. Aliases, retries,
+and repeated shard calls cannot increase the distinct responsibility count. The exact
+candidate-dependent inventory is `test_generation`, `exploit_reproduction_planner`, and
+`falsifier`; these execute only when candidate validation requires them and never substitute for a
+missing candidate-independent responsibility.
 
 ## Atomic budget enforcement
 

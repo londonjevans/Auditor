@@ -27,6 +27,12 @@ from mmaudit.models.openrouter import (
     OpenRouterUnboundIdentityError,
 )
 from mmaudit.models.qualification import VerifiedProductionQualification
+from mmaudit.models.refresh_runtime import (
+    AuditModelRefreshEvidence,
+    AuditModelRefreshPricingEvidence,
+    VerifiedAuditModelRefreshGuard,
+    VerifiedAuditModelRefreshPricingAuthority,
+)
 from mmaudit.models.scheduler import (
     ABSENT_COST_LEDGER_BASELINE_SHA256,
     ABSENT_PRIVACY_EVIDENCE_CUSTODY_SHA256,
@@ -67,6 +73,7 @@ from mmaudit.models.schemas import (
     CandidateCrossExaminationDecision,
     CandidateFinding,
     CandidateReproductionResolution,
+    ContextPackage,
     EconomicSimulationPlan,
     FalsificationDecision,
     Finding,
@@ -94,11 +101,33 @@ from mmaudit.models.schemas import (
     VerificationDecision,
 )
 from mmaudit.models.sharding import SolidityShardInventory
+from mmaudit.models.truncation import (
+    CandidateReviewNormalizationEvidence,
+    CandidateReviewTruncatedEnvelopeEvidence,
+    CandidateReviewTruncationProjection,
+    candidate_review_batch_schema_sha256,
+    candidate_review_frame_wire_schema_sha256,
+    candidate_review_protocol_implementation_is_pristine,
+)
+from mmaudit.models.truncation_recovery import TruncationRecoveryChildPlan
+from mmaudit.models.truncation_recovery_journal import (
+    SchedulerRecoveredCandidateReviewOutput,
+    SchedulerTruncationRecoveryChildActivation,
+    SchedulerTruncationRecoveryChildPreflightResult,
+    SchedulerTruncationRecoveryChildResult,
+    SchedulerTruncationRecoveryFamilyRoot,
+    SchedulerTruncationRecoveryTerminalStatus,
+)
 from mmaudit.models.usage import is_accountable_usage_record, is_creditable_usage_record
 from mmaudit.orchestration.budgets import (
     BudgetExhaustedError,
     _issue_trusted_request_limit_scope,
     _TrustedRequestLimitScope,
+)
+from mmaudit.orchestration.context import (
+    ContextBoundaryError,
+    render_context,
+    revalidate_model_surface_context_package,
 )
 from mmaudit.orchestration.cost_ledger import (
     AtomicCostLedger,
@@ -108,13 +137,21 @@ from mmaudit.orchestration.cost_ledger import (
 from mmaudit.orchestration.execution_candidates import ExecutionCandidateBuildResult
 from mmaudit.orchestration.scheduler import (
     SchedulerJournal,
+    _canonical_recovery_usd_sum,
     create_scheduler_journal,
     resume_scheduler_journal,
+)
+from mmaudit.orchestration.truncation_recovery_evidence import (
+    TruncationRecoveryEvidenceError,
+    build_truncation_recovery_child_context,
 )
 from mmaudit.repository.discovery import DiscoveryResult
 
 if TYPE_CHECKING:
-    from mmaudit.models.policy_selection import AuditModelSelectionEvidenceBundle
+    from mmaudit.models.policy_selection import (
+        AuditModelSelectionEvidenceBundle,
+        VerifiedAuditModelSelection,
+    )
 
 _HOST_PROMPT_SHA256 = scheduler_canonical_sha256(
     {"domain": "mmaudit.scheduler.host-computation-prompt.v1"}
@@ -253,12 +290,92 @@ _PROJECT_ROOT_MODEL_TYPES = frozenset(
     }
 )
 _DIAGNOSTIC_FIELDS = frozenset({"error", "errors", "failure_reason", "limitations", "warnings"})
+_WHOLE_PROTOCOL_RECOVERY_ROLE = re.compile(r"^whole_protocol_review:(?:0|[1-9][0-9]{0,3})$")
 
 
 @dataclass(frozen=True)
 class _AnalysisProjectionRoots:
     audited_repository_root: Path
     disposable_roots: tuple[Path, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedTruncationRecoveryRequest:
+    """Ephemeral exact child request coordinates for one bounded recovery call."""
+
+    family_id: str
+    child_task_id: str
+    logical_request_id: str
+    role: str
+    requested_model: str
+    child_context: ContextPackage
+    system_prompt_sha256: str
+    user_prompt_sha256: str
+    response_schema_sha256: str
+    delivered_sources: tuple[DeliveredSourceDescriptor, ...]
+    delivered_source_descriptor_sha256s: tuple[str, ...]
+    request_limit_scope: str
+    request_limit_count_before: int
+    request_limit_maximum: int
+
+
+def _recovery_delivered_source_descriptors(
+    context: ContextPackage,
+) -> tuple[DeliveredSourceDescriptor, ...]:
+    """Rebuild the exact whole-file descriptor projection used by transport."""
+
+    repository_files: dict[str, list[Any]] = {}
+    for item in context.repository_map.files:
+        repository_files.setdefault(item.path, []).append(item)
+    delivered: set[DeliveredSourceDescriptor] = set()
+    for excerpt in context.excerpts:
+        matching_files = repository_files.get(excerpt.path, [])
+        if len(matching_files) != 1:
+            continue
+        repository_file = matching_files[0]
+        encoded = excerpt.content.encode("utf-8")
+        if (
+            excerpt.start_line == 1
+            and excerpt.end_line == max(1, repository_file.lines)
+            and not excerpt.omitted_before
+            and not excerpt.omitted_after
+            and len(encoded) == repository_file.size
+            and excerpt.content_hash == repository_file.sha256
+            and hashlib.sha256(encoded).hexdigest() == repository_file.sha256
+        ):
+            delivered.add(
+                DeliveredSourceDescriptor(
+                    path=excerpt.path,
+                    sha256=repository_file.sha256,
+                    size=repository_file.size,
+                )
+            )
+    return tuple(sorted(delivered))
+
+
+def _detached_context(context: ContextPackage) -> ContextPackage:
+    return ContextPackage.model_validate(context.model_dump(mode="python"), strict=True)
+
+
+def _detached_prepared_recovery_request(
+    prepared: PreparedTruncationRecoveryRequest,
+) -> PreparedTruncationRecoveryRequest:
+    return PreparedTruncationRecoveryRequest(
+        family_id=prepared.family_id,
+        child_task_id=prepared.child_task_id,
+        logical_request_id=prepared.logical_request_id,
+        role=prepared.role,
+        requested_model=prepared.requested_model,
+        child_context=_detached_context(prepared.child_context),
+        system_prompt_sha256=prepared.system_prompt_sha256,
+        user_prompt_sha256=prepared.user_prompt_sha256,
+        response_schema_sha256=prepared.response_schema_sha256,
+        delivered_sources=prepared.delivered_sources,
+        delivered_source_descriptor_sha256s=(prepared.delivered_source_descriptor_sha256s),
+        request_limit_scope=prepared.request_limit_scope,
+        request_limit_count_before=prepared.request_limit_count_before,
+        request_limit_maximum=prepared.request_limit_maximum,
+    )
 
 
 def scheduler_prompt_template_inventory() -> tuple[dict[str, Any], ...]:
@@ -362,6 +479,18 @@ def scheduler_response_schema_hashes() -> frozenset[str]:
 def _cached_scheduler_response_normalizer_sha256(response_schema_sha256: str) -> str:
     """Bind the canonical JSON/Pydantic normalization used by scheduler outputs."""
 
+    if response_schema_sha256 == candidate_review_frame_wire_schema_sha256():
+        return scheduler_canonical_sha256(
+            {
+                "domain": "mmaudit.scheduler.candidate-review-wire-normalizer.v1",
+                "protocol": "CANDIDATE_REVIEW_NORMALIZATION_V1",
+                "wire_schema_sha256": response_schema_sha256,
+                "normalized_batch_schema_sha256": candidate_review_batch_schema_sha256(),
+                "json_encoding": "sorted-keys,compact,ascii,no-nan",
+                "control_frames_removed": True,
+                "semantic_records_unchanged": True,
+            }
+        )
     return scheduler_canonical_sha256(
         {
             "domain": "mmaudit.scheduler.model-output-normalizer.v1",
@@ -374,7 +503,10 @@ def _cached_scheduler_response_normalizer_sha256(response_schema_sha256: str) ->
 def scheduler_response_normalizer_sha256(response_schema_sha256: str) -> str:
     """Bind normalization only for a currently exact registered response schema."""
 
-    if response_schema_sha256 not in scheduler_response_schema_hashes():
+    if response_schema_sha256 not in scheduler_response_schema_hashes() or (
+        response_schema_sha256 == candidate_review_frame_wire_schema_sha256()
+        and not candidate_review_protocol_implementation_is_pristine()
+    ):
         raise ValueError("scheduler normalizer requires a registered response schema")
     return _cached_scheduler_response_normalizer_sha256(response_schema_sha256)
 
@@ -479,6 +611,8 @@ def build_scheduler_bindings(
     cost_ledger_baseline: SchedulerCostLedgerBaseline | None = None,
     privacy_evidence_custody: SchedulerPrivacyEvidenceCustody | None = None,
     audit_model_selection_evidence: AuditModelSelectionEvidenceBundle | None = None,
+    audit_model_refresh_evidence: AuditModelRefreshEvidence | None = None,
+    audit_model_refresh_pricing_evidence: AuditModelRefreshPricingEvidence | None = None,
 ) -> SchedulerBindings:
     """Build independently reproducible immutable campaign bindings."""
 
@@ -504,6 +638,8 @@ def build_scheduler_bindings(
             else ABSENT_PRIVACY_EVIDENCE_CUSTODY_SHA256
         ),
         audit_model_selection_evidence=audit_model_selection_evidence,
+        audit_model_refresh_evidence=audit_model_refresh_evidence,
+        audit_model_refresh_pricing_evidence=audit_model_refresh_pricing_evidence,
     )
 
 
@@ -1014,10 +1150,14 @@ def build_scheduler_cost_ledger_baseline(
     """Freeze the exact terminal ledger head before a scheduler campaign starts."""
 
     snapshot = atomic_ledger.snapshot()
+
+    def canonical_usd(value: Decimal) -> str:
+        return _canonical_recovery_usd_sum((format(value, "f"),))
+
     return SchedulerCostLedgerBaseline.build(
-        cap_usd_exact=format(snapshot.cap_usd, "f"),
-        spent_usd_exact=format(snapshot.spent_usd, "f"),
-        active_reserved_usd_exact=format(snapshot.active_reserved_usd, "f"),
+        cap_usd_exact=canonical_usd(snapshot.cap_usd),
+        spent_usd_exact=canonical_usd(snapshot.spent_usd),
+        active_reserved_usd_exact=canonical_usd(snapshot.active_reserved_usd),
         entries=(
             SchedulerCostLedgerBaselineEntry.build(
                 request_id=entry.request_id,
@@ -1042,6 +1182,7 @@ class PipelineScheduler:
             item.task_id: item for item in journal.activations
         }
         self._upstream_results: dict[str, tuple[str, ...]] = {}
+        self._prepared_truncation_recovery: PreparedTruncationRecoveryRequest | None = None
 
     @classmethod
     def create(
@@ -1053,6 +1194,13 @@ class PipelineScheduler:
         shard_inventory: SchedulerShardInventory,
         privacy_evidence_custody: SchedulerPrivacyEvidenceCustody,
         cost_ledger_baseline: SchedulerCostLedgerBaseline | None = None,
+        audit_model_refresh_evidence: AuditModelRefreshEvidence | None = None,
+        audit_model_refresh_guard: VerifiedAuditModelRefreshGuard | None = None,
+        audit_model_refresh_pricing_evidence: AuditModelRefreshPricingEvidence | None = None,
+        audit_model_refresh_pricing_authority: VerifiedAuditModelRefreshPricingAuthority
+        | None = None,
+        production_qualification: VerifiedProductionQualification | None = None,
+        audit_model_selection: VerifiedAuditModelSelection | None = None,
     ) -> PipelineScheduler:
         return cls(
             create_scheduler_journal(
@@ -1063,6 +1211,12 @@ class PipelineScheduler:
                 cost_ledger_baseline=cost_ledger_baseline,
                 privacy_evidence_custody=privacy_evidence_custody,
                 require_terminal_report_authority=True,
+                audit_model_refresh_evidence=audit_model_refresh_evidence,
+                audit_model_refresh_guard=audit_model_refresh_guard,
+                audit_model_refresh_pricing_evidence=(audit_model_refresh_pricing_evidence),
+                audit_model_refresh_pricing_authority=(audit_model_refresh_pricing_authority),
+                production_qualification=production_qualification,
+                audit_model_selection=audit_model_selection,
             )
         )
 
@@ -1076,8 +1230,19 @@ class PipelineScheduler:
         shard_inventory: SchedulerShardInventory,
         cost_ledger_baseline: SchedulerCostLedgerBaseline | None = None,
         atomic_ledger: AtomicCostLedger | None = None,
+        audit_model_refresh_evidence: AuditModelRefreshEvidence | None = None,
+        audit_model_refresh_guard: VerifiedAuditModelRefreshGuard | None = None,
+        audit_model_refresh_pricing_evidence: AuditModelRefreshPricingEvidence | None = None,
+        audit_model_refresh_pricing_authority: VerifiedAuditModelRefreshPricingAuthority
+        | None = None,
+        production_qualification: VerifiedProductionQualification | None = None,
+        audit_model_selection: VerifiedAuditModelSelection | None = None,
     ) -> PipelineScheduler:
-        """Resume only an exact campaign; dispatched work remains non-retriable."""
+        """Resume an exact campaign after its local journal head compares successfully.
+
+        The journal loader performs that comparison before crash recovery, so pipeline
+        callers cannot accidentally omit the local recovery-suffix rollback check.
+        """
 
         return cls(
             resume_scheduler_journal(
@@ -1088,6 +1253,12 @@ class PipelineScheduler:
                 expected_cost_ledger_baseline=cost_ledger_baseline,
                 atomic_ledger=atomic_ledger,
                 expected_terminal_report_authority_required=True,
+                audit_model_refresh_evidence=audit_model_refresh_evidence,
+                audit_model_refresh_guard=audit_model_refresh_guard,
+                audit_model_refresh_pricing_evidence=(audit_model_refresh_pricing_evidence),
+                audit_model_refresh_pricing_authority=(audit_model_refresh_pricing_authority),
+                production_qualification=production_qualification,
+                audit_model_selection=audit_model_selection,
             )
         )
 
@@ -1118,6 +1289,14 @@ class PipelineScheduler:
             raise ValueError("scheduled model task lacks exact pre-dispatch privacy custody")
         if response_schema_sha256 not in scheduler_response_schema_hashes():
             raise ValueError("scheduled model task uses an unregistered response schema")
+        candidate_review_contract = pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW or (
+            pass_kind is SchedulerPassKind.CROSS_SHARD_INTEGRATION and role == "business_logic"
+        )
+        if candidate_review_contract and (
+            response_schema_sha256 != candidate_review_frame_wire_schema_sha256()
+            or not candidate_review_protocol_implementation_is_pristine()
+        ):
+            raise ValueError("new scheduler candidate reviews require the exact framed wire schema")
         input_recipe_sha256 = scheduler_canonical_sha256(
             {
                 "domain": "mmaudit.scheduler.model-input-recipe.v1",
@@ -1363,6 +1542,50 @@ class PipelineScheduler:
             raise ValueError("completed scheduler task lacks a successful retained output")
         return self.journal.reconstruct_output(task.task_id, output_type)
 
+    def effective_completed_status_for_task(
+        self,
+        pass_result: SchedulerPassResult,
+        task: SchedulerTaskPlan,
+    ) -> SchedulerTerminalStatus:
+        """Report promotion-aware status while preserving the original durable terminal."""
+
+        original = self.completed_result_for_task(pass_result, task)
+        promoted = self.journal.recovered_candidate_review_output_for_task(task.task_id)
+        binding = tuple(
+            item
+            for item in pass_result.recovery_promotion_bindings
+            if item.parent_task_id == task.task_id
+        )
+        if promoted is None:
+            if binding:
+                raise ValueError("scheduler pass claims a missing private recovery promotion")
+            return original.terminal_status
+        if (
+            original.terminal_status is not SchedulerTerminalStatus.TRUNCATED
+            or len(binding) != 1
+            or binding[0].original_truncated_result_sha256 != original.result_sha256
+            or binding[0].recovered_output_artifact_sha256 != promoted.output_artifact_sha256
+        ):
+            raise ValueError("scheduler recovered status differs from its exact pass binding")
+        return SchedulerTerminalStatus.SUCCEEDED
+
+    def completed_recovered_candidate_review(
+        self,
+        pass_result: SchedulerPassResult,
+        task: SchedulerTaskPlan,
+    ) -> SchedulerRecoveredCandidateReviewOutput:
+        """Return one private promoted CandidateReviewBatch for downstream resumption."""
+
+        if (
+            self.effective_completed_status_for_task(pass_result, task)
+            is not SchedulerTerminalStatus.SUCCEEDED
+        ):
+            raise ValueError("scheduler task has no effective recovered completion")
+        recovered = self.journal.recovered_candidate_review_output_for_task(task.task_id)
+        if recovered is None:
+            raise ValueError("scheduler task completed directly rather than through recovery")
+        return recovered
+
     @property
     def resumable_tasks(self) -> tuple[SchedulerTaskPlan, ...]:
         """Return exact active-plan tasks that were never durably dispatched."""
@@ -1416,6 +1639,177 @@ class PipelineScheduler:
             return
         self._upstream_results[task.task_id] = values
 
+    def prepare_truncation_recovery_child(
+        self,
+        child_task_id: str,
+        *,
+        parent_context: ContextPackage,
+    ) -> PreparedTruncationRecoveryRequest:
+        """Derive and freeze one exact direct child before its provider lifecycle starts."""
+
+        family, child = self._truncation_recovery_child(child_task_id)
+        if child.reserved_provider_attempts != 1:
+            raise OpenRouterSchemaError(
+                "candidate-review recovery requires exactly one reserved provider attempt"
+            )
+        live_child_ids = self._live_truncation_recovery_child_ids()
+        if live_child_ids and live_child_ids != {child_task_id}:
+            raise OpenRouterSchemaError(
+                "only one truncation-recovery child may be prepared at a time"
+            )
+        if self._truncation_recovery_child_is_terminal(child_task_id):
+            raise OpenRouterSchemaError("truncation-recovery child is already terminal")
+        activation = self._truncation_recovery_activation(child_task_id)
+        if activation is None:
+            if child_task_id not in self.journal.activatable_truncation_recovery_child_ids:
+                raise OpenRouterSchemaError("truncation-recovery child is not activatable")
+        elif child_task_id not in self.journal.dispatchable_truncation_recovery_child_ids:
+            raise OpenRouterSchemaError("truncation-recovery child is not dispatchable")
+
+        parent_activation, parent_role, parent_model, parent_schema_sha256 = (
+            self._truncation_recovery_parent_request(family)
+        )
+        parent_system_prompt_sha256 = parent_activation.system_prompt_sha256
+        if parent_system_prompt_sha256 is None:
+            raise OpenRouterSchemaError(
+                "truncation-recovery parent lacks an exact system prompt hash"
+            )
+        reservation = family.request_limit_binding.parent_request_limit_reservation
+        if (
+            parent_role != reservation.role
+            or parent_model != reservation.exact_model_id
+            or parent_schema_sha256 != candidate_review_frame_wire_schema_sha256()
+            or parent_activation.response_schema_sha256 != parent_schema_sha256
+            or not candidate_review_protocol_implementation_is_pristine()
+        ):
+            raise OpenRouterSchemaError(
+                "truncation-recovery parent route differs from framed request custody"
+            )
+        try:
+            if type(parent_context) is not ContextPackage:
+                raise ContextBoundaryError(
+                    "truncation-recovery parent context requires an exact ContextPackage"
+                )
+            sealed_parent = revalidate_model_surface_context_package(parent_context)
+            manifest_by_id = {
+                request.surface_id: request
+                for request in family.requested_surface_manifest.requests
+            }
+            expected_parent_requests = tuple(
+                manifest_by_id[surface_id]
+                for surface_id in family.recovery_plan.parent.requested_surface_ids
+            )
+            if tuple(sealed_parent.requested_model_surfaces) != expected_parent_requests:
+                raise ContextBoundaryError(
+                    "truncation-recovery parent context differs from its frozen surface manifest"
+                )
+            parent_user_prompt_sha256 = hashlib.sha256(
+                render_context(sealed_parent).encode("utf-8")
+            ).hexdigest()
+            if (
+                parent_activation.actual_input_sha256 != parent_user_prompt_sha256
+                or parent_activation.user_prompt_sha256 != parent_user_prompt_sha256
+            ):
+                raise ContextBoundaryError(
+                    "truncation-recovery parent context differs from durable request bytes"
+                )
+            sealed_child = build_truncation_recovery_child_context(
+                parent_context=sealed_parent,
+                child=child,
+            )
+        except (ContextBoundaryError, KeyError, TruncationRecoveryEvidenceError) as exc:
+            raise OpenRouterSchemaError(str(exc)) from None
+        role_matches = sealed_child.role == reservation.role or (
+            sealed_child.role == "whole_protocol_review"
+            and _WHOLE_PROTOCOL_RECOVERY_ROLE.fullmatch(reservation.role) is not None
+        )
+        if not role_matches:
+            raise OpenRouterSchemaError(
+                "truncation-recovery child context role differs from its parent route"
+            )
+        parent_sources = _recovery_delivered_source_descriptors(sealed_parent)
+        child_sources = _recovery_delivered_source_descriptors(sealed_child)
+        if child_sources != parent_sources:
+            raise OpenRouterSchemaError(
+                "truncation-recovery child changed parent delivered-source custody"
+            )
+        sources_by_path: dict[str, list[SchedulerSourceDescriptor]] = {}
+        for shard in self.journal.manifest.shard_inventory.shards:
+            for source in shard.sources:
+                sources_by_path.setdefault(source.path, []).append(source)
+        descriptor_sha256s: list[str] = []
+        for delivered in child_sources:
+            matching_sources = sources_by_path.get(delivered.path, [])
+            if (
+                len(matching_sources) != 1
+                or matching_sources[0].sha256 != delivered.sha256
+                or matching_sources[0].size != delivered.size
+            ):
+                raise OpenRouterSchemaError(
+                    "truncation-recovery delivered source differs from audited source bytes"
+                )
+            descriptor_sha256s.append(matching_sources[0].source_descriptor_sha256)
+
+        preceding_attempts = sum(
+            planned.reserved_provider_attempts
+            for planned in family.recovery_plan.children
+            if planned.ordinal < child.ordinal
+        )
+        request_limit_count_before = family.request_limit_count_before_family + preceding_attempts
+        user_prompt_sha256 = hashlib.sha256(
+            render_context(sealed_child).encode("utf-8")
+        ).hexdigest()
+        prepared = PreparedTruncationRecoveryRequest(
+            family_id=family.family_id,
+            child_task_id=child.child_task_id,
+            logical_request_id=child.child_logical_request_id,
+            role=reservation.role,
+            requested_model=reservation.exact_model_id,
+            child_context=_detached_context(sealed_child),
+            system_prompt_sha256=parent_system_prompt_sha256,
+            user_prompt_sha256=user_prompt_sha256,
+            response_schema_sha256=candidate_review_frame_wire_schema_sha256(),
+            delivered_sources=child_sources,
+            delivered_source_descriptor_sha256s=tuple(descriptor_sha256s),
+            request_limit_scope=family.request_limit_id,
+            request_limit_count_before=request_limit_count_before,
+            request_limit_maximum=family.request_limit_binding.request_limit_maximum,
+        )
+        if activation is not None:
+            self._require_matching_truncation_recovery_activation(
+                prepared=prepared,
+                activation=activation,
+                child=child,
+                family=family,
+            )
+        current = self._prepared_truncation_recovery
+        if current is not None and not self._truncation_recovery_child_is_terminal(
+            current.child_task_id
+        ):
+            if current != prepared:
+                raise OpenRouterSchemaError(
+                    "a different truncation-recovery child is already prepared"
+                )
+            return _detached_prepared_recovery_request(current)
+        self._prepared_truncation_recovery = prepared
+        return _detached_prepared_recovery_request(prepared)
+
+    def prepared_truncation_recovery_request(
+        self,
+        *,
+        logical_request_id: str | None = None,
+    ) -> PreparedTruncationRecoveryRequest:
+        """Return a detached copy of the sole ephemeral recovery request binding."""
+
+        prepared = self._prepared_truncation_recovery
+        if prepared is None or (
+            logical_request_id is not None and logical_request_id != prepared.logical_request_id
+        ):
+            raise OpenRouterSchemaError("truncation-recovery request is not prepared")
+        if self._truncation_recovery_child_is_terminal(prepared.child_task_id):
+            raise OpenRouterSchemaError("truncation-recovery child is already terminal")
+        return _detached_prepared_recovery_request(prepared)
+
     def request_ready(
         self,
         *,
@@ -1431,6 +1825,22 @@ class PipelineScheduler:
     ) -> _TrustedRequestLimitScope | None:
         """Persist the exact provider request material before transport."""
 
+        prepared_recovery = self._prepared_truncation_recovery
+        if (
+            prepared_recovery is not None
+            and logical_request_id == prepared_recovery.logical_request_id
+        ):
+            return self._truncation_recovery_request_ready(
+                prepared=prepared_recovery,
+                role=role,
+                requested_model=requested_model,
+                prompt_sha256=prompt_sha256,
+                system_prompt_sha256=system_prompt_sha256,
+                user_prompt_sha256=user_prompt_sha256,
+                schema_sha256=schema_sha256,
+                delivered_sources=delivered_sources,
+                privacy_binding=privacy_binding,
+            )
         matches = [
             task for task in self.active_plan.tasks if task.logical_request_id == logical_request_id
         ]
@@ -1522,6 +1932,18 @@ class PipelineScheduler:
     def request_dispatched(self, *, logical_request_id: str) -> None:
         """Persist provider dispatch before the HTTP transport is entered."""
 
+        prepared_recovery = self._prepared_truncation_recovery
+        if (
+            prepared_recovery is not None
+            and logical_request_id == prepared_recovery.logical_request_id
+        ):
+            activation = self._truncation_recovery_activation(prepared_recovery.child_task_id)
+            if activation is None:
+                raise OpenRouterSchemaError(
+                    "truncation-recovery dispatch lacks an exact durable activation"
+                )
+            self.journal.mark_truncation_recovery_child_dispatched(prepared_recovery.child_task_id)
+            return
         matches = [
             task for task in self.active_plan.tasks if task.logical_request_id == logical_request_id
         ]
@@ -1530,6 +1952,24 @@ class PipelineScheduler:
                 "provider dispatch lacks one exact active scheduler task identity"
             )
         self.journal.mark_dispatched(matches[0].task_id)
+
+    def record_truncation_recovery_child_preflight_result(
+        self,
+        *,
+        logical_request_id: str,
+        terminal_status: SchedulerTruncationRecoveryTerminalStatus,
+        terminal_evidence_sha256: str,
+    ) -> SchedulerTruncationRecoveryChildPreflightResult:
+        """Close an activated, never-dispatched child with exact zero-cost evidence."""
+
+        prepared = self.prepared_truncation_recovery_request(logical_request_id=logical_request_id)
+        result = self.journal.record_truncation_recovery_child_preflight_result(
+            prepared.child_task_id,
+            terminal_status=terminal_status,
+            terminal_evidence_sha256=terminal_evidence_sha256,
+        )
+        self._prepared_truncation_recovery = None
+        return result
 
     def activate_host(
         self,
@@ -1583,6 +2023,7 @@ class PipelineScheduler:
         model_surface_review_requests: Iterable[ModelSurfaceReviewRequest] = (),
         model_surface_review_artifact: ModelSurfaceReviewArtifact | None = None,
         accepted_candidates: Iterable[CandidateFinding] = (),
+        normalization_evidence: CandidateReviewNormalizationEvidence | None = None,
     ) -> SchedulerTaskResult:
         self._require_active_task(task)
         activation = self._activation(task)
@@ -1639,6 +2080,7 @@ class PipelineScheduler:
                 model_surface_review_requests=model_surface_review_requests,
                 model_surface_review_artifact=model_surface_review_artifact,
                 accepted_candidates=accepted_candidates,
+                normalization_evidence=normalization_evidence,
             )
         except ValueError:
             attempt = self._persist_accountable_provider_attempt(task, (usage,))
@@ -1666,8 +2108,24 @@ class PipelineScheduler:
         usage_records: Iterable[UsageRecord] = (),
     ) -> SchedulerTaskResult:
         self._require_active_task(task)
-        if isinstance(error, OpenRouterTruncatedResponseError):
+        truncation_projection_sha256: str | None = None
+        exact_truncated_usage: UsageRecord | None = None
+        truncation_envelope: CandidateReviewTruncatedEnvelopeEvidence | None = None
+        truncation_projection = None
+        truncation_failed_usage = None
+        if type(error) is OpenRouterTruncatedResponseError:
             status = SchedulerTerminalStatus.TRUNCATED
+            try:
+                envelope = error.envelope_evidence
+                projection = error.projection
+                failed_usage = error.failed_usage_record
+            except OpenRouterSchemaError:
+                status = SchedulerTerminalStatus.INVALID
+            else:
+                if envelope is not None and projection is not None and failed_usage is not None:
+                    truncation_envelope = envelope
+                    truncation_projection = projection
+                    truncation_failed_usage = failed_usage
         elif isinstance(error, OpenRouterUnboundIdentityError):
             status = SchedulerTerminalStatus.UNBOUND
         elif isinstance(error, OpenRouterSchemaError):
@@ -1701,9 +2159,42 @@ class PipelineScheduler:
             )
             self.journal.record_activated_preflight_failure(result)
             return result
-        attempt = self._persist_accountable_provider_attempt(task, usage_records)
+        exact_usage_records: list[UsageRecord] = []
+        for record in usage_records:
+            if record.request_id != task.logical_request_id:
+                continue
+            exact_usage_records.append(record)
+            if len(exact_usage_records) > 1:
+                break
+        if truncation_projection is not None and truncation_failed_usage is not None:
+            if (
+                len(exact_usage_records) == 1
+                and type(exact_usage_records[0]) is UsageRecord
+                and exact_usage_records[0] == truncation_failed_usage
+            ):
+                exact_truncated_usage = truncation_failed_usage
+                truncation_projection_sha256 = truncation_projection.evidence_sha256
+            else:
+                status = SchedulerTerminalStatus.UNBOUND
+        attempt = self._persist_accountable_provider_attempt(
+            task,
+            exact_usage_records,
+            truncated_envelope_evidence=(
+                truncation_envelope if exact_truncated_usage is not None else None
+            ),
+            truncation_projection=(
+                truncation_projection if exact_truncated_usage is not None else None
+            ),
+        )
         if attempt is not None:
-            evidence_sha256 = attempt.attempt_evidence_sha256
+            if (
+                truncation_projection_sha256 is not None
+                and exact_truncated_usage is not None
+                and attempt.usage_record == exact_truncated_usage
+            ):
+                evidence_sha256 = truncation_projection_sha256
+            else:
+                evidence_sha256 = attempt.attempt_evidence_sha256
         return self._record_result(
             task,
             terminal_status=status,
@@ -1792,6 +2283,220 @@ class PipelineScheduler:
     def close(self) -> None:
         self.journal.close()
 
+    def _truncation_recovery_child(
+        self,
+        child_task_id: str,
+    ) -> tuple[SchedulerTruncationRecoveryFamilyRoot, TruncationRecoveryChildPlan]:
+        matches = tuple(
+            (family, child)
+            for family in self.journal.truncation_recovery_families
+            for child in family.recovery_plan.children
+            if child.child_task_id == child_task_id
+        )
+        if len(matches) != 1:
+            raise OpenRouterSchemaError("truncation-recovery child lacks one exact journal plan")
+        return matches[0]
+
+    def _truncation_recovery_activation(
+        self,
+        child_task_id: str,
+    ) -> SchedulerTruncationRecoveryChildActivation | None:
+        matches = tuple(
+            entry
+            for entry in self.journal.truncation_recovery_entries
+            if isinstance(entry, SchedulerTruncationRecoveryChildActivation)
+            and entry.child_task_id == child_task_id
+        )
+        if len(matches) > 1:
+            raise OpenRouterSchemaError(
+                "truncation-recovery child has duplicate durable activations"
+            )
+        return matches[0] if matches else None
+
+    def _truncation_recovery_child_is_terminal(self, child_task_id: str) -> bool:
+        return any(
+            isinstance(
+                entry,
+                (
+                    SchedulerTruncationRecoveryChildPreflightResult,
+                    SchedulerTruncationRecoveryChildResult,
+                ),
+            )
+            and entry.child_task_id == child_task_id
+            for entry in self.journal.truncation_recovery_entries
+        )
+
+    def _live_truncation_recovery_child_ids(self) -> set[str]:
+        activated = {
+            entry.child_task_id
+            for entry in self.journal.truncation_recovery_entries
+            if isinstance(entry, SchedulerTruncationRecoveryChildActivation)
+        }
+        terminal = {
+            entry.child_task_id
+            for entry in self.journal.truncation_recovery_entries
+            if isinstance(
+                entry,
+                (
+                    SchedulerTruncationRecoveryChildPreflightResult,
+                    SchedulerTruncationRecoveryChildResult,
+                ),
+            )
+        }
+        return activated - terminal
+
+    def _truncation_recovery_parent_request(
+        self,
+        family: SchedulerTruncationRecoveryFamilyRoot,
+    ) -> tuple[
+        SchedulerTaskActivation | SchedulerTruncationRecoveryChildActivation,
+        str,
+        str,
+        str,
+    ]:
+        parent_task_id = family.recovery_plan.parent.parent_task_id
+        task_matches = tuple(
+            task
+            for plan in self.journal.plans
+            for task in plan.tasks
+            if task.task_id == parent_task_id
+        )
+        if len(task_matches) == 1:
+            task = task_matches[0]
+            activation = self._activations.get(parent_task_id)
+            if (
+                activation is None
+                or task.requested_model is None
+                or task.system_prompt_sha256 is None
+            ):
+                raise OpenRouterSchemaError(
+                    "truncation-recovery parent lacks exact scheduled request custody"
+                )
+            return activation, task.role, task.requested_model, task.response_schema_sha256
+        if task_matches:
+            raise OpenRouterSchemaError("truncation-recovery parent task is ambiguous")
+        recovery_activation = self._truncation_recovery_activation(parent_task_id)
+        if (
+            recovery_activation is None
+            or recovery_activation.request_role is None
+            or recovery_activation.requested_model is None
+            or recovery_activation.response_schema_sha256 is None
+        ):
+            raise OpenRouterSchemaError(
+                "nested truncation-recovery parent lacks exact request custody"
+            )
+        return (
+            recovery_activation,
+            recovery_activation.request_role,
+            recovery_activation.requested_model,
+            recovery_activation.response_schema_sha256,
+        )
+
+    def _require_matching_truncation_recovery_activation(
+        self,
+        *,
+        prepared: PreparedTruncationRecoveryRequest,
+        activation: SchedulerTruncationRecoveryChildActivation,
+        child: TruncationRecoveryChildPlan,
+        family: SchedulerTruncationRecoveryFamilyRoot,
+        provider_prompt_sha256: str | None = None,
+    ) -> None:
+        if (
+            activation.family_id != family.family_id
+            or activation.family_root_sha256 != family.entry_sha256
+            or activation.child_ordinal != child.ordinal
+            or activation.child_task_id != child.child_task_id
+            or activation.child_logical_request_id != child.child_logical_request_id
+            or activation.child_plan_sha256 != child.child_plan_sha256
+            or activation.child_surface_ids != child.surface_ids
+            or activation.request_limit_id != prepared.request_limit_scope
+            or activation.request_limit_count_before_child != prepared.request_limit_count_before
+            or activation.request_limit_count_after_child != prepared.request_limit_count_before + 1
+            or activation.request_limit_maximum != prepared.request_limit_maximum
+            or activation.request_role != prepared.role
+            or activation.requested_model != prepared.requested_model
+            or activation.actual_input_sha256 != prepared.user_prompt_sha256
+            or activation.system_prompt_sha256 != prepared.system_prompt_sha256
+            or activation.user_prompt_sha256 != prepared.user_prompt_sha256
+            or activation.response_schema_sha256 != prepared.response_schema_sha256
+            or (
+                provider_prompt_sha256 is not None
+                and activation.provider_prompt_sha256 != provider_prompt_sha256
+            )
+        ):
+            raise OpenRouterSchemaError(
+                "resumed truncation-recovery request differs from durable activation"
+            )
+
+    def _truncation_recovery_request_ready(
+        self,
+        *,
+        prepared: PreparedTruncationRecoveryRequest,
+        role: str,
+        requested_model: str,
+        prompt_sha256: str,
+        system_prompt_sha256: str,
+        user_prompt_sha256: str,
+        schema_sha256: str,
+        delivered_sources: tuple[DeliveredSourceDescriptor, ...],
+        privacy_binding: ModelRequestPrivacyBinding | None,
+    ) -> _TrustedRequestLimitScope:
+        if self._truncation_recovery_child_is_terminal(prepared.child_task_id):
+            raise OpenRouterSchemaError("truncation-recovery child is already terminal")
+        custody = self.journal.manifest.privacy_evidence_custody
+        if (
+            custody is None
+            or privacy_binding is None
+            or privacy_binding.source_sha256 != custody.source_sha256
+            or privacy_binding.effective_policy_sha256 != custody.effective_policy_evidence_sha256
+            or privacy_binding.source_provenance_sha256 != custody.source_provenance_evidence_sha256
+        ):
+            raise OpenRouterSchemaError(
+                "truncation-recovery request privacy authority differs from scheduler custody"
+            )
+        try:
+            for value, label in (
+                (prompt_sha256, "provider prompt SHA-256"),
+                (system_prompt_sha256, "system prompt SHA-256"),
+                (user_prompt_sha256, "user prompt SHA-256"),
+                (schema_sha256, "response schema SHA-256"),
+            ):
+                _require_optional_sha256(value, label)
+        except ValueError as exc:
+            raise OpenRouterSchemaError(str(exc)) from None
+        if (
+            role != prepared.role
+            or requested_model != prepared.requested_model
+            or system_prompt_sha256 != prepared.system_prompt_sha256
+            or user_prompt_sha256 != prepared.user_prompt_sha256
+            or schema_sha256 != prepared.response_schema_sha256
+            or schema_sha256 != candidate_review_frame_wire_schema_sha256()
+            or not candidate_review_protocol_implementation_is_pristine()
+            or delivered_sources != prepared.delivered_sources
+        ):
+            raise OpenRouterSchemaError(
+                "provider request differs from its exact prepared truncation-recovery child"
+            )
+        family, child = self._truncation_recovery_child(prepared.child_task_id)
+        activation = self._truncation_recovery_activation(prepared.child_task_id)
+        if activation is None:
+            activation = self.journal.activate_truncation_recovery_child(
+                prepared.child_task_id,
+                actual_input_sha256=user_prompt_sha256,
+                system_prompt_sha256=system_prompt_sha256,
+                user_prompt_sha256=user_prompt_sha256,
+                provider_prompt_sha256=prompt_sha256,
+                response_schema_sha256=schema_sha256,
+            )
+        self._require_matching_truncation_recovery_activation(
+            prepared=prepared,
+            activation=activation,
+            child=child,
+            family=family,
+            provider_prompt_sha256=prompt_sha256,
+        )
+        return _issue_trusted_request_limit_scope(prepared.request_limit_scope)
+
     def _record_result(
         self,
         task: SchedulerTaskPlan,
@@ -1804,6 +2509,7 @@ class PipelineScheduler:
         model_surface_review_requests: Iterable[ModelSurfaceReviewRequest] = (),
         model_surface_review_artifact: ModelSurfaceReviewArtifact | None = None,
         accepted_candidates: Iterable[CandidateFinding] = (),
+        normalization_evidence: CandidateReviewNormalizationEvidence | None = None,
     ) -> SchedulerTaskResult:
         output = (
             self.journal.persist_output(
@@ -1814,6 +2520,7 @@ class PipelineScheduler:
                 model_surface_review_requests=model_surface_review_requests,
                 model_surface_review_artifact=model_surface_review_artifact,
                 accepted_candidates=accepted_candidates,
+                normalization_evidence=normalization_evidence,
             )
             if terminal_status is SchedulerTerminalStatus.SUCCEEDED
             else None
@@ -1833,6 +2540,9 @@ class PipelineScheduler:
         self,
         task: SchedulerTaskPlan,
         records: Iterable[UsageRecord],
+        *,
+        truncated_envelope_evidence: CandidateReviewTruncatedEnvelopeEvidence | None = None,
+        truncation_projection: CandidateReviewTruncationProjection | None = None,
     ) -> SchedulerProviderAttemptEvidence | None:
         """Retain one exact paid attempt without granting successful-review credit."""
 
@@ -1841,6 +2551,15 @@ class PipelineScheduler:
         exact = tuple(record for record in records if record.request_id == task.logical_request_id)
         if len(exact) != 1 or not is_accountable_usage_record(exact[0]):
             return None
+        if (truncated_envelope_evidence is None) != (truncation_projection is None):
+            raise ValueError("scheduler typed truncation custody is all-or-none")
+        if truncated_envelope_evidence is not None and truncation_projection is not None:
+            return self.journal.persist_truncated_provider_attempt(
+                task.task_id,
+                exact[0],
+                truncated_envelope_evidence=truncated_envelope_evidence,
+                truncation_projection=truncation_projection,
+            )
         return self.journal.persist_provider_attempt(task.task_id, exact[0])
 
     def _require_active_task(self, task: SchedulerTaskPlan) -> None:

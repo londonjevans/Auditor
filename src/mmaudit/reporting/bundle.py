@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -18,6 +19,9 @@ from mmaudit.models.scheduler import (
 )
 from mmaudit.models.schemas import (
     AnalysisState,
+    AuditModelRefreshEvidence,
+    AuditModelRefreshPricingAttemptEvidence,
+    AuditModelRefreshPricingEvidence,
     AuditModelSelection,
     AuditReport,
     AuditRunStatus,
@@ -51,6 +55,8 @@ from mmaudit.models.schemas import (
     UsageRecord,
     VerificationDecision,
     VerificationVerdict,
+    validate_audit_model_refresh_pricing_usage_custody,
+    validate_audit_model_refresh_usage_custody,
     validate_audit_model_selection_usage_custody,
 )
 from mmaudit.orchestration.cost_ledger import (
@@ -67,7 +73,7 @@ from mmaudit.scanners.projection import project_scanner_finding
 
 _MAX_SOURCE_EXCERPT_EVIDENCE_BYTES = 1_000_000
 _USD_EXACT_PATTERN = r"^(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,18})?$"
-_SCHEDULER_REQUEST_PATTERN = r"^scheduler-request-[0-9a-f]{64}$"
+_SCHEDULER_REQUEST_PATTERN = r"^(?:scheduler-request|scheduler-recovery-request)-[0-9a-f]{64}$"
 
 SCANNER_SOURCE_EVIDENCE_PATH = "private/scanner-source-evidence.json"
 
@@ -142,6 +148,25 @@ def _money_text(value: Decimal) -> str:
     if "." in material:
         material = material.rstrip("0").rstrip(".")
     return material or "0"
+
+
+def _exact_money_sum(values: Iterable[Decimal]) -> Decimal:
+    """Sum bounded monetary values independently of the ambient Decimal context."""
+
+    with localcontext() as context:
+        context.prec = 160
+        return sum(values, start=Decimal(0))
+
+
+def _exact_money_difference(minuend: Decimal, *subtrahends: Decimal) -> Decimal:
+    """Subtract bounded monetary values independently of ambient Decimal precision."""
+
+    with localcontext() as context:
+        context.prec = 160
+        result = minuend
+        for subtrahend in subtrahends:
+            result -= subtrahend
+        return result
 
 
 def _attempt_request_id(logical_request_id: str, attempt_index: int) -> str:
@@ -1009,7 +1034,7 @@ class CostLedgerAttemptEvidence(StrictModel):
             entry.reserved_usd
             if entry.status is CostEntryStatus.RELEASED
             else (
-                entry.reserved_usd - entry.accounted_cost_usd
+                _exact_money_difference(entry.reserved_usd, entry.accounted_cost_usd)
                 if entry.status is CostEntryStatus.RECONCILED
                 else Decimal(0)
             )
@@ -1036,7 +1061,10 @@ class CostLedgerAttemptEvidence(StrictModel):
     @model_validator(mode="after")
     def terminal_lifecycle_and_hash_are_exact(self) -> CostLedgerAttemptEvidence:
         expected_request_id = _attempt_request_id(self.logical_request_id, self.attempt_index)
-        if self.request_id != expected_request_id:
+        if self.request_id != expected_request_id or (
+            self.logical_request_id.startswith("scheduler-recovery-request-")
+            and self.attempt_index != 1
+        ):
             raise ValueError("cost-ledger attempt identity differs from its logical request")
         if self.created_at.tzinfo is None or self.created_at.utcoffset() != UTC.utcoffset(
             self.created_at
@@ -1071,7 +1099,7 @@ class CostLedgerAttemptEvidence(StrictModel):
                 and accounted == reconciled
                 and self.release_reason is None
             )
-            expected_released = reserved - accounted
+            expected_released = _exact_money_difference(reserved, accounted)
         elif self.status is CostEntryStatus.UNCERTAIN_ACCOUNTED:
             valid = reconciled is None and accounted == reserved and self.release_reason is None
         else:
@@ -1140,6 +1168,16 @@ class RunCostLedgerEvidence(StrictModel):
             attempts,
             key=lambda item: (item.logical_request_id, item.attempt_index),
         )
+        exact_final_remaining = max(
+            Decimal(0),
+            _exact_money_difference(
+                final_snapshot.cap_usd,
+                final_snapshot.spent_usd,
+                final_snapshot.active_reserved_usd,
+            ),
+        )
+        if final_snapshot.remaining_usd != exact_final_remaining:
+            raise ValueError("final cost-ledger remaining amount is not exact")
         values = {
             "schema_version": "1.0",
             "state": "RUN_SCOPED_CLOSED",
@@ -1154,24 +1192,17 @@ class RunCostLedgerEvidence(StrictModel):
             ),
             "final_spent_usd_exact": _money_text(final_snapshot.spent_usd),
             "final_active_reserved_usd_exact": _money_text(final_snapshot.active_reserved_usd),
-            "final_remaining_usd_exact": _money_text(final_snapshot.remaining_usd),
+            "final_remaining_usd_exact": _money_text(exact_final_remaining),
             "run_reserved_usd_exact": _money_text(
-                sum(
-                    (Decimal(item.reserved_usd_exact) for item in canonical_attempts),
-                    start=Decimal(0),
-                )
+                _exact_money_sum(Decimal(item.reserved_usd_exact) for item in canonical_attempts)
             ),
             "run_accounted_cost_usd_exact": _money_text(
-                sum(
-                    (Decimal(item.accounted_cost_usd_exact) for item in canonical_attempts),
-                    start=Decimal(0),
+                _exact_money_sum(
+                    Decimal(item.accounted_cost_usd_exact) for item in canonical_attempts
                 )
             ),
             "run_released_usd_exact": _money_text(
-                sum(
-                    (Decimal(item.released_usd_exact) for item in canonical_attempts),
-                    start=Decimal(0),
-                )
+                _exact_money_sum(Decimal(item.released_usd_exact) for item in canonical_attempts)
             ),
             "baseline_entry_count": len(baseline.entries),
             "final_entry_count": len(final_snapshot.entries),
@@ -1217,23 +1248,20 @@ class RunCostLedgerEvidence(StrictModel):
         final_spent = Decimal(self.final_spent_usd_exact)
         final_active = Decimal(self.final_active_reserved_usd_exact)
         cap = Decimal(self.cap_usd_exact)
-        run_reserved = sum(
-            (Decimal(item.reserved_usd_exact) for item in self.attempts),
-            start=Decimal(0),
+        run_reserved = _exact_money_sum(Decimal(item.reserved_usd_exact) for item in self.attempts)
+        run_accounted = _exact_money_sum(
+            Decimal(item.accounted_cost_usd_exact) for item in self.attempts
         )
-        run_accounted = sum(
-            (Decimal(item.accounted_cost_usd_exact) for item in self.attempts),
-            start=Decimal(0),
-        )
-        run_released = sum(
-            (Decimal(item.released_usd_exact) for item in self.attempts),
-            start=Decimal(0),
+        run_released = _exact_money_sum(Decimal(item.released_usd_exact) for item in self.attempts)
+        final_remaining = max(
+            Decimal(0),
+            _exact_money_difference(cap, final_spent),
         )
         if (
             baseline_active != 0
             or final_active != 0
-            or final_spent != baseline_spent + run_accounted
-            or Decimal(self.final_remaining_usd_exact) != max(Decimal(0), cap - final_spent)
+            or final_spent != _exact_money_sum((baseline_spent, run_accounted))
+            or Decimal(self.final_remaining_usd_exact) != final_remaining
             or Decimal(self.run_reserved_usd_exact) != run_reserved
             or Decimal(self.run_accounted_cost_usd_exact) != run_accounted
             or Decimal(self.run_released_usd_exact) != run_released
@@ -1291,13 +1319,44 @@ def _validate_usage_cost_joins(
             len(logical_attempts) != record.attempts
             or [item.attempt_index for item in logical_attempts]
             != list(range(1, record.attempts + 1))
-            or sum(
-                (Decimal(item.accounted_cost_usd_exact) for item in logical_attempts),
-                start=Decimal(0),
-            )
+            or _exact_money_sum(Decimal(item.accounted_cost_usd_exact) for item in logical_attempts)
             != Decimal(record.accounted_cost_usd_exact or "0")
         ):
             raise ValueError("emitted usage does not exactly close its cost-ledger attempts")
+        raw_pricing_attempts = record.routing.get("audit_model_refresh_pricing_attempts")
+        if raw_pricing_attempts is not None:
+            if not isinstance(raw_pricing_attempts, list):
+                raise ValueError("usage refreshed-price cost-bound inventory is invalid")
+            try:
+                pricing_attempts = tuple(
+                    AuditModelRefreshPricingAttemptEvidence.model_validate_json(
+                        json.dumps(
+                            item,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            ensure_ascii=False,
+                            allow_nan=False,
+                        ),
+                        strict=True,
+                    )
+                    for item in raw_pricing_attempts
+                )
+            except ValueError as exc:
+                raise ValueError("usage refreshed-price cost-bound inventory is invalid") from exc
+            if len(pricing_attempts) != len(logical_attempts) or any(
+                ledger_attempt.request_id != pricing_attempt.attempt_request_id
+                or ledger_attempt.attempt_index != pricing_attempt.attempt_index
+                or Decimal(ledger_attempt.reserved_usd_exact)
+                != Decimal(pricing_attempt.maximum_cost_usd_exact)
+                for ledger_attempt, pricing_attempt in zip(
+                    logical_attempts,
+                    pricing_attempts,
+                    strict=True,
+                )
+            ):
+                raise ValueError(
+                    "cost-ledger reservation differs from typed refreshed-price maximum"
+                )
 
 
 def build_run_cost_ledger_evidence(
@@ -1349,17 +1408,9 @@ def build_run_cost_ledger_evidence(
         ):
             raise ValueError("cost-ledger baseline entry changed during the campaign")
         prefix_entries.append(final_entry)
-    baseline_spent = sum(
-        (entry.accounted_cost_usd for entry in prefix_entries),
-        start=Decimal(0),
-    )
-    baseline_active = sum(
-        (
-            entry.reserved_usd
-            for entry in prefix_entries
-            if entry.status is CostEntryStatus.RESERVED
-        ),
-        start=Decimal(0),
+    baseline_spent = _exact_money_sum(entry.accounted_cost_usd for entry in prefix_entries)
+    baseline_active = _exact_money_sum(
+        entry.reserved_usd for entry in prefix_entries if entry.status is CostEntryStatus.RESERVED
     )
     if baseline_spent != Decimal(baseline.spent_usd_exact) or baseline_active != Decimal(
         baseline.active_reserved_usd_exact
@@ -1369,8 +1420,15 @@ def build_run_cost_ledger_evidence(
         cap_usd=final_snapshot.cap_usd,
         spent_usd=baseline_spent,
         active_reserved_usd=baseline_active,
-        remaining_usd=max(Decimal(0), final_snapshot.cap_usd - baseline_spent - baseline_active),
-        over_cap=baseline_spent + baseline_active > final_snapshot.cap_usd,
+        remaining_usd=max(
+            Decimal(0),
+            _exact_money_difference(
+                final_snapshot.cap_usd,
+                baseline_spent,
+                baseline_active,
+            ),
+        ),
+        over_cap=(_exact_money_sum((baseline_spent, baseline_active)) > final_snapshot.cap_usd),
         has_reservation_overrun=any(
             entry.status is CostEntryStatus.RESERVATION_OVERRUN for entry in prefix_entries
         ),
@@ -1398,6 +1456,7 @@ def build_run_cost_ledger_evidence(
         attempt_index = 1 if match.group(2) is None else int(match.group(2))
         if (
             attempt_index > 6
+            or (logical_request_id.startswith("scheduler-recovery-request-") and attempt_index != 1)
             or _attempt_request_id(logical_request_id, attempt_index) != entry.request_id
         ):
             raise ValueError("campaign cost-ledger attempt identity is non-canonical")
@@ -1440,6 +1499,14 @@ class ModelExecutionArtifact(ReportStatusProjection):
         default=None,
         exclude_if=lambda value: value is None,
     )
+    audit_model_refresh_evidence: AuditModelRefreshEvidence | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_pricing_evidence: AuditModelRefreshPricingEvidence | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     configured_models: dict[str, str]
     configured_fallbacks: dict[str, list[str]]
     requested_models: list[str]
@@ -1472,9 +1539,26 @@ class ModelExecutionArtifact(ReportStatusProjection):
     def totals_are_exact(self) -> ModelExecutionArtifact:
         if self.schema_version == "1.2" and self.language_capability is None:
             raise ValueError("current artifact requires non-null language capability evidence")
-        if self.schema_version != "1.2" and self.audit_model_selection is not None:
-            raise ValueError("legacy model-execution evidence cannot carry audit model selection")
+        if self.schema_version != "1.2" and (
+            self.audit_model_selection is not None
+            or self.audit_model_refresh_evidence is not None
+            or self.audit_model_refresh_pricing_evidence is not None
+        ):
+            raise ValueError(
+                "legacy model-execution evidence cannot carry audit selection or refresh custody"
+            )
         validate_audit_model_selection_usage_custody(
+            audit_model_selection=self.audit_model_selection,
+            usage=self.usage,
+        )
+        validate_audit_model_refresh_usage_custody(
+            audit_model_refresh_evidence=self.audit_model_refresh_evidence,
+            audit_model_selection=self.audit_model_selection,
+            usage=self.usage,
+        )
+        validate_audit_model_refresh_pricing_usage_custody(
+            audit_model_refresh_pricing_evidence=(self.audit_model_refresh_pricing_evidence),
+            audit_model_refresh_evidence=self.audit_model_refresh_evidence,
             audit_model_selection=self.audit_model_selection,
             usage=self.usage,
         )
@@ -1793,14 +1877,11 @@ def build_model_execution_artifact(
         cost_evidence = CostLedgerAbsenceEvidence.build(
             persistent_ledger_configured=persistent_ledger_configured
         )
-    usage_exact_cost = sum(
-        (
-            Decimal(record.accounted_cost_usd_exact)
-            if record.accounted_cost_usd_exact is not None
-            else Decimal(str(record.accounted_cost_usd))
-            for record in usage
-        ),
-        start=Decimal("0"),
+    usage_exact_cost = _exact_money_sum(
+        Decimal(record.accounted_cost_usd_exact)
+        if record.accounted_cost_usd_exact is not None
+        else Decimal(str(record.accounted_cost_usd))
+        for record in usage
     )
     report_exact_cost = (
         Decimal(report.accounted_cost_usd_exact)
@@ -1827,6 +1908,8 @@ def build_model_execution_artifact(
         schema_version=resolved_schema_version,
         run_id=report.run_id,
         audit_model_selection=report.audit_model_selection,
+        audit_model_refresh_evidence=report.audit_model_refresh_evidence,
+        audit_model_refresh_pricing_evidence=(report.audit_model_refresh_pricing_evidence),
         configured_models=_string_mapping(report.metadata.get("configured_models")),
         configured_fallbacks=_fallback_mapping(report.metadata.get("configured_fallbacks")),
         requested_models=sorted({record.requested_model for record in usage}),

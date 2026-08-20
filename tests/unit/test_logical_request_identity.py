@@ -65,6 +65,7 @@ from tests.unit.test_openrouter import (
     _client,
     _completion_response,
     _empty_context_package,
+    _endpoint_snapshot,
 )
 from tests.unit.test_scheduler_journal import (
     _analysis_inventory,
@@ -277,25 +278,33 @@ async def test_scheduler_privacy_mismatch_stops_before_budget_or_transport(
         return _completion_response('{"answer":"must not execute"}')
 
     config = config_factory()
-    client, http_client, usage = _client(
-        config,
-        handler,
-        provider_policy=OpenRouterProviderPolicy(only=("synthetic-provider",)),
-    )
     control = tmp_path / "control"
     control.mkdir(mode=0o700)
     ledger = AtomicCostLedger.initialize(
         (control / "cost-ledger.json").resolve(),
         cap_usd=Decimal(str(config.execution.budget_usd)),
     )
-    client.budget = BudgetManager(
+    budget = BudgetManager(
         total_usd=config.execution.budget_usd,
         max_output_tokens=config.execution.max_output_tokens_per_request,
         conservative_usd_per_million_tokens=(config.execution.conservative_usd_per_million_tokens),
         max_requests_per_agent=config.execution.max_requests_per_agent,
         atomic_ledger=ledger,
+        require_endpoint_cost_bound=True,
         global_input_token_budget=config.token_budgets.global_input_token_budget,
         global_output_token_budget=config.token_budgets.global_output_token_budget,
+    )
+    client, http_client, usage = _client(
+        config,
+        handler,
+        provider_policy=OpenRouterProviderPolicy(only=("synthetic-provider",)),
+        budget=budget,
+    )
+    client.register_endpoint_snapshot(
+        evidence=_endpoint_snapshot(
+            provider="synthetic-provider",
+            provider_name="Synthetic Provider",
+        )
     )
     scheduler = PipelineScheduler.create(
         tmp_path / "journal",
@@ -351,7 +360,6 @@ async def test_scheduler_privacy_mismatch_stops_before_budget_or_transport(
 @pytest.mark.asyncio
 async def test_scheduler_privacy_binding_is_rechecked_after_reservation(
     config_factory: Callable[..., AuditConfig],
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     handler_calls = 0
@@ -362,11 +370,6 @@ async def test_scheduler_privacy_binding_is_rechecked_after_reservation(
         return _completion_response('{"answer":"must not execute"}')
 
     config = config_factory()
-    client, http_client, usage = _client(
-        config,
-        handler,
-        provider_policy=OpenRouterProviderPolicy(only=("synthetic-provider",)),
-    )
     inventory = _inventory()
     evaluated_at = datetime.now(UTC).replace(microsecond=0)
 
@@ -384,7 +387,6 @@ async def test_scheduler_privacy_binding_is_rechecked_after_reservation(
         )
 
     initial_policy = policy_for(inventory.source_tree_sha256)
-    client.effective_privacy_policy = initial_policy
     custody = SchedulerPrivacyEvidenceCustody.build(
         source_sha256=inventory.source_tree_sha256,
         source_provenance_size=128,
@@ -420,10 +422,23 @@ async def test_scheduler_privacy_binding_is_rechecked_after_reservation(
         conservative_usd_per_million_tokens=(config.execution.conservative_usd_per_million_tokens),
         max_requests_per_agent=config.execution.max_requests_per_agent,
         atomic_ledger=ledger,
+        require_endpoint_cost_bound=True,
         global_input_token_budget=config.token_budgets.global_input_token_budget,
         global_output_token_budget=config.token_budgets.global_output_token_budget,
     )
-    client.budget = budget
+    client, http_client, usage = _client(
+        config,
+        handler,
+        provider_policy=OpenRouterProviderPolicy(only=("synthetic-provider",)),
+        budget=budget,
+    )
+    client.register_endpoint_snapshot(
+        evidence=_endpoint_snapshot(
+            provider="synthetic-provider",
+            provider_name="Synthetic Provider",
+        )
+    )
+    client.effective_privacy_policy = initial_policy
     scheduler = PipelineScheduler.create(
         tmp_path / "recheck-journal",
         bindings=bindings,
@@ -452,15 +467,18 @@ async def test_scheduler_privacy_binding_is_rechecked_after_reservation(
         response_schema_sha256=preview.schema_sha256,
     )
     scheduler.seal_pass(SchedulerPassKind.ORIENTATION, (task,))
-    original_reserve = budget.reserve
 
-    async def reserve_then_replace_policy(*args: Any, **kwargs: Any) -> Any:
-        reservation = await original_reserve(*args, **kwargs)
-        client.effective_privacy_policy = policy_for("f" * 64)
-        return reservation
+    class ReplacePolicyAfterSchedulerActivation:
+        def request_ready(self, **values: Any) -> _TrustedRequestLimitScope | None:
+            scope = scheduler.request_ready(**values)
+            client.effective_privacy_policy = policy_for("f" * 64)
+            return scope
 
-    monkeypatch.setattr(budget, "reserve", reserve_then_replace_policy)
-    client.bind_request_lifecycle_observer(scheduler)
+        def request_dispatched(self, *, logical_request_id: str) -> None:
+            scheduler.request_dispatched(logical_request_id=logical_request_id)
+
+    observer = ReplacePolicyAfterSchedulerActivation()
+    client.bind_request_lifecycle_observer(observer)
     try:
         with pytest.raises(OpenRouterPrivacyError, match="changed before provider transport"):
             await client.complete_with_evidence(
@@ -473,7 +491,7 @@ async def test_scheduler_privacy_binding_is_rechecked_after_reservation(
                 logical_request_id=task.logical_request_id,
             )
     finally:
-        client.unbind_request_lifecycle_observer(scheduler)
+        client.unbind_request_lifecycle_observer(observer)
         scheduler.close()
         await http_client.aclose()
 

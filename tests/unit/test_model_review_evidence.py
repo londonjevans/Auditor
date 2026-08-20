@@ -5,6 +5,7 @@ import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from pydantic import ValidationError
 
 import mmaudit.orchestration.pipeline as pipeline_module
 from mmaudit.agents.base import FindingReviewResult
@@ -49,6 +50,14 @@ from mmaudit.models.token_planning import (
     ContextOmissionItem,
     ContextOmissionReason,
 )
+from mmaudit.models.truncation import (
+    CandidateReviewNormalizationEvidence,
+    candidate_review_frame_wire_schema_sha256,
+    frame_candidate_review_batch,
+    normalize_candidate_review_document,
+)
+from mmaudit.models.usage import request_token_plan_from_usage
+from mmaudit.orchestration.budgets import AtomicRequestLimitReservationEvidence
 from mmaudit.orchestration.context import render_context
 from mmaudit.orchestration.model_review_evidence import (
     ModelReviewEvidenceError,
@@ -95,6 +104,10 @@ def _typed_omission(
 def seal_model_surface_review_artifact(
     context: ContextPackage,
     completion: StructuredCompletion[CandidateReviewBatch],
+    *,
+    normalization_evidence: CandidateReviewNormalizationEvidence | None = None,
+    recovery_request_limit_scope: str | None = None,
+    recovery_request_limit_count_before: int | None = None,
 ) -> ModelSurfaceReviewArtifact | None:
     rendered_user_context = render_context(context)
     bound_completion = StructuredCompletion(
@@ -109,6 +122,9 @@ def seal_model_surface_review_artifact(
         context,
         bound_completion,
         rendered_user_context=rendered_user_context,
+        normalization_evidence=normalization_evidence,
+        recovery_request_limit_scope=recovery_request_limit_scope,
+        recovery_request_limit_count_before=recovery_request_limit_count_before,
     )
 
 
@@ -238,6 +254,26 @@ def _record(
         ),
         assumptions=("observed token receipts are authoritative",),
         confidence=0.91,
+    )
+
+
+def _not_reviewed_record(request: ModelSurfaceReviewRequest) -> ModelSurfaceReviewRecord:
+    return ModelSurfaceReviewRecord(
+        surface_id=request.surface_id,
+        contract=request.contract,
+        function_or_state_surface=request.function_or_state_surface,
+        review_role=_ROLE,
+        status=ModelSurfaceReviewStatus.NOT_REVIEWED,
+        rationale="The bounded synthetic review explicitly records incomplete analysis.",
+        citation=ModelSurfaceReviewCitation(
+            location=None,
+            symbol=request.allowed_symbols[0],
+        ),
+        invariant_considered=request.invariant_considered,
+        evidence_observations=(),
+        reachability=None,
+        assumptions=(),
+        confidence=0,
     )
 
 
@@ -558,6 +594,39 @@ def _completion(
     return StructuredCompletion(value=batch, usage_record=_usage(batch, role=role))
 
 
+def _recovery_completion(
+    batch: CandidateReviewBatch,
+    *,
+    request_limit_scope: str,
+    request_limit_count_before: int,
+) -> StructuredCompletion[CandidateReviewBatch]:
+    completion = _completion(batch)
+    usage = completion.usage_record
+    plan = request_token_plan_from_usage(usage)
+    assert plan is not None
+    reservation = AtomicRequestLimitReservationEvidence.build(
+        request_id=usage.request_id,
+        exact_model_id=usage.requested_model,
+        role=usage.role,
+        request_token_plan_sha256=plan.plan_sha256,
+        request_limit_scope=request_limit_scope,
+        request_limit_count_before=request_limit_count_before,
+        request_limit_maximum=32,
+    )
+    rebound = usage.model_copy(
+        update={
+            "routing": {
+                **usage.routing,
+                "atomic_request_limit_reservations": [reservation.model_dump(mode="json")],
+                "atomic_request_limit_reservation_sha256s": [reservation.evidence_sha256],
+                "atomic_request_limit_reservation": reservation.model_dump(mode="json"),
+                "atomic_request_limit_reservation_sha256": reservation.evidence_sha256,
+            }
+        }
+    )
+    return StructuredCompletion(value=batch, usage_record=rebound)
+
+
 def _rebind_output_usage(
     record: UsageRecord,
     *,
@@ -598,6 +667,24 @@ def _rebind_output_usage(
     )
 
 
+def _framed_completion(
+    batch: CandidateReviewBatch,
+    *,
+    role: str = _ROLE,
+) -> tuple[StructuredCompletion[CandidateReviewBatch], CandidateReviewNormalizationEvidence]:
+    document = frame_candidate_review_batch(batch)
+    normalized, evidence = normalize_candidate_review_document(
+        document,
+        request_id="request-surface-review",
+    )
+    usage = _rebind_output_usage(
+        _usage(batch, role=role),
+        validated_response_sha256=evidence.wire_validated_response_sha256,
+        schema_sha256=candidate_review_frame_wire_schema_sha256(),
+    )
+    return StructuredCompletion(value=normalized, usage_record=usage), evidence
+
+
 def test_seal_surface_review_artifact_binds_exact_request_response_and_source() -> None:
     request = _request()
     record = _record(request)
@@ -618,6 +705,155 @@ def test_seal_surface_review_artifact_binds_exact_request_response_and_source() 
         == hashlib.sha256(render_context(context).encode()).hexdigest()
     )
     assert first.require_exact_requested_surface_manifest((request,)) == first
+
+
+def test_surface_artifact_accepts_only_the_exact_shared_recovery_request_position() -> None:
+    request = _request()
+    batch = CandidateReviewBatch(findings=[], surface_reviews=(_record(request),))
+    request_limit_scope = f"scheduler-request-{'1' * 64}"
+    completion = _recovery_completion(
+        batch,
+        request_limit_scope=request_limit_scope,
+        request_limit_count_before=1,
+    )
+    context = _context((request,))
+
+    with pytest.raises(ModelReviewEvidenceError, match="creditable structured request"):
+        seal_model_surface_review_artifact(context, completion)
+    with pytest.raises(ModelReviewEvidenceError, match="creditable structured request"):
+        seal_model_surface_review_artifact(
+            context,
+            completion,
+            recovery_request_limit_scope=request_limit_scope,
+            recovery_request_limit_count_before=2,
+        )
+    with pytest.raises(ModelReviewEvidenceError, match="custody is incomplete"):
+        seal_model_surface_review_artifact(
+            context,
+            completion,
+            recovery_request_limit_scope=request_limit_scope,
+        )
+
+    artifact = seal_model_surface_review_artifact(
+        context,
+        completion,
+        recovery_request_limit_scope=request_limit_scope,
+        recovery_request_limit_count_before=1,
+    )
+
+    assert artifact is not None
+    assert artifact.request_id == completion.usage_record.request_id
+    assert artifact.records == tuple(batch.surface_reviews)
+
+
+def test_framed_surface_artifact_reloads_with_exact_wire_normalization_and_record_joins() -> None:
+    request = _request()
+    record = _record(request)
+    batch = CandidateReviewBatch(findings=[], surface_reviews=(record,))
+    completion, normalization = _framed_completion(batch)
+
+    artifact = seal_model_surface_review_artifact(
+        _context((request,)),
+        completion,
+        normalization_evidence=normalization,
+    )
+
+    assert artifact is not None
+    assert artifact.schema_version == "1.1"
+    assert artifact.response_schema_sha256 == completion.usage_record.schema_sha256
+    assert artifact.validated_response_sha256 == (completion.usage_record.validated_response_sha256)
+    assert artifact.normalization_evidence == normalization
+    assert artifact.normalized_response == batch
+    assert artifact.normalized_response_sha256 == normalization.normalized_batch_sha256
+    assert artifact.records == tuple(batch.surface_reviews)
+    reloaded = ModelSurfaceReviewArtifact.model_validate_json(
+        artifact.model_dump_json(),
+        strict=True,
+    )
+    assert reloaded == artifact
+    assert reloaded.normalization_evidence is not None
+    assert reloaded.normalized_response is not None
+    assert (
+        reloaded.normalization_evidence.require_exact_batch(
+            reloaded.normalized_response,
+            request_id=reloaded.request_id,
+        )
+        is reloaded.normalization_evidence
+    )
+
+
+def test_legacy_surface_artifact_replays_without_injected_framed_null_fields() -> None:
+    request = _request()
+    batch = CandidateReviewBatch(findings=[], surface_reviews=(_record(request),))
+    artifact = seal_model_surface_review_artifact(_context((request,)), _completion(batch))
+    assert artifact is not None
+    payload = artifact.model_dump(mode="json")
+    framed_fields = {
+        "normalized_response_sha256",
+        "normalization_evidence",
+        "normalized_response",
+    }
+    assert framed_fields.isdisjoint(payload)
+    canonical = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+
+    reloaded = ModelSurfaceReviewArtifact.model_validate_json(canonical, strict=True)
+    replay = json.dumps(
+        reloaded.model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+
+    assert replay == canonical
+
+
+def test_surface_artifact_rejects_whitespace_request_identity_instead_of_normalizing() -> None:
+    request = _request()
+    batch = CandidateReviewBatch(findings=[], surface_reviews=(_record(request),))
+    artifact = seal_model_surface_review_artifact(_context((request,)), _completion(batch))
+    assert artifact is not None
+    payload = artifact.model_dump(mode="json")
+    payload["request_id"] = f" {artifact.request_id} "
+    payload["artifact_sha256"] = ModelSurfaceReviewArtifact.calculate_artifact_sha256(payload)
+
+    with pytest.raises(ValidationError, match="request ID must be bounded plain text"):
+        ModelSurfaceReviewArtifact.model_validate_json(json.dumps(payload))
+
+
+@pytest.mark.parametrize("inventory", ["normalized_response", "records"])
+def test_framed_surface_artifact_rejects_omitted_nested_defaults_with_unchanged_hash(
+    inventory: str,
+) -> None:
+    request = _request()
+    batch = CandidateReviewBatch(findings=[], surface_reviews=(_not_reviewed_record(request),))
+    completion, normalization = _framed_completion(batch)
+    artifact = seal_model_surface_review_artifact(
+        _context((request,)),
+        completion,
+        normalization_evidence=normalization,
+    )
+    assert artifact is not None
+    payload = artifact.model_dump(mode="json")
+    if inventory == "normalized_response":
+        normalized = payload["normalized_response"]
+        assert isinstance(normalized, dict)
+        reviews = normalized["surface_reviews"]
+    else:
+        reviews = payload["records"]
+    assert isinstance(reviews, list) and isinstance(reviews[0], dict)
+    citation = reviews[0]["citation"]
+    assert isinstance(citation, dict)
+    del citation["location"]
+
+    with pytest.raises(ValidationError, match="nested model field explicitly"):
+        ModelSurfaceReviewArtifact.model_validate_json(json.dumps(payload))
 
 
 def test_whole_protocol_context_accepts_only_its_exact_indexed_request_role() -> None:

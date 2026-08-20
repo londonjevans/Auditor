@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from functools import cache
+from itertools import islice
 from pathlib import PurePosixPath
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, Self, cast
@@ -44,6 +45,7 @@ from mmaudit.models.schemas import (
     GeneratedFoundryTestSpec,
     InvariantReviewBatch,
     JudgeDecisionBatch,
+    ModelIdentityStrength,
     ModelRequestValidationStatus,
     ModelSurfaceReviewArtifact,
     ModelSurfaceReviewRequest,
@@ -59,6 +61,28 @@ from mmaudit.models.schemas import (
     VerificationBatch,
     VerificationDecision,
 )
+from mmaudit.models.truncation import (
+    CandidateReviewFramedDocument,
+    CandidateReviewNormalizationEvidence,
+    CandidateReviewTruncatedEnvelopeEvidence,
+    CandidateReviewTruncationProjection,
+    candidate_review_batch_schema_sha256,
+    candidate_review_frame_wire_schema_sha256,
+    candidate_review_protocol_implementation_is_pristine,
+)
+from mmaudit.models.truncation_recovery import TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS
+from mmaudit.models.truncation_recovery_journal import (
+    SCHEDULER_TRUNCATION_RECOVERY_MAX_ENTRIES,
+    SchedulerTruncationRecoveryChildActivation,
+    SchedulerTruncationRecoveryChildResult,
+    SchedulerTruncationRecoveryEntry,
+    SchedulerTruncationRecoveryFamilyPromotion,
+    SchedulerTruncationRecoveryFamilyRoot,
+    SchedulerTruncationRecoveryParentKind,
+    SchedulerTruncationRecoveryPromotionBinding,
+    SchedulerTruncationRecoveryTerminalStatus,
+    validate_truncation_recovery_entry_chain,
+)
 from mmaudit.models.usage import (
     is_structurally_accountable_usage_record,
     usage_requires_audit_policy_evidence,
@@ -68,6 +92,10 @@ if TYPE_CHECKING:
     from mmaudit.models.policy_selection import (
         AuditModelRoutingEvidence,
         AuditModelSelectionEvidenceBundle,
+    )
+    from mmaudit.models.refresh_runtime import (
+        AuditModelRefreshEvidence,
+        AuditModelRefreshPricingEvidence,
     )
 
 SCHEDULER_ALGORITHM_VERSION = "mmaudit.seven-pass-scheduler.v1"
@@ -106,6 +134,7 @@ _SAFE_KEY_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"
 _ROLE_PATTERN = r"^[a-z][a-z0-9_:.-]{0,127}$"
 _MAX_TASK_OUTPUT_BYTES = 100_000_000
 _MAX_PRIVACY_EVIDENCE_BYTES = 1_048_576
+_MAX_SCHEDULER_MODEL_REQUESTS = 700_000
 _USD_EXACT_PATTERN = r"^(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,18})?$"
 _WHOLE_PROTOCOL_REVIEW_ROLE = re.compile(r"^whole_protocol_review:(?:0|[1-9][0-9]{0,3})$")
 _BLIND_SHARD_REVIEW_ROLES = frozenset(
@@ -129,6 +158,7 @@ _SPECIALIST_ACCEPTED_OUTCOME_ROLES = frozenset(
 _SCHEDULER_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     CandidateCrossExaminationResponse,
     CandidateReviewBatch,
+    CandidateReviewFramedDocument,
     FalsificationBatch,
     GeneratedFoundryTestBatch,
     InvariantReviewBatch,
@@ -187,6 +217,20 @@ def scheduler_role_requires_specialist_accepted_outcome(role: str) -> bool:
     """
 
     return role in _SPECIALIST_ACCEPTED_OUTCOME_ROLES
+
+
+def _bounded_scheduler_items[ItemT](
+    values: Iterable[ItemT],
+    *,
+    limit: int,
+    label: str,
+) -> tuple[ItemT, ...]:
+    """Materialize one untrusted scheduler inventory without trusting length hints."""
+
+    items = tuple(islice(iter(values), limit + 1))
+    if len(items) > limit:
+        raise ValueError(f"scheduler {label} exceeds its item limit")
+    return items
 
 
 def _json_default(value: Any) -> Any:
@@ -252,8 +296,17 @@ def scheduler_response_schema_sha256(response_model: type[Any]) -> str:
     return matches[0]
 
 
+def _task_uses_candidate_review_contract(task: SchedulerTaskPlan) -> bool:
+    """Return whether a model task has a framed-wire/normalized-batch contract."""
+
+    return task.pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW or (
+        task.pass_kind is SchedulerPassKind.CROSS_SHARD_INTEGRATION
+        and task.role == "business_logic"
+    )
+
+
 def _expected_response_model(task: SchedulerTaskPlan) -> type[BaseModel]:
-    """Select the only response type authorized for a trusted scheduler role."""
+    """Select the retained normalized response type authorized for a scheduler role."""
 
     if task.pass_kind is SchedulerPassKind.ORIENTATION and task.role == "threat_model":
         return ThreatModel
@@ -288,14 +341,29 @@ def _parse_scheduler_model_payload(
     payload: Any,
 ) -> BaseModel:
     registry = _scheduler_response_schema_model_registry()
-    binding = registry.get(activation.response_schema_sha256 or "")
+    wire_binding = registry.get(activation.response_schema_sha256 or "")
     expected_model = _expected_response_model(task)
-    if binding is None or binding.response_model is not expected_model:
+    candidate_review_contract = _task_uses_candidate_review_contract(task)
+    permitted_wire_models = (
+        (CandidateReviewBatch, CandidateReviewFramedDocument)
+        if candidate_review_contract
+        else (expected_model,)
+    )
+    if wire_binding is None or wire_binding.response_model not in permitted_wire_models:
         raise ValueError(
             f"scheduler task output for role {task.role} uses the wrong response schema"
         )
-    response_model = binding.response_model
+    normalized_schema_sha256 = (
+        candidate_review_batch_schema_sha256()
+        if candidate_review_contract
+        else wire_binding.schema_sha256
+    )
+    binding = registry.get(normalized_schema_sha256)
+    if binding is None or binding.response_model is not expected_model:
+        raise ValueError("scheduler normalized output schema is not registered exactly")
+    response_model = expected_model
     try:
+        wire_binding.require_current()
         binding.require_current()
     except ValueError:
         raise ValueError(
@@ -314,7 +382,12 @@ def _parse_scheduler_model_payload(
             f"scheduler task output for role {task.role} returned the wrong response type"
         )
     if (
-        getattr(response_model, "__pydantic_validator__", None) is not binding.validator
+        getattr(wire_binding.response_model, "__pydantic_validator__", None)
+        is not wire_binding.validator
+        or getattr(wire_binding.response_model, "__pydantic_core_schema__", None)
+        is not wire_binding.core_schema
+        or strict_json_schema_sha256(wire_binding.response_model) != wire_binding.schema_sha256
+        or getattr(response_model, "__pydantic_validator__", None) is not binding.validator
         or getattr(response_model, "__pydantic_core_schema__", None) is not binding.core_schema
         or strict_json_schema_sha256(response_model) != binding.schema_sha256
     ):
@@ -335,7 +408,12 @@ def _parse_scheduler_model_payload(
             f"scheduler task output for role {task.role} returned the wrong revalidated type"
         )
     if (
-        getattr(response_model, "__pydantic_validator__", None) is not binding.validator
+        getattr(wire_binding.response_model, "__pydantic_validator__", None)
+        is not wire_binding.validator
+        or getattr(wire_binding.response_model, "__pydantic_core_schema__", None)
+        is not wire_binding.core_schema
+        or strict_json_schema_sha256(wire_binding.response_model) != wire_binding.schema_sha256
+        or getattr(response_model, "__pydantic_validator__", None) is not binding.validator
         or getattr(response_model, "__pydantic_core_schema__", None) is not binding.core_schema
         or strict_json_schema_sha256(response_model) != binding.schema_sha256
     ):
@@ -1222,6 +1300,434 @@ class SchedulerAuditModelSelectionBinding(StrictModel):
         return self
 
 
+class SchedulerAuditModelRefreshRouteBinding(StrictModel):
+    """Exact per-model membership in the audit-selected refresh route set."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    exact_model_id: str = Field(pattern=_MODEL_ID_PATTERN)
+    route_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+
+class SchedulerAuditModelRefreshBinding(StrictModel):
+    """Hash-only campaign join to canonical veto-only refresh evidence.
+
+    The durable projection cannot recreate the process-local refresh guard and
+    therefore cannot authorize model selection, routing, or provider access.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    evidence_authority: Literal["comparison_required"] = "comparison_required"
+    authority_mode: Literal["VETO_ONLY_EXTERNAL_WORKFLOW_PIN_REQUIRED"] = (
+        "VETO_ONLY_EXTERNAL_WORKFLOW_PIN_REQUIRED"
+    )
+    audit_model_refresh_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+    guard_capability_sha256: str = Field(pattern=_SHA256_PATTERN)
+    expected_workflow_status_sha256: str = Field(pattern=_SHA256_PATTERN)
+    workflow_status_sha256: str = Field(pattern=_SHA256_PATTERN)
+    snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
+    freshness_sha256: str = Field(pattern=_SHA256_PATTERN)
+    technical_route_set_sha256: str = Field(pattern=_SHA256_PATTERN)
+    audit_route_set_sha256: str = Field(pattern=_SHA256_PATTERN)
+    audit_model_ids: tuple[str, ...] = Field(min_length=1, max_length=128)
+    audit_routes: tuple[SchedulerAuditModelRefreshRouteBinding, ...] = Field(
+        min_length=1,
+        max_length=128,
+    )
+    technical_qualification_capability_sha256: str = Field(pattern=_SHA256_PATTERN)
+    technical_production_selection_sha256: str = Field(pattern=_SHA256_PATTERN)
+    audit_selection_capability_sha256: str = Field(pattern=_SHA256_PATTERN)
+    audit_selection_sha256: str = Field(pattern=_SHA256_PATTERN)
+    audit_scope_sha256: str = Field(pattern=_SHA256_PATTERN)
+    source_sha256: str = Field(pattern=_SHA256_PATTERN)
+    audit_context_sha256: str = Field(pattern=_SHA256_PATTERN)
+    client_constraints_sha256: str = Field(pattern=_SHA256_PATTERN)
+    verified_at: datetime
+    refresh_current_through: datetime
+    expires_at: datetime
+    runtime_authorized: Literal[False] = False
+    binding_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        audit_model_refresh_evidence_sha256: str,
+        guard_capability_sha256: str,
+        expected_workflow_status_sha256: str,
+        workflow_status_sha256: str,
+        snapshot_sha256: str,
+        freshness_sha256: str,
+        technical_route_set_sha256: str,
+        audit_route_set_sha256: str,
+        audit_routes: Iterable[SchedulerAuditModelRefreshRouteBinding],
+        technical_qualification_capability_sha256: str,
+        technical_production_selection_sha256: str,
+        audit_selection_capability_sha256: str,
+        audit_selection_sha256: str,
+        audit_scope_sha256: str,
+        source_sha256: str,
+        audit_context_sha256: str,
+        client_constraints_sha256: str,
+        verified_at: datetime,
+        refresh_current_through: datetime,
+        expires_at: datetime,
+    ) -> SchedulerAuditModelRefreshBinding:
+        canonical_routes = tuple(sorted(audit_routes, key=lambda item: item.exact_model_id))
+        values: dict[str, Any] = {
+            "schema_version": "1.0",
+            "evidence_authority": "comparison_required",
+            "authority_mode": "VETO_ONLY_EXTERNAL_WORKFLOW_PIN_REQUIRED",
+            "audit_model_refresh_evidence_sha256": audit_model_refresh_evidence_sha256,
+            "guard_capability_sha256": guard_capability_sha256,
+            "expected_workflow_status_sha256": expected_workflow_status_sha256,
+            "workflow_status_sha256": workflow_status_sha256,
+            "snapshot_sha256": snapshot_sha256,
+            "freshness_sha256": freshness_sha256,
+            "technical_route_set_sha256": technical_route_set_sha256,
+            "audit_route_set_sha256": audit_route_set_sha256,
+            "audit_model_ids": tuple(item.exact_model_id for item in canonical_routes),
+            "audit_routes": canonical_routes,
+            "technical_qualification_capability_sha256": (
+                technical_qualification_capability_sha256
+            ),
+            "technical_production_selection_sha256": (technical_production_selection_sha256),
+            "audit_selection_capability_sha256": audit_selection_capability_sha256,
+            "audit_selection_sha256": audit_selection_sha256,
+            "audit_scope_sha256": audit_scope_sha256,
+            "source_sha256": source_sha256,
+            "audit_context_sha256": audit_context_sha256,
+            "client_constraints_sha256": client_constraints_sha256,
+            "verified_at": verified_at,
+            "refresh_current_through": refresh_current_through,
+            "expires_at": expires_at,
+            "runtime_authorized": False,
+        }
+        return cls(**values, binding_sha256=scheduler_canonical_sha256(values))
+
+    @classmethod
+    def from_evidence(
+        cls,
+        evidence: AuditModelRefreshEvidence,
+    ) -> SchedulerAuditModelRefreshBinding:
+        """Project exact durable evidence while excluding the opaque live guard."""
+
+        from mmaudit.models.refresh_runtime import AuditModelRefreshEvidence
+
+        if type(evidence) is not AuditModelRefreshEvidence:
+            raise ValueError("scheduler refresh binding requires exact canonical evidence")
+        canonical = AuditModelRefreshEvidence.model_validate_json(
+            evidence.model_dump_json(),
+            strict=True,
+        )
+        if canonical != evidence:
+            raise ValueError("scheduler refresh evidence changed during canonicalization")
+        guard_capability_sha256 = scheduler_canonical_sha256(
+            {
+                "verified_at": canonical.verified_at,
+                "expires_at": canonical.expires_at,
+                "refresh_current_through": canonical.refresh_current_through,
+                "workflow_status_sha256": canonical.workflow_status_sha256,
+                "snapshot_sha256": canonical.snapshot_sha256,
+                "technical_qualification_capability_sha256": (
+                    canonical.technical_qualification_capability_sha256
+                ),
+                "technical_production_selection_sha256": (
+                    canonical.technical_production_selection_sha256
+                ),
+                "audit_selection_capability_sha256": (canonical.audit_selection_capability_sha256),
+                "audit_selection_sha256": canonical.audit_selection_sha256,
+                "evidence_sha256": canonical.evidence_sha256,
+            }
+        )
+        return cls.build(
+            audit_model_refresh_evidence_sha256=canonical.evidence_sha256,
+            guard_capability_sha256=guard_capability_sha256,
+            expected_workflow_status_sha256=canonical.expected_workflow_status_sha256,
+            workflow_status_sha256=canonical.workflow_status_sha256,
+            snapshot_sha256=canonical.snapshot_sha256,
+            freshness_sha256=canonical.freshness_sha256,
+            technical_route_set_sha256=canonical.technical_route_set_sha256,
+            audit_route_set_sha256=canonical.audit_route_set_sha256,
+            audit_routes=tuple(
+                SchedulerAuditModelRefreshRouteBinding(
+                    exact_model_id=route.exact_model_id,
+                    route_evidence_sha256=route.route_evidence_sha256,
+                )
+                for route in canonical.routes
+                if route.audit_selected
+            ),
+            technical_qualification_capability_sha256=(
+                canonical.technical_qualification_capability_sha256
+            ),
+            technical_production_selection_sha256=(canonical.technical_production_selection_sha256),
+            audit_selection_capability_sha256=canonical.audit_selection_capability_sha256,
+            audit_selection_sha256=canonical.audit_selection_sha256,
+            audit_scope_sha256=canonical.audit_scope_sha256,
+            source_sha256=canonical.source_sha256,
+            audit_context_sha256=canonical.audit_context_sha256,
+            client_constraints_sha256=canonical.client_constraints_sha256,
+            verified_at=canonical.verified_at,
+            refresh_current_through=canonical.refresh_current_through,
+            expires_at=canonical.expires_at,
+        )
+
+    @field_validator("audit_model_ids")
+    @classmethod
+    def model_ids_are_canonical(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if value != tuple(sorted(set(value))) or any(
+            re.fullmatch(_MODEL_ID_PATTERN, model_id) is None for model_id in value
+        ):
+            raise ValueError("scheduler refresh model IDs must be exact, unique, and sorted")
+        return value
+
+    @field_validator("verified_at", "refresh_current_through", "expires_at")
+    @classmethod
+    def times_are_whole_second_utc(cls, value: datetime) -> datetime:
+        if (
+            type(value) is not datetime
+            or value.tzinfo is None
+            or value.utcoffset() != timedelta(0)
+            or value.microsecond != 0
+        ):
+            raise ValueError("scheduler refresh times must be whole-second UTC")
+        return value
+
+    @field_validator("runtime_authorized", mode="before")
+    @classmethod
+    def authority_is_literal_false(cls, value: object) -> object:
+        if type(value) is not bool:
+            raise ValueError("scheduler refresh authority flag must be a literal boolean")
+        return value
+
+    def route_for(self, exact_model_id: str) -> SchedulerAuditModelRefreshRouteBinding:
+        matches = tuple(item for item in self.audit_routes if item.exact_model_id == exact_model_id)
+        if len(matches) != 1:
+            raise ValueError(f"model is absent from scheduler refresh binding: {exact_model_id}")
+        return matches[0]
+
+    @model_validator(mode="after")
+    def refresh_binding_is_canonical_and_exact(self) -> Self:
+        if self.expected_workflow_status_sha256 != self.workflow_status_sha256:
+            raise ValueError("scheduler refresh differs from its external workflow pin")
+        route_ids = tuple(item.exact_model_id for item in self.audit_routes)
+        if (
+            self.audit_routes
+            != tuple(sorted(self.audit_routes, key=lambda item: item.exact_model_id))
+            or route_ids != tuple(sorted(set(route_ids)))
+            or route_ids != self.audit_model_ids
+        ):
+            raise ValueError("scheduler refresh routes differ from the exact audit model set")
+        if (
+            not self.verified_at < self.expires_at
+            or self.expires_at > self.refresh_current_through + timedelta(seconds=1)
+        ):
+            raise ValueError("scheduler refresh expiry exceeds its current-freshness boundary")
+        if self.binding_sha256 != _model_sha256(self, exclude={"binding_sha256"}):
+            raise ValueError("scheduler audit model-refresh binding is inconsistent")
+        return self
+
+
+class SchedulerAuditModelRefreshPricingRouteBinding(StrictModel):
+    """Hash-only scheduler join for one audit-selected refreshed-price route."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    exact_model_id: str = Field(pattern=_MODEL_ID_PATTERN)
+    approved_provider_endpoint: str = Field(pattern=_PROVIDER_ENDPOINT_PATTERN)
+    pricing_route_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+    refresh_route_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+    qualified_pricing_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
+    baseline_pricing_sha256: str = Field(pattern=_SHA256_PATTERN)
+    current_pricing_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @model_validator(mode="after")
+    def baseline_is_explicit_and_qualified(self) -> Self:
+        if self.qualified_pricing_snapshot_sha256 != self.baseline_pricing_sha256:
+            raise ValueError("scheduler pricing route differs from its qualified baseline")
+        return self
+
+
+class SchedulerAuditModelRefreshPricingBinding(StrictModel):
+    """Durable comparison-only projection of bounded refreshed pricing.
+
+    The public authority hash is retained only for exact comparison with the
+    process-local opaque capability. This binding cannot authorize pricing or
+    provider access by itself.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    evidence_authority: Literal["comparison_required"] = "comparison_required"
+    authority_mode: Literal["VETO_ONLY_EXTERNAL_PRICING_PIN_REQUIRED"] = (
+        "VETO_ONLY_EXTERNAL_PRICING_PIN_REQUIRED"
+    )
+    audit_model_refresh_pricing_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+    pricing_authority_capability_sha256: str = Field(pattern=_SHA256_PATTERN)
+    expected_workflow_status_sha256: str = Field(pattern=_SHA256_PATTERN)
+    workflow_status_sha256: str = Field(pattern=_SHA256_PATTERN)
+    refresh_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+    refresh_guard_capability_sha256: str = Field(pattern=_SHA256_PATTERN)
+    previous_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
+    current_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
+    pricing_tolerance_fraction: str = Field(min_length=1, max_length=66)
+    technical_pricing_route_set_sha256: str = Field(pattern=_SHA256_PATTERN)
+    audit_pricing_route_set_sha256: str = Field(pattern=_SHA256_PATTERN)
+    technical_qualification_capability_sha256: str = Field(pattern=_SHA256_PATTERN)
+    technical_production_selection_sha256: str = Field(pattern=_SHA256_PATTERN)
+    audit_selection_capability_sha256: str = Field(pattern=_SHA256_PATTERN)
+    audit_selection_sha256: str = Field(pattern=_SHA256_PATTERN)
+    audit_scope_sha256: str = Field(pattern=_SHA256_PATTERN)
+    source_sha256: str = Field(pattern=_SHA256_PATTERN)
+    audit_context_sha256: str = Field(pattern=_SHA256_PATTERN)
+    client_constraints_sha256: str = Field(pattern=_SHA256_PATTERN)
+    verified_at: datetime
+    expires_at: datetime
+    audit_model_ids: tuple[str, ...] = Field(min_length=1, max_length=128)
+    audit_routes: tuple[SchedulerAuditModelRefreshPricingRouteBinding, ...] = Field(
+        min_length=1,
+        max_length=128,
+    )
+    runtime_authorized: Literal[False] = False
+    binding_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @classmethod
+    def from_evidence(
+        cls,
+        evidence: AuditModelRefreshPricingEvidence,
+    ) -> SchedulerAuditModelRefreshPricingBinding:
+        """Project canonical pricing evidence without retaining live authority."""
+
+        from mmaudit.models.refresh_runtime import (
+            AuditModelRefreshPricingEvidence as PricingEvidence,
+        )
+
+        if type(evidence) is not PricingEvidence:
+            raise ValueError("scheduler pricing binding requires exact canonical evidence")
+        canonical = PricingEvidence.model_validate_json(evidence.model_dump_json(), strict=True)
+        if canonical != evidence:
+            raise ValueError("scheduler pricing evidence changed during canonicalization")
+        authority_payload = {
+            "verified_at": canonical.verified_at,
+            "expires_at": canonical.expires_at,
+            "workflow_status_sha256": canonical.workflow_status_sha256,
+            "refresh_evidence_sha256": canonical.refresh_evidence_sha256,
+            "refresh_guard_capability_sha256": canonical.refresh_guard_capability_sha256,
+            "technical_qualification_capability_sha256": (
+                canonical.technical_qualification_capability_sha256
+            ),
+            "technical_production_selection_sha256": (
+                canonical.technical_production_selection_sha256
+            ),
+            "audit_selection_capability_sha256": (canonical.audit_selection_capability_sha256),
+            "audit_selection_sha256": canonical.audit_selection_sha256,
+            "pricing_evidence_sha256": canonical.evidence_sha256,
+        }
+        routes = tuple(
+            SchedulerAuditModelRefreshPricingRouteBinding(
+                exact_model_id=route.exact_model_id,
+                approved_provider_endpoint=route.approved_provider_endpoint,
+                pricing_route_evidence_sha256=route.route_evidence_sha256,
+                refresh_route_evidence_sha256=route.refresh_route_evidence_sha256,
+                qualified_pricing_snapshot_sha256=(route.qualified_pricing_snapshot_sha256),
+                baseline_pricing_sha256=route.baseline_pricing_sha256,
+                current_pricing_sha256=route.current_pricing_sha256,
+            )
+            for route in canonical.routes
+            if route.audit_selected
+        )
+        values: dict[str, Any] = {
+            "schema_version": "1.0",
+            "evidence_authority": "comparison_required",
+            "authority_mode": "VETO_ONLY_EXTERNAL_PRICING_PIN_REQUIRED",
+            "audit_model_refresh_pricing_evidence_sha256": canonical.evidence_sha256,
+            "pricing_authority_capability_sha256": scheduler_canonical_sha256(authority_payload),
+            "expected_workflow_status_sha256": canonical.expected_workflow_status_sha256,
+            "workflow_status_sha256": canonical.workflow_status_sha256,
+            "refresh_evidence_sha256": canonical.refresh_evidence_sha256,
+            "refresh_guard_capability_sha256": canonical.refresh_guard_capability_sha256,
+            "previous_snapshot_sha256": canonical.previous_snapshot_sha256,
+            "current_snapshot_sha256": canonical.current_snapshot_sha256,
+            "pricing_tolerance_fraction": canonical.pricing_tolerance_fraction,
+            "technical_pricing_route_set_sha256": (canonical.technical_pricing_route_set_sha256),
+            "audit_pricing_route_set_sha256": canonical.audit_pricing_route_set_sha256,
+            "technical_qualification_capability_sha256": (
+                canonical.technical_qualification_capability_sha256
+            ),
+            "technical_production_selection_sha256": (
+                canonical.technical_production_selection_sha256
+            ),
+            "audit_selection_capability_sha256": (canonical.audit_selection_capability_sha256),
+            "audit_selection_sha256": canonical.audit_selection_sha256,
+            "audit_scope_sha256": canonical.audit_scope_sha256,
+            "source_sha256": canonical.source_sha256,
+            "audit_context_sha256": canonical.audit_context_sha256,
+            "client_constraints_sha256": canonical.client_constraints_sha256,
+            "verified_at": canonical.verified_at,
+            "expires_at": canonical.expires_at,
+            "audit_model_ids": canonical.audit_model_ids,
+            "audit_routes": routes,
+            "runtime_authorized": False,
+        }
+        return cls(**values, binding_sha256=scheduler_canonical_sha256(values))
+
+    @field_validator("audit_model_ids")
+    @classmethod
+    def model_ids_are_canonical(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if value != tuple(sorted(set(value))) or any(
+            re.fullmatch(_MODEL_ID_PATTERN, model_id) is None for model_id in value
+        ):
+            raise ValueError("scheduler pricing model IDs must be exact, unique, and sorted")
+        return value
+
+    @field_validator("verified_at", "expires_at")
+    @classmethod
+    def times_are_whole_second_utc(cls, value: datetime) -> datetime:
+        if (
+            type(value) is not datetime
+            or value.tzinfo is None
+            or value.utcoffset() != timedelta(0)
+            or value.microsecond != 0
+        ):
+            raise ValueError("scheduler pricing times must be whole-second UTC")
+        return value
+
+    @field_validator("runtime_authorized", mode="before")
+    @classmethod
+    def authority_is_literal_false(cls, value: object) -> object:
+        if type(value) is not bool:
+            raise ValueError("scheduler pricing authority flag must be a literal boolean")
+        return value
+
+    def route_for(
+        self,
+        exact_model_id: str,
+    ) -> SchedulerAuditModelRefreshPricingRouteBinding:
+        matches = tuple(item for item in self.audit_routes if item.exact_model_id == exact_model_id)
+        if len(matches) != 1:
+            raise ValueError(f"model is absent from scheduler pricing binding: {exact_model_id}")
+        return matches[0]
+
+    @model_validator(mode="after")
+    def pricing_binding_is_canonical_and_exact(self) -> Self:
+        route_ids = tuple(item.exact_model_id for item in self.audit_routes)
+        if (
+            self.expected_workflow_status_sha256 != self.workflow_status_sha256
+            or route_ids != self.audit_model_ids
+            or route_ids != tuple(sorted(set(route_ids)))
+            or not self.verified_at < self.expires_at
+        ):
+            raise ValueError("scheduler pricing binding is not exact or current-bounded")
+        if self.binding_sha256 != _model_sha256(self, exclude={"binding_sha256"}):
+            raise ValueError("scheduler pricing binding hash is inconsistent")
+        return self
+
+
 class SchedulerBindings(StrictModel):
     """Immutable hash-only inputs that define one scheduler campaign."""
 
@@ -1253,6 +1759,14 @@ class SchedulerBindings(StrictModel):
         default=None,
         exclude_if=lambda value: value is None,
     )
+    audit_model_refresh: SchedulerAuditModelRefreshBinding | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_pricing: SchedulerAuditModelRefreshPricingBinding | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     bindings_sha256: str = Field(pattern=_SHA256_PATTERN)
 
     @classmethod
@@ -1272,6 +1786,10 @@ class SchedulerBindings(StrictModel):
         privacy_evidence_custody_sha256: str = ABSENT_PRIVACY_EVIDENCE_CUSTODY_SHA256,
         audit_model_selection_evidence: AuditModelSelectionEvidenceBundle | None = None,
         audit_model_selection: SchedulerAuditModelSelectionBinding | None = None,
+        audit_model_refresh_evidence: AuditModelRefreshEvidence | None = None,
+        audit_model_refresh: SchedulerAuditModelRefreshBinding | None = None,
+        audit_model_refresh_pricing_evidence: AuditModelRefreshPricingEvidence | None = None,
+        audit_model_refresh_pricing: SchedulerAuditModelRefreshPricingBinding | None = None,
     ) -> SchedulerBindings:
         if audit_model_selection_evidence is not None and audit_model_selection is not None:
             raise ValueError("scheduler audit selection can have only one exact source")
@@ -1283,6 +1801,37 @@ class SchedulerBindings(StrictModel):
                     audit_model_selection.model_dump(mode="python")
                 )
                 if audit_model_selection is not None
+                else None
+            )
+        )
+        if audit_model_refresh_evidence is not None and audit_model_refresh is not None:
+            raise ValueError("scheduler model refresh can have only one exact source")
+        validated_model_refresh = (
+            SchedulerAuditModelRefreshBinding.from_evidence(audit_model_refresh_evidence)
+            if audit_model_refresh_evidence is not None
+            else (
+                SchedulerAuditModelRefreshBinding.model_validate(
+                    audit_model_refresh.model_dump(mode="python")
+                )
+                if audit_model_refresh is not None
+                else None
+            )
+        )
+        if (
+            audit_model_refresh_pricing_evidence is not None
+            and audit_model_refresh_pricing is not None
+        ):
+            raise ValueError("scheduler refresh pricing can have only one exact source")
+        validated_refresh_pricing = (
+            SchedulerAuditModelRefreshPricingBinding.from_evidence(
+                audit_model_refresh_pricing_evidence
+            )
+            if audit_model_refresh_pricing_evidence is not None
+            else (
+                SchedulerAuditModelRefreshPricingBinding.model_validate(
+                    audit_model_refresh_pricing.model_dump(mode="python")
+                )
+                if audit_model_refresh_pricing is not None
                 else None
             )
         )
@@ -1304,6 +1853,10 @@ class SchedulerBindings(StrictModel):
         }
         if validated_audit_selection is not None:
             values["audit_model_selection"] = validated_audit_selection
+        if validated_model_refresh is not None:
+            values["audit_model_refresh"] = validated_model_refresh
+        if validated_refresh_pricing is not None:
+            values["audit_model_refresh_pricing"] = validated_refresh_pricing
         return cls(**values, bindings_sha256=scheduler_canonical_sha256(values))
 
     @model_validator(mode="after")
@@ -1313,6 +1866,67 @@ class SchedulerBindings(StrictModel):
             and self.audit_model_selection.source_sha256 != self.source_sha256
         ):
             raise ValueError("scheduler audit selection differs from campaign source")
+        if self.audit_model_refresh is not None and self.audit_model_selection is None:
+            raise ValueError("scheduler model refresh requires exact audit selection custody")
+        if self.audit_model_refresh is not None and self.audit_model_selection is not None:
+            refresh = self.audit_model_refresh
+            selection = self.audit_model_selection
+            if (
+                refresh.source_sha256 != self.source_sha256
+                or refresh.source_sha256 != selection.source_sha256
+                or refresh.audit_model_ids != selection.selected_model_ids
+                or refresh.technical_qualification_capability_sha256
+                != selection.technical_qualification_capability_sha256
+                or refresh.technical_production_selection_sha256
+                != selection.technical_production_selection_sha256
+                or refresh.audit_selection_sha256 != selection.audit_selection_sha256
+                or refresh.audit_scope_sha256 != selection.audit_scope_sha256
+                or refresh.audit_context_sha256 != selection.audit_context_sha256
+                or refresh.client_constraints_sha256 != selection.client_constraints_sha256
+                or refresh.expires_at > selection.selection_expires_at
+            ):
+                raise ValueError(
+                    "scheduler model refresh differs from exact audit and technical selection"
+                )
+        if self.audit_model_refresh_pricing is not None:
+            if self.audit_model_refresh is None or self.audit_model_selection is None:
+                raise ValueError(
+                    "scheduler refresh pricing requires refresh and audit selection custody"
+                )
+            pricing = self.audit_model_refresh_pricing
+            refresh = self.audit_model_refresh
+            selection = self.audit_model_selection
+            refresh_routes = {
+                route.exact_model_id: route.route_evidence_sha256 for route in refresh.audit_routes
+            }
+            if (
+                pricing.source_sha256 != self.source_sha256
+                or pricing.source_sha256 != selection.source_sha256
+                or pricing.refresh_evidence_sha256 != refresh.audit_model_refresh_evidence_sha256
+                or pricing.refresh_guard_capability_sha256 != refresh.guard_capability_sha256
+                or pricing.workflow_status_sha256 != refresh.workflow_status_sha256
+                or pricing.current_snapshot_sha256 != refresh.snapshot_sha256
+                or pricing.technical_qualification_capability_sha256
+                != selection.technical_qualification_capability_sha256
+                or pricing.technical_production_selection_sha256
+                != selection.technical_production_selection_sha256
+                or pricing.audit_selection_capability_sha256
+                != refresh.audit_selection_capability_sha256
+                or pricing.audit_selection_sha256 != selection.audit_selection_sha256
+                or pricing.audit_scope_sha256 != selection.audit_scope_sha256
+                or pricing.audit_context_sha256 != selection.audit_context_sha256
+                or pricing.client_constraints_sha256 != selection.client_constraints_sha256
+                or pricing.audit_model_ids != selection.selected_model_ids
+                or pricing.audit_model_ids != refresh.audit_model_ids
+                or pricing.expires_at != refresh.expires_at
+                or any(
+                    refresh_routes.get(route.exact_model_id) != route.refresh_route_evidence_sha256
+                    for route in pricing.audit_routes
+                )
+            ):
+                raise ValueError(
+                    "scheduler refresh pricing differs from exact refresh and selection custody"
+                )
         if self.bindings_sha256 != _model_sha256(self, exclude={"bindings_sha256"}):
             raise ValueError("scheduler bindings hash does not match its typed fields")
         return self
@@ -2513,8 +3127,18 @@ def _require_usage_audit_selection(
         or evidence.route.route_sha256 != selected_route.policy_route_sha256
         or evidence.selected_model_sha256 != selected_route.selected_model_sha256
         or usage_record.requested_model != selected_route.exact_model_id
-        or usage_record.provider != selected_route.provider_name
-        or usage_record.actual_provider_endpoint != selected_route.provider_endpoint
+        or tuple(usage_record.configured_provider_endpoints) != (selected_route.provider_endpoint,)
+        or (
+            usage_record.provider != selected_route.provider_name
+            and (usage_record.status == "success" or usage_record.provider is not None)
+        )
+        or (
+            usage_record.actual_provider_endpoint != selected_route.provider_endpoint
+            and (
+                usage_record.status == "success"
+                or usage_record.actual_provider_endpoint is not None
+            )
+        )
         or usage_record.started_at is None
         or usage_record.ended_at is None
         or usage_record.started_at >= binding.selection_expires_at
@@ -2524,12 +3148,191 @@ def _require_usage_audit_selection(
     return evidence
 
 
+def _usage_audit_model_refresh_route_evidence(
+    usage_record: UsageRecord,
+) -> Any | None:
+    """Parse one canonical non-authorizing route projection from provider usage."""
+
+    from mmaudit.models.refresh_runtime import AuditModelRefreshRouteEvidence
+
+    raw = usage_record.routing.get("audit_model_refresh_route_evidence")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("scheduler usage has invalid typed model-refresh route evidence")
+    try:
+        route = AuditModelRefreshRouteEvidence.model_validate_json(
+            json.dumps(
+                raw,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ),
+            strict=True,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("scheduler usage has invalid typed model-refresh route evidence") from exc
+    if route.model_dump(mode="json") != raw:
+        raise ValueError("scheduler usage model-refresh route changed on validation")
+    return route
+
+
+def _require_usage_audit_model_refresh(
+    *,
+    usage_record: UsageRecord,
+    requested_model: str,
+    binding: SchedulerAuditModelRefreshBinding | None,
+    audit_model_selection: SchedulerAuditModelSelectionBinding | None,
+) -> Any:
+    """Require one REAL scheduler use to match veto-only campaign refresh custody."""
+
+    route = _usage_audit_model_refresh_route_evidence(usage_record)
+    if binding is None or audit_model_selection is None or route is None:
+        raise ValueError("REAL scheduler model usage lacks current model-refresh evidence")
+    selected_route = audit_model_selection.route_for(requested_model)
+    refresh_route = binding.route_for(requested_model)
+    expires_at_text = binding.expires_at.isoformat()
+    guard_capability_sha256 = usage_record.routing.get(
+        "audit_model_refresh_guard_capability_sha256"
+    )
+    if (
+        usage_record.routing.get("audit_model_refresh_evidence_sha256")
+        != binding.audit_model_refresh_evidence_sha256
+        or usage_record.routing.get("audit_model_refresh_workflow_status_sha256")
+        != binding.workflow_status_sha256
+        or usage_record.routing.get("audit_model_refresh_snapshot_sha256")
+        != binding.snapshot_sha256
+        or usage_record.routing.get("audit_model_refresh_route_evidence_sha256")
+        != route.route_evidence_sha256
+        or guard_capability_sha256 != binding.guard_capability_sha256
+        or usage_record.routing.get("audit_model_refresh_audit_route_set_sha256")
+        != binding.audit_route_set_sha256
+        or usage_record.routing.get("audit_model_refresh_technical_route_set_sha256")
+        != binding.technical_route_set_sha256
+        or usage_record.routing.get("audit_model_refresh_expires_at") != expires_at_text
+        or route.exact_model_id != requested_model
+        or route.route_evidence_sha256 != refresh_route.route_evidence_sha256
+        or route.exact_model_id not in binding.audit_model_ids
+        or not route.audit_selected
+        or route.runtime_authorized
+        or route.root_lineage != selected_route.root_lineage
+        or route.approved_provider_name != selected_route.provider_name
+        or route.approved_provider_endpoint != selected_route.provider_endpoint
+        or usage_record.requested_model != route.exact_model_id
+        or tuple(usage_record.configured_provider_endpoints) != (route.approved_provider_endpoint,)
+        or (
+            usage_record.provider != route.approved_provider_name
+            and (usage_record.status == "success" or usage_record.provider is not None)
+        )
+        or (
+            usage_record.actual_provider_endpoint != route.approved_provider_endpoint
+            and (
+                usage_record.status == "success"
+                or usage_record.actual_provider_endpoint is not None
+            )
+        )
+        or usage_record.started_at is None
+        or usage_record.ended_at is None
+        or usage_record.started_at < binding.verified_at
+        or usage_record.started_at >= binding.expires_at
+        or usage_record.started_at >= route.qualification_expires_at
+    ):
+        raise ValueError("REAL scheduler model usage differs from current model refresh")
+    return route
+
+
+def _usage_audit_model_refresh_pricing_route_evidence(
+    usage_record: UsageRecord,
+) -> Any | None:
+    """Parse one canonical non-authorizing refreshed-price route from usage."""
+
+    from mmaudit.models.refresh_runtime import AuditModelRefreshPricingRouteEvidence
+
+    raw = usage_record.routing.get("audit_model_refresh_pricing_route_evidence")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("scheduler usage has invalid typed refresh-pricing route")
+    try:
+        route = AuditModelRefreshPricingRouteEvidence.model_validate_json(
+            json.dumps(
+                raw,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ),
+            strict=True,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("scheduler usage has invalid typed refresh-pricing route") from exc
+    if route.model_dump(mode="json") != raw:
+        raise ValueError("scheduler usage refresh-pricing route changed on validation")
+    return route
+
+
+def _require_usage_audit_model_refresh_pricing(
+    *,
+    usage_record: UsageRecord,
+    requested_model: str,
+    binding: SchedulerAuditModelRefreshPricingBinding | None,
+    refresh_binding: SchedulerAuditModelRefreshBinding | None,
+) -> Any:
+    """Require exact pricing/cost custody for one REAL refresh-bound use."""
+
+    route = _usage_audit_model_refresh_pricing_route_evidence(usage_record)
+    if binding is None or refresh_binding is None or route is None:
+        raise ValueError("REAL scheduler model usage lacks refreshed-price evidence")
+    projected = binding.route_for(requested_model)
+    refresh_route = refresh_binding.route_for(requested_model)
+    if (
+        usage_record.routing.get("audit_model_refresh_pricing_evidence_sha256")
+        != binding.audit_model_refresh_pricing_evidence_sha256
+        or usage_record.routing.get("audit_model_refresh_pricing_authority_capability_sha256")
+        != binding.pricing_authority_capability_sha256
+        or usage_record.routing.get("audit_model_refresh_pricing_route_evidence_sha256")
+        != route.route_evidence_sha256
+        or usage_record.routing.get("audit_model_refresh_pricing_workflow_status_sha256")
+        != binding.workflow_status_sha256
+        or usage_record.routing.get("audit_model_refresh_pricing_current_snapshot_sha256")
+        != binding.current_snapshot_sha256
+        or usage_record.routing.get("audit_model_refresh_pricing_refresh_evidence_sha256")
+        != binding.refresh_evidence_sha256
+        or usage_record.routing.get("audit_model_refresh_pricing_refresh_guard_capability_sha256")
+        != binding.refresh_guard_capability_sha256
+        or usage_record.routing.get("audit_model_refresh_pricing_technical_route_set_sha256")
+        != binding.technical_pricing_route_set_sha256
+        or usage_record.routing.get("audit_model_refresh_pricing_audit_route_set_sha256")
+        != binding.audit_pricing_route_set_sha256
+        or usage_record.routing.get("audit_model_refresh_pricing_qualified_pricing_snapshot_sha256")
+        != projected.qualified_pricing_snapshot_sha256
+        or usage_record.routing.get("audit_model_refresh_pricing_current_pricing_snapshot_sha256")
+        != projected.current_pricing_sha256
+        or usage_record.routing.get("audit_model_refresh_pricing_expires_at")
+        != binding.expires_at.isoformat()
+        or route.exact_model_id != requested_model
+        or route.route_evidence_sha256 != projected.pricing_route_evidence_sha256
+        or route.refresh_route_evidence_sha256 != refresh_route.route_evidence_sha256
+        or route.qualified_pricing_snapshot_sha256 != projected.qualified_pricing_snapshot_sha256
+        or route.baseline_pricing_sha256 != projected.baseline_pricing_sha256
+        or route.current_pricing_sha256 != projected.current_pricing_sha256
+        or route.approved_provider_endpoint != projected.approved_provider_endpoint
+        or route.pricing_use_authorized
+        or route.provider_access_authorized
+        or route.model_selection_authorized
+        or "audit_model_refresh_pricing_attempts" not in usage_record.routing
+    ):
+        raise ValueError("REAL scheduler model usage differs from refreshed-price custody")
+    return route
+
+
 class SchedulerModelCompletionEvidence(StrictModel):
     """Private redacted provider/normalization evidence for one successful model task."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     evidence_authority: Literal["comparison_required"] = "comparison_required"
     task_id: str = Field(pattern=r"^scheduler-task-[0-9a-f]{64}$")
     logical_request_id: str = Field(pattern=r"^scheduler-request-[0-9a-f]{64}$")
@@ -2576,6 +3379,84 @@ class SchedulerModelCompletionEvidence(StrictModel):
         pattern=_SHA256_PATTERN,
         exclude_if=lambda value: value is None,
     )
+    audit_model_refresh_binding_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_guard_capability_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_workflow_status_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_snapshot_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_route_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_audit_route_set_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_technical_route_set_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_expires_at: datetime | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_pricing_binding_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_pricing_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_pricing_authority_capability_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_pricing_route_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_pricing_baseline_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_pricing_current_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_pricing_expires_at: datetime | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     context_request_evidence: ContextRequestEvidence
     context_request_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
     provider_response_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -2583,6 +3464,10 @@ class SchedulerModelCompletionEvidence(StrictModel):
     response_schema_sha256: str = Field(pattern=_SHA256_PATTERN)
     normalizer_sha256: str = Field(pattern=_SHA256_PATTERN)
     normalized_output_sha256: str = Field(pattern=_SHA256_PATTERN)
+    normalization_evidence: CandidateReviewNormalizationEvidence | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     completion_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
 
     @classmethod
@@ -2594,8 +3479,11 @@ class SchedulerModelCompletionEvidence(StrictModel):
         usage_record: UsageRecord,
         privacy_evidence_custody: SchedulerPrivacyEvidenceCustody | None,
         audit_model_selection: SchedulerAuditModelSelectionBinding | None,
+        audit_model_refresh: SchedulerAuditModelRefreshBinding | None,
+        audit_model_refresh_pricing: SchedulerAuditModelRefreshPricingBinding | None = None,
         normalizer_sha256: str,
         normalized_output_sha256: str,
+        normalization_evidence: CandidateReviewNormalizationEvidence | None = None,
     ) -> SchedulerModelCompletionEvidence:
         if task.task_kind is not SchedulerTaskKind.MODEL_REQUEST:
             raise ValueError("scheduler model completion evidence requires a model task")
@@ -2631,10 +3519,80 @@ class SchedulerModelCompletionEvidence(StrictModel):
                 requested_model=task.requested_model or "",
                 binding=audit_model_selection,
             )
+        refresh_route = _usage_audit_model_refresh_route_evidence(frozen_usage)
+        if (
+            frozen_usage.execution_evidence is ExecutionEvidenceKind.REAL
+            or refresh_route is not None
+        ):
+            refresh_route = _require_usage_audit_model_refresh(
+                usage_record=frozen_usage,
+                requested_model=task.requested_model or "",
+                binding=audit_model_refresh,
+                audit_model_selection=audit_model_selection,
+            )
+        pricing_route = _usage_audit_model_refresh_pricing_route_evidence(frozen_usage)
+        if (
+            (
+                frozen_usage.execution_evidence is ExecutionEvidenceKind.REAL
+                and audit_model_refresh is not None
+            )
+            or pricing_route is not None
+            or audit_model_refresh_pricing is not None
+        ):
+            pricing_route = _require_usage_audit_model_refresh_pricing(
+                usage_record=frozen_usage,
+                requested_model=task.requested_model or "",
+                binding=audit_model_refresh_pricing,
+                refresh_binding=audit_model_refresh,
+            )
         raw_context = frozen_usage.routing.get("context_request_evidence")
         if not isinstance(raw_context, dict):
             raise ValueError("scheduler model completion lacks typed context request evidence")
         context = ContextRequestEvidence.model_validate(raw_context)
+        frozen_normalization: CandidateReviewNormalizationEvidence | None = None
+        if normalization_evidence is not None:
+            if (
+                type(normalization_evidence) is not CandidateReviewNormalizationEvidence
+                or not candidate_review_protocol_implementation_is_pristine()
+            ):
+                raise ValueError("scheduler candidate-review normalization implementation changed")
+            frozen_normalization = CandidateReviewNormalizationEvidence.model_validate_json(
+                normalization_evidence.model_dump_json(),
+                strict=True,
+            )
+            if frozen_normalization != normalization_evidence:
+                raise ValueError("scheduler candidate-review normalization evidence changed")
+        candidate_review_contract = _task_uses_candidate_review_contract(task)
+        framed_candidate_review = (
+            candidate_review_contract
+            and activation.response_schema_sha256 == candidate_review_frame_wire_schema_sha256()
+        )
+        legacy_candidate_review = (
+            candidate_review_contract
+            and activation.response_schema_sha256 == candidate_review_batch_schema_sha256()
+        )
+        if candidate_review_contract and not (framed_candidate_review or legacy_candidate_review):
+            raise ValueError("scheduler candidate review uses an unknown wire schema")
+        if framed_candidate_review != (frozen_normalization is not None):
+            raise ValueError(
+                "scheduler framed candidate review requires exact normalization evidence"
+            )
+        if not candidate_review_contract and frozen_normalization is not None:
+            raise ValueError(
+                "non-candidate scheduler completion cannot carry normalization evidence"
+            )
+        if task.normalizer_sha256 is None or normalizer_sha256 != task.normalizer_sha256:
+            raise ValueError("scheduler completion normalizer differs from its sealed task")
+        if frozen_normalization is not None and (
+            frozen_normalization.request_id != task.logical_request_id
+            or frozen_normalization.wire_schema_sha256 != activation.response_schema_sha256
+            or frozen_normalization.normalized_batch_schema_sha256
+            != candidate_review_batch_schema_sha256()
+            or frozen_normalization.wire_validated_response_sha256
+            != frozen_usage.validated_response_sha256
+            or frozen_normalization.normalized_batch_sha256 != normalized_output_sha256
+        ):
+            raise ValueError("scheduler candidate-review normalization custody is inconsistent")
         if (
             frozen_usage.request_id != task.logical_request_id
             or frozen_usage.role != task.role
@@ -2654,11 +3612,14 @@ class SchedulerModelCompletionEvidence(StrictModel):
             or context.request_role != task.role
             or frozen_usage.routing.get("context_request_evidence_sha256")
             != context.evidence_sha256
-            or frozen_usage.validated_response_sha256 != normalized_output_sha256
+            or (
+                frozen_normalization is None
+                and frozen_usage.validated_response_sha256 != normalized_output_sha256
+            )
         ):
             raise ValueError("scheduler model output is not the exact provider-validated response")
         values: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": "1.1" if frozen_normalization is not None else "1.0",
             "evidence_authority": "comparison_required",
             "task_id": task.task_id,
             "logical_request_id": task.logical_request_id,
@@ -2682,6 +3643,60 @@ class SchedulerModelCompletionEvidence(StrictModel):
                 if audit_routing is not None and audit_model_selection is not None
                 else {}
             ),
+            **(
+                {
+                    "audit_model_refresh_pricing_binding_sha256": (
+                        audit_model_refresh_pricing.binding_sha256
+                    ),
+                    "audit_model_refresh_pricing_evidence_sha256": (
+                        audit_model_refresh_pricing.audit_model_refresh_pricing_evidence_sha256
+                    ),
+                    "audit_model_refresh_pricing_authority_capability_sha256": (
+                        audit_model_refresh_pricing.pricing_authority_capability_sha256
+                    ),
+                    "audit_model_refresh_pricing_route_evidence_sha256": (
+                        pricing_route.route_evidence_sha256
+                    ),
+                    "audit_model_refresh_pricing_baseline_sha256": (
+                        pricing_route.baseline_pricing_sha256
+                    ),
+                    "audit_model_refresh_pricing_current_sha256": (
+                        pricing_route.current_pricing_sha256
+                    ),
+                    "audit_model_refresh_pricing_expires_at": (
+                        audit_model_refresh_pricing.expires_at
+                    ),
+                }
+                if pricing_route is not None and audit_model_refresh_pricing is not None
+                else {}
+            ),
+            **(
+                {
+                    "audit_model_refresh_binding_sha256": audit_model_refresh.binding_sha256,
+                    "audit_model_refresh_evidence_sha256": (
+                        audit_model_refresh.audit_model_refresh_evidence_sha256
+                    ),
+                    "audit_model_refresh_guard_capability_sha256": (
+                        audit_model_refresh.guard_capability_sha256
+                    ),
+                    "audit_model_refresh_workflow_status_sha256": (
+                        audit_model_refresh.workflow_status_sha256
+                    ),
+                    "audit_model_refresh_snapshot_sha256": audit_model_refresh.snapshot_sha256,
+                    "audit_model_refresh_route_evidence_sha256": (
+                        refresh_route.route_evidence_sha256
+                    ),
+                    "audit_model_refresh_audit_route_set_sha256": (
+                        audit_model_refresh.audit_route_set_sha256
+                    ),
+                    "audit_model_refresh_technical_route_set_sha256": (
+                        audit_model_refresh.technical_route_set_sha256
+                    ),
+                    "audit_model_refresh_expires_at": audit_model_refresh.expires_at,
+                }
+                if refresh_route is not None and audit_model_refresh is not None
+                else {}
+            ),
             "context_request_evidence": context,
             "context_request_evidence_sha256": context.evidence_sha256,
             "provider_response_sha256": frozen_usage.response_sha256,
@@ -2689,6 +3704,11 @@ class SchedulerModelCompletionEvidence(StrictModel):
             "response_schema_sha256": activation.response_schema_sha256,
             "normalizer_sha256": normalizer_sha256,
             "normalized_output_sha256": normalized_output_sha256,
+            **(
+                {"normalization_evidence": frozen_normalization}
+                if frozen_normalization is not None
+                else {}
+            ),
         }
         return cls(
             **values,
@@ -2698,6 +3718,27 @@ class SchedulerModelCompletionEvidence(StrictModel):
     @model_validator(mode="after")
     def completion_evidence_is_redacted_and_exact(self) -> Self:
         _reject_sensitive_usage_material(self.usage_record.model_dump(mode="json"))
+        framed_schema = self.response_schema_sha256 == candidate_review_frame_wire_schema_sha256()
+        if self.schema_version == "1.0":
+            if self.normalization_evidence is not None or framed_schema:
+                raise ValueError("legacy scheduler completion cannot carry framed custody")
+        elif (
+            self.normalization_evidence is None
+            or not framed_schema
+            or not candidate_review_protocol_implementation_is_pristine()
+            or type(self.normalization_evidence) is not CandidateReviewNormalizationEvidence
+        ):
+            raise ValueError("framed scheduler completion lacks exact normalization custody")
+        if self.normalization_evidence is not None and (
+            self.normalization_evidence.request_id != self.logical_request_id
+            or self.normalization_evidence.wire_schema_sha256 != self.response_schema_sha256
+            or self.normalization_evidence.normalized_batch_schema_sha256
+            != candidate_review_batch_schema_sha256()
+            or self.normalization_evidence.wire_validated_response_sha256
+            != self.validated_response_sha256
+            or self.normalization_evidence.normalized_batch_sha256 != self.normalized_output_sha256
+        ):
+            raise ValueError("scheduler normalization hashes are inconsistent")
         audit_fields = (
             self.audit_policy_selection_binding_sha256,
             self.audit_model_selection_bundle_sha256,
@@ -2707,6 +3748,26 @@ class SchedulerModelCompletionEvidence(StrictModel):
             self.audit_source_sha256,
             self.audit_selection_expires_at,
             self.audit_policy_routing_evidence_sha256,
+        )
+        refresh_fields = (
+            self.audit_model_refresh_binding_sha256,
+            self.audit_model_refresh_evidence_sha256,
+            self.audit_model_refresh_guard_capability_sha256,
+            self.audit_model_refresh_workflow_status_sha256,
+            self.audit_model_refresh_snapshot_sha256,
+            self.audit_model_refresh_route_evidence_sha256,
+            self.audit_model_refresh_audit_route_set_sha256,
+            self.audit_model_refresh_technical_route_set_sha256,
+            self.audit_model_refresh_expires_at,
+        )
+        pricing_fields = (
+            self.audit_model_refresh_pricing_binding_sha256,
+            self.audit_model_refresh_pricing_evidence_sha256,
+            self.audit_model_refresh_pricing_authority_capability_sha256,
+            self.audit_model_refresh_pricing_route_evidence_sha256,
+            self.audit_model_refresh_pricing_baseline_sha256,
+            self.audit_model_refresh_pricing_current_sha256,
+            self.audit_model_refresh_pricing_expires_at,
         )
         if any(item is None for item in audit_fields) and any(
             item is not None for item in audit_fields
@@ -2728,6 +3789,61 @@ class SchedulerModelCompletionEvidence(StrictModel):
             or self.audit_policy_routing_evidence_sha256 != audit_routing.routing_evidence_sha256
         ):
             raise ValueError("scheduler audit policy completion hashes are inconsistent")
+        refresh_route = _usage_audit_model_refresh_route_evidence(self.usage_record)
+        if any(item is None for item in refresh_fields) and any(
+            item is not None for item in refresh_fields
+        ):
+            raise ValueError("scheduler model-refresh completion evidence is all-or-none")
+        if usage_requires_audit_policy_evidence(self.usage_record) and (
+            refresh_route is None or any(item is None for item in refresh_fields)
+        ):
+            raise ValueError("REAL scheduler completion lacks model-refresh route evidence")
+        if refresh_route is not None and (
+            self.audit_model_refresh_evidence_sha256
+            != self.usage_record.routing.get("audit_model_refresh_evidence_sha256")
+            or self.audit_model_refresh_guard_capability_sha256
+            != self.usage_record.routing.get("audit_model_refresh_guard_capability_sha256")
+            or self.audit_model_refresh_workflow_status_sha256
+            != self.usage_record.routing.get("audit_model_refresh_workflow_status_sha256")
+            or self.audit_model_refresh_snapshot_sha256
+            != self.usage_record.routing.get("audit_model_refresh_snapshot_sha256")
+            or self.audit_model_refresh_route_evidence_sha256 != refresh_route.route_evidence_sha256
+            or self.audit_model_refresh_audit_route_set_sha256
+            != self.usage_record.routing.get("audit_model_refresh_audit_route_set_sha256")
+            or self.audit_model_refresh_technical_route_set_sha256
+            != self.usage_record.routing.get("audit_model_refresh_technical_route_set_sha256")
+            or self.audit_model_refresh_expires_at is None
+            or self.audit_model_refresh_expires_at.isoformat()
+            != self.usage_record.routing.get("audit_model_refresh_expires_at")
+        ):
+            raise ValueError("scheduler model-refresh completion hashes are inconsistent")
+        pricing_route = _usage_audit_model_refresh_pricing_route_evidence(self.usage_record)
+        if any(item is None for item in pricing_fields) and any(
+            item is not None for item in pricing_fields
+        ):
+            raise ValueError("scheduler refresh-pricing completion evidence is all-or-none")
+        if refresh_route is not None and (
+            pricing_route is None or any(item is None for item in pricing_fields)
+        ):
+            raise ValueError("REAL refresh-bound completion lacks refreshed-price evidence")
+        if pricing_route is not None and (
+            self.audit_model_refresh_pricing_evidence_sha256
+            != self.usage_record.routing.get("audit_model_refresh_pricing_evidence_sha256")
+            or self.audit_model_refresh_pricing_authority_capability_sha256
+            != self.usage_record.routing.get(
+                "audit_model_refresh_pricing_authority_capability_sha256"
+            )
+            or self.audit_model_refresh_pricing_route_evidence_sha256
+            != pricing_route.route_evidence_sha256
+            or self.audit_model_refresh_pricing_baseline_sha256
+            != pricing_route.baseline_pricing_sha256
+            or self.audit_model_refresh_pricing_current_sha256
+            != pricing_route.current_pricing_sha256
+            or self.audit_model_refresh_pricing_expires_at is None
+            or self.audit_model_refresh_pricing_expires_at.isoformat()
+            != self.usage_record.routing.get("audit_model_refresh_pricing_expires_at")
+        ):
+            raise ValueError("scheduler refresh-pricing completion hashes are inconsistent")
         if (
             self.usage_record_sha256
             != scheduler_canonical_sha256(self.usage_record.model_dump(mode="json"))
@@ -2739,15 +3855,69 @@ class SchedulerModelCompletionEvidence(StrictModel):
             or self.usage_record.response_sha256 != self.provider_response_sha256
             or self.usage_record.validated_response_sha256 != self.validated_response_sha256
             or self.usage_record.schema_sha256 != self.response_schema_sha256
-            or self.validated_response_sha256 != self.normalized_output_sha256
+            or (
+                self.normalization_evidence is None
+                and self.validated_response_sha256 != self.normalized_output_sha256
+            )
         ):
             raise ValueError("scheduler model completion evidence contains inconsistent hashes")
         if self.completion_evidence_sha256 != _model_sha256(
             self,
-            exclude={"completion_evidence_sha256"},
+            exclude={
+                "completion_evidence_sha256",
+                *({"normalization_evidence"} if self.schema_version == "1.0" else set()),
+            },
         ):
             raise ValueError("scheduler model completion evidence hash is inconsistent")
         return self
+
+
+def _scheduler_truncated_envelope_routing(
+    envelope: CandidateReviewTruncatedEnvelopeEvidence,
+) -> dict[str, Any]:
+    """Rebuild the complete raw-free envelope inventory retained in usage."""
+
+    return {
+        "candidate_review_truncated_envelope_evidence": envelope.model_dump(mode="json"),
+        "candidate_review_truncated_envelope_sha256": envelope.evidence_sha256,
+    }
+
+
+def _scheduler_truncation_projection_routing(
+    projection: CandidateReviewTruncationProjection,
+) -> dict[str, Any]:
+    """Rebuild the non-record projection inventory retained in usage."""
+
+    return {
+        "candidate_review_truncation_projection_sha256": projection.evidence_sha256,
+        "candidate_review_truncation_termination": projection.termination.value,
+        "candidate_review_truncation_findings_state": projection.findings_state.value,
+        "candidate_review_truncation_surface_reviews_state": (
+            projection.surface_reviews_state.value
+        ),
+        "candidate_review_truncation_summary_state": projection.summary_state.value,
+        "candidate_review_truncation_stream_integrity_valid": projection.stream_integrity_valid,
+        "candidate_review_truncation_document_complete": projection.document_complete,
+        "candidate_review_truncation_declared_finding_count": projection.declared_finding_count,
+        "candidate_review_truncation_declared_surface_review_count": (
+            projection.declared_surface_review_count
+        ),
+        "candidate_review_truncation_observed_frame_count": projection.observed_frame_count,
+        "candidate_review_truncation_observed_finding_frame_count": (
+            projection.observed_finding_frame_count
+        ),
+        "candidate_review_truncation_observed_surface_review_frame_count": (
+            projection.observed_surface_review_frame_count
+        ),
+        "candidate_review_truncation_accepted_frame_count": len(projection.accepted_frames),
+        "candidate_review_truncation_accepted_finding_count": (projection.accepted_finding_count),
+        "candidate_review_truncation_accepted_surface_review_count": (
+            projection.accepted_surface_review_count
+        ),
+        "candidate_review_truncation_invalid_frame_count": projection.invalid_frame_count,
+        "candidate_review_truncation_credit_eligible": False,
+        "candidate_review_truncation_authority_eligible": False,
+    }
 
 
 class SchedulerProviderAttemptEvidence(StrictModel):
@@ -2755,7 +3925,7 @@ class SchedulerProviderAttemptEvidence(StrictModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     evidence_authority: Literal["comparison_required"] = "comparison_required"
     task_id: str = Field(pattern=r"^scheduler-task-[0-9a-f]{64}$")
     logical_request_id: str = Field(pattern=r"^scheduler-request-[0-9a-f]{64}$")
@@ -2802,12 +3972,148 @@ class SchedulerProviderAttemptEvidence(StrictModel):
         pattern=_SHA256_PATTERN,
         exclude_if=lambda value: value is None,
     )
+    audit_model_refresh_binding_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_guard_capability_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_workflow_status_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_snapshot_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_route_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_audit_route_set_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_technical_route_set_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_expires_at: datetime | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_pricing_binding_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_pricing_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_pricing_authority_capability_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_pricing_route_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_pricing_baseline_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_pricing_current_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_pricing_expires_at: datetime | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     context_request_evidence: ContextRequestEvidence
     context_request_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
     provider_response_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
     validated_response_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
     response_schema_sha256: str = Field(pattern=_SHA256_PATTERN)
+    truncated_envelope_evidence: CandidateReviewTruncatedEnvelopeEvidence | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    truncation_projection: CandidateReviewTruncationProjection | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     attempt_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @field_validator("truncated_envelope_evidence", mode="before")
+    @classmethod
+    def typed_truncated_envelope_reconstructs_from_json(
+        cls,
+        value: object,
+    ) -> CandidateReviewTruncatedEnvelopeEvidence | None:
+        if value is None or type(value) is CandidateReviewTruncatedEnvelopeEvidence:
+            return value
+        if type(value) is not dict:
+            raise ValueError("scheduler truncated envelope has an invalid serialized type")
+        try:
+            return CandidateReviewTruncatedEnvelopeEvidence.model_validate_json(
+                json.dumps(
+                    value,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                    allow_nan=False,
+                ),
+                strict=True,
+            )
+        except (TypeError, ValueError):
+            raise ValueError("scheduler truncated envelope failed exact reconstruction") from None
+
+    @field_validator("truncation_projection", mode="before")
+    @classmethod
+    def typed_truncation_projection_reconstructs_from_json(
+        cls,
+        value: object,
+    ) -> CandidateReviewTruncationProjection | None:
+        if value is None or type(value) is CandidateReviewTruncationProjection:
+            return value
+        if type(value) is not dict:
+            raise ValueError("scheduler truncation projection has an invalid serialized type")
+        try:
+            return CandidateReviewTruncationProjection.model_validate_json(
+                json.dumps(
+                    value,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                    allow_nan=False,
+                ),
+                strict=True,
+            )
+        except (TypeError, ValueError):
+            raise ValueError(
+                "scheduler truncation projection failed exact reconstruction"
+            ) from None
 
     @classmethod
     def build(
@@ -2817,11 +4123,36 @@ class SchedulerProviderAttemptEvidence(StrictModel):
         activation: SchedulerTaskActivation,
         usage_record: UsageRecord,
         audit_model_selection: SchedulerAuditModelSelectionBinding | None,
+        audit_model_refresh: SchedulerAuditModelRefreshBinding | None = None,
+        audit_model_refresh_pricing: SchedulerAuditModelRefreshPricingBinding | None = None,
+        truncated_envelope_evidence: CandidateReviewTruncatedEnvelopeEvidence | None = None,
+        truncation_projection: CandidateReviewTruncationProjection | None = None,
     ) -> SchedulerProviderAttemptEvidence:
         if task.task_kind is not SchedulerTaskKind.MODEL_REQUEST:
             raise ValueError("scheduler provider-attempt evidence requires a model task")
         frozen_usage = UsageRecord.model_validate(usage_record.model_dump(mode="python"))
         _reject_sensitive_usage_material(frozen_usage.model_dump(mode="json"))
+        if (truncated_envelope_evidence is None) != (truncation_projection is None):
+            raise ValueError("scheduler typed truncation custody is all-or-none")
+        frozen_envelope: CandidateReviewTruncatedEnvelopeEvidence | None = None
+        frozen_projection: CandidateReviewTruncationProjection | None = None
+        if truncated_envelope_evidence is not None and truncation_projection is not None:
+            if (
+                type(truncated_envelope_evidence) is not CandidateReviewTruncatedEnvelopeEvidence
+                or type(truncation_projection) is not CandidateReviewTruncationProjection
+                or not candidate_review_protocol_implementation_is_pristine()
+                or not _task_uses_candidate_review_contract(task)
+                or activation.response_schema_sha256 != candidate_review_frame_wire_schema_sha256()
+            ):
+                raise ValueError("scheduler typed truncation custody has an invalid boundary")
+            frozen_envelope = CandidateReviewTruncatedEnvelopeEvidence.model_validate_json(
+                truncated_envelope_evidence.model_dump_json(),
+                strict=True,
+            )
+            frozen_projection = CandidateReviewTruncationProjection.model_validate_json(
+                truncation_projection.model_dump_json(),
+                strict=True,
+            )
         audit_routing = _usage_audit_routing_evidence(frozen_usage)
         if (
             usage_requires_audit_policy_evidence(frozen_usage)
@@ -2835,6 +4166,32 @@ class SchedulerProviderAttemptEvidence(StrictModel):
                 usage_record=frozen_usage,
                 requested_model=task.requested_model or "",
                 binding=audit_model_selection,
+            )
+        refresh_route = _usage_audit_model_refresh_route_evidence(frozen_usage)
+        if (
+            frozen_usage.execution_evidence is ExecutionEvidenceKind.REAL
+            or refresh_route is not None
+        ):
+            refresh_route = _require_usage_audit_model_refresh(
+                usage_record=frozen_usage,
+                requested_model=task.requested_model or "",
+                binding=audit_model_refresh,
+                audit_model_selection=audit_model_selection,
+            )
+        pricing_route = _usage_audit_model_refresh_pricing_route_evidence(frozen_usage)
+        if (
+            (
+                frozen_usage.execution_evidence is ExecutionEvidenceKind.REAL
+                and audit_model_refresh is not None
+            )
+            or pricing_route is not None
+            or audit_model_refresh_pricing is not None
+        ):
+            pricing_route = _require_usage_audit_model_refresh_pricing(
+                usage_record=frozen_usage,
+                requested_model=task.requested_model or "",
+                binding=audit_model_refresh_pricing,
+                refresh_binding=audit_model_refresh,
             )
         context = ContextRequestEvidence.model_validate(
             frozen_usage.routing.get("context_request_evidence")
@@ -2858,7 +4215,7 @@ class SchedulerProviderAttemptEvidence(StrictModel):
         ):
             raise ValueError("scheduler provider attempt is not exact non-creditable evidence")
         values: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": "1.1" if frozen_projection is not None else "1.0",
             "evidence_authority": "comparison_required",
             "task_id": task.task_id,
             "logical_request_id": task.logical_request_id,
@@ -2882,17 +4239,171 @@ class SchedulerProviderAttemptEvidence(StrictModel):
                 if audit_routing is not None and audit_model_selection is not None
                 else {}
             ),
+            **(
+                {
+                    "audit_model_refresh_pricing_binding_sha256": (
+                        audit_model_refresh_pricing.binding_sha256
+                    ),
+                    "audit_model_refresh_pricing_evidence_sha256": (
+                        audit_model_refresh_pricing.audit_model_refresh_pricing_evidence_sha256
+                    ),
+                    "audit_model_refresh_pricing_authority_capability_sha256": (
+                        audit_model_refresh_pricing.pricing_authority_capability_sha256
+                    ),
+                    "audit_model_refresh_pricing_route_evidence_sha256": (
+                        pricing_route.route_evidence_sha256
+                    ),
+                    "audit_model_refresh_pricing_baseline_sha256": (
+                        pricing_route.baseline_pricing_sha256
+                    ),
+                    "audit_model_refresh_pricing_current_sha256": (
+                        pricing_route.current_pricing_sha256
+                    ),
+                    "audit_model_refresh_pricing_expires_at": (
+                        audit_model_refresh_pricing.expires_at
+                    ),
+                }
+                if pricing_route is not None and audit_model_refresh_pricing is not None
+                else {}
+            ),
+            **(
+                {
+                    "audit_model_refresh_binding_sha256": audit_model_refresh.binding_sha256,
+                    "audit_model_refresh_evidence_sha256": (
+                        audit_model_refresh.audit_model_refresh_evidence_sha256
+                    ),
+                    "audit_model_refresh_guard_capability_sha256": (
+                        audit_model_refresh.guard_capability_sha256
+                    ),
+                    "audit_model_refresh_workflow_status_sha256": (
+                        audit_model_refresh.workflow_status_sha256
+                    ),
+                    "audit_model_refresh_snapshot_sha256": audit_model_refresh.snapshot_sha256,
+                    "audit_model_refresh_route_evidence_sha256": (
+                        refresh_route.route_evidence_sha256
+                    ),
+                    "audit_model_refresh_audit_route_set_sha256": (
+                        audit_model_refresh.audit_route_set_sha256
+                    ),
+                    "audit_model_refresh_technical_route_set_sha256": (
+                        audit_model_refresh.technical_route_set_sha256
+                    ),
+                    "audit_model_refresh_expires_at": audit_model_refresh.expires_at,
+                }
+                if refresh_route is not None and audit_model_refresh is not None
+                else {}
+            ),
             "context_request_evidence": context,
             "context_request_evidence_sha256": context.evidence_sha256,
             "provider_response_sha256": frozen_usage.response_sha256,
             "validated_response_sha256": frozen_usage.validated_response_sha256,
             "response_schema_sha256": activation.response_schema_sha256,
+            **(
+                {
+                    "truncated_envelope_evidence": frozen_envelope,
+                    "truncation_projection": frozen_projection,
+                }
+                if frozen_envelope is not None and frozen_projection is not None
+                else {}
+            ),
         }
         return cls(**values, attempt_evidence_sha256=scheduler_canonical_sha256(values))
+
+    @classmethod
+    def build_truncated(
+        cls,
+        *,
+        task: SchedulerTaskPlan,
+        activation: SchedulerTaskActivation,
+        usage_record: UsageRecord,
+        audit_model_selection: SchedulerAuditModelSelectionBinding | None,
+        truncated_envelope_evidence: CandidateReviewTruncatedEnvelopeEvidence,
+        truncation_projection: CandidateReviewTruncationProjection,
+        audit_model_refresh: SchedulerAuditModelRefreshBinding | None = None,
+        audit_model_refresh_pricing: SchedulerAuditModelRefreshPricingBinding | None = None,
+    ) -> SchedulerProviderAttemptEvidence:
+        """Build one private raw-free truncation capture before terminal append."""
+
+        return cls.build(
+            task=task,
+            activation=activation,
+            usage_record=usage_record,
+            audit_model_selection=audit_model_selection,
+            audit_model_refresh=audit_model_refresh,
+            audit_model_refresh_pricing=audit_model_refresh_pricing,
+            truncated_envelope_evidence=truncated_envelope_evidence,
+            truncation_projection=truncation_projection,
+        )
 
     @model_validator(mode="after")
     def attempt_is_redacted_and_exact(self) -> Self:
         _reject_sensitive_usage_material(self.usage_record.model_dump(mode="json"))
+        envelope = self.truncated_envelope_evidence
+        projection = self.truncation_projection
+        if self.schema_version == "1.0":
+            if envelope is not None or projection is not None:
+                raise ValueError(
+                    "legacy scheduler provider attempt cannot carry truncation custody"
+                )
+        elif (
+            envelope is None
+            or projection is None
+            or type(envelope) is not CandidateReviewTruncatedEnvelopeEvidence
+            or type(projection) is not CandidateReviewTruncationProjection
+            or not candidate_review_protocol_implementation_is_pristine()
+        ):
+            raise ValueError("typed scheduler provider attempt lacks truncation custody")
+        if envelope is not None and projection is not None:
+            usage = self.usage_record
+            envelope_routing = _scheduler_truncated_envelope_routing(envelope)
+            projection_routing = _scheduler_truncation_projection_routing(projection)
+            actual_envelope_keys = {
+                key for key in usage.routing if key.startswith("candidate_review_truncated_")
+            }
+            actual_projection_keys = {
+                key for key in usage.routing if key.startswith("candidate_review_truncation_")
+            }
+            if (
+                self.response_schema_sha256 != candidate_review_frame_wire_schema_sha256()
+                or usage.validation_status is not ModelRequestValidationStatus.TRUNCATED
+                or usage.identity_strength is not ModelIdentityStrength.UNBOUND
+                or usage.status != "rejected_truncated_response"
+                or usage.validated_response_sha256 is not None
+                or self.validated_response_sha256 is not None
+                or usage.request_id != envelope.logical_request_id
+                or usage.requested_model != envelope.requested_model
+                or usage.returned_model != envelope.returned_model
+                or usage.actual_model != envelope.selected_model
+                or usage.provider != envelope.selected_provider_name
+                or usage.openrouter_generation_id != envelope.generation_id
+                or usage.actual_provider_endpoint != envelope.selected_provider_endpoint
+                or usage.response_sha256 != envelope.response_sha256
+                or usage.response_sha256 != projection.original_response_sha256
+                or self.provider_response_sha256 != projection.original_response_sha256
+                or usage.schema_sha256 != envelope.wire_schema_sha256
+                or usage.schema_sha256 != projection.wire_schema_sha256
+                or usage.finish_reason != envelope.finish_reason
+                or usage.finish_reason != projection.finish_reason
+                or envelope.native_finish_reason != projection.native_finish_reason
+                or usage.routing.get("generation_id") != envelope.generation_id
+                or usage.routing.get("generation_header_id") != envelope.generation_header_id
+                or usage.routing.get("provider") != envelope.selected_provider_name
+                or usage.routing.get("router_metadata_sha256") != envelope.router_metadata_sha256
+                or usage.routing.get("finish_reason") != envelope.finish_reason
+                or usage.routing.get("native_finish_reason") != envelope.native_finish_reason
+                or usage.routing.get("schema_sha256") != envelope.wire_schema_sha256
+                or projection.review_credit_eligible
+                or projection.coverage_credit_eligible
+                or projection.summary_credit_eligible
+                or projection.authority_eligible
+                or actual_envelope_keys != set(envelope_routing)
+                or any(usage.routing.get(key) != value for key, value in envelope_routing.items())
+                or actual_projection_keys != set(projection_routing)
+                or any(usage.routing.get(key) != value for key, value in projection_routing.items())
+            ):
+                raise ValueError(
+                    "scheduler typed provider attempt differs from its truncation custody"
+                )
         audit_fields = (
             self.audit_policy_selection_binding_sha256,
             self.audit_model_selection_bundle_sha256,
@@ -2902,6 +4413,26 @@ class SchedulerProviderAttemptEvidence(StrictModel):
             self.audit_source_sha256,
             self.audit_selection_expires_at,
             self.audit_policy_routing_evidence_sha256,
+        )
+        refresh_fields = (
+            self.audit_model_refresh_binding_sha256,
+            self.audit_model_refresh_evidence_sha256,
+            self.audit_model_refresh_guard_capability_sha256,
+            self.audit_model_refresh_workflow_status_sha256,
+            self.audit_model_refresh_snapshot_sha256,
+            self.audit_model_refresh_route_evidence_sha256,
+            self.audit_model_refresh_audit_route_set_sha256,
+            self.audit_model_refresh_technical_route_set_sha256,
+            self.audit_model_refresh_expires_at,
+        )
+        pricing_fields = (
+            self.audit_model_refresh_pricing_binding_sha256,
+            self.audit_model_refresh_pricing_evidence_sha256,
+            self.audit_model_refresh_pricing_authority_capability_sha256,
+            self.audit_model_refresh_pricing_route_evidence_sha256,
+            self.audit_model_refresh_pricing_baseline_sha256,
+            self.audit_model_refresh_pricing_current_sha256,
+            self.audit_model_refresh_pricing_expires_at,
         )
         if any(item is None for item in audit_fields) and any(
             item is not None for item in audit_fields
@@ -2923,6 +4454,61 @@ class SchedulerProviderAttemptEvidence(StrictModel):
             or self.audit_policy_routing_evidence_sha256 != audit_routing.routing_evidence_sha256
         ):
             raise ValueError("scheduler audit policy provider-attempt hashes are inconsistent")
+        refresh_route = _usage_audit_model_refresh_route_evidence(self.usage_record)
+        if any(item is None for item in refresh_fields) and any(
+            item is not None for item in refresh_fields
+        ):
+            raise ValueError("scheduler model-refresh provider-attempt evidence is all-or-none")
+        if usage_requires_audit_policy_evidence(self.usage_record) and (
+            refresh_route is None or any(item is None for item in refresh_fields)
+        ):
+            raise ValueError("REAL scheduler provider attempt lacks model-refresh route evidence")
+        if refresh_route is not None and (
+            self.audit_model_refresh_evidence_sha256
+            != self.usage_record.routing.get("audit_model_refresh_evidence_sha256")
+            or self.audit_model_refresh_guard_capability_sha256
+            != self.usage_record.routing.get("audit_model_refresh_guard_capability_sha256")
+            or self.audit_model_refresh_workflow_status_sha256
+            != self.usage_record.routing.get("audit_model_refresh_workflow_status_sha256")
+            or self.audit_model_refresh_snapshot_sha256
+            != self.usage_record.routing.get("audit_model_refresh_snapshot_sha256")
+            or self.audit_model_refresh_route_evidence_sha256 != refresh_route.route_evidence_sha256
+            or self.audit_model_refresh_audit_route_set_sha256
+            != self.usage_record.routing.get("audit_model_refresh_audit_route_set_sha256")
+            or self.audit_model_refresh_technical_route_set_sha256
+            != self.usage_record.routing.get("audit_model_refresh_technical_route_set_sha256")
+            or self.audit_model_refresh_expires_at is None
+            or self.audit_model_refresh_expires_at.isoformat()
+            != self.usage_record.routing.get("audit_model_refresh_expires_at")
+        ):
+            raise ValueError("scheduler model-refresh provider-attempt hashes are inconsistent")
+        pricing_route = _usage_audit_model_refresh_pricing_route_evidence(self.usage_record)
+        if any(item is None for item in pricing_fields) and any(
+            item is not None for item in pricing_fields
+        ):
+            raise ValueError("scheduler refresh-pricing provider evidence is all-or-none")
+        if refresh_route is not None and (
+            pricing_route is None or any(item is None for item in pricing_fields)
+        ):
+            raise ValueError("REAL refresh-bound provider attempt lacks pricing evidence")
+        if pricing_route is not None and (
+            self.audit_model_refresh_pricing_evidence_sha256
+            != self.usage_record.routing.get("audit_model_refresh_pricing_evidence_sha256")
+            or self.audit_model_refresh_pricing_authority_capability_sha256
+            != self.usage_record.routing.get(
+                "audit_model_refresh_pricing_authority_capability_sha256"
+            )
+            or self.audit_model_refresh_pricing_route_evidence_sha256
+            != pricing_route.route_evidence_sha256
+            or self.audit_model_refresh_pricing_baseline_sha256
+            != pricing_route.baseline_pricing_sha256
+            or self.audit_model_refresh_pricing_current_sha256
+            != pricing_route.current_pricing_sha256
+            or self.audit_model_refresh_pricing_expires_at is None
+            or self.audit_model_refresh_pricing_expires_at.isoformat()
+            != self.usage_record.routing.get("audit_model_refresh_pricing_expires_at")
+        ):
+            raise ValueError("scheduler refresh-pricing provider hashes are inconsistent")
         if (
             not is_structurally_accountable_usage_record(self.usage_record)
             or self.usage_record_sha256
@@ -2934,7 +4520,17 @@ class SchedulerProviderAttemptEvidence(StrictModel):
             or self.usage_record.validated_response_sha256 != self.validated_response_sha256
             or self.usage_record.schema_sha256 != self.response_schema_sha256
             or self.attempt_evidence_sha256
-            != _model_sha256(self, exclude={"attempt_evidence_sha256"})
+            != _model_sha256(
+                self,
+                exclude={
+                    "attempt_evidence_sha256",
+                    *(
+                        {"truncated_envelope_evidence", "truncation_projection"}
+                        if self.schema_version == "1.0"
+                        else set()
+                    ),
+                },
+            )
         ):
             raise ValueError("scheduler provider-attempt evidence is inconsistent")
         return self
@@ -2997,6 +4593,18 @@ def _validated_model_surface_custody(
         or frozen_artifact.records != parsed_payload.surface_reviews
     ):
         raise ValueError("model-surface artifact differs from its exact request or completion")
+    normalization = completion.normalization_evidence
+    if normalization is None:
+        if frozen_artifact.schema_version != "1.0":
+            raise ValueError("legacy model-surface custody cannot claim framed normalization")
+    elif (
+        frozen_artifact.schema_version != "1.1"
+        or frozen_artifact.normalization_evidence != normalization
+        or frozen_artifact.normalized_response != parsed_payload
+        or frozen_artifact.normalized_response_sha256 != completion.normalized_output_sha256
+        or normalization.normalized_batch_sha256 != completion.normalized_output_sha256
+    ):
+        raise ValueError("framed model-surface artifact differs from scheduler normalization")
     request_by_id = {item.surface_id: item for item in frozen_requests}
     for record in frozen_artifact.records:
         request = request_by_id[record.surface_id]
@@ -3889,6 +5497,7 @@ class SchedulerTaskOutput(StrictModel):
         model_surface_review_artifact: ModelSurfaceReviewArtifact | None = None,
         accepted_candidates: Iterable[CandidateFinding] = (),
         normalizer_sha256: str | None = None,
+        normalization_evidence: CandidateReviewNormalizationEvidence | None = None,
         schema_version: Literal["1.0", "1.1"] = "1.1",
     ) -> SchedulerTaskOutput:
         activation.require_exact_task(plan=plan, task=task)
@@ -3932,14 +5541,25 @@ class SchedulerTaskOutput(StrictModel):
                 usage_record=usage_record,
                 privacy_evidence_custody=plan.manifest.privacy_evidence_custody,
                 audit_model_selection=plan.manifest.bindings.audit_model_selection,
+                audit_model_refresh=plan.manifest.bindings.audit_model_refresh,
+                audit_model_refresh_pricing=(plan.manifest.bindings.audit_model_refresh_pricing),
                 normalizer_sha256=effective_normalizer_sha256,
                 normalized_output_sha256=output_sha256,
+                normalization_evidence=normalization_evidence,
             )
             if usage_record is not None and effective_normalizer_sha256 is not None
             else None
         )
         if (usage_record is None) != (effective_normalizer_sha256 is None):
             raise ValueError("scheduler model normalization evidence is all-or-none")
+        if normalization_evidence is not None:
+            if type(parsed_payload) is not CandidateReviewBatch:
+                raise ValueError("scheduler normalization evidence requires a candidate batch")
+            assert isinstance(parsed_payload, CandidateReviewBatch)
+            normalization_evidence.require_exact_batch(
+                parsed_payload,
+                request_id=task.logical_request_id,
+            )
         accepted_outcome = (
             SpecialistAcceptedOutcome.model_validate(
                 specialist_accepted_outcome.model_dump(mode="python")
@@ -4133,6 +5753,15 @@ class SchedulerTaskOutput(StrictModel):
             or self.model_completion_evidence.normalized_output_sha256 != self.output_sha256
         ):
             raise ValueError("scheduler model completion evidence differs from its output")
+        if self.model_completion_evidence is not None:
+            normalization = self.model_completion_evidence.normalization_evidence
+            if normalization is not None:
+                if candidate_batch is None:
+                    raise ValueError("scheduler framed completion lacks a candidate batch payload")
+                normalization.require_exact_batch(
+                    candidate_batch,
+                    request_id=self.logical_request_id,
+                )
         if self.specialist_accepted_outcome is not None:
             completion = self.model_completion_evidence
             if (
@@ -4968,6 +6597,395 @@ class SchedulerModelRequestEvidence(StrictModel):
         return self
 
 
+class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
+    """Public hash-only projection of one typed v1.1 recovery child usage."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    evidence_authority: Literal["comparison_required"] = "comparison_required"
+    provider_dispatch_authorized: Literal[False] = False
+    review_credit_authorized: Literal[False] = False
+    coverage_credit_authorized: Literal[False] = False
+    completion_authorized: Literal[False] = False
+    release_authorized: Literal[False] = False
+    campaign_id: str = Field(pattern=r"^scheduler-campaign-[0-9a-f]{64}$")
+    parent_task_id: str = Field(pattern=r"^scheduler-task-[0-9a-f]{64}$")
+    promotion_entry_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    child_task_id: str = Field(pattern=r"^scheduler-recovery-task-[0-9a-f]{64}$")
+    logical_request_id: str = Field(pattern=r"^scheduler-recovery-request-[0-9a-f]{64}$")
+    child_result_entry_sha256: str = Field(pattern=_SHA256_PATTERN)
+    activation_id: str = Field(pattern=r"^scheduler-recovery-activation-[0-9a-f]{64}$")
+    activation_entry_sha256: str = Field(pattern=_SHA256_PATTERN)
+    activation_status: Literal[SchedulerActivationStatus.ACTIVATED] = (
+        SchedulerActivationStatus.ACTIVATED
+    )
+    role: str = Field(pattern=_ROLE_PATTERN)
+    requested_model: str = Field(pattern=_MODEL_ID_PATTERN)
+    root_lineage: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    actual_input_sha256: str = Field(pattern=_SHA256_PATTERN)
+    system_prompt_sha256: str = Field(pattern=_SHA256_PATTERN)
+    user_prompt_sha256: str = Field(pattern=_SHA256_PATTERN)
+    provider_prompt_sha256: str = Field(pattern=_SHA256_PATTERN)
+    response_schema_sha256: str = Field(pattern=_SHA256_PATTERN)
+    delivered_source_inventory_sha256: str = Field(pattern=_SHA256_PATTERN)
+    request_limit_scope: str = Field(pattern=r"^scheduler-request-[0-9a-f]{64}$")
+    request_limit_count_before: int = Field(ge=1, le=2**63 - 1)
+    request_limit_count_after: int = Field(ge=1, le=2**63 - 1)
+    request_limit_maximum: int = Field(ge=1, le=2**63 - 1)
+    request_limit_reservation_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+    terminal_status: Literal[
+        SchedulerTerminalStatus.SUCCEEDED,
+        SchedulerTerminalStatus.TRUNCATED,
+    ]
+    terminal_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+    runtime_completion_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    usage_record_sha256: str = Field(pattern=_SHA256_PATTERN)
+    context_request_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+    provider_response_sha256: str = Field(pattern=_SHA256_PATTERN)
+    validated_response_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    normalization_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    output_artifact_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_policy_selection_binding_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_selection_bundle_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_selection_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_selected_model_set_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_scope_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_source_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    audit_selection_expires_at: datetime | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    audit_policy_routing_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    request_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        manifest: SchedulerCampaignManifest,
+        parent_request: SchedulerModelRequestEvidence,
+        family: SchedulerTruncationRecoveryFamilyRoot,
+        promotion: SchedulerTruncationRecoveryFamilyPromotion | None,
+        activation: SchedulerTruncationRecoveryChildActivation,
+        result: SchedulerTruncationRecoveryChildResult,
+    ) -> SchedulerTruncationRecoveryModelRequestEvidence:
+        """Derive one projection without accepting caller-selected evidence coordinates."""
+
+        exact_manifest = SchedulerCampaignManifest.model_validate(
+            manifest.model_dump(mode="python")
+        )
+        exact_parent = SchedulerModelRequestEvidence.model_validate(
+            parent_request.model_dump(mode="python")
+        )
+        exact_family = SchedulerTruncationRecoveryFamilyRoot.model_validate_json(
+            family.model_dump_json(),
+            strict=True,
+        )
+        exact_promotion = (
+            SchedulerTruncationRecoveryFamilyPromotion.model_validate_json(
+                promotion.model_dump_json(),
+                strict=True,
+            )
+            if promotion is not None
+            else None
+        )
+        exact_activation = SchedulerTruncationRecoveryChildActivation.model_validate_json(
+            activation.model_dump_json(),
+            strict=True,
+        )
+        exact_result = SchedulerTruncationRecoveryChildResult.model_validate_json(
+            result.model_dump_json(),
+            strict=True,
+        )
+        usage = exact_result.runtime_usage_record
+        reservation = exact_result.runtime_request_limit_reservation
+        normalization = exact_result.runtime_normalization_evidence
+        output_artifact = exact_result.runtime_output_artifact
+        succeeded = (
+            exact_result.terminal_status is SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED
+        )
+        if (
+            exact_result.schema_version != "1.1"
+            or exact_result.terminal_status
+            not in {
+                SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED,
+                SchedulerTruncationRecoveryTerminalStatus.TRUNCATED,
+            }
+            or exact_result.runtime_activation != exact_activation
+            or exact_result.activation_sha256 != exact_activation.entry_sha256
+            or usage is None
+            or reservation is None
+            or exact_result.runtime_usage_record_sha256 is None
+            or succeeded
+            != (
+                normalization is not None
+                and output_artifact is not None
+                and exact_result.runtime_completion_evidence_sha256 is not None
+                and exact_result.runtime_output_artifact_sha256 is not None
+                and usage.validated_response_sha256 is not None
+            )
+            or (exact_promotion is not None and not succeeded)
+            or (
+                exact_promotion is not None
+                and exact_result.entry_sha256 not in exact_promotion.direct_child_result_sha256s
+            )
+        ):
+            raise ValueError("recovery public request lacks one typed runtime usage")
+        binding = (
+            SchedulerTruncationRecoveryPromotionBinding.from_promotion(exact_promotion)
+            if exact_promotion is not None
+            else None
+        )
+        expected_source_inventory_sha256 = scheduler_canonical_sha256(
+            {
+                "domain": "mmaudit.scheduler.recovery-delivered-source-inventory.v1",
+                "source_descriptor_sha256s": (exact_parent.delivered_source_descriptor_sha256s),
+            }
+        )
+        if (
+            exact_manifest.campaign_id != exact_parent.campaign_id
+            or exact_family.campaign_id != exact_manifest.campaign_id
+            or exact_family.parent_kind is not SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK
+            or exact_family.recovery_plan.parent.parent_task_id != exact_parent.task_id
+            or exact_family.parent_terminal_result_sha256 != exact_parent.result_sha256
+            or exact_result.family_id != exact_family.family_id
+            or exact_result.family_root_sha256 != exact_family.entry_sha256
+            or exact_parent.terminal_status is not SchedulerTerminalStatus.TRUNCATED
+            or exact_parent.response_schema_sha256 != candidate_review_frame_wire_schema_sha256()
+            or scheduler_role_requires_specialist_accepted_outcome(exact_parent.role)
+            or exact_activation.campaign_id != exact_manifest.campaign_id
+            or exact_activation.child_task_id != exact_result.child_task_id
+            or exact_activation.child_logical_request_id != exact_result.child_logical_request_id
+            or exact_activation.request_role != exact_parent.role
+            or exact_activation.requested_model != exact_parent.requested_model
+            or exact_activation.response_schema_sha256 != exact_parent.response_schema_sha256
+            or exact_activation.family_id != exact_family.family_id
+            or exact_activation.family_root_sha256 != exact_family.entry_sha256
+            or exact_activation.request_limit_id != exact_parent.logical_request_id
+            or (
+                exact_promotion is not None
+                and (
+                    exact_promotion.campaign_id != exact_manifest.campaign_id
+                    or exact_promotion.parent_task_id != exact_parent.task_id
+                    or exact_parent.result_sha256
+                    != exact_promotion.original_truncated_result_sha256
+                    or binding is None
+                    or binding.delivered_source_inventory_sha256 != expected_source_inventory_sha256
+                )
+            )
+        ):
+            raise ValueError("recovery public request differs from its typed family parent")
+        _reject_sensitive_usage_material(usage.model_dump(mode="json"))
+        raw_context = usage.routing.get("context_request_evidence")
+        if not isinstance(raw_context, dict):
+            raise ValueError("recovery public request lacks typed context evidence")
+        context = ContextRequestEvidence.model_validate(raw_context)
+        routed_lineage = usage.routing.get("qualified_root_lineage")
+        if (
+            context.request_id != exact_activation.child_logical_request_id
+            or context.request_role != exact_activation.request_role
+            or context.rendered_sha256 != exact_activation.user_prompt_sha256
+            or usage.routing.get("context_request_evidence_sha256") != context.evidence_sha256
+            or usage.response_sha256 is None
+            or (routed_lineage is not None and routed_lineage != exact_parent.root_lineage)
+            or reservation.request_limit_scope != exact_activation.request_limit_id
+            or reservation.request_limit_count_before
+            != exact_activation.request_limit_count_before_child
+            or reservation.request_limit_count_after
+            != exact_activation.request_limit_count_after_child
+            or reservation.request_limit_maximum != exact_activation.request_limit_maximum
+        ):
+            raise ValueError("recovery public request differs from typed provider evidence")
+
+        audit_routing = _usage_audit_routing_evidence(usage)
+        audit_binding = exact_manifest.bindings.audit_model_selection
+        if usage_requires_audit_policy_evidence(usage) or audit_routing is not None:
+            audit_routing = _require_usage_audit_selection(
+                usage_record=usage,
+                requested_model=exact_parent.requested_model,
+                binding=audit_binding,
+            )
+        refresh_route = _usage_audit_model_refresh_route_evidence(usage)
+        if usage.execution_evidence is ExecutionEvidenceKind.REAL or refresh_route is not None:
+            _require_usage_audit_model_refresh(
+                usage_record=usage,
+                requested_model=exact_parent.requested_model,
+                binding=exact_manifest.bindings.audit_model_refresh,
+                audit_model_selection=audit_binding,
+            )
+        pricing_route = _usage_audit_model_refresh_pricing_route_evidence(usage)
+        if (
+            usage.execution_evidence is ExecutionEvidenceKind.REAL
+            or pricing_route is not None
+            or exact_manifest.bindings.audit_model_refresh_pricing is not None
+        ):
+            _require_usage_audit_model_refresh_pricing(
+                usage_record=usage,
+                requested_model=exact_parent.requested_model,
+                binding=exact_manifest.bindings.audit_model_refresh_pricing,
+                refresh_binding=exact_manifest.bindings.audit_model_refresh,
+            )
+        values: dict[str, Any] = {
+            "schema_version": "1.0",
+            "evidence_authority": "comparison_required",
+            "provider_dispatch_authorized": False,
+            "review_credit_authorized": False,
+            "coverage_credit_authorized": False,
+            "completion_authorized": False,
+            "release_authorized": False,
+            "campaign_id": exact_manifest.campaign_id,
+            "parent_task_id": exact_parent.task_id,
+            **(
+                {"promotion_entry_sha256": exact_promotion.entry_sha256}
+                if exact_promotion is not None
+                else {}
+            ),
+            "child_task_id": exact_activation.child_task_id,
+            "logical_request_id": exact_activation.child_logical_request_id,
+            "child_result_entry_sha256": exact_result.entry_sha256,
+            "activation_id": exact_activation.activation_id,
+            "activation_entry_sha256": exact_activation.entry_sha256,
+            "activation_status": SchedulerActivationStatus.ACTIVATED,
+            "role": exact_activation.request_role,
+            "requested_model": exact_activation.requested_model,
+            "root_lineage": exact_parent.root_lineage,
+            "actual_input_sha256": exact_activation.actual_input_sha256,
+            "system_prompt_sha256": exact_activation.system_prompt_sha256,
+            "user_prompt_sha256": exact_activation.user_prompt_sha256,
+            "provider_prompt_sha256": exact_activation.provider_prompt_sha256,
+            "response_schema_sha256": exact_activation.response_schema_sha256,
+            "delivered_source_inventory_sha256": expected_source_inventory_sha256,
+            "request_limit_scope": reservation.request_limit_scope,
+            "request_limit_count_before": reservation.request_limit_count_before,
+            "request_limit_count_after": reservation.request_limit_count_after,
+            "request_limit_maximum": reservation.request_limit_maximum,
+            "request_limit_reservation_evidence_sha256": reservation.evidence_sha256,
+            "terminal_status": (
+                SchedulerTerminalStatus.SUCCEEDED
+                if succeeded
+                else SchedulerTerminalStatus.TRUNCATED
+            ),
+            "terminal_evidence_sha256": exact_result.terminal_evidence_sha256,
+            "usage_record_sha256": exact_result.runtime_usage_record_sha256,
+            "context_request_evidence_sha256": context.evidence_sha256,
+            "provider_response_sha256": usage.response_sha256,
+            **(
+                {
+                    "runtime_completion_evidence_sha256": (
+                        exact_result.runtime_completion_evidence_sha256
+                    ),
+                    "validated_response_sha256": usage.validated_response_sha256,
+                    "normalization_evidence_sha256": normalization.evidence_sha256,
+                    "output_artifact_sha256": output_artifact.artifact_sha256,
+                }
+                if succeeded and normalization is not None and output_artifact is not None
+                else {}
+            ),
+            **(
+                {
+                    "audit_policy_selection_binding_sha256": audit_binding.binding_sha256,
+                    "audit_model_selection_bundle_sha256": (
+                        audit_routing.audit_model_selection_bundle_sha256
+                    ),
+                    "audit_selection_sha256": audit_routing.audit_selection_sha256,
+                    "audit_selected_model_set_sha256": (audit_routing.selected_model_set_sha256),
+                    "audit_scope_sha256": audit_routing.audit_scope_sha256,
+                    "audit_source_sha256": audit_routing.source_sha256,
+                    "audit_selection_expires_at": audit_routing.expires_at,
+                    "audit_policy_routing_evidence_sha256": (audit_routing.routing_evidence_sha256),
+                }
+                if audit_routing is not None and audit_binding is not None
+                else {}
+            ),
+        }
+        return cls(**values, request_evidence_sha256=scheduler_canonical_sha256(values))
+
+    @model_validator(mode="after")
+    def public_recovery_request_shape_and_hash_are_exact(self) -> Self:
+        audit_fields = (
+            self.audit_policy_selection_binding_sha256,
+            self.audit_model_selection_bundle_sha256,
+            self.audit_selection_sha256,
+            self.audit_selected_model_set_sha256,
+            self.audit_scope_sha256,
+            self.audit_source_sha256,
+            self.audit_selection_expires_at,
+            self.audit_policy_routing_evidence_sha256,
+        )
+        completion_fields = (
+            self.runtime_completion_evidence_sha256,
+            self.validated_response_sha256,
+            self.normalization_evidence_sha256,
+            self.output_artifact_sha256,
+        )
+        succeeded = self.terminal_status is SchedulerTerminalStatus.SUCCEEDED
+        if (
+            self.request_limit_count_after <= self.request_limit_count_before
+            or self.request_limit_count_after > self.request_limit_maximum
+            or self.response_schema_sha256 != candidate_review_frame_wire_schema_sha256()
+            or succeeded != all(item is not None for item in completion_fields)
+            or (not succeeded and any(item is not None for item in completion_fields))
+            or (self.promotion_entry_sha256 is not None and not succeeded)
+            or (
+                any(item is None for item in audit_fields)
+                and any(item is not None for item in audit_fields)
+            )
+            or self.request_evidence_sha256
+            != _model_sha256(self, exclude={"request_evidence_sha256"})
+        ):
+            raise ValueError("scheduler recovery model-request evidence is inconsistent")
+        return self
+
+
 def build_scheduler_model_request_evidence(
     *,
     plans: Iterable[SchedulerPassPlan],
@@ -5001,8 +7019,103 @@ def build_scheduler_model_request_evidence(
     return tuple(sorted(requests, key=lambda item: item.task_id))
 
 
-def _derived_pass_status(results: tuple[SchedulerTaskResult, ...]) -> SchedulerPassStatus:
-    statuses = {result.terminal_status for result in results}
+def build_scheduler_truncation_recovery_model_request_evidence(
+    *,
+    manifest: SchedulerCampaignManifest,
+    model_requests: Iterable[SchedulerModelRequestEvidence],
+    truncation_recovery_entries: Iterable[SchedulerTruncationRecoveryEntry],
+) -> tuple[SchedulerTruncationRecoveryModelRequestEvidence, ...]:
+    """Derive public request evidence for every typed v1.1 child UsageRecord."""
+
+    exact_manifest = SchedulerCampaignManifest.model_validate(manifest.model_dump(mode="python"))
+    request_items = _bounded_scheduler_items(
+        model_requests,
+        limit=_MAX_SCHEDULER_MODEL_REQUESTS,
+        label="model-request inventory",
+    )
+    exact_requests = tuple(
+        SchedulerModelRequestEvidence.model_validate(item.model_dump(mode="python"))
+        for item in request_items
+    )
+    entries = validate_truncation_recovery_entry_chain(truncation_recovery_entries)
+    parent_by_task = {item.task_id: item for item in exact_requests}
+    if len(parent_by_task) != len(exact_requests):
+        raise ValueError("scheduler recovery public projection repeats a parent request")
+    activations_by_sha = {
+        entry.entry_sha256: entry
+        for entry in entries
+        if isinstance(entry, SchedulerTruncationRecoveryChildActivation)
+    }
+    results_by_sha = {
+        entry.entry_sha256: entry
+        for entry in entries
+        if isinstance(entry, SchedulerTruncationRecoveryChildResult)
+    }
+    promotions = tuple(
+        entry for entry in entries if isinstance(entry, SchedulerTruncationRecoveryFamilyPromotion)
+    )
+    families_by_id = {
+        entry.family_id: entry
+        for entry in entries
+        if isinstance(entry, SchedulerTruncationRecoveryFamilyRoot)
+    }
+    parent_ids = tuple(item.parent_task_id for item in promotions)
+    if len(parent_ids) != len(set(parent_ids)):
+        raise ValueError("scheduler recovery public projection repeats a promoted parent")
+    promotion_by_result_sha256: dict[str, SchedulerTruncationRecoveryFamilyPromotion] = {}
+    for promotion in promotions:
+        for result_sha256 in promotion.direct_child_result_sha256s:
+            if result_sha256 in promotion_by_result_sha256:
+                raise ValueError("scheduler recovery promotions repeat a typed child result")
+            promotion_by_result_sha256[result_sha256] = promotion
+    recovered: list[SchedulerTruncationRecoveryModelRequestEvidence] = []
+    for result in results_by_sha.values():
+        if result.schema_version != "1.1" or result.runtime_usage_record is None:
+            continue
+        family = families_by_id.get(result.family_id)
+        activation = activations_by_sha.get(result.activation_sha256)
+        parent = (
+            parent_by_task.get(family.recovery_plan.parent.parent_task_id)
+            if family is not None
+            else None
+        )
+        if family is None or activation is None or parent is None:
+            raise ValueError("scheduler typed recovery usage lacks its public parent lifecycle")
+        recovered.append(
+            SchedulerTruncationRecoveryModelRequestEvidence.build(
+                manifest=exact_manifest,
+                parent_request=parent,
+                family=family,
+                promotion=promotion_by_result_sha256.get(result.entry_sha256),
+                activation=activation,
+                result=result,
+            )
+        )
+    ordered = tuple(sorted(recovered, key=lambda item: item.logical_request_id))
+    request_ids = tuple(item.logical_request_id for item in ordered)
+    result_sha256s = {item.child_result_entry_sha256 for item in ordered}
+    if (
+        len(ordered) > TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS
+        or request_ids != tuple(sorted(set(request_ids)))
+        or not set(promotion_by_result_sha256) <= result_sha256s
+    ):
+        raise ValueError("scheduler recovery public request inventory is not exact")
+    return ordered
+
+
+def _derived_pass_status(
+    results: tuple[SchedulerTaskResult, ...],
+    *,
+    recovered_task_ids: frozenset[str] = frozenset(),
+) -> SchedulerPassStatus:
+    statuses = {
+        (
+            SchedulerTerminalStatus.SUCCEEDED
+            if result.task_id in recovered_task_ids
+            else result.terminal_status
+        )
+        for result in results
+    }
     if statuses <= {
         SchedulerTerminalStatus.SUCCEEDED,
         SchedulerTerminalStatus.EXPLICIT_EMPTY,
@@ -5024,10 +7137,15 @@ class SchedulerPassResult(StrictModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     evidence_authority: Literal["comparison_required"] = "comparison_required"
     plan: SchedulerPassPlan
     task_results: tuple[SchedulerTaskResult, ...] = Field(min_length=1, max_length=100_000)
+    recovery_promotion_bindings: tuple[SchedulerTruncationRecoveryPromotionBinding, ...] = Field(
+        default=(),
+        max_length=100_000,
+        exclude_if=lambda value: not value,
+    )
     status: SchedulerPassStatus
     pass_result_id: str = Field(pattern=r"^scheduler-pass-result-[0-9a-f]{64}$")
     pass_result_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -5038,6 +7156,7 @@ class SchedulerPassResult(StrictModel):
         *,
         plan: SchedulerPassPlan,
         task_results: Iterable[SchedulerTaskResult],
+        recovery_promotion_bindings: Iterable[SchedulerTruncationRecoveryPromotionBinding] = (),
     ) -> SchedulerPassResult:
         validated_plan = SchedulerPassPlan.model_validate(plan.model_dump(mode="python"))
         canonical_results = tuple(
@@ -5049,12 +7168,38 @@ class SchedulerPassResult(StrictModel):
                 key=lambda item: item.task_id,
             )
         )
+        raw_promotions = tuple(
+            islice(iter(recovery_promotion_bindings), len(validated_plan.tasks) + 1)
+        )
+        if len(raw_promotions) > len(validated_plan.tasks):
+            raise ValueError("scheduler pass recovery promotions exceed its exact task inventory")
+        canonical_promotions = tuple(
+            sorted(
+                (
+                    SchedulerTruncationRecoveryPromotionBinding.model_validate_json(
+                        item.model_dump_json(),
+                        strict=True,
+                    )
+                    for item in raw_promotions
+                ),
+                key=lambda item: item.parent_task_id,
+            )
+        )
+        recovered_task_ids = frozenset(item.parent_task_id for item in canonical_promotions)
         values: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": "1.1" if canonical_promotions else "1.0",
             "evidence_authority": "comparison_required",
             "plan": validated_plan,
             "task_results": canonical_results,
-            "status": _derived_pass_status(canonical_results),
+            **(
+                {"recovery_promotion_bindings": canonical_promotions}
+                if canonical_promotions
+                else {}
+            ),
+            "status": _derived_pass_status(
+                canonical_results,
+                recovered_task_ids=recovered_task_ids,
+            ),
         }
         result_id = "scheduler-pass-result-" + scheduler_canonical_sha256(
             {
@@ -5073,6 +7218,51 @@ class SchedulerPassResult(StrictModel):
             raise ValueError("scheduler pass results must be unique and sorted")
         if set(result_ids) != set(planned_by_id):
             raise ValueError("scheduler pass result set differs from its exact task plan")
+        promotion_task_ids = tuple(item.parent_task_id for item in self.recovery_promotion_bindings)
+        if self.schema_version == "1.0" and self.recovery_promotion_bindings:
+            raise ValueError("scheduler pass result v1.0 cannot contain recovery promotions")
+        if self.schema_version == "1.1" and not self.recovery_promotion_bindings:
+            raise ValueError("scheduler pass result v1.1 requires an exact recovery promotion")
+        if (
+            promotion_task_ids != tuple(sorted(set(promotion_task_ids)))
+            or self.plan.pass_kind is not SchedulerPassKind.BLIND_SHARD_REVIEW
+        ) and self.recovery_promotion_bindings:
+            raise ValueError("scheduler pass recovery promotions are not canonical blind reviews")
+        result_by_task = {item.task_id: item for item in self.task_results}
+        for promotion in self.recovery_promotion_bindings:
+            task = planned_by_id.get(promotion.parent_task_id)
+            original = result_by_task.get(promotion.parent_task_id)
+            expected_promotion_sources = tuple(
+                sorted(
+                    source.source_descriptor_sha256
+                    for source in (
+                        _task_source_descriptors(self.plan, task) if task is not None else ()
+                    )
+                )
+            )
+            expected_source_inventory_sha256 = scheduler_canonical_sha256(
+                {
+                    "domain": "mmaudit.scheduler.recovery-delivered-source-inventory.v1",
+                    "source_descriptor_sha256s": expected_promotion_sources,
+                }
+            )
+            if (
+                task is None
+                or original is None
+                or task.task_kind is not SchedulerTaskKind.MODEL_REQUEST
+                or task.response_schema_sha256 != candidate_review_frame_wire_schema_sha256()
+                or original.terminal_status is not SchedulerTerminalStatus.TRUNCATED
+                or promotion.original_truncated_result_sha256 != original.result_sha256
+                or (
+                    (
+                        task.role == "source_audit"
+                        or _WHOLE_PROTOCOL_REVIEW_ROLE.fullmatch(task.role) is not None
+                    )
+                    and promotion.delivered_source_inventory_sha256
+                    != expected_source_inventory_sha256
+                )
+            ):
+                raise ValueError("scheduler recovery promotion differs from its truncated task")
         for result in self.task_results:
             task = planned_by_id[result.task_id]
             if (
@@ -5131,7 +7321,10 @@ class SchedulerPassResult(StrictModel):
                 and result.reviewed_candidate_ids != task.candidate_ids
             ):
                 raise ValueError("judge result omitted an exact candidate-group decision")
-        expected_status = _derived_pass_status(self.task_results)
+        expected_status = _derived_pass_status(
+            self.task_results,
+            recovered_task_ids=frozenset(promotion_task_ids),
+        )
         if self.status is not expected_status:
             raise ValueError("scheduler pass status is not derived from terminal task evidence")
         if (
@@ -5144,6 +7337,9 @@ class SchedulerPassResult(StrictModel):
                 for source in shard.sources
             }
             observed_sources: set[str] = set()
+            promotions_by_task = {
+                item.parent_task_id: item for item in self.recovery_promotion_bindings
+            }
             for result in self.task_results:
                 task = planned_by_id[result.task_id]
                 if task.role != "source_audit":
@@ -5152,11 +7348,17 @@ class SchedulerPassResult(StrictModel):
                     source.source_descriptor_sha256
                     for source in _task_source_descriptors(self.plan, task)
                 }
-                if set(result.reviewed_source_descriptor_sha256s) != expected_task_sources:
+                task_promotion = promotions_by_task.get(result.task_id)
+                reviewed_sources = (
+                    tuple(sorted(expected_task_sources))
+                    if task_promotion is not None
+                    else result.reviewed_source_descriptor_sha256s
+                )
+                if set(reviewed_sources) != expected_task_sources:
                     raise ValueError(
                         "blind source-audit result lacks exact substantive source coverage"
                     )
-                observed_sources.update(result.reviewed_source_descriptor_sha256s)
+                observed_sources.update(reviewed_sources)
             if observed_sources != exact_sources:
                 raise ValueError("blind pass did not review every exact audited source")
         expected_id = "scheduler-pass-result-" + scheduler_canonical_sha256(
@@ -5687,7 +7889,7 @@ class SchedulerJournalEvidence(StrictModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0", "1.1"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.0"
     evidence_authority: Literal["comparison_required"] = "comparison_required"
     campaign_id: str = Field(pattern=r"^scheduler-campaign-[0-9a-f]{64}$")
     manifest_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -5712,7 +7914,17 @@ class SchedulerJournalEvidence(StrictModel):
     result_observation_sha256s: tuple[str, ...] = Field(max_length=1_400_000)
     pass_result_sha256s: tuple[str, ...] = Field(max_length=7)
     event_sha256s: tuple[str, ...] = Field(max_length=2_800_000)
+    truncation_recovery_entry_sha256s: tuple[str, ...] = Field(
+        default=(),
+        max_length=SCHEDULER_TRUNCATION_RECOVERY_MAX_ENTRIES,
+        exclude_if=lambda value: not value,
+    )
     terminal_event_chain_head_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
+    truncation_recovery_chain_head_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
     terminal_report_authority_sha256: str | None = Field(
         default=None,
         pattern=_SHA256_PATTERN,
@@ -5729,6 +7941,12 @@ class SchedulerJournalEvidence(StrictModel):
     preflight_failure_count: int = Field(ge=0, le=700_000)
     pass_result_count: int = Field(ge=0, le=7)
     event_count: int = Field(ge=0, le=2_800_000)
+    truncation_recovery_entry_count: int = Field(
+        default=0,
+        ge=0,
+        le=SCHEDULER_TRUNCATION_RECOVERY_MAX_ENTRIES,
+        exclude_if=lambda value: value == 0,
+    )
     succeeded_count: int = Field(ge=0, le=700_000)
     explicit_empty_count: int = Field(ge=0, le=7)
     failed_count: int = Field(ge=0, le=700_000)
@@ -5751,6 +7969,7 @@ class SchedulerJournalEvidence(StrictModel):
         "result_observation_sha256s",
         "pass_result_sha256s",
         "event_sha256s",
+        "truncation_recovery_entry_sha256s",
     )
     @classmethod
     def detached_hash_inventory_is_valid_and_unique(cls, value: tuple[str, ...]) -> tuple[str, ...]:
@@ -5759,6 +7978,158 @@ class SchedulerJournalEvidence(StrictModel):
         ):
             raise ValueError("scheduler journal hash inventories must be valid and unique")
         return value
+
+    @classmethod
+    def _project_validated_state(
+        cls,
+        *,
+        manifest: SchedulerCampaignManifest,
+        analysis_input_inventory: SchedulerAnalysisInputInventory,
+        summary: SchedulerCampaignSummary,
+        plans: tuple[SchedulerPassPlan, ...],
+        model_requests: tuple[SchedulerModelRequestEvidence, ...],
+        activations: tuple[SchedulerTaskActivation, ...],
+        outputs: tuple[SchedulerTaskOutput, ...],
+        provider_attempts: tuple[SchedulerProviderAttemptEvidence, ...],
+        task_results: tuple[SchedulerTaskResult, ...],
+        result_observations: tuple[SchedulerTaskResult, ...],
+        events: tuple[SchedulerTaskEvent, ...],
+        truncation_recovery_entries: tuple[SchedulerTruncationRecoveryEntry, ...],
+        terminal_report_authority: SchedulerTerminalReportAuthority | None,
+    ) -> SchedulerJournalEvidence:
+        """Build the one canonical projection after its private graph is validated."""
+
+        tasks = tuple(task for plan in plans for task in plan.tasks)
+        status_counts = {
+            status: sum(result.terminal_status is status for result in task_results)
+            for status in SchedulerTerminalStatus
+        }
+        values: dict[str, Any] = {
+            "schema_version": (
+                "1.3"
+                if terminal_report_authority is not None and truncation_recovery_entries
+                else "1.2"
+                if truncation_recovery_entries
+                else "1.1"
+                if terminal_report_authority is not None
+                else "1.0"
+            ),
+            "evidence_authority": "comparison_required",
+            "campaign_id": manifest.campaign_id,
+            "manifest_sha256": manifest.manifest_sha256,
+            "summary_sha256": summary.summary_sha256,
+            "analysis_input_sha256": analysis_input_inventory.analysis_input_sha256,
+            "analysis_input_descriptor_sha256s": tuple(
+                item.descriptor_sha256 for item in analysis_input_inventory.descriptors
+            ),
+            "analysis_input_descriptor_count": len(analysis_input_inventory.descriptors),
+            "shard_inventory_sha256": manifest.shard_inventory.inventory_sha256,
+            "pass_plan_sha256s": tuple(item.pass_plan_sha256 for item in plans),
+            "task_plan_sha256s": tuple(item.task_plan_sha256 for item in tasks),
+            "model_request_evidence_sha256s": tuple(
+                item.request_evidence_sha256 for item in model_requests
+            ),
+            "task_activation_sha256s": tuple(item.activation_sha256 for item in activations),
+            "task_output_artifact_sha256s": tuple(item.output_artifact_sha256 for item in outputs),
+            "provider_attempt_evidence_sha256s": tuple(
+                item.attempt_evidence_sha256 for item in provider_attempts
+            ),
+            "task_result_sha256s": tuple(item.result_sha256 for item in task_results),
+            "result_observation_sha256s": tuple(item.result_sha256 for item in result_observations),
+            "pass_result_sha256s": tuple(item.pass_result_sha256 for item in summary.pass_results),
+            "event_sha256s": tuple(item.event_sha256 for item in events),
+            **(
+                {
+                    "truncation_recovery_entry_sha256s": tuple(
+                        item.entry_sha256 for item in truncation_recovery_entries
+                    ),
+                    "truncation_recovery_chain_head_sha256": (
+                        truncation_recovery_entries[-1].entry_sha256
+                    ),
+                    "truncation_recovery_entry_count": len(truncation_recovery_entries),
+                }
+                if truncation_recovery_entries
+                else {}
+            ),
+            "terminal_event_chain_head_sha256": (events[-1].event_sha256 if events else None),
+            **(
+                {"terminal_report_authority_sha256": (terminal_report_authority.authority_sha256)}
+                if terminal_report_authority is not None
+                else {}
+            ),
+            "pass_plan_count": len(plans),
+            "task_plan_count": len(tasks),
+            "model_request_count": len(model_requests),
+            "task_activation_count": len(activations),
+            "task_output_count": len(outputs),
+            "provider_attempt_count": len(provider_attempts),
+            "task_result_count": len(task_results),
+            "result_observation_count": len(result_observations),
+            "preflight_failure_count": sum(
+                item.result_origin is SchedulerResultOrigin.LOCAL_PREFLIGHT for item in task_results
+            ),
+            "pass_result_count": len(summary.pass_results),
+            "event_count": len(events),
+            "succeeded_count": status_counts[SchedulerTerminalStatus.SUCCEEDED],
+            "explicit_empty_count": status_counts[SchedulerTerminalStatus.EXPLICIT_EMPTY],
+            "failed_count": status_counts[SchedulerTerminalStatus.FAILED],
+            "truncated_count": status_counts[SchedulerTerminalStatus.TRUNCATED],
+            "invalid_count": status_counts[SchedulerTerminalStatus.INVALID],
+            "unbound_count": status_counts[SchedulerTerminalStatus.UNBOUND],
+            "inconclusive_count": status_counts[SchedulerTerminalStatus.INCONCLUSIVE],
+            "uncertain_count": status_counts[SchedulerTerminalStatus.UNCERTAIN],
+        }
+        return cls(**values, evidence_sha256=scheduler_canonical_sha256(values))
+
+    @classmethod
+    def _build_from_validated_retained_state(
+        cls,
+        *,
+        manifest: SchedulerCampaignManifest,
+        analysis_input_inventory: SchedulerAnalysisInputInventory,
+        summary: SchedulerCampaignSummary,
+        plans: Iterable[SchedulerPassPlan],
+        model_requests: Iterable[SchedulerModelRequestEvidence],
+        activations: Iterable[SchedulerTaskActivation],
+        outputs: Iterable[SchedulerTaskOutput],
+        provider_attempts: Iterable[SchedulerProviderAttemptEvidence] = (),
+        task_results: Iterable[SchedulerTaskResult],
+        result_observations: Iterable[SchedulerTaskResult],
+        events: Iterable[SchedulerTaskEvent],
+        truncation_recovery_entries: Iterable[SchedulerTruncationRecoveryEntry] = (),
+        terminal_report_authority: SchedulerTerminalReportAuthority | None = None,
+    ) -> SchedulerJournalEvidence:
+        """Project frozen controller-owned state without repeating full graph validation."""
+
+        if (
+            analysis_input_inventory.analysis_input_sha256
+            != manifest.bindings.analysis_input_sha256
+        ):
+            raise ValueError("scheduler analysis-input inventory differs from campaign bindings")
+        if (
+            terminal_report_authority is not None
+            and not manifest.terminal_report_authority_required
+        ):
+            raise ValueError(
+                "scheduler journal evidence differs from campaign terminal-authority mode"
+            )
+        return cls._project_validated_state(
+            manifest=manifest,
+            analysis_input_inventory=analysis_input_inventory,
+            summary=summary,
+            plans=tuple(sorted(plans, key=lambda item: _pass_index(item.pass_kind))),
+            model_requests=tuple(sorted(model_requests, key=lambda item: item.task_id)),
+            activations=tuple(sorted(activations, key=lambda item: item.task_id)),
+            outputs=tuple(sorted(outputs, key=lambda item: item.task_id)),
+            provider_attempts=tuple(sorted(provider_attempts, key=lambda item: item.task_id)),
+            task_results=tuple(sorted(task_results, key=lambda item: item.task_id)),
+            result_observations=tuple(
+                sorted(result_observations, key=lambda item: (item.task_id, item.result_sha256))
+            ),
+            events=tuple(sorted(events, key=lambda item: item.event_index)),
+            truncation_recovery_entries=tuple(truncation_recovery_entries),
+            terminal_report_authority=terminal_report_authority,
+        )
 
     @classmethod
     def build(
@@ -5775,6 +8146,7 @@ class SchedulerJournalEvidence(StrictModel):
         task_results: Iterable[SchedulerTaskResult],
         result_observations: Iterable[SchedulerTaskResult],
         events: Iterable[SchedulerTaskEvent],
+        truncation_recovery_entries: Iterable[SchedulerTruncationRecoveryEntry] = (),
         terminal_report_authority: SchedulerTerminalReportAuthority | None = None,
     ) -> SchedulerJournalEvidence:
         validated_manifest = SchedulerCampaignManifest.model_validate(
@@ -5863,6 +8235,9 @@ class SchedulerJournalEvidence(StrictModel):
                 key=lambda item: item.event_index,
             )
         )
+        canonical_recovery_entries = validate_truncation_recovery_entry_chain(
+            truncation_recovery_entries
+        )
         canonical_terminal_authority = (
             SchedulerTerminalReportAuthority.model_validate(
                 terminal_report_authority.model_dump(mode="python")
@@ -5870,8 +8245,13 @@ class SchedulerJournalEvidence(StrictModel):
             if terminal_report_authority is not None
             else None
         )
-        if validated_manifest.terminal_report_authority_required != (
+        # An active production journal needs a comparison-only prefix projection for
+        # its local rollback checkpoint before the final authority artifact exists.
+        # SchedulerArtifact still rejects that prefix for a manifest that requires
+        # terminal authority, so this cannot promote the checkpoint into authority.
+        if (
             canonical_terminal_authority is not None
+            and not validated_manifest.terminal_report_authority_required
         ):
             raise ValueError(
                 "scheduler journal evidence differs from campaign terminal-authority mode"
@@ -5894,87 +8274,37 @@ class SchedulerJournalEvidence(StrictModel):
             task_results=canonical_results,
         ):
             raise ValueError("scheduler public model requests differ from exact journal state")
-        tasks = tuple(task for plan in canonical_plans for task in plan.tasks)
-        status_counts = {
-            status: sum(result.terminal_status is status for result in canonical_results)
-            for status in SchedulerTerminalStatus
-        }
-        values: dict[str, Any] = {
-            "schema_version": "1.1" if canonical_terminal_authority is not None else "1.0",
-            "evidence_authority": "comparison_required",
-            "campaign_id": validated_manifest.campaign_id,
-            "manifest_sha256": validated_manifest.manifest_sha256,
-            "summary_sha256": validated_summary.summary_sha256,
-            "analysis_input_sha256": validated_analysis_inputs.analysis_input_sha256,
-            "analysis_input_descriptor_sha256s": tuple(
-                item.descriptor_sha256 for item in validated_analysis_inputs.descriptors
-            ),
-            "analysis_input_descriptor_count": len(validated_analysis_inputs.descriptors),
-            "shard_inventory_sha256": validated_manifest.shard_inventory.inventory_sha256,
-            "pass_plan_sha256s": tuple(item.pass_plan_sha256 for item in canonical_plans),
-            "task_plan_sha256s": tuple(item.task_plan_sha256 for item in tasks),
-            "model_request_evidence_sha256s": tuple(
-                item.request_evidence_sha256 for item in canonical_model_requests
-            ),
-            "task_activation_sha256s": tuple(
-                item.activation_sha256 for item in canonical_activations
-            ),
-            "task_output_artifact_sha256s": tuple(
-                item.output_artifact_sha256 for item in canonical_outputs
-            ),
-            "provider_attempt_evidence_sha256s": tuple(
-                item.attempt_evidence_sha256 for item in canonical_provider_attempts
-            ),
-            "task_result_sha256s": tuple(item.result_sha256 for item in canonical_results),
-            "result_observation_sha256s": tuple(
-                item.result_sha256 for item in canonical_observations
-            ),
-            "pass_result_sha256s": tuple(
-                item.pass_result_sha256 for item in validated_summary.pass_results
-            ),
-            "event_sha256s": tuple(item.event_sha256 for item in canonical_events),
-            "terminal_event_chain_head_sha256": (
-                canonical_events[-1].event_sha256 if canonical_events else None
-            ),
-            **(
-                {
-                    "terminal_report_authority_sha256": (
-                        canonical_terminal_authority.authority_sha256
-                    )
-                }
-                if canonical_terminal_authority is not None
-                else {}
-            ),
-            "pass_plan_count": len(canonical_plans),
-            "task_plan_count": len(tasks),
-            "model_request_count": len(canonical_model_requests),
-            "task_activation_count": len(canonical_activations),
-            "task_output_count": len(canonical_outputs),
-            "provider_attempt_count": len(canonical_provider_attempts),
-            "task_result_count": len(canonical_results),
-            "result_observation_count": len(canonical_observations),
-            "preflight_failure_count": sum(
-                item.result_origin is SchedulerResultOrigin.LOCAL_PREFLIGHT
-                for item in canonical_results
-            ),
-            "pass_result_count": len(validated_summary.pass_results),
-            "event_count": len(canonical_events),
-            "succeeded_count": status_counts[SchedulerTerminalStatus.SUCCEEDED],
-            "explicit_empty_count": status_counts[SchedulerTerminalStatus.EXPLICIT_EMPTY],
-            "failed_count": status_counts[SchedulerTerminalStatus.FAILED],
-            "truncated_count": status_counts[SchedulerTerminalStatus.TRUNCATED],
-            "invalid_count": status_counts[SchedulerTerminalStatus.INVALID],
-            "unbound_count": status_counts[SchedulerTerminalStatus.UNBOUND],
-            "inconclusive_count": status_counts[SchedulerTerminalStatus.INCONCLUSIVE],
-            "uncertain_count": status_counts[SchedulerTerminalStatus.UNCERTAIN],
-        }
-        return cls(**values, evidence_sha256=scheduler_canonical_sha256(values))
+        return cls._project_validated_state(
+            manifest=validated_manifest,
+            analysis_input_inventory=validated_analysis_inputs,
+            summary=validated_summary,
+            plans=canonical_plans,
+            model_requests=canonical_model_requests,
+            activations=canonical_activations,
+            outputs=canonical_outputs,
+            provider_attempts=canonical_provider_attempts,
+            task_results=canonical_results,
+            result_observations=canonical_observations,
+            events=canonical_events,
+            truncation_recovery_entries=canonical_recovery_entries,
+            terminal_report_authority=canonical_terminal_authority,
+        )
 
     @model_validator(mode="after")
     def evidence_counts_chain_and_hash_are_consistent(self) -> Self:
-        if (self.schema_version == "1.1") != (self.terminal_report_authority_sha256 is not None):
+        expected_schema_version = (
+            "1.3"
+            if self.terminal_report_authority_sha256 is not None
+            and self.truncation_recovery_entry_sha256s
+            else "1.2"
+            if self.truncation_recovery_entry_sha256s
+            else "1.1"
+            if self.terminal_report_authority_sha256 is not None
+            else "1.0"
+        )
+        if self.schema_version != expected_schema_version:
             raise ValueError(
-                "scheduler journal evidence terminal-report authority mode is inconsistent"
+                "scheduler journal evidence authority or recovery mode is inconsistent"
             )
         pairs = (
             (
@@ -5994,6 +8324,10 @@ class SchedulerJournalEvidence(StrictModel):
             (self.result_observation_count, len(self.result_observation_sha256s)),
             (self.pass_result_count, len(self.pass_result_sha256s)),
             (self.event_count, len(self.event_sha256s)),
+            (
+                self.truncation_recovery_entry_count,
+                len(self.truncation_recovery_entry_sha256s),
+            ),
         )
         if any(count != observed for count, observed in pairs):
             raise ValueError("scheduler journal evidence counts differ from hash inventories")
@@ -6001,6 +8335,16 @@ class SchedulerJournalEvidence(StrictModel):
             raise ValueError("scheduler event-chain head presence is inconsistent")
         if self.event_sha256s and self.terminal_event_chain_head_sha256 != self.event_sha256s[-1]:
             raise ValueError("scheduler event-chain head differs from its terminal event")
+        if (self.truncation_recovery_entry_count == 0) != (
+            self.truncation_recovery_chain_head_sha256 is None
+        ):
+            raise ValueError("scheduler recovery-chain head presence is inconsistent")
+        if (
+            self.truncation_recovery_entry_sha256s
+            and self.truncation_recovery_chain_head_sha256
+            != self.truncation_recovery_entry_sha256s[-1]
+        ):
+            raise ValueError("scheduler recovery-chain head differs from its terminal entry")
         status_total = (
             self.succeeded_count
             + self.explicit_empty_count
@@ -6039,11 +8383,18 @@ class SchedulerArtifact(StrictModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0", "1.1"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.0"
     evidence_authority: Literal["comparison_required"] = "comparison_required"
     summary: SchedulerCampaignSummary
     journal_evidence: SchedulerJournalEvidence
-    model_requests: tuple[SchedulerModelRequestEvidence, ...] = Field(max_length=700_000)
+    model_requests: tuple[SchedulerModelRequestEvidence, ...] = Field(
+        max_length=_MAX_SCHEDULER_MODEL_REQUESTS
+    )
+    recovery_model_requests: tuple[SchedulerTruncationRecoveryModelRequestEvidence, ...] = Field(
+        default=(),
+        max_length=TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS,
+        exclude_if=lambda value: not value,
+    )
     artifact_sha256: str = Field(pattern=_SHA256_PATTERN)
 
     @classmethod
@@ -6053,6 +8404,7 @@ class SchedulerArtifact(StrictModel):
         summary: SchedulerCampaignSummary,
         journal_evidence: SchedulerJournalEvidence,
         model_requests: Iterable[SchedulerModelRequestEvidence],
+        recovery_model_requests: Iterable[SchedulerTruncationRecoveryModelRequestEvidence] = (),
     ) -> SchedulerArtifact:
         validated_summary = SchedulerCampaignSummary.model_validate(
             summary.model_dump(mode="python")
@@ -6060,13 +8412,35 @@ class SchedulerArtifact(StrictModel):
         validated_evidence = SchedulerJournalEvidence.model_validate(
             journal_evidence.model_dump(mode="python")
         )
+        request_items = _bounded_scheduler_items(
+            model_requests,
+            limit=_MAX_SCHEDULER_MODEL_REQUESTS,
+            label="artifact model-request inventory",
+        )
+        recovery_request_items = _bounded_scheduler_items(
+            recovery_model_requests,
+            limit=TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS,
+            label="artifact recovery-model-request inventory",
+        )
         validated_requests = tuple(
             sorted(
                 (
                     SchedulerModelRequestEvidence.model_validate(item.model_dump(mode="python"))
-                    for item in model_requests
+                    for item in request_items
                 ),
                 key=lambda item: item.task_id,
+            )
+        )
+        validated_recovery_requests = tuple(
+            sorted(
+                (
+                    SchedulerTruncationRecoveryModelRequestEvidence.model_validate_json(
+                        item.model_dump_json(),
+                        strict=True,
+                    )
+                    for item in recovery_request_items
+                ),
+                key=lambda item: item.logical_request_id,
             )
         )
         values: dict[str, Any] = {
@@ -6075,6 +8449,11 @@ class SchedulerArtifact(StrictModel):
             "summary": validated_summary,
             "journal_evidence": validated_evidence,
             "model_requests": validated_requests,
+            **(
+                {"recovery_model_requests": validated_recovery_requests}
+                if validated_recovery_requests
+                else {}
+            ),
         }
         return cls(**values, artifact_sha256=scheduler_canonical_sha256(values))
 
@@ -6083,9 +8462,26 @@ class SchedulerArtifact(StrictModel):
         evidence = self.journal_evidence
         audit_selection = self.summary.manifest.bindings.audit_model_selection
         request_ids = tuple(item.task_id for item in self.model_requests)
+        logical_request_ids = tuple(item.logical_request_id for item in self.model_requests)
+        recovery_request_ids = tuple(
+            item.logical_request_id for item in self.recovery_model_requests
+        )
+        recovery_result_sha256s = tuple(
+            item.child_result_entry_sha256 for item in self.recovery_model_requests
+        )
+        recovery_promotions = tuple(
+            binding
+            for pass_result in self.summary.pass_results
+            for binding in pass_result.recovery_promotion_bindings
+        )
+        recovery_promotion_entry_sha256s = tuple(
+            binding.promotion_entry_sha256 for binding in recovery_promotions
+        )
+        promotion_by_sha256 = {item.promotion_entry_sha256: item for item in recovery_promotions}
+        recovery_chain_sha256s = set(evidence.truncation_recovery_entry_sha256s)
         if (
             self.schema_version != evidence.schema_version
-            or (self.schema_version == "1.1")
+            or (self.schema_version in {"1.1", "1.3"})
             != self.summary.manifest.terminal_report_authority_required
             or evidence.campaign_id != self.summary.manifest.campaign_id
             or evidence.manifest_sha256 != self.summary.manifest.manifest_sha256
@@ -6098,16 +8494,102 @@ class SchedulerArtifact(StrictModel):
             or evidence.pass_result_sha256s
             != tuple(item.pass_result_sha256 for item in self.summary.pass_results)
             or request_ids != tuple(sorted(set(request_ids)))
+            or len(logical_request_ids) != len(set(logical_request_ids))
+            or recovery_request_ids != tuple(sorted(set(recovery_request_ids)))
+            or len(recovery_result_sha256s) != len(set(recovery_result_sha256s))
+            or set(logical_request_ids).intersection(recovery_request_ids)
             or evidence.model_request_count != len(self.model_requests)
             or evidence.model_request_evidence_sha256s
             != tuple(item.request_evidence_sha256 for item in self.model_requests)
+            or len(recovery_promotion_entry_sha256s) != len(set(recovery_promotion_entry_sha256s))
+            or len(promotion_by_sha256) != len(recovery_promotions)
+            or not set(recovery_promotion_entry_sha256s)
+            <= set(evidence.truncation_recovery_entry_sha256s)
             or any(
                 item.campaign_id != self.summary.manifest.campaign_id
                 or item.manifest_sha256 != self.summary.manifest.manifest_sha256
                 for item in self.model_requests
             )
+            or any(
+                item.campaign_id != self.summary.manifest.campaign_id
+                or (
+                    item.promotion_entry_sha256 is not None
+                    and item.promotion_entry_sha256 not in promotion_by_sha256
+                )
+                or item.activation_entry_sha256 not in recovery_chain_sha256s
+                or item.child_result_entry_sha256 not in recovery_chain_sha256s
+                for item in self.recovery_model_requests
+            )
         ):
             raise ValueError("scheduler public artifact differs from its journal evidence")
+        parent_requests = {item.task_id: item for item in self.model_requests}
+        recovery_by_promotion: dict[
+            str,
+            list[SchedulerTruncationRecoveryModelRequestEvidence],
+        ] = {}
+        for recovery_request in self.recovery_model_requests:
+            parent = parent_requests.get(recovery_request.parent_task_id)
+            expected_source_inventory_sha256 = (
+                scheduler_canonical_sha256(
+                    {
+                        "domain": ("mmaudit.scheduler.recovery-delivered-source-inventory.v1"),
+                        "source_descriptor_sha256s": (parent.delivered_source_descriptor_sha256s),
+                    }
+                )
+                if parent is not None
+                else None
+            )
+            if (
+                parent is None
+                or parent.terminal_status is not SchedulerTerminalStatus.TRUNCATED
+                or recovery_request.role != parent.role
+                or recovery_request.requested_model != parent.requested_model
+                or recovery_request.root_lineage != parent.root_lineage
+                or recovery_request.response_schema_sha256 != parent.response_schema_sha256
+                or recovery_request.request_limit_scope != parent.logical_request_id
+                or recovery_request.delivered_source_inventory_sha256
+                != expected_source_inventory_sha256
+            ):
+                raise ValueError("scheduler recovery request differs from its truncated parent")
+            if recovery_request.promotion_entry_sha256 is not None:
+                recovery_by_promotion.setdefault(
+                    recovery_request.promotion_entry_sha256,
+                    [],
+                ).append(recovery_request)
+        for binding in recovery_promotions:
+            children = recovery_by_promotion.get(binding.promotion_entry_sha256, [])
+            parent = parent_requests.get(binding.parent_task_id)
+            expected_source_inventory_sha256 = (
+                scheduler_canonical_sha256(
+                    {
+                        "domain": ("mmaudit.scheduler.recovery-delivered-source-inventory.v1"),
+                        "source_descriptor_sha256s": (parent.delivered_source_descriptor_sha256s),
+                    }
+                )
+                if parent is not None
+                else None
+            )
+            if (
+                parent is None
+                or parent.terminal_status is not SchedulerTerminalStatus.TRUNCATED
+                or parent.result_sha256 != binding.original_truncated_result_sha256
+                or binding.delivered_source_inventory_sha256 != expected_source_inventory_sha256
+                or len(children) != 2
+                or {item.child_result_entry_sha256 for item in children}
+                != set(binding.direct_child_result_sha256s)
+                or any(
+                    item.parent_task_id != parent.task_id
+                    or item.role != parent.role
+                    or item.requested_model != parent.requested_model
+                    or item.root_lineage != parent.root_lineage
+                    or item.response_schema_sha256 != parent.response_schema_sha256
+                    or item.request_limit_scope != parent.logical_request_id
+                    or item.delivered_source_inventory_sha256
+                    != binding.delivered_source_inventory_sha256
+                    for item in children
+                )
+            ):
+                raise ValueError("scheduler recovery requests differ from their promoted parent")
         for request in self.model_requests:
             audit_fields = (
                 request.audit_policy_selection_binding_sha256,
@@ -6140,6 +8622,40 @@ class SchedulerArtifact(StrictModel):
                 or request.audit_policy_routing_evidence_sha256 is None
             ):
                 raise ValueError("successful scheduler request differs from its audit selection")
+        for recovery_request in self.recovery_model_requests:
+            audit_fields = (
+                recovery_request.audit_policy_selection_binding_sha256,
+                recovery_request.audit_model_selection_bundle_sha256,
+                recovery_request.audit_selection_sha256,
+                recovery_request.audit_selected_model_set_sha256,
+                recovery_request.audit_scope_sha256,
+                recovery_request.audit_source_sha256,
+                recovery_request.audit_selection_expires_at,
+                recovery_request.audit_policy_routing_evidence_sha256,
+            )
+            if audit_selection is None:
+                if any(item is not None for item in audit_fields):
+                    raise ValueError("scheduler recovery request claims an audit selection")
+                continue
+            selected_route = audit_selection.route_for(recovery_request.requested_model)
+            if (
+                recovery_request.root_lineage != selected_route.root_lineage
+                or recovery_request.audit_policy_selection_binding_sha256
+                != audit_selection.binding_sha256
+                or recovery_request.audit_model_selection_bundle_sha256
+                != audit_selection.audit_model_selection_bundle_sha256
+                or recovery_request.audit_selection_sha256 != audit_selection.audit_selection_sha256
+                or recovery_request.audit_selected_model_set_sha256
+                != audit_selection.selected_model_set_sha256
+                or recovery_request.audit_scope_sha256 != audit_selection.audit_scope_sha256
+                or recovery_request.audit_source_sha256 != audit_selection.source_sha256
+                or recovery_request.audit_selection_expires_at
+                != audit_selection.selection_expires_at
+                or recovery_request.audit_policy_routing_evidence_sha256 is None
+            ):
+                raise ValueError(
+                    "successful scheduler recovery request differs from its audit selection"
+                )
         if self.summary.status is SchedulerCampaignStatus.COMPLETE and (
             evidence.pass_plan_count != 7
             or evidence.pass_result_count != 7
@@ -6275,8 +8791,20 @@ class SchedulerReportBinding(StrictModel):
     planned_task_count: int = Field(ge=0, le=700_000)
     activated_task_count: int = Field(ge=0, le=700_000)
     terminal_task_count: int = Field(ge=0, le=700_000)
-    model_request_count: int = Field(ge=0, le=700_000)
-    logical_request_count: int = Field(ge=0, le=700_000)
+    model_request_count: int = Field(
+        ge=0,
+        le=700_000 + TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS,
+    )
+    recovery_model_request_count: int = Field(
+        default=0,
+        ge=0,
+        le=TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS,
+        exclude_if=lambda value: value == 0,
+    )
+    logical_request_count: int = Field(
+        ge=0,
+        le=700_000 + TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS,
+    )
     task_result_count: int = Field(ge=0, le=700_000)
     result_observation_count: int = Field(ge=0, le=1_400_000)
     preflight_failure_count: int = Field(ge=0, le=700_000)
@@ -6287,6 +8815,12 @@ class SchedulerReportBinding(StrictModel):
     explicit_empty_count: int = Field(ge=0, le=7)
     failed_count: int = Field(ge=0, le=700_000)
     truncated_count: int = Field(ge=0, le=700_000)
+    recovered_count: int = Field(
+        default=0,
+        ge=0,
+        le=700_000,
+        exclude_if=lambda value: value == 0,
+    )
     invalid_count: int = Field(ge=0, le=700_000)
     unbound_count: int = Field(ge=0, le=700_000)
     inconclusive_count: int = Field(ge=0, le=700_000)
@@ -6298,6 +8832,10 @@ class SchedulerReportBinding(StrictModel):
         validated = SchedulerArtifact.model_validate(artifact.model_dump(mode="python"))
         summary = validated.summary
         evidence = validated.journal_evidence
+        recovery_request_count = len(validated.recovery_model_requests)
+        recovered_count = sum(
+            len(pass_result.recovery_promotion_bindings) for pass_result in summary.pass_results
+        )
         values: dict[str, Any] = {
             "schema_version": "1.0",
             "evidence_authority": "comparison_required",
@@ -6316,8 +8854,13 @@ class SchedulerReportBinding(StrictModel):
             "planned_task_count": evidence.task_plan_count,
             "activated_task_count": evidence.task_activation_count,
             "terminal_task_count": evidence.task_result_count,
-            "model_request_count": evidence.model_request_count,
-            "logical_request_count": evidence.task_plan_count,
+            "model_request_count": evidence.model_request_count + recovery_request_count,
+            **(
+                {"recovery_model_request_count": recovery_request_count}
+                if recovery_request_count
+                else {}
+            ),
+            "logical_request_count": evidence.task_plan_count + recovery_request_count,
             "task_result_count": evidence.task_result_count,
             "result_observation_count": evidence.result_observation_count,
             "preflight_failure_count": evidence.preflight_failure_count,
@@ -6328,6 +8871,7 @@ class SchedulerReportBinding(StrictModel):
             "explicit_empty_count": evidence.explicit_empty_count,
             "failed_count": evidence.failed_count,
             "truncated_count": evidence.truncated_count,
+            **({"recovered_count": recovered_count} if recovered_count else {}),
             "invalid_count": evidence.invalid_count,
             "unbound_count": evidence.unbound_count,
             "inconclusive_count": evidence.inconclusive_count,
@@ -6354,8 +8898,11 @@ class SchedulerReportBinding(StrictModel):
         if (
             self.terminal_task_count != self.task_result_count
             or self.task_result_count != terminal_status_total
-            or self.logical_request_count != self.planned_task_count
+            or self.logical_request_count
+            != self.planned_task_count + self.recovery_model_request_count
+            or self.model_request_count < self.recovery_model_request_count
             or self.request_result_mapping_count != self.task_result_count
+            or self.recovered_count > self.truncated_count
         ):
             raise ValueError("scheduler report binding counts are inconsistent")
         if self.status is SchedulerCampaignStatus.COMPLETE and (
@@ -6364,7 +8911,7 @@ class SchedulerReportBinding(StrictModel):
             or self.planned_task_count != self.terminal_task_count
             or self.task_output_count != self.succeeded_count
             or self.failed_count
-            or self.truncated_count
+            or self.truncated_count != self.recovered_count
             or self.invalid_count
             or self.unbound_count
             or self.inconclusive_count
@@ -6770,23 +9317,19 @@ def _validate_scheduler_journal_evidence(
         exact_output.require_exact_activation(observed_activation)
         _plan, task = task_by_id[task_id]
         completion = exact_output.model_completion_evidence
-        audit_selection = manifest.bindings.audit_model_selection
-        if (
-            completion is not None
-            and completion.usage_record.execution_evidence is ExecutionEvidenceKind.REAL
-            and audit_selection is not None
+        if completion is not None and completion != SchedulerModelCompletionEvidence.build(
+            task=task,
+            activation=observed_activation,
+            usage_record=completion.usage_record,
+            privacy_evidence_custody=manifest.privacy_evidence_custody,
+            audit_model_selection=manifest.bindings.audit_model_selection,
+            audit_model_refresh=manifest.bindings.audit_model_refresh,
+            audit_model_refresh_pricing=(manifest.bindings.audit_model_refresh_pricing),
+            normalizer_sha256=completion.normalizer_sha256,
+            normalized_output_sha256=completion.normalized_output_sha256,
+            normalization_evidence=completion.normalization_evidence,
         ):
-            routing = _require_usage_audit_selection(
-                usage_record=completion.usage_record,
-                requested_model=task.requested_model or "",
-                binding=audit_selection,
-            )
-            if (
-                completion.audit_policy_selection_binding_sha256 != audit_selection.binding_sha256
-                or completion.audit_policy_routing_evidence_sha256
-                != routing.routing_evidence_sha256
-            ):
-                raise ValueError("scheduler journal output differs from its audit selection")
+            raise ValueError("scheduler journal output differs from exact completion custody")
     if set(provider_attempt_by_task).intersection(output_by_task):
         raise ValueError("scheduler provider attempt cannot also receive review credit")
     for task_id, attempt in provider_attempt_by_task.items():
@@ -6799,6 +9342,10 @@ def _validate_scheduler_journal_evidence(
             activation=observed_activation,
             usage_record=attempt.usage_record,
             audit_model_selection=manifest.bindings.audit_model_selection,
+            audit_model_refresh=manifest.bindings.audit_model_refresh,
+            audit_model_refresh_pricing=(manifest.bindings.audit_model_refresh_pricing),
+            truncated_envelope_evidence=attempt.truncated_envelope_evidence,
+            truncation_projection=attempt.truncation_projection,
         ):
             raise ValueError("scheduler provider attempt differs from exact task evidence")
     for result in result_observations:

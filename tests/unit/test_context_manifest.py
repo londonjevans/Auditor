@@ -728,6 +728,102 @@ def test_context_manifest_rejects_duplicate_request_ids() -> None:
         build_context_manifest(run_id="run-1", usage_records=[_usage(), _usage()])
 
 
+def test_context_manifest_requires_exact_external_recovery_request_coordinates() -> None:
+    from tests.unit.test_usage import _owned_request_limit_record
+
+    request_id = "scheduler-recovery-request-" + "a" * 64
+    request_limit_scope = "scheduler-request-" + "b" * 64
+    usage = _owned_request_limit_record(
+        request_id,
+        request_limit_scope=request_limit_scope,
+        request_limit_count_before=1,
+    )
+    coordinates = ((request_id, request_limit_scope, 1),)
+
+    manifest = build_context_manifest(
+        run_id="recovery-context",
+        usage_records=(usage,),
+        recovery_request_limit_coordinates=coordinates,
+    )
+    assert tuple(item.request_id for item in manifest.requests) == (request_id,)
+    validate_context_manifest_against_usage(
+        manifest,
+        run_id="recovery-context",
+        usage_records=(usage,),
+        recovery_request_limit_coordinates=coordinates,
+    )
+
+    with pytest.raises(ContextManifestError, match="externally supplied"):
+        build_context_manifest(run_id="recovery-context", usage_records=(usage,))
+    with pytest.raises(ContextManifestError, match="token-plan or atomic"):
+        build_context_manifest(
+            run_id="recovery-context",
+            usage_records=(usage,),
+            recovery_request_limit_coordinates=((request_id, request_limit_scope, 2),),
+        )
+    with pytest.raises(ContextManifestError, match="absent provider usage"):
+        build_context_manifest(
+            run_id="recovery-context",
+            usage_records=(),
+            recovery_request_limit_coordinates=coordinates,
+        )
+
+
+def test_context_manifest_recovery_coordinates_are_bounded_unique_and_sorted() -> None:
+    from tests.unit.test_usage import _owned_request_limit_record
+
+    first_id = "scheduler-recovery-request-" + "a" * 64
+    second_id = "scheduler-recovery-request-" + "b" * 64
+    first_scope = "scheduler-request-" + "c" * 64
+    second_scope = "scheduler-request-" + "d" * 64
+    first = _owned_request_limit_record(
+        first_id,
+        request_limit_scope=first_scope,
+        request_limit_count_before=1,
+    )
+    second = _owned_request_limit_record(
+        second_id,
+        request_limit_scope=second_scope,
+        request_limit_count_before=1,
+    )
+    with pytest.raises(ContextManifestError, match="unique and sorted"):
+        build_context_manifest(
+            run_id="recovery-context",
+            usage_records=(first, second),
+            recovery_request_limit_coordinates=(
+                (second_id, second_scope, 1),
+                (first_id, first_scope, 1),
+            ),
+        )
+    with pytest.raises(ContextManifestError, match="unique and sorted"):
+        build_context_manifest(
+            run_id="recovery-context",
+            usage_records=(first,),
+            recovery_request_limit_coordinates=(
+                (first_id, first_scope, 1),
+                (first_id, first_scope, 1),
+            ),
+        )
+
+    class _UnboundedCoordinates(Sequence[tuple[str, str, int]]):
+        def __len__(self) -> int:
+            return 1
+
+        def __getitem__(self, index: int) -> tuple[str, str, int]:
+            return (first_id, first_scope, 1)
+
+        def __iter__(self):  # type: ignore[no-untyped-def]
+            while True:
+                yield (first_id, first_scope, 1)
+
+    with pytest.raises(ContextManifestError, match="compiled bound"):
+        build_context_manifest(
+            run_id="recovery-context",
+            usage_records=(first,),
+            recovery_request_limit_coordinates=_UnboundedCoordinates(),
+        )
+
+
 def test_context_manifest_rejects_retry_preflight_with_a_different_logical_plan() -> None:
     provider_plan = _plan(omitted_item_sha256s=(hashlib.sha256(b"provider omission").hexdigest(),))
     spliced_plan = _plan(omitted_item_sha256s=(hashlib.sha256(b"spliced omission").hexdigest(),))

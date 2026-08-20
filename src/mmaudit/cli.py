@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import stat
 import sys
 import tempfile
 import uuid
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from importlib.resources import files
@@ -19,6 +21,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
+from mmaudit.artifact_limits import MAX_JSON_ARTIFACT_BYTES
 from mmaudit.benchmark.certificate import (
     CertificateVerificationStatus,
     build_file_backed_benchmark_certificate,
@@ -28,6 +31,7 @@ from mmaudit.benchmark.certificate import (
     write_benchmark_certificate_verification,
 )
 from mmaudit.benchmark.claims import load_human_comparison_evidence
+from mmaudit.benchmark.cross_lineage_adjudication import CrossLineageAdjudicationRunKind
 from mmaudit.benchmark.engine import (
     BenchmarkMetricState,
     BenchmarkStatus,
@@ -77,6 +81,16 @@ from mmaudit.forensic_export import (
     verify_complete_forensic_bundle,
 )
 from mmaudit.logging import configure_logging
+from mmaudit.models.authenticated_runner_durable_bundle import (
+    AuthenticatedRunnerDurableBundleError,
+    AuthenticatedRunnerDurableEvidenceBundle,
+    authenticated_runner_durable_bundle_bytes,
+    build_authenticated_runner_durable_bundle,
+    load_authenticated_runner_durable_bundle,
+)
+from mmaudit.models.authenticated_runner_execution import (
+    AuthenticatedRunnerRunPlan,
+)
 from mmaudit.models.calibration import (
     build_model_calibration_artifact,
     derive_calibrated_qualification_policy,
@@ -91,6 +105,12 @@ from mmaudit.models.candidate_benchmark import (
     validate_candidate_benchmark_egress,
     validate_candidate_benchmark_policy_capacity,
 )
+from mmaudit.models.candidate_registry_bridge import (
+    derive_candidate_registry_from_discovery,
+    preflight_candidate_registry_output,
+    validate_candidate_registry_template_selection,
+    write_candidate_registry_json,
+)
 from mmaudit.models.discovery import (
     DiscoveryCandidateRoute,
     load_model_discovery_run,
@@ -103,6 +123,10 @@ from mmaudit.models.endpoint_snapshots import (
     validate_openrouter_endpoint_snapshot,
 )
 from mmaudit.models.generation_evidence import TrustedGenerationVerification
+from mmaudit.models.ground_truth_authority import (
+    load_frozen_ground_truth_provenance,
+    resolve_verified_frozen_ground_truth,
+)
 from mmaudit.models.identifiers import is_exact_openrouter_model_id
 from mmaudit.models.lineage_authority import (
     TrustedModelLineageReviewVerification,
@@ -128,6 +152,7 @@ from mmaudit.models.policy_eligibility_refresh import (
     load_policy_eligibility_source_observation,
     validate_model_policy_eligibility_refresh_inputs,
 )
+from mmaudit.models.public_lineage_authority import resolve_verified_public_model_lineage
 from mmaudit.models.qualification import (
     CandidateRegistry,
     QualificationPolicy,
@@ -159,6 +184,7 @@ from mmaudit.models.refresh import (
     load_model_refresh_source_evidence,
     reject_model_refresh_secret_reflection,
     seal_model_refresh_attempt,
+    validate_model_refresh_controls,
     write_model_refresh_failure,
     write_model_refresh_success,
 )
@@ -185,6 +211,15 @@ from mmaudit.operator_secrets import (
     OperatorSecretError,
     OperatorSecrets,
     load_operator_secrets,
+    select_operator_secret_file,
+)
+from mmaudit.orchestration.authenticated_runner_openrouter import (
+    AuthenticatedRunnerOpenRouterExecutionSnapshot,
+    AuthenticatedRunnerOpenRouterLaunch,
+    AuthenticatedRunnerOpenRouterResult,
+    AuthenticatedRunnerOpenRouterRunSnapshot,
+    execute_authenticated_openrouter_runner,
+    preflight_authenticated_openrouter_launch,
 )
 from mmaudit.orchestration.budgets import BudgetManager
 from mmaudit.orchestration.certification import (
@@ -269,6 +304,7 @@ DEFAULT_BENCHMARK_MANIFEST = (
 DEFAULT_MODEL_BENCHMARK_CORPUS = (
     Path(__file__).resolve().parents[2] / "benchmarks" / "model_corpus" / "manifest.json"
 )
+DEFAULT_MODEL_BENCHMARK_PROVENANCE = DEFAULT_MODEL_BENCHMARK_CORPUS.with_name("provenance.json")
 
 
 def _version(value: bool) -> None:
@@ -795,12 +831,64 @@ def models_discover(
             help="Private directory for self-hashed discovery evidence.",
         ),
     ] = Path(".mmaudit/private/model-discovery"),
+    candidate_registry_template: Annotated[
+        Path | None,
+        typer.Option(
+            "--candidate-registry-template",
+            help="Existing registry supplying only selected lineage-review and role policy.",
+        ),
+    ] = None,
+    candidate_registry_output: Annotated[
+        Path | None,
+        typer.Option(
+            "--candidate-registry-output",
+            help="Fresh private JSON registry bound to this exact discovery run.",
+        ),
+    ] = None,
     no_color: Annotated[bool, typer.Option("--no-color")] = False,
 ) -> None:
     """Freeze exact public model and endpoint metadata without making a completion call."""
 
     async def execute() -> None:
+        if (candidate_registry_template is None) != (candidate_registry_output is None):
+            raise ConfigError(
+                "--candidate-registry-template and --candidate-registry-output "
+                "must be supplied together"
+            )
         candidates = _parse_model_discovery_candidates(candidate)
+        template_registry: CandidateRegistry | None = None
+        registry_output_path: Path | None = None
+        if candidate_registry_template is not None and candidate_registry_output is not None:
+            discovery_path = Path(os.path.abspath(output_dir))
+            template_path = Path(os.path.abspath(candidate_registry_template))
+            requested_registry_output = Path(os.path.abspath(candidate_registry_output))
+            if requested_registry_output == template_path:
+                raise ConfigError("candidate registry output must differ from its template")
+            if (
+                requested_registry_output == discovery_path
+                or requested_registry_output.is_relative_to(discovery_path)
+                or discovery_path.is_relative_to(requested_registry_output)
+            ):
+                raise ConfigError(
+                    "candidate registry output must remain outside the discovery directory"
+                )
+            try:
+                template_registry = load_candidate_registry(candidate_registry_template)
+                validate_candidate_registry_template_selection(
+                    template=template_registry,
+                    routes=tuple(
+                        DiscoveryCandidateRoute(
+                            exact_model_id=model_id,
+                            approved_provider_endpoint=provider_endpoint,
+                        )
+                        for model_id, provider_endpoint in candidates
+                    ),
+                )
+                registry_output_path = preflight_candidate_registry_output(
+                    candidate_registry_output
+                )
+            except ValueError as exc:
+                raise ConfigError(f"candidate registry bridge is invalid: {exc}") from exc
         _preflight_model_discovery_output_dir(output_dir)
         config = load_config(config_path)
         budget, usage = _budget_and_usage(config)
@@ -870,6 +958,19 @@ def models_discover(
                 await client.close()
 
         manifest = write_model_discovery_run(output_dir, evidence)
+        registry: CandidateRegistry | None = None
+        if template_registry is not None and registry_output_path is not None:
+            try:
+                registry = derive_candidate_registry_from_discovery(
+                    template=template_registry,
+                    run_manifest=manifest,
+                    evidence=evidence,
+                )
+                write_candidate_registry_json(registry_output_path, registry)
+            except ValueError as exc:
+                raise ConfigError(
+                    f"fresh candidate registry could not be published: {exc}"
+                ) from exc
         local_console = Console(no_color=no_color)
         for item in evidence:
             local_console.print(f"{item.exact_model_id}: {item.discovery_evidence_sha256}")
@@ -878,6 +979,11 @@ def models_discover(
             f"{output_dir.resolve()}; run {provenance.run_id}; manifest "
             f"{manifest.manifest_sha256}; no model completion was requested.[/green]"
         )
+        if registry is not None and registry_output_path is not None:
+            local_console.print(
+                f"[green]Frozen exact pending candidate registry {registry.registry_sha256} "
+                f"at {registry_output_path}; stale discovery fields were not copied.[/green]"
+            )
 
     _run_async_cli(execute)
 
@@ -891,6 +997,13 @@ def models_refresh(
             help="Frozen candidate registry used only as the comparison baseline.",
         ),
     ] = Path("config/models.candidates.toml"),
+    previous_candidate_registry: Annotated[
+        Path | None,
+        typer.Option(
+            "--previous-candidate-registry",
+            help="Exact prior candidate registry paired with the prior source and snapshot.",
+        ),
+    ] = None,
     previous_snapshot: Annotated[
         Path | None,
         typer.Option(
@@ -963,7 +1076,18 @@ def models_refresh(
     local_console = Console(no_color=no_color)
 
     async def execute() -> None:
+        preflight_observed_at = datetime.now(UTC).replace(microsecond=0)
+        try:
+            validate_model_refresh_controls(
+                pricing_tolerance_fraction=pricing_tolerance_fraction,
+                soft_max_age_hours=soft_max_age_hours,
+                hard_max_age_hours=hard_max_age_hours,
+            )
+        except ModelRefreshValidationError as exc:
+            raise ConfigError("models refresh policy is invalid") from exc
         registry = load_candidate_registry(candidate_registry)
+        if registry.created_at > preflight_observed_at:
+            raise ConfigError("candidate registry is future-dated")
         policy_paths = (
             policy_eligibility_artifact,
             policy_source_observation,
@@ -995,10 +1119,23 @@ def models_refresh(
                 )
             except ModelPolicyEligibilityRefreshError as exc:
                 raise ConfigError("models refresh policy evidence is invalid") from exc
-        if (previous_snapshot is None) is not (previous_source_evidence is None):
+        previous_paths = (
+            previous_candidate_registry,
+            previous_snapshot,
+            previous_source_evidence,
+        )
+        if any(path is not None for path in previous_paths) and not all(
+            path is not None for path in previous_paths
+        ):
             raise ConfigError(
-                "--previous-snapshot and --previous-source-evidence must be supplied together"
+                "--previous-candidate-registry, --previous-snapshot, and "
+                "--previous-source-evidence must be supplied together"
             )
+        previous_registry = (
+            load_candidate_registry(previous_candidate_registry)
+            if previous_candidate_registry is not None
+            else None
+        )
         previous = (
             load_model_refresh_snapshot(previous_snapshot)
             if previous_snapshot is not None
@@ -1009,14 +1146,23 @@ def models_refresh(
             if previous_source_evidence is not None
             else None
         )
-        if previous is not None and previous_source is not None:
-            reproduced_previous = build_model_refresh_snapshot_from_source(
-                source_evidence=previous_source,
-                candidate_registry=registry,
-            )
+        if previous_registry is not None and previous is not None and previous_source is not None:
+            try:
+                reproduced_previous = build_model_refresh_snapshot_from_source(
+                    source_evidence=previous_source,
+                    candidate_registry=previous_registry,
+                )
+            except ModelRefreshValidationError as exc:
+                raise ConfigError("previous refresh evidence is invalid") from exc
             if previous != reproduced_previous:
                 raise ConfigError(
                     "previous refresh snapshot differs from its paired source evidence"
+                )
+            if previous.retrieved_at > preflight_observed_at:
+                raise ConfigError("previous refresh snapshot is future-dated")
+            if previous_registry.created_at > registry.created_at:
+                raise ConfigError(
+                    "previous candidate registry is newer than the current candidate registry"
                 )
         selected = _parse_model_refresh_selected_routes(selected_route or [])
         approved_routes = {
@@ -1135,6 +1281,8 @@ def models_refresh(
             diff = diff_model_refresh(
                 current=snapshot,
                 previous=previous,
+                previous_source_evidence=previous_source,
+                previous_candidate_registry=previous_registry,
                 candidate_registry=registry,
                 pricing_tolerance_fraction=pricing_tolerance_fraction,
                 compared_at=retrieved_at,
@@ -1602,6 +1750,340 @@ def models_benchmark(
                 f"{result.overall_score:.1%}"
             )
         local_console.print(f"Result: {output.resolve()}")
+
+    _run_async_cli(execute)
+
+
+@models_app.command("authenticated-runner")
+def models_authenticated_runner(
+    candidate_registry: Annotated[
+        Path,
+        typer.Option(
+            "--candidate-registry",
+            help="Fresh-discovery-bound singleton candidate registry.",
+        ),
+    ],
+    candidate_discovery_run: Annotated[
+        Path,
+        typer.Option(
+            "--candidate-discovery-run",
+            help="Fresh atomic discovery directory for the singleton candidate.",
+        ),
+    ],
+    primary_judge_registry: Annotated[
+        Path,
+        typer.Option(
+            "--primary-judge-registry",
+            help="Fresh-discovery-bound singleton PRIMARY judge registry.",
+        ),
+    ],
+    primary_judge_discovery_run: Annotated[
+        Path,
+        typer.Option(
+            "--primary-judge-discovery-run",
+            help="Fresh atomic discovery directory for the PRIMARY judge.",
+        ),
+    ],
+    replay_judge_registry: Annotated[
+        Path,
+        typer.Option(
+            "--replay-judge-registry",
+            help="Fresh-discovery-bound singleton REPLAY judge registry.",
+        ),
+    ],
+    replay_judge_discovery_run: Annotated[
+        Path,
+        typer.Option(
+            "--replay-judge-discovery-run",
+            help="Fresh atomic discovery directory for the REPLAY judge.",
+        ),
+    ],
+    qualification_policy: Annotated[
+        Path,
+        typer.Option(
+            "--qualification-policy",
+            help="Frozen release-pinned candidate qualification policy.",
+        ),
+    ],
+    primary_campaign_journal: Annotated[
+        Path,
+        typer.Option(
+            "--primary-campaign-journal",
+            help="Fresh absolute private PRIMARY campaign directory.",
+        ),
+    ],
+    primary_portfolio: Annotated[
+        Path,
+        typer.Option(
+            "--primary-portfolio",
+            help="Fresh absolute private PRIMARY portfolio directory.",
+        ),
+    ],
+    replay_campaign_journal: Annotated[
+        Path,
+        typer.Option(
+            "--replay-campaign-journal",
+            help="Fresh absolute private REPLAY campaign directory.",
+        ),
+    ],
+    replay_portfolio: Annotated[
+        Path,
+        typer.Option(
+            "--replay-portfolio",
+            help="Fresh absolute private REPLAY portfolio directory.",
+        ),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            help="Fresh absolute private nonauthorizing runner/AUTHSEAL JSON output.",
+        ),
+    ],
+    candidate_declared_cost_cap_usd_per_attempt: Annotated[
+        str,
+        typer.Option(
+            "--candidate-cost-cap-usd-per-attempt",
+            help="Exact positive candidate per-attempt cost tripwire (decimal USD).",
+        ),
+    ],
+    primary_judge_declared_cost_cap_usd_per_attempt: Annotated[
+        str,
+        typer.Option(
+            "--primary-judge-cost-cap-usd-per-attempt",
+            help="Exact positive PRIMARY judge per-attempt cost tripwire (decimal USD).",
+        ),
+    ],
+    replay_judge_declared_cost_cap_usd_per_attempt: Annotated[
+        str,
+        typer.Option(
+            "--replay-judge-cost-cap-usd-per-attempt",
+            help="Exact positive REPLAY judge per-attempt cost tripwire (decimal USD).",
+        ),
+    ],
+    config_path: ConfigOption = Path(DEFAULT_CONFIG_NAME),
+    secrets_env_file: SecretsEnvFileOption = None,
+    corpus: Annotated[
+        Path,
+        typer.Option("--corpus", help="Exact frozen synthetic/public benchmark corpus."),
+    ] = DEFAULT_MODEL_BENCHMARK_CORPUS,
+    ground_truth_provenance: Annotated[
+        Path,
+        typer.Option(
+            "--ground-truth-provenance",
+            help="Compiled-pin-bound frozen ground-truth provenance.",
+        ),
+    ] = DEFAULT_MODEL_BENCHMARK_PROVENANCE,
+    cost_ledger: Annotated[
+        Path | None,
+        typer.Option(
+            "--cost-ledger",
+            help="Existing absolute exact-250-USD cumulative provider cost ledger.",
+        ),
+    ] = None,
+    allow_code_egress: Annotated[
+        bool,
+        typer.Option(
+            "--allow-code-egress",
+            help="Explicitly permit only the frozen synthetic/public corpus to reach providers.",
+        ),
+    ] = False,
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
+) -> None:
+    """Run one exact two-pass authenticated synthetic benchmark in a single process."""
+
+    async def execute() -> None:
+        if not allow_code_egress:
+            raise ConfigError("models authenticated-runner requires explicit --allow-code-egress")
+        candidate_cost_cap = _parse_authenticated_runner_cost_cap(
+            candidate_declared_cost_cap_usd_per_attempt,
+            label="candidate",
+        )
+        primary_judge_cost_cap = _parse_authenticated_runner_cost_cap(
+            primary_judge_declared_cost_cap_usd_per_attempt,
+            label="PRIMARY judge",
+        )
+        replay_judge_cost_cap = _parse_authenticated_runner_cost_cap(
+            replay_judge_declared_cost_cap_usd_per_attempt,
+            label="REPLAY judge",
+        )
+
+        config = load_config(config_path)
+        benchmark_suite = load_model_benchmark_corpus(corpus)
+        provenance = load_frozen_ground_truth_provenance(ground_truth_provenance)
+        ground_truth_capability = resolve_verified_frozen_ground_truth(
+            provenance=provenance,
+            benchmark_suite=benchmark_suite,
+        )
+        public_lineage_capability = resolve_verified_public_model_lineage()
+        candidate = load_candidate_registry(candidate_registry)
+        candidate_manifest, candidate_evidence = load_model_discovery_run(candidate_discovery_run)
+        primary_judge = load_candidate_registry(primary_judge_registry)
+        primary_judge_manifest, primary_judge_evidence = load_model_discovery_run(
+            primary_judge_discovery_run
+        )
+        replay_judge = load_candidate_registry(replay_judge_registry)
+        replay_judge_manifest, replay_judge_evidence = load_model_discovery_run(
+            replay_judge_discovery_run
+        )
+        policy = load_qualification_policy(qualification_policy)
+        _require_qualification_release_pins(
+            config=config,
+            policy=policy,
+            benchmark_suite=benchmark_suite,
+        )
+        selected_secret_file = select_operator_secret_file(secrets_env_file)
+        if selected_secret_file is None:
+            raise ConfigError(
+                "models authenticated-runner requires --secrets-env-file or "
+                "MMAUDIT_SECRETS_ENV_FILE"
+            )
+
+        ledger_path = _selected_cost_ledger_path(config, cost_ledger)
+        if ledger_path is None:
+            raise ConfigError(
+                "models authenticated-runner requires an existing --cost-ledger initialized "
+                "with models init-cost-ledger or execution.cost_ledger_path"
+            )
+        budget, usage = _budget_and_usage(
+            config,
+            ledger_path=ledger_path,
+            require_endpoint_cost_bound=True,
+        )
+        ledger = budget.atomic_ledger
+        if ledger is None:
+            raise ConfigError("authenticated runner cost ledger failed to open")
+
+        plans = (
+            AuthenticatedRunnerRunPlan(
+                run_kind=CrossLineageAdjudicationRunKind.PRIMARY,
+                campaign_path=primary_campaign_journal,
+                portfolio_path=primary_portfolio,
+                judge_discovery_manifest=primary_judge_manifest,
+                judge_discovery_evidence=primary_judge_evidence,
+                judge_registry=primary_judge,
+                candidate_declared_cost_cap_usd_per_attempt=candidate_cost_cap,
+                judge_declared_cost_cap_usd_per_attempt=primary_judge_cost_cap,
+            ),
+            AuthenticatedRunnerRunPlan(
+                run_kind=CrossLineageAdjudicationRunKind.REPLAY,
+                campaign_path=replay_campaign_journal,
+                portfolio_path=replay_portfolio,
+                judge_discovery_manifest=replay_judge_manifest,
+                judge_discovery_evidence=replay_judge_evidence,
+                judge_registry=replay_judge,
+                candidate_declared_cost_cap_usd_per_attempt=candidate_cost_cap,
+                judge_declared_cost_cap_usd_per_attempt=replay_judge_cost_cap,
+            ),
+        )
+        launch = AuthenticatedRunnerOpenRouterLaunch(
+            config=config,
+            explicitly_allow_synthetic_egress=allow_code_egress,
+            public_lineage_capability=public_lineage_capability,
+            ground_truth_capability=ground_truth_capability,
+            benchmark_suite=benchmark_suite,
+            candidate_discovery_manifest=candidate_manifest,
+            candidate_discovery_evidence=candidate_evidence,
+            candidate_registry=candidate,
+            qualification_policy=policy,
+            budget=budget,
+            usage=usage,
+            run_plans=plans,
+        )
+        mutable_outputs = (
+            primary_campaign_journal,
+            primary_portfolio,
+            replay_campaign_journal,
+            replay_portfolio,
+            output,
+        )
+        source_paths = (
+            config_path,
+            corpus,
+            ground_truth_provenance,
+            candidate_registry,
+            candidate_discovery_run,
+            primary_judge_registry,
+            primary_judge_discovery_run,
+            replay_judge_registry,
+            replay_judge_discovery_run,
+            qualification_policy,
+            ledger.path,
+            ledger.lock_path,
+            selected_secret_file,
+        )
+        _preflight_authenticated_runner_cli_paths(
+            mutable_outputs=mutable_outputs,
+            source_paths=source_paths,
+        )
+        _preflight_authenticated_runner_output(output)
+        preflight_authenticated_openrouter_launch(launch)
+
+        with load_operator_secrets(selected_secret_file, required=True) as operator_secrets:
+            if not operator_secrets.openrouter_api_key_present:
+                raise ConfigError("OPENROUTER_API_KEY is missing from the operator secret file")
+            result = await execute_authenticated_openrouter_runner(
+                launch=launch,
+                operator_secrets=operator_secrets,
+            )
+
+        durable_output = _authenticated_runner_durable_output(result)
+        _preflight_authenticated_runner_output(output)
+        _write_authenticated_runner_output_fresh(output, durable_output)
+        local_console = Console(no_color=no_color)
+        if result.authseal_rejection_kind is not None:
+            raise ConfigError(
+                "AUTHSEAL comparison rejected after AUTHRUNNER completion "
+                f"({result.authseal_rejection_kind}); nonauthorizing runner evidence "
+                f"was retained at {output}"
+            )
+        assert result.authseal_collision_map is not None
+        local_console.print(
+            f"Runner evidence: {result.runner_evidence.evidence_sha256}; "
+            f"AUTHSEAL collision map: "
+            f"{result.authseal_collision_map.collision_map_sha256}",
+            markup=False,
+        )
+        local_console.print(f"Result: {output}", markup=False)
+
+    _run_async_cli(execute)
+
+
+@models_app.command("verify-authenticated-runner")
+def models_verify_authenticated_runner(
+    bundle_path: Annotated[
+        Path,
+        typer.Option(
+            "--bundle",
+            help="Absolute private mode-0600 nonauthorizing AUTHRUNNER evidence bundle.",
+        ),
+    ],
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
+) -> None:
+    """Replay one durable AUTHRUNNER bundle offline without issuing authority."""
+
+    async def execute() -> None:
+        bundle = load_authenticated_runner_durable_bundle(bundle_path)
+        ledger = bundle.closed_ledger_evidence
+        local_console = Console(no_color=no_color)
+        local_console.print(
+            "AUTHRUNNER durable evidence: VALID / NONAUTHORIZING",
+            markup=False,
+        )
+        local_console.print(f"Bundle SHA-256: {bundle.bundle_sha256}", markup=False)
+        local_console.print(
+            f"Runner SHA-256: {bundle.runner_evidence_sha256}",
+            markup=False,
+        )
+        local_console.print(
+            f"Closed ledger: entries={len(ledger.entries)}; "
+            f"final_spent_usd={ledger.final_spent_usd}",
+            markup=False,
+        )
+        local_console.print(
+            f"AUTHSEAL comparison: {bundle.authseal_comparison.status}",
+            markup=False,
+        )
 
     _run_async_cli(execute)
 
@@ -3880,6 +4362,393 @@ def platform_python() -> str:
     return f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
 
 
+def _parse_authenticated_runner_cost_cap(value: str, *, label: str) -> Decimal:
+    """Parse one exact finite decimal without a binary-float round trip."""
+
+    if type(value) is not str or not value or value != value.strip():
+        raise ConfigError(f"authenticated runner {label} cost cap must be an exact decimal")
+    try:
+        parsed = Decimal(value)
+    except ArithmeticError:
+        raise ConfigError(
+            f"authenticated runner {label} cost cap must be an exact decimal"
+        ) from None
+    if not parsed.is_finite() or parsed <= 0:
+        raise ConfigError(f"authenticated runner {label} cost cap must be finite and positive")
+    return parsed
+
+
+def _preflight_authenticated_runner_cli_paths(
+    *,
+    mutable_outputs: tuple[Path, ...],
+    source_paths: tuple[Path, ...],
+) -> None:
+    """Reject output/source aliasing before the operator secret file is opened."""
+
+    path_type = type(Path("/"))
+    if (
+        type(mutable_outputs) is not tuple
+        or len(mutable_outputs) != 5
+        or type(source_paths) is not tuple
+        or not source_paths
+    ):
+        raise ConfigError("authenticated runner path inventory is incomplete")
+
+    normalized_mutable: list[Path] = []
+    for path in mutable_outputs:
+        if type(path) is not path_type or not path.is_absolute():
+            raise ConfigError("authenticated runner output paths must be exact absolute paths")
+        normalized = Path(os.path.abspath(path))
+        if normalized != path or not normalized.name or normalized.name in {".", ".."}:
+            raise ConfigError("authenticated runner output paths must be canonical leaves")
+        if is_sensitive_workspace_name(normalized.name):
+            raise ConfigError("refusing a sensitive authenticated runner output path")
+        normalized_mutable.append(normalized)
+
+    if len(set(normalized_mutable)) != len(normalized_mutable):
+        raise ConfigError("authenticated runner outputs must be distinct")
+    for index, left in enumerate(normalized_mutable):
+        for right in normalized_mutable[index + 1 :]:
+            if _paths_overlap(left, right):
+                raise ConfigError("authenticated runner output paths may not overlap")
+
+    for source in source_paths:
+        if type(source) is not path_type:
+            raise ConfigError("authenticated runner source paths must use concrete paths")
+        normalized_source = Path(os.path.abspath(source))
+        if any(_paths_overlap(output, normalized_source) for output in normalized_mutable):
+            raise ConfigError(
+                "authenticated runner output overlaps immutable input or ledger state"
+            )
+
+
+def _paths_overlap(left: Path, right: Path) -> bool:
+    return left == right or left in right.parents or right in left.parents
+
+
+def _preflight_authenticated_runner_output(output: Path) -> None:
+    """Prove the final bundle can be atomically published to a fresh private leaf."""
+
+    path_type = type(Path("/"))
+    if type(output) is not path_type or not output.is_absolute():
+        raise ConfigError("authenticated runner final output must be an exact absolute path")
+    absolute = Path(os.path.abspath(output))
+    if absolute != output or not absolute.name or absolute.name in {".", ".."}:
+        raise ConfigError("authenticated runner final output must be a canonical leaf")
+    if is_sensitive_workspace_name(absolute.name):
+        raise ConfigError("refusing a sensitive authenticated runner output filename")
+
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    if (
+        no_follow <= 0
+        or directory <= 0
+        or os.open not in os.supports_dir_fd
+        or os.link not in os.supports_dir_fd
+        or os.stat not in os.supports_dir_fd
+        or os.unlink not in os.supports_dir_fd
+        or os.link not in os.supports_follow_symlinks
+        or os.stat not in os.supports_follow_symlinks
+    ):
+        raise ConfigError(
+            "authenticated runner output preflight requires descriptor-relative no-follow support"
+        )
+
+    descriptor = -1
+    probe_name: str | None = None
+    linked_probe_name: str | None = None
+    directory_flags = os.O_RDONLY | no_follow | directory | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(absolute.anchor, directory_flags)
+        for component in absolute.parts[1:-1]:
+            child = os.open(component, directory_flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        parent = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(parent.st_mode)
+            or stat.S_IMODE(parent.st_mode) != 0o700
+            or parent.st_uid != os.geteuid()
+        ):
+            raise ConfigError(
+                "authenticated runner output parent must be an owned mode-0700 directory"
+            )
+        parent_identity = (parent.st_dev, parent.st_ino, parent.st_mode, parent.st_uid)
+        if _authenticated_runner_output_parent_identity(absolute, directory_flags) != (
+            parent_identity
+        ):
+            raise ConfigError("authenticated runner output parent changed during preflight")
+        try:
+            os.stat(absolute.name, dir_fd=descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise ConfigError("authenticated runner final output must be fresh")
+
+        probe_name = f".mmaudit-authrunner-output-{uuid.uuid4().hex}"
+        probe_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | no_follow | getattr(os, "O_CLOEXEC", 0)
+        probe = os.open(probe_name, probe_flags, 0o600, dir_fd=descriptor)
+        try:
+            os.fchmod(probe, 0o600)
+            metadata = os.fstat(probe)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_nlink != 1
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+            ):
+                raise ConfigError(
+                    "authenticated runner output parent cannot create private artifacts"
+                )
+            os.fsync(probe)
+        finally:
+            os.close(probe)
+        linked_probe_name = f"{probe_name}.link"
+        os.link(
+            probe_name,
+            linked_probe_name,
+            src_dir_fd=descriptor,
+            dst_dir_fd=descriptor,
+            follow_symlinks=False,
+        )
+        linked_probe = os.stat(linked_probe_name, dir_fd=descriptor, follow_symlinks=False)
+        original_probe = os.stat(probe_name, dir_fd=descriptor, follow_symlinks=False)
+        if (
+            linked_probe.st_dev != original_probe.st_dev
+            or linked_probe.st_ino != original_probe.st_ino
+            or linked_probe.st_nlink != 2
+            or original_probe.st_nlink != 2
+        ):
+            raise ConfigError(
+                "authenticated runner output parent cannot publish exact private artifacts"
+            )
+        os.unlink(linked_probe_name, dir_fd=descriptor)
+        linked_probe_name = None
+        os.fsync(descriptor)
+        os.unlink(probe_name, dir_fd=descriptor)
+        probe_name = None
+        os.fsync(descriptor)
+        current_parent = os.fstat(descriptor)
+        if (
+            current_parent.st_dev,
+            current_parent.st_ino,
+            current_parent.st_mode,
+            current_parent.st_uid,
+        ) != (
+            parent.st_dev,
+            parent.st_ino,
+            parent.st_mode,
+            parent.st_uid,
+        ):
+            raise ConfigError("authenticated runner output parent changed during preflight")
+        if _authenticated_runner_output_parent_identity(absolute, directory_flags) != (
+            parent_identity
+        ):
+            raise ConfigError("authenticated runner output parent changed during preflight")
+    except ConfigError:
+        raise
+    except OSError as exc:
+        raise ConfigError(
+            "authenticated runner output parent is unavailable, linked, or not writable"
+        ) from exc
+    finally:
+        if descriptor >= 0:
+            if linked_probe_name is not None:
+                with suppress(OSError):
+                    os.unlink(linked_probe_name, dir_fd=descriptor)
+            if probe_name is not None:
+                with suppress(OSError):
+                    os.unlink(probe_name, dir_fd=descriptor)
+            os.close(descriptor)
+
+
+def _authenticated_runner_output_parent_identity(
+    output: Path,
+    directory_flags: int,
+) -> tuple[int, int, int, int]:
+    """Resolve the requested parent afresh and return its exact inode identity."""
+
+    descriptor = -1
+    try:
+        descriptor = os.open(output.anchor, directory_flags)
+        for component in output.parts[1:-1]:
+            child = os.open(component, directory_flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        parent = os.fstat(descriptor)
+        return (parent.st_dev, parent.st_ino, parent.st_mode, parent.st_uid)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _write_authenticated_runner_output_fresh(
+    output: Path,
+    value: AuthenticatedRunnerDurableEvidenceBundle,
+    *,
+    max_bytes: int = MAX_JSON_ARTIFACT_BYTES,
+) -> int:
+    """Publish one bounded private bundle without replacing an intervening leaf.
+
+    The provider-free preflight is intentionally repeated here.  Publication uses
+    a descriptor-relative exclusive temporary file followed by an exclusive hard
+    link, so an output created after preflight is never overwritten. Once the final
+    name becomes visible, rollback never unlinks it: there is no portable atomic
+    unlink-if-inode-matches operation, and deleting by name could remove a concurrent
+    operator replacement.
+    """
+
+    if (
+        type(value) is not AuthenticatedRunnerDurableEvidenceBundle
+        or type(max_bytes) is not int
+        or max_bytes <= 0
+    ):
+        raise ConfigError("authenticated runner final output payload is invalid")
+    try:
+        serialized = authenticated_runner_durable_bundle_bytes(value)
+    except AuthenticatedRunnerDurableBundleError:
+        raise ConfigError("authenticated runner final output payload is invalid") from None
+    if len(serialized) > max_bytes:
+        raise ConfigError(f"authenticated runner final output exceeds {max_bytes} byte limit")
+    _preflight_authenticated_runner_output(output)
+
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    if (
+        no_follow <= 0
+        or directory <= 0
+        or os.open not in os.supports_dir_fd
+        or os.link not in os.supports_dir_fd
+        or os.unlink not in os.supports_dir_fd
+        or os.link not in os.supports_follow_symlinks
+    ):
+        raise ConfigError(
+            "authenticated runner output publication requires descriptor-relative support"
+        )
+
+    descriptor = -1
+    temporary_name: str | None = None
+    published = False
+    directory_flags = os.O_RDONLY | no_follow | directory | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(output.anchor, directory_flags)
+        for component in output.parts[1:-1]:
+            child = os.open(component, directory_flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        parent = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(parent.st_mode)
+            or stat.S_IMODE(parent.st_mode) != 0o700
+            or parent.st_uid != os.geteuid()
+        ):
+            raise ConfigError(
+                "authenticated runner output parent must be an owned mode-0700 directory"
+            )
+        parent_identity = (parent.st_dev, parent.st_ino, parent.st_mode, parent.st_uid)
+        if _authenticated_runner_output_parent_identity(output, directory_flags) != (
+            parent_identity
+        ):
+            raise ConfigError("authenticated runner output parent changed before publication")
+
+        temporary_name = f".mmaudit-authrunner-output-{uuid.uuid4().hex}"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | no_follow | getattr(os, "O_CLOEXEC", 0)
+        temporary = os.open(temporary_name, flags, 0o600, dir_fd=descriptor)
+        try:
+            remaining = memoryview(serialized)
+            while remaining:
+                written = os.write(temporary, remaining)
+                if written <= 0:
+                    raise OSError("authenticated runner output write made no progress")
+                remaining = remaining[written:]
+            os.fsync(temporary)
+            metadata = os.fstat(temporary)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_nlink != 1
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or metadata.st_size != len(serialized)
+            ):
+                raise ConfigError("authenticated runner temporary output is not exact and private")
+        finally:
+            os.close(temporary)
+
+        if _authenticated_runner_output_parent_identity(output, directory_flags) != (
+            parent_identity
+        ):
+            raise ConfigError("authenticated runner output parent changed before publication")
+        os.link(
+            temporary_name,
+            output.name,
+            src_dir_fd=descriptor,
+            dst_dir_fd=descriptor,
+            follow_symlinks=False,
+        )
+        if _authenticated_runner_output_parent_identity(output, directory_flags) != (
+            parent_identity
+        ):
+            raise ConfigError("authenticated runner output parent changed during publication")
+        os.unlink(temporary_name, dir_fd=descriptor)
+        temporary_name = None
+        os.fsync(descriptor)
+        final = os.stat(output.name, dir_fd=descriptor, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(final.st_mode)
+            or final.st_nlink != 1
+            or stat.S_IMODE(final.st_mode) != 0o600
+            or final.st_size != len(serialized)
+        ):
+            raise ConfigError("authenticated runner final output is not exact and private")
+        if _authenticated_runner_output_parent_identity(output, directory_flags) != (
+            parent_identity
+        ):
+            raise ConfigError("authenticated runner output parent changed during publication")
+        published = True
+    except FileExistsError:
+        raise ConfigError("authenticated runner final output must remain fresh") from None
+    except ConfigError:
+        raise
+    except OSError as exc:
+        raise ConfigError("authenticated runner final output publication failed safely") from exc
+    finally:
+        if descriptor >= 0:
+            if temporary_name is not None:
+                with suppress(OSError):
+                    os.unlink(temporary_name, dir_fd=descriptor)
+            os.close(descriptor)
+    if not published:
+        raise ConfigError("authenticated runner final output was not published")
+    return len(serialized)
+
+
+def _authenticated_runner_durable_output(
+    result: AuthenticatedRunnerOpenRouterResult,
+) -> AuthenticatedRunnerDurableEvidenceBundle:
+    """Build the strict durable bundle without serializing PID-local authority."""
+
+    if (
+        type(result) is not AuthenticatedRunnerOpenRouterResult
+        or type(result.execution) is not AuthenticatedRunnerOpenRouterExecutionSnapshot
+        or type(result.execution.runs) is not tuple
+        or any(
+            type(item) is not AuthenticatedRunnerOpenRouterRunSnapshot
+            for item in result.execution.runs
+        )
+    ):
+        raise ConfigError("authenticated runner returned the wrong exact result type")
+    try:
+        return build_authenticated_runner_durable_bundle(
+            runner_evidence=result.runner_evidence,
+            candidate_reports=tuple(item.candidate_report for item in result.execution.runs),
+            prepared_runs=tuple(item.prepared_adjudication for item in result.execution.runs),
+            adjudication_reports=tuple(item.adjudication_report for item in result.execution.runs),
+            authseal_collision_map=result.authseal_collision_map,
+            authseal_decision_projections=result.authseal_decision_projections,
+            authseal_rejection_kind=result.authseal_rejection_kind,
+        )
+    except (AttributeError, AuthenticatedRunnerDurableBundleError):
+        raise ConfigError("authenticated runner durable output is invalid") from None
+
+
 def _budget_and_usage(
     config: AuditConfig,
     *,
@@ -3912,9 +4781,15 @@ def _selected_cost_ledger_path(
     config: AuditConfig,
     override: Path | None,
 ) -> Path | None:
-    if override is not None:
-        return override
     configured = config.execution.cost_ledger_path
+    if override is not None:
+        if not override.is_absolute():
+            raise ConfigError("authenticated runner cost ledger override must be absolute")
+        if configured is not None and override != Path(configured):
+            raise ConfigError(
+                "authenticated runner cost ledger override differs from configured ledger"
+            )
+        return override
     return Path(configured) if configured is not None else None
 
 
@@ -4627,7 +5502,7 @@ def _run_async_cli(function: Any) -> None:
     try:
         asyncio.run(function())
     except (ConfigError, CostLedgerError, OpenRouterError, OSError, ValueError) as exc:
-        console.print(f"[red]mmaudit failed safely:[/red] {exc}")
+        console.print(f"mmaudit failed safely: {exc}", style="red", markup=False)
         raise typer.Exit(ExitCode.CONFIGURATION) from exc
 
 

@@ -207,6 +207,7 @@ def _force_real_audit_policy_boundary(
         context_package: Any,
         checked_at: datetime,
         require_runtime_snapshots: bool,
+        allow_refreshed_pricing: bool = False,
     ) -> Any:
         del require_runtime_snapshots
         return original(
@@ -220,6 +221,7 @@ def _force_real_audit_policy_boundary(
             context_package=context_package,
             checked_at=checked_at,
             require_runtime_snapshots=False,
+            allow_refreshed_pricing=allow_refreshed_pricing,
         )
 
     monkeypatch.setattr(
@@ -532,17 +534,17 @@ async def test_policy_binding_drift_before_reserve_refuses_without_ledger_entry(
         ),
     )
     drift = _policy_bundle(harness.technical, context_tag="drift-before-reserve")
-    original_build_request = harness.client.build_request
+    original_request_token_plan = harness.client._request_token_plan
 
-    def build_then_drift(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        body = original_build_request(*args, **kwargs)
+    def plan_then_drift(*args: Any, **kwargs: Any) -> Any:
+        plan = original_request_token_plan(*args, **kwargs)
         harness.client._audit_policy_binding = openrouter_module._OpenRouterAuditPolicyBinding(
             audit_context=drift.audit_context,
             client_constraints=drift.client_constraints,
         )
-        return body
+        return plan
 
-    monkeypatch.setattr(harness.client, "build_request", build_then_drift)
+    monkeypatch.setattr(harness.client, "_request_token_plan", plan_then_drift)
     try:
         with pytest.raises(OpenRouterPolicyEligibilityError, match="effective privacy request"):
             await _complete(harness)
@@ -571,17 +573,20 @@ async def test_policy_binding_failure_after_reserve_releases_without_post(
         ),
     )
     drift = _policy_bundle(harness.technical, context_tag="drift-after-reserve")
-    original_reserve = harness.client.budget.reserve
 
-    async def reserve_then_drift(*args: Any, **kwargs: Any) -> Any:
-        reservation = await original_reserve(*args, **kwargs)
-        harness.client._audit_policy_binding = openrouter_module._OpenRouterAuditPolicyBinding(
-            audit_context=drift.audit_context,
-            client_constraints=drift.client_constraints,
-        )
-        return reservation
+    @dataclass(slots=True)
+    class DriftAfterReserve:
+        def request_ready(self, **_values: Any) -> None:
+            return None
 
-    monkeypatch.setattr(harness.client.budget, "reserve", reserve_then_drift)
+        def request_dispatched(self, *, logical_request_id: str) -> None:
+            del logical_request_id
+            harness.client._audit_policy_binding = openrouter_module._OpenRouterAuditPolicyBinding(
+                audit_context=drift.audit_context,
+                client_constraints=drift.client_constraints,
+            )
+
+    harness.client.bind_request_lifecycle_observer(DriftAfterReserve())
     try:
         with pytest.raises(OpenRouterPolicyEligibilityError, match="effective privacy request"):
             await _complete(harness)
@@ -594,7 +599,7 @@ async def test_policy_binding_failure_after_reserve_releases_without_post(
     assert snapshot.spent_usd == 0
     assert len(snapshot.entries) == 1
     assert snapshot.entries[0].status.value == "released"
-    assert harness.context_preflight_records[-1].reason is ContextPreflightReason.ROUTE_UNAVAILABLE
+    assert harness.context_preflight_records == ()
 
 
 @pytest.mark.asyncio

@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import re
+import sys
 import threading
 import weakref
 from collections.abc import Callable, Mapping
@@ -20,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from mmaudit.models.identifiers import is_exact_openrouter_model_id
 from mmaudit.models.schemas import ExecutionEvidenceKind, UsageRecord
 from mmaudit.models.usage import (
+    _has_authrunner_owned_real_usage_origin,
     _is_structurally_generation_bindable_usage_record,
     _is_structurally_generation_reconcilable_usage_record,
     _validated_usage_copy_preserving_owned_attestation,
@@ -373,6 +375,287 @@ def _build_generation_capability_authority() -> tuple[
 _register_trusted_generation_capability, _trusted_generation_binding_for = (
     _build_generation_capability_authority()
 )
+
+
+def _build_authrunner_generation_origin_authority() -> tuple[
+    Callable[..., None],
+    Callable[
+        [TrustedGenerationVerification, tuple[GenerationVerificationRequest, ...]],
+        TrustedGenerationVerification,
+    ],
+    Callable[..., bool],
+]:
+    """Keep fresh REAL re-fetch origin separate from structural test capabilities."""
+
+    type RequestBinding = tuple[str, str, str, str]
+    type Issuer = tuple[
+        object,
+        type[object],
+        Callable[..., object],
+        Callable[[], bool],
+        Callable[[object], ExecutionEvidenceKind],
+    ]
+
+    registry: dict[
+        int,
+        tuple[
+            weakref.ReferenceType[TrustedGenerationVerification],
+            tuple[RequestBinding, ...],
+            object,
+        ],
+    ] = {}
+    issuer: Issuer | None = None
+    lock = threading.RLock()
+    trusted_sys = sys
+    trusted_self_module = trusted_sys.modules[__name__]
+    trusted_hashlib = hashlib
+    trusted_json = json
+    trusted_sha256 = trusted_hashlib.sha256
+    trusted_json_dumps = trusted_json.dumps
+    trusted_binding_for = _trusted_generation_binding_for
+    trusted_usage_origin = _has_authrunner_owned_real_usage_origin
+
+    def trusted_usage_sha256(record: UsageRecord) -> str:
+        return trusted_sha256(
+            trusted_json_dumps(
+                record.model_dump(mode="json"),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+
+    def register_issuer(
+        *,
+        module: object,
+        client_type: type[object],
+        refetch_method: Callable[..., object],
+        pristine_predicate: Callable[[], bool],
+        execution_evidence_resolver: Callable[[object], ExecutionEvidenceKind],
+    ) -> None:
+        """Register the exact OpenRouter authenticated refetch method once."""
+
+        nonlocal issuer
+        frame = trusted_sys._getframe(1)
+        module_name = getattr(module, "__name__", None)
+        module_values = getattr(module, "__dict__", None)
+        if (
+            module_name != "mmaudit.models.openrouter"
+            or type(module_values) is not dict
+            or frame.f_globals is not module_values
+            or frame.f_code.co_name != "<module>"
+            or trusted_sys.modules.get(module_name) is not module
+            or getattr(module, "OpenRouterClient", None) is not client_type
+            or client_type.__module__ != module_name
+            or vars(client_type).get("create_trusted_generation_verification") is not refetch_method
+            or getattr(refetch_method, "__module__", None) != module_name
+            or getattr(refetch_method, "__qualname__", None)
+            != "OpenRouterClient.create_trusted_generation_verification"
+            or getattr(module, "_openrouter_client_callables_are_pristine", None)
+            is not pristine_predicate
+            or getattr(module, "trusted_openrouter_execution_evidence", None)
+            is not execution_evidence_resolver
+        ):
+            raise RuntimeError("AUTHRUNNER generation-origin issuer registration is invalid")
+        with lock:
+            if issuer is not None:
+                raise RuntimeError("AUTHRUNNER generation-origin issuer is already registered")
+            issuer = (
+                module,
+                client_type,
+                refetch_method,
+                pristine_predicate,
+                execution_evidence_resolver,
+            )
+
+    def mark(
+        capability: TrustedGenerationVerification,
+        requests: tuple[GenerationVerificationRequest, ...],
+    ) -> TrustedGenerationVerification:
+        """Strong-mark one exact capability returned by the pristine live refetch path."""
+
+        with lock:
+            registered_issuer = issuer
+        if registered_issuer is None:
+            raise GenerationEvidenceValidationError(
+                "AUTHRUNNER generation-origin issuer is not registered"
+            )
+        (
+            module,
+            client_type,
+            refetch_method,
+            pristine_predicate,
+            execution_evidence_resolver,
+        ) = registered_issuer
+        frame = trusted_sys._getframe(1)
+        module_name = getattr(module, "__name__", "")
+        module_values = getattr(module, "__dict__", None)
+        client = frame.f_locals.get("self")
+        if (
+            type(module_values) is not dict
+            or globals().get("sys") is not trusted_sys
+            or globals().get("hashlib") is not trusted_hashlib
+            or globals().get("json") is not trusted_json
+            or trusted_hashlib.sha256 is not trusted_sha256
+            or trusted_json.dumps is not trusted_json_dumps
+            or trusted_sys.modules.get(__name__) is not trusted_self_module
+            or getattr(trusted_self_module, "_trusted_generation_binding_for", None)
+            is not trusted_binding_for
+            or getattr(trusted_self_module, "_has_authrunner_owned_real_usage_origin", None)
+            is not trusted_usage_origin
+            or trusted_sys.modules.get(module_name) is not module
+            or getattr(module, "OpenRouterClient", None) is not client_type
+            or vars(client_type).get("create_trusted_generation_verification") is not refetch_method
+            or getattr(module, "_openrouter_client_callables_are_pristine", None)
+            is not pristine_predicate
+            or getattr(module, "trusted_openrouter_execution_evidence", None)
+            is not execution_evidence_resolver
+            or frame.f_globals is not module_values
+            or frame.f_code is not refetch_method.__code__
+            or type(client) is not client_type
+        ):
+            raise GenerationEvidenceValidationError(
+                "AUTHRUNNER generation origin requires the pristine refetch path"
+            )
+        try:
+            budget = object.__getattribute__(client, "budget")
+            atomic_ledger = object.__getattribute__(budget, "atomic_ledger")
+        except (AttributeError, TypeError):
+            atomic_ledger = None
+        if (
+            not pristine_predicate()
+            or execution_evidence_resolver(client) is not ExecutionEvidenceKind.REAL
+            or object.__getattribute__(client, "_owns_client") is not True
+            or object.__getattribute__(client, "_authentication_validated") is not True
+            or atomic_ledger is None
+            or type(capability) is not TrustedGenerationVerification
+            or type(requests) is not tuple
+            or not requests
+        ):
+            raise GenerationEvidenceValidationError(
+                "AUTHRUNNER generation origin requires an owned REAL fresh refetch"
+            )
+        request_bindings: list[RequestBinding] = []
+        for request in requests:
+            if type(request) is not GenerationVerificationRequest or not trusted_usage_origin(
+                request.usage_record,
+                atomic_ledger=atomic_ledger,
+            ):
+                raise GenerationEvidenceValidationError(
+                    "AUTHRUNNER generation origin requires owned REAL request usage"
+                )
+            binding = trusted_binding_for(
+                capability,
+                request.benchmark_report_sha256,
+                request.exact_model_id,
+                request.case_id,
+            )
+            usage_sha256 = trusted_usage_sha256(request.usage_record)
+            if binding is None or binding.usage_record_sha256 != usage_sha256:
+                raise GenerationEvidenceValidationError(
+                    "AUTHRUNNER generation origin differs from the fresh refetch set"
+                )
+            request_bindings.append(
+                (
+                    request.benchmark_report_sha256,
+                    request.exact_model_id,
+                    request.case_id,
+                    usage_sha256,
+                )
+            )
+        frozen_bindings = tuple(request_bindings)
+        key = id(capability)
+
+        def discard(reference: weakref.ReferenceType[TrustedGenerationVerification]) -> None:
+            with lock:
+                current = registry.get(key)
+                if current is not None and current[0] is reference:
+                    registry.pop(key, None)
+
+        reference = weakref.ref(capability, discard)
+        with lock:
+            if key in registry:
+                raise GenerationEvidenceValidationError(
+                    "AUTHRUNNER generation origin is already registered"
+                )
+            registry[key] = (reference, frozen_bindings, atomic_ledger)
+        return capability
+
+    def contains(
+        capability: TrustedGenerationVerification,
+        *,
+        atomic_ledger: object | None = None,
+    ) -> bool:
+        if type(capability) is not TrustedGenerationVerification:
+            return False
+        with lock:
+            registered_issuer = issuer
+        if registered_issuer is None:
+            return False
+        (
+            module,
+            client_type,
+            refetch_method,
+            pristine_predicate,
+            execution_evidence_resolver,
+        ) = registered_issuer
+        module_name = getattr(module, "__name__", "")
+        if (
+            globals().get("sys") is not trusted_sys
+            or globals().get("hashlib") is not trusted_hashlib
+            or globals().get("json") is not trusted_json
+            or trusted_hashlib.sha256 is not trusted_sha256
+            or trusted_json.dumps is not trusted_json_dumps
+            or trusted_sys.modules.get(__name__) is not trusted_self_module
+            or getattr(trusted_self_module, "_trusted_generation_binding_for", None)
+            is not trusted_binding_for
+            or getattr(trusted_self_module, "_has_authrunner_owned_real_usage_origin", None)
+            is not trusted_usage_origin
+            or trusted_sys.modules.get(module_name) is not module
+            or getattr(module, "OpenRouterClient", None) is not client_type
+            or vars(client_type).get("create_trusted_generation_verification") is not refetch_method
+            or getattr(module, "_openrouter_client_callables_are_pristine", None)
+            is not pristine_predicate
+            or getattr(module, "trusted_openrouter_execution_evidence", None)
+            is not execution_evidence_resolver
+            or not pristine_predicate()
+        ):
+            return False
+        with lock:
+            registered = registry.get(id(capability))
+        if (
+            registered is None
+            or registered[0]() is not capability
+            or (atomic_ledger is not None and registered[2] is not atomic_ledger)
+        ):
+            return False
+        try:
+            return all(
+                (
+                    binding := trusted_binding_for(
+                        capability,
+                        report_sha256,
+                        exact_model_id,
+                        case_id,
+                    )
+                )
+                is not None
+                and binding.usage_record_sha256 == usage_sha256
+                for report_sha256, exact_model_id, case_id, usage_sha256 in registered[1]
+            )
+        except GenerationEvidenceValidationError:
+            return False
+
+    return register_issuer, mark, contains
+
+
+(
+    _register_authrunner_generation_origin_issuer,
+    _attest_authrunner_generation_origin,
+    _has_authrunner_generation_origin,
+) = _build_authrunner_generation_origin_authority()
+del _build_authrunner_generation_origin_authority
 
 
 class OpenRouterGenerationEvidence(BaseModel):

@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
-from typing import Any, cast
 
 import pytest
 
-from mmaudit.agents.base import FindingReviewResult
+from mmaudit.agents.base import FindingReviewResult, load_prompt
 from mmaudit.agents.source_audit import SourceAuditAgent
 from mmaudit.config import AuditConfig
-from mmaudit.models.openrouter import OpenRouterClient, OpenRouterSchemaError, StructuredCompletion
+from mmaudit.models.openrouter import (
+    OpenRouterClient,
+    OpenRouterSchemaError,
+)
 from mmaudit.models.schemas import (
     CandidateOriginKind,
     CandidateReviewBatch,
@@ -43,28 +45,22 @@ from tests.unit.test_execution_origin_consensus import (
     _provenance,
     _validation,
 )
-from tests.unit.test_model_review_evidence import _context, _usage
+from tests.unit.test_model_review_evidence import _context, _framed_completion, _usage
 
 
-class _SyntheticCompletionClient:
-    """Return one local structured batch without provider or network access."""
+@pytest.mark.parametrize(
+    "prompt_file",
+    ("source_audit.md", "configuration.md", "business_logic.md", "specialist.md"),
+)
+def test_finding_prompts_require_exact_candidate_review_frame_order(prompt_file: str) -> None:
+    prompt = load_prompt(prompt_file)
 
-    def __init__(self, batch: CandidateReviewBatch) -> None:
-        self.batch = batch
-
-    async def complete_with_evidence(
-        self,
-        *,
-        role: str,
-        user_prompt: str,
-        **_kwargs: Any,
-    ) -> StructuredCompletion[CandidateReviewBatch]:
-        usage = _usage(self.batch, role=role).model_copy(
-            update={
-                "user_prompt_sha256": hashlib.sha256(user_prompt.encode()).hexdigest(),
-            }
-        )
-        return StructuredCompletion(value=self.batch, usage_record=usage)
+    assert "CandidateReviewBatch" not in prompt
+    assert "CandidateReviewFramedDocument" in prompt
+    assert "one `BEGIN`, every\n`FINDING`, one `FINDINGS_END`" in prompt
+    assert "one `SURFACE_REVIEWS_END`, one `SUMMARY`, and\none `END`" in prompt
+    assert "never emit top-level `findings` or\n`surface_reviews`" in prompt
+    assert "`END.frame_count` is the total number of frames" in prompt
 
 
 def _bound_usage(
@@ -100,16 +96,26 @@ def _bound_usage(
     )
 
 
-@pytest.mark.asyncio
-async def test_model_response_cannot_create_or_reattribute_execution_origin(
+def test_model_response_cannot_create_or_reattribute_execution_origin(
     config_factory: Callable[..., AuditConfig],
 ) -> None:
     claimed_execution = _execution_candidate(_provenance())
     response = CandidateReviewBatch(findings=[claimed_execution], surface_reviews=())
-    client = cast(OpenRouterClient, _SyntheticCompletionClient(response))
-    agent = SourceAuditAgent(config_factory(), client)
+    context = _context((), role="source_audit")
+    completion, normalization = _framed_completion(response, role="source_audit")
+    usage = completion.usage_record.model_copy(
+        update={
+            "user_prompt_sha256": hashlib.sha256(render_context(context).encode()).hexdigest(),
+        }
+    )
+    agent = SourceAuditAgent(config_factory(), object.__new__(OpenRouterClient))
 
-    result = await agent.run(_context((), role="source_audit"))
+    result = agent.bind_completed_review(
+        context,
+        raw_response=response,
+        completion_usage=usage,
+        normalization_evidence=normalization,
+    )
 
     assert len(result.findings) == 1
     normalized = result.findings[0]

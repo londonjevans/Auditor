@@ -1095,10 +1095,12 @@ def test_models_benchmark_help_lists_blinded_corpus_and_egress_controls() -> Non
 
 
 def test_models_discover_help_lists_exact_route_and_private_output_controls() -> None:
-    result = runner.invoke(app, ["models", "discover", "--help"])
+    result = runner.invoke(app, ["models", "discover", "--help"], env={"COLUMNS": "240"})
     assert result.exit_code == 0
     assert "--candidate" in result.stdout
     assert "--output-dir" in result.stdout
+    assert "--candidate-registry-template" in result.stdout
+    assert "--candidate-registry-output" in result.stdout
     assert "--secrets-env-file" in result.stdout
 
 

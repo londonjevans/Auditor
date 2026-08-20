@@ -32,12 +32,17 @@
         },
         "filename": {
           "enum": [
+            "model-refresh-candidate-registry.json",
             "model-refresh-source-evidence.json",
             "model-refresh-snapshot.json",
             "model-refresh-diff.json",
             "model-refresh-attempt.json",
             "model-refresh-freshness.json",
-            "model-policy-eligibility-refresh.json"
+            "model-policy-eligibility-refresh.json",
+            "previous-workflow-status.json",
+            "previous-candidate-registry.json",
+            "previous-source-evidence.json",
+            "previous-snapshot.json"
           ],
           "title": "Filename",
           "type": "string"
@@ -83,7 +88,49 @@
       "title": "Policy Projection Expected",
       "type": "boolean"
     },
+    "previous_workflow_run_attempt": {
+      "anyOf": [
+        {
+          "pattern": "^[1-9][0-9]{0,19}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Previous Workflow Run Attempt"
+    },
+    "previous_workflow_run_id": {
+      "anyOf": [
+        {
+          "pattern": "^[1-9][0-9]{0,19}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Previous Workflow Run Id"
+    },
+    "previous_workflow_status_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Previous Workflow Status Sha256"
+    },
     "pricing_tolerance_fraction": {
+      "maxLength": 66,
+      "minLength": 1,
+      "pattern": "^(?:0|1|0\\.[0-9]*[1-9])$",
       "title": "Pricing Tolerance Fraction",
       "type": "string"
     },
@@ -94,8 +141,8 @@
       "type": "integer"
     },
     "schema_version": {
-      "const": "3.0",
-      "default": "3.0",
+      "const": "4.0",
+      "default": "4.0",
       "title": "Schema Version",
       "type": "string"
     },

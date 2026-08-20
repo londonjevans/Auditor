@@ -38,7 +38,7 @@ from mmaudit.config import (
     MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_VERSION,
     MAXIMUM_ASSURANCE_QUALIFICATION_POLICY_SHA256,
 )
-from mmaudit.constants import ALL_SPECIALIST_ROLES
+from mmaudit.constants import ALL_SPECIALIST_ROLES, CANDIDATE_INDEPENDENT_SPECIALIST_ROLES
 from mmaudit.models.discovery import (
     DataCollectionDenyEvidenceSource,
     OpenRouterModelDiscoveryEvidence,
@@ -69,6 +69,7 @@ from mmaudit.models.schemas import AuditProfile, ExecutionEvidenceKind, StrictMo
 from mmaudit.models.usage import (
     _is_structurally_creditable_usage_record,
     is_creditable_usage_record,
+    is_recovery_creditable_usage_record,
     source_backed_whole_protocol_context,
 )
 from mmaudit.orchestration.manifest import canonical_sha256
@@ -89,6 +90,10 @@ _MIN_SPECIALIST_RESPONSIBILITIES = 24
 _MIN_WHOLE_PROTOCOL_LINEAGES = 4
 _MIN_CRITICAL_SURFACE_LINEAGES = 3
 _MIN_FALSIFIER_LINEAGES = 2
+if len(CANDIDATE_INDEPENDENT_SPECIALIST_ROLES) != _MIN_SPECIALIST_RESPONSIBILITIES:
+    raise RuntimeError(
+        "qualified specialist minimum must equal the frozen candidate-independent portfolio"
+    )
 _COMPILED_QUALIFICATION_RELEASE_PINS = (
     "1df14052e97a8ceb2cf3ec9fd25637f5f2f3a821818a54382a7c1f241059da8c",
     "2.0",
@@ -4808,6 +4813,9 @@ def evaluate_certified_ensemble(
             if (role := _canonical_specialist_role(record.role)) is not None
         }
     )
+    candidate_independent_specialists = sorted(
+        set(specialists) & set(CANDIDATE_INDEPENDENT_SPECIALIST_ROLES)
+    )
     whole_protocol_roots = sorted(
         {
             selected[record.requested_model].root_lineage
@@ -4868,7 +4876,7 @@ def evaluate_certified_ensemble(
         ),
         _ensemble_requirement(
             "specialist_responsibilities",
-            observed=len(specialists),
+            observed=len(candidate_independent_specialists),
             required=_MIN_SPECIALIST_RESPONSIBILITIES,
         ),
         _ensemble_requirement(
@@ -4984,8 +4992,29 @@ def usage_matches_verified_reasoning_qualification(
     record: UsageRecord,
     production_qualification: VerifiedProductionQualification,
     now: datetime,
+    recovery_request_limit_scope: str | None = None,
+    recovery_request_limit_count_before: int | None = None,
 ) -> bool:
     """Credit a runtime request only through its exact opaque reasoning authority."""
+
+    if (recovery_request_limit_scope is None) != (recovery_request_limit_count_before is None):
+        return False
+    usage_is_creditable = (
+        is_recovery_creditable_usage_record(
+            record,
+            request_limit_scope=recovery_request_limit_scope,
+            request_limit_count_before=recovery_request_limit_count_before,
+            require_real=True,
+            require_certification=True,
+        )
+        if recovery_request_limit_scope is not None
+        and recovery_request_limit_count_before is not None
+        else is_creditable_usage_record(
+            record,
+            require_real=True,
+            require_certification=True,
+        )
+    )
 
     try:
         if type(production_qualification) is not VerifiedProductionQualification:
@@ -5018,11 +5047,7 @@ def usage_matches_verified_reasoning_qualification(
         binding.reasoning_benchmark_fresh_evidence_sha256,
     )
     return (
-        is_creditable_usage_record(
-            record,
-            require_real=True,
-            require_certification=True,
-        )
+        usage_is_creditable
         and record.actual_provider_endpoint == model.approved_provider_endpoint
         and binding.exact_model_id == model.exact_model_id
         and binding.approved_provider_endpoint == model.approved_provider_endpoint

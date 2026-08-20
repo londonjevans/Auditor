@@ -16,7 +16,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Context, Decimal, InvalidOperation, localcontext
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Self
@@ -70,10 +70,13 @@ from mmaudit.repository.secrets import is_sensitive_workspace_name
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _ENDPOINT_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$"
+MODEL_REFRESH_FRACTION_PATTERN = r"^(?:0|1|0\.[0-9]*[1-9])$"
+MAX_MODEL_REFRESH_FRACTION_TEXT_LENGTH = 66
 _MAX_MODELS = 10_000
 _MAX_ROUTES_PER_MODEL = 256
 _MAX_PARAMETERS = 256
 _MAX_PRICING_FIELDS = 64
+_PRICING_COMPARISON_CONTEXT = Context(prec=160)
 _MAX_ARTIFACT_BYTES = 20_000_000
 _PRIVATE_FILE_MODE = 0o600
 _PRIVATE_DIRECTORY_MODE = 0o700
@@ -85,6 +88,7 @@ SOURCE_EVIDENCE_FILENAME = "model-refresh-source-evidence.json"
 DIFF_FILENAME = "model-refresh-diff.json"
 ATTEMPT_FILENAME = "model-refresh-attempt.json"
 FRESHNESS_FILENAME = "model-refresh-freshness.json"
+CANDIDATE_REGISTRY_FILENAME = "model-refresh-candidate-registry.json"
 
 _EndpointIdentityKey = tuple[str | None, str | None]
 _CatalogModelId = Annotated[
@@ -766,13 +770,18 @@ class ModelDriftRecord(_FrozenModel):
 class ModelRefreshDiff(_FrozenModel):
     """Deterministic exact-state comparison against a frozen baseline."""
 
-    schema_version: Literal["2.0"] = "2.0"
+    schema_version: Literal["3.0"] = "3.0"
     compared_at: datetime
     baseline_kind: RefreshBaselineKind
     baseline_sha256: str = Field(pattern=_SHA256_PATTERN)
+    baseline_candidate_registry_sha256: str = Field(pattern=_SHA256_PATTERN)
     current_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
-    candidate_registry_sha256: str = Field(pattern=_SHA256_PATTERN)
-    pricing_tolerance_fraction: str
+    current_candidate_registry_sha256: str = Field(pattern=_SHA256_PATTERN)
+    pricing_tolerance_fraction: str = Field(
+        min_length=1,
+        max_length=MAX_MODEL_REFRESH_FRACTION_TEXT_LENGTH,
+        pattern=MODEL_REFRESH_FRACTION_PATTERN,
+    )
     selected_routes: tuple[SelectedModelRoute, ...]
     changes: tuple[ModelDriftRecord, ...]
     semantic_unchanged: bool
@@ -795,6 +804,11 @@ class ModelRefreshDiff(_FrozenModel):
 
     @model_validator(mode="after")
     def diff_is_canonical_and_self_bound(self) -> Self:
+        if self.baseline_kind is RefreshBaselineKind.CANDIDATE_REGISTRY_HASH_ONLY and (
+            self.baseline_sha256 != self.baseline_candidate_registry_sha256
+            or self.baseline_candidate_registry_sha256 != self.current_candidate_registry_sha256
+        ):
+            raise ValueError("refresh bootstrap registry bindings are inconsistent")
         selected = tuple(
             (route.exact_model_id, route.provider_endpoint) for route in self.selected_routes
         )
@@ -996,6 +1010,10 @@ def build_model_refresh_source_evidence(
         )
     retrieved_at = _whole_second_utc(retrieved_at, label="refresh retrieval time")
     registry = CandidateRegistry.model_validate(candidate_registry.model_dump(mode="json"))
+    _require_registry_observed_no_earlier_than_created(
+        registry=registry,
+        observed_at=retrieved_at,
+    )
     raw_models = _required_bounded_list(catalog_payload.get("data"), label="model catalogue")
     raw_zdr = _required_bounded_list(
         zdr_payload.get("data"),
@@ -1143,6 +1161,10 @@ def build_model_refresh_snapshot_from_source(
 
     source = ModelRefreshSourceEvidence.model_validate(source_evidence.model_dump(mode="json"))
     registry = CandidateRegistry.model_validate(candidate_registry.model_dump(mode="json"))
+    _require_registry_observed_no_earlier_than_created(
+        registry=registry,
+        observed_at=source.retrieved_at,
+    )
     if source.candidate_registry_sha256 != registry.registry_sha256:
         raise ModelRefreshValidationError(
             "refresh source evidence binds a different candidate registry"
@@ -1597,14 +1619,25 @@ def diff_model_refresh(
     pricing_tolerance_fraction: str,
     compared_at: datetime,
     previous: ModelRefreshSnapshot | None = None,
+    previous_source_evidence: ModelRefreshSourceEvidence | None = None,
+    previous_candidate_registry: CandidateRegistry | None = None,
     selected_routes: Sequence[SelectedModelRoute] = (),
 ) -> ModelRefreshDiff:
-    """Compare exact normalized state without treating discovery as qualification."""
+    """Compare exact normalized state without treating discovery as qualification.
+
+    An exact historical baseline is accepted only as an atomic source/snapshot/registry
+    custody chain. Replaying that source with its own registry permits registry evolution
+    without substituting a hash-only baseline or weakening exact route comparisons.
+    """
 
     current = ModelRefreshSnapshot.model_validate(current.model_dump(mode="json"))
     registry = CandidateRegistry.model_validate(candidate_registry.model_dump(mode="json"))
     if current.candidate_registry_sha256 != registry.registry_sha256:
         raise ModelRefreshValidationError("refresh snapshot binds a different candidate registry")
+    _require_registry_observed_no_earlier_than_created(
+        registry=registry,
+        observed_at=current.retrieved_at,
+    )
     tolerance = _canonical_fraction(pricing_tolerance_fraction)
     if tolerance > 1:
         raise ModelRefreshValidationError("refresh pricing tolerance cannot exceed one")
@@ -1641,23 +1674,62 @@ def diff_model_refresh(
             selected_route.provider_endpoint
         )
 
+    previous_inputs = (
+        previous,
+        previous_source_evidence,
+        previous_candidate_registry,
+    )
+    if any(item is not None for item in previous_inputs) and not all(
+        item is not None for item in previous_inputs
+    ):
+        raise ModelRefreshValidationError(
+            "previous refresh snapshot, source evidence, and candidate registry "
+            "must be supplied together"
+        )
+
     exact_previous_snapshot = previous is not None
     if previous is None:
         baseline_kind = RefreshBaselineKind.CANDIDATE_REGISTRY_HASH_ONLY
         baseline_sha256 = registry.registry_sha256
+        baseline_candidate_registry_sha256 = registry.registry_sha256
         before_models = _candidate_baseline_models(registry)
     else:
-        previous = ModelRefreshSnapshot.model_validate(previous.model_dump(mode="json"))
-        if previous.candidate_registry_sha256 != registry.registry_sha256:
-            raise ModelRefreshValidationError(
-                "previous refresh snapshot binds a different candidate registry"
+        assert previous_source_evidence is not None
+        assert previous_candidate_registry is not None
+        try:
+            validated_previous = ModelRefreshSnapshot.model_validate(
+                previous.model_dump(mode="json")
             )
+            validated_previous_source = ModelRefreshSourceEvidence.model_validate(
+                previous_source_evidence.model_dump(mode="json")
+            )
+            validated_previous_registry = CandidateRegistry.model_validate(
+                previous_candidate_registry.model_dump(mode="json")
+            )
+            reproduced_previous = build_model_refresh_snapshot_from_source(
+                source_evidence=validated_previous_source,
+                candidate_registry=validated_previous_registry,
+            )
+        except (AttributeError, ValueError) as exc:
+            raise ModelRefreshValidationError(
+                "previous refresh evidence cannot be reproduced with its candidate registry"
+            ) from exc
+        if validated_previous != reproduced_previous:
+            raise ModelRefreshValidationError(
+                "previous refresh snapshot differs from its source and candidate registry replay"
+            )
+        previous = validated_previous
         if previous.retrieved_at > current.retrieved_at:
             raise ModelRefreshValidationError(
                 "previous refresh snapshot is newer than the current snapshot"
             )
+        if validated_previous_registry.created_at > registry.created_at:
+            raise ModelRefreshValidationError(
+                "previous candidate registry is newer than the current candidate registry"
+            )
         baseline_kind = RefreshBaselineKind.PREVIOUS_SNAPSHOT
         baseline_sha256 = previous.snapshot_sha256
+        baseline_candidate_registry_sha256 = validated_previous_registry.registry_sha256
         before_models = {model.exact_model_id: model for model in previous.models}
     after_models = {model.exact_model_id: model for model in current.models}
     baseline_variant_keys = {model.variant_family_key for model in before_models.values()}
@@ -1984,12 +2056,13 @@ def diff_model_refresh(
         )
     )
     values: dict[str, Any] = {
-        "schema_version": "2.0",
+        "schema_version": "3.0",
         "compared_at": compared_at,
         "baseline_kind": baseline_kind.value,
         "baseline_sha256": baseline_sha256,
+        "baseline_candidate_registry_sha256": baseline_candidate_registry_sha256,
         "current_snapshot_sha256": current.snapshot_sha256,
-        "candidate_registry_sha256": registry.registry_sha256,
+        "current_candidate_registry_sha256": registry.registry_sha256,
         "pricing_tolerance_fraction": pricing_tolerance_fraction,
         "selected_routes": [route.model_dump(mode="json") for route in selected],
         "changes": [record.model_dump(mode="json") for record in changes],
@@ -2021,8 +2094,10 @@ def seal_model_refresh_attempt(
             raise ModelRefreshValidationError(
                 "successful refresh attempt requires snapshot and diff"
             )
-        if snapshot.candidate_registry_sha256 != candidate_registry_sha256 or (
-            diff.current_snapshot_sha256 != snapshot.snapshot_sha256
+        if (
+            snapshot.candidate_registry_sha256 != candidate_registry_sha256
+            or diff.current_candidate_registry_sha256 != candidate_registry_sha256
+            or diff.current_snapshot_sha256 != snapshot.snapshot_sha256
         ):
             raise ModelRefreshValidationError("refresh attempt snapshot and diff bindings disagree")
         status = diff.status
@@ -2052,15 +2127,10 @@ def evaluate_model_refresh_freshness(
     """Evaluate exact soft/hard boundaries without granting positive authority."""
 
     observed_at = _whole_second_utc(observed_at, label="refresh freshness observation")
-    if (
-        isinstance(soft_max_age_hours, bool)
-        or isinstance(hard_max_age_hours, bool)
-        or not isinstance(soft_max_age_hours, int)
-        or not isinstance(hard_max_age_hours, int)
-        or soft_max_age_hours < 1
-        or hard_max_age_hours <= soft_max_age_hours
-    ):
-        raise ModelRefreshValidationError("refresh freshness hours are invalid")
+    _validate_model_refresh_freshness_policy(
+        soft_max_age_hours=soft_max_age_hours,
+        hard_max_age_hours=hard_max_age_hours,
+    )
     last_success = snapshot.retrieved_at if snapshot is not None else None
     snapshot_sha256 = snapshot.snapshot_sha256 if snapshot is not None else None
     if last_success is None:
@@ -2119,8 +2189,10 @@ def write_model_refresh_success(
         or source_evidence.candidate_registry_sha256 != snapshot.candidate_registry_sha256
         or source_evidence.catalog_projection_sha256 != snapshot.catalog_snapshot_sha256
         or source_evidence.zdr_projection_sha256 != snapshot.zdr_snapshot_sha256
+        or attempt.candidate_registry_sha256 != snapshot.candidate_registry_sha256
         or attempt.snapshot_sha256 != snapshot.snapshot_sha256
         or attempt.diff_sha256 != diff.diff_sha256
+        or diff.current_candidate_registry_sha256 != snapshot.candidate_registry_sha256
         or diff.current_snapshot_sha256 != snapshot.snapshot_sha256
         or freshness.snapshot_sha256 != snapshot.snapshot_sha256
     ):
@@ -2507,8 +2579,7 @@ def _compare_model_pricing(
         for field in sorted(set(before.pricing) | set(after.pricing)):
             old = Decimal(before.pricing.get(field, "0"))
             new = Decimal(after.pricing.get(field, "0"))
-            threshold = old * (Decimal(1) + tolerance)
-            if new > threshold:
+            if _price_exceeds_tolerance(old=old, new=new, tolerance=tolerance):
                 increases.add(f"{endpoint}:{field}")
     if not_evaluable:
         return PricingComparisonState.NOT_EVALUABLE, changed, increases
@@ -2532,10 +2603,17 @@ def _endpoints_with_pricing_increase(
         for field in set(prior.pricing) | set(route.pricing):
             old = Decimal(prior.pricing.get(field, "0"))
             new = Decimal(route.pricing.get(field, "0"))
-            if new > old * (Decimal(1) + tolerance):
+            if _price_exceeds_tolerance(old=old, new=new, tolerance=tolerance):
                 result.add(route.provider_endpoint)
                 break
     return result
+
+
+def _price_exceeds_tolerance(*, old: Decimal, new: Decimal, tolerance: Decimal) -> bool:
+    """Compare canonical prices without inheriting the process Decimal context."""
+
+    with localcontext(_PRICING_COMPARISON_CONTEXT):
+        return new > old * (Decimal(1) + tolerance)
 
 
 def _normalize_endpoint_inventory(
@@ -2677,15 +2755,75 @@ def _canonical_pricing(value: Any) -> dict[str, str]:
 
 
 def _canonical_fraction(value: str) -> Decimal:
+    return parse_model_refresh_fraction(value)
+
+
+def parse_model_refresh_fraction(value: str) -> Decimal:
+    """Parse one bounded canonical fraction without exponent expansion."""
+
     if not isinstance(value, str):
         raise ModelRefreshValidationError("refresh fraction must be decimal text")
+    if not 1 <= len(value) <= MAX_MODEL_REFRESH_FRACTION_TEXT_LENGTH or (
+        value not in {"0", "1"}
+        and not (
+            value.startswith("0.")
+            and len(value) > 2
+            and value[-1] != "0"
+            and all("0" <= character <= "9" for character in value[2:])
+        )
+    ):
+        raise ModelRefreshValidationError("refresh fraction is not canonical")
     try:
         parsed = Decimal(value)
     except InvalidOperation as exc:
         raise ModelRefreshValidationError("refresh fraction is invalid") from exc
-    if not parsed.is_finite() or parsed < 0 or _canonical_decimal(parsed) != value:
+    if not parsed.is_finite() or not Decimal(0) <= parsed <= Decimal(1):
         raise ModelRefreshValidationError("refresh fraction is not canonical")
     return parsed
+
+
+def validate_model_refresh_controls(
+    *,
+    pricing_tolerance_fraction: str,
+    soft_max_age_hours: int,
+    hard_max_age_hours: int,
+) -> None:
+    """Reject invalid local refresh policy before credentials or provider access."""
+
+    if _canonical_fraction(pricing_tolerance_fraction) > 1:
+        raise ModelRefreshValidationError("refresh pricing tolerance cannot exceed one")
+    _validate_model_refresh_freshness_policy(
+        soft_max_age_hours=soft_max_age_hours,
+        hard_max_age_hours=hard_max_age_hours,
+    )
+
+
+def _validate_model_refresh_freshness_policy(
+    *,
+    soft_max_age_hours: int,
+    hard_max_age_hours: int,
+) -> None:
+    if (
+        isinstance(soft_max_age_hours, bool)
+        or isinstance(hard_max_age_hours, bool)
+        or not isinstance(soft_max_age_hours, int)
+        or not isinstance(hard_max_age_hours, int)
+        or not 1 <= soft_max_age_hours <= 24 * 30
+        or not 2 <= hard_max_age_hours <= 24 * 90
+        or hard_max_age_hours <= soft_max_age_hours
+    ):
+        raise ModelRefreshValidationError("refresh freshness hours are invalid")
+
+
+def _require_registry_observed_no_earlier_than_created(
+    *,
+    registry: CandidateRegistry,
+    observed_at: datetime,
+) -> None:
+    if registry.created_at > observed_at:
+        raise ModelRefreshValidationError(
+            "candidate registry creation time is later than refresh observation"
+        )
 
 
 def _canonical_decimal(value: Decimal) -> str:

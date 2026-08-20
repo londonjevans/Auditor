@@ -3,12 +3,24 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import PurePosixPath
 
 from mmaudit.config import AuditConfig, ModelLineageConfig, model_lineage_index
 from mmaudit.constants import SPECIALIST_INVESTIGATOR_ROLES
+from mmaudit.models.coverage_planning import (
+    MAX_COVERAGE_ASSIGNMENTS,
+    MAX_COVERAGE_REVIEWERS,
+    MAX_COVERAGE_SURFACES,
+    MAX_COVERAGE_TASKS,
+    ModelSurfaceAssignmentPurpose,
+    ModelSurfaceCoveragePlan,
+    ModelSurfaceRiskTier,
+)
 from mmaudit.models.schemas import (
     AnalysisState,
     AuditedSuiteCoverage,
@@ -40,7 +52,10 @@ from mmaudit.models.schemas import (
     SoliditySymbolIndex,
     UsageRecord,
 )
-from mmaudit.models.usage import is_creditable_usage_record
+from mmaudit.models.usage import (
+    is_creditable_usage_record,
+    is_recovery_creditable_usage_record,
+)
 from mmaudit.orchestration.model_review_evidence import (
     model_review_context_sha256,
     model_surface_review_excerpt_validation_failures,
@@ -114,6 +129,10 @@ _CREDITABLE_REVIEW_STATUSES = frozenset(
         ModelSurfaceReviewStatus.REVIEWED_NO_ISSUE,
     }
 )
+_RECOVERY_REQUEST_ID_RE = re.compile(r"^scheduler-recovery-request-[0-9a-f]{64}$")
+_RECOVERY_REQUEST_LIMIT_SCOPE_RE = re.compile(r"^scheduler-request-[0-9a-f]{64}$")
+_MAX_RECOVERY_USAGE_COORDINATES = 32
+type ModelCoverageRecoveryUsageCoordinate = tuple[str, str, int]
 _FORENSIC_LIMITATION_LABELS = {
     "duplicate_artifact": "duplicate model-review artifacts were not credited",
     "invalid_context": "model-review requests used an invalid context package",
@@ -172,6 +191,7 @@ def build_model_review_coverage(
     minimum_critical_root_lineages: int = 3,
     audited_suite_coverage: AuditedSuiteCoverage | None = None,
     source_contents_by_path: dict[str, str] | None = None,
+    recovery_usage_coordinates: Sequence[ModelCoverageRecoveryUsageCoordinate] = (),
 ) -> ModelReviewCoverage:
     """Credit only explicit, validated per-surface response records."""
 
@@ -267,6 +287,7 @@ def build_model_review_coverage(
         index=index,
         graphs=graphs,
         limitations=limitations,
+        recovery_usage_coordinates=recovery_usage_coordinates,
     )
     surfaces = sorted(
         (
@@ -823,6 +844,282 @@ def _scheduled_model_surface_review_roles(config: AuditConfig) -> tuple[str, ...
     return tuple(sorted((*_BASE_REVIEW_ROLES, *specialists)))
 
 
+def model_review_tiered_completion_gate(
+    plan: ModelSurfaceCoveragePlan | None,
+    coverage: ModelReviewCoverage | None,
+    authoritative_requests: Sequence[ModelSurfaceReviewRequest],
+    *,
+    required: bool,
+) -> QualityGateResult:
+    """Require the exact planned T0-T3 surface contract in final review evidence.
+
+    Plan hashes and derived feasibility flags are never treated as completion
+    authority. An independently supplied canonical request inventory is bounded and
+    revalidated before every full request, requirement, and response-backed coverage
+    surface is rejoined.
+    """
+
+    gate = "tiered_model_surface_review"
+    artifacts = ["model-review-coverage.json", "model-surface-coverage-plan.json"]
+    if plan is None or coverage is None:
+        missing = "coverage plan" if plan is None else "model-review coverage"
+        return QualityGateResult(
+            gate=gate,
+            required=required,
+            passed=False,
+            detail=f"tiered model-surface {missing} was not produced",
+            state=AnalysisState.NOT_ANALYZED,
+            artifacts=[],
+        )
+
+    try:
+        validated_authoritative_requests = _bounded_authoritative_surface_requests(
+            authoritative_requests
+        )
+        if (
+            type(plan.requirements) is not tuple
+            or len(plan.requirements) > MAX_COVERAGE_SURFACES
+            or type(plan.reviewer_bindings) is not tuple
+            or len(plan.reviewer_bindings) > MAX_COVERAGE_REVIEWERS
+            or type(plan.assignments) is not tuple
+            or len(plan.assignments) > MAX_COVERAGE_ASSIGNMENTS
+            or type(plan.tasks) is not tuple
+            or len(plan.tasks) > MAX_COVERAGE_TASKS
+            or type(coverage.surfaces) is not list
+            or len(coverage.surfaces) > MAX_COVERAGE_SURFACES
+        ):
+            raise ValueError("tiered coverage inputs exceed their bounded canonical shapes")
+        validated_plan = ModelSurfaceCoveragePlan.model_validate(plan.model_dump(mode="python"))
+        validated_coverage = ModelReviewCoverage.model_validate(coverage.model_dump(mode="python"))
+    except (AttributeError, TypeError, ValueError) as exc:
+        detail = str(exc).replace("\n", " ")[:500]
+        return QualityGateResult(
+            gate=gate,
+            required=required,
+            passed=False,
+            detail=f"tiered model-surface evidence failed canonical revalidation: {detail}",
+            state=AnalysisState.ATTEMPTED_FAILED,
+            artifacts=artifacts,
+        )
+
+    if not validated_coverage.applicable:
+        return QualityGateResult(
+            gate=gate,
+            required=required,
+            passed=False,
+            detail=(
+                validated_coverage.limitations[0]
+                if validated_coverage.limitations
+                else "tiered model-surface coverage was not applicable"
+            ),
+            state=AnalysisState.NOT_ANALYZED,
+            artifacts=artifacts,
+        )
+    if not validated_coverage.critical_classification_complete:
+        return QualityGateResult(
+            gate=gate,
+            required=required,
+            passed=False,
+            detail=(
+                validated_coverage.limitations[0]
+                if validated_coverage.limitations
+                else "critical model-surface classification was incomplete"
+            ),
+            state=AnalysisState.NOT_ANALYZED,
+            artifacts=artifacts,
+        )
+
+    requirements_by_id = {
+        requirement.surface_id: requirement for requirement in validated_plan.requirements
+    }
+    plan_requests_by_id = {
+        requirement.surface_id: requirement.request() for requirement in validated_plan.requirements
+    }
+    authoritative_by_id = {
+        request.surface_id: request for request in validated_authoritative_requests
+    }
+    surfaces_by_id = {surface.surface_id: surface for surface in validated_coverage.surfaces}
+    authoritative_ids = set(authoritative_by_id)
+    plan_ids = set(requirements_by_id)
+    coverage_ids = set(surfaces_by_id)
+    plan_missing_surface_count = len(authoritative_ids - plan_ids)
+    plan_extra_surface_count = len(plan_ids - authoritative_ids)
+    coverage_missing_surface_count = len(authoritative_ids - coverage_ids)
+    coverage_extra_surface_count = len(coverage_ids - authoritative_ids)
+    authoritative_manifest = ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256(
+        validated_authoritative_requests
+    )
+    manifest_mismatch_count = int(
+        validated_plan.surface_request_manifest_sha256 != authoritative_manifest
+    )
+    full_request_mismatch_count = sum(
+        authoritative_by_id[surface_id] != plan_requests_by_id[surface_id]
+        for surface_id in sorted(authoritative_ids & plan_ids)
+    )
+
+    expected_t0_floor = validated_coverage.minimum_critical_root_lineages
+    policy_mismatch_count = int(validated_plan.policy.minimum_t0_root_lineages != expected_t0_floor)
+    request_surface_mismatch_count = 0
+    requirement_mismatch_count = 0
+    planned_root_mismatch_count = 0
+    tier_counts = {tier: 0 for tier in ModelSurfaceRiskTier}
+    tier_deficits = {tier: 0 for tier in ModelSurfaceRiskTier}
+
+    planned_roots_by_surface: dict[str, set[str]] = {
+        surface_id: set(requirement.credited_root_lineages)
+        for surface_id, requirement in requirements_by_id.items()
+    }
+    for assignment in validated_plan.assignments:
+        if assignment.purpose is ModelSurfaceAssignmentPurpose.LINEAGE_GAP:
+            planned_roots_by_surface.setdefault(assignment.surface_id, set()).add(
+                assignment.root_lineage
+            )
+
+    for surface_id in sorted(authoritative_ids):
+        request = authoritative_by_id[surface_id]
+        expected_tier = _completion_risk_tier(request)
+        expected_floor = _completion_root_lineage_floor(expected_tier, expected_t0_floor)
+        tier_counts[expected_tier] += 1
+
+        surface = surfaces_by_id.get(surface_id)
+        if surface is None:
+            tier_deficits[expected_tier] += 1
+            continue
+        requirement = requirements_by_id.get(surface_id)
+        if requirement is None:
+            continue
+        policy_requirement = validated_plan.policy.requirement_for(expected_tier)
+        if (
+            requirement.risk_tier is not expected_tier
+            or requirement.minimum_root_lineages != expected_floor
+            or policy_requirement.minimum_root_lineages != expected_floor
+            or not requirement.completion_blocking
+            or not policy_requirement.completion_blocking
+        ):
+            requirement_mismatch_count += 1
+
+        if (
+            request.surface_id != surface.surface_id
+            or request.kind is not surface.kind
+            or request.subject_id != surface.subject_id
+            or request.function_or_state_surface != surface.label
+            or request.critical is not surface.critical
+            or request.allowed_locations != tuple(surface.locations)
+        ):
+            request_surface_mismatch_count += 1
+
+        observed_roots = set(surface.root_lineages)
+        if not planned_roots_by_surface.get(surface_id, set()) <= observed_roots:
+            planned_root_mismatch_count += 1
+        if not surface.reviewed or len(observed_roots) < expected_floor:
+            tier_deficits[expected_tier] += 1
+
+    critical_gate_mismatch = int(not validated_coverage.critical_gate_passed)
+    plan_infeasible = int(not validated_plan.feasible)
+    failed = any(
+        (
+            plan_missing_surface_count,
+            plan_extra_surface_count,
+            coverage_missing_surface_count,
+            coverage_extra_surface_count,
+            manifest_mismatch_count,
+            full_request_mismatch_count,
+            policy_mismatch_count,
+            request_surface_mismatch_count,
+            requirement_mismatch_count,
+            planned_root_mismatch_count,
+            critical_gate_mismatch,
+            plan_infeasible,
+            *tier_deficits.values(),
+        )
+    )
+    tier_summary = ",".join(
+        f"{tier.value}:{tier_counts[tier]}/{tier_deficits[tier]}" for tier in ModelSurfaceRiskTier
+    )
+    return QualityGateResult(
+        gate=gate,
+        required=required,
+        passed=not failed,
+        detail=(
+            f"tier_surfaces/deficits={tier_summary}; "
+            f"plan_missing_surfaces={plan_missing_surface_count}; "
+            f"plan_extra_surfaces={plan_extra_surface_count}; "
+            f"coverage_missing_surfaces={coverage_missing_surface_count}; "
+            f"coverage_extra_surfaces={coverage_extra_surface_count}; "
+            f"manifest_mismatches={manifest_mismatch_count}; "
+            f"full_request_mismatches={full_request_mismatch_count}; "
+            f"policy_mismatches={policy_mismatch_count}; "
+            f"request_surface_mismatches={request_surface_mismatch_count}; "
+            f"requirement_mismatches={requirement_mismatch_count}; "
+            f"planned_root_mismatches={planned_root_mismatch_count}; "
+            f"critical_gate_mismatches={critical_gate_mismatch}; "
+            f"plan_infeasible={plan_infeasible}"
+        ),
+        state=AnalysisState.MODEL_ONLY if not failed else AnalysisState.ATTEMPTED_FAILED,
+        artifacts=artifacts,
+    )
+
+
+def _bounded_authoritative_surface_requests(
+    requests: Sequence[ModelSurfaceReviewRequest],
+) -> tuple[ModelSurfaceReviewRequest, ...]:
+    """Consume at most one over the surface bound without trusting caller length hints."""
+
+    if isinstance(requests, str | bytes | bytearray):
+        raise ValueError("authoritative model-surface inventory must contain request records")
+    try:
+        iterator = iter(requests)
+    except TypeError:
+        raise ValueError("authoritative model-surface inventory must be iterable") from None
+    raw_requests = tuple(itertools.islice(iterator, MAX_COVERAGE_SURFACES + 1))
+    if not raw_requests:
+        raise ValueError("authoritative model-surface inventory must not be empty")
+    if len(raw_requests) > MAX_COVERAGE_SURFACES:
+        raise ValueError(
+            f"authoritative model-surface inventory exceeds {MAX_COVERAGE_SURFACES} requests"
+        )
+    validated = tuple(
+        ModelSurfaceReviewRequest.model_validate(request.model_dump(mode="python"))
+        for request in raw_requests
+    )
+    surface_ids = tuple(request.surface_id for request in validated)
+    if surface_ids != tuple(sorted(set(surface_ids))):
+        raise ValueError(
+            "authoritative model-surface inventory must be unique and sorted by surface ID"
+        )
+    return validated
+
+
+def _completion_risk_tier(request: ModelSurfaceReviewRequest) -> ModelSurfaceRiskTier:
+    """Derive the frozen tier without accepting the plan's tier assertion."""
+
+    if request.critical:
+        return ModelSurfaceRiskTier.T0
+    if request.kind in {ModelReviewSurfaceKind.ENTRY_POINT, ModelReviewSurfaceKind.CALL}:
+        return ModelSurfaceRiskTier.T1
+    if request.kind in {
+        ModelReviewSurfaceKind.INTERNAL_FUNCTION,
+        ModelReviewSurfaceKind.STATE,
+    }:
+        return ModelSurfaceRiskTier.T2
+    if request.kind in {ModelReviewSurfaceKind.CONTRACT, ModelReviewSurfaceKind.SOURCE_FILE}:
+        return ModelSurfaceRiskTier.T3
+    raise ValueError(f"noncritical {request.kind.value} surface has no frozen completion tier")
+
+
+def _completion_root_lineage_floor(
+    tier: ModelSurfaceRiskTier,
+    minimum_t0_root_lineages: int,
+) -> int:
+    """Derive the exact root floor without trusting a plan requirement or hash."""
+
+    if tier is ModelSurfaceRiskTier.T0:
+        return minimum_t0_root_lineages
+    if tier is ModelSurfaceRiskTier.T1:
+        return min(2, minimum_t0_root_lineages)
+    return 1
+
+
 def model_review_critical_surface_gate(
     coverage: ModelReviewCoverage | None,
     *,
@@ -935,6 +1232,7 @@ def _review_evidence_references(
     index: SoliditySymbolIndex | None,
     graphs: SolidityGraphSet | None,
     limitations: set[str],
+    recovery_usage_coordinates: Sequence[ModelCoverageRecoveryUsageCoordinate],
 ) -> dict[str, list[ModelReviewEvidenceReference]]:
     requests_by_id = {request.surface_id: request for request in requests}
     usage_by_request: dict[str, list[UsageRecord]] = {}
@@ -942,6 +1240,7 @@ def _review_evidence_references(
         usage_by_request.setdefault(usage_record.request_id, []).append(usage_record)
     lineage_by_model = model_lineage_index(config)
     require_certification = config.profile is AuditProfile.MAXIMUM_ASSURANCE
+    recovery_coordinates = _recovery_usage_coordinate_map(recovery_usage_coordinates)
     references: dict[str, list[ModelReviewEvidenceReference]] = {}
     forensic_limitations: dict[str, set[str]] = {}
     artifact_counts: dict[str, int] = {}
@@ -1062,11 +1361,23 @@ def _review_evidence_references(
                 reasons.append("artifact validated-response hash differed from its usage record")
             if artifact.response_schema_sha256 != usage.schema_sha256:
                 reasons.append("artifact schema hash differed from its usage record")
-            if not is_creditable_usage_record(
-                usage,
-                require_real=True,
-                require_certification=require_certification,
-            ):
+            recovery_coordinate = recovery_coordinates.get(usage.request_id)
+            usage_is_creditable = (
+                is_recovery_creditable_usage_record(
+                    usage,
+                    request_limit_scope=recovery_coordinate[0],
+                    request_limit_count_before=recovery_coordinate[1],
+                    require_real=True,
+                    require_certification=require_certification,
+                )
+                if recovery_coordinate is not None
+                else is_creditable_usage_record(
+                    usage,
+                    require_real=True,
+                    require_certification=require_certification,
+                )
+            )
+            if not usage_is_creditable:
                 if usage.execution_evidence is not ExecutionEvidenceKind.REAL:
                     reasons.append("model usage was not REAL")
                     limitations.add(
@@ -1156,6 +1467,32 @@ def _review_evidence_references(
             )
         )
     return references
+
+
+def _recovery_usage_coordinate_map(
+    values: Sequence[ModelCoverageRecoveryUsageCoordinate],
+) -> dict[str, tuple[str, int]]:
+    materialized = tuple(itertools.islice(values, _MAX_RECOVERY_USAGE_COORDINATES + 1))
+    if len(materialized) > _MAX_RECOVERY_USAGE_COORDINATES:
+        raise ValueError("model coverage recovery usage coordinates exceed their compiled bound")
+    normalized: list[ModelCoverageRecoveryUsageCoordinate] = []
+    for value in materialized:
+        if (
+            type(value) is not tuple
+            or len(value) != 3
+            or type(value[0]) is not str
+            or _RECOVERY_REQUEST_ID_RE.fullmatch(value[0]) is None
+            or type(value[1]) is not str
+            or _RECOVERY_REQUEST_LIMIT_SCOPE_RE.fullmatch(value[1]) is None
+            or type(value[2]) is not int
+            or not 1 <= value[2] <= 2**63 - 1
+        ):
+            raise ValueError("model coverage recovery usage coordinates are invalid")
+        normalized.append(value)
+    canonical = tuple(sorted(normalized, key=lambda item: item[0]))
+    if tuple(normalized) != canonical or len({item[0] for item in canonical}) != len(canonical):
+        raise ValueError("model coverage recovery usage coordinates must be unique and sorted")
+    return {request_id: (scope, count_before) for request_id, scope, count_before in canonical}
 
 
 def _context_symbol_index_is_subset(
@@ -1447,6 +1784,8 @@ def _critical_classification_inputs_complete(
     source_contents_by_path: dict[str, str] | None,
 ) -> bool:
     if index is None or graphs is None or invariants is None:
+        return False
+    if not graphs.generation_complete or bool(graphs.edge_omissions) or bool(graphs.fact_omissions):
         return False
     partition = partition_audited_source_entities(index=index, projects=index.projects)
     if not partition.classification_complete:

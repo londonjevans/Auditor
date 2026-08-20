@@ -32,6 +32,7 @@ from mmaudit.models.qualification import (
 )
 from mmaudit.models.schemas import ExecutionEvidenceKind
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
+from mmaudit.privacy import PrivacyProfile
 from tests.unit import test_candidate_benchmark as candidate_fixtures
 
 runner = CliRunner()
@@ -46,7 +47,10 @@ CANARY = "SYNTHETIC_CANDIDATE_CLI_SECRET_CANARY"
 def _pending_config(config_factory: Callable[..., AuditConfig]) -> AuditConfig:
     return config_factory(
         execution={"max_requests_per_agent": 512},
-        privacy={"approved_model_lineages": []},
+        privacy={
+            "profile": PrivacyProfile.SYNTHETIC_BENCHMARK,
+            "approved_model_lineages": [],
+        },
         models={
             "registry": [],
             "reasoning": {"effort": "high", "reserved_tokens": 4_096},

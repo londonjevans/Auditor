@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import stat
+from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -16,17 +19,26 @@ from mmaudit.models.openrouter import (
     ModelRequestPrivacyBinding,
     OpenRouterSchemaError,
 )
+from mmaudit.models.refresh_runtime import (
+    AuditModelRefreshPricingRouteEvidence,
+    AuditModelRefreshRouteEvidence,
+)
 from mmaudit.models.scheduler import (
     SCHEDULER_ANALYSIS_INPUT_LABELS,
     SCHEDULER_PASS_ORDER,
     SchedulerAbsenceReason,
     SchedulerAnalysisInputDescriptor,
     SchedulerAnalysisInputInventory,
+    SchedulerAuditModelRefreshBinding,
+    SchedulerAuditModelRefreshPricingBinding,
+    SchedulerAuditModelRefreshPricingRouteBinding,
+    SchedulerAuditModelRefreshRouteBinding,
     SchedulerBindings,
     SchedulerCampaignStatus,
     SchedulerCandidateWorkset,
     SchedulerConditionalAbsence,
     SchedulerJournalEvidence,
+    SchedulerModelCompletionEvidence,
     SchedulerPassKind,
     SchedulerPassPlan,
     SchedulerPassResult,
@@ -44,14 +56,23 @@ from mmaudit.models.scheduler import (
     SchedulerTaskPlan,
     SchedulerTaskResult,
     SchedulerTerminalStatus,
+    scheduler_canonical_sha256,
 )
 from mmaudit.models.schemas import (
+    AuditModelRefreshPricingAttemptEvidence,
+    CandidateReviewBatch,
     ExecutionEvidenceKind,
     ModelIdentityStrength,
     ModelRequestValidationStatus,
     Severity,
     ThreatModel,
     UsageRecord,
+)
+from mmaudit.models.truncation import (
+    CandidateReviewNormalizationEvidence,
+    candidate_review_frame_wire_schema_sha256,
+    frame_candidate_review_batch,
+    normalize_candidate_review_document,
 )
 from mmaudit.models.usage import (
     is_accountable_usage_record,
@@ -78,13 +99,18 @@ from mmaudit.orchestration.scheduler import (
 )
 from mmaudit.orchestration.scheduler_runtime import (
     PipelineScheduler,
+    build_scheduler_bindings,
     build_scheduler_cost_ledger_baseline,
+    scheduler_response_normalizer_sha256,
     scheduler_response_schema_registry,
 )
 from mmaudit.release_io import write_json_evidence
 from mmaudit.reporting.json_report import stable_json
 from tests.identity_fixtures import reattest_synthetic_real_usage
+from tests.refresh_runtime_support import synthetic_refresh_runtime
 from tests.scheduler_support import (
+    build_scheduler_test_audit_model_refresh_binding,
+    build_scheduler_test_audit_model_refresh_pricing_binding,
     build_scheduler_test_audit_model_selection_binding,
     build_scheduler_test_host_payload,
     build_scheduler_test_model_payload,
@@ -171,6 +197,7 @@ def _bindings(
     cost_ledger_baseline_sha256: str | None = None,
     with_audit_policy: bool = False,
     audit_policy_seed: str = "scheduler-journal-policy",
+    audit_model_refresh_expires_at: datetime | None = None,
 ) -> SchedulerBindings:
     inventory = _inventory()
     audit_selection = (
@@ -205,6 +232,18 @@ def _bindings(
     }
     if audit_selection is not None:
         values["audit_model_selection"] = audit_selection
+        audit_refresh = build_scheduler_test_audit_model_refresh_binding(
+            audit_selection,
+            seed=f"{audit_policy_seed}:refresh",
+            expires_at=audit_model_refresh_expires_at,
+        )
+        values["audit_model_refresh"] = audit_refresh
+        values["audit_model_refresh_pricing"] = (
+            build_scheduler_test_audit_model_refresh_pricing_binding(
+                audit_selection,
+                audit_refresh,
+            )
+        )
     if changed is not None:
         values[changed] = "f" * 64
     if cost_ledger_baseline_sha256 is not None:
@@ -226,6 +265,26 @@ def _bindings_without_privacy_custody() -> SchedulerBindings:
         tool_policy_sha256=bindings.tool_policy_sha256,
         cost_ledger_baseline_sha256=bindings.cost_ledger_baseline_sha256,
         audit_model_selection=bindings.audit_model_selection,
+        audit_model_refresh=bindings.audit_model_refresh,
+    )
+
+
+def _refresh_only_bindings() -> SchedulerBindings:
+    bindings = _bindings(with_audit_policy=True)
+    return SchedulerBindings.build(
+        source_sha256=bindings.source_sha256,
+        analysis_input_sha256=bindings.analysis_input_sha256,
+        effective_config_sha256=bindings.effective_config_sha256,
+        shard_inventory_sha256=bindings.shard_inventory_sha256,
+        model_selection_sha256=bindings.model_selection_sha256,
+        qualification_sha256=bindings.qualification_sha256,
+        prompt_set_sha256=bindings.prompt_set_sha256,
+        schema_set_sha256=bindings.schema_set_sha256,
+        tool_policy_sha256=bindings.tool_policy_sha256,
+        cost_ledger_baseline_sha256=bindings.cost_ledger_baseline_sha256,
+        privacy_evidence_custody_sha256=bindings.privacy_evidence_custody_sha256,
+        audit_model_selection=bindings.audit_model_selection,
+        audit_model_refresh=bindings.audit_model_refresh,
     )
 
 
@@ -237,13 +296,29 @@ def create_scheduler_journal(
     **kwargs: Any,
 ) -> SchedulerJournal:
     kwargs.setdefault("privacy_evidence_custody", _privacy_custody())
-    return _create_scheduler_journal(
-        path,
-        bindings=bindings,
-        analysis_input_inventory=_analysis_inventory(),
-        shard_inventory=shard_inventory,
-        **kwargs,
+    original_validator = scheduler_module._validate_live_scheduler_model_refresh
+    synthetic_pricing = (
+        bindings.audit_model_refresh_pricing is not None
+        and "audit_model_refresh_pricing_authority" not in kwargs
     )
+    if synthetic_pricing:
+        # Model-graph tests use deliberately non-authorizing hash fixtures. The
+        # production live-authority boundary is exercised through PipelineScheduler
+        # directly below; bypass it only while constructing these local journals.
+        scheduler_module._validate_live_scheduler_model_refresh = lambda **_values: (
+            True,
+            True,
+        )
+    try:
+        return _create_scheduler_journal(
+            path,
+            bindings=bindings,
+            analysis_input_inventory=_analysis_inventory(),
+            shard_inventory=shard_inventory,
+            **kwargs,
+        )
+    finally:
+        scheduler_module._validate_live_scheduler_model_refresh = original_validator
 
 
 def resume_scheduler_journal(
@@ -629,12 +704,14 @@ def test_all_seven_exact_passes_derive_complete_campaign(tmp_path: Path) -> None
         "activations",
         "analysis-input-inventory.json",
         "events",
+        "journal-head-checkpoint.json",
         "manifest.json",
         "pass-plans",
         "pass-results",
         "provider-attempts",
         "task-outputs",
         "task-results",
+        "truncation-recovery",
     }
 
     for pass_kind in SCHEDULER_PASS_ORDER:
@@ -770,15 +847,13 @@ def test_current_terminal_authority_is_write_once_resume_exact_and_downgrade_res
     resumed.close()
 
     (path / "terminal-report-authority.json").unlink()
-    missing = resume_scheduler_journal(
-        path,
-        expected_bindings=_bindings(),
-        expected_shard_inventory=_inventory(),
-        expected_terminal_report_authority_required=True,
-    )
-    with pytest.raises(ValueError, match="terminal-authority mode"):
-        missing.artifact()
-    missing.close()
+    with pytest.raises(ValueError, match="local journal-head checkpoint does not match"):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(),
+            expected_shard_inventory=_inventory(),
+            expected_terminal_report_authority_required=True,
+        )
 
 
 def test_current_unsealed_crash_window_remains_resumable(tmp_path: Path) -> None:
@@ -832,6 +907,272 @@ def test_large_indexed_journal_matches_full_readback_reconstruction(tmp_path: Pa
     assert verified.pass_results[-1] == pass_result
     assert verified.journal_evidence == expected_evidence
     verified.close()
+
+
+def test_incremental_checkpoint_is_byte_identical_at_every_task_lifecycle_prefix(
+    tmp_path: Path,
+) -> None:
+    journal = create_scheduler_journal(
+        tmp_path / "lifecycle-checkpoint",
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+
+    def require_exact_checkpoint() -> None:
+        assert journal.local_journal_head_checkpoint == journal.journal_evidence
+
+    require_exact_checkpoint()
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    require_exact_checkpoint()
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+        delivered_source_descriptor_sha256s=(
+            scheduler_test_delivered_source_descriptor_sha256s(plan, task)
+        ),
+    )
+    require_exact_checkpoint()
+    journal.mark_dispatched(task.task_id)
+    require_exact_checkpoint()
+    payload = build_scheduler_test_model_payload(plan, task)
+    usage = build_scheduler_test_usage(task, activation, validated_output=payload)
+    surface_requests, surface_artifact = build_scheduler_test_model_surface_review_custody(
+        plan,
+        task,
+        activation,
+        usage,
+        payload,
+    )
+    output = journal.persist_output(
+        task.task_id,
+        payload,
+        usage_record=usage,
+        model_surface_review_requests=surface_requests,
+        model_surface_review_artifact=surface_artifact,
+    )
+    require_exact_checkpoint()
+    journal.record_terminal(
+        SchedulerTaskResult.build(
+            plan=plan,
+            task=task,
+            activation=activation,
+            terminal_status=SchedulerTerminalStatus.SUCCEEDED,
+            terminal_evidence_sha256=usage.validated_response_sha256,
+            output=output,
+        )
+    )
+    require_exact_checkpoint()
+    journal.seal_pass_result(plan.pass_kind)
+    require_exact_checkpoint()
+    journal.close()
+
+
+def test_returned_output_payload_cannot_mutate_retained_checkpoint_state(
+    tmp_path: Path,
+) -> None:
+    journal = create_scheduler_journal(
+        tmp_path / "detached-output",
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+        delivered_source_descriptor_sha256s=(
+            scheduler_test_delivered_source_descriptor_sha256s(plan, task)
+        ),
+    )
+    journal.mark_dispatched(task.task_id)
+    payload = build_scheduler_test_model_payload(plan, task)
+    usage = build_scheduler_test_usage(task, activation, validated_output=payload)
+    surface_requests, surface_artifact = build_scheduler_test_model_surface_review_custody(
+        plan,
+        task,
+        activation,
+        usage,
+        payload,
+    )
+    output = journal.persist_output(
+        task.task_id,
+        payload,
+        usage_record=usage,
+        model_surface_review_requests=surface_requests,
+        model_surface_review_artifact=surface_artifact,
+    )
+    durable_payload = journal.load_output(task.task_id)
+    returned_payload = output.payload
+    assert isinstance(returned_payload, dict)
+    returned_assets = returned_payload["assets"]
+    assert isinstance(returned_assets, list)
+    returned_assets.append("caller-owned mutation")
+
+    exposed_payload = journal.outputs[0].payload
+    assert isinstance(exposed_payload, dict)
+    exposed_assets = exposed_payload["assets"]
+    assert isinstance(exposed_assets, list)
+    exposed_assets.append("outward-property mutation")
+
+    journal.record_terminal(
+        SchedulerTaskResult.build(
+            plan=plan,
+            task=task,
+            activation=activation,
+            terminal_status=SchedulerTerminalStatus.SUCCEEDED,
+            terminal_evidence_sha256=usage.validated_response_sha256,
+            output=output,
+        )
+    )
+    assert journal.load_output(task.task_id) == durable_payload
+    assert journal.local_journal_head_checkpoint == journal.journal_evidence
+    journal.close()
+
+
+def test_task_transition_checkpoint_does_not_reload_full_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal = create_scheduler_journal(
+        tmp_path / "incremental-transition",
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    original_load_state = scheduler_module._load_state
+    load_calls = 0
+
+    def counted_load_state(*args: Any, **kwargs: Any) -> Any:
+        nonlocal load_calls
+        load_calls += 1
+        return original_load_state(*args, **kwargs)
+
+    monkeypatch.setattr(scheduler_module, "_load_state", counted_load_state)
+    task = plan.tasks[0]
+    journal.record_preflight_failure(
+        SchedulerTaskResult.build_preflight_failure(
+            plan=plan,
+            task=task,
+            terminal_status=SchedulerTerminalStatus.FAILED,
+            terminal_evidence_sha256="d" * 64,
+        )
+    )
+    assert load_calls == 0
+    assert journal.local_journal_head_checkpoint == journal.journal_evidence
+    assert load_calls == 1
+    journal.close()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["same-inode", "replacement", "delete", "extra"],
+)
+def test_active_transition_rejects_retained_artifact_tamper_before_checkpoint_advance(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    path = tmp_path / f"active-tamper-{mutation}"
+    journal = create_scheduler_journal(
+        path,
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    checkpoint_path = path / "journal-head-checkpoint.json"
+    checkpoint_before = checkpoint_path.read_bytes()
+    target = path / "events" / "event-00000000.json"
+    if mutation == "same-inode":
+        metadata = target.stat()
+        content = bytearray(target.read_bytes())
+        marker = b'"event_sha256": "'
+        offset = content.index(marker) + len(marker)
+        content[offset] = ord("0") if content[offset] != ord("0") else ord("1")
+        target.write_bytes(content)
+        os.utime(
+            target,
+            ns=(metadata.st_atime_ns, metadata.st_mtime_ns),
+        )
+    elif mutation == "replacement":
+        replacement = target.with_name(".event-replacement")
+        replacement.write_bytes(target.read_bytes())
+        replacement.chmod(0o600)
+        replacement.replace(target)
+    elif mutation == "delete":
+        target.unlink()
+    else:
+        extra = path / "events" / "unmanifested.json"
+        extra.write_text("{}\n", encoding="utf-8")
+        extra.chmod(0o600)
+
+    task = plan.tasks[0]
+    with pytest.raises(ValueError, match=r"retained artifact|unmanifested"):
+        journal.record_preflight_failure(
+            SchedulerTaskResult.build_preflight_failure(
+                plan=plan,
+                task=task,
+                terminal_status=SchedulerTerminalStatus.FAILED,
+                terminal_evidence_sha256="d" * 64,
+            )
+        )
+    assert checkpoint_path.read_bytes() == checkpoint_before
+    journal.close()
+
+
+def test_active_transition_rejects_replacement_during_fast_projection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "active-projection-race"
+    journal = create_scheduler_journal(
+        path,
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    checkpoint_path = path / "journal-head-checkpoint.json"
+    checkpoint_before = checkpoint_path.read_bytes()
+    target = path / "events" / "event-00000000.json"
+    original_projection = SchedulerJournal._build_retained_journal_evidence
+    replaced = False
+
+    def project_then_replace(self: SchedulerJournal) -> SchedulerJournalEvidence:
+        nonlocal replaced
+        evidence = original_projection(self)
+        if self is journal and not replaced:
+            replacement = target.with_name(".event-race-replacement")
+            replacement.write_bytes(target.read_bytes())
+            replacement.chmod(0o600)
+            replacement.replace(target)
+            replaced = True
+        return evidence
+
+    monkeypatch.setattr(
+        SchedulerJournal,
+        "_build_retained_journal_evidence",
+        project_then_replace,
+    )
+    task = plan.tasks[0]
+    with pytest.raises(ValueError, match="changed during checkpoint projection"):
+        journal.record_preflight_failure(
+            SchedulerTaskResult.build_preflight_failure(
+                plan=plan,
+                task=task,
+                terminal_status=SchedulerTerminalStatus.FAILED,
+                terminal_evidence_sha256="d" * 64,
+            )
+        )
+    assert replaced
+    assert checkpoint_path.read_bytes() == checkpoint_before
+    journal.close()
 
 
 def test_large_journal_full_readback_rejects_middle_event_chain_tamper(tmp_path: Path) -> None:
@@ -1078,7 +1419,7 @@ def test_model_plan_cannot_be_sealed_without_exact_privacy_custody(tmp_path: Pat
         ),
     ),
 )
-async def test_failed_paid_attempt_survives_resume_without_review_credit_or_double_charge(
+async def test_failed_paid_attempt_survives_structural_resume_without_runtime_authority(
     tmp_path: Path,
     validation_status: ModelRequestValidationStatus,
     status: str,
@@ -1112,11 +1453,23 @@ async def test_failed_paid_attempt_survives_resume_without_review_credit_or_doub
         cost_usd_exact=str(exact_cost),
         privacy_evidence_custody=journal.manifest.privacy_evidence_custody,
         audit_model_selection=journal.manifest.bindings.audit_model_selection,
+        audit_model_refresh=journal.manifest.bindings.audit_model_refresh,
+        audit_model_refresh_pricing=(journal.manifest.bindings.audit_model_refresh_pricing),
     )
     failed_usage = reattest_synthetic_real_usage(
         successful_usage.model_copy(
             update={
                 "identity_strength": ModelIdentityStrength.UNBOUND,
+                "provider": (
+                    None
+                    if classification in {"timeout", "rate_limit"}
+                    else successful_usage.provider
+                ),
+                "actual_provider_endpoint": (
+                    None
+                    if classification in {"timeout", "rate_limit"}
+                    else successful_usage.actual_provider_endpoint
+                ),
                 "provider_error_classification": classification,
                 "status": status,
                 "validation_status": validation_status,
@@ -1139,21 +1492,9 @@ async def test_failed_paid_attempt_survives_resume_without_review_credit_or_doub
     assert result.terminal_status is terminal_status
     assert len(journal.provider_attempts) == 1
     attempt = journal.provider_attempts[0]
-    audit_selection = journal.manifest.bindings.audit_model_selection
-    assert audit_selection is not None
-    assert attempt.audit_policy_selection_binding_sha256 == audit_selection.binding_sha256
-    assert (
-        attempt.audit_model_selection_bundle_sha256
-        == audit_selection.audit_model_selection_bundle_sha256
-    )
-    assert attempt.audit_selection_sha256 == audit_selection.audit_selection_sha256
-    assert attempt.audit_selected_model_set_sha256 == audit_selection.selected_model_set_sha256
-    assert attempt.audit_scope_sha256 == audit_selection.audit_scope_sha256
-    assert attempt.audit_source_sha256 == audit_selection.source_sha256
-    assert attempt.audit_selection_expires_at == audit_selection.selection_expires_at
-    assert attempt.audit_policy_routing_evidence_sha256 == failed_usage.routing.get(
-        "audit_policy_routing_evidence_sha256"
-    )
+    assert attempt.audit_policy_selection_binding_sha256 is not None
+    assert attempt.audit_model_refresh_binding_sha256 is not None
+    assert attempt.audit_model_refresh_pricing_binding_sha256 is not None
     assert result.terminal_evidence_sha256 == attempt.attempt_evidence_sha256
     assert journal.outputs == ()
     assert journal.structurally_successful_review_usage_records == ()
@@ -1166,35 +1507,27 @@ async def test_failed_paid_attempt_survives_resume_without_review_credit_or_doub
     assert failed_usage.accounted_cost_usd_exact not in serialized_public
     runtime.close()
 
-    resumed = resume_scheduler_journal(
+    with pytest.raises(ValueError, match="requires live model-refresh authority"):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(with_audit_policy=True),
+            expected_shard_inventory=_inventory(),
+        )
+    verification = open_scheduler_journal_for_verification(
         path,
         expected_bindings=_bindings(with_audit_policy=True),
         expected_shard_inventory=_inventory(),
     )
-    serialized = resumed.restorable_usage_records
+    serialized = verification.restorable_usage_records
     assert len(serialized) == 1
     assert is_structurally_accountable_usage_record(serialized[0], require_real=True)
-    assert not is_accountable_usage_record(serialized[0], require_real=True)
-    assert resumed.restorable_context_request_evidence == (
-        resumed.provider_attempts[0].context_request_evidence,
+    assert verification.restorable_context_request_evidence == (
+        verification.provider_attempts[0].context_request_evidence,
     )
-    restored, recovery_scope = resumed.claim_restorable_usage_for_budget_recovery(
-        atomic_ledger=ledger
-    )
-    assert len(restored) == 1
-    assert is_accountable_usage_record(restored[0], require_real=True)
-    assert not is_creditable_usage_record(restored[0], require_real=True)
-    budget = BudgetManager(
-        total_usd=1,
-        max_output_tokens=10,
-        conservative_usd_per_million_tokens=1,
-        max_requests_per_agent=10,
-        atomic_ledger=ledger,
-    )
-    await budget.restore_recovered_usage(restored, recovery_scope=recovery_scope)
-    assert budget.spent_usd_exact == exact_cost
+    with pytest.raises(ValueError, match="read-only"):
+        verification.claim_restorable_usage_for_budget_recovery(atomic_ledger=ledger)
     assert ledger.snapshot() == before_resume
-    resumed.close()
+    verification.close()
 
 
 def test_failed_paid_provider_attempt_rejects_missing_audit_policy_custody(
@@ -1240,6 +1573,81 @@ def test_failed_paid_provider_attempt_rejects_missing_audit_policy_custody(
     journal.close()
 
 
+def test_refresh_only_legacy_binding_cannot_persist_or_recover_real_usage(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "refresh-only-real-usage"
+    bindings = _refresh_only_bindings()
+    journal = create_scheduler_journal(
+        path,
+        bindings=bindings,
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    journal.mark_dispatched(task.task_id)
+    payload = build_scheduler_test_model_payload(plan, task)
+    usage = build_scheduler_test_real_usage(
+        task,
+        activation,
+        validated_output=payload,
+        privacy_evidence_custody=journal.manifest.privacy_evidence_custody,
+        audit_model_selection=bindings.audit_model_selection,
+        audit_model_refresh=bindings.audit_model_refresh,
+        include_audit_model_refresh_pricing=False,
+    )
+
+    with pytest.raises(ValueError, match="lacks refreshed-price evidence"):
+        journal.persist_output(task.task_id, payload, usage_record=usage)
+    with pytest.raises(ValueError, match="lacks refreshed-price evidence"):
+        journal.persist_provider_attempt(task.task_id, usage)
+    assert journal.outputs == ()
+    assert journal.provider_attempts == ()
+    journal.close()
+
+    with pytest.raises(ValueError, match="requires live model-refresh authority"):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=bindings,
+            expected_shard_inventory=_inventory(),
+        )
+
+
+def test_scheduler_bindings_reject_resealed_pricing_selection_capability_drift() -> None:
+    bindings = _bindings(with_audit_policy=True)
+    pricing = bindings.audit_model_refresh_pricing
+    assert pricing is not None
+    pricing_values = pricing.model_dump(mode="python", exclude={"binding_sha256"})
+    pricing_values["audit_selection_capability_sha256"] = "f" * 64
+    resealed_pricing = SchedulerAuditModelRefreshPricingBinding.model_validate(
+        {
+            **pricing_values,
+            "binding_sha256": scheduler_canonical_sha256(pricing_values),
+        }
+    )
+    binding_values = bindings.model_dump(mode="python", exclude={"bindings_sha256"})
+    binding_values["audit_model_refresh_pricing"] = resealed_pricing
+
+    with pytest.raises(
+        ValueError,
+        match="pricing differs from exact refresh and selection custody",
+    ):
+        SchedulerBindings.model_validate(
+            {
+                **binding_values,
+                "bindings_sha256": scheduler_canonical_sha256(binding_values),
+            }
+        )
+
+
 def test_resume_rejects_coherently_swapped_provider_attempt_audit_selection(
     tmp_path: Path,
 ) -> None:
@@ -1271,6 +1679,7 @@ def test_resume_rejects_coherently_swapped_provider_attempt_audit_selection(
         validated_output=payload,
         privacy_evidence_custody=journal.manifest.privacy_evidence_custody,
         audit_model_selection=journal.manifest.bindings.audit_model_selection,
+        audit_model_refresh=journal.manifest.bindings.audit_model_refresh,
     )
     original_failed_usage = reattest_synthetic_real_usage(
         original_usage.model_copy(
@@ -1302,12 +1711,22 @@ def test_resume_rejects_coherently_swapped_provider_attempt_audit_selection(
         ),
         seed="scheduler-attempt-swapped",
     )
+    swapped_refresh = build_scheduler_test_audit_model_refresh_binding(
+        swapped_selection,
+        seed="scheduler-attempt-swapped:refresh",
+    )
+    swapped_pricing = build_scheduler_test_audit_model_refresh_pricing_binding(
+        swapped_selection,
+        swapped_refresh,
+    )
     swapped_usage = build_scheduler_test_real_usage(
         task,
         activation,
         validated_output=payload,
         privacy_evidence_custody=campaign.privacy_evidence_custody,
         audit_model_selection=swapped_selection,
+        audit_model_refresh=swapped_refresh,
+        audit_model_refresh_pricing=swapped_pricing,
     )
     swapped_failed_usage = reattest_synthetic_real_usage(
         swapped_usage.model_copy(
@@ -1324,6 +1743,8 @@ def test_resume_rejects_coherently_swapped_provider_attempt_audit_selection(
         activation=activation,
         usage_record=swapped_failed_usage,
         audit_model_selection=swapped_selection,
+        audit_model_refresh=swapped_refresh,
+        audit_model_refresh_pricing=swapped_pricing,
     )
     attempt_path = next((path / "provider-attempts").glob("*.json"))
     attempt_path.write_text(stable_json(swapped_attempt), encoding="utf-8")
@@ -1334,9 +1755,373 @@ def test_resume_rejects_coherently_swapped_provider_attempt_audit_selection(
     )
 
     with pytest.raises(ValueError, match="differs from audit policy selection"):
-        resume_scheduler_journal(
+        open_scheduler_journal_for_verification(
             path,
             expected_bindings=original_bindings,
+            expected_shard_inventory=_inventory(),
+        )
+
+
+def test_resume_rejects_coherently_resealed_failed_attempt_with_unbound_refresh_route(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "resealed-attempt-refresh-route"
+    bindings = _bindings(with_audit_policy=True)
+    journal = create_scheduler_journal(
+        path,
+        bindings=bindings,
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    journal.mark_dispatched(task.task_id)
+    payload = build_scheduler_test_model_payload(plan, task)
+    exact_usage = build_scheduler_test_real_usage(
+        task,
+        activation,
+        validated_output=payload,
+        privacy_evidence_custody=journal.manifest.privacy_evidence_custody,
+        audit_model_selection=bindings.audit_model_selection,
+        audit_model_refresh=bindings.audit_model_refresh,
+    )
+    exact_failed_usage = reattest_synthetic_real_usage(
+        exact_usage.model_copy(
+            update={
+                "identity_strength": ModelIdentityStrength.UNBOUND,
+                "provider_error_classification": "timeout",
+                "status": "provider_error",
+                "validation_status": ModelRequestValidationStatus.PROVIDER_ERROR,
+            }
+        )
+    )
+    journal.persist_provider_attempt(task.task_id, exact_failed_usage)
+    journal.close()
+
+    assert bindings.audit_model_refresh is not None
+    assert bindings.audit_model_refresh_pricing is not None
+    assert bindings.audit_model_selection is not None
+    resealed_usage, resealed_refresh, resealed_pricing = _reseal_refresh_route_and_binding(
+        exact_failed_usage,
+        bindings.audit_model_refresh,
+        bindings.audit_model_refresh_pricing,
+    )
+    resealed_attempt = SchedulerProviderAttemptEvidence.build(
+        task=task,
+        activation=activation,
+        usage_record=resealed_usage,
+        audit_model_selection=bindings.audit_model_selection,
+        audit_model_refresh=resealed_refresh,
+        audit_model_refresh_pricing=resealed_pricing,
+    )
+    attempt_path = next((path / "provider-attempts").glob("*.json"))
+    attempt_path.write_text(stable_json(resealed_attempt), encoding="utf-8")
+    attempt_path.rename(
+        attempt_path.with_name(
+            f"{resealed_attempt.task_id}-{resealed_attempt.attempt_evidence_sha256}.json"
+        )
+    )
+
+    with pytest.raises(ValueError, match="current model refresh"):
+        open_scheduler_journal_for_verification(
+            path,
+            expected_bindings=bindings,
+            expected_shard_inventory=_inventory(),
+        )
+
+
+def test_resume_rejects_coherently_resealed_success_with_swapped_refresh(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "swapped-completion-refresh"
+    bindings = _bindings(
+        with_audit_policy=True,
+        audit_policy_seed="scheduler-completion-original",
+    )
+    journal = create_scheduler_journal(
+        path,
+        bindings=bindings,
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    journal.mark_dispatched(task.task_id)
+    payload = build_scheduler_test_model_payload(plan, task)
+    exact_usage = build_scheduler_test_real_usage(
+        task,
+        activation,
+        validated_output=payload,
+        privacy_evidence_custody=journal.manifest.privacy_evidence_custody,
+        audit_model_selection=bindings.audit_model_selection,
+        audit_model_refresh=bindings.audit_model_refresh,
+    )
+    output = journal.persist_output(task.task_id, payload, usage_record=exact_usage)
+    journal.close()
+
+    audit_selection = bindings.audit_model_selection
+    assert audit_selection is not None
+    swapped_refresh = build_scheduler_test_audit_model_refresh_binding(
+        audit_selection,
+        seed="scheduler-completion-swapped:refresh",
+    )
+    swapped_pricing = build_scheduler_test_audit_model_refresh_pricing_binding(
+        audit_selection,
+        swapped_refresh,
+    )
+    swapped_usage = build_scheduler_test_real_usage(
+        task,
+        activation,
+        validated_output=payload,
+        privacy_evidence_custody=plan.manifest.privacy_evidence_custody,
+        audit_model_selection=audit_selection,
+        audit_model_refresh=swapped_refresh,
+        audit_model_refresh_pricing=swapped_pricing,
+    )
+    assert task.normalizer_sha256 is not None
+    swapped_completion = SchedulerModelCompletionEvidence.build(
+        task=task,
+        activation=activation,
+        usage_record=swapped_usage,
+        privacy_evidence_custody=plan.manifest.privacy_evidence_custody,
+        audit_model_selection=audit_selection,
+        audit_model_refresh=swapped_refresh,
+        audit_model_refresh_pricing=swapped_pricing,
+        normalizer_sha256=task.normalizer_sha256,
+        normalized_output_sha256=output.output_sha256,
+    )
+    output_values = output.model_dump(mode="python", exclude={"output_artifact_sha256"})
+    output_values["model_completion_evidence"] = swapped_completion
+    swapped_output = SchedulerTaskOutput.model_validate(
+        {
+            **output_values,
+            "output_artifact_sha256": scheduler_canonical_sha256(output_values),
+        }
+    )
+    output_path = next((path / "task-outputs").glob("*.json"))
+    output_path.write_text(stable_json(swapped_output), encoding="utf-8")
+    output_path.rename(
+        output_path.with_name(
+            f"{swapped_output.task_id}-{swapped_output.output_artifact_sha256}.json"
+        )
+    )
+
+    with pytest.raises(ValueError, match="current model refresh"):
+        open_scheduler_journal_for_verification(
+            path,
+            expected_bindings=bindings,
+            expected_shard_inventory=_inventory(),
+        )
+
+
+def _reseal_refresh_route_and_binding(
+    usage: UsageRecord,
+    binding: SchedulerAuditModelRefreshBinding,
+    pricing_binding: SchedulerAuditModelRefreshPricingBinding,
+) -> tuple[
+    UsageRecord,
+    SchedulerAuditModelRefreshBinding,
+    SchedulerAuditModelRefreshPricingBinding,
+]:
+    raw_route = usage.routing.get("audit_model_refresh_route_evidence")
+    route = AuditModelRefreshRouteEvidence.model_validate_json(json.dumps(raw_route))
+    route_values = route.model_dump(mode="python", exclude={"route_evidence_sha256"})
+    route_values["endpoint_snapshot_sha256"] = "f" * 64
+    resealed_route = AuditModelRefreshRouteEvidence.model_validate(
+        {
+            **route_values,
+            "route_evidence_sha256": scheduler_canonical_sha256(route_values),
+        }
+    )
+    raw_pricing_route = usage.routing.get("audit_model_refresh_pricing_route_evidence")
+    pricing_route = AuditModelRefreshPricingRouteEvidence.model_validate_json(
+        json.dumps(raw_pricing_route)
+    )
+    pricing_route_values = pricing_route.model_dump(
+        mode="python",
+        exclude={"route_evidence_sha256"},
+    )
+    pricing_route_values["refresh_route_evidence_sha256"] = resealed_route.route_evidence_sha256
+    resealed_pricing_route = AuditModelRefreshPricingRouteEvidence.model_validate(
+        {
+            **pricing_route_values,
+            "route_evidence_sha256": scheduler_canonical_sha256(pricing_route_values),
+        }
+    )
+    raw_attempts = usage.routing.get("audit_model_refresh_pricing_attempts")
+    assert isinstance(raw_attempts, list)
+    resealed_attempts = []
+    for raw_attempt in raw_attempts:
+        attempt = AuditModelRefreshPricingAttemptEvidence.model_validate_json(
+            json.dumps(raw_attempt)
+        )
+        attempt_values = attempt.model_dump(mode="python", exclude={"evidence_sha256"})
+        attempt_values["refresh_route_evidence_sha256"] = resealed_route.route_evidence_sha256
+        attempt_values["pricing_route_evidence_sha256"] = (
+            resealed_pricing_route.route_evidence_sha256
+        )
+        resealed_attempts.append(
+            AuditModelRefreshPricingAttemptEvidence.model_validate(
+                {
+                    **attempt_values,
+                    "evidence_sha256": scheduler_canonical_sha256(attempt_values),
+                }
+            )
+        )
+    final_attempt = resealed_attempts[-1]
+    resealed_usage = reattest_synthetic_real_usage(
+        usage.model_copy(
+            update={
+                "routing": {
+                    **usage.routing,
+                    "audit_model_refresh_route_evidence": resealed_route.model_dump(mode="json"),
+                    "audit_model_refresh_route_evidence_sha256": (
+                        resealed_route.route_evidence_sha256
+                    ),
+                    "audit_model_refresh_pricing_route_evidence": (
+                        resealed_pricing_route.model_dump(mode="json")
+                    ),
+                    "audit_model_refresh_pricing_route_evidence_sha256": (
+                        resealed_pricing_route.route_evidence_sha256
+                    ),
+                    "audit_model_refresh_pricing_attempts": [
+                        attempt.model_dump(mode="json") for attempt in resealed_attempts
+                    ],
+                    "audit_model_refresh_pricing_attempt_sha256s": [
+                        attempt.evidence_sha256 for attempt in resealed_attempts
+                    ],
+                    "audit_model_refresh_pricing_attempt": final_attempt.model_dump(mode="json"),
+                    "audit_model_refresh_pricing_attempt_sha256": (final_attempt.evidence_sha256),
+                }
+            }
+        )
+    )
+    binding_values = binding.model_dump(mode="python", exclude={"binding_sha256"})
+    binding_values["audit_routes"] = (
+        SchedulerAuditModelRefreshRouteBinding(
+            exact_model_id=resealed_route.exact_model_id,
+            route_evidence_sha256=resealed_route.route_evidence_sha256,
+        ),
+    )
+    resealed_binding = SchedulerAuditModelRefreshBinding.model_validate(
+        {
+            **binding_values,
+            "binding_sha256": scheduler_canonical_sha256(binding_values),
+        }
+    )
+    pricing_binding_values = pricing_binding.model_dump(
+        mode="python",
+        exclude={"binding_sha256"},
+    )
+    pricing_binding_values["audit_routes"] = (
+        SchedulerAuditModelRefreshPricingRouteBinding(
+            exact_model_id=resealed_pricing_route.exact_model_id,
+            approved_provider_endpoint=resealed_pricing_route.approved_provider_endpoint,
+            pricing_route_evidence_sha256=resealed_pricing_route.route_evidence_sha256,
+            refresh_route_evidence_sha256=resealed_route.route_evidence_sha256,
+            qualified_pricing_snapshot_sha256=(
+                resealed_pricing_route.qualified_pricing_snapshot_sha256
+            ),
+            baseline_pricing_sha256=resealed_pricing_route.baseline_pricing_sha256,
+            current_pricing_sha256=resealed_pricing_route.current_pricing_sha256,
+        ),
+    )
+    resealed_pricing_binding = SchedulerAuditModelRefreshPricingBinding.model_validate(
+        {
+            **pricing_binding_values,
+            "binding_sha256": scheduler_canonical_sha256(pricing_binding_values),
+        }
+    )
+    return resealed_usage, resealed_binding, resealed_pricing_binding
+
+
+def test_resume_rejects_coherently_resealed_success_with_unbound_refresh_route(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "resealed-completion-refresh-route"
+    bindings = _bindings(with_audit_policy=True)
+    journal = create_scheduler_journal(
+        path,
+        bindings=bindings,
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    journal.mark_dispatched(task.task_id)
+    payload = build_scheduler_test_model_payload(plan, task)
+    exact_usage = build_scheduler_test_real_usage(
+        task,
+        activation,
+        validated_output=payload,
+        privacy_evidence_custody=journal.manifest.privacy_evidence_custody,
+        audit_model_selection=bindings.audit_model_selection,
+        audit_model_refresh=bindings.audit_model_refresh,
+    )
+    output = journal.persist_output(task.task_id, payload, usage_record=exact_usage)
+    journal.close()
+
+    assert bindings.audit_model_refresh is not None
+    assert bindings.audit_model_refresh_pricing is not None
+    assert bindings.audit_model_selection is not None
+    resealed_usage, resealed_refresh, resealed_pricing = _reseal_refresh_route_and_binding(
+        exact_usage,
+        bindings.audit_model_refresh,
+        bindings.audit_model_refresh_pricing,
+    )
+    assert task.normalizer_sha256 is not None
+    resealed_completion = SchedulerModelCompletionEvidence.build(
+        task=task,
+        activation=activation,
+        usage_record=resealed_usage,
+        privacy_evidence_custody=plan.manifest.privacy_evidence_custody,
+        audit_model_selection=bindings.audit_model_selection,
+        audit_model_refresh=resealed_refresh,
+        audit_model_refresh_pricing=resealed_pricing,
+        normalizer_sha256=task.normalizer_sha256,
+        normalized_output_sha256=output.output_sha256,
+    )
+    output_values = output.model_dump(mode="python", exclude={"output_artifact_sha256"})
+    output_values["model_completion_evidence"] = resealed_completion
+    resealed_output = SchedulerTaskOutput.model_validate(
+        {
+            **output_values,
+            "output_artifact_sha256": scheduler_canonical_sha256(output_values),
+        }
+    )
+    output_path = next((path / "task-outputs").glob("*.json"))
+    output_path.write_text(stable_json(resealed_output), encoding="utf-8")
+    output_path.rename(
+        output_path.with_name(
+            f"{resealed_output.task_id}-{resealed_output.output_artifact_sha256}.json"
+        )
+    )
+
+    with pytest.raises(ValueError, match="current model refresh"):
+        open_scheduler_journal_for_verification(
+            path,
+            expected_bindings=bindings,
             expected_shard_inventory=_inventory(),
         )
 
@@ -1368,6 +2153,8 @@ def test_post_transport_privacy_mismatch_is_accounted_but_never_credited(
         cost_usd_exact="0.125",
         privacy_evidence_custody=journal.manifest.privacy_evidence_custody,
         audit_model_selection=journal.manifest.bindings.audit_model_selection,
+        audit_model_refresh=journal.manifest.bindings.audit_model_refresh,
+        audit_model_refresh_pricing=(journal.manifest.bindings.audit_model_refresh_pricing),
     )
     mismatched_usage = reattest_synthetic_real_usage(
         exact_usage.model_copy(
@@ -1394,6 +2181,303 @@ def test_post_transport_privacy_mismatch_is_accounted_but_never_credited(
     assert journal.provider_attempts[0].usage_record.request_id == task.logical_request_id
     assert journal.structurally_successful_review_usage_records == ()
     assert journal.restorable_review_usage_records == ()
+    runtime.close()
+
+
+def _framed_candidate_review_fixture(path: Path) -> dict[str, Any]:
+    bindings = _bindings(with_audit_policy=True)
+    inventory = _inventory()
+    journal = create_scheduler_journal(
+        path,
+        bindings=bindings,
+        shard_inventory=inventory,
+    )
+    orientation_plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    orientation_task = orientation_plan.tasks[0]
+    orientation_activation = journal.activate_task(
+        orientation_task.task_id,
+        actual_input_sha256=orientation_task.input_sha256,
+        system_prompt_sha256=orientation_task.system_prompt_sha256,
+        user_prompt_sha256="3" * 64,
+        provider_prompt_sha256="4" * 64,
+        response_schema_sha256=orientation_task.response_schema_sha256,
+    )
+    journal.mark_dispatched(orientation_task.task_id)
+    orientation_payload = build_scheduler_test_model_payload(
+        orientation_plan,
+        orientation_task,
+    )
+    orientation_usage = build_scheduler_test_real_usage(
+        orientation_task,
+        orientation_activation,
+        validated_output=orientation_payload,
+        cost_usd_exact="0.125",
+        privacy_evidence_custody=journal.manifest.privacy_evidence_custody,
+        audit_model_selection=journal.manifest.bindings.audit_model_selection,
+        audit_model_refresh=journal.manifest.bindings.audit_model_refresh,
+        audit_model_refresh_pricing=(journal.manifest.bindings.audit_model_refresh_pricing),
+    )
+    orientation_output = journal.persist_output(
+        orientation_task.task_id,
+        orientation_payload,
+        usage_record=orientation_usage,
+    )
+    orientation_result = SchedulerTaskResult.build(
+        plan=orientation_plan,
+        task=orientation_task,
+        activation=orientation_activation,
+        terminal_status=SchedulerTerminalStatus.SUCCEEDED,
+        terminal_evidence_sha256=orientation_usage.validated_response_sha256 or "0" * 64,
+        output=orientation_output,
+    )
+    journal.record_terminal(orientation_result)
+    journal.seal_pass_result(SchedulerPassKind.ORIENTATION)
+    planner = PipelineScheduler(journal)
+    wire_schema_sha256 = candidate_review_frame_wire_schema_sha256()
+    audit_selection = journal.manifest.bindings.audit_model_selection
+    assert audit_selection is not None
+    selected_root_lineage = audit_selection.route_for("synthetic/auditor-v1").root_lineage
+    tasks = tuple(
+        planner.model_task(
+            pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+            scope=SchedulerScope.single_shard(shard_id),
+            task_key=f"framed-source-audit-{shard_id}",
+            role="source_audit",
+            requested_model="synthetic/auditor-v1",
+            root_lineage=selected_root_lineage,
+            system_prompt_sha256="a" * 64,
+            response_schema_sha256=wire_schema_sha256,
+        )
+        for shard_id in SHARDS
+    )
+    task = tasks[0]
+    assert task.normalizer_sha256 == scheduler_response_normalizer_sha256(wire_schema_sha256)
+    plan = planner.prepare_pass(SchedulerPassKind.BLIND_SHARD_REVIEW, tasks)
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=wire_schema_sha256,
+        delivered_source_descriptor_sha256s=(
+            scheduler_test_delivered_source_descriptor_sha256s(plan, task)
+        ),
+    )
+    journal.mark_dispatched(task.task_id)
+    payload = CandidateReviewBatch.model_validate(build_scheduler_test_model_payload(plan, task))
+    document = frame_candidate_review_batch(payload)
+    normalized, normalization = normalize_candidate_review_document(
+        document,
+        request_id=task.logical_request_id,
+    )
+    assert normalized == payload
+    usage = build_scheduler_test_real_usage(
+        task,
+        activation,
+        validated_output=document,
+        cost_usd_exact="0.125",
+        privacy_evidence_custody=journal.manifest.privacy_evidence_custody,
+        audit_model_selection=journal.manifest.bindings.audit_model_selection,
+        audit_model_refresh=journal.manifest.bindings.audit_model_refresh,
+        audit_model_refresh_pricing=(journal.manifest.bindings.audit_model_refresh_pricing),
+    )
+    surface_requests, surface_artifact = build_scheduler_test_model_surface_review_custody(
+        plan,
+        task,
+        activation,
+        usage,
+        payload,
+        normalization_evidence=normalization,
+    )
+    assert surface_artifact is not None
+    assert surface_artifact.schema_version == "1.1"
+    return {
+        "bindings": bindings,
+        "inventory": inventory,
+        "journal": journal,
+        "runtime": PipelineScheduler(journal),
+        "plan": plan,
+        "task": task,
+        "payload": payload,
+        "usage": usage,
+        "normalization": normalization,
+        "surface_requests": surface_requests,
+        "surface_artifact": surface_artifact,
+    }
+
+
+def _record_framed_candidate_review(
+    fixture: dict[str, Any],
+    *,
+    normalization: CandidateReviewNormalizationEvidence | None,
+) -> SchedulerTaskResult:
+    runtime = fixture["runtime"]
+    assert isinstance(runtime, PipelineScheduler)
+    task = fixture["task"]
+    assert isinstance(task, SchedulerTaskPlan)
+    usage = fixture["usage"]
+    assert isinstance(usage, UsageRecord)
+    return runtime.record_model_success(
+        task,
+        output_value=fixture["payload"],
+        usage_records=[usage],
+        model_surface_review_requests=fixture["surface_requests"],
+        model_surface_review_artifact=fixture["surface_artifact"],
+        normalization_evidence=normalization,
+    )
+
+
+def test_framed_candidate_review_completion_survives_exact_journal_reload(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "framed-candidate-review"
+    fixture = _framed_candidate_review_fixture(path)
+    normalization = fixture["normalization"]
+    assert isinstance(normalization, CandidateReviewNormalizationEvidence)
+
+    result = _record_framed_candidate_review(fixture, normalization=normalization)
+
+    assert result.terminal_status is SchedulerTerminalStatus.SUCCEEDED
+    runtime = fixture["runtime"]
+    assert isinstance(runtime, PipelineScheduler)
+    runtime.close()
+    verified = open_scheduler_journal_for_verification(
+        path,
+        expected_bindings=fixture["bindings"],
+        expected_shard_inventory=fixture["inventory"],
+    )
+    task = fixture["task"]
+    assert isinstance(task, SchedulerTaskPlan)
+    output = next(item for item in verified.outputs if item.task_id == task.task_id)
+    completion = output.model_completion_evidence
+    assert completion is not None
+    assert completion.schema_version == "1.1"
+    assert completion.normalization_evidence == normalization
+    assert completion.validated_response_sha256 == normalization.wire_validated_response_sha256
+    assert completion.normalized_output_sha256 == normalization.normalized_batch_sha256
+    assert completion.validated_response_sha256 != completion.normalized_output_sha256
+    assert output.model_surface_review_artifact is not None
+    assert output.model_surface_review_artifact.normalization_evidence == normalization
+    assert verified.reconstruct_output(task.task_id, CandidateReviewBatch) == fixture["payload"]
+    verified.close()
+
+
+def test_legacy_direct_batch_candidate_review_remains_reload_compatible(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "legacy-candidate-review"
+    bindings = _bindings()
+    inventory = _inventory()
+    journal = create_scheduler_journal(
+        path,
+        bindings=bindings,
+        shard_inventory=inventory,
+    )
+    _complete_pass(journal, SchedulerPassKind.ORIENTATION)
+    _complete_pass(journal, SchedulerPassKind.BLIND_SHARD_REVIEW)
+    legacy_outputs = tuple(
+        output
+        for output in journal.outputs
+        if output.model_completion_evidence is not None
+        and output.model_completion_evidence.response_schema_sha256
+        == scheduler_test_response_schema_sha256(
+            SchedulerPassKind.BLIND_SHARD_REVIEW,
+            "source_audit",
+        )
+    )
+    assert len(legacy_outputs) == len(SHARDS)
+    assert all(
+        output.model_completion_evidence is not None
+        and output.model_completion_evidence.schema_version == "1.0"
+        and output.model_completion_evidence.normalization_evidence is None
+        for output in legacy_outputs
+    )
+    journal.close()
+
+    verified = open_scheduler_journal_for_verification(
+        path,
+        expected_bindings=bindings,
+        expected_shard_inventory=inventory,
+    )
+    assert {
+        output.output_artifact_sha256
+        for output in verified.outputs
+        if output.model_completion_evidence is not None
+        and output.model_completion_evidence.response_schema_sha256
+        == scheduler_test_response_schema_sha256(
+            SchedulerPassKind.BLIND_SHARD_REVIEW,
+            "source_audit",
+        )
+    } == {output.output_artifact_sha256 for output in legacy_outputs}
+    verified.close()
+
+
+def test_new_pipeline_candidate_review_task_rejects_legacy_batch_wire_schema(
+    tmp_path: Path,
+) -> None:
+    runtime = PipelineScheduler.create(
+        tmp_path / "new-candidate-task",
+        bindings=_bindings(),
+        analysis_input_inventory=_analysis_inventory(),
+        shard_inventory=_inventory(),
+        privacy_evidence_custody=_privacy_custody(),
+    )
+
+    with pytest.raises(ValueError, match="exact framed wire schema"):
+        runtime.model_task(
+            pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+            scope=SchedulerScope.single_shard(SHARDS[0]),
+            task_key="legacy-wire-is-for-replay-only",
+            role="source_audit",
+            requested_model="synthetic/auditor-v1",
+            root_lineage="sha256:" + "1" * 64,
+            system_prompt_sha256="2" * 64,
+            response_schema_sha256=scheduler_test_response_schema_sha256(
+                SchedulerPassKind.BLIND_SHARD_REVIEW,
+                "source_audit",
+            ),
+        )
+    runtime.close()
+
+
+@pytest.mark.parametrize("tamper", ("omitted", "swapped", "coherently_resealed"))
+def test_framed_candidate_review_rejects_missing_or_false_normalization_custody(
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    fixture = _framed_candidate_review_fixture(tmp_path / tamper)
+    normalization = fixture["normalization"]
+    assert isinstance(normalization, CandidateReviewNormalizationEvidence)
+    supplied: CandidateReviewNormalizationEvidence | None
+    if tamper == "omitted":
+        supplied = None
+    elif tamper == "swapped":
+        payload = fixture["payload"]
+        assert isinstance(payload, CandidateReviewBatch)
+        _normalized, supplied = normalize_candidate_review_document(
+            frame_candidate_review_batch(payload),
+            request_id="scheduler-request-" + "f" * 64,
+        )
+    else:
+        resealed = normalization.model_dump(mode="json")
+        resealed["normalized_batch_sha256"] = "f" * 64
+        resealed["evidence_sha256"] = scheduler_canonical_sha256(
+            {key: value for key, value in resealed.items() if key != "evidence_sha256"}
+        )
+        supplied = CandidateReviewNormalizationEvidence.model_validate(resealed)
+
+    result = _record_framed_candidate_review(fixture, normalization=supplied)
+
+    assert result.terminal_status is SchedulerTerminalStatus.INVALID
+    journal = fixture["journal"]
+    assert isinstance(journal, SchedulerJournal)
+    task = fixture["task"]
+    assert isinstance(task, SchedulerTaskPlan)
+    assert all(output.task_id != task.task_id for output in journal.outputs)
+    assert len(journal.provider_attempts) == 1
+    runtime = fixture["runtime"]
+    assert isinstance(runtime, PipelineScheduler)
     runtime.close()
 
 
@@ -1462,12 +2546,174 @@ def test_paid_real_success_rejects_stripped_audit_policy_routing(tmp_path: Path)
     journal.close()
 
 
-def test_resume_repairs_activation_file_crash_window(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "routing_field",
+    (
+        "audit_model_refresh_technical_route_set_sha256",
+        "audit_model_refresh_guard_capability_sha256",
+    ),
+)
+def test_paid_real_success_rejects_swapped_refresh_binding_hash(
+    tmp_path: Path,
+    routing_field: str,
+) -> None:
+    journal = create_scheduler_journal(
+        tmp_path / "refresh-technical-route-swapped",
+        bindings=_bindings(with_audit_policy=True),
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    journal.mark_dispatched(task.task_id)
+    payload = build_scheduler_test_model_payload(plan, task)
+    exact = build_scheduler_test_real_usage(
+        task,
+        activation,
+        validated_output=payload,
+        privacy_evidence_custody=journal.manifest.privacy_evidence_custody,
+        audit_model_selection=journal.manifest.bindings.audit_model_selection,
+        audit_model_refresh=journal.manifest.bindings.audit_model_refresh,
+    )
+    swapped = reattest_synthetic_real_usage(
+        exact.model_copy(
+            update={
+                "routing": {
+                    **exact.routing,
+                    routing_field: "f" * 64,
+                }
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="differs from current model refresh"):
+        journal.persist_output(task.task_id, payload, usage_record=swapped)
+    assert journal.outputs == ()
+    journal.close()
+
+
+def test_paid_real_success_rejects_use_before_refresh_verification(
+    tmp_path: Path,
+) -> None:
+    journal = create_scheduler_journal(
+        tmp_path / "refresh-use-before-verification",
+        bindings=_bindings(with_audit_policy=True),
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    journal.mark_dispatched(task.task_id)
+    payload = build_scheduler_test_model_payload(plan, task)
+    exact = build_scheduler_test_real_usage(
+        task,
+        activation,
+        validated_output=payload,
+        privacy_evidence_custody=journal.manifest.privacy_evidence_custody,
+        audit_model_selection=journal.manifest.bindings.audit_model_selection,
+        audit_model_refresh=journal.manifest.bindings.audit_model_refresh,
+    )
+    started_at = datetime(2019, 12, 31, 23, 59, 59, tzinfo=UTC)
+    ended_at = started_at + timedelta(milliseconds=1)
+    predates_verification = reattest_synthetic_real_usage(
+        exact.model_copy(
+            update={
+                "started_at": started_at,
+                "ended_at": ended_at,
+                "routing": {
+                    **exact.routing,
+                    "request_started_at": started_at.isoformat(),
+                    "request_ended_at": ended_at.isoformat(),
+                },
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="differs from current model refresh"):
+        journal.persist_output(task.task_id, payload, usage_record=predates_verification)
+    assert journal.outputs == ()
+    journal.close()
+
+
+def test_paid_real_completion_may_finish_after_refresh_expiry_if_dispatch_was_current(
+    tmp_path: Path,
+) -> None:
+    started_at = datetime(2025, 1, 1, tzinfo=UTC)
+    refresh_expires_at = started_at + timedelta(seconds=1)
+    journal = create_scheduler_journal(
+        tmp_path / "refresh-expires-during-request",
+        bindings=_bindings(
+            with_audit_policy=True,
+            audit_model_refresh_expires_at=refresh_expires_at,
+        ),
+        shard_inventory=_inventory(),
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    task = plan.tasks[0]
+    activation = journal.activate_task(
+        task.task_id,
+        actual_input_sha256=task.input_sha256,
+        system_prompt_sha256=task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=task.response_schema_sha256,
+    )
+    journal.mark_dispatched(task.task_id)
+    payload = build_scheduler_test_model_payload(plan, task)
+    exact = build_scheduler_test_real_usage(
+        task,
+        activation,
+        validated_output=payload,
+        privacy_evidence_custody=journal.manifest.privacy_evidence_custody,
+        audit_model_selection=journal.manifest.bindings.audit_model_selection,
+        audit_model_refresh=journal.manifest.bindings.audit_model_refresh,
+    )
+    ended_at = refresh_expires_at + timedelta(seconds=1)
+    completed_after_expiry = reattest_synthetic_real_usage(
+        exact.model_copy(
+            update={
+                "ended_at": ended_at,
+                "latency_ms": 2_000,
+                "routing": {
+                    **exact.routing,
+                    "request_ended_at": ended_at.isoformat(),
+                    "latency_ms": 2_000,
+                },
+            }
+        )
+    )
+
+    output = journal.persist_output(
+        task.task_id,
+        payload,
+        usage_record=completed_after_expiry,
+    )
+
+    assert output.model_completion_evidence is not None
+    assert output.model_completion_evidence.audit_model_refresh_expires_at == refresh_expires_at
+    journal.close()
+
+
+def test_resume_rejects_activation_event_rollback_against_local_head(tmp_path: Path) -> None:
     path = tmp_path / "journal"
     journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
     plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
     task = plan.tasks[0]
-    activation = journal.activate_task(
+    journal.activate_task(
         task.task_id,
         actual_input_sha256=task.input_sha256,
         system_prompt_sha256=task.system_prompt_sha256,
@@ -1479,15 +2725,12 @@ def test_resume_repairs_activation_file_crash_window(tmp_path: Path) -> None:
     journal.close()
     (path / "events" / f"event-{activated_event.event_index:08d}.json").unlink()
 
-    resumed = resume_scheduler_journal(
-        path,
-        expected_bindings=_bindings(),
-        expected_shard_inventory=_inventory(),
-    )
-    assert resumed.activations == (activation,)
-    assert resumed.events[-1] == activated_event
-    assert resumed.dispatchable_task_ids == (task.task_id,)
-    resumed.close()
+    with pytest.raises(ValueError):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(),
+            expected_shard_inventory=_inventory(),
+        )
 
 
 def test_resume_rejects_swapped_audit_policy_selection_bundle(tmp_path: Path) -> None:
@@ -1503,7 +2746,7 @@ def test_resume_rejects_swapped_audit_policy_selection_bundle(tmp_path: Path) ->
     journal.close()
 
     with pytest.raises(ValueError, match="bindings or shard inventory do not match"):
-        resume_scheduler_journal(
+        open_scheduler_journal_for_verification(
             path,
             expected_bindings=_bindings(
                 with_audit_policy=True,
@@ -1514,7 +2757,7 @@ def test_resume_rejects_swapped_audit_policy_selection_bundle(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_resume_re_attests_exact_real_usage_once_but_serialized_copy_cannot(
+async def test_structural_refresh_resume_cannot_re_attest_real_usage(
     tmp_path: Path,
 ) -> None:
     exact_cost = Decimal("0.123456789012345678")
@@ -1543,6 +2786,7 @@ async def test_resume_re_attests_exact_real_usage_once_but_serialized_copy_canno
         cost_usd_exact=str(exact_cost),
         privacy_evidence_custody=journal.manifest.privacy_evidence_custody,
         audit_model_selection=journal.manifest.bindings.audit_model_selection,
+        audit_model_refresh=journal.manifest.bindings.audit_model_refresh,
     )
     assert is_creditable_usage_record(runtime_usage, require_real=True)
     output = journal.persist_output(task.task_id, payload, usage_record=runtime_usage)
@@ -1582,35 +2826,24 @@ async def test_resume_re_attests_exact_real_usage_once_but_serialized_copy_canno
         expected_bindings=_bindings(with_audit_policy=True),
         expected_shard_inventory=_inventory(),
     )
-    with pytest.raises(ValueError, match="read-only"):
-        verification.claim_restorable_usage_records()
-    verification.close()
-
-    resumed = resume_scheduler_journal(
-        path,
-        expected_bindings=_bindings(with_audit_policy=True),
-        expected_shard_inventory=_inventory(),
-    )
-    serialized = resumed.restorable_usage_records
+    serialized = verification.restorable_usage_records
     assert len(serialized) == 1
     assert not is_creditable_usage_record(serialized[0], require_real=True)
     forged = UsageRecord.model_validate(serialized[0].model_dump(mode="json"))
     assert not is_creditable_usage_record(forged, require_real=True)
-    restored, budget_scope = resumed.claim_restorable_usage_for_budget_recovery()
-    assert len(restored) == 1
-    assert is_creditable_usage_record(restored[0], require_real=True)
+    with pytest.raises(ValueError, match="read-only"):
+        verification.claim_restorable_usage_records()
+    verification.close()
+
     before_cost = cost_ledger.snapshot()
-    await budget.restore_recovered_usage(restored, recovery_scope=budget_scope)
-    assert not budget.recovery_required
-    assert budget.spent_input_tokens == restored[0].prompt_tokens
-    assert budget.spent_output_tokens == restored[0].completion_tokens
-    assert budget.spent_usd_exact == exact_cost
+    with pytest.raises(ValueError, match="requires live model-refresh authority"):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(with_audit_policy=True),
+            expected_shard_inventory=_inventory(),
+        )
+    assert budget.recovery_required
     assert cost_ledger.snapshot() == before_cost
-    with pytest.raises(BudgetReservationStateError, match="not required or already ran"):
-        await budget.restore_recovered_usage(restored, recovery_scope=budget_scope)
-    with pytest.raises(ValueError, match="lacks usage recovery authority"):
-        resumed.claim_restorable_usage_records()
-    resumed.close()
 
 
 def test_resume_recovery_authority_never_promotes_mock_usage_to_real(tmp_path: Path) -> None:
@@ -2006,19 +3239,42 @@ def test_scheduler_cost_baseline_is_stable_and_does_not_serialize_ledger_paths(
     tmp_path: Path,
 ) -> None:
     ledger_path = tmp_path / "operator-private-ledger-name.json"
-    ledger = AtomicCostLedger.initialize(ledger_path, cap_usd=Decimal("1"))
+    ledger = AtomicCostLedger.initialize(ledger_path, cap_usd=Decimal("20"))
     reservation = ledger.reserve("prior-request", Decimal("0.10"))
     ledger.reconcile(reservation, Decimal("0.05"))
 
     baseline = build_scheduler_cost_ledger_baseline(ledger)
-    reopened = AtomicCostLedger.open_existing(ledger_path, cap_usd=Decimal("1"))
+    reopened = AtomicCostLedger.open_existing(ledger_path, cap_usd=Decimal("20"))
     reopened_baseline = build_scheduler_cost_ledger_baseline(reopened)
     serialized = baseline.model_dump_json()
 
     assert reopened_baseline == baseline
+    assert baseline.cap_usd_exact == "20"
+    assert baseline.spent_usd_exact == "0.05"
+    assert baseline.active_reserved_usd_exact == "0"
+    assert scheduler_module._canonical_recovery_usd_sum(("20.000000000000",)) == "20"
     assert ledger_path.as_posix() not in serialized
     assert ledger.lock_path.as_posix() not in serialized
     assert ledger_path.name not in serialized
+
+
+def test_scheduler_recovery_cost_sum_bounds_a_lying_iterable() -> None:
+    class LyingCosts:
+        def __init__(self) -> None:
+            self.consumed = 0
+
+        def __len__(self) -> int:
+            return 0
+
+        def __iter__(self) -> Iterator[str]:
+            while True:
+                self.consumed += 1
+                yield "0"
+
+    values = LyingCosts()
+    with pytest.raises(ValueError, match="cost evidence exceeds its item limit"):
+        scheduler_module._canonical_recovery_usd_sum(values)
+    assert values.consumed == scheduler_module._TRUNCATION_RECOVERY_COST_COMPONENT_LIMIT + 1
 
 
 @pytest.mark.asyncio
@@ -2136,6 +3392,238 @@ def test_activated_provider_preflight_failure_is_terminal_without_dispatch(
         SchedulerPassStatus.INCONCLUSIVE,
     }
     runtime.close()
+
+
+def test_pipeline_scheduler_requires_live_refresh_guard_on_create_and_resume(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inventory = _inventory()
+    analysis_inventory = _analysis_inventory()
+    privacy_custody = _privacy_custody(source_sha256=inventory.source_tree_sha256)
+    refresh = synthetic_refresh_runtime(
+        tmp_path / "refresh-authority",
+        source_sha256_override=inventory.source_tree_sha256,
+    )
+    bindings = build_scheduler_bindings(
+        config=refresh.config,
+        shard_inventory=inventory,
+        qualification=refresh.technical_qualification,
+        analysis_input_sha256=analysis_inventory.analysis_input_sha256,
+        privacy_evidence_custody=privacy_custody,
+        audit_model_selection_evidence=refresh.audit_selection_evidence,
+        audit_model_refresh_evidence=refresh.evidence,
+    )
+    assert bindings.audit_model_refresh is not None
+    assert bindings.audit_model_refresh.guard_capability_sha256 == refresh.guard.capability_sha256
+    journal_path = tmp_path / "journal"
+
+    with pytest.raises(ValueError, match="must be one exact atomic pair"):
+        PipelineScheduler.create(
+            journal_path,
+            bindings=bindings,
+            analysis_input_inventory=analysis_inventory,
+            shard_inventory=inventory,
+            privacy_evidence_custody=privacy_custody,
+            audit_model_refresh_evidence=refresh.evidence,
+        )
+    with pytest.raises(ValueError, match="requires live model-refresh authority"):
+        PipelineScheduler.create(
+            journal_path,
+            bindings=bindings,
+            analysis_input_inventory=analysis_inventory,
+            shard_inventory=inventory,
+            privacy_evidence_custody=privacy_custody,
+        )
+    assert not journal_path.exists()
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "_scheduler_wall_clock",
+        lambda: refresh.verified_at,
+    )
+    scheduler = PipelineScheduler.create(
+        journal_path,
+        bindings=bindings,
+        analysis_input_inventory=analysis_inventory,
+        shard_inventory=inventory,
+        privacy_evidence_custody=privacy_custody,
+        audit_model_refresh_evidence=refresh.evidence,
+        audit_model_refresh_guard=refresh.guard,
+        production_qualification=refresh.technical_qualification,
+        audit_model_selection=refresh.audit_selection,
+    )
+    scheduler.close()
+
+    serialized = (journal_path / "manifest.json").read_text(encoding="utf-8")
+    assert refresh.evidence.evidence_sha256 in serialized
+    assert refresh.guard.capability_sha256 in serialized
+    assert '"audit_model_refresh_guard":' not in serialized
+
+    with pytest.raises(ValueError, match="requires live model-refresh authority"):
+        PipelineScheduler.resume(
+            journal_path,
+            bindings=bindings,
+            analysis_input_inventory=analysis_inventory,
+            shard_inventory=inventory,
+        )
+    resumed = PipelineScheduler.resume(
+        journal_path,
+        bindings=bindings,
+        analysis_input_inventory=analysis_inventory,
+        shard_inventory=inventory,
+        audit_model_refresh_evidence=refresh.evidence,
+        audit_model_refresh_guard=refresh.guard,
+        production_qualification=refresh.technical_qualification,
+        audit_model_selection=refresh.audit_selection,
+    )
+    with pytest.raises(ValueError, match="lacks live model-refresh recovery authority"):
+        resumed.journal.claim_restorable_usage_records()
+    resumed.close()
+
+
+def test_pricing_bound_recovery_rechecks_actual_wall_clock_before_ledger_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inventory = _inventory()
+    analysis_inventory = _analysis_inventory()
+    privacy_custody = _privacy_custody(source_sha256=inventory.source_tree_sha256)
+    refresh = synthetic_refresh_runtime(
+        tmp_path / "pricing-recovery-authority",
+        source_sha256_override=inventory.source_tree_sha256,
+    )
+    ledger_path = tmp_path / "pricing-recovery-cost.json"
+    ledger = AtomicCostLedger.initialize(ledger_path, cap_usd=Decimal("1"))
+    baseline = build_scheduler_cost_ledger_baseline(ledger)
+    bindings = build_scheduler_bindings(
+        config=refresh.config,
+        shard_inventory=inventory,
+        qualification=refresh.technical_qualification,
+        analysis_input_sha256=analysis_inventory.analysis_input_sha256,
+        cost_ledger_baseline=baseline,
+        privacy_evidence_custody=privacy_custody,
+        audit_model_selection_evidence=refresh.audit_selection_evidence,
+        audit_model_refresh_evidence=refresh.evidence,
+        audit_model_refresh_pricing_evidence=refresh.pricing_evidence,
+    )
+    assert bindings.audit_model_selection is not None
+    selected = bindings.audit_model_selection.selected_routes[0]
+    journal_path = tmp_path / "pricing-recovery-journal"
+    monkeypatch.setattr(scheduler_module, "_scheduler_wall_clock", lambda: refresh.verified_at)
+    journal = _create_scheduler_journal(
+        journal_path,
+        bindings=bindings,
+        analysis_input_inventory=analysis_inventory,
+        shard_inventory=inventory,
+        cost_ledger_baseline=baseline,
+        privacy_evidence_custody=privacy_custody,
+        audit_model_refresh_evidence=refresh.evidence,
+        audit_model_refresh_guard=refresh.guard,
+        audit_model_refresh_pricing_evidence=refresh.pricing_evidence,
+        audit_model_refresh_pricing_authority=refresh.pricing_authority,
+        production_qualification=refresh.technical_qualification,
+        audit_model_selection=refresh.audit_selection,
+    )
+    task = SchedulerTaskPlan.build(
+        manifest=journal.manifest,
+        pass_kind=SchedulerPassKind.ORIENTATION,
+        scope=SchedulerScope.global_scope(),
+        task_kind=SchedulerTaskKind.MODEL_REQUEST,
+        task_key="pricing-expiry-recovery",
+        role="threat_model",
+        requested_model=selected.exact_model_id,
+        root_lineage=selected.root_lineage,
+        candidate_ids=(),
+        input_sha256="9" * 64,
+        prompt_sha256="a" * 64,
+        response_schema_sha256=scheduler_test_response_schema_sha256(
+            SchedulerPassKind.ORIENTATION,
+            "threat_model",
+        ),
+        **scheduler_test_model_fields("pricing-expiry-recovery"),
+    )
+    plan = journal.seal_pass_plan(
+        SchedulerPassPlan.build(
+            manifest=journal.manifest,
+            pass_kind=SchedulerPassKind.ORIENTATION,
+            dependencies=journal.next_dependencies,
+            tasks=(task,),
+        )
+    )
+    sealed_task = plan.tasks[0]
+    journal.activate_task(
+        sealed_task.task_id,
+        actual_input_sha256=sealed_task.input_sha256,
+        system_prompt_sha256=sealed_task.system_prompt_sha256,
+        user_prompt_sha256="1" * 64,
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=sealed_task.response_schema_sha256,
+    )
+    journal.mark_dispatched(sealed_task.task_id)
+    ledger.reserve(sealed_task.logical_request_id, Decimal("0.25"))
+    journal.close()
+
+    resumed = _resume_scheduler_journal(
+        journal_path,
+        expected_bindings=bindings,
+        expected_analysis_input_inventory=analysis_inventory,
+        expected_shard_inventory=inventory,
+        expected_cost_ledger_baseline=baseline,
+        atomic_ledger=ledger,
+        audit_model_refresh_evidence=refresh.evidence,
+        audit_model_refresh_guard=refresh.guard,
+        audit_model_refresh_pricing_evidence=refresh.pricing_evidence,
+        audit_model_refresh_pricing_authority=refresh.pricing_authority,
+        production_qualification=refresh.technical_qualification,
+        audit_model_selection=refresh.audit_selection,
+    )
+    before_snapshot = ledger.snapshot()
+    before_bytes = ledger_path.read_bytes()
+    monkeypatch.setattr(
+        scheduler_module,
+        "_scheduler_wall_clock",
+        lambda: refresh.pricing_evidence.expires_at,
+    )
+
+    with pytest.raises(ValueError, match="recovery authority is expired"):
+        resumed.recover_active_cost_reservations(ledger)
+    assert ledger.snapshot() == before_snapshot
+    assert ledger_path.read_bytes() == before_bytes
+    with pytest.raises(ValueError, match="recovery authority is expired"):
+        resumed.claim_restorable_usage_for_budget_recovery(atomic_ledger=ledger)
+    assert ledger.snapshot() == before_snapshot
+    assert ledger_path.read_bytes() == before_bytes
+    resumed.close()
+
+
+def test_refresh_bound_raw_resume_refuses_before_active_ledger_mutation(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "refresh-raw-resume"
+    bindings = _bindings(with_audit_policy=True)
+    journal = create_scheduler_journal(
+        path,
+        bindings=bindings,
+        shard_inventory=_inventory(),
+    )
+    journal.close()
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "active-refresh-ledger.json",
+        cap_usd=Decimal("1"),
+    )
+    ledger.reserve("synthetic-auditor-v1-attempt-1", Decimal("0.25"))
+    before = ledger.snapshot()
+
+    with pytest.raises(ValueError, match="requires live model-refresh authority"):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=bindings,
+            expected_shard_inventory=_inventory(),
+            atomic_ledger=ledger,
+        )
+
+    assert ledger.snapshot() == before
 
 
 def test_provider_delivery_requires_exact_audited_path_hash_and_size(tmp_path: Path) -> None:
@@ -2341,7 +3829,7 @@ def test_dispatched_without_terminal_becomes_uncertain_and_is_not_retried(
     resumed.close()
 
 
-def test_resume_repairs_only_missing_planned_suffix_after_sealed_blind_plan(
+def test_resume_rejects_missing_planned_suffix_against_local_head(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "journal"
@@ -2356,19 +3844,15 @@ def test_resume_repairs_only_missing_planned_suffix_after_sealed_blind_plan(
     journal.close()
     (path / "events" / f"event-{last_event.event_index:08d}.json").unlink()
 
-    resumed = resume_scheduler_journal(
-        path,
-        expected_bindings=_bindings(),
-        expected_shard_inventory=_inventory(),
-    )
-    assert resumed.events[-1] == last_event
-    assert resumed.resumable_task_ids == tuple(sorted(task.task_id for task in blind.tasks))
-    with pytest.raises(ValueError, match="exact campaign order"):
-        resumed.seal_pass_plan(blind)
-    resumed.close()
+    with pytest.raises(ValueError):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(),
+            expected_shard_inventory=_inventory(),
+        )
 
 
-def test_result_without_terminal_event_is_retained_but_never_credited(
+def test_result_without_checkpoint_update_fails_closed_before_recovery(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "journal"
@@ -2402,17 +3886,12 @@ def test_result_without_terminal_event_is_retained_but_never_credited(
     )
     journal.close()
 
-    resumed = resume_scheduler_journal(
-        path,
-        expected_bindings=_bindings(),
-        expected_shard_inventory=_inventory(),
-    )
-    assert len(resumed.result_observations) == 2
-    assert result in resumed.result_observations
-    assert resumed.task_results[0].terminal_status is SchedulerTerminalStatus.UNCERTAIN
-    assert resumed.events[-1].kind is SchedulerTaskEventKind.TERMINAL
-    assert resumed.uncertain_task_ids == (task.task_id,)
-    resumed.close()
+    with pytest.raises(ValueError, match="local journal-head checkpoint does not match"):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(),
+            expected_shard_inventory=_inventory(),
+        )
 
 
 def test_output_without_terminal_result_is_retained_and_dispatch_is_uncertain(
@@ -2451,7 +3930,7 @@ def test_output_without_terminal_result_is_retained_and_dispatch_is_uncertain(
     resumed.close()
 
 
-def test_resume_repairs_preflight_result_file_crash_window(tmp_path: Path) -> None:
+def test_resume_rejects_preflight_event_rollback_against_local_head(tmp_path: Path) -> None:
     path = tmp_path / "journal"
     journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
     plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
@@ -2466,15 +3945,12 @@ def test_resume_repairs_preflight_result_file_crash_window(tmp_path: Path) -> No
     journal.close()
     (path / "events" / f"event-{terminal.event_index:08d}.json").unlink()
 
-    resumed = resume_scheduler_journal(
-        path,
-        expected_bindings=_bindings(),
-        expected_shard_inventory=_inventory(),
-    )
-    assert resumed.events[-1] == terminal
-    assert resumed.task_results == (result,)
-    assert resumed.activations == ()
-    resumed.close()
+    with pytest.raises(ValueError, match="local journal-head checkpoint does not match"):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(),
+            expected_shard_inventory=_inventory(),
+        )
 
 
 @pytest.mark.parametrize("directory", ["activations", "task-outputs", "task-results"])
@@ -2568,7 +4044,7 @@ def test_resume_rejects_deleted_terminal_event_linked_by_pass_result(tmp_path: P
         )
 
 
-def test_deleted_tail_pass_result_cannot_preserve_complete_status(tmp_path: Path) -> None:
+def test_deleted_tail_pass_result_fails_closed_against_local_head(tmp_path: Path) -> None:
     path = tmp_path / "journal"
     journal = create_scheduler_journal(path, bindings=_bindings(), shard_inventory=_inventory())
     for pass_kind in SCHEDULER_PASS_ORDER:
@@ -2577,15 +4053,12 @@ def test_deleted_tail_pass_result_cannot_preserve_complete_status(tmp_path: Path
     journal.close()
     (path / "pass-results" / "pass-07-result.json").unlink()
 
-    resumed = resume_scheduler_journal(
-        path,
-        expected_bindings=_bindings(),
-        expected_shard_inventory=_inventory(),
-    )
-    with pytest.raises(ValueError, match="not complete"):
-        resumed.require_complete()
-    assert resumed.artifact().summary.status is SchedulerCampaignStatus.INCOMPLETE
-    resumed.close()
+    with pytest.raises(ValueError, match="local journal-head checkpoint does not match"):
+        resume_scheduler_journal(
+            path,
+            expected_bindings=_bindings(),
+            expected_shard_inventory=_inventory(),
+        )
 
 
 def test_concurrent_live_custody_is_rejected_without_releasing_owner(tmp_path: Path) -> None:

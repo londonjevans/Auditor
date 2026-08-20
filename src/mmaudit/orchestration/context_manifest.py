@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -50,6 +51,11 @@ _RUN_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
 _MAX_CONTEXT_MANIFEST_BYTES = 100_000_000
 _MAX_CONTEXT_REQUESTS = 100_000
 _MAX_REQUEST_OMISSION_EVIDENCE = CONTEXT_OMISSION_GROUP_CAP + 1
+_MAX_RECOVERY_REQUEST_LIMIT_COORDINATES = 32
+_RECOVERY_REQUEST_ID_RE = re.compile(r"^scheduler-recovery-request-[0-9a-f]{64}$")
+_RECOVERY_REQUEST_LIMIT_SCOPE_RE = re.compile(r"^scheduler-request-[0-9a-f]{64}$")
+
+type ContextRecoveryRequestLimitCoordinate = tuple[str, str, int]
 
 
 class ContextManifestError(ValueError):
@@ -646,8 +652,18 @@ class ContextRequestEvidence(FrozenContextEvidence):
     evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
 
     @classmethod
-    def build(cls, usage: UsageRecord) -> Self:
-        plan = _request_token_plan_from_usage(usage)
+    def build(
+        cls,
+        usage: UsageRecord,
+        *,
+        recovery_request_limit_scope: str | None = None,
+        recovery_request_limit_count_before: int | None = None,
+    ) -> Self:
+        plan = _request_token_plan_from_usage(
+            usage,
+            recovery_request_limit_scope=recovery_request_limit_scope,
+            recovery_request_limit_count_before=recovery_request_limit_count_before,
+        )
         token_reservations = _atomic_token_reservations_from_usage(usage, plan)
         token_reservation = token_reservations[-1]
         token_reservation_sha256s = tuple(
@@ -1226,10 +1242,30 @@ def build_context_manifest(
     run_id: str,
     usage_records: Sequence[UsageRecord],
     preflight_records: Sequence[ContextPreflightRequestEvidence] = (),
+    recovery_request_limit_coordinates: Sequence[ContextRecoveryRequestLimitCoordinate] = (),
 ) -> ContextManifest:
     """Build deterministic request context evidence, rejecting missing plans."""
 
-    provider_requests = tuple(ContextRequestEvidence.build(record) for record in usage_records)
+    recovery_coordinates = _recovery_request_limit_coordinates(recovery_request_limit_coordinates)
+    usage_request_ids = tuple(record.request_id for record in usage_records)
+    if any(request_id not in usage_request_ids for request_id in recovery_coordinates):
+        raise ContextManifestError("context recovery coordinates refer to absent provider usage")
+    provider_requests = tuple(
+        ContextRequestEvidence.build(
+            record,
+            recovery_request_limit_scope=(
+                recovery_coordinates[record.request_id][0]
+                if record.request_id in recovery_coordinates
+                else None
+            ),
+            recovery_request_limit_count_before=(
+                recovery_coordinates[record.request_id][1]
+                if record.request_id in recovery_coordinates
+                else None
+            ),
+        )
+        for record in usage_records
+    )
     if any(not isinstance(record, ContextPreflightRequestEvidence) for record in preflight_records):
         raise TypeError("context preflight inventory contains invalid evidence")
     requests: tuple[ContextManifestRequestEvidence, ...] = tuple(
@@ -1274,6 +1310,7 @@ def validate_context_manifest_against_usage(
     run_id: str,
     usage_records: Sequence[UsageRecord],
     preflight_records: Sequence[ContextPreflightRequestEvidence] = (),
+    recovery_request_limit_coordinates: Sequence[ContextRecoveryRequestLimitCoordinate] = (),
 ) -> None:
     """Rebuild semantic evidence so an independently resealed artifact still fails."""
 
@@ -1281,6 +1318,7 @@ def validate_context_manifest_against_usage(
         run_id=run_id,
         usage_records=usage_records,
         preflight_records=preflight_records,
+        recovery_request_limit_coordinates=recovery_request_limit_coordinates,
     )
     if manifest != expected:
         raise ContextManifestError("context manifest differs from final provider usage evidence")
@@ -1577,17 +1615,81 @@ def _read_bounded_descriptor(descriptor: int, *, expected_size: int) -> bytes:
     return b"".join(chunks)
 
 
-def _request_token_plan_from_usage(usage: UsageRecord) -> RequestTokenPlan:
+def _recovery_request_limit_coordinates(
+    values: Sequence[ContextRecoveryRequestLimitCoordinate],
+) -> dict[str, tuple[str, int]]:
+    materialized = tuple(itertools.islice(values, _MAX_RECOVERY_REQUEST_LIMIT_COORDINATES + 1))
+    if len(materialized) > _MAX_RECOVERY_REQUEST_LIMIT_COORDINATES:
+        raise ContextManifestError(
+            "context recovery request-limit coordinates exceed their compiled bound"
+        )
+    normalized: list[ContextRecoveryRequestLimitCoordinate] = []
+    for value in materialized:
+        if (
+            type(value) is not tuple
+            or len(value) != 3
+            or type(value[0]) is not str
+            or _RECOVERY_REQUEST_ID_RE.fullmatch(value[0]) is None
+            or type(value[1]) is not str
+            or _RECOVERY_REQUEST_LIMIT_SCOPE_RE.fullmatch(value[1]) is None
+            or type(value[2]) is not int
+            or not 1 <= value[2] <= 2**63 - 1
+        ):
+            raise ContextManifestError("context recovery request-limit coordinates are invalid")
+        normalized.append(value)
+    canonical = tuple(sorted(normalized, key=lambda item: item[0]))
+    if tuple(normalized) != canonical or len({item[0] for item in canonical}) != len(canonical):
+        raise ContextManifestError(
+            "context recovery request-limit coordinates must be unique and sorted"
+        )
+    return {request_id: (scope, count_before) for request_id, scope, count_before in canonical}
+
+
+def _request_token_plan_from_usage(
+    usage: UsageRecord,
+    *,
+    recovery_request_limit_scope: str | None = None,
+    recovery_request_limit_count_before: int | None = None,
+) -> RequestTokenPlan:
     # The parser lives beside usage validation to keep one authoritative routing
     # projection. getattr keeps this module importable while an older serialized
     # run is inspected, but manifest creation itself fails closed.
     from mmaudit.models import usage as usage_module
 
-    parser = getattr(usage_module, "request_token_plan_from_usage", None)
+    recovery_coordinates_supplied = recovery_request_limit_scope is not None
+    if recovery_coordinates_supplied != (recovery_request_limit_count_before is not None):
+        raise ContextManifestError("usage recovery request-limit coordinates are incomplete")
+    if _RECOVERY_REQUEST_ID_RE.fullmatch(usage.request_id) is not None and not (
+        recovery_coordinates_supplied
+    ):
+        raise ContextManifestError(
+            "recovery usage requires externally supplied request-limit coordinates"
+        )
+    if (
+        recovery_coordinates_supplied
+        and _RECOVERY_REQUEST_ID_RE.fullmatch(usage.request_id) is None
+    ):
+        raise ContextManifestError(
+            "ordinary usage cannot consume recovery request-limit coordinates"
+        )
+    parser_name = (
+        "recovery_request_token_plan_from_usage"
+        if recovery_coordinates_supplied
+        else "request_token_plan_from_usage"
+    )
+    parser = getattr(usage_module, parser_name, None)
     if not callable(parser):
         raise ContextManifestError("usage parser cannot validate request token-plan evidence")
     try:
-        plan = parser(usage)
+        plan = (
+            parser(
+                usage,
+                request_limit_scope=recovery_request_limit_scope,
+                request_limit_count_before=recovery_request_limit_count_before,
+            )
+            if recovery_coordinates_supplied
+            else parser(usage)
+        )
     except (TypeError, ValueError) as exc:
         raise ContextManifestError(
             "usage lacks valid request token-plan or atomic token-reservation evidence"

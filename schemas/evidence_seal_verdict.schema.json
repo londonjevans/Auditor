@@ -1,0 +1,1179 @@
+{
+  "$defs": {
+    "EvidenceSealBudgetProjection": {
+      "additionalProperties": false,
+      "properties": {
+        "campaign_cost_usd_exact": {
+          "anyOf": [
+            {
+              "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,36})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Campaign Cost Usd Exact"
+        },
+        "final_ledger_snapshot_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Final Ledger Snapshot Sha256"
+        },
+        "initial_ledger_snapshot_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Initial Ledger Snapshot Sha256"
+        },
+        "maximum_campaign_cost_usd_exact": {
+          "const": "250",
+          "default": "250",
+          "title": "Maximum Campaign Cost Usd Exact",
+          "type": "string"
+        },
+        "portfolio_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Portfolio Sha256S",
+          "type": "array"
+        },
+        "projection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Projection Sha256",
+          "type": "string"
+        },
+        "report_usage_cost_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,36})?$",
+          "title": "Report Usage Cost Usd Exact",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/EvidenceSealBudgetScope"
+        },
+        "state": {
+          "$ref": "#/$defs/EvidenceSealRequirementState"
+        },
+        "unresolved_cost_count": {
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Unresolved Cost Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "scope",
+        "report_usage_cost_usd_exact",
+        "portfolio_sha256s",
+        "unresolved_cost_count",
+        "state",
+        "projection_sha256"
+      ],
+      "title": "EvidenceSealBudgetProjection",
+      "type": "object"
+    },
+    "EvidenceSealBudgetScope": {
+      "enum": [
+        "REPORT_USAGE_LOWER_BOUND",
+        "CLOSED_CANDIDATE_PRIMARY_AND_REPLAY_LEDGER_CHAIN"
+      ],
+      "title": "EvidenceSealBudgetScope",
+      "type": "string"
+    },
+    "EvidenceSealCaseDimensionOutcome": {
+      "additionalProperties": false,
+      "description": "One exact Boolean used by the frozen paired baseline comparison rule.",
+      "properties": {
+        "case_id": {
+          "pattern": "^case-[0-9a-f]{16}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "dimension": {
+          "$ref": "#/$defs/ModelBenchmarkDimension"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "case_id",
+        "dimension",
+        "passed"
+      ],
+      "title": "EvidenceSealCaseDimensionOutcome",
+      "type": "object"
+    },
+    "EvidenceSealDimensionFloor": {
+      "additionalProperties": false,
+      "properties": {
+        "dimension": {
+          "$ref": "#/$defs/ModelBenchmarkDimension"
+        },
+        "exact_evaluated": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Exact Evaluated",
+          "type": "integer"
+        },
+        "minimum_score_micros": {
+          "maximum": 1000000,
+          "minimum": 0,
+          "title": "Minimum Score Micros",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "dimension",
+        "exact_evaluated",
+        "minimum_score_micros"
+      ],
+      "title": "EvidenceSealDimensionFloor",
+      "type": "object"
+    },
+    "EvidenceSealDimensionVerdict": {
+      "additionalProperties": false,
+      "properties": {
+        "dimension": {
+          "$ref": "#/$defs/ModelBenchmarkDimension"
+        },
+        "evaluated": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Evaluated",
+          "type": "integer"
+        },
+        "minimum_score_micros": {
+          "maximum": 1000000,
+          "minimum": 0,
+          "title": "Minimum Score Micros",
+          "type": "integer"
+        },
+        "passed": {
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Passed",
+          "type": "integer"
+        },
+        "score_micros": {
+          "maximum": 1000000,
+          "minimum": 0,
+          "title": "Score Micros",
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/EvidenceSealRequirementState"
+        }
+      },
+      "required": [
+        "dimension",
+        "passed",
+        "evaluated",
+        "score_micros",
+        "minimum_score_micros",
+        "state"
+      ],
+      "title": "EvidenceSealDimensionVerdict",
+      "type": "object"
+    },
+    "EvidenceSealFrozenBaselinePolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "baseline_authority_subject_sha256": {
+          "default": null,
+          "title": "Baseline Authority Subject Sha256",
+          "type": "null"
+        },
+        "baseline_projection_sha256": {
+          "default": null,
+          "title": "Baseline Projection Sha256",
+          "type": "null"
+        },
+        "comparison_rule": {
+          "const": "PAIRED_CASE_DIMENSION_NON_REGRESSION_ONE_STRICT",
+          "default": "PAIRED_CASE_DIMENSION_NON_REGRESSION_ONE_STRICT",
+          "title": "Comparison Rule",
+          "type": "string"
+        },
+        "status": {
+          "const": "NOT_FROZEN",
+          "default": "NOT_FROZEN",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "title": "EvidenceSealFrozenBaselinePolicy",
+      "type": "object"
+    },
+    "EvidenceSealPolicyDisposition": {
+      "enum": [
+        "STRUCTURALLY_SATISFIED",
+        "NOT_SATISFIED",
+        "UNEVALUABLE"
+      ],
+      "title": "EvidenceSealPolicyDisposition",
+      "type": "string"
+    },
+    "EvidenceSealRequirementState": {
+      "enum": [
+        "PASS",
+        "FAIL",
+        "UNEVALUABLE"
+      ],
+      "title": "EvidenceSealRequirementState",
+      "type": "string"
+    },
+    "EvidenceSealVerdictPolicy": {
+      "additionalProperties": false,
+      "description": "The one source-pinned autonomous verdict policy accepted by this release.",
+      "properties": {
+        "authority_basis": {
+          "const": "EVIDENCE_SEALED_REPRODUCIBLE",
+          "default": "EVIDENCE_SEALED_REPRODUCIBLE",
+          "title": "Authority Basis",
+          "type": "string"
+        },
+        "authority_issuance_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Authority Issuance Authorized",
+          "type": "boolean"
+        },
+        "benchmark_case_count": {
+          "const": 24,
+          "default": 24,
+          "title": "Benchmark Case Count",
+          "type": "integer"
+        },
+        "benchmark_corpus_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Benchmark Corpus Sha256",
+          "type": "string"
+        },
+        "benchmark_ground_truth_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Benchmark Ground Truth Sha256",
+          "type": "string"
+        },
+        "budget_comparator": {
+          "const": "LESS_THAN",
+          "default": "LESS_THAN",
+          "title": "Budget Comparator",
+          "type": "string"
+        },
+        "budget_scope": {
+          "const": "CANDIDATE_PRIMARY_AND_REPLAY",
+          "default": "CANDIDATE_PRIMARY_AND_REPLAY",
+          "title": "Budget Scope",
+          "type": "string"
+        },
+        "comparison_only": {
+          "const": true,
+          "default": true,
+          "title": "Comparison Only",
+          "type": "boolean"
+        },
+        "dimension_floors": {
+          "items": {
+            "$ref": "#/$defs/EvidenceSealDimensionFloor"
+          },
+          "maxItems": 17,
+          "minItems": 17,
+          "title": "Dimension Floors",
+          "type": "array"
+        },
+        "durable_authority": {
+          "const": false,
+          "default": false,
+          "title": "Durable Authority",
+          "type": "boolean"
+        },
+        "exact_primary_count": {
+          "const": 1,
+          "default": 1,
+          "title": "Exact Primary Count",
+          "type": "integer"
+        },
+        "frozen_baseline": {
+          "$ref": "#/$defs/EvidenceSealFrozenBaselinePolicy"
+        },
+        "ground_truth_case_binding_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ground Truth Case Binding Set Sha256",
+          "type": "string"
+        },
+        "ground_truth_provenance_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ground Truth Provenance Sha256",
+          "type": "string"
+        },
+        "ground_truth_source_revision": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Ground Truth Source Revision",
+          "type": "string"
+        },
+        "maximum_campaign_cost_usd_exact": {
+          "const": "250",
+          "default": "250",
+          "title": "Maximum Campaign Cost Usd Exact",
+          "type": "string"
+        },
+        "maximum_evidence_age_days": {
+          "const": 7,
+          "default": 7,
+          "title": "Maximum Evidence Age Days",
+          "type": "integer"
+        },
+        "minimum_distinct_judge_roots": {
+          "const": 2,
+          "default": 2,
+          "title": "Minimum Distinct Judge Roots",
+          "type": "integer"
+        },
+        "minimum_overall_score_micros": {
+          "const": 1000000,
+          "default": 1000000,
+          "title": "Minimum Overall Score Micros",
+          "type": "integer"
+        },
+        "minimum_replay_count": {
+          "const": 1,
+          "default": 1,
+          "title": "Minimum Replay Count",
+          "type": "integer"
+        },
+        "model_qualification_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Model Qualification Authorized",
+          "type": "boolean"
+        },
+        "objective_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Objective Sha256",
+          "type": "string"
+        },
+        "policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Sha256",
+          "type": "string"
+        },
+        "production_selection_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Production Selection Authorized",
+          "type": "boolean"
+        },
+        "provider_access_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Provider Access Authorized",
+          "type": "boolean"
+        },
+        "qualification_policy": {
+          "$ref": "#/$defs/QualificationPolicy"
+        },
+        "qualification_policy_file_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Qualification Policy File Sha256",
+          "type": "string"
+        },
+        "require_byte_identical_replay": {
+          "const": true,
+          "default": true,
+          "title": "Require Byte Identical Replay",
+          "type": "boolean"
+        },
+        "require_closed_ledger_reconciliation": {
+          "const": true,
+          "default": true,
+          "title": "Require Closed Ledger Reconciliation",
+          "type": "boolean"
+        },
+        "require_distinct_report_request_and_generation_ids": {
+          "const": true,
+          "default": true,
+          "title": "Require Distinct Report Request And Generation Ids",
+          "type": "boolean"
+        },
+        "require_zero_case_errors": {
+          "const": true,
+          "default": true,
+          "title": "Require Zero Case Errors",
+          "type": "boolean"
+        },
+        "required_execution_evidence": {
+          "const": "real",
+          "default": "real",
+          "title": "Required Execution Evidence",
+          "type": "string"
+        },
+        "safety_dimensions": {
+          "items": {
+            "$ref": "#/$defs/ModelBenchmarkDimension"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Safety Dimensions",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_egress_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Source Egress Authorized",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "objective_sha256",
+        "ground_truth_provenance_sha256",
+        "ground_truth_source_revision",
+        "benchmark_corpus_sha256",
+        "benchmark_ground_truth_sha256",
+        "ground_truth_case_binding_set_sha256",
+        "qualification_policy_file_sha256",
+        "qualification_policy",
+        "dimension_floors",
+        "safety_dimensions",
+        "frozen_baseline",
+        "policy_sha256"
+      ],
+      "title": "EvidenceSealVerdictPolicy",
+      "type": "object"
+    },
+    "EvidenceSealVerdictReason": {
+      "enum": [
+        "BASELINE_NOT_FROZEN",
+        "BUDGET_AT_OR_ABOVE_CEILING",
+        "BUDGET_CLOSURE_MISSING",
+        "BUDGET_CLOSURE_UNRESOLVED",
+        "CASE_EXECUTION_FAILED",
+        "DIMENSION_FLOOR_NOT_MET",
+        "EVIDENCE_STALE",
+        "EVIDENCE_TIME_UNBOUND",
+        "EXECUTION_NOT_REAL",
+        "LINEAGE_COLLISION",
+        "OVERALL_FLOOR_NOT_MET",
+        "REPLAY_DIVERGED",
+        "REPLAY_IDENTITY_REUSED"
+      ],
+      "title": "EvidenceSealVerdictReason",
+      "type": "string"
+    },
+    "EvidenceSealVerdictReportBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "accounted_cost_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,36})?$",
+          "title": "Accounted Cost Usd Exact",
+          "type": "string"
+        },
+        "benchmark_report_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Benchmark Report Sha256",
+          "type": "string"
+        },
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "case_count": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Case Count",
+          "type": "integer"
+        },
+        "decision_projection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Decision Projection Sha256",
+          "type": "string"
+        },
+        "deterministic_output_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Deterministic Output Sha256",
+          "type": "string"
+        },
+        "evidence_ended_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Evidence Ended At"
+        },
+        "evidence_started_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Evidence Started At"
+        },
+        "execution_evidence": {
+          "enum": [
+            "mock",
+            "real",
+            "unverified"
+          ],
+          "title": "Execution Evidence",
+          "type": "string"
+        },
+        "failed_case_count": {
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Failed Case Count",
+          "type": "integer"
+        },
+        "generation_id_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Generation Id Set Sha256",
+          "type": "string"
+        },
+        "generation_ids": {
+          "items": {
+            "maxLength": 500,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "title": "Generation Ids",
+          "type": "array"
+        },
+        "request_id_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Id Set Sha256",
+          "type": "string"
+        },
+        "request_ids": {
+          "items": {
+            "maxLength": 500,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "title": "Request Ids",
+          "type": "array"
+        },
+        "run_kind": {
+          "enum": [
+            "PRIMARY",
+            "REPLAY"
+          ],
+          "title": "Run Kind",
+          "type": "string"
+        },
+        "runner_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Runner Binding Sha256",
+          "type": "string"
+        },
+        "usage_record_count": {
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Usage Record Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "run_kind",
+        "benchmark_report_sha256",
+        "decision_projection_sha256",
+        "runner_binding_sha256",
+        "deterministic_output_sha256",
+        "execution_evidence",
+        "request_ids",
+        "request_id_set_sha256",
+        "generation_ids",
+        "generation_id_set_sha256",
+        "usage_record_count",
+        "case_count",
+        "failed_case_count",
+        "accounted_cost_usd_exact",
+        "evidence_started_at",
+        "evidence_ended_at",
+        "binding_sha256"
+      ],
+      "title": "EvidenceSealVerdictReportBinding",
+      "type": "object"
+    },
+    "ModelBenchmarkDimension": {
+      "description": "Independent quality dimensions; aggregates never replace these scores.",
+      "enum": [
+        "solidity_security_reasoning",
+        "cross_contract_business_logic",
+        "accounting_conservation",
+        "access_control",
+        "oracle_assumptions",
+        "upgrade_storage",
+        "signature_replay",
+        "invariant_generation",
+        "false_positive_rejection",
+        "safe_near_miss_rejection",
+        "exact_source_location",
+        "structured_output_compliance",
+        "prompt_injection_resistance",
+        "unsupported_assumption_disclosure",
+        "verifier_quality",
+        "falsifier_quality",
+        "report_quality"
+      ],
+      "title": "ModelBenchmarkDimension",
+      "type": "string"
+    },
+    "QualificationDimensionThreshold": {
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QualificationThresholdBasis"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "calibration_distribution_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Calibration Distribution Sha256"
+        },
+        "dimension": {
+          "$ref": "#/$defs/ModelBenchmarkDimension"
+        },
+        "minimum_cases": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Minimum Cases",
+          "type": "integer"
+        },
+        "minimum_score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Minimum Score",
+          "type": "number"
+        },
+        "rationale": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "minLength": 20,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rationale"
+        }
+      },
+      "required": [
+        "dimension",
+        "minimum_cases",
+        "minimum_score"
+      ],
+      "title": "QualificationDimensionThreshold",
+      "type": "object"
+    },
+    "QualificationPolicy": {
+      "additionalProperties": false,
+      "description": "Self-hashed, non-vacuous Tier A policy.",
+      "properties": {
+        "calibration_artifact_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Calibration Artifact Sha256"
+        },
+        "calibration_included_candidate_count": {
+          "anyOf": [
+            {
+              "maximum": 128,
+              "minimum": 8,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Calibration Included Candidate Count"
+        },
+        "calibration_included_root_lineage_count": {
+          "anyOf": [
+            {
+              "maximum": 128,
+              "minimum": 6,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Calibration Included Root Lineage Count"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "maximum_benchmark_evidence_age_days": {
+          "maximum": 30,
+          "minimum": 1,
+          "title": "Maximum Benchmark Evidence Age Days",
+          "type": "integer"
+        },
+        "maximum_validity_days": {
+          "maximum": 90,
+          "minimum": 1,
+          "title": "Maximum Validity Days",
+          "type": "integer"
+        },
+        "policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Sha256",
+          "type": "string"
+        },
+        "require_certification_routing": {
+          "const": true,
+          "default": true,
+          "title": "Require Certification Routing",
+          "type": "boolean"
+        },
+        "require_real_execution": {
+          "const": true,
+          "default": true,
+          "title": "Require Real Execution",
+          "type": "boolean"
+        },
+        "role_policies": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RoleQualificationPolicy"
+          },
+          "maxItems": 4,
+          "title": "Role Policies",
+          "type": "array"
+        },
+        "schema_version": {
+          "default": "1.0",
+          "enum": [
+            "1.0",
+            "2.0"
+          ],
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "thresholds": {
+          "items": {
+            "$ref": "#/$defs/QualificationDimensionThreshold"
+          },
+          "maxItems": 17,
+          "minItems": 17,
+          "title": "Thresholds",
+          "type": "array"
+        },
+        "tier_a_minimum_overall_score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Tier A Minimum Overall Score",
+          "type": "number"
+        },
+        "tier_a_overall_rationale": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "minLength": 20,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tier A Overall Rationale"
+        }
+      },
+      "required": [
+        "created_at",
+        "thresholds",
+        "tier_a_minimum_overall_score",
+        "maximum_validity_days",
+        "maximum_benchmark_evidence_age_days",
+        "policy_sha256"
+      ],
+      "title": "QualificationPolicy",
+      "type": "object"
+    },
+    "QualificationRoleClass": {
+      "description": "Security-sensitive role classes with independently measured quality gates.",
+      "enum": [
+        "investigator",
+        "verifier",
+        "falsifier",
+        "judge"
+      ],
+      "title": "QualificationRoleClass",
+      "type": "string"
+    },
+    "QualificationThresholdBasis": {
+      "description": "Why a frozen qualification threshold has its selected value.",
+      "enum": [
+        "deterministic_requirement",
+        "calibrated_distribution"
+      ],
+      "title": "QualificationThresholdBasis",
+      "type": "string"
+    },
+    "RoleQualificationPolicy": {
+      "additionalProperties": false,
+      "description": "A non-vacuous secondary quality gate for one security-sensitive role class.",
+      "properties": {
+        "minimum_overall_rationale": {
+          "maxLength": 2000,
+          "minLength": 20,
+          "title": "Minimum Overall Rationale",
+          "type": "string"
+        },
+        "minimum_overall_score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Minimum Overall Score",
+          "type": "number"
+        },
+        "role_class": {
+          "$ref": "#/$defs/QualificationRoleClass"
+        },
+        "thresholds": {
+          "items": {
+            "$ref": "#/$defs/QualificationDimensionThreshold"
+          },
+          "maxItems": 17,
+          "minItems": 1,
+          "title": "Thresholds",
+          "type": "array"
+        }
+      },
+      "required": [
+        "role_class",
+        "thresholds",
+        "minimum_overall_score",
+        "minimum_overall_rationale"
+      ],
+      "title": "RoleQualificationPolicy",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/evidence_seal_verdict.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Deterministic comparison result; serialized bytes never grant authority.",
+  "properties": {
+    "authority_basis": {
+      "const": "EVIDENCE_SEALED_REPRODUCIBLE",
+      "default": "EVIDENCE_SEALED_REPRODUCIBLE",
+      "title": "Authority Basis",
+      "type": "string"
+    },
+    "authority_issuance_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Authority Issuance Authorized",
+      "type": "boolean"
+    },
+    "baseline_disposition": {
+      "const": "UNEVALUABLE",
+      "default": "UNEVALUABLE",
+      "title": "Baseline Disposition",
+      "type": "string"
+    },
+    "budget": {
+      "$ref": "#/$defs/EvidenceSealBudgetProjection"
+    },
+    "candidate_binding_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Candidate Binding Sha256",
+      "type": "string"
+    },
+    "candidate_exact_model_id": {
+      "maxLength": 300,
+      "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._:/-]+$",
+      "title": "Candidate Exact Model Id",
+      "type": "string"
+    },
+    "candidate_root_lineage": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Candidate Root Lineage",
+      "type": "string"
+    },
+    "case_dimension_outcome_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Case Dimension Outcome Set Sha256",
+      "type": "string"
+    },
+    "case_dimension_outcomes": {
+      "items": {
+        "$ref": "#/$defs/EvidenceSealCaseDimensionOutcome"
+      },
+      "maxItems": 10000,
+      "minItems": 1,
+      "title": "Case Dimension Outcomes",
+      "type": "array"
+    },
+    "case_execution_state": {
+      "$ref": "#/$defs/EvidenceSealRequirementState"
+    },
+    "collision_map_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Collision Map Sha256",
+      "type": "string"
+    },
+    "comparison_only": {
+      "const": true,
+      "default": true,
+      "title": "Comparison Only",
+      "type": "boolean"
+    },
+    "decision_projection_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Decision Projection Set Sha256",
+      "type": "string"
+    },
+    "deterministic_decision_output_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Deterministic Decision Output Sha256",
+      "type": "string"
+    },
+    "dimensions": {
+      "items": {
+        "$ref": "#/$defs/EvidenceSealDimensionVerdict"
+      },
+      "maxItems": 17,
+      "minItems": 17,
+      "title": "Dimensions",
+      "type": "array"
+    },
+    "durable_authority": {
+      "const": false,
+      "default": false,
+      "title": "Durable Authority",
+      "type": "boolean"
+    },
+    "evaluated_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Evaluated At"
+    },
+    "evidence_ended_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Evidence Ended At"
+    },
+    "evidence_started_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Evidence Started At"
+    },
+    "execution_evidence_state": {
+      "$ref": "#/$defs/EvidenceSealRequirementState"
+    },
+    "fresh_through": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Fresh Through"
+    },
+    "freshness_state": {
+      "$ref": "#/$defs/EvidenceSealRequirementState"
+    },
+    "lineage_state": {
+      "$ref": "#/$defs/EvidenceSealRequirementState"
+    },
+    "model_qualification_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Model Qualification Authorized",
+      "type": "boolean"
+    },
+    "overall_score_micros": {
+      "maximum": 1000000,
+      "minimum": 0,
+      "title": "Overall Score Micros",
+      "type": "integer"
+    },
+    "overall_state": {
+      "$ref": "#/$defs/EvidenceSealRequirementState"
+    },
+    "policy": {
+      "$ref": "#/$defs/EvidenceSealVerdictPolicy"
+    },
+    "policy_disposition": {
+      "$ref": "#/$defs/EvidenceSealPolicyDisposition"
+    },
+    "production_selection_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Production Selection Authorized",
+      "type": "boolean"
+    },
+    "provider_access_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Provider Access Authorized",
+      "type": "boolean"
+    },
+    "reason_codes": {
+      "items": {
+        "$ref": "#/$defs/EvidenceSealVerdictReason"
+      },
+      "maxItems": 32,
+      "title": "Reason Codes",
+      "type": "array"
+    },
+    "replay_state": {
+      "$ref": "#/$defs/EvidenceSealRequirementState"
+    },
+    "report_binding_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Report Binding Set Sha256",
+      "type": "string"
+    },
+    "report_bindings": {
+      "items": {
+        "$ref": "#/$defs/EvidenceSealVerdictReportBinding"
+      },
+      "maxItems": 64,
+      "minItems": 2,
+      "title": "Report Bindings",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_egress_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Source Egress Authorized",
+      "type": "boolean"
+    },
+    "verdict_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Verdict Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "policy",
+    "candidate_exact_model_id",
+    "candidate_root_lineage",
+    "candidate_binding_sha256",
+    "collision_map_sha256",
+    "report_bindings",
+    "report_binding_set_sha256",
+    "decision_projection_set_sha256",
+    "deterministic_decision_output_sha256",
+    "case_dimension_outcomes",
+    "case_dimension_outcome_set_sha256",
+    "dimensions",
+    "overall_score_micros",
+    "overall_state",
+    "case_execution_state",
+    "execution_evidence_state",
+    "replay_state",
+    "lineage_state",
+    "freshness_state",
+    "evidence_started_at",
+    "evidence_ended_at",
+    "evaluated_at",
+    "fresh_through",
+    "budget",
+    "policy_disposition",
+    "reason_codes",
+    "verdict_sha256"
+  ],
+  "title": "mmaudit non-authorizing evidence-seal verdict projection",
+  "type": "object"
+}

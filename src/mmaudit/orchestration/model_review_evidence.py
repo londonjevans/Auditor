@@ -30,7 +30,15 @@ from mmaudit.models.schemas import (
     SolidityGraphSet,
     SoliditySymbolIndex,
 )
-from mmaudit.models.usage import is_creditable_usage_record
+from mmaudit.models.truncation import (
+    CandidateReviewNormalizationEvidence,
+    candidate_review_batch_schema_sha256,
+    candidate_review_frame_wire_schema_sha256,
+)
+from mmaudit.models.usage import (
+    is_creditable_usage_record,
+    is_recovery_creditable_usage_record,
+)
 from mmaudit.repository.chunking import excerpt_proves_location
 
 _BASE_REVIEW_ROLES = frozenset({"source_audit", "business_logic", "configuration"})
@@ -176,6 +184,9 @@ def seal_model_surface_review_artifact(
     completion: StructuredCompletion[CandidateReviewBatch],
     *,
     rendered_user_context: str,
+    normalization_evidence: CandidateReviewNormalizationEvidence | None = None,
+    recovery_request_limit_scope: str | None = None,
+    recovery_request_limit_count_before: int | None = None,
 ) -> ModelSurfaceReviewArtifact | None:
     """Validate and hash-link one completed response to its exact requested surfaces."""
 
@@ -207,20 +218,72 @@ def seal_model_surface_review_artifact(
         raise ModelReviewEvidenceError(
             "model surface evidence usage role differs from the request context"
         )
-    if not is_creditable_usage_record(usage):
+    recovery_request = recovery_request_limit_scope is not None
+    if recovery_request != (recovery_request_limit_count_before is not None) or (
+        recovery_request
+        and (
+            type(recovery_request_limit_scope) is not str
+            or type(recovery_request_limit_count_before) is not int
+        )
+    ):
+        raise ModelReviewEvidenceError(
+            "model surface recovery request-limit custody is incomplete or invalid"
+        )
+    usage_is_creditable = (
+        is_recovery_creditable_usage_record(
+            usage,
+            request_limit_scope=recovery_request_limit_scope,
+            request_limit_count_before=recovery_request_limit_count_before,
+        )
+        if recovery_request
+        and recovery_request_limit_scope is not None
+        and recovery_request_limit_count_before is not None
+        else is_creditable_usage_record(usage)
+    )
+    if not usage_is_creditable:
         raise ModelReviewEvidenceError(
             "model surface evidence requires a completed creditable structured request"
         )
-    if usage.schema_sha256 != _canonical_sha256(strict_json_schema(CandidateReviewBatch)):
-        raise ModelReviewEvidenceError(
-            "model surface evidence response schema hash is inconsistent"
-        )
-    if usage.validated_response_sha256 != _canonical_sha256(
-        completion.value.model_dump(mode="json")
-    ):
-        raise ModelReviewEvidenceError(
-            "model surface evidence validated response hash is inconsistent"
-        )
+    normalized_response_sha256 = _canonical_sha256(completion.value.model_dump(mode="json"))
+    if normalization_evidence is None:
+        if usage.schema_sha256 != _canonical_sha256(strict_json_schema(CandidateReviewBatch)):
+            raise ModelReviewEvidenceError(
+                "model surface evidence response schema hash is inconsistent"
+            )
+        if usage.validated_response_sha256 != normalized_response_sha256:
+            raise ModelReviewEvidenceError(
+                "model surface evidence validated response hash is inconsistent"
+            )
+    else:
+        if type(normalization_evidence) is not CandidateReviewNormalizationEvidence:
+            raise ModelReviewEvidenceError(
+                "model surface evidence normalization custody has an invalid exact type"
+            )
+        try:
+            normalization_evidence = CandidateReviewNormalizationEvidence.model_validate_json(
+                normalization_evidence.model_dump_json(),
+                strict=True,
+            )
+            normalization_evidence.require_exact_batch(
+                completion.value,
+                request_id=usage.request_id,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ModelReviewEvidenceError(
+                "model surface evidence normalization custody is invalid"
+            ) from exc
+        if (
+            usage.schema_sha256 != candidate_review_frame_wire_schema_sha256()
+            or usage.schema_sha256 != normalization_evidence.wire_schema_sha256
+            or usage.validated_response_sha256
+            != normalization_evidence.wire_validated_response_sha256
+            or normalization_evidence.normalized_batch_schema_sha256
+            != candidate_review_batch_schema_sha256()
+            or normalization_evidence.normalized_batch_sha256 != normalized_response_sha256
+        ):
+            raise ModelReviewEvidenceError(
+                "model surface evidence wire-to-normalized response custody is inconsistent"
+            )
     rendered_context_sha256 = hashlib.sha256(rendered_user_context.encode()).hexdigest()
     if rendered_context_sha256 != model_review_context_sha256(context):
         raise ModelReviewEvidenceError(
@@ -272,7 +335,7 @@ def seal_model_surface_review_artifact(
     ):
         raise ModelReviewEvidenceError("model surface evidence request hashes are incomplete")
     payload: dict[str, Any] = {
-        "schema_version": "1.0",
+        "schema_version": "1.1" if normalization_evidence is not None else "1.0",
         "request_id": usage.request_id,
         "review_role": usage.role,
         "requested_surface_ids": list(requested_ids),
@@ -287,6 +350,14 @@ def seal_model_surface_review_artifact(
         "response_schema_sha256": usage.schema_sha256,
         "records": [record.model_dump(mode="json") for record in records],
     }
+    if normalization_evidence is not None:
+        payload.update(
+            {
+                "normalized_response_sha256": normalized_response_sha256,
+                "normalization_evidence": normalization_evidence.model_dump(mode="json"),
+                "normalized_response": completion.value.model_dump(mode="json"),
+            }
+        )
     payload["artifact_sha256"] = ModelSurfaceReviewArtifact.calculate_artifact_sha256(payload)
     try:
         artifact = ModelSurfaceReviewArtifact.model_validate(payload)

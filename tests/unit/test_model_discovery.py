@@ -925,6 +925,17 @@ def test_unrelated_catalog_aliases_are_not_eligible_candidates() -> None:
     assert payload.exact_model_id == "alpha/atlas-secure"
 
 
+def test_unrelated_catalog_ids_outside_candidate_canonical_form_are_ignored() -> None:
+    payload = _discover(
+        models=[
+            _model(model="Publisher/Model-V1", canonical_slug="Publisher/Model-V1"),
+            _model(),
+        ]
+    )
+
+    assert payload.exact_model_id == "alpha/atlas-secure"
+
+
 @pytest.mark.parametrize(
     "model",
     [

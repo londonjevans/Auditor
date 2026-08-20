@@ -2,34 +2,78 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
+import re
 from dataclasses import dataclass
+from datetime import datetime
 from importlib.resources import files
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from mmaudit.config import AuditConfig, model_family
+import mmaudit.models.openrouter as _openrouter_module
+
+if TYPE_CHECKING:
+    from mmaudit.models.coverage_planning import (
+        ModelSurfaceGapTask,
+        ModelSurfaceTaskResourcePreview,
+    )
+    from mmaudit.models.scheduler import SchedulerCampaignManifest, SchedulerTaskPlan
+
+from mmaudit.config import AuditConfig
+from mmaudit.models.candidate_review_stamping import (
+    CandidateReviewStampingError,
+    model_review_origin_candidate_id,
+    require_unique_raw_candidate_ids,
+    stamp_candidate_review_findings,
+)
 from mmaudit.models.openrouter import (
+    OpenRouterCandidateReviewBoundaryError,
     OpenRouterClient,
     OpenRouterSchemaError,
     StructuredCompletion,
+    trusted_complete_candidate_review_with_evidence,
 )
 from mmaudit.models.schemas import (
     CandidateFinding,
-    CandidateOriginKind,
     CandidateReviewBatch,
     ContextPackage,
-    Evidence,
     ModelSurfaceReviewArtifact,
-    ModelVote,
     ThreatModel,
     UsageRecord,
 )
+from mmaudit.models.truncation import (
+    CandidateReviewFramedDocument,
+    CandidateReviewNormalizationEvidence,
+)
+from mmaudit.models.usage import _validated_usage_copy_preserving_owned_attestation
 from mmaudit.orchestration.context import render_context
 from mmaudit.orchestration.model_review_evidence import (
     ModelReviewEvidenceError,
     seal_model_surface_review_artifact,
 )
+
+_RECOVERY_ROOT_REQUEST_ID = re.compile(r"^scheduler-request-[0-9a-f]{64}$")
+_MAX_RECOVERY_REQUEST_COUNT = 1_000_000
+_TRUSTED_CANDIDATE_REVIEW_COMPLETION_DISPATCH = trusted_complete_candidate_review_with_evidence
+
+
+def _require_candidate_review_recovery_coordinates(
+    *,
+    single_route_single_attempt: bool,
+    request_limit_scope: str | None,
+    request_limit_count_before: int | None,
+) -> None:
+    recovery_requested = request_limit_scope is not None or request_limit_count_before is not None
+    if not recovery_requested:
+        return
+    if (
+        not single_route_single_attempt
+        or type(request_limit_scope) is not str
+        or _RECOVERY_ROOT_REQUEST_ID.fullmatch(request_limit_scope) is None
+        or type(request_limit_count_before) is not int
+        or not 1 <= request_limit_count_before <= _MAX_RECOVERY_REQUEST_COUNT
+    ):
+        raise OpenRouterSchemaError(
+            "candidate-review recovery requires exact one-route/one-attempt coordinates"
+        )
 
 
 def load_prompt(name: str) -> str:
@@ -69,9 +113,10 @@ def _require_unique_raw_candidate_ids(
 ) -> None:
     """Reject one provider response that reuses a raw candidate identity."""
 
-    candidate_ids = [finding.candidate_id for finding in findings]
-    if len(candidate_ids) != len(set(candidate_ids)):
-        raise OpenRouterSchemaError("model response contained duplicate raw candidate IDs")
+    try:
+        require_unique_raw_candidate_ids(findings)
+    except CandidateReviewStampingError as exc:
+        raise OpenRouterSchemaError(str(exc)) from None
 
 
 def _model_review_origin_candidate_id(
@@ -82,34 +127,14 @@ def _model_review_origin_candidate_id(
 ) -> str:
     """Derive one stable origin ID from exact request and raw candidate evidence."""
 
-    if not request_role or not request_id:
-        raise OpenRouterSchemaError("model candidate origin identity is incomplete")
-    raw_candidate = candidate.model_dump(
-        mode="json",
-        exclude={
-            "execution_provenance",
-            "model_family",
-            "model_votes",
-            "origin_kind",
-            "role",
-        },
-    )
-    payload = {
-        "domain": "mmaudit.model-review-origin-candidate.v1",
-        "request_id": request_id,
-        "request_role": request_role,
-        "raw_candidate": raw_candidate,
-    }
-    digest = hashlib.sha256(
-        json.dumps(
-            payload,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-            allow_nan=False,
-        ).encode("utf-8")
-    ).hexdigest()
-    return f"cand-{digest[:24]}"
+    try:
+        return model_review_origin_candidate_id(
+            request_role=request_role,
+            request_id=request_id,
+            candidate=candidate,
+        )
+    except CandidateReviewStampingError as exc:
+        raise OpenRouterSchemaError(str(exc)) from None
 
 
 class AgentBase:
@@ -144,6 +169,7 @@ class FindingReviewResult:
     surface_review_context: ContextPackage
     completion_usage: UsageRecord
     raw_response: CandidateReviewBatch | None = None
+    normalization_evidence: CandidateReviewNormalizationEvidence | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,7 +218,7 @@ class FindingAgent(AgentBase):
         return build_agent_request_protocol(
             prompt_file=self.prompt_file,
             schema_name=f"mmaudit_{self.role}_findings",
-            response_model=CandidateReviewBatch,
+            response_model=CandidateReviewFramedDocument,
         )
 
     async def run(
@@ -200,24 +226,59 @@ class FindingAgent(AgentBase):
         context: ContextPackage,
         *,
         logical_request_id: str | None = None,
+        single_route_single_attempt: bool = False,
+        recovery_request_limit_scope: str | None = None,
+        recovery_request_limit_count_before: int | None = None,
+        expected_resource_preview: ModelSurfaceTaskResourcePreview | None = None,
+        coverage_task: ModelSurfaceGapTask | None = None,
+        scheduler_task: SchedulerTaskPlan | None = None,
+        campaign_manifest: SchedulerCampaignManifest | None = None,
+        resource_preview_checked_at: datetime | None = None,
     ) -> FindingReviewResult:
+        _require_candidate_review_recovery_coordinates(
+            single_route_single_attempt=single_route_single_attempt,
+            request_limit_scope=recovery_request_limit_scope,
+            request_limit_count_before=recovery_request_limit_count_before,
+        )
         request_context = context.model_copy(deep=True)
         rendered_user_context = render_context(request_context)
         protocol = self.request_protocol
-        completion = await self.client.complete_with_evidence(
+        if (
+            trusted_complete_candidate_review_with_evidence
+            is not _TRUSTED_CANDIDATE_REVIEW_COMPLETION_DISPATCH
+            or _openrouter_module.trusted_complete_candidate_review_with_evidence
+            is not _TRUSTED_CANDIDATE_REVIEW_COMPLETION_DISPATCH
+        ):
+            raise OpenRouterCandidateReviewBoundaryError(
+                "candidate-review agent dispatch binding changed before provider work"
+            )
+        completion = await _TRUSTED_CANDIDATE_REVIEW_COMPLETION_DISPATCH(
+            self.client,
             role=self.role,
-            models=self.configured_models,
+            models=(
+                [coverage_task.requested_model]
+                if expected_resource_preview is not None and coverage_task is not None
+                else self.configured_models
+            ),
             system_prompt=protocol.system_prompt,
             user_prompt=rendered_user_context,
             context_package=request_context,
-            response_model=protocol.response_model,
             schema_name=protocol.schema_name,
             logical_request_id=logical_request_id,
+            single_route_single_attempt=single_route_single_attempt,
+            expected_resource_preview=expected_resource_preview,
+            coverage_task=coverage_task,
+            scheduler_task=scheduler_task,
+            campaign_manifest=campaign_manifest,
+            resource_preview_checked_at=resource_preview_checked_at,
         )
         return self.bind_completed_review(
             request_context,
             raw_response=completion.value,
             completion_usage=completion.usage_record,
+            normalization_evidence=completion.normalization_evidence,
+            recovery_request_limit_scope=recovery_request_limit_scope,
+            recovery_request_limit_count_before=recovery_request_limit_count_before,
         )
 
     def bind_completed_review(
@@ -226,14 +287,35 @@ class FindingAgent(AgentBase):
         *,
         raw_response: CandidateReviewBatch,
         completion_usage: UsageRecord,
+        normalization_evidence: CandidateReviewNormalizationEvidence | None = None,
+        recovery_request_limit_scope: str | None = None,
+        recovery_request_limit_count_before: int | None = None,
     ) -> FindingReviewResult:
         """Rebuild one host-validated review from exact retained completion evidence."""
 
         request_context = context.model_copy(deep=True)
         rendered_user_context = render_context(request_context)
+        bound_normalization_evidence = None
+        if normalization_evidence is not None:
+            if type(normalization_evidence) is not CandidateReviewNormalizationEvidence:
+                raise OpenRouterSchemaError(
+                    "candidate-review normalization custody has an invalid exact type"
+                )
+            bound_normalization_evidence = CandidateReviewNormalizationEvidence.model_validate_json(
+                normalization_evidence.model_dump_json(),
+                strict=True,
+            )
+        if type(completion_usage) is not UsageRecord:
+            raise OpenRouterSchemaError("candidate-review usage has an invalid exact type")
+        try:
+            validated_usage = _validated_usage_copy_preserving_owned_attestation(completion_usage)
+        except (TypeError, ValueError) as exc:
+            raise OpenRouterSchemaError("candidate-review usage failed exact validation") from exc
+        if validated_usage != completion_usage:
+            raise OpenRouterSchemaError("candidate-review usage changed after validation")
         completion = StructuredCompletion(
             value=CandidateReviewBatch.model_validate(raw_response.model_dump(mode="python")),
-            usage_record=UsageRecord.model_validate(completion_usage.model_dump(mode="python")),
+            usage_record=validated_usage,
         )
         result = completion.value
         usage = completion.usage_record
@@ -242,67 +324,32 @@ class FindingAgent(AgentBase):
                 context=request_context,
                 completion=completion,
                 rendered_user_context=rendered_user_context,
+                normalization_evidence=bound_normalization_evidence,
+                recovery_request_limit_scope=recovery_request_limit_scope,
+                recovery_request_limit_count_before=recovery_request_limit_count_before,
             )
         except ModelReviewEvidenceError as exc:
             raise OpenRouterSchemaError(
                 f"model response did not provide valid requested-surface evidence: {exc}"
             ) from None
-        requested = usage.requested_model
-        returned = usage.returned_model
-        family = model_family(requested)
-        trusted_scanner_fingerprints = {
-            finding.fingerprint for finding in request_context.scanner_findings
-        }
-        _require_unique_raw_candidate_ids(result.findings)
-        stamped = []
-        for finding in result.findings:
-            origin_candidate_id = _model_review_origin_candidate_id(
+        try:
+            stamped = stamp_candidate_review_findings(
                 request_role=self.role,
-                request_id=usage.request_id,
-                candidate=finding,
+                usage_record=usage,
+                trusted_scanner_fingerprints=tuple(
+                    sorted({finding.fingerprint for finding in request_context.scanner_findings})
+                ),
+                raw_findings=result.findings,
             )
-            vote = ModelVote(
-                role=self.role,
-                requested_model=requested,
-                returned_model=returned,
-                family=model_family(requested),
-                verdict="proposed",
-                rationale=finding.summary,
-            )
-            evidence: list[Evidence] = []
-            for item in finding.evidence:
-                if item.type == "scanner" and item.fingerprint in trusted_scanner_fingerprints:
-                    evidence.append(item)
-                else:
-                    evidence.append(
-                        Evidence(
-                            type="model",
-                            source=self.role,
-                            description=item.description,
-                            rule_id=None,
-                            fingerprint=None,
-                        )
-                    )
-            stamped_candidate = finding.model_copy(
-                update={
-                    "candidate_id": origin_candidate_id,
-                    "origin_kind": CandidateOriginKind.MODEL_REVIEW,
-                    "execution_provenance": None,
-                    "role": self.role,
-                    "model_family": family,
-                    "model_votes": [vote],
-                    "evidence": evidence,
-                }
-            )
-            stamped.append(
-                CandidateFinding.model_validate(stamped_candidate.model_dump(mode="python"))
-            )
+        except CandidateReviewStampingError as exc:
+            raise OpenRouterSchemaError(f"candidate-review stamping failed: {exc}") from None
         return FindingReviewResult(
-            findings=tuple(stamped),
+            findings=stamped,
             surface_review_artifact=surface_review_artifact,
             surface_review_context=request_context,
             completion_usage=usage,
             raw_response=result,
+            normalization_evidence=bound_normalization_evidence,
         )
 
 
@@ -336,5 +383,5 @@ class WholeProtocolReviewAgent(FindingAgent):
         return build_agent_request_protocol(
             prompt_file=self.prompt_file,
             schema_name=f"mmaudit_whole_protocol_review_{self.role.rsplit(':', 1)[1]}",
-            response_model=CandidateReviewBatch,
+            response_model=CandidateReviewFramedDocument,
         )

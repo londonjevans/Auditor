@@ -41,24 +41,40 @@ from tests.identity_fixtures import (
 from tests.unit.test_run_status import NOW as REPORT_NOW
 from tests.unit.test_run_status import _assessment as _minimum_floor_assessment
 from tests.unit.test_run_status import _coverage as _minimum_floor_coverage
-from tests.unit.test_run_status import _real_scanner, _typed_report_payload
+from tests.unit.test_run_status import (
+    _real_scanner,
+    _report_refresh_runtime,
+    _typed_report_payload,
+)
 
 ROOT = Path(__file__).parents[2]
 SURFACE_ID = "model-surface:" + ("a" * 64)
 MODEL_A = "alpha/atlas-secure"
 MODEL_B = "bravo/borealis-secure"
-ROOT_A = "sha256:" + hashlib.sha256(b"root-0").hexdigest()
-ROOT_B = "sha256:" + hashlib.sha256(b"root-1").hexdigest()
+
+
+def _refresh_route(model: str):
+    routes = tuple(
+        route
+        for route in _report_refresh_runtime().evidence.routes
+        if route.exact_model_id == model and route.audit_selected
+    )
+    assert len(routes) == 1
+    return routes[0]
+
+
+ROOT_A = _refresh_route(MODEL_A).root_lineage
+ROOT_B = _refresh_route(MODEL_B).root_lineage
 FLOOR_ROLE_MODELS = {
     "threat_model": ("alpha/atlas-secure", ROOT_A),
     "source_audit": ("bravo/borealis-secure", ROOT_B),
     "business_logic": (
         "charlie/cirrus-secure",
-        "sha256:" + hashlib.sha256(b"root-2").hexdigest(),
+        _refresh_route("charlie/cirrus-secure").root_lineage,
     ),
     "configuration": (
         "delta/denali-secure",
-        "sha256:" + hashlib.sha256(b"root-3").hexdigest(),
+        _refresh_route("delta/denali-secure").root_lineage,
     ),
 }
 
@@ -80,17 +96,27 @@ def _usage(
     root_lineage: str = ROOT_A,
     role: str = "source_audit",
 ) -> UsageRecord:
+    runtime = _report_refresh_runtime()
+    route = _refresh_route(model)
+    technical_models = tuple(
+        candidate
+        for candidate in runtime.technical_qualification.models
+        if candidate.exact_model_id == model
+    )
+    assert len(technical_models) == 1
+    technical_model = technical_models[0]
+    assert root_lineage == route.root_lineage
     started_at = REPORT_NOW
     ended_at = started_at + timedelta(milliseconds=25)
     generation_id = f"generation-{request_id}-{model.rsplit('/', maxsplit=1)[-1]}"
-    endpoint = "openrouter/provider-a"
+    endpoint = route.approved_provider_endpoint
     schema_sha256 = "1" * 64
     routing = {
         "generation_id": generation_id,
-        "selected_model": model,
-        "canonical_model": model,
+        "selected_model": route.canonical_model_slug,
+        "canonical_model": route.canonical_model_slug,
         "selected_provider_endpoint": endpoint,
-        "selected_provider_name": "Synthetic Provider",
+        "selected_provider_name": route.approved_provider_name,
         "router_strategy": "direct",
         "router_attempt": 1,
         "router_attempt_count": 1,
@@ -113,27 +139,34 @@ def _usage(
             canonical_model=model,
         ),
         "provider_fallbacks_allowed": False,
-        "endpoint_snapshot_sha256": "4" * 64,
-        "endpoint_pricing_sha256": "5" * 64,
+        "endpoint_snapshot_sha256": route.endpoint_snapshot_sha256,
+        "endpoint_pricing_sha256": route.qualified_pricing_snapshot_sha256,
+        "output_capability_sha256": route.output_capability_sha256,
         "catalog_snapshot_sha256": "6" * 64,
         "discovery_provenance_sha256": "7" * 64,
         "discovery_evidence_sha256": "8" * 64,
         "qualified_exact_model_id": model,
-        "qualified_canonical_model_slug": model,
+        "qualified_canonical_model_slug": route.canonical_model_slug,
         "qualified_root_lineage": root_lineage,
         "qualified_provider_endpoint": endpoint,
-        "qualified_provider_name": "Synthetic Provider",
-        "qualified_endpoint_snapshot_sha256": "4" * 64,
-        "qualified_model_metadata_snapshot_sha256": "9" * 64,
-        "qualified_pricing_snapshot_sha256": "5" * 64,
-        "qualified_roles": [role],
-        "qualification_verified_at": started_at.isoformat(),
-        "qualification_expires_at": (started_at + timedelta(days=1)).isoformat(),
-        "qualification_artifact_sha256": "a" * 64,
-        "qualification_verification_sha256": "b" * 64,
-        "production_selection_sha256": "c" * 64,
-        "selection_verification_sha256": "d" * 64,
-        "qualification_result_sha256": "e" * 64,
+        "qualified_provider_name": route.approved_provider_name,
+        "qualified_endpoint_snapshot_sha256": route.endpoint_snapshot_sha256,
+        "qualified_model_metadata_snapshot_sha256": route.model_metadata_snapshot_sha256,
+        "qualified_pricing_snapshot_sha256": route.qualified_pricing_snapshot_sha256,
+        "qualified_roles": list(route.approved_roles),
+        "qualification_verified_at": runtime.technical_qualification.verified_at.isoformat(),
+        "qualification_expires_at": route.qualification_expires_at.isoformat(),
+        "qualification_artifact_sha256": runtime.technical_qualification.artifact_sha256,
+        "qualification_verification_sha256": (
+            runtime.technical_qualification.qualification_verification_sha256
+        ),
+        "production_selection_sha256": (
+            runtime.technical_qualification.production_selection_sha256
+        ),
+        "selection_verification_sha256": (
+            runtime.technical_qualification.selection_verification_sha256
+        ),
+        "qualification_result_sha256": technical_model.qualification_result_sha256,
     }
     return bind_synthetic_usage_identity(
         UsageRecord(
@@ -141,9 +174,9 @@ def _usage(
             role=role,
             execution_evidence=ExecutionEvidenceKind.REAL,
             requested_model=model,
-            returned_model=model,
-            actual_model=model,
-            provider="Synthetic Provider",
+            returned_model=route.canonical_model_slug,
+            actual_model=route.canonical_model_slug,
+            provider=route.approved_provider_name,
             model_family=model.split("/", maxsplit=1)[0],
             timestamp=started_at,
             prompt_tokens=10,

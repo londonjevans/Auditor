@@ -19,6 +19,24 @@ from typing import Any, Literal, Self, SupportsIndex, cast
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 import mmaudit
+from mmaudit.models.provider_smoke import (
+    REAL_PROVIDER_SMOKE_ROLE as _TRUSTED_PROVIDER_SMOKE_ROLE,
+)
+from mmaudit.models.provider_smoke import (
+    REAL_PROVIDER_SMOKE_SCHEMA_NAME as _TRUSTED_PROVIDER_SMOKE_SCHEMA_NAME,
+)
+from mmaudit.models.provider_smoke import (
+    SyntheticProviderSmokeResponse as _TRUSTED_PROVIDER_SMOKE_RESPONSE,
+)
+from mmaudit.models.provider_smoke import (
+    build_provider_smoke_user_prompt as _TRUSTED_BUILD_PROVIDER_SMOKE_USER_PROMPT,
+)
+from mmaudit.models.provider_smoke import (
+    provider_smoke_request_commitment as _TRUSTED_PROVIDER_SMOKE_REQUEST_COMMITMENT,
+)
+from mmaudit.models.provider_smoke import (
+    provider_smoke_system_prompt as _TRUSTED_PROVIDER_SMOKE_SYSTEM_PROMPT,
+)
 from mmaudit.repository.discovery import DiscoveryResult
 from mmaudit.repository.ignore import normalize_relative_path
 
@@ -160,6 +178,7 @@ class PrivacySourceProvenanceEvidence(BaseModel):
         "DISTRIBUTION_COMMITTED_SYNTHETIC",
         "PACKAGE_PINNED_SYNTHETIC",
         "RELEASE_PINNED_MODEL_BENCHMARK",
+        "RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION",
     ]
     distribution_commit: str | None = Field(
         default=None,
@@ -193,6 +212,18 @@ class PrivacySourceProvenanceEvidence(BaseModel):
         default=None,
         pattern=_SHA256_PATTERN,
     )
+    adjudication_prepared_run_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+    )
+    adjudication_candidate_report_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+    )
+    adjudication_ground_truth_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+    )
     observed_at: datetime
     limitations: tuple[str, ...] = Field(min_length=1, max_length=8)
     evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -222,12 +253,19 @@ class PrivacySourceProvenanceEvidence(BaseModel):
             self.release_pin_set_sha256,
             self.provider_visible_case_inventory_sha256,
         )
+        adjudication_values = (
+            self.adjudication_prepared_run_sha256,
+            self.adjudication_candidate_report_sha256,
+            self.adjudication_ground_truth_sha256,
+        )
+        release_pinned_adjudication = self.proof_kind == "RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION"
         if committed_synthetic:
             if (
                 self.source_classification != "SYNTHETIC_COMMITTED"
                 or any(value is None for value in committed_synthetic_values)
                 or self.committed_file_count < 1
                 or any(value is not None for value in release_values)
+                or any(value is not None for value in adjudication_values)
                 or self.provider_visible_case_count
             ):
                 raise ValueError("synthetic source provenance is incomplete")
@@ -252,15 +290,32 @@ class PrivacySourceProvenanceEvidence(BaseModel):
                 or self.synthetic_declaration_sha256 is not None
                 or self.synthetic_declaration_entry_sha256 is not None
                 or any(value is None for value in release_values)
+                or any(value is not None for value in adjudication_values)
                 or self.provider_visible_case_count < 1
             ):
                 raise ValueError("release-pinned model benchmark provenance is incomplete")
+        elif release_pinned_adjudication:
+            if (
+                self.source_classification != "SYNTHETIC_COMMITTED"
+                or self.distribution_commit is not None
+                or self.distribution_scope != "benchmarks/model_corpus"
+                or self.committed_file_count
+                or self.committed_file_inventory_sha256 is not None
+                or self.synthetic_declaration_path is not None
+                or self.synthetic_declaration_sha256 is not None
+                or self.synthetic_declaration_entry_sha256 is not None
+                or any(value is None for value in release_values)
+                or any(value is None for value in adjudication_values)
+                or self.provider_visible_case_count < 1
+            ):
+                raise ValueError("release-pinned cross-lineage provenance is incomplete")
         elif (
             self.source_classification != "PRIVATE_OPERATOR_SOURCE"
             or self.distribution_commit is not None
             or any(value is not None for value in committed_synthetic_values)
             or self.committed_file_count
             or any(value is not None for value in release_values)
+            or any(value is not None for value in adjudication_values)
             or self.provider_visible_case_count
         ):
             raise ValueError("private source provenance cannot claim committed benchmark proof")
@@ -311,6 +366,12 @@ def _build_privacy_source_classification_evidence(
     requested_classification: str,
     source_sha256: str,
     now: datetime,
+    _smoke_user_prompt: Callable[..., str] = _TRUSTED_BUILD_PROVIDER_SMOKE_USER_PROMPT,
+    _smoke_request_commitment: Callable[..., str] = (_TRUSTED_PROVIDER_SMOKE_REQUEST_COMMITMENT),
+    _smoke_system_prompt: Callable[[], str] = _TRUSTED_PROVIDER_SMOKE_SYSTEM_PROMPT,
+    _smoke_response_model: type[BaseModel] = _TRUSTED_PROVIDER_SMOKE_RESPONSE,
+    _smoke_role: str = _TRUSTED_PROVIDER_SMOKE_ROLE,
+    _smoke_schema_name: str = _TRUSTED_PROVIDER_SMOKE_SCHEMA_NAME,
 ) -> tuple[PrivacySourceProvenanceEvidence, frozenset[str]]:
     """Prove a safe effective classification for the exact provider-visible scope."""
 
@@ -543,6 +604,38 @@ def _build_privacy_source_classification_evidence(
             }
         )
     proof_kind = "PACKAGE_PINNED_SYNTHETIC" if package_mode else "DISTRIBUTION_COMMITTED_SYNTHETIC"
+    provider_visible_request_commitment_sha256s: frozenset[str] = frozenset()
+    provider_smoke_scopes = {
+        "tests/fixtures/solidity/provider_smoke",
+        "src/mmaudit/resources/synthetic/provider_smoke",
+    }
+    if scope in provider_smoke_scopes:
+        from mmaudit.models.output_modes import StructuredOutputMode
+
+        if len(discovery.files) != 1 or len(records) != 1:
+            raise ValueError("provider smoke provenance requires one exact committed source")
+        smoke_file = discovery.files[0]
+        smoke_path = records[0]["path"]
+        if type(smoke_path) is not str:
+            raise ValueError("provider smoke provenance path is invalid")
+        user_prompt = _smoke_user_prompt(
+            fixture_path=smoke_path,
+            fixture_sha256=smoke_file.sha256,
+            fixture_source=smoke_file.content,
+        )
+        provider_visible_request_commitment_sha256s = frozenset(
+            {
+                _smoke_request_commitment(
+                    request_role=_smoke_role,
+                    system_prompt=_smoke_system_prompt(),
+                    user_prompt=user_prompt,
+                    response_model=_smoke_response_model,
+                    schema_name=_smoke_schema_name,
+                    structured_output_mode=StructuredOutputMode.NATIVE_JSON_SCHEMA,
+                    context_package=None,
+                )
+            }
+        )
     limitations = (
         (
             "Package-pinned provenance proves exact reviewed bytes, but no runtime Git commit is available."
@@ -573,7 +666,7 @@ def _build_privacy_source_classification_evidence(
                 "limitations": (limitations,),
             }
         ),
-        frozenset(),
+        provider_visible_request_commitment_sha256s,
     )
 
 
@@ -686,10 +779,142 @@ def _build_release_pinned_model_benchmark_evidence(
     )
 
 
+def _build_release_pinned_cross_lineage_adjudication_evidence(
+    prepared_run: object,
+    benchmark_suite: object,
+    candidate_report: object,
+    *,
+    now: datetime,
+    _release_builder: Callable[..., tuple[PrivacySourceProvenanceEvidence, frozenset[str]]] = (
+        _build_release_pinned_model_benchmark_evidence
+    ),
+) -> tuple[PrivacySourceProvenanceEvidence, frozenset[str]]:
+    """Prove one exact prepared judge-request inventory over the release benchmark."""
+
+    from mmaudit.benchmark.cross_lineage_adjudication import (
+        CROSS_LINEAGE_ADJUDICATION_SCHEMA_NAME,
+        CrossLineageAdjudicationPreparedRun,
+        CrossLineageAdjudicationWireResponse,
+        build_cross_lineage_adjudication_prompt,
+        cross_lineage_adjudication_provider_request_commitment,
+        cross_lineage_adjudication_source_sha256,
+        cross_lineage_adjudication_system_prompt,
+    )
+    from mmaudit.benchmark.models import ModelBenchmarkReport, ModelBenchmarkSuite
+
+    if type(prepared_run) is not CrossLineageAdjudicationPreparedRun:
+        raise ValueError("cross-lineage source requires an exact prepared run")
+    if type(benchmark_suite) is not ModelBenchmarkSuite:
+        raise ValueError("cross-lineage source requires an exact benchmark suite")
+    if type(candidate_report) is not ModelBenchmarkReport:
+        raise ValueError("cross-lineage source requires an exact candidate report")
+    try:
+        prepared = CrossLineageAdjudicationPreparedRun.model_validate(
+            prepared_run.model_dump(mode="python"),
+            strict=True,
+        )
+        suite = ModelBenchmarkSuite.model_validate(
+            benchmark_suite.model_dump(mode="python"),
+            strict=True,
+        )
+        report = ModelBenchmarkReport.model_validate(
+            candidate_report.model_dump(mode="python"),
+            strict=True,
+        )
+    except Exception:
+        raise ValueError("cross-lineage source inputs failed detached validation") from None
+    if prepared != prepared_run or suite != benchmark_suite or report != candidate_report:
+        raise ValueError("cross-lineage source inputs changed during detached validation")
+    if (
+        prepared.corpus_name != suite.name
+        or prepared.corpus_sha256 != suite.corpus_sha256
+        or prepared.ground_truth_sha256 != suite.ground_truth_sha256
+        or prepared.candidate_report_sha256 != report.report_sha256
+    ):
+        raise ValueError("cross-lineage prepared run differs from its sealed source inputs")
+
+    release_evidence, _release_commitments = _release_builder(suite, now=now)
+    if (
+        release_evidence.proof_kind != "RELEASE_PINNED_MODEL_BENCHMARK"
+        or release_evidence.release_pin_set_sha256 is None
+    ):
+        raise ValueError("cross-lineage source lacks release-pinned benchmark custody")
+    output_mode = prepared.target.judge_structured_output_mode
+    request_commitments: set[str] = set()
+    inventory: list[dict[str, object]] = []
+    for request in prepared.requests:
+        prompt = build_cross_lineage_adjudication_prompt(
+            request=request,
+            suite=suite,
+            candidate_report=report,
+        )
+        commitment = cross_lineage_adjudication_provider_request_commitment(
+            request_role="model_benchmark",
+            system_prompt=cross_lineage_adjudication_system_prompt(),
+            user_prompt=prompt,
+            response_model=CrossLineageAdjudicationWireResponse,
+            schema_name=CROSS_LINEAGE_ADJUDICATION_SCHEMA_NAME,
+            structured_output_mode=output_mode,
+            context_package=None,
+        )
+        request_commitments.add(commitment)
+        inventory.append(
+            {
+                "case_id": request.case_id,
+                "request_sha256": request.request_sha256,
+                "provider_visible_payload_sha256": request.provider_visible_payload_sha256,
+                "provider_request_commitment_sha256": commitment,
+                "request_size": len(prompt.encode("utf-8")),
+            }
+        )
+    if len(request_commitments) != len(prepared.requests):
+        raise ValueError("cross-lineage provider request commitments are not unique")
+    observed_at = _whole_second_utc(now)
+    return (
+        _seal(
+            {
+                "schema_version": "1.0",
+                "source_classification": "SYNTHETIC_COMMITTED",
+                "source_sha256": cross_lineage_adjudication_source_sha256(prepared),
+                "proof_kind": "RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION",
+                "distribution_commit": None,
+                "distribution_scope": "benchmarks/model_corpus",
+                "committed_file_count": 0,
+                "committed_file_inventory_sha256": None,
+                "synthetic_declaration_path": None,
+                "synthetic_declaration_sha256": None,
+                "synthetic_declaration_entry_sha256": None,
+                "release_pin_set_sha256": release_evidence.release_pin_set_sha256,
+                "provider_visible_case_count": len(inventory),
+                "provider_visible_case_inventory_sha256": _canonical_sha256(inventory),
+                "adjudication_prepared_run_sha256": prepared.prepared_run_sha256,
+                "adjudication_candidate_report_sha256": report.report_sha256,
+                "adjudication_ground_truth_sha256": suite.ground_truth_sha256,
+                "observed_at": observed_at,
+                "limitations": tuple(
+                    sorted(
+                        {
+                            "Adjudication source custody covers only this exact prepared request inventory.",
+                            "Release pins prove the synthetic corpus; candidate responses remain separately REAL-evidence bound.",
+                        }
+                    )
+                ),
+            }
+        ),
+        frozenset(request_commitments),
+    )
+
+
 def _build_privacy_source_provenance_authority(
     source_builder: Callable[..., tuple[PrivacySourceProvenanceEvidence, frozenset[str]]],
     release_builder: Callable[..., tuple[PrivacySourceProvenanceEvidence, frozenset[str]]],
+    adjudication_builder: Callable[
+        ...,
+        tuple[PrivacySourceProvenanceEvidence, frozenset[str]],
+    ],
+    smoke_request_commitment: Callable[..., str],
 ) -> tuple[
+    Callable[..., PrivacySourceProvenanceObservation],
     Callable[..., PrivacySourceProvenanceObservation],
     Callable[..., PrivacySourceProvenanceObservation],
     Callable[..., PrivacySourceProvenanceObservation],
@@ -774,6 +999,21 @@ def _build_privacy_source_provenance_authority(
         evidence, request_sha256s = release_builder(benchmark_suite, now=now)
         return issue(evidence, request_sha256s)
 
+    def prove_adjudication(
+        prepared_run: object,
+        benchmark_suite: object,
+        candidate_report: object,
+        *,
+        now: datetime,
+    ) -> PrivacySourceProvenanceObservation:
+        evidence, request_sha256s = adjudication_builder(
+            prepared_run,
+            benchmark_suite,
+            candidate_report,
+            now=now,
+        )
+        return issue(evidence, request_sha256s)
+
     def reobserve_retained(
         current_observation: PrivacySourceProvenanceObservation,
         retained_evidence: PrivacySourceProvenanceEvidence,
@@ -853,7 +1093,6 @@ def _build_privacy_source_provenance_authority(
         structured_output_mode: object,
         context_package: object | None,
     ) -> PrivacySourceProvenanceEvidence:
-        from mmaudit.benchmark.models import model_benchmark_provider_request_commitment
         from mmaudit.models.output_modes import StructuredOutputMode
         from mmaudit.privacy import PrivacySourceClassification
 
@@ -865,8 +1104,27 @@ def _build_privacy_source_provenance_authority(
         )
         if type(structured_output_mode) is not StructuredOutputMode:
             raise ValueError("release-pinned benchmark structured-output mode is invalid")
-        case_commitment_sha256, _request_commitment_sha256 = (
-            model_benchmark_provider_request_commitment(
+        if evidence.proof_kind == "RELEASE_PINNED_MODEL_BENCHMARK":
+            from mmaudit.benchmark.models import model_benchmark_provider_request_commitment
+
+            request_commitment_sha256, _closed_request_commitment_sha256 = (
+                model_benchmark_provider_request_commitment(
+                    request_role=request_role,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    response_model=response_model,
+                    schema_name=schema_name,
+                    structured_output_mode=structured_output_mode,
+                    context_package=context_package,
+                )
+            )
+            expected_count = evidence.provider_visible_case_count
+        elif evidence.proof_kind == "RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION":
+            from mmaudit.benchmark.cross_lineage_adjudication import (
+                cross_lineage_adjudication_provider_request_commitment,
+            )
+
+            request_commitment_sha256 = cross_lineage_adjudication_provider_request_commitment(
                 request_role=request_role,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
@@ -875,17 +1133,36 @@ def _build_privacy_source_provenance_authority(
                 structured_output_mode=structured_output_mode,
                 context_package=context_package,
             )
-        )
-        if (
-            evidence.proof_kind != "RELEASE_PINNED_MODEL_BENCHMARK"
-            or len(binding.provider_visible_case_commitment_sha256s)
-            != evidence.provider_visible_case_count
-            or case_commitment_sha256 not in binding.provider_visible_case_commitment_sha256s
-        ):
-            raise ValueError(
-                "request is absent from the live release-pinned provider-visible "
-                "benchmark inventory"
+            expected_count = evidence.provider_visible_case_count
+        elif evidence.proof_kind in {
+            "DISTRIBUTION_COMMITTED_SYNTHETIC",
+            "PACKAGE_PINNED_SYNTHETIC",
+        }:
+            request_commitment_sha256 = smoke_request_commitment(
+                request_role=request_role,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                structured_output_mode=structured_output_mode,
+                context_package=context_package,
             )
+            expected_count = 1
+        else:
+            raise ValueError("source provenance does not authorize a provider request")
+        if (
+            len(binding.provider_visible_case_commitment_sha256s) != expected_count
+            or request_commitment_sha256 not in binding.provider_visible_case_commitment_sha256s
+        ):
+            if evidence.proof_kind in {
+                "RELEASE_PINNED_MODEL_BENCHMARK",
+                "RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION",
+            }:
+                raise ValueError(
+                    "request is absent from the live release-pinned provider-visible "
+                    "benchmark inventory"
+                )
+            raise ValueError("request is absent from the live provider-visible source inventory")
         return evidence
 
     def evidence_for(
@@ -896,6 +1173,7 @@ def _build_privacy_source_provenance_authority(
     return (
         prove_source,
         prove_release,
+        prove_adjudication,
         reobserve_retained,
         validate,
         validate_request,
@@ -1152,8 +1430,14 @@ def _whole_second_utc(value: datetime) -> datetime:
 
 
 def _seal(payload: dict[str, object]) -> PrivacySourceProvenanceEvidence:
+    normalized = {
+        "adjudication_prepared_run_sha256": None,
+        "adjudication_candidate_report_sha256": None,
+        "adjudication_ground_truth_sha256": None,
+        **payload,
+    }
     return PrivacySourceProvenanceEvidence.model_validate(
-        {**payload, "evidence_sha256": _canonical_sha256(payload)}
+        {**normalized, "evidence_sha256": _canonical_sha256(normalized)}
     )
 
 
@@ -1182,15 +1466,28 @@ def _model_content_sha256(value: BaseModel) -> str:
 (
     prove_privacy_source_classification,
     prove_release_pinned_model_benchmark_source,
+    prove_release_pinned_cross_lineage_adjudication_source,
     reobserve_retained_privacy_source_provenance,
     validate_privacy_source_provenance_observation,
-    validate_release_pinned_model_benchmark_request,
+    validate_provider_visible_source_request,
     _privacy_source_provenance_observation_evidence,
 ) = _build_privacy_source_provenance_authority(
     _build_privacy_source_classification_evidence,
     _build_release_pinned_model_benchmark_evidence,
+    _build_release_pinned_cross_lineage_adjudication_evidence,
+    _TRUSTED_PROVIDER_SMOKE_REQUEST_COMMITMENT,
 )
 del _build_privacy_source_provenance_authority
 del _build_privacy_source_classification_evidence
 del _build_release_pinned_model_benchmark_evidence
+del _build_release_pinned_cross_lineage_adjudication_evidence
 del _TRUSTED_REQUIRE_RELEASE_PINNED_MODEL_BENCHMARK
+del _TRUSTED_BUILD_PROVIDER_SMOKE_USER_PROMPT
+del _TRUSTED_PROVIDER_SMOKE_REQUEST_COMMITMENT
+del _TRUSTED_PROVIDER_SMOKE_RESPONSE
+del _TRUSTED_PROVIDER_SMOKE_ROLE
+del _TRUSTED_PROVIDER_SMOKE_SCHEMA_NAME
+del _TRUSTED_PROVIDER_SMOKE_SYSTEM_PROMPT
+
+# Compatibility name for callers whose request is specifically the release benchmark.
+validate_release_pinned_model_benchmark_request = validate_provider_visible_source_request

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -8,19 +9,32 @@ import pytest
 from pydantic import BaseModel
 
 from mmaudit.models.refresh import (
+    MAX_MODEL_REFRESH_FRACTION_TEXT_LENGTH,
+    MODEL_REFRESH_FRACTION_PATTERN,
     ModelRefreshAttempt,
     ModelRefreshDiff,
     ModelRefreshFreshness,
     ModelRefreshSnapshot,
     ModelRefreshSourceEvidence,
 )
+from mmaudit.models.refresh_runtime import (
+    AuditModelRefreshEvidence,
+    AuditModelRefreshPricingEvidence,
+)
 from mmaudit.models.refresh_staging import ModelRefreshWorkflowStatus
+from mmaudit.models.schemas import AuditModelRefreshPricingAttemptEvidence
 from scripts.generate_release_schemas import rendered_schema
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_ROOT = ROOT / "schemas"
 
 REFRESH_SCHEMAS: tuple[tuple[str, type[BaseModel]], ...] = (
+    ("audit_model_refresh_evidence.schema.json", AuditModelRefreshEvidence),
+    (
+        "audit_model_refresh_pricing_attempt_evidence.schema.json",
+        AuditModelRefreshPricingAttemptEvidence,
+    ),
+    ("audit_model_refresh_pricing_evidence.schema.json", AuditModelRefreshPricingEvidence),
     ("model_refresh_attempt.schema.json", ModelRefreshAttempt),
     ("model_refresh_diff.schema.json", ModelRefreshDiff),
     ("model_refresh_freshness.schema.json", ModelRefreshFreshness),
@@ -28,6 +42,32 @@ REFRESH_SCHEMAS: tuple[tuple[str, type[BaseModel]], ...] = (
     ("model_refresh_source_evidence.schema.json", ModelRefreshSourceEvidence),
     ("model_refresh_workflow_status.schema.json", ModelRefreshWorkflowStatus),
 )
+
+
+def test_pricing_schemas_expose_canonical_map_key_and_value_bounds() -> None:
+    evidence = _published("audit_model_refresh_pricing_evidence.schema.json")
+    attempt = _published("audit_model_refresh_pricing_attempt_evidence.schema.json")
+    route = evidence["$defs"]["AuditModelRefreshPricingRouteEvidence"]["properties"]
+    canonical_price_pattern = r"^(?:0|[1-9][0-9]{0,11}|(?:0|[1-9][0-9]{0,11})\.[0-9]{0,35}[1-9])$"
+    field_pattern = r"^[a-z][a-z0-9_]{0,63}$"
+
+    for pricing_map in (
+        route["baseline_pricing"],
+        route["current_pricing"],
+        attempt["properties"]["baseline_pricing"],
+        attempt["properties"]["current_pricing"],
+    ):
+        assert pricing_map["propertyNames"]["pattern"] == field_pattern
+        assert pricing_map["patternProperties"][field_pattern]["pattern"] == (
+            canonical_price_pattern
+        )
+        assert re.fullmatch(canonical_price_pattern, "1.0") is None
+
+    provider_caps = attempt["properties"]["provider_max_price"]
+    provider_field_pattern = r"^(?:completion|image|prompt|request)$"
+    provider_price_pattern = provider_caps["patternProperties"][provider_field_pattern]["pattern"]
+    assert provider_caps["propertyNames"]["pattern"] == provider_field_pattern
+    assert re.fullmatch(provider_price_pattern, "1.0") is None
 
 
 def _published(filename: str) -> dict[str, Any]:
@@ -70,9 +110,20 @@ def test_refresh_snapshot_and_diff_schema_preserve_evidence_bounds() -> None:
         snapshot["$defs"]["LiveProviderRouteState"]["properties"]["schema_version"]["const"]
         == "2.0"
     )
-    assert diff["properties"]["schema_version"]["const"] == "2.0"
+    assert diff["properties"]["schema_version"]["const"] == "3.0"
     assert diff["$defs"]["CatalogModelState"]["properties"]["schema_version"]["const"] == "2.0"
     assert diff["$defs"]["ProviderRouteState"]["properties"]["schema_version"]["const"] == "2.0"
+    assert diff["properties"]["baseline_candidate_registry_sha256"]["pattern"] == (
+        r"^[0-9a-f]{64}$"
+    )
+    assert diff["properties"]["current_candidate_registry_sha256"]["pattern"] == (r"^[0-9a-f]{64}$")
+    assert "candidate_registry_sha256" not in diff["properties"]
+    assert diff["properties"]["pricing_tolerance_fraction"]["maxLength"] == (
+        MAX_MODEL_REFRESH_FRACTION_TEXT_LENGTH
+    )
+    assert diff["properties"]["pricing_tolerance_fraction"]["pattern"] == (
+        MODEL_REFRESH_FRACTION_PATTERN
+    )
     assert snapshot["properties"]["models"]["minItems"] == 1
     assert snapshot["properties"]["models"]["maxItems"] == 10_000
     assert snapshot["properties"]["excluded_routed_model_ids"]["maxItems"] == 10_000
@@ -145,6 +196,56 @@ def test_refresh_snapshot_and_diff_schema_preserve_evidence_bounds() -> None:
     ]
 
 
+def test_audit_refresh_evidence_schema_is_bounded_and_non_authorizing() -> None:
+    evidence = _published("audit_model_refresh_evidence.schema.json")
+    route = evidence["$defs"]["AuditModelRefreshRouteEvidence"]
+
+    assert evidence["title"] == "mmaudit audit-scoped model refresh evidence"
+    assert evidence["properties"]["schema_version"]["const"] == "1.0"
+    assert evidence["properties"]["authority_mode"]["const"] == (
+        "VETO_ONLY_EXTERNAL_WORKFLOW_PIN_REQUIRED"
+    )
+    assert evidence["properties"]["source_commit"]["pattern"] == (
+        r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    )
+    assert evidence["properties"]["workflow_run_id"]["pattern"] == r"^[1-9][0-9]{0,19}$"
+    assert evidence["properties"]["workflow_run_attempt"]["pattern"] == (r"^[1-9][0-9]{0,19}$")
+    assert evidence["properties"]["pricing_tolerance_fraction"]["maxLength"] == (
+        MAX_MODEL_REFRESH_FRACTION_TEXT_LENGTH
+    )
+    assert evidence["properties"]["pricing_tolerance_fraction"]["pattern"] == (
+        MODEL_REFRESH_FRACTION_PATTERN
+    )
+    assert evidence["properties"]["soft_max_age_hours"] == {
+        "maximum": 720,
+        "minimum": 1,
+        "title": "Soft Max Age Hours",
+        "type": "integer",
+    }
+    assert evidence["properties"]["hard_max_age_hours"] == {
+        "maximum": 2160,
+        "minimum": 2,
+        "title": "Hard Max Age Hours",
+        "type": "integer",
+    }
+    for field in ("technical_model_ids", "audit_model_ids", "routes"):
+        assert evidence["properties"][field]["minItems"] == 1
+        assert evidence["properties"][field]["maxItems"] == 128
+    for field in (
+        "technical_selection_authorized",
+        "audit_selection_authorized",
+        "provider_access_authorized",
+        "production_promotion_authorized",
+    ):
+        assert evidence["properties"][field]["const"] is False
+    assert route["additionalProperties"] is False
+    assert route["properties"]["runtime_authorized"]["const"] is False
+    assert route["properties"]["approved_roles"]["minItems"] == 1
+    assert route["properties"]["approved_roles"]["maxItems"] == 128
+    assert route["properties"]["refresh_route"]["$ref"] == ("#/$defs/LiveProviderRouteState")
+    assert evidence["$defs"]["LiveProviderRouteState"]["additionalProperties"] is False
+
+
 def test_refresh_terminal_and_freshness_states_are_explicit() -> None:
     attempt = _published("model_refresh_attempt.schema.json")
     freshness = _published("model_refresh_freshness.schema.json")
@@ -211,7 +312,7 @@ def test_refresh_workflow_status_schema_binds_disposition_inventory_and_identity
     status = _published("model_refresh_workflow_status.schema.json")
     artifact = status["$defs"]["StagedModelRefreshArtifact"]
 
-    assert status["properties"]["schema_version"]["const"] == "3.0"
+    assert status["properties"]["schema_version"]["const"] == "4.0"
     assert status["properties"]["validated_at"]["format"] == "date-time"
     assert status["$defs"]["ModelRefreshWorkflowDisposition"]["enum"] == [
         "COMPLETED",
@@ -221,12 +322,17 @@ def test_refresh_workflow_status_schema_binds_disposition_inventory_and_identity
     ]
     assert artifact["additionalProperties"] is False
     assert artifact["properties"]["filename"]["enum"] == [
+        "model-refresh-candidate-registry.json",
         "model-refresh-source-evidence.json",
         "model-refresh-snapshot.json",
         "model-refresh-diff.json",
         "model-refresh-attempt.json",
         "model-refresh-freshness.json",
         "model-policy-eligibility-refresh.json",
+        "previous-workflow-status.json",
+        "previous-candidate-registry.json",
+        "previous-source-evidence.json",
+        "previous-snapshot.json",
     ]
     assert set(artifact["required"]) == {
         "filename",
@@ -238,8 +344,24 @@ def test_refresh_workflow_status_schema_binds_disposition_inventory_and_identity
     assert artifact["properties"]["byte_count"]["maximum"] == 20_000_000
     assert status["properties"]["source_commit"]["pattern"] == (r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
     assert status["properties"]["candidate_registry_sha256"]["pattern"] == r"^[0-9a-f]{64}$"
+    assert status["properties"]["pricing_tolerance_fraction"]["maxLength"] == (
+        MAX_MODEL_REFRESH_FRACTION_TEXT_LENGTH
+    )
+    assert status["properties"]["pricing_tolerance_fraction"]["pattern"] == (
+        MODEL_REFRESH_FRACTION_PATTERN
+    )
     assert status["properties"]["workflow_status_sha256"]["pattern"] == r"^[0-9a-f]{64}$"
     assert status["properties"]["workflow_run_id"]["pattern"] == r"^[1-9][0-9]{0,19}$"
     assert status["properties"]["workflow_run_attempt"]["pattern"] == r"^[1-9][0-9]{0,19}$"
+    assert status["properties"]["previous_workflow_run_id"]["anyOf"][0]["pattern"] == (
+        r"^[1-9][0-9]{0,19}$"
+    )
+    assert status["properties"]["previous_workflow_run_attempt"]["anyOf"][0]["pattern"] == (
+        r"^[1-9][0-9]{0,19}$"
+    )
+    assert (
+        status["properties"]["previous_workflow_status_sha256"]["anyOf"][0]["pattern"]
+        == r"^[0-9a-f]{64}$"
+    )
     assert status["properties"]["policy_projection_expected"]["type"] == "boolean"
     assert "policy_projection_expected" in status["required"]

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections import Counter
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
+from itertools import islice
 
 from mmaudit.models.schemas import (
     AnalysisState,
@@ -12,13 +15,17 @@ from mmaudit.models.schemas import (
     CompilationStatus,
     CoverageMetric,
     MinimumAnalysisFloor,
+    MinimumFloorRecoveryModelUsageBinding,
     QualityGateResult,
     RepositoryMap,
     ScannerRun,
     SolidityCompilationResult,
     UsageRecord,
 )
-from mmaudit.models.usage import is_creditable_usage_record
+from mmaudit.models.usage import (
+    is_creditable_usage_record,
+    is_recovery_creditable_usage_record,
+)
 from mmaudit.orchestration.assurance import is_qualifying_real_scanner_run
 from mmaudit.reporting.status import quality_status_for_run_status
 
@@ -29,6 +36,7 @@ DEFAULT_STATIC_SCANNER_NAMES: frozenset[str] = frozenset(
         "slither",
     }
 )
+_MAX_RECOVERY_MODEL_USAGE_BINDINGS = 32
 
 
 def assess_minimum_analysis_floor(
@@ -48,6 +56,7 @@ def assess_minimum_analysis_floor(
     surface_analysis_feasible: bool = True,
     surface_feasibility_reasons: Sequence[str] = (),
     orchestration_failures: Sequence[str] = (),
+    recovery_model_usage_bindings: Iterable[MinimumFloorRecoveryModelUsageBinding] = (),
 ) -> MinimumAnalysisFloor:
     """Derive the terminal status from qualifying runtime evidence only."""
 
@@ -96,9 +105,44 @@ def assess_minimum_analysis_floor(
         qualifying_real_static_scanners
     )
 
-    completed_real_model_roles = sorted(
-        {record.role for record in usage if is_creditable_usage_record(record, require_real=True)}
+    recovery_bindings = tuple(
+        islice(iter(recovery_model_usage_bindings), _MAX_RECOVERY_MODEL_USAGE_BINDINGS + 1)
     )
+    if len(recovery_bindings) > _MAX_RECOVERY_MODEL_USAGE_BINDINGS:
+        raise ValueError("minimum-floor recovery usage bindings exceed their item limit")
+    recovery_binding_by_request = {binding.request_id: binding for binding in recovery_bindings}
+    if tuple(recovery_binding_by_request) != tuple(sorted(recovery_binding_by_request)) or len(
+        recovery_binding_by_request
+    ) != len(recovery_bindings):
+        raise ValueError("minimum-floor recovery usage bindings must be unique and sorted")
+    usage_by_request = {record.request_id: record for record in usage}
+    if recovery_bindings and (
+        len(usage_by_request) != len(usage)
+        or any(request_id not in usage_by_request for request_id in recovery_binding_by_request)
+    ):
+        raise ValueError("minimum-floor recovery usage bindings differ from provider usage")
+    for request_id, binding in recovery_binding_by_request.items():
+        record = usage_by_request[request_id]
+        if binding.role != record.role or binding.usage_record_sha256 != _usage_record_sha256(
+            record
+        ):
+            raise ValueError("minimum-floor recovery usage binding differs from provider usage")
+    completed_role_set: set[str] = set()
+    for record in usage:
+        recovery_binding = recovery_binding_by_request.get(record.request_id)
+        creditable = (
+            is_recovery_creditable_usage_record(
+                record,
+                request_limit_scope=recovery_binding.request_limit_scope,
+                request_limit_count_before=recovery_binding.request_limit_count_before,
+                require_real=True,
+            )
+            if recovery_binding is not None
+            else is_creditable_usage_record(record, require_real=True)
+        )
+        if creditable:
+            completed_role_set.add(record.role)
+    completed_real_model_roles = sorted(completed_role_set)
     qualifying_real_analysis = bool(qualifying_real_static_scanners or completed_real_model_roles)
     model_review_required = model_review_applicable and not scanner_only
     model_review_satisfied = not model_review_required or (
@@ -191,6 +235,7 @@ def assess_minimum_analysis_floor(
     )
 
     return MinimumAnalysisFloor(
+        schema_version=("1.1" if recovery_bindings else "1.0"),
         run_status=run_status,
         source_files_ingested=source_files_ingested,
         source_ingestion_succeeded=source_ingestion_succeeded,
@@ -206,6 +251,7 @@ def assess_minimum_analysis_floor(
         explicit_downgrade_reason=downgrade_reason,
         required_model_roles=roles_required,
         completed_real_model_roles=completed_real_model_roles,
+        recovery_model_usage_bindings=list(recovery_bindings),
         model_review_satisfied=model_review_satisfied,
         coverage_metric_ids=metric_ids,
         coverage_denominators_valid=coverage_denominators_valid,
@@ -254,6 +300,18 @@ def _is_applicable_source_file(path: str, language: str, solidity_applicable: bo
     if solidity_applicable:
         return language.casefold() == "solidity" or path.casefold().endswith(".sol")
     return bool(path and language)
+
+
+def _usage_record_sha256(record: UsageRecord) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            record.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def canonicalize_runtime_messages(values: Collection[str] | Sequence[str]) -> list[str]:

@@ -6,34 +6,51 @@ import hashlib
 import json
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from datetime import datetime
+from typing import TYPE_CHECKING, Literal
+
+import mmaudit.models.openrouter as _openrouter_module
+
+if TYPE_CHECKING:
+    from mmaudit.models.coverage_planning import (
+        ModelSurfaceGapTask,
+        ModelSurfaceTaskResourcePreview,
+    )
+    from mmaudit.models.scheduler import SchedulerCampaignManifest, SchedulerTaskPlan
 
 from mmaudit.agents.base import (
     AgentRequestProtocol,
     FindingReviewResult,
     ValidatedAgentResult,
-    _model_review_origin_candidate_id,
-    _require_unique_raw_candidate_ids,
+    _require_candidate_review_recovery_coordinates,
     build_agent_request_protocol,
 )
-from mmaudit.config import AuditConfig, model_family
+from mmaudit.config import AuditConfig
 from mmaudit.constants import (
     ALL_SPECIALIST_ROLES,
+    CANDIDATE_DEPENDENT_SPECIALIST_ROLES,
+    CANDIDATE_INDEPENDENT_SPECIALIST_ROLES,
     SPECIALIST_AUXILIARY_ROLES,
     SPECIALIST_INVESTIGATOR_ROLES,
 )
-from mmaudit.models.openrouter import OpenRouterClient, OpenRouterSchemaError, StructuredCompletion
+from mmaudit.models.candidate_review_stamping import (
+    CandidateReviewStampingError,
+    stamp_candidate_review_findings,
+)
+from mmaudit.models.openrouter import (
+    OpenRouterCandidateReviewBoundaryError,
+    OpenRouterClient,
+    OpenRouterSchemaError,
+    StructuredCompletion,
+    trusted_complete_candidate_review_with_evidence,
+)
 from mmaudit.models.schemas import (
-    CandidateFinding,
-    CandidateOriginKind,
     CandidateReviewBatch,
     ContextExecutionEvidence,
     ContextPackage,
     ContextRequestEvidence,
-    Evidence,
     ExecutionEvidenceKind,
     Finding,
-    ModelVote,
     QualityGateResult,
     ReportQualityReview,
     SolidityCoverage,
@@ -44,12 +61,21 @@ from mmaudit.models.schemas import (
     UsageRecord,
 )
 from mmaudit.models.token_planning import UTF8_BYTES_PER_ESTIMATED_TOKEN
-from mmaudit.models.usage import is_creditable_usage_record
+from mmaudit.models.truncation import (
+    CandidateReviewFramedDocument,
+    CandidateReviewNormalizationEvidence,
+)
+from mmaudit.models.usage import (
+    _validated_usage_copy_preserving_owned_attestation,
+    is_creditable_usage_record,
+)
 from mmaudit.orchestration.context import render_context, revalidate_context_package
 from mmaudit.orchestration.model_review_evidence import (
     ModelReviewEvidenceError,
     seal_model_surface_review_artifact,
 )
+
+_TRUSTED_CANDIDATE_REVIEW_COMPLETION_DISPATCH = trusted_complete_candidate_review_with_evidence
 
 
 @dataclass(frozen=True)
@@ -60,7 +86,7 @@ class SpecialistRoleDefinition:
     context_priorities: tuple[str, ...]
     exclusions: tuple[str, ...] = ()
     role_kind: Literal["investigator", "auxiliary"] = "investigator"
-    response_schema: str = "CandidateReviewBatch"
+    response_schema: str = "CandidateReviewFramedDocument"
     schema_name: str = ""
 
     def effective_schema_name(self) -> str:
@@ -273,6 +299,52 @@ SPECIALIST_ROLE_REGISTRY: dict[str, SpecialistRoleDefinition] = {
         ),
         ("invariant suite", "formal results", "state graph", "source locations"),
     ),
+    "state_machine_lifecycle": SpecialistRoleDefinition(
+        "state_machine_lifecycle",
+        (
+            "Find illegal, skipped, repeated, or permanently stuck lifecycle transitions "
+            "across initialization, operation, pause, settlement, migration, and termination."
+        ),
+        (
+            "Enumerate valid states and every entry point that changes them.",
+            "Check transition guards, one-way/terminal states, repeated and out-of-order calls.",
+            (
+                "Trace callback, timing, and partial-failure paths that can desynchronize "
+                "lifecycle state across contracts."
+            ),
+        ),
+        (
+            "state-machine and state-dependency graphs",
+            "public entry points and modifiers",
+            "events and terminal states",
+            "cross-contract boundaries",
+        ),
+    ),
+    "randomness_entropy_commit_reveal": SpecialistRoleDefinition(
+        "randomness_entropy_commit_reveal",
+        "Find predictable, biasable, replayable, or prematurely revealed randomness and "
+        "commit-reveal defects.",
+        (
+            (
+                "Trace every entropy input and actor/block-builder influence to value-sensitive "
+                "selection or output."
+            ),
+            (
+                "Check commitment binding, reveal timing, non-reveal/forfeiture behavior, and "
+                "replay/domain separation."
+            ),
+            (
+                "Distinguish authenticated VRF/oracle guarantees from block-variable "
+                "pseudo-randomness and unsupported trust assumptions."
+            ),
+        ),
+        (
+            "entropy and randomness dependencies",
+            "commit/reveal state",
+            "block and timing inputs",
+            "value allocation and winner selection",
+        ),
+    ),
     "false_negative_hunter": SpecialistRoleDefinition(
         "false_negative_hunter",
         "Blindly search weakly covered paths and vulnerability classes likely missed by other engines.",
@@ -399,6 +471,16 @@ SPECIALIST_ROLE_REGISTRY: dict[str, SpecialistRoleDefinition] = {
 def _validate_specialist_registry() -> None:
     if set(SPECIALIST_ROLE_REGISTRY) != set(ALL_SPECIALIST_ROLES):
         raise RuntimeError("specialist role registry does not match configured specialist roles")
+    independent_roles = set(CANDIDATE_INDEPENDENT_SPECIALIST_ROLES)
+    if tuple(role for role in SPECIALIST_ROLE_REGISTRY if role in independent_roles) != (
+        CANDIDATE_INDEPENDENT_SPECIALIST_ROLES
+    ):
+        raise RuntimeError("candidate-independent specialist portfolio is not frozen exactly")
+    dependent_roles = set(CANDIDATE_DEPENDENT_SPECIALIST_ROLES)
+    if tuple(role for role in SPECIALIST_ROLE_REGISTRY if role in dependent_roles) != (
+        CANDIDATE_DEPENDENT_SPECIALIST_ROLES
+    ):
+        raise RuntimeError("candidate-dependent specialist portfolio is not frozen exactly")
     if {
         role
         for role, definition in SPECIALIST_ROLE_REGISTRY.items()
@@ -728,7 +810,7 @@ class SpecialistFindingAgent:
         return build_agent_request_protocol(
             prompt_file="specialist.md",
             schema_name=self.definition.effective_schema_name(),
-            response_model=CandidateReviewBatch,
+            response_model=CandidateReviewFramedDocument,
             role_contract=self.definition.prompt_contract(),
         )
 
@@ -737,26 +819,61 @@ class SpecialistFindingAgent:
         context: ContextPackage,
         *,
         logical_request_id: str | None = None,
+        single_route_single_attempt: bool = False,
+        recovery_request_limit_scope: str | None = None,
+        recovery_request_limit_count_before: int | None = None,
+        expected_resource_preview: ModelSurfaceTaskResourcePreview | None = None,
+        coverage_task: ModelSurfaceGapTask | None = None,
+        scheduler_task: SchedulerTaskPlan | None = None,
+        campaign_manifest: SchedulerCampaignManifest | None = None,
+        resource_preview_checked_at: datetime | None = None,
     ) -> FindingReviewResult:
+        _require_candidate_review_recovery_coordinates(
+            single_route_single_attempt=single_route_single_attempt,
+            request_limit_scope=recovery_request_limit_scope,
+            request_limit_count_before=recovery_request_limit_count_before,
+        )
         configured = self.config.models.role(self.role)
         request_role = f"specialist:{self.role}"
         request_context = context.model_copy(deep=True)
         rendered_user_context = render_context(request_context)
         protocol = self.request_protocol
-        completion = await self.client.complete_with_evidence(
+        if (
+            trusted_complete_candidate_review_with_evidence
+            is not _TRUSTED_CANDIDATE_REVIEW_COMPLETION_DISPATCH
+            or _openrouter_module.trusted_complete_candidate_review_with_evidence
+            is not _TRUSTED_CANDIDATE_REVIEW_COMPLETION_DISPATCH
+        ):
+            raise OpenRouterCandidateReviewBoundaryError(
+                "candidate-review specialist dispatch binding changed before provider work"
+            )
+        completion = await _TRUSTED_CANDIDATE_REVIEW_COMPLETION_DISPATCH(
+            self.client,
             role=request_role,
-            models=[configured.primary, *configured.fallbacks],
+            models=(
+                [coverage_task.requested_model]
+                if expected_resource_preview is not None and coverage_task is not None
+                else [configured.primary, *configured.fallbacks]
+            ),
             system_prompt=protocol.system_prompt,
             user_prompt=rendered_user_context,
             context_package=request_context,
-            response_model=protocol.response_model,
             schema_name=protocol.schema_name,
             logical_request_id=logical_request_id,
+            single_route_single_attempt=single_route_single_attempt,
+            expected_resource_preview=expected_resource_preview,
+            coverage_task=coverage_task,
+            scheduler_task=scheduler_task,
+            campaign_manifest=campaign_manifest,
+            resource_preview_checked_at=resource_preview_checked_at,
         )
         return self.bind_completed_review(
             request_context,
             raw_response=completion.value,
             completion_usage=completion.usage_record,
+            normalization_evidence=completion.normalization_evidence,
+            recovery_request_limit_scope=recovery_request_limit_scope,
+            recovery_request_limit_count_before=recovery_request_limit_count_before,
         )
 
     def bind_completed_review(
@@ -765,15 +882,36 @@ class SpecialistFindingAgent:
         *,
         raw_response: CandidateReviewBatch,
         completion_usage: UsageRecord,
+        normalization_evidence: CandidateReviewNormalizationEvidence | None = None,
+        recovery_request_limit_scope: str | None = None,
+        recovery_request_limit_count_before: int | None = None,
     ) -> FindingReviewResult:
         """Rebuild one specialist result from exact retained completion evidence."""
 
         request_role = f"specialist:{self.role}"
         request_context = context.model_copy(deep=True)
         rendered_user_context = render_context(request_context)
+        bound_normalization_evidence = None
+        if normalization_evidence is not None:
+            if type(normalization_evidence) is not CandidateReviewNormalizationEvidence:
+                raise OpenRouterSchemaError(
+                    "candidate-review normalization custody has an invalid exact type"
+                )
+            bound_normalization_evidence = CandidateReviewNormalizationEvidence.model_validate_json(
+                normalization_evidence.model_dump_json(),
+                strict=True,
+            )
+        if type(completion_usage) is not UsageRecord:
+            raise OpenRouterSchemaError("candidate-review usage has an invalid exact type")
+        try:
+            validated_usage = _validated_usage_copy_preserving_owned_attestation(completion_usage)
+        except (TypeError, ValueError) as exc:
+            raise OpenRouterSchemaError("candidate-review usage failed exact validation") from exc
+        if validated_usage != completion_usage:
+            raise OpenRouterSchemaError("candidate-review usage changed after validation")
         completion = StructuredCompletion(
             value=CandidateReviewBatch.model_validate(raw_response.model_dump(mode="python")),
-            usage_record=UsageRecord.model_validate(completion_usage.model_dump(mode="python")),
+            usage_record=validated_usage,
         )
         result = completion.value
         usage = completion.usage_record
@@ -782,64 +920,32 @@ class SpecialistFindingAgent:
                 context=request_context,
                 completion=completion,
                 rendered_user_context=rendered_user_context,
+                normalization_evidence=bound_normalization_evidence,
+                recovery_request_limit_scope=recovery_request_limit_scope,
+                recovery_request_limit_count_before=recovery_request_limit_count_before,
             )
         except ModelReviewEvidenceError as exc:
             raise OpenRouterSchemaError(
                 f"model response did not provide valid requested-surface evidence: {exc}"
             ) from None
-        requested = usage.requested_model
-        returned = usage.returned_model
-        family = model_family(requested)
-        scanner_fingerprints = {finding.fingerprint for finding in request_context.scanner_findings}
-        _require_unique_raw_candidate_ids(result.findings)
-        stamped = []
-        for finding in result.findings:
-            origin_candidate_id = _model_review_origin_candidate_id(
+        try:
+            stamped = stamp_candidate_review_findings(
                 request_role=request_role,
-                request_id=usage.request_id,
-                candidate=finding,
+                usage_record=usage,
+                trusted_scanner_fingerprints=tuple(
+                    sorted({finding.fingerprint for finding in request_context.scanner_findings})
+                ),
+                raw_findings=result.findings,
             )
-            evidence = [
-                (
-                    item
-                    if item.type == "scanner" and item.fingerprint in scanner_fingerprints
-                    else Evidence(
-                        type="model",
-                        source=request_role,
-                        description=item.description,
-                    )
-                )
-                for item in finding.evidence
-            ]
-            stamped_candidate = finding.model_copy(
-                update={
-                    "candidate_id": origin_candidate_id,
-                    "origin_kind": CandidateOriginKind.MODEL_REVIEW,
-                    "execution_provenance": None,
-                    "role": request_role,
-                    "model_family": family,
-                    "evidence": evidence,
-                    "model_votes": [
-                        ModelVote(
-                            role=request_role,
-                            requested_model=requested,
-                            returned_model=returned,
-                            family=family,
-                            verdict="proposed",
-                            rationale=finding.summary,
-                        )
-                    ],
-                }
-            )
-            stamped.append(
-                CandidateFinding.model_validate(stamped_candidate.model_dump(mode="python"))
-            )
+        except CandidateReviewStampingError as exc:
+            raise OpenRouterSchemaError(f"candidate-review stamping failed: {exc}") from None
         return FindingReviewResult(
-            findings=tuple(stamped),
+            findings=stamped,
             surface_review_artifact=surface_review_artifact,
             surface_review_context=request_context,
             completion_usage=usage,
             raw_response=result,
+            normalization_evidence=bound_normalization_evidence,
         )
 
 

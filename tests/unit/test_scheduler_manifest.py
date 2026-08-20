@@ -695,7 +695,7 @@ def test_scheduler_schema_is_generated_strict_and_bounded() -> None:
         "model_requests",
         "summary",
     }
-    assert schema["properties"]["schema_version"]["enum"] == ["1.0", "1.1"]
+    assert schema["properties"]["schema_version"]["enum"] == ["1.0", "1.1", "1.2", "1.3"]
     assert schema["properties"]["evidence_authority"]["const"] == "comparison_required"
     assert (
         schema["$defs"]["SchedulerPassResult"]["properties"]["task_results"]["maxItems"] == 100_000

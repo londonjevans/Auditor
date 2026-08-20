@@ -1,0 +1,130 @@
+{
+  "authority_basis": "MECHANISM_ONLY",
+  "authority_issuance_authorized": false,
+  "binding_set_sha256": "609895321edfcdc1e10dcf663517117321ae2bfb7e9d1f6713bfcb3607e2621a",
+  "bindings": [
+    {
+      "binding_sha256": "e119ffc4191e2e54503f6659db1c231e7461073a793da1039fdc6817eb0351f8",
+      "canonical_model_id": "synthetic-lineage:alpha/model-core",
+      "exact_model_id": "synthetic-lineage:alpha/model-core",
+      "origin": {
+        "construction_group_id": "constructed-root-alpha",
+        "construction_group_model_ids": [
+          "synthetic-lineage:alpha/model-core",
+          "synthetic-lineage:alpha/model-core-v1"
+        ],
+        "construction_group_sha256": "3a4ed23aa9908195c99f91227cce3b824adee840936e881e688c6be3d79f32ce",
+        "construction_manifest_file_sha256": "0f57e7c224e8e7178ab1baf33678c89c91b424383655e0e5f3b3078a56aa356a",
+        "construction_source_file_sha256": "af58892d44968df4a3c2ffaa9e4aa239fb2d7762546770f54004bcadbef6bd41",
+        "construction_source_revision": "af58892d44968df4a3c2ffaa9e4aa239fb2d7762546770f54004bcadbef6bd41",
+        "exact_model_id": "synthetic-lineage:alpha/model-core",
+        "external_provenance_verified": false,
+        "model_identity_domain": "MMAUDIT_NON_DEPLOYABLE_SYNTHETIC_MODEL_LINEAGE_V1",
+        "non_model_authorship_verified": false,
+        "origin_kind": "SYNTHETIC_CONSTRUCTED",
+        "origin_sha256": "64570d0c850f39d63e2c287e2f2bf00b5a92970099b14b92ec9b5ac7192eea6a",
+        "provenance_class": "SYNTHETIC_CONSTRUCTED_TEST_FIXTURE",
+        "real_provider_model_applicable": false,
+        "regression_contract_file_sha256": "65ca78292f7465045f58cc7676cee41708ab362dea3595756f640cf127a051e9"
+      },
+      "root_lineage": "sha256:a9d4f8d87d11015029ae19cd6bd5beae62363a656d793fda3c02f3be1c687aba"
+    },
+    {
+      "binding_sha256": "986495ff455729d2a82bf0fb1058498c5917295cb777edfccad21197453ca2bd",
+      "canonical_model_id": "synthetic-lineage:alpha/model-core",
+      "exact_model_id": "synthetic-lineage:alpha/model-core-v1",
+      "origin": {
+        "construction_group_id": "constructed-root-alpha",
+        "construction_group_model_ids": [
+          "synthetic-lineage:alpha/model-core",
+          "synthetic-lineage:alpha/model-core-v1"
+        ],
+        "construction_group_sha256": "3a4ed23aa9908195c99f91227cce3b824adee840936e881e688c6be3d79f32ce",
+        "construction_manifest_file_sha256": "0f57e7c224e8e7178ab1baf33678c89c91b424383655e0e5f3b3078a56aa356a",
+        "construction_source_file_sha256": "af58892d44968df4a3c2ffaa9e4aa239fb2d7762546770f54004bcadbef6bd41",
+        "construction_source_revision": "af58892d44968df4a3c2ffaa9e4aa239fb2d7762546770f54004bcadbef6bd41",
+        "exact_model_id": "synthetic-lineage:alpha/model-core-v1",
+        "external_provenance_verified": false,
+        "model_identity_domain": "MMAUDIT_NON_DEPLOYABLE_SYNTHETIC_MODEL_LINEAGE_V1",
+        "non_model_authorship_verified": false,
+        "origin_kind": "SYNTHETIC_CONSTRUCTED",
+        "origin_sha256": "38d0de24d6faddfd451b966a77539118d5eddef5d3861ec5721f074c17c3cf21",
+        "provenance_class": "SYNTHETIC_CONSTRUCTED_TEST_FIXTURE",
+        "real_provider_model_applicable": false,
+        "regression_contract_file_sha256": "65ca78292f7465045f58cc7676cee41708ab362dea3595756f640cf127a051e9"
+      },
+      "root_lineage": "sha256:a9d4f8d87d11015029ae19cd6bd5beae62363a656d793fda3c02f3be1c687aba"
+    },
+    {
+      "binding_sha256": "2786095e21ee2065ceda9356e6c2d36fefe1b7bce3e88a7421bd9fce028f4fcb",
+      "canonical_model_id": "synthetic-lineage:beta/model-core",
+      "exact_model_id": "synthetic-lineage:beta/model-core",
+      "origin": {
+        "construction_group_id": "constructed-root-beta",
+        "construction_group_model_ids": [
+          "synthetic-lineage:beta/model-core"
+        ],
+        "construction_group_sha256": "440aa0b85594e28973fda02aafdadfa650e9312ecf128c709caaae2a1a09b89e",
+        "construction_manifest_file_sha256": "0f57e7c224e8e7178ab1baf33678c89c91b424383655e0e5f3b3078a56aa356a",
+        "construction_source_file_sha256": "af58892d44968df4a3c2ffaa9e4aa239fb2d7762546770f54004bcadbef6bd41",
+        "construction_source_revision": "af58892d44968df4a3c2ffaa9e4aa239fb2d7762546770f54004bcadbef6bd41",
+        "exact_model_id": "synthetic-lineage:beta/model-core",
+        "external_provenance_verified": false,
+        "model_identity_domain": "MMAUDIT_NON_DEPLOYABLE_SYNTHETIC_MODEL_LINEAGE_V1",
+        "non_model_authorship_verified": false,
+        "origin_kind": "SYNTHETIC_CONSTRUCTED",
+        "origin_sha256": "0555b7ab0a08a6dfae0fd9ffad45a84db88584266e6a93dbdee88b2b4a2d964e",
+        "provenance_class": "SYNTHETIC_CONSTRUCTED_TEST_FIXTURE",
+        "real_provider_model_applicable": false,
+        "regression_contract_file_sha256": "65ca78292f7465045f58cc7676cee41708ab362dea3595756f640cf127a051e9"
+      },
+      "root_lineage": "sha256:cb7d3388821742bb53f768f6e5bef33cb910e277ec71afd4c49726e4c35173c3"
+    },
+    {
+      "binding_sha256": "b26492095146d69d2a1796e105a834bb2bdc66638bddb5a08653cb19ffb2e4b8",
+      "canonical_model_id": "synthetic-lineage:gamma/model-core",
+      "exact_model_id": "synthetic-lineage:gamma/model-core",
+      "origin": {
+        "construction_group_id": "constructed-root-gamma",
+        "construction_group_model_ids": [
+          "synthetic-lineage:gamma/model-core"
+        ],
+        "construction_group_sha256": "fa5b3d093bf78b43fce48dc4c1f6d3b6fc74cf1b3dda69502301dfb4667c9814",
+        "construction_manifest_file_sha256": "0f57e7c224e8e7178ab1baf33678c89c91b424383655e0e5f3b3078a56aa356a",
+        "construction_source_file_sha256": "af58892d44968df4a3c2ffaa9e4aa239fb2d7762546770f54004bcadbef6bd41",
+        "construction_source_revision": "af58892d44968df4a3c2ffaa9e4aa239fb2d7762546770f54004bcadbef6bd41",
+        "exact_model_id": "synthetic-lineage:gamma/model-core",
+        "external_provenance_verified": false,
+        "model_identity_domain": "MMAUDIT_NON_DEPLOYABLE_SYNTHETIC_MODEL_LINEAGE_V1",
+        "non_model_authorship_verified": false,
+        "origin_kind": "SYNTHETIC_CONSTRUCTED",
+        "origin_sha256": "99f71c9d88609ac5708cd91db2db5669a91deb11fc64c0147eb9a172f59e17ca",
+        "provenance_class": "SYNTHETIC_CONSTRUCTED_TEST_FIXTURE",
+        "real_provider_model_applicable": false,
+        "regression_contract_file_sha256": "65ca78292f7465045f58cc7676cee41708ab362dea3595756f640cf127a051e9"
+      },
+      "root_lineage": "sha256:d50aa6cd24cdf4d339de6dea1d0a23a6d3f9052d09a159c6ed95c500c83823a9"
+    }
+  ],
+  "completion_eligible": false,
+  "construction_manifest_file_sha256": "0f57e7c224e8e7178ab1baf33678c89c91b424383655e0e5f3b3078a56aa356a",
+  "construction_sha256": "83e3001667782029981fc0ac1ae0f8e5acfe75bde892877e2f1300cd6cce6b63",
+  "construction_source_file_sha256": "af58892d44968df4a3c2ffaa9e4aa239fb2d7762546770f54004bcadbef6bd41",
+  "external_provenance_verified": false,
+  "lineage_identity_authorized": false,
+  "model_qualification_authorized": false,
+  "non_model_authorship_verified": false,
+  "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
+  "production_selection_authorized": false,
+  "projection_scope": "LOCAL_SYNTHETIC_MECHANISM_TEST",
+  "provenance_sha256": "7b36005d5ee33f31db8edf056b5d2dbe035c901de70eaa7c940153e69d9acbb5",
+  "provider_access_authorized": false,
+  "provider_lineage_authorized": false,
+  "real_provider_model_applicable": false,
+  "regression_contract_file_sha256": "65ca78292f7465045f58cc7676cee41708ab362dea3595756f640cf127a051e9",
+  "release_authorized": false,
+  "runner_authority_authorized": false,
+  "schema_version": "1.0",
+  "source_egress_authorized": false,
+  "source_revision": "af58892d44968df4a3c2ffaa9e4aa239fb2d7762546770f54004bcadbef6bd41"
+}

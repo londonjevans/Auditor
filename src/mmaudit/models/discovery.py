@@ -40,6 +40,7 @@ from mmaudit.models.endpoint_snapshots import (
 from mmaudit.models.identifiers import (
     EXACT_MODEL_ID_PATTERN,
     is_exact_openrouter_model_id,
+    is_openrouter_catalog_model_id,
 )
 from mmaudit.models.output_modes import (
     REASONING_REQUEST_PARAMETER,
@@ -1382,7 +1383,7 @@ def _select_catalog_model(
     indexed: dict[str, Mapping[str, Any]] = {}
     for item in items:
         model_id = item.get("id")
-        if not isinstance(model_id, str) or re.fullmatch(_MODEL_ID_PATTERN, model_id) is None:
+        if not isinstance(model_id, str) or not is_openrouter_catalog_model_id(model_id):
             raise ModelDiscoveryValidationError(
                 "model catalog contains a missing or invalid exact model identifier"
             )

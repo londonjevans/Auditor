@@ -1,0 +1,411 @@
+{
+  "$defs": {
+    "FrozenModelLineageBinding": {
+      "additionalProperties": false,
+      "description": "One durable exact-model, canonical-model, root, and origin join.",
+      "properties": {
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "canonical_model_id": {
+          "maxLength": 300,
+          "minLength": 3,
+          "title": "Canonical Model Id",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "maxLength": 300,
+          "minLength": 3,
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "origin": {
+          "discriminator": {
+            "mapping": {
+              "PUBLIC_ESTABLISHED": "#/$defs/PublicEstablishedModelLineageOrigin",
+              "SYNTHETIC_CONSTRUCTED": "#/$defs/SyntheticConstructedModelLineageOrigin"
+            },
+            "propertyName": "origin_kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SyntheticConstructedModelLineageOrigin"
+            },
+            {
+              "$ref": "#/$defs/PublicEstablishedModelLineageOrigin"
+            }
+          ],
+          "title": "Origin"
+        },
+        "root_lineage": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Root Lineage",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "canonical_model_id",
+        "root_lineage",
+        "origin",
+        "binding_sha256"
+      ],
+      "title": "FrozenModelLineageBinding",
+      "type": "object"
+    },
+    "PublicEstablishedModelLineageOrigin": {
+      "additionalProperties": false,
+      "description": "Structurally representable public ancestry with no current issuer.",
+      "properties": {
+        "exact_model_id": {
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "external_provenance_verified": {
+          "const": false,
+          "default": false,
+          "title": "External Provenance Verified",
+          "type": "boolean"
+        },
+        "non_model_authorship_verified": {
+          "const": false,
+          "default": false,
+          "title": "Non Model Authorship Verified",
+          "type": "boolean"
+        },
+        "origin_kind": {
+          "const": "PUBLIC_ESTABLISHED",
+          "default": "PUBLIC_ESTABLISHED",
+          "title": "Origin Kind",
+          "type": "string"
+        },
+        "origin_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Origin Sha256",
+          "type": "string"
+        },
+        "public_lineage_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$",
+          "title": "Public Lineage Id",
+          "type": "string"
+        },
+        "publication_artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Publication Artifact Sha256",
+          "type": "string"
+        },
+        "publication_proof_kind": {
+          "const": "EXTERNAL_TRANSPARENCY_INCLUSION",
+          "default": "EXTERNAL_TRANSPARENCY_INCLUSION",
+          "title": "Publication Proof Kind",
+          "type": "string"
+        },
+        "publication_proof_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Publication Proof Sha256",
+          "type": "string"
+        },
+        "publication_uri": {
+          "maxLength": 2000,
+          "minLength": 9,
+          "title": "Publication Uri",
+          "type": "string"
+        },
+        "published_at": {
+          "format": "date-time",
+          "title": "Published At",
+          "type": "string"
+        },
+        "upstream_source_revision": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+          "title": "Upstream Source Revision",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "public_lineage_id",
+        "publication_uri",
+        "published_at",
+        "publication_artifact_sha256",
+        "publication_proof_sha256",
+        "upstream_source_revision",
+        "origin_sha256"
+      ],
+      "title": "PublicEstablishedModelLineageOrigin",
+      "type": "object"
+    },
+    "SyntheticConstructedModelLineageOrigin": {
+      "additionalProperties": false,
+      "description": "One identity planted in the reserved non-provider construction domain.",
+      "properties": {
+        "construction_group_id": {
+          "pattern": "^constructed-root-[a-z][a-z0-9-]{0,47}$",
+          "title": "Construction Group Id",
+          "type": "string"
+        },
+        "construction_group_model_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Construction Group Model Ids",
+          "type": "array"
+        },
+        "construction_group_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Construction Group Sha256",
+          "type": "string"
+        },
+        "construction_manifest_file_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Construction Manifest File Sha256",
+          "type": "string"
+        },
+        "construction_source_file_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Construction Source File Sha256",
+          "type": "string"
+        },
+        "construction_source_revision": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+          "title": "Construction Source Revision",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "pattern": "^synthetic-lineage:[a-z][a-z0-9_-]{0,31}/[a-z][a-z0-9._-]{0,63}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "external_provenance_verified": {
+          "const": false,
+          "default": false,
+          "title": "External Provenance Verified",
+          "type": "boolean"
+        },
+        "model_identity_domain": {
+          "const": "MMAUDIT_NON_DEPLOYABLE_SYNTHETIC_MODEL_LINEAGE_V1",
+          "default": "MMAUDIT_NON_DEPLOYABLE_SYNTHETIC_MODEL_LINEAGE_V1",
+          "title": "Model Identity Domain",
+          "type": "string"
+        },
+        "non_model_authorship_verified": {
+          "const": false,
+          "default": false,
+          "title": "Non Model Authorship Verified",
+          "type": "boolean"
+        },
+        "origin_kind": {
+          "const": "SYNTHETIC_CONSTRUCTED",
+          "default": "SYNTHETIC_CONSTRUCTED",
+          "title": "Origin Kind",
+          "type": "string"
+        },
+        "origin_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Origin Sha256",
+          "type": "string"
+        },
+        "provenance_class": {
+          "const": "SYNTHETIC_CONSTRUCTED_TEST_FIXTURE",
+          "default": "SYNTHETIC_CONSTRUCTED_TEST_FIXTURE",
+          "title": "Provenance Class",
+          "type": "string"
+        },
+        "real_provider_model_applicable": {
+          "const": false,
+          "default": false,
+          "title": "Real Provider Model Applicable",
+          "type": "boolean"
+        },
+        "regression_contract_file_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Regression Contract File Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "construction_group_id",
+        "construction_group_sha256",
+        "construction_group_model_ids",
+        "construction_source_revision",
+        "construction_manifest_file_sha256",
+        "construction_source_file_sha256",
+        "regression_contract_file_sha256",
+        "origin_sha256"
+      ],
+      "title": "SyntheticConstructedModelLineageOrigin",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/frozen_model_lineage_provenance.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Strict durable evidence over exact constructed lineage source bytes.",
+  "properties": {
+    "authority_basis": {
+      "const": "MECHANISM_ONLY",
+      "default": "MECHANISM_ONLY",
+      "title": "Authority Basis",
+      "type": "string"
+    },
+    "authority_issuance_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Authority Issuance Authorized",
+      "type": "boolean"
+    },
+    "binding_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Binding Set Sha256",
+      "type": "string"
+    },
+    "bindings": {
+      "items": {
+        "$ref": "#/$defs/FrozenModelLineageBinding"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "title": "Bindings",
+      "type": "array"
+    },
+    "completion_eligible": {
+      "const": false,
+      "default": false,
+      "title": "Completion Eligible",
+      "type": "boolean"
+    },
+    "construction_manifest_file_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Construction Manifest File Sha256",
+      "type": "string"
+    },
+    "construction_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Construction Sha256",
+      "type": "string"
+    },
+    "construction_source_file_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Construction Source File Sha256",
+      "type": "string"
+    },
+    "external_provenance_verified": {
+      "const": false,
+      "default": false,
+      "title": "External Provenance Verified",
+      "type": "boolean"
+    },
+    "lineage_identity_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Lineage Identity Authorized",
+      "type": "boolean"
+    },
+    "model_qualification_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Model Qualification Authorized",
+      "type": "boolean"
+    },
+    "non_model_authorship_verified": {
+      "const": false,
+      "default": false,
+      "title": "Non Model Authorship Verified",
+      "type": "boolean"
+    },
+    "objective_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Objective Sha256",
+      "type": "string"
+    },
+    "production_selection_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Production Selection Authorized",
+      "type": "boolean"
+    },
+    "projection_scope": {
+      "const": "LOCAL_SYNTHETIC_MECHANISM_TEST",
+      "default": "LOCAL_SYNTHETIC_MECHANISM_TEST",
+      "title": "Projection Scope",
+      "type": "string"
+    },
+    "provenance_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Provenance Sha256",
+      "type": "string"
+    },
+    "provider_access_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Provider Access Authorized",
+      "type": "boolean"
+    },
+    "provider_lineage_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Provider Lineage Authorized",
+      "type": "boolean"
+    },
+    "real_provider_model_applicable": {
+      "const": false,
+      "default": false,
+      "title": "Real Provider Model Applicable",
+      "type": "boolean"
+    },
+    "regression_contract_file_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Regression Contract File Sha256",
+      "type": "string"
+    },
+    "release_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Release Authorized",
+      "type": "boolean"
+    },
+    "runner_authority_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Runner Authority Authorized",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_egress_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Source Egress Authorized",
+      "type": "boolean"
+    },
+    "source_revision": {
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+      "title": "Source Revision",
+      "type": "string"
+    }
+  },
+  "required": [
+    "objective_sha256",
+    "source_revision",
+    "construction_sha256",
+    "construction_manifest_file_sha256",
+    "construction_source_file_sha256",
+    "regression_contract_file_sha256",
+    "bindings",
+    "binding_set_sha256",
+    "provenance_sha256"
+  ],
+  "title": "mmaudit mechanism-only frozen model lineage provenance",
+  "type": "object"
+}

@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import re
+from collections import deque
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal, overload
@@ -74,6 +75,9 @@ _BENCHMARK_REQUIRED_COVERAGE_METRICS = tuple(
 _RUNTIME_CREDITING_MUTATION_SCORECARD_ORIGINS: frozenset[MutationScorecardEvidenceOrigin] = (
     frozenset()
 )
+_MAX_BENCHMARK_ASSIGNMENT_COMPARISONS = 1_000_000
+_MAX_BENCHMARK_FINDING_LOCATIONS = 100
+_MAX_BENCHMARK_FINDING_CWES = 100
 _BASE_REQUIRED_GATE_NAMES = (
     "known_critical_recall",
     "safe_control_false_confirmations",
@@ -350,6 +354,10 @@ class BenchmarkCaseResult(StrictModel):
             raise ValueError("benchmark reproduction success requires a real attempt")
         if not set(self.confirmed_finding_ids) <= set(self.matched_finding_ids):
             raise ValueError("confirmed benchmark findings must be a subset of active matches")
+        if self.variant == "vulnerable" and len(self.matched_finding_ids) > 1:
+            raise ValueError("one vulnerable truth case can receive at most one finding assignment")
+        if self.detected != bool(self.matched_finding_ids):
+            raise ValueError("benchmark detected flag must match its assigned finding IDs")
         if self.confirmed != bool(self.confirmed_finding_ids):
             raise ValueError("benchmark confirmed flag must match its confirmed finding IDs")
         return self
@@ -1032,6 +1040,14 @@ class BenchmarkReport(StrictModel):
         }
         if any(getattr(self, name) != expected for name, expected in count_fields.items()):
             raise ValueError("benchmark aggregate counts do not match repository metrics")
+        assigned_finding_keys = [
+            (result.repository_id, finding_id)
+            for result in self.case_results
+            if result.variant == "vulnerable"
+            for finding_id in result.matched_finding_ids
+        ]
+        if len(assigned_finding_keys) != len(set(assigned_finding_keys)):
+            raise ValueError("one benchmark finding cannot satisfy multiple truth cases")
         expected_coverage = _aggregate_repository_coverage(self.repository_metrics)
         if set(self.coverage_metrics) != set(expected_coverage) or any(
             _coverage_projection(self.coverage_metrics[name])
@@ -1040,14 +1056,14 @@ class BenchmarkReport(StrictModel):
         ):
             raise ValueError("benchmark aggregate coverage does not match repository evidence")
 
-        active_true_ids = {
-            finding_id
+        active_true_assignments = {
+            (result.repository_id, finding_id)
             for result in self.case_results
             if result.variant == "vulnerable" and result.detected
             for finding_id in result.matched_finding_ids
         }
-        confirmed_true_ids = {
-            finding_id
+        confirmed_true_assignments = {
+            (result.repository_id, finding_id)
             for result in self.case_results
             if result.variant == "vulnerable" and result.confirmed
             for finding_id in result.confirmed_finding_ids
@@ -1060,9 +1076,9 @@ class BenchmarkReport(StrictModel):
         )
         expected_finding_counts = (
             self.metrics.all_finding_precision.denominator,
-            len(active_true_ids),
+            len(active_true_assignments),
             self.metrics.confirmed_precision.denominator,
-            len(confirmed_true_ids),
+            len(confirmed_true_assignments),
         )
         if finding_counts != expected_finding_counts:
             raise ValueError("benchmark precision inventory does not match case evidence")
@@ -1642,6 +1658,16 @@ def evaluate_benchmark(
         for repository_id, report in reports.items()
         if input_by_repository[repository_id].usable
     }
+    cases_by_repository = _benchmark_cases_by_repository(manifest)
+    _validate_benchmark_scoring_work(
+        cases_by_repository=cases_by_repository,
+        reports=usable_reports,
+    )
+    assigned_findings_by_case = _assign_vulnerable_findings_to_cases(
+        manifest=manifest,
+        reports=usable_reports,
+        cases_by_repository=cases_by_repository,
+    )
 
     results: list[BenchmarkCaseResult] = []
     for case in sorted(manifest.cases, key=lambda item: item.id):
@@ -1660,11 +1686,21 @@ def evaluate_benchmark(
                 )
             )
             continue
-        matches = [
-            finding
-            for finding in [*report.findings, *report.rejected_findings]
-            if _matches_case(finding, case)
-        ]
+        if case.variant == "vulnerable":
+            matches = assigned_findings_by_case[case.id]
+        elif case.variant == "safe":
+            matches = [
+                finding
+                for finding in report.findings
+                if _finding_is_active(finding)
+                and SEVERITY_ORDER[finding.severity.value]
+                >= SEVERITY_ORDER[case.minimum_severity.value]
+                and _matches_case(finding, case)
+            ]
+        else:
+            # Ambiguous truth cases are denominators only. A vulnerability claim or
+            # an insufficient-context disposition must never become positive credit.
+            matches = []
         active = [
             finding
             for finding in matches
@@ -1783,20 +1819,14 @@ def evaluate_benchmark(
         if finding.status is FindingStatus.CONFIRMED
     ]
     true_active_findings = sum(
-        _finding_matches_any_vulnerable_case(
-            finding,
-            manifest.cases,
-            repository_id=repository_id,
-        )
-        for repository_id, finding in active_finding_records
+        len(result.matched_finding_ids)
+        for result in results
+        if result.variant == "vulnerable" and result.detected
     )
     true_confirmed_findings = sum(
-        _finding_matches_any_vulnerable_case(
-            finding,
-            manifest.cases,
-            repository_id=repository_id,
-        )
-        for repository_id, finding in confirmed_finding_records
+        len(result.confirmed_finding_ids)
+        for result in results
+        if result.variant == "vulnerable" and result.confirmed
     )
 
     severity_metrics: dict[Severity, BenchmarkRateMetric] = {}
@@ -2237,6 +2267,130 @@ def write_benchmark_report(path: Path, report: BenchmarkReport) -> None:
         + "\n",
         encoding="utf-8",
     )
+
+
+def _assign_vulnerable_findings_to_cases(
+    *,
+    manifest: BenchmarkManifest,
+    reports: dict[str, AuditReport],
+    cases_by_repository: dict[str, tuple[BenchmarkCase, ...]],
+) -> dict[str, list[Finding]]:
+    """Compute a deterministic maximum one-to-one positive-credit assignment."""
+
+    assignments: dict[str, list[Finding]] = {case.id: [] for case in manifest.cases}
+    traversal_work = 0
+    for repository_id in sorted(reports):
+        report = reports[repository_id]
+        cases = tuple(
+            case for case in cases_by_repository[repository_id] if case.variant == "vulnerable"
+        )
+        findings = sorted(
+            (finding for finding in report.findings if _finding_is_active(finding)),
+            key=lambda finding: finding.id,
+        )
+        finding_ids = [finding.id for finding in findings]
+        if len(finding_ids) != len(set(finding_ids)):
+            raise ValueError("active benchmark finding IDs must be unique within a report")
+        findings_by_id = {finding.id: finding for finding in findings}
+        edges = {
+            case.id: tuple(
+                finding.id
+                for finding in findings
+                if _finding_matches_vulnerable_truth_identity(finding, case)
+            )
+            for case in cases
+        }
+        traversal_work += len(cases) * sum(len(case_edges) for case_edges in edges.values())
+        if traversal_work > _MAX_BENCHMARK_ASSIGNMENT_COMPARISONS:
+            raise ValueError("benchmark truth assignment exceeds the bounded traversal limit")
+        case_to_finding: dict[str, str] = {}
+        finding_to_case: dict[str, str] = {}
+        for root_case in cases:
+            queue = deque([root_case.id])
+            visited_cases = {root_case.id}
+            visited_findings: set[str] = set()
+            parent_case: dict[str, str] = {}
+            parent_finding: dict[str, str] = {}
+            augmenting_endpoint: tuple[str, str] | None = None
+            while queue and augmenting_endpoint is None:
+                case_id = queue.popleft()
+                for finding_id in edges[case_id]:
+                    if finding_id in visited_findings:
+                        continue
+                    visited_findings.add(finding_id)
+                    incumbent_case = finding_to_case.get(finding_id)
+                    if incumbent_case is None:
+                        augmenting_endpoint = (case_id, finding_id)
+                        break
+                    if incumbent_case not in visited_cases:
+                        visited_cases.add(incumbent_case)
+                        parent_case[incumbent_case] = case_id
+                        parent_finding[incumbent_case] = finding_id
+                        queue.append(incumbent_case)
+            if augmenting_endpoint is None:
+                continue
+            case_id, finding_id = augmenting_endpoint
+            while True:
+                case_to_finding[case_id] = finding_id
+                finding_to_case[finding_id] = case_id
+                if case_id == root_case.id:
+                    break
+                finding_id = parent_finding[case_id]
+                case_id = parent_case[case_id]
+        for case_id, finding_id in case_to_finding.items():
+            assignments[case_id] = [findings_by_id[finding_id]]
+    return assignments
+
+
+def _validate_benchmark_scoring_work(
+    *,
+    cases_by_repository: dict[str, tuple[BenchmarkCase, ...]],
+    reports: dict[str, AuditReport],
+) -> None:
+    charged_work = 0
+    for repository_id, report in reports.items():
+        repository_case_count = len(cases_by_repository[repository_id])
+        identity_units = 0
+        for finding in report.findings:
+            if not _finding_is_active(finding):
+                continue
+            if len(finding.locations) > _MAX_BENCHMARK_FINDING_LOCATIONS:
+                raise ValueError("benchmark finding location inventory exceeds the scoring bound")
+            if len(finding.cwe) > _MAX_BENCHMARK_FINDING_CWES:
+                raise ValueError("benchmark finding CWE inventory exceeds the scoring bound")
+            identity_units += 1 + len(finding.locations) + len(finding.cwe)
+        charged_work += repository_case_count * identity_units
+        if charged_work > _MAX_BENCHMARK_ASSIGNMENT_COMPARISONS:
+            raise ValueError("benchmark scoring exceeds the bounded identity-comparison limit")
+
+
+def _benchmark_cases_by_repository(
+    manifest: BenchmarkManifest,
+) -> dict[str, tuple[BenchmarkCase, ...]]:
+    indexed: dict[str, list[BenchmarkCase]] = {
+        repository.repository_id: [] for repository in manifest.repositories
+    }
+    for case in manifest.cases:
+        indexed[case.repository_id].append(case)
+    return {
+        repository_id: tuple(sorted(cases, key=lambda case: case.id))
+        for repository_id, cases in indexed.items()
+    }
+
+
+def _finding_matches_vulnerable_truth_identity(
+    finding: Finding,
+    case: BenchmarkCase,
+) -> bool:
+    if (
+        case.variant != "vulnerable"
+        or not _finding_is_positive_vulnerability_claim(finding)
+        or SEVERITY_ORDER[finding.severity.value] < SEVERITY_ORDER[case.minimum_severity.value]
+        or finding.title != case.category
+        or finding.cwe != case.expected_cwe
+    ):
+        return False
+    return _matches_case(finding, case)
 
 
 def _matches_case(finding: Finding, case: BenchmarkCase) -> bool:
@@ -2786,19 +2940,14 @@ def _finding_is_active(finding: Finding) -> bool:
     }
 
 
-def _finding_matches_any_vulnerable_case(
-    finding: Finding,
-    cases: list[BenchmarkCase],
-    *,
-    repository_id: str | None = None,
-) -> bool:
-    return any(
-        case.variant == "vulnerable"
-        and (repository_id is None or case.repository_id == repository_id)
-        and SEVERITY_ORDER[finding.severity.value] >= SEVERITY_ORDER[case.minimum_severity.value]
-        and _matches_case(finding, case)
-        for case in cases
-    )
+def _finding_is_positive_vulnerability_claim(finding: Finding) -> bool:
+    return finding.status in {
+        FindingStatus.CONFIRMED,
+        FindingStatus.STRONGLY_SUPPORTED,
+        FindingStatus.HIGH_CONFIDENCE,
+        FindingStatus.PLAUSIBLE,
+        FindingStatus.NEEDS_REVIEW,
+    }
 
 
 def _finding_has_real_reproduction(

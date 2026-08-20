@@ -1,0 +1,769 @@
+{
+  "$defs": {
+    "ModelSurfaceAssignmentPurpose": {
+      "description": "Why one reviewer/surface assignment exists in a gap-fill plan.",
+      "enum": [
+        "lineage_gap",
+        "responsibility_seed"
+      ],
+      "title": "ModelSurfaceAssignmentPurpose",
+      "type": "string"
+    },
+    "ModelSurfaceCoverageDeficit": {
+      "additionalProperties": false,
+      "description": "Exact remaining independent-root deficit for one mandatory surface.",
+      "properties": {
+        "artifact_kind": {
+          "const": "model_surface_coverage_deficit",
+          "default": "model_surface_coverage_deficit",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "assigned_root_lineages": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Assigned Root Lineages",
+          "type": "array"
+        },
+        "authorizes_dispatch": {
+          "const": false,
+          "default": false,
+          "title": "Authorizes Dispatch",
+          "type": "boolean"
+        },
+        "credited_root_lineages": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Credited Root Lineages",
+          "type": "array"
+        },
+        "deficit_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Deficit Sha256",
+          "type": "string"
+        },
+        "grants_completion_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Completion Credit",
+          "type": "boolean"
+        },
+        "grants_review_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Review Credit",
+          "type": "boolean"
+        },
+        "minimum_root_lineages": {
+          "maximum": 16,
+          "minimum": 1,
+          "title": "Minimum Root Lineages",
+          "type": "integer"
+        },
+        "missing_root_lineages": {
+          "maximum": 16,
+          "minimum": 1,
+          "title": "Missing Root Lineages",
+          "type": "integer"
+        },
+        "requirement_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Requirement Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "surface_id": {
+          "pattern": "^model-surface:[0-9a-f]{64}$",
+          "title": "Surface Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "surface_id",
+        "requirement_sha256",
+        "minimum_root_lineages",
+        "credited_root_lineages",
+        "assigned_root_lineages",
+        "missing_root_lineages",
+        "deficit_sha256"
+      ],
+      "title": "ModelSurfaceCoverageDeficit",
+      "type": "object"
+    },
+    "ModelSurfaceCoveragePolicy": {
+      "additionalProperties": false,
+      "description": "Complete immutable T0-T3 policy derived from one T0 lineage floor.",
+      "properties": {
+        "artifact_kind": {
+          "const": "model_surface_coverage_policy",
+          "default": "model_surface_coverage_policy",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "authorizes_dispatch": {
+          "const": false,
+          "default": false,
+          "title": "Authorizes Dispatch",
+          "type": "boolean"
+        },
+        "grants_completion_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Completion Credit",
+          "type": "boolean"
+        },
+        "grants_review_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Review Credit",
+          "type": "boolean"
+        },
+        "minimum_t0_root_lineages": {
+          "maximum": 16,
+          "minimum": 1,
+          "title": "Minimum T0 Root Lineages",
+          "type": "integer"
+        },
+        "policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Sha256",
+          "type": "string"
+        },
+        "requirements": {
+          "items": {
+            "$ref": "#/$defs/ModelSurfaceTierRequirement"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "title": "Requirements",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "minimum_t0_root_lineages",
+        "requirements",
+        "policy_sha256"
+      ],
+      "title": "ModelSurfaceCoveragePolicy",
+      "type": "object"
+    },
+    "ModelSurfaceCoverageRequirement": {
+      "additionalProperties": false,
+      "description": "One exact scoped request and its immutable risk/lineage requirement.",
+      "properties": {
+        "artifact_kind": {
+          "const": "model_surface_coverage_requirement",
+          "default": "model_surface_coverage_requirement",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "authorizes_dispatch": {
+          "const": false,
+          "default": false,
+          "title": "Authorizes Dispatch",
+          "type": "boolean"
+        },
+        "completion_blocking": {
+          "const": true,
+          "default": true,
+          "title": "Completion Blocking",
+          "type": "boolean"
+        },
+        "credited_root_lineages": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Credited Root Lineages",
+          "type": "array"
+        },
+        "grants_completion_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Completion Credit",
+          "type": "boolean"
+        },
+        "grants_review_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Review Credit",
+          "type": "boolean"
+        },
+        "minimum_root_lineages": {
+          "maximum": 16,
+          "minimum": 1,
+          "title": "Minimum Root Lineages",
+          "type": "integer"
+        },
+        "request_canonical_json": {
+          "maxLength": 1000000,
+          "minLength": 2,
+          "title": "Request Canonical Json",
+          "type": "string"
+        },
+        "request_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Sha256",
+          "type": "string"
+        },
+        "requirement_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Requirement Sha256",
+          "type": "string"
+        },
+        "risk_tier": {
+          "$ref": "#/$defs/ModelSurfaceRiskTier"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "scope_id": {
+          "maxLength": 200,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$",
+          "title": "Scope Id",
+          "type": "string"
+        },
+        "surface_id": {
+          "pattern": "^model-surface:[0-9a-f]{64}$",
+          "title": "Surface Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "surface_id",
+        "scope_id",
+        "request_canonical_json",
+        "request_sha256",
+        "risk_tier",
+        "minimum_root_lineages",
+        "requirement_sha256"
+      ],
+      "title": "ModelSurfaceCoverageRequirement",
+      "type": "object"
+    },
+    "ModelSurfaceGapAssignment": {
+      "additionalProperties": false,
+      "description": "One non-authorizing reviewer assignment for a lineage gap or responsibility seed.",
+      "properties": {
+        "artifact_kind": {
+          "const": "model_surface_gap_assignment",
+          "default": "model_surface_gap_assignment",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "assignment_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Assignment Sha256",
+          "type": "string"
+        },
+        "authorizes_dispatch": {
+          "const": false,
+          "default": false,
+          "title": "Authorizes Dispatch",
+          "type": "boolean"
+        },
+        "counts_toward_lineage_requirement": {
+          "title": "Counts Toward Lineage Requirement",
+          "type": "boolean"
+        },
+        "grants_completion_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Completion Credit",
+          "type": "boolean"
+        },
+        "grants_review_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Review Credit",
+          "type": "boolean"
+        },
+        "purpose": {
+          "$ref": "#/$defs/ModelSurfaceAssignmentPurpose"
+        },
+        "requested_model": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Requested Model",
+          "type": "string"
+        },
+        "requirement_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Requirement Sha256",
+          "type": "string"
+        },
+        "review_role": {
+          "pattern": "^[a-z][a-z0-9_:.-]{0,127}$",
+          "title": "Review Role",
+          "type": "string"
+        },
+        "risk_tier": {
+          "$ref": "#/$defs/ModelSurfaceRiskTier"
+        },
+        "root_lineage": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Root Lineage",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "scope_id": {
+          "maxLength": 200,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$",
+          "title": "Scope Id",
+          "type": "string"
+        },
+        "surface_id": {
+          "pattern": "^model-surface:[0-9a-f]{64}$",
+          "title": "Surface Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "surface_id",
+        "scope_id",
+        "requirement_sha256",
+        "risk_tier",
+        "review_role",
+        "requested_model",
+        "root_lineage",
+        "purpose",
+        "counts_toward_lineage_requirement",
+        "assignment_sha256"
+      ],
+      "title": "ModelSurfaceGapAssignment",
+      "type": "object"
+    },
+    "ModelSurfaceGapTask": {
+      "additionalProperties": false,
+      "description": "One exact single-scope request batch, capped at 32 surface records.",
+      "properties": {
+        "artifact_kind": {
+          "const": "model_surface_gap_task",
+          "default": "model_surface_gap_task",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "assignment_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Assignment Sha256S",
+          "type": "array"
+        },
+        "authorizes_dispatch": {
+          "const": false,
+          "default": false,
+          "title": "Authorizes Dispatch",
+          "type": "boolean"
+        },
+        "grants_completion_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Completion Credit",
+          "type": "boolean"
+        },
+        "grants_review_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Review Credit",
+          "type": "boolean"
+        },
+        "lineage_gap_assignment_count": {
+          "maximum": 32,
+          "minimum": 0,
+          "title": "Lineage Gap Assignment Count",
+          "type": "integer"
+        },
+        "requested_model": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Requested Model",
+          "type": "string"
+        },
+        "requested_surface_manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Requested Surface Manifest Sha256",
+          "type": "string"
+        },
+        "responsibility_seed_assignment_count": {
+          "maximum": 32,
+          "minimum": 0,
+          "title": "Responsibility Seed Assignment Count",
+          "type": "integer"
+        },
+        "review_role": {
+          "pattern": "^[a-z][a-z0-9_:.-]{0,127}$",
+          "title": "Review Role",
+          "type": "string"
+        },
+        "root_lineage": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Root Lineage",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "scope_id": {
+          "maxLength": 200,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$",
+          "title": "Scope Id",
+          "type": "string"
+        },
+        "surface_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Surface Ids",
+          "type": "array"
+        },
+        "task_id": {
+          "pattern": "^model-surface-gap-task-[0-9a-f]{64}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "task_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Task Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope_id",
+        "review_role",
+        "requested_model",
+        "root_lineage",
+        "surface_ids",
+        "assignment_sha256s",
+        "requested_surface_manifest_sha256",
+        "lineage_gap_assignment_count",
+        "responsibility_seed_assignment_count",
+        "task_id",
+        "task_sha256"
+      ],
+      "title": "ModelSurfaceGapTask",
+      "type": "object"
+    },
+    "ModelSurfaceReviewerBinding": {
+      "additionalProperties": false,
+      "description": "One exact configured reviewer/model/root binding available to the planner.",
+      "properties": {
+        "artifact_kind": {
+          "const": "model_surface_reviewer_binding",
+          "default": "model_surface_reviewer_binding",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "authorizes_dispatch": {
+          "const": false,
+          "default": false,
+          "title": "Authorizes Dispatch",
+          "type": "boolean"
+        },
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "grants_completion_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Completion Credit",
+          "type": "boolean"
+        },
+        "grants_review_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Review Credit",
+          "type": "boolean"
+        },
+        "requested_model": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Requested Model",
+          "type": "string"
+        },
+        "review_role": {
+          "pattern": "^[a-z][a-z0-9_:.-]{0,127}$",
+          "title": "Review Role",
+          "type": "string"
+        },
+        "root_lineage": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Root Lineage",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "review_role",
+        "requested_model",
+        "root_lineage",
+        "binding_sha256"
+      ],
+      "title": "ModelSurfaceReviewerBinding",
+      "type": "object"
+    },
+    "ModelSurfaceRiskTier": {
+      "description": "Closed deterministic risk tiers for model-review surfaces.",
+      "enum": [
+        "T0",
+        "T1",
+        "T2",
+        "T3"
+      ],
+      "title": "ModelSurfaceRiskTier",
+      "type": "string"
+    },
+    "ModelSurfaceTierRequirement": {
+      "additionalProperties": false,
+      "description": "One immutable, self-hashed tier-to-lineage requirement.",
+      "properties": {
+        "artifact_kind": {
+          "const": "model_surface_tier_requirement",
+          "default": "model_surface_tier_requirement",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "authorizes_dispatch": {
+          "const": false,
+          "default": false,
+          "title": "Authorizes Dispatch",
+          "type": "boolean"
+        },
+        "completion_blocking": {
+          "const": true,
+          "default": true,
+          "title": "Completion Blocking",
+          "type": "boolean"
+        },
+        "grants_completion_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Completion Credit",
+          "type": "boolean"
+        },
+        "grants_review_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Review Credit",
+          "type": "boolean"
+        },
+        "minimum_root_lineages": {
+          "maximum": 16,
+          "minimum": 1,
+          "title": "Minimum Root Lineages",
+          "type": "integer"
+        },
+        "requirement_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Requirement Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "tier": {
+          "$ref": "#/$defs/ModelSurfaceRiskTier"
+        }
+      },
+      "required": [
+        "tier",
+        "minimum_root_lineages",
+        "requirement_sha256"
+      ],
+      "title": "ModelSurfaceTierRequirement",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/model_surface_coverage_plan.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Complete deterministic gap-fill plan; never dispatch authority.",
+  "properties": {
+    "artifact_kind": {
+      "const": "model_surface_coverage_plan",
+      "default": "model_surface_coverage_plan",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "assignments": {
+      "items": {
+        "$ref": "#/$defs/ModelSurfaceGapAssignment"
+      },
+      "maxItems": 200000,
+      "title": "Assignments",
+      "type": "array"
+    },
+    "authorizes_dispatch": {
+      "const": false,
+      "default": false,
+      "title": "Authorizes Dispatch",
+      "type": "boolean"
+    },
+    "deficits": {
+      "items": {
+        "$ref": "#/$defs/ModelSurfaceCoverageDeficit"
+      },
+      "maxItems": 10000,
+      "title": "Deficits",
+      "type": "array"
+    },
+    "feasible": {
+      "title": "Feasible",
+      "type": "boolean"
+    },
+    "grants_completion_credit": {
+      "const": false,
+      "default": false,
+      "title": "Grants Completion Credit",
+      "type": "boolean"
+    },
+    "grants_review_credit": {
+      "const": false,
+      "default": false,
+      "title": "Grants Review Credit",
+      "type": "boolean"
+    },
+    "lineage_gap_assignment_count": {
+      "maximum": 200000,
+      "minimum": 0,
+      "title": "Lineage Gap Assignment Count",
+      "type": "integer"
+    },
+    "lineage_requirements_satisfied": {
+      "title": "Lineage Requirements Satisfied",
+      "type": "boolean"
+    },
+    "mandatory_responsibilities_satisfied": {
+      "title": "Mandatory Responsibilities Satisfied",
+      "type": "boolean"
+    },
+    "mandatory_reviewer_roles": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 256,
+      "title": "Mandatory Reviewer Roles",
+      "type": "array"
+    },
+    "plan_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Plan Sha256",
+      "type": "string"
+    },
+    "policy": {
+      "$ref": "#/$defs/ModelSurfaceCoveragePolicy"
+    },
+    "requirements": {
+      "items": {
+        "$ref": "#/$defs/ModelSurfaceCoverageRequirement"
+      },
+      "maxItems": 10000,
+      "minItems": 1,
+      "title": "Requirements",
+      "type": "array"
+    },
+    "responsibility_seed_assignment_count": {
+      "maximum": 256,
+      "minimum": 0,
+      "title": "Responsibility Seed Assignment Count",
+      "type": "integer"
+    },
+    "reviewer_bindings": {
+      "items": {
+        "$ref": "#/$defs/ModelSurfaceReviewerBinding"
+      },
+      "maxItems": 256,
+      "title": "Reviewer Bindings",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "surface_count": {
+      "maximum": 10000,
+      "minimum": 1,
+      "title": "Surface Count",
+      "type": "integer"
+    },
+    "surface_request_manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Surface Request Manifest Sha256",
+      "type": "string"
+    },
+    "task_count": {
+      "maximum": 200000,
+      "minimum": 0,
+      "title": "Task Count",
+      "type": "integer"
+    },
+    "tasks": {
+      "items": {
+        "$ref": "#/$defs/ModelSurfaceGapTask"
+      },
+      "maxItems": 200000,
+      "title": "Tasks",
+      "type": "array"
+    }
+  },
+  "required": [
+    "policy",
+    "surface_request_manifest_sha256",
+    "requirements",
+    "reviewer_bindings",
+    "mandatory_reviewer_roles",
+    "assignments",
+    "tasks",
+    "deficits",
+    "surface_count",
+    "lineage_gap_assignment_count",
+    "responsibility_seed_assignment_count",
+    "task_count",
+    "lineage_requirements_satisfied",
+    "mandatory_responsibilities_satisfied",
+    "feasible",
+    "plan_sha256"
+  ],
+  "title": "ModelSurfaceCoveragePlan",
+  "type": "object"
+}

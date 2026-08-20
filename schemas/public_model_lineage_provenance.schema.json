@@ -1,0 +1,770 @@
+{
+  "$comment": "Runtime validation additionally enforces sorted keyed inventories, exact source and claim joins, aggregate source-byte bounds, derived decisions, and canonical inventory hashes.",
+  "$defs": {
+    "ManifestFileBinding": {
+      "additionalProperties": false,
+      "description": "Hash and size for one normalized source or run-artifact path.",
+      "properties": {
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size": {
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "size"
+      ],
+      "title": "ManifestFileBinding",
+      "type": "object"
+    },
+    "PublicModelLineageAliasBinding": {
+      "additionalProperties": false,
+      "description": "Compiled exact production identity to documentary identity binding.",
+      "properties": {
+        "alias_id": {
+          "pattern": "^alias-[a-z][a-z0-9-]{0,95}$",
+          "title": "Alias Id",
+          "type": "string"
+        },
+        "alias_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Alias Sha256",
+          "type": "string"
+        },
+        "documentary_model_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+ -]{0,299}$",
+          "title": "Documentary Model Id",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "publisher_id": {
+          "pattern": "^[a-z][a-z0-9-]{0,63}$",
+          "title": "Publisher Id",
+          "type": "string"
+        },
+        "source_ids": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9-]{0,99}$",
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Source Ids",
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "alias_id",
+        "exact_model_id",
+        "documentary_model_id",
+        "publisher_id",
+        "source_ids",
+        "alias_sha256"
+      ],
+      "title": "PublicModelLineageAliasBinding",
+      "type": "object"
+    },
+    "PublicModelLineageClaim": {
+      "$comment": "Runtime validation additionally binds the UTF-8 marker length and SHA-256 to its exact non-overlapping source byte span.",
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "target_exact_model_id": {
+                "type": "null"
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "claim_kind": {
+                "const": "ROOTS_WITH"
+              }
+            },
+            "required": [
+              "claim_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "target_exact_model_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "target_exact_model_id"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "claim_kind": {
+                "const": "VAGUE"
+              }
+            },
+            "required": [
+              "claim_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "decisive_primary_publisher": {
+                "const": false
+              }
+            }
+          }
+        }
+      ],
+      "description": "One exact non-overlapping documentary claim span.",
+      "properties": {
+        "byte_end": {
+          "exclusiveMinimum": 0,
+          "maximum": 100000,
+          "title": "Byte End",
+          "type": "integer"
+        },
+        "byte_start": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Byte Start",
+          "type": "integer"
+        },
+        "claim_id": {
+          "pattern": "^claim-[a-z][a-z0-9-]{0,95}$",
+          "title": "Claim Id",
+          "type": "string"
+        },
+        "claim_kind": {
+          "$ref": "#/$defs/PublicModelLineageClaimKind"
+        },
+        "claim_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Claim Sha256",
+          "type": "string"
+        },
+        "decisive_primary_publisher": {
+          "title": "Decisive Primary Publisher",
+          "type": "boolean"
+        },
+        "exact_marker": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Exact Marker",
+          "type": "string"
+        },
+        "marker_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Marker Sha256",
+          "type": "string"
+        },
+        "source_id": {
+          "pattern": "^[a-z][a-z0-9-]{0,99}$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "subject_exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Subject Exact Model Id",
+          "type": "string"
+        },
+        "target_exact_model_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Exact Model Id"
+        }
+      },
+      "required": [
+        "claim_id",
+        "subject_exact_model_id",
+        "claim_kind",
+        "source_id",
+        "decisive_primary_publisher",
+        "byte_start",
+        "byte_end",
+        "exact_marker",
+        "marker_sha256",
+        "claim_sha256"
+      ],
+      "title": "PublicModelLineageClaim",
+      "type": "object"
+    },
+    "PublicModelLineageClaimKind": {
+      "description": "Semantics supported by exact documentary spans.",
+      "enum": [
+        "ROOT_ANCHOR",
+        "ROOTS_WITH",
+        "VAGUE"
+      ],
+      "title": "PublicModelLineageClaimKind",
+      "type": "string"
+    },
+    "PublicModelLineageConstraintKind": {
+      "description": "Negative-only non-independence constraints.",
+      "enum": [
+        "DOCUMENTED_DIRECT_ANCESTRY",
+        "CONSERVATIVE_ORGANIZATIONAL",
+        "SOURCE_CONFLICT_CORRECTION"
+      ],
+      "title": "PublicModelLineageConstraintKind",
+      "type": "string"
+    },
+    "PublicModelLineageDecision": {
+      "additionalProperties": false,
+      "description": "One comparison-only decision independently rebuilt by the verifier.",
+      "properties": {
+        "decision_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Decision Sha256",
+          "type": "string"
+        },
+        "documentary_model_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+ -]{0,299}$",
+          "title": "Documentary Model Id",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "root_lineage": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Root Lineage"
+        },
+        "status": {
+          "$ref": "#/$defs/PublicModelLineageDecisionStatus"
+        },
+        "supporting_claim_ids": {
+          "items": {
+            "pattern": "^claim-[a-z][a-z0-9-]{0,95}$",
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Supporting Claim Ids",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "unconfirmed_reasons": {
+          "items": {
+            "$ref": "#/$defs/PublicModelLineageUnconfirmedReason"
+          },
+          "maxItems": 7,
+          "title": "Unconfirmed Reasons",
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "documentary_model_id",
+        "status",
+        "supporting_claim_ids",
+        "unconfirmed_reasons",
+        "decision_sha256"
+      ],
+      "title": "PublicModelLineageDecision",
+      "type": "object"
+    },
+    "PublicModelLineageDecisionStatus": {
+      "description": "Independently derived candidate confirmation state.",
+      "enum": [
+        "CONFIRMED",
+        "UNCONFIRMED"
+      ],
+      "title": "PublicModelLineageDecisionStatus",
+      "type": "string"
+    },
+    "PublicModelLineageNonIndependenceConstraint": {
+      "additionalProperties": false,
+      "description": "A conservative negative-only collision constraint.",
+      "properties": {
+        "constraint_id": {
+          "pattern": "^constraint-[a-z][a-z0-9-]{0,91}$",
+          "title": "Constraint Id",
+          "type": "string"
+        },
+        "constraint_kind": {
+          "$ref": "#/$defs/PublicModelLineageConstraintKind"
+        },
+        "constraint_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Constraint Sha256",
+          "type": "string"
+        },
+        "member_exact_model_ids": {
+          "items": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 2,
+          "title": "Member Exact Model Ids",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "negative_only": {
+          "const": true,
+          "default": true,
+          "title": "Negative Only",
+          "type": "boolean"
+        },
+        "positive_root_assignment_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Positive Root Assignment Authorized",
+          "type": "boolean"
+        },
+        "supporting_claim_ids": {
+          "items": {
+            "pattern": "^claim-[a-z][a-z0-9-]{0,95}$",
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Supporting Claim Ids",
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "constraint_id",
+        "constraint_kind",
+        "member_exact_model_ids",
+        "supporting_claim_ids",
+        "constraint_sha256"
+      ],
+      "title": "PublicModelLineageNonIndependenceConstraint",
+      "type": "object"
+    },
+    "PublicModelLineageSourceEvidence": {
+      "additionalProperties": false,
+      "description": "One exact source projection copied from the capture journal.",
+      "properties": {
+        "capture_observation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Capture Observation Sha256",
+          "type": "string"
+        },
+        "file_binding": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/ManifestFileBinding"
+            },
+            {
+              "properties": {
+                "path": {
+                  "pattern": "^sources/[a-z][a-z0-9-]{0,99}\\.md$"
+                },
+                "size": {
+                  "maximum": 100000,
+                  "minimum": 1
+                }
+              }
+            }
+          ]
+        },
+        "final_url": {
+          "maxLength": 8192,
+          "minLength": 9,
+          "pattern": "^https://(?:huggingface\\.co|raw\\.githubusercontent\\.com)/[^\\s#]+$",
+          "title": "Final Url",
+          "type": "string"
+        },
+        "immutable_revision": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Immutable Revision",
+          "type": "string"
+        },
+        "independence_key": {
+          "pattern": "^[a-z][a-z0-9-]{0,63}$",
+          "title": "Independence Key",
+          "type": "string"
+        },
+        "media_type": {
+          "enum": [
+            "text/markdown",
+            "text/plain"
+          ],
+          "title": "Media Type",
+          "type": "string"
+        },
+        "publisher_id": {
+          "pattern": "^[a-z][a-z0-9-]{0,63}$",
+          "title": "Publisher Id",
+          "type": "string"
+        },
+        "redirect_chain": {
+          "items": {
+            "pattern": "^https://(?:huggingface\\.co|raw\\.githubusercontent\\.com)/[^\\s#]+$",
+            "type": "string"
+          },
+          "maxItems": 5,
+          "minItems": 1,
+          "title": "Redirect Chain",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "requested_url": {
+          "maxLength": 8192,
+          "minLength": 9,
+          "pattern": "^https://(?:huggingface\\.co/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/resolve/[0-9a-f]{40}/[^\\s?#]+|raw\\.githubusercontent\\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/[0-9a-f]{40}/[^\\s?#]+)$",
+          "title": "Requested Url",
+          "type": "string"
+        },
+        "retrieved_at": {
+          "format": "date-time",
+          "title": "Retrieved At",
+          "type": "string"
+        },
+        "source_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Evidence Sha256",
+          "type": "string"
+        },
+        "source_id": {
+          "pattern": "^[a-z][a-z0-9-]{0,99}$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_kind": {
+          "$ref": "#/$defs/PublicModelLineageSourceKind"
+        }
+      },
+      "required": [
+        "source_id",
+        "requested_url",
+        "final_url",
+        "redirect_chain",
+        "publisher_id",
+        "independence_key",
+        "source_kind",
+        "immutable_revision",
+        "retrieved_at",
+        "media_type",
+        "file_binding",
+        "capture_observation_sha256",
+        "source_evidence_sha256"
+      ],
+      "title": "PublicModelLineageSourceEvidence",
+      "type": "object"
+    },
+    "PublicModelLineageSourceKind": {
+      "description": "Allowed documentary source classes.",
+      "enum": [
+        "PRIMARY_PUBLISHER_MODEL_CARD",
+        "AUTHORITATIVE_SECONDARY"
+      ],
+      "title": "PublicModelLineageSourceKind",
+      "type": "string"
+    },
+    "PublicModelLineageUnconfirmedReason": {
+      "description": "Fail-closed reasons produced by the documentary resolver.",
+      "enum": [
+        "MISSING_CLAIM",
+        "VAGUE_ONLY",
+        "INSUFFICIENT_CORROBORATION",
+        "CONFLICTING_CLAIMS",
+        "CYCLE",
+        "UPSTREAM_UNCONFIRMED",
+        "ALIAS_SOURCE_MISMATCH"
+      ],
+      "title": "PublicModelLineageUnconfirmedReason",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/public_model_lineage_provenance.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Complete durable public-lineage evidence; serialized bytes grant no authority.",
+  "properties": {
+    "alias_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Alias Set Sha256",
+      "type": "string"
+    },
+    "aliases": {
+      "items": {
+        "$ref": "#/$defs/PublicModelLineageAliasBinding"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "title": "Aliases",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "approved_root_lineages": {
+      "items": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "maxItems": 128,
+      "title": "Approved Root Lineages",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "benchmark_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Benchmark Authorized",
+      "type": "boolean"
+    },
+    "bundle_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Bundle Sha256",
+      "type": "string"
+    },
+    "capture_observations_file_binding": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ManifestFileBinding"
+        },
+        {
+          "properties": {
+            "path": {
+              "const": "capture-observations.json"
+            },
+            "size": {
+              "maximum": 500000,
+              "minimum": 1
+            }
+          }
+        }
+      ]
+    },
+    "claim_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Claim Set Sha256",
+      "type": "string"
+    },
+    "claims": {
+      "items": {
+        "$ref": "#/$defs/PublicModelLineageClaim"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "title": "Claims",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "confirmed_exact_model_ids": {
+      "items": {
+        "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+        "type": "string"
+      },
+      "maxItems": 128,
+      "title": "Confirmed Exact Model Ids",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "conservative_non_independence_constraints": {
+      "items": {
+        "$ref": "#/$defs/PublicModelLineageNonIndependenceConstraint"
+      },
+      "maxItems": 32,
+      "title": "Conservative Non Independence Constraints",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "constraint_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Constraint Set Sha256",
+      "type": "string"
+    },
+    "decision_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Decision Set Sha256",
+      "type": "string"
+    },
+    "decisions": {
+      "items": {
+        "$ref": "#/$defs/PublicModelLineageDecision"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "title": "Decisions",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "evidence_standard": {
+      "const": "DOCUMENTARY_EXACT_BYTES_V1",
+      "default": "DOCUMENTARY_EXACT_BYTES_V1",
+      "title": "Evidence Standard",
+      "type": "string"
+    },
+    "excluded_exact_model_ids": {
+      "items": {
+        "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+        "type": "string"
+      },
+      "maxItems": 128,
+      "title": "Excluded Exact Model Ids",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "model_qualification_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Model Qualification Authorized",
+      "type": "boolean"
+    },
+    "operator_review_authoritative": {
+      "const": false,
+      "default": false,
+      "title": "Operator Review Authoritative",
+      "type": "boolean"
+    },
+    "production_selection_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Production Selection Authorized",
+      "type": "boolean"
+    },
+    "provider_call_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Provider Call Authorized",
+      "type": "boolean"
+    },
+    "provider_route_identity_required": {
+      "const": false,
+      "default": false,
+      "title": "Provider Route Identity Required",
+      "type": "boolean"
+    },
+    "release_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Release Authorized",
+      "type": "boolean"
+    },
+    "runner_authority_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Runner Authority Authorized",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "seal_publication_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Seal Publication Authorized",
+      "type": "boolean"
+    },
+    "serialized_authority": {
+      "const": false,
+      "default": false,
+      "title": "Serialized Authority",
+      "type": "boolean"
+    },
+    "sigstore_lineage_receipt_required": {
+      "const": false,
+      "default": false,
+      "title": "Sigstore Lineage Receipt Required",
+      "type": "boolean"
+    },
+    "source_egress_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Source Egress Authorized",
+      "type": "boolean"
+    },
+    "source_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Set Sha256",
+      "type": "string"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/PublicModelLineageSourceEvidence"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "title": "Sources",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "unconfirmed_exact_model_ids": {
+      "items": {
+        "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+        "type": "string"
+      },
+      "maxItems": 128,
+      "title": "Unconfirmed Exact Model Ids",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "valid_until": {
+      "format": "date-time",
+      "title": "Valid Until",
+      "type": "string"
+    },
+    "verified_at": {
+      "format": "date-time",
+      "title": "Verified At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "capture_observations_file_binding",
+    "verified_at",
+    "valid_until",
+    "sources",
+    "aliases",
+    "claims",
+    "decisions",
+    "conservative_non_independence_constraints",
+    "confirmed_exact_model_ids",
+    "unconfirmed_exact_model_ids",
+    "excluded_exact_model_ids",
+    "approved_root_lineages",
+    "source_set_sha256",
+    "alias_set_sha256",
+    "claim_set_sha256",
+    "decision_set_sha256",
+    "constraint_set_sha256",
+    "bundle_sha256"
+  ],
+  "title": "mmaudit documentary public model lineage provenance",
+  "type": "object"
+}

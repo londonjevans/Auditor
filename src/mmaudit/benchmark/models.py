@@ -1081,11 +1081,15 @@ async def run_model_benchmark(
         results=model_results,
     )
     serialized = payload.model_dump(mode="json")
-    return ModelBenchmarkReport.model_validate(
-        {
-            **serialized,
-            "report_sha256": canonical_sha256(serialized),
-        }
+    return ModelBenchmarkReport(
+        schema_version=payload.schema_version,
+        corpus_name=payload.corpus_name,
+        corpus_sha256=payload.corpus_sha256,
+        ground_truth_sha256=payload.ground_truth_sha256,
+        case_ids=payload.case_ids,
+        execution_evidence=payload.execution_evidence,
+        results=model_results,
+        report_sha256=canonical_sha256(serialized),
     )
 
 

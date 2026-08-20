@@ -26,9 +26,11 @@ from mmaudit.benchmark.models import (
 from mmaudit.config import AuditConfig, model_lineage_index
 from mmaudit.models.candidate_benchmark import (
     CandidateBenchmarkFailureStage,
+    CandidateBenchmarkPreDispatchError,
     CandidateBenchmarkRunState,
     _require_exact_candidate_usage_binding,
     run_candidate_registry_benchmarks,
+    validate_candidate_benchmark_egress,
     validate_candidate_benchmark_policy_capacity,
 )
 from mmaudit.models.discovery import (
@@ -493,6 +495,7 @@ def _budget(tmp_path: Path, config: AuditConfig) -> BudgetManager:
 def _config(config_factory: Callable[..., AuditConfig]) -> AuditConfig:
     return config_factory(
         execution={"max_requests_per_agent": 512},
+        privacy={"profile": PrivacyProfile.SYNTHETIC_BENCHMARK},
         models={"reasoning": {"effort": "high", "reserved_tokens": 4_096}},
     )
 
@@ -536,10 +539,33 @@ def test_discovery_and_candidate_snapshot_use_the_same_configured_privacy_mode(
         structured_output_required=False,
     )
 
-    assert config.privacy.profile is PrivacyProfile.STRICT_ZDR
+    assert config.privacy.profile is PrivacyProfile.SYNTHETIC_BENCHMARK
+    assert config.privacy.require_zdr is True
+    assert config.privacy.maximum_model_retention == "zero"
+    assert config.privacy.store_raw_prompts is False
+    assert config.privacy.store_raw_responses is False
     assert discovery_snapshot.require_zdr is True
     assert candidate_snapshot == discovery_snapshot
     assert candidate_snapshot.snapshot_sha256 == discovery_snapshot.snapshot_sha256
+
+
+def test_candidate_benchmark_rejects_strict_zdr_profile_for_synthetic_campaign(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    suite = load_model_benchmark_corpus(CORPUS_PATH)
+
+    with pytest.raises(ValueError, match="SYNTHETIC_BENCHMARK privacy profile"):
+        validate_candidate_benchmark_egress(
+            config=config_factory(),
+            benchmark_suite=suite,
+            explicitly_allowed=True,
+        )
+
+    validate_candidate_benchmark_egress(
+        config=_config(config_factory),
+        benchmark_suite=suite,
+        explicitly_allowed=True,
+    )
 
 
 def _attested_candidate_usage() -> UsageRecord:
@@ -788,7 +814,8 @@ async def test_candidate_benchmark_uses_exact_mock_certification_route(
     assert all(body["reasoning"]["effort"] == "high" for body in factory.request_bodies)
     effective_policy = factory.clients[0].effective_privacy_policy
     assert effective_policy is not None
-    assert effective_policy.privacy_profile is PrivacyProfile.STRICT_ZDR
+    assert effective_policy.privacy_profile is PrivacyProfile.SYNTHETIC_BENCHMARK
+    assert effective_policy.require_zdr is True
     assert effective_policy.source_sha256 == suite.corpus_sha256
     assert effective_policy.source_classification is (
         PrivacySourceClassification.SYNTHETIC_COMMITTED
@@ -813,6 +840,11 @@ async def test_candidate_benchmark_uses_exact_mock_certification_route(
             case.usage_record.routing["effective_privacy_policy_sha256"]
             == effective_policy.evidence_sha256
         )
+        assert (
+            case.usage_record.routing["privacy_profile"] == PrivacyProfile.SYNTHETIC_BENCHMARK.value
+        )
+        assert case.usage_record.routing["zdr_requested"] is True
+        assert case.usage_record.routing["provider_fallbacks_allowed"] is False
         assert case.usage_record.routing["privacy_source_sha256"] == suite.corpus_sha256
     assert all(not client._credential for client in factory.clients)
     assert canary not in result.model_dump_json()
@@ -964,6 +996,7 @@ async def test_unsupported_reasoning_fails_without_changing_mock_provenance(
         ),
     )
     factory = _MockClientFactory()
+    rejections: list[CandidateBenchmarkPreDispatchError] = []
     try:
         result = await run_candidate_registry_benchmarks(
             config=config,
@@ -976,6 +1009,7 @@ async def test_unsupported_reasoning_fails_without_changing_mock_provenance(
             operator_api_key="synthetic-key",
             explicitly_allow_synthetic_egress=True,
             client_factory=factory,
+            pre_dispatch_rejection_observer=rejections.append,
         )
     finally:
         await factory.close()
@@ -986,6 +1020,9 @@ async def test_unsupported_reasoning_fails_without_changing_mock_provenance(
         result.diagnostics[0].failure_stage is CandidateBenchmarkFailureStage.ENDPOINT_REGISTRATION
     )
     assert result.reports[0].execution_evidence is ExecutionEvidenceKind.UNVERIFIED
+    assert len(rejections) == 1
+    assert rejections[0].stage is CandidateBenchmarkFailureStage.ENDPOINT_REGISTRATION
+    assert rejections[0].detail == "active reasoning requires explicit endpoint parameter support"
     assert all("reasoning" not in body for body in factory.request_bodies)
 
 
@@ -996,7 +1033,10 @@ async def test_pending_lineage_candidate_can_be_measured_without_becoming_approv
 ) -> None:
     config = config_factory(
         execution={"max_requests_per_agent": 512},
-        privacy={"approved_model_lineages": []},
+        privacy={
+            "profile": PrivacyProfile.SYNTHETIC_BENCHMARK,
+            "approved_model_lineages": [],
+        },
         models={
             "registry": [],
             "reasoning": {"effort": "high", "reserved_tokens": 4_096},

@@ -22,6 +22,7 @@ from mmaudit.models.qualification import (
 )
 from mmaudit.models.refresh import (
     ATTEMPT_FILENAME,
+    CANDIDATE_REGISTRY_FILENAME,
     DIFF_FILENAME,
     FRESHNESS_FILENAME,
     SNAPSHOT_FILENAME,
@@ -47,6 +48,7 @@ from mmaudit.models.refresh import (
     load_model_refresh_source_evidence,
     model_variant_family_key,
     seal_model_refresh_attempt,
+    validate_model_refresh_controls,
     write_model_refresh_failure,
     write_model_refresh_success,
 )
@@ -97,6 +99,7 @@ def _reseal_catalog_model(payload: dict[str, Any]) -> dict[str, Any]:
 def _registry(
     *,
     model_ids: tuple[str, ...] = (MODEL,),
+    created_at: datetime = NOW,
     pricing: dict[str, Any] = BASE_PRICING,
     structured_output_mode: StructuredOutputMode | None = StructuredOutputMode.JSON_OBJECT,
     max_prompt_tokens: int = 91_808,
@@ -154,7 +157,7 @@ def _registry(
             )
         )
     return seal_candidate_registry(
-        created_at=NOW,
+        created_at=created_at,
         discovery_run_sha256=_sha(["discovery-run", *model_ids]),
         candidates=tuple(candidates),
     )
@@ -288,6 +291,14 @@ def _source(
             for model_id, endpoints in selected.items()
         },
         authenticated_metadata=True,
+    )
+
+
+def _source_and_snapshot(registry: Any, **kwargs: Any) -> tuple[Any, Any]:
+    source = _source(registry, **kwargs)
+    return source, build_model_refresh_snapshot_from_source(
+        source_evidence=source,
+        candidate_registry=registry,
     )
 
 
@@ -644,7 +655,7 @@ def test_diff_after_state_cannot_be_resealed_from_hash_only_baseline() -> None:
         type(diff).model_validate(payload)
 
 
-def test_refresh_v1_snapshot_and_diff_versions_are_explicitly_rejected() -> None:
+def test_legacy_refresh_snapshot_and_diff_versions_are_explicitly_rejected() -> None:
     registry = _registry()
     source = _source(registry)
     snapshot = build_model_refresh_snapshot_from_source(
@@ -662,10 +673,11 @@ def test_refresh_v1_snapshot_and_diff_versions_are_explicitly_rejected() -> None
         pricing_tolerance_fraction="0.05",
         compared_at=NOW,
     )
-    diff_payload = diff.model_dump(mode="json")
-    diff_payload["schema_version"] = "1.0"
-    with pytest.raises(ValidationError, match=r"2\.0"):
-        type(diff).model_validate(diff_payload)
+    for legacy_version in ("1.0", "2.0"):
+        diff_payload = diff.model_dump(mode="json")
+        diff_payload["schema_version"] = legacy_version
+        with pytest.raises(ValidationError, match=r"3\.0"):
+            type(diff).model_validate(diff_payload)
 
 
 def test_full_zdr_inventory_ignores_hash_bound_router_aliases() -> None:
@@ -776,7 +788,7 @@ def test_semantic_snapshot_and_diff_are_order_and_time_invariant() -> None:
         MODEL: [first_endpoint],
         second_model: [second_endpoint],
     }
-    first = _snapshot(
+    first_source, first = _source_and_snapshot(
         registry,
         models=[_model(), _model(second_model)],
         zdr_endpoints=[first_endpoint, second_endpoint],
@@ -795,6 +807,8 @@ def test_semantic_snapshot_and_diff_are_order_and_time_invariant() -> None:
     diff = diff_model_refresh(
         current=second,
         previous=first,
+        previous_source_evidence=first_source,
+        previous_candidate_registry=registry,
         candidate_registry=registry,
         pricing_tolerance_fraction="0.05",
         compared_at=NOW + timedelta(hours=1),
@@ -804,13 +818,300 @@ def test_semantic_snapshot_and_diff_are_order_and_time_invariant() -> None:
     assert diff.changes == ()
 
 
+def test_exact_previous_evidence_bridges_a_candidate_registry_revision() -> None:
+    previous_registry = _registry()
+    current_registry = seal_candidate_registry(
+        created_at=NOW + timedelta(minutes=30),
+        discovery_run_sha256=_sha(["revised-discovery-run"]),
+        candidates=previous_registry.candidates,
+    )
+    previous_source, previous = _source_and_snapshot(previous_registry)
+    current = _snapshot(
+        current_registry,
+        retrieved_at=NOW + timedelta(hours=1),
+    )
+
+    diff = diff_model_refresh(
+        current=current,
+        previous=previous,
+        previous_source_evidence=previous_source,
+        previous_candidate_registry=previous_registry,
+        candidate_registry=current_registry,
+        pricing_tolerance_fraction="0.05",
+        compared_at=NOW + timedelta(hours=1),
+    )
+
+    assert CANDIDATE_REGISTRY_FILENAME == "model-refresh-candidate-registry.json"
+    assert diff.schema_version == "3.0"
+    assert diff.baseline_candidate_registry_sha256 == previous_registry.registry_sha256
+    assert diff.current_candidate_registry_sha256 == current_registry.registry_sha256
+    assert diff.baseline_candidate_registry_sha256 != diff.current_candidate_registry_sha256
+    assert diff.semantic_unchanged
+    assert diff.changes == ()
+
+
+def test_refresh_source_rejects_registry_created_after_observation() -> None:
+    registry = _registry(created_at=NOW + timedelta(seconds=1))
+
+    with pytest.raises(ModelRefreshValidationError, match="creation time"):
+        _source(registry, retrieved_at=NOW)
+
+
+def test_cross_registry_diff_rejects_registry_history_rollback() -> None:
+    previous_registry = _registry(created_at=NOW + timedelta(minutes=30))
+    current_registry = _registry(created_at=NOW)
+    previous_source, previous = _source_and_snapshot(
+        previous_registry,
+        retrieved_at=NOW + timedelta(minutes=30),
+    )
+    current = _snapshot(
+        current_registry,
+        retrieved_at=NOW + timedelta(hours=1),
+    )
+
+    with pytest.raises(ModelRefreshValidationError, match="registry is newer"):
+        diff_model_refresh(
+            current=current,
+            previous=previous,
+            previous_source_evidence=previous_source,
+            previous_candidate_registry=previous_registry,
+            candidate_registry=current_registry,
+            pricing_tolerance_fraction="0.05",
+            compared_at=NOW + timedelta(hours=1),
+        )
+
+
+@pytest.mark.parametrize(
+    ("pricing_tolerance_fraction", "soft_max_age_hours", "hard_max_age_hours"),
+    [
+        ("0.050", 30, 72),
+        ("1e-1000000000", 30, 72),
+        ("-0.1", 30, 72),
+        ("2", 30, 72),
+        ("0.05", 72, 72),
+        ("0.05", 73, 72),
+        ("0.05", 721, 722),
+        ("0.05", 30, 2_161),
+    ],
+)
+def test_refresh_controls_reject_invalid_local_policy(
+    pricing_tolerance_fraction: str,
+    soft_max_age_hours: int,
+    hard_max_age_hours: int,
+) -> None:
+    with pytest.raises(ModelRefreshValidationError):
+        validate_model_refresh_controls(
+            pricing_tolerance_fraction=pricing_tolerance_fraction,
+            soft_max_age_hours=soft_max_age_hours,
+            hard_max_age_hours=hard_max_age_hours,
+        )
+
+
+def test_refresh_diff_model_rejects_extreme_fraction_text_before_self_hash() -> None:
+    registry = _registry()
+    current = _snapshot(registry)
+    diff = diff_model_refresh(
+        current=current,
+        candidate_registry=registry,
+        pricing_tolerance_fraction="0.05",
+        compared_at=NOW,
+    )
+    payload = diff.model_dump(mode="json")
+    payload["pricing_tolerance_fraction"] = "1e-1000000000"
+    payload["diff_sha256"] = _sha(
+        {key: value for key, value in payload.items() if key != "diff_sha256"}
+    )
+
+    with pytest.raises(ValidationError, match="pricing_tolerance_fraction"):
+        type(diff).model_validate(payload)
+
+
+def test_cross_registry_diff_preserves_exact_route_identity_blocking() -> None:
+    previous_registry = _registry()
+    current_registry = seal_candidate_registry(
+        created_at=NOW + timedelta(minutes=30),
+        discovery_run_sha256=_sha(["revised-discovery-run"]),
+        candidates=previous_registry.candidates,
+    )
+    previous_endpoint = _dual_identity_endpoint(
+        tag=ENDPOINT,
+        slug="approved-provider/original-secondary",
+        provider_name="Approved Provider",
+    )
+    current_endpoint = _dual_identity_endpoint(
+        tag=ENDPOINT,
+        slug="approved-provider/replacement-secondary",
+        provider_name="Approved Provider",
+    )
+    previous_source, previous = _source_and_snapshot(
+        previous_registry,
+        zdr_endpoints=[previous_endpoint],
+        candidate_endpoints={MODEL: [previous_endpoint]},
+    )
+    current = _snapshot(
+        current_registry,
+        retrieved_at=NOW + timedelta(hours=1),
+        zdr_endpoints=[current_endpoint],
+        candidate_endpoints={MODEL: [current_endpoint]},
+    )
+
+    diff = diff_model_refresh(
+        current=current,
+        previous=previous,
+        previous_source_evidence=previous_source,
+        previous_candidate_registry=previous_registry,
+        candidate_registry=current_registry,
+        pricing_tolerance_fraction="0.05",
+        compared_at=NOW + timedelta(hours=1),
+        selected_routes=(SelectedModelRoute(exact_model_id=MODEL, provider_endpoint=ENDPOINT),),
+    )
+
+    assert diff.status is ModelRefreshAttemptStatus.PRODUCTION_BLOCKED
+    assert diff.production_block_reasons == (f"{MODEL}={ENDPOINT}",)
+    assert diff.changes[0].production_blocking
+    assert ModelDriftKind.ENDPOINT_IDENTITY_CHANGED in diff.changes[0].change_kinds
+    assert ModelDriftKind.ENDPOINT_IDENTITY_UNVERIFIED not in diff.changes[0].change_kinds
+
+
+@pytest.mark.parametrize(
+    ("include_snapshot", "include_source", "include_registry"),
+    (
+        (True, False, False),
+        (False, True, False),
+        (False, False, True),
+        (True, True, False),
+        (True, False, True),
+        (False, True, True),
+    ),
+)
+def test_previous_evidence_triple_is_atomic(
+    include_snapshot: bool,
+    include_source: bool,
+    include_registry: bool,
+) -> None:
+    registry = _registry()
+    previous_source, previous = _source_and_snapshot(registry)
+    current = _snapshot(registry, retrieved_at=NOW + timedelta(hours=1))
+    prior_inputs: dict[str, Any] = {}
+    if include_snapshot:
+        prior_inputs["previous"] = previous
+    if include_source:
+        prior_inputs["previous_source_evidence"] = previous_source
+    if include_registry:
+        prior_inputs["previous_candidate_registry"] = registry
+
+    with pytest.raises(ModelRefreshValidationError, match="must be supplied together"):
+        diff_model_refresh(
+            current=current,
+            candidate_registry=registry,
+            pricing_tolerance_fraction="0.05",
+            compared_at=NOW + timedelta(hours=1),
+            **prior_inputs,
+        )
+
+
+@pytest.mark.parametrize("swap_snapshot", (False, True))
+def test_previous_snapshot_and_source_cannot_be_swapped(swap_snapshot: bool) -> None:
+    registry = _registry()
+    first_source, first = _source_and_snapshot(registry)
+    second_source, second = _source_and_snapshot(
+        registry,
+        retrieved_at=NOW + timedelta(minutes=1),
+    )
+    current = _snapshot(registry, retrieved_at=NOW + timedelta(hours=1))
+
+    with pytest.raises(ModelRefreshValidationError, match="differs from its source"):
+        diff_model_refresh(
+            current=current,
+            previous=second if swap_snapshot else first,
+            previous_source_evidence=first_source if swap_snapshot else second_source,
+            previous_candidate_registry=registry,
+            candidate_registry=registry,
+            pricing_tolerance_fraction="0.05",
+            compared_at=NOW + timedelta(hours=1),
+        )
+
+
+def test_previous_candidate_registry_cannot_be_swapped() -> None:
+    previous_registry = _registry()
+    swapped_registry = seal_candidate_registry(
+        created_at=NOW + timedelta(minutes=1),
+        discovery_run_sha256=_sha(["swapped-registry"]),
+        candidates=previous_registry.candidates,
+    )
+    previous_source, previous = _source_and_snapshot(previous_registry)
+    current = _snapshot(swapped_registry, retrieved_at=NOW + timedelta(hours=1))
+
+    with pytest.raises(ModelRefreshValidationError, match="cannot be reproduced"):
+        diff_model_refresh(
+            current=current,
+            previous=previous,
+            previous_source_evidence=previous_source,
+            previous_candidate_registry=swapped_registry,
+            candidate_registry=swapped_registry,
+            pricing_tolerance_fraction="0.05",
+            compared_at=NOW + timedelta(hours=1),
+        )
+
+
+def test_resealed_previous_snapshot_cannot_break_source_replay_binding() -> None:
+    registry = _registry()
+    previous_source, previous = _source_and_snapshot(registry)
+    payload = previous.model_dump(mode="json")
+    payload["source_evidence_sha256"] = "f" * 64
+    payload["snapshot_sha256"] = _sha(
+        {key: value for key, value in payload.items() if key != "snapshot_sha256"}
+    )
+    resealed_previous = type(previous).model_validate(payload)
+    current = _snapshot(registry, retrieved_at=NOW + timedelta(hours=1))
+
+    with pytest.raises(ModelRefreshValidationError, match="differs from its source"):
+        diff_model_refresh(
+            current=current,
+            previous=resealed_previous,
+            previous_source_evidence=previous_source,
+            previous_candidate_registry=registry,
+            candidate_registry=registry,
+            pricing_tolerance_fraction="0.05",
+            compared_at=NOW + timedelta(hours=1),
+        )
+
+
+def test_resealed_previous_source_cannot_claim_another_registry() -> None:
+    previous_registry = _registry()
+    other_registry = seal_candidate_registry(
+        created_at=NOW + timedelta(minutes=1),
+        discovery_run_sha256=_sha(["other-registry"]),
+        candidates=previous_registry.candidates,
+    )
+    previous_source, previous = _source_and_snapshot(previous_registry)
+    source_payload = previous_source.model_dump(mode="json")
+    source_payload["candidate_registry_sha256"] = other_registry.registry_sha256
+    source_payload["source_evidence_sha256"] = _sha(
+        {key: value for key, value in source_payload.items() if key != "source_evidence_sha256"}
+    )
+    resealed_source = type(previous_source).model_validate(source_payload)
+    current = _snapshot(other_registry, retrieved_at=NOW + timedelta(hours=1))
+
+    with pytest.raises(ModelRefreshValidationError, match="cannot be reproduced"):
+        diff_model_refresh(
+            current=current,
+            previous=previous,
+            previous_source_evidence=resealed_source,
+            previous_candidate_registry=other_registry,
+            candidate_registry=other_registry,
+            pricing_tolerance_fraction="0.05",
+            compared_at=NOW + timedelta(hours=1),
+        )
+
+
 def test_diff_classifies_every_required_drift_with_exact_states() -> None:
     withdrawn = "bravo/borealis-secure"
     new_model = "charlie/cirrus-secure"
     registry = _registry(model_ids=(MODEL, withdrawn))
     old_endpoint = _endpoint()
     withdrawn_endpoint = _endpoint(withdrawn, "provider-1/fp8")
-    previous = _snapshot(
+    previous_source, previous = _source_and_snapshot(
         registry,
         models=[_model(), _model(withdrawn)],
         zdr_endpoints=[old_endpoint, withdrawn_endpoint],
@@ -852,6 +1153,8 @@ def test_diff_classifies_every_required_drift_with_exact_states() -> None:
     diff = diff_model_refresh(
         current=current,
         previous=previous,
+        previous_source_evidence=previous_source,
+        previous_candidate_registry=registry,
         candidate_registry=registry,
         pricing_tolerance_fraction="0.05",
         compared_at=NOW + timedelta(hours=1),
@@ -884,7 +1187,7 @@ def test_diff_classifies_every_required_drift_with_exact_states() -> None:
 
 def test_zdr_and_pricing_drift_are_distinct_and_exact() -> None:
     registry = _registry()
-    previous = _snapshot(registry)
+    previous_source, previous = _source_and_snapshot(registry)
     repriced = _endpoint(pricing={"completion": "0.000003", "prompt": "0.000002"})
     current = _snapshot(
         registry,
@@ -896,6 +1199,8 @@ def test_zdr_and_pricing_drift_are_distinct_and_exact() -> None:
     diff = diff_model_refresh(
         current=current,
         previous=previous,
+        previous_source_evidence=previous_source,
+        previous_candidate_registry=registry,
         candidate_registry=registry,
         pricing_tolerance_fraction="0.05",
         compared_at=NOW + timedelta(hours=1),
@@ -913,7 +1218,7 @@ def test_zdr_and_pricing_drift_are_distinct_and_exact() -> None:
 
 def test_exact_endpoint_withdrawal_overrides_stale_zdr_inventory_and_blocks() -> None:
     registry = _registry()
-    previous = _snapshot(registry)
+    previous_source, previous = _source_and_snapshot(registry)
     current = _snapshot(
         registry,
         retrieved_at=NOW + timedelta(hours=1),
@@ -925,6 +1230,8 @@ def test_exact_endpoint_withdrawal_overrides_stale_zdr_inventory_and_blocks() ->
     diff = diff_model_refresh(
         current=current,
         previous=previous,
+        previous_source_evidence=previous_source,
+        previous_candidate_registry=registry,
         candidate_registry=registry,
         pricing_tolerance_fraction="0.05",
         compared_at=NOW + timedelta(hours=1),
@@ -947,7 +1254,7 @@ def test_mismatched_zdr_counterpart_cannot_confer_selected_route_eligibility(
     zdr_mutation: dict[str, Any],
 ) -> None:
     registry = _registry()
-    previous = _snapshot(registry)
+    previous_source, previous = _source_and_snapshot(registry)
     endpoint = _endpoint()
     zdr_endpoint = {**endpoint, **zdr_mutation}
     current = _snapshot(
@@ -961,6 +1268,8 @@ def test_mismatched_zdr_counterpart_cannot_confer_selected_route_eligibility(
     diff = diff_model_refresh(
         current=current,
         previous=previous,
+        previous_source_evidence=previous_source,
+        previous_candidate_registry=registry,
         candidate_registry=registry,
         pricing_tolerance_fraction="0.05",
         compared_at=NOW + timedelta(hours=1),
@@ -982,7 +1291,7 @@ def test_selected_route_endpoint_identity_drift_blocks_against_exact_snapshot() 
         "tag": ENDPOINT,
         "slug": "approved-provider/replacement-secondary",
     }
-    previous = _snapshot(
+    previous_source, previous = _source_and_snapshot(
         registry,
         zdr_endpoints=[previous_endpoint],
         candidate_endpoints={MODEL: [previous_endpoint]},
@@ -997,6 +1306,8 @@ def test_selected_route_endpoint_identity_drift_blocks_against_exact_snapshot() 
     diff = diff_model_refresh(
         current=current,
         previous=previous,
+        previous_source_evidence=previous_source,
+        previous_candidate_registry=registry,
         candidate_registry=registry,
         pricing_tolerance_fraction="0.05",
         compared_at=NOW + timedelta(hours=1),
@@ -1106,7 +1417,7 @@ def test_selected_validated_text_candidate_retains_exact_mode_credit() -> None:
     parameters = ["max_tokens", "reasoning", "temperature"]
     registry = _registry(structured_output_mode=StructuredOutputMode.VALIDATED_TEXT_JSON)
     endpoint = _endpoint(parameters=parameters)
-    previous = _snapshot(
+    previous_source, previous = _source_and_snapshot(
         registry,
         models=[_model(parameters=parameters)],
         zdr_endpoints=[endpoint],
@@ -1123,6 +1434,8 @@ def test_selected_validated_text_candidate_retains_exact_mode_credit() -> None:
     diff = diff_model_refresh(
         current=snapshot,
         previous=previous,
+        previous_source_evidence=previous_source,
+        previous_candidate_registry=registry,
         candidate_registry=registry,
         pricing_tolerance_fraction="0.05",
         compared_at=NOW + timedelta(hours=1),
@@ -1138,7 +1451,7 @@ def test_selected_validated_text_candidate_retains_exact_mode_credit() -> None:
 
 def test_route_parameter_drift_cannot_be_reported_as_semantically_unchanged() -> None:
     registry = _registry()
-    previous = _snapshot(registry)
+    previous_source, previous = _source_and_snapshot(registry)
     parameters = [*PARAMETERS, "seed"]
     endpoint = _endpoint(parameters=parameters)
     current = _snapshot(
@@ -1152,6 +1465,8 @@ def test_route_parameter_drift_cannot_be_reported_as_semantically_unchanged() ->
     diff = diff_model_refresh(
         current=current,
         previous=previous,
+        previous_source_evidence=previous_source,
+        previous_candidate_registry=registry,
         candidate_registry=registry,
         pricing_tolerance_fraction="0.05",
         compared_at=NOW + timedelta(hours=1),
@@ -1217,7 +1532,7 @@ def test_exact_prompt_limit_source_drift_is_not_semantically_unchanged() -> None
     registry = _registry()
     fallback = _endpoint()
     fallback["max_prompt_tokens"] = None
-    previous = _snapshot(
+    previous_source, previous = _source_and_snapshot(
         registry,
         zdr_endpoints=[fallback],
         candidate_endpoints={MODEL: [fallback]},
@@ -1234,6 +1549,8 @@ def test_exact_prompt_limit_source_drift_is_not_semantically_unchanged() -> None
     diff = diff_model_refresh(
         current=current,
         previous=previous,
+        previous_source_evidence=previous_source,
+        previous_candidate_registry=registry,
         candidate_registry=registry,
         pricing_tolerance_fraction="0.05",
         compared_at=NOW + timedelta(hours=1),
@@ -1250,7 +1567,7 @@ def test_exact_output_limit_source_drift_is_not_semantically_unchanged() -> None
     fallback = _endpoint(output=100_000)
     fallback["max_prompt_tokens"] = 100_000
     fallback["max_completion_tokens"] = None
-    previous = _snapshot(
+    previous_source, previous = _source_and_snapshot(
         registry,
         models=[_model(output=100_000)],
         zdr_endpoints=[fallback],
@@ -1269,6 +1586,8 @@ def test_exact_output_limit_source_drift_is_not_semantically_unchanged() -> None
     diff = diff_model_refresh(
         current=current,
         previous=previous,
+        previous_source_evidence=previous_source,
+        previous_candidate_registry=registry,
         candidate_registry=registry,
         pricing_tolerance_fraction="0.05",
         compared_at=NOW + timedelta(hours=1),
@@ -1381,10 +1700,12 @@ def test_selected_native_mode_downgrade_blocks_while_json_upgrade_does_not() -> 
         zdr_endpoints=[native_endpoint],
         candidate_endpoints={MODEL: [native_endpoint]},
     )
-    json_previous = _snapshot(json_registry)
+    json_previous_source, json_previous = _source_and_snapshot(json_registry)
     upgrade_diff = diff_model_refresh(
         current=upgraded,
         previous=json_previous,
+        previous_source_evidence=json_previous_source,
+        previous_candidate_registry=json_registry,
         candidate_registry=json_registry,
         pricing_tolerance_fraction="0.05",
         compared_at=NOW + timedelta(hours=1),
@@ -1479,7 +1800,7 @@ def test_hash_only_baseline_does_not_claim_unknown_catalog_capacity_drift() -> N
 
 def test_exact_previous_snapshot_detects_catalog_capacity_drift() -> None:
     registry = _registry()
-    previous = _snapshot(registry)
+    previous_source, previous = _source_and_snapshot(registry)
     model = _model(context=99_999, output=8_191)
     model["top_provider"]["context_length"] = 100_000
     endpoint = _endpoint()
@@ -1494,6 +1815,8 @@ def test_exact_previous_snapshot_detects_catalog_capacity_drift() -> None:
     diff = diff_model_refresh(
         current=current,
         previous=previous,
+        previous_source_evidence=previous_source,
+        previous_candidate_registry=registry,
         candidate_registry=registry,
         pricing_tolerance_fraction="0.05",
         compared_at=NOW + timedelta(hours=1),
@@ -1547,7 +1870,7 @@ def test_selected_route_semantic_loss_never_becomes_unchanged(
     expected_kind: ModelDriftKind,
 ) -> None:
     registry = _registry()
-    previous = _snapshot(registry)
+    previous_source, previous = _source_and_snapshot(registry)
     changed = {**_endpoint(), **mutation}
     current = _snapshot(
         registry,
@@ -1559,6 +1882,8 @@ def test_selected_route_semantic_loss_never_becomes_unchanged(
     diff = diff_model_refresh(
         current=current,
         previous=previous,
+        previous_source_evidence=previous_source,
+        previous_candidate_registry=registry,
         candidate_registry=registry,
         pricing_tolerance_fraction="0.05",
         compared_at=NOW + timedelta(hours=1),
@@ -1592,7 +1917,7 @@ def test_selected_route_must_match_the_frozen_candidate_registry() -> None:
 def test_diff_rejects_inverted_snapshot_chronology() -> None:
     registry = _registry()
     current = _snapshot(registry)
-    future_previous = _snapshot(
+    future_previous_source, future_previous = _source_and_snapshot(
         registry,
         retrieved_at=NOW + timedelta(hours=1),
     )
@@ -1601,6 +1926,8 @@ def test_diff_rejects_inverted_snapshot_chronology() -> None:
         diff_model_refresh(
             current=current,
             previous=future_previous,
+            previous_source_evidence=future_previous_source,
+            previous_candidate_registry=registry,
             candidate_registry=registry,
             pricing_tolerance_fraction="0.05",
             compared_at=NOW,
@@ -1654,13 +1981,13 @@ def test_hash_only_bootstrap_never_fabricates_prior_prices_and_blocks_selection(
 def test_pricing_tolerance_uses_exact_decimal_boundary() -> None:
     base = {"completion": "1", "prompt": "1"}
     registry = _registry(pricing=base)
-    previous = _snapshot(
+    previous_source, previous = _source_and_snapshot(
         registry,
         candidate_endpoints={MODEL: [_endpoint(pricing=base)]},
         zdr_endpoints=[_endpoint(pricing=base)],
     )
     selected = (SelectedModelRoute(exact_model_id=MODEL, provider_endpoint=ENDPOINT),)
-    boundary = _snapshot(
+    boundary_source, boundary = _source_and_snapshot(
         registry,
         retrieved_at=NOW + timedelta(hours=1),
         candidate_endpoints={MODEL: [_endpoint(pricing={"completion": "1.05", "prompt": "1.05"})]},
@@ -1669,6 +1996,8 @@ def test_pricing_tolerance_uses_exact_decimal_boundary() -> None:
     boundary_diff = diff_model_refresh(
         current=boundary,
         previous=previous,
+        previous_source_evidence=previous_source,
+        previous_candidate_registry=registry,
         candidate_registry=registry,
         pricing_tolerance_fraction="0.05",
         compared_at=NOW + timedelta(hours=1),
@@ -1686,6 +2015,8 @@ def test_pricing_tolerance_uses_exact_decimal_boundary() -> None:
     repeated_diff = diff_model_refresh(
         current=repeated,
         previous=boundary,
+        previous_source_evidence=boundary_source,
+        previous_candidate_registry=registry,
         candidate_registry=registry,
         pricing_tolerance_fraction="0.05",
         compared_at=NOW + timedelta(hours=2),
@@ -1707,6 +2038,8 @@ def test_pricing_tolerance_uses_exact_decimal_boundary() -> None:
     beyond_diff = diff_model_refresh(
         current=beyond,
         previous=previous,
+        previous_source_evidence=previous_source,
+        previous_candidate_registry=registry,
         candidate_registry=registry,
         pricing_tolerance_fraction="0.05",
         compared_at=NOW + timedelta(hours=3),
@@ -1718,7 +2051,7 @@ def test_pricing_tolerance_uses_exact_decimal_boundary() -> None:
 
 def test_canonical_identity_drift_is_classified_and_blocks_selected_route() -> None:
     registry = _registry()
-    previous = _snapshot(registry)
+    previous_source, previous = _source_and_snapshot(registry)
     changed_model = _model()
     changed_model["canonical_slug"] = "alpha/atlas-secure-revision"
     current = _snapshot(
@@ -1730,6 +2063,8 @@ def test_canonical_identity_drift_is_classified_and_blocks_selected_route() -> N
     diff = diff_model_refresh(
         current=current,
         previous=previous,
+        previous_source_evidence=previous_source,
+        previous_candidate_registry=registry,
         candidate_registry=registry,
         pricing_tolerance_fraction="0.05",
         compared_at=NOW + timedelta(hours=1),

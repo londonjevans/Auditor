@@ -17,6 +17,7 @@ from mmaudit.config import (
 from mmaudit.models.registry import ModelRegistry
 from mmaudit.models.runtime import build_openrouter_runtime_controls
 from mmaudit.models.schemas import LanguageCapabilityProfile
+from mmaudit.privacy import PrivacyProfile
 
 ROOT = Path(__file__).parents[2]
 QUALIFICATION_CONFIG = ROOT / "config" / "openrouter-qualification.toml"
@@ -41,9 +42,11 @@ def test_qualification_runtime_config_loads_without_secrets_or_claims() -> None:
         config.execution.max_requests_per_agent
     )
     assert config.privacy.allow_code_egress is False
+    assert config.privacy.profile is PrivacyProfile.SYNTHETIC_BENCHMARK
     assert config.privacy.require_zdr is True
     assert config.privacy.store_raw_prompts is False
     assert config.privacy.store_raw_responses is False
+    assert config.privacy.maximum_model_retention == "zero"
     assert config.privacy.approved_model_lineages == ()
     assert config.models.registry == ()
     assert config.models.allow_non_independent_models is True

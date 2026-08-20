@@ -1,0 +1,324 @@
+{
+  "$defs": {
+    "FrozenGroundTruthCaseBinding": {
+      "additionalProperties": false,
+      "description": "Exact corpus, answer-key, source-excerpt, and origin join for one case.",
+      "properties": {
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "case_id": {
+          "pattern": "^case-[0-9a-f]{16}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "corpus_case_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Corpus Case Sha256",
+          "type": "string"
+        },
+        "disposition": {
+          "$ref": "#/$defs/GroundTruthDisposition"
+        },
+        "ground_truth_case_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ground Truth Case Sha256",
+          "type": "string"
+        },
+        "origin": {
+          "discriminator": {
+            "mapping": {
+              "PUBLIC_ESTABLISHED": "#/$defs/PublicEstablishedGroundTruthOrigin",
+              "SYNTHETIC_PLANTED": "#/$defs/SyntheticPlantedGroundTruthOrigin"
+            },
+            "propertyName": "origin_kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SyntheticPlantedGroundTruthOrigin"
+            },
+            {
+              "$ref": "#/$defs/PublicEstablishedGroundTruthOrigin"
+            }
+          ],
+          "title": "Origin"
+        },
+        "source_excerpt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Excerpt Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_id",
+        "disposition",
+        "corpus_case_sha256",
+        "ground_truth_case_sha256",
+        "source_excerpt_sha256",
+        "origin",
+        "binding_sha256"
+      ],
+      "title": "FrozenGroundTruthCaseBinding",
+      "type": "object"
+    },
+    "GroundTruthDisposition": {
+      "description": "Canonical case outcome independently joined to benchmark truth.",
+      "enum": [
+        "VULNERABILITY",
+        "SAFE",
+        "INSUFFICIENT_CONTEXT"
+      ],
+      "title": "GroundTruthDisposition",
+      "type": "string"
+    },
+    "PublicEstablishedGroundTruthOrigin": {
+      "additionalProperties": false,
+      "description": "Externally published finding bound to an immutable affected source revision.",
+      "properties": {
+        "authored_by_evaluated_process": {
+          "const": false,
+          "default": false,
+          "title": "Authored By Evaluated Process",
+          "type": "boolean"
+        },
+        "case_id": {
+          "pattern": "^case-[0-9a-f]{16}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "origin_kind": {
+          "const": "PUBLIC_ESTABLISHED",
+          "default": "PUBLIC_ESTABLISHED",
+          "title": "Origin Kind",
+          "type": "string"
+        },
+        "origin_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Origin Sha256",
+          "type": "string"
+        },
+        "public_finding_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$",
+          "title": "Public Finding Id",
+          "type": "string"
+        },
+        "publication_artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Publication Artifact Sha256",
+          "type": "string"
+        },
+        "publication_proof_kind": {
+          "const": "EXTERNAL_TRANSPARENCY_INCLUSION",
+          "default": "EXTERNAL_TRANSPARENCY_INCLUSION",
+          "title": "Publication Proof Kind",
+          "type": "string"
+        },
+        "publication_proof_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Publication Proof Sha256",
+          "type": "string"
+        },
+        "publication_uri": {
+          "maxLength": 2000,
+          "minLength": 9,
+          "title": "Publication Uri",
+          "type": "string"
+        },
+        "published_at": {
+          "format": "date-time",
+          "title": "Published At",
+          "type": "string"
+        },
+        "upstream_source_revision": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+          "title": "Upstream Source Revision",
+          "type": "string"
+        },
+        "upstream_source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Upstream Source Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_id",
+        "public_finding_id",
+        "publication_uri",
+        "published_at",
+        "publication_artifact_sha256",
+        "publication_proof_sha256",
+        "upstream_source_revision",
+        "upstream_source_sha256",
+        "origin_sha256"
+      ],
+      "title": "PublicEstablishedGroundTruthOrigin",
+      "type": "object"
+    },
+    "SyntheticPlantedGroundTruthOrigin": {
+      "additionalProperties": false,
+      "description": "Precommitted synthetic construction and its deterministic regression contract.",
+      "properties": {
+        "authored_by_evaluated_process": {
+          "const": false,
+          "default": false,
+          "title": "Authored By Evaluated Process",
+          "type": "boolean"
+        },
+        "case_id": {
+          "pattern": "^case-[0-9a-f]{16}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "construction_basis": {
+          "const": "PRECOMMITTED_NON_MODEL_FIXTURE",
+          "default": "PRECOMMITTED_NON_MODEL_FIXTURE",
+          "title": "Construction Basis",
+          "type": "string"
+        },
+        "construction_ground_truth_file_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Construction Ground Truth File Sha256",
+          "type": "string"
+        },
+        "construction_manifest_file_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Construction Manifest File Sha256",
+          "type": "string"
+        },
+        "construction_source_revision": {
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+          "title": "Construction Source Revision",
+          "type": "string"
+        },
+        "origin_kind": {
+          "const": "SYNTHETIC_PLANTED",
+          "default": "SYNTHETIC_PLANTED",
+          "title": "Origin Kind",
+          "type": "string"
+        },
+        "origin_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Origin Sha256",
+          "type": "string"
+        },
+        "regression_contract_file_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Regression Contract File Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_id",
+        "construction_source_revision",
+        "construction_manifest_file_sha256",
+        "construction_ground_truth_file_sha256",
+        "regression_contract_file_sha256",
+        "origin_sha256"
+      ],
+      "title": "SyntheticPlantedGroundTruthOrigin",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/frozen_ground_truth_provenance.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Non-authorizing exact provenance overlay for one frozen benchmark suite.",
+  "properties": {
+    "authored_by_evaluated_process": {
+      "const": false,
+      "default": false,
+      "title": "Authored By Evaluated Process",
+      "type": "boolean"
+    },
+    "authority_issuance_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Authority Issuance Authorized",
+      "type": "boolean"
+    },
+    "benchmark_corpus_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Benchmark Corpus Sha256",
+      "type": "string"
+    },
+    "benchmark_ground_truth_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Benchmark Ground Truth Sha256",
+      "type": "string"
+    },
+    "benchmark_scoring_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Benchmark Scoring Authorized",
+      "type": "boolean"
+    },
+    "case_binding_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Case Binding Set Sha256",
+      "type": "string"
+    },
+    "case_bindings": {
+      "items": {
+        "$ref": "#/$defs/FrozenGroundTruthCaseBinding"
+      },
+      "maxItems": 10000,
+      "minItems": 1,
+      "title": "Case Bindings",
+      "type": "array"
+    },
+    "model_qualification_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Model Qualification Authorized",
+      "type": "boolean"
+    },
+    "objective_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Objective Sha256",
+      "type": "string"
+    },
+    "production_selection_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Production Selection Authorized",
+      "type": "boolean"
+    },
+    "provenance_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Provenance Sha256",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_egress_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Source Egress Authorized",
+      "type": "boolean"
+    },
+    "source_revision": {
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+      "title": "Source Revision",
+      "type": "string"
+    }
+  },
+  "required": [
+    "objective_sha256",
+    "source_revision",
+    "benchmark_corpus_sha256",
+    "benchmark_ground_truth_sha256",
+    "case_bindings",
+    "case_binding_set_sha256",
+    "provenance_sha256"
+  ],
+  "title": "mmaudit frozen ground-truth provenance",
+  "type": "object"
+}

@@ -11,6 +11,12 @@ from mmaudit.models.policy_selection import (
     AUDIT_MODEL_SELECTION_EVIDENCE_FILENAME,
     AuditModelSelectionEvidenceBundle,
 )
+from mmaudit.models.refresh_runtime import (
+    AUDIT_MODEL_REFRESH_EVIDENCE_FILENAME,
+    AUDIT_MODEL_REFRESH_PRICING_EVIDENCE_FILENAME,
+    AuditModelRefreshEvidence,
+    AuditModelRefreshPricingEvidence,
+)
 from mmaudit.models.schemas import AuditProfile, ExecutionEvidenceKind
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.pipeline import (
@@ -22,6 +28,7 @@ from mmaudit.orchestration.pipeline import (
 )
 from tests.conftest import MODEL_IDS, base_config_data, model_registry_entry
 from tests.qualification_support import synthetic_production_qualification
+from tests.refresh_runtime_support import SyntheticRefreshRuntime, synthetic_refresh_runtime
 from tests.unit.test_model_policy_selection import (
     BASE_TIME,
     _hash,
@@ -83,6 +90,46 @@ def _pipeline(
     return pipeline, policy
 
 
+def _refresh_pipeline(
+    tmp_path: Path,
+    *,
+    include_refresh_evidence: bool = True,
+    include_refresh_guard: bool = True,
+    include_pricing_evidence: bool = True,
+    include_pricing_authority: bool = True,
+    paid: bool = False,
+) -> tuple[AuditPipeline, SyntheticRefreshRuntime]:
+    refresh = synthetic_refresh_runtime(tmp_path / "refresh-authority")
+    repository = tmp_path / "refresh-repository"
+    repository.mkdir()
+    pipeline = AuditPipeline(
+        refresh.config,
+        repo=repository,
+        output=tmp_path / "refresh-output",
+        production_qualification=refresh.technical_qualification,
+        audit_model_selection_evidence=refresh.audit_selection_evidence,
+        verified_audit_model_selection=refresh.audit_selection,
+        audit_model_refresh_evidence=(refresh.evidence if include_refresh_evidence else None),
+        audit_model_refresh_guard=refresh.guard if include_refresh_guard else None,
+        audit_model_refresh_pricing_evidence=(
+            refresh.pricing_evidence if include_pricing_evidence else None
+        ),
+        audit_model_refresh_pricing_authority=(
+            refresh.pricing_authority if include_pricing_authority else None
+        ),
+        api_key="synthetic-nonempty-credential" if paid else None,
+        cost_ledger=(
+            AtomicCostLedger.initialize(
+                tmp_path / "refresh-cost-ledger.json",
+                cap_usd=Decimal(str(refresh.config.execution.budget_usd)),
+            )
+            if paid
+            else None
+        ),
+    )
+    return pipeline, refresh
+
+
 @pytest.mark.asyncio
 async def test_real_paid_pipeline_requires_policy_selection_before_run_artifacts(
     tmp_path: Path,
@@ -113,6 +160,156 @@ async def test_real_paid_pipeline_requires_policy_selection_before_run_artifacts
 
     assert not output.exists()
     assert pipeline.client is None
+
+
+def test_pipeline_requires_atomic_model_refresh_evidence_and_guard(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="evidence and live guard must be supplied together"):
+        _refresh_pipeline(
+            tmp_path,
+            include_refresh_guard=False,
+            include_pricing_evidence=False,
+            include_pricing_authority=False,
+        )
+
+
+def test_pipeline_requires_atomic_model_refresh_pricing_evidence_and_authority(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="pricing evidence and live authority must be supplied together",
+    ):
+        _refresh_pipeline(tmp_path, include_pricing_authority=False)
+
+
+@pytest.mark.asyncio
+async def test_real_paid_pipeline_requires_model_refresh_before_run_artifacts(
+    tmp_path: Path,
+) -> None:
+    pipeline, _refresh = _refresh_pipeline(
+        tmp_path,
+        include_refresh_evidence=False,
+        include_refresh_guard=False,
+        include_pricing_evidence=False,
+        include_pricing_authority=False,
+        paid=True,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="paid REAL provider audits require model-refresh evidence and a live guard",
+    ):
+        await pipeline.run(allow_code_egress=True)
+
+    assert not pipeline.output.exists()
+    assert pipeline.client is None
+
+
+@pytest.mark.asyncio
+async def test_real_paid_pipeline_requires_refresh_pricing_before_run_artifacts(
+    tmp_path: Path,
+) -> None:
+    pipeline, _refresh = _refresh_pipeline(
+        tmp_path,
+        include_pricing_evidence=False,
+        include_pricing_authority=False,
+        paid=True,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="paid REAL provider audits require refreshed-pricing evidence and live authority",
+    ):
+        await pipeline.run(allow_code_egress=True)
+
+    assert not pipeline.output.exists()
+    assert pipeline.client is None
+
+
+@pytest.mark.asyncio
+async def test_scanner_only_pipeline_rejects_model_refresh_custody_without_policy_pair(
+    tmp_path: Path,
+) -> None:
+    refresh = synthetic_refresh_runtime(tmp_path / "refresh-authority")
+    repository = tmp_path / "refresh-repository"
+    repository.mkdir()
+    pipeline = AuditPipeline(
+        refresh.config,
+        repo=repository,
+        output=tmp_path / "refresh-output",
+        production_qualification=refresh.technical_qualification,
+        audit_model_refresh_evidence=refresh.evidence,
+        audit_model_refresh_guard=refresh.guard,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="audit model-refresh custody is accepted only for paid REAL provider audits",
+    ):
+        await pipeline.run(scanner_only=True)
+
+
+@pytest.mark.asyncio
+async def test_non_real_pipeline_rejects_model_refresh_custody_without_policy_pair(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    refresh = synthetic_refresh_runtime(tmp_path / "refresh-authority")
+    repository = tmp_path / "refresh-repository"
+    repository.mkdir()
+    pipeline = AuditPipeline(
+        refresh.config,
+        repo=repository,
+        output=tmp_path / "refresh-output",
+        production_qualification=refresh.technical_qualification,
+        audit_model_refresh_evidence=refresh.evidence,
+        audit_model_refresh_guard=refresh.guard,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_planned_model_execution_evidence",
+        lambda: ExecutionEvidenceKind.MOCK,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="audit model-refresh custody is accepted only for paid REAL provider audits",
+    ):
+        await pipeline.run()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scanner_only", (True, False), ids=("scanner", "non-real"))
+async def test_nonpaid_pipeline_rejects_refresh_pricing_custody(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scanner_only: bool,
+) -> None:
+    refresh = synthetic_refresh_runtime(tmp_path / "refresh-pricing-authority")
+    repository = tmp_path / "refresh-pricing-repository"
+    repository.mkdir()
+    pipeline = AuditPipeline(
+        refresh.config,
+        repo=repository,
+        output=tmp_path / "refresh-pricing-output",
+        production_qualification=refresh.technical_qualification,
+        audit_model_refresh_evidence=refresh.evidence,
+        audit_model_refresh_guard=refresh.guard,
+        audit_model_refresh_pricing_evidence=refresh.pricing_evidence,
+        audit_model_refresh_pricing_authority=refresh.pricing_authority,
+    )
+    if not scanner_only:
+        monkeypatch.setattr(
+            pipeline,
+            "_planned_model_execution_evidence",
+            lambda: ExecutionEvidenceKind.MOCK,
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="refresh pricing custody is accepted only for paid REAL provider audits",
+    ):
+        await pipeline.run(scanner_only=scanner_only)
 
 
 @pytest.mark.asyncio
@@ -231,6 +428,65 @@ def test_policy_evidence_persistence_and_latest_projection_are_exact(tmp_path: P
         filename=AUDIT_MODEL_SELECTION_EVIDENCE_FILENAME,
     )
     assert not latest_artifact.exists()
+
+
+def test_refresh_evidence_persistence_is_canonical_and_non_authorizing(tmp_path: Path) -> None:
+    pipeline, refresh = _refresh_pipeline(tmp_path)
+    run_dir = tmp_path / "run-with-refresh"
+    run_dir.mkdir()
+
+    observed = pipeline._require_current_audit_model_refresh(
+        now=refresh.verified_at,
+        expected_source_sha256=refresh.evidence.source_sha256,
+    )
+    pipeline._persist_current_audit_model_refresh_evidence(
+        run_dir=run_dir,
+        now=refresh.verified_at,
+        expected_source_sha256=refresh.evidence.source_sha256,
+    )
+    artifact = run_dir / AUDIT_MODEL_REFRESH_EVIDENCE_FILENAME
+    persisted = AuditModelRefreshEvidence.model_validate_json(
+        artifact.read_text(encoding="utf-8"),
+        strict=True,
+    )
+
+    assert observed == refresh.evidence
+    assert persisted == refresh.evidence
+    assert not persisted.technical_selection_authorized
+    assert not persisted.audit_selection_authorized
+    assert not persisted.provider_access_authorized
+    assert not persisted.production_promotion_authorized
+    assert refresh.guard.capability_sha256 not in artifact.read_text(encoding="utf-8")
+
+
+def test_refresh_pricing_persistence_is_canonical_and_non_authorizing(tmp_path: Path) -> None:
+    pipeline, refresh = _refresh_pipeline(tmp_path)
+    run_dir = tmp_path / "run-with-refresh-pricing"
+    run_dir.mkdir()
+
+    observed = pipeline._require_current_audit_model_refresh_pricing(
+        now=refresh.verified_at,
+        expected_source_sha256=refresh.pricing_evidence.source_sha256,
+    )
+    pipeline._persist_current_audit_model_refresh_pricing_evidence(
+        run_dir=run_dir,
+        now=refresh.verified_at,
+        expected_source_sha256=refresh.pricing_evidence.source_sha256,
+    )
+    artifact = run_dir / AUDIT_MODEL_REFRESH_PRICING_EVIDENCE_FILENAME
+    persisted = AuditModelRefreshPricingEvidence.model_validate_json(
+        artifact.read_text(encoding="utf-8"),
+        strict=True,
+    )
+
+    assert observed == refresh.pricing_evidence
+    assert persisted == refresh.pricing_evidence
+    assert not persisted.pricing_use_authorized
+    assert not persisted.technical_selection_authorized
+    assert not persisted.audit_selection_authorized
+    assert not persisted.provider_access_authorized
+    assert not persisted.production_promotion_authorized
+    assert refresh.pricing_authority.capability_sha256 not in artifact.read_text(encoding="utf-8")
 
 
 def test_pipeline_rejects_policy_excluded_configured_primary(tmp_path: Path) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
@@ -178,6 +179,15 @@ class CandidateBenchmarkFailureStage(StrEnum):
     AUTHENTICATION = "authentication"
     ENDPOINT_REGISTRATION = "endpoint_registration"
     BENCHMARK_EXECUTION = "benchmark_execution"
+
+
+class CandidateBenchmarkPreDispatchError(ValueError):
+    """Bounded non-secret setup rejection surfaced by an explicit fail-fast caller."""
+
+    def __init__(self, *, stage: CandidateBenchmarkFailureStage, detail: str) -> None:
+        self.stage = stage
+        self.detail = detail
+        super().__init__(detail)
 
 
 class CandidateBenchmarkRunState(StrEnum):
@@ -707,6 +717,9 @@ async def run_candidate_registry_benchmarks(
     client_factory: CandidateBenchmarkClientFactory | None = None,
     evidence_sink: CandidateBenchmarkEvidenceSink | None = None,
     qualification_policy: QualificationPolicy | None = None,
+    pre_dispatch_rejection_observer: (
+        Callable[[CandidateBenchmarkPreDispatchError], None] | None
+    ) = None,
 ) -> CandidateBenchmarkExecutionResult:
     """Benchmark every exact frozen candidate while preserving failed denominators."""
 
@@ -791,6 +804,7 @@ async def run_candidate_registry_benchmarks(
                 operator_api_key=operator_api_key,
                 reasoning_policy=reasoning_policy,
                 factory=factory,
+                pre_dispatch_rejection_observer=pre_dispatch_rejection_observer,
             )
             observed_usage = tuple(usage.records[usage_start:])
             raw_ledger_after = budget.atomic_ledger.snapshot()
@@ -864,7 +878,7 @@ def _candidate_benchmark_privacy_policy(
     benchmark_suite: ModelBenchmarkSuite,
     candidate: CandidateModel,
 ) -> tuple[EffectivePrivacyPolicyEvidence, PrivacySourceProvenanceObservation]:
-    """Bind one strict-ZDR candidate request to the exact versioned synthetic corpus."""
+    """Bind one synthetic-benchmark ZDR request to the exact versioned corpus."""
 
     observed_at = datetime.now(UTC).replace(microsecond=0)
     source_provenance = prove_release_pinned_model_benchmark_source(
@@ -872,8 +886,8 @@ def _candidate_benchmark_privacy_policy(
         now=observed_at,
     )
     policy = resolve_effective_privacy_policy(
-        profile=PrivacyProfile.STRICT_ZDR,
-        require_zdr=True,
+        profile=config.privacy.profile,
+        require_zdr=config.privacy.require_zdr,
         consent_observation=None,
         source_sha256=benchmark_suite.corpus_sha256,
         source_classification=PrivacySourceClassification.SYNTHETIC_COMMITTED,
@@ -899,6 +913,9 @@ async def _execute_candidate(
     operator_api_key: str,
     reasoning_policy: ReasoningPolicyArtifact,
     factory: CandidateBenchmarkClientFactory,
+    pre_dispatch_rejection_observer: (
+        Callable[[CandidateBenchmarkPreDispatchError], None] | None
+    ) = None,
 ) -> tuple[ModelBenchmarkReport, CandidateBenchmarkFailureStage | None, int]:
     before_usage = len(usage.records)
     client: OpenRouterClient | None = None
@@ -940,7 +957,12 @@ async def _execute_candidate(
                 raise ValueError(
                     "candidate benchmark client lacks the exact live release-pinned privacy proof"
                 )
-        except Exception:
+        except Exception as exc:
+            _observe_pre_dispatch_rejection(
+                pre_dispatch_rejection_observer,
+                stage=CandidateBenchmarkFailureStage.CLIENT_INITIALIZATION,
+                error=exc,
+            )
             return (
                 await _unverified_failure_report(
                     benchmark_suite=benchmark_suite,
@@ -951,7 +973,12 @@ async def _execute_candidate(
             )
         try:
             await client.validate_authentication()
-        except Exception:
+        except Exception as exc:
+            _observe_pre_dispatch_rejection(
+                pre_dispatch_rejection_observer,
+                stage=CandidateBenchmarkFailureStage.AUTHENTICATION,
+                error=exc,
+            )
             return (
                 await _unverified_failure_report(
                     benchmark_suite=benchmark_suite,
@@ -1010,7 +1037,12 @@ async def _execute_candidate(
                 evidence=endpoint_evidence,
                 manifest=discovery_manifest,
             )
-        except Exception:
+        except Exception as exc:
+            _observe_pre_dispatch_rejection(
+                pre_dispatch_rejection_observer,
+                stage=CandidateBenchmarkFailureStage.ENDPOINT_REGISTRATION,
+                error=exc,
+            )
             return (
                 await _unverified_failure_report(
                     benchmark_suite=benchmark_suite,
@@ -1044,6 +1076,27 @@ async def _execute_candidate(
                 client.clear_credentials()
             finally:
                 await client.close()
+
+
+def _observe_pre_dispatch_rejection(
+    observer: Callable[[CandidateBenchmarkPreDispatchError], None] | None,
+    *,
+    stage: CandidateBenchmarkFailureStage,
+    error: Exception,
+) -> None:
+    """Expose only bounded local validation text; provider errors remain type-only."""
+
+    if observer is None:
+        return
+    detail = str(error) if isinstance(error, (TypeError, ValueError)) else type(error).__name__
+    if (
+        not detail
+        or len(detail) > 500
+        or not detail.isascii()
+        or any(ord(character) < 32 or ord(character) > 126 for character in detail)
+    ):
+        detail = type(error).__name__
+    observer(CandidateBenchmarkPreDispatchError(stage=stage, detail=detail))
 
 
 def _require_exact_candidate_usage_binding(
@@ -1084,8 +1137,8 @@ def validate_candidate_benchmark_egress(
 
     if not explicitly_allowed:
         raise ValueError("candidate benchmarks require explicit synthetic-source egress approval")
-    if config.privacy.profile is not PrivacyProfile.STRICT_ZDR:
-        raise ValueError("candidate benchmarks require the STRICT_ZDR privacy profile")
+    if config.privacy.profile is not PrivacyProfile.SYNTHETIC_BENCHMARK:
+        raise ValueError("candidate benchmarks require the SYNTHETIC_BENCHMARK privacy profile")
     if not config.privacy.require_zdr:
         raise ValueError("candidate benchmarks require zero-data-retention routing")
     if config.privacy.store_raw_prompts or config.privacy.store_raw_responses:

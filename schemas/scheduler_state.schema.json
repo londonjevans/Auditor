@@ -19,6 +19,453 @@
       "title": "SchedulerActivationStatus",
       "type": "string"
     },
+    "SchedulerAuditModelRefreshBinding": {
+      "additionalProperties": false,
+      "description": "Hash-only campaign join to canonical veto-only refresh evidence.\n\nThe durable projection cannot recreate the process-local refresh guard and\ntherefore cannot authorize model selection, routing, or provider access.",
+      "properties": {
+        "audit_context_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Context Sha256",
+          "type": "string"
+        },
+        "audit_model_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "title": "Audit Model Ids",
+          "type": "array"
+        },
+        "audit_model_refresh_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Model Refresh Evidence Sha256",
+          "type": "string"
+        },
+        "audit_route_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Route Set Sha256",
+          "type": "string"
+        },
+        "audit_routes": {
+          "items": {
+            "$ref": "#/$defs/SchedulerAuditModelRefreshRouteBinding"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "title": "Audit Routes",
+          "type": "array"
+        },
+        "audit_scope_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Scope Sha256",
+          "type": "string"
+        },
+        "audit_selection_capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Selection Capability Sha256",
+          "type": "string"
+        },
+        "audit_selection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Selection Sha256",
+          "type": "string"
+        },
+        "authority_mode": {
+          "const": "VETO_ONLY_EXTERNAL_WORKFLOW_PIN_REQUIRED",
+          "default": "VETO_ONLY_EXTERNAL_WORKFLOW_PIN_REQUIRED",
+          "title": "Authority Mode",
+          "type": "string"
+        },
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "client_constraints_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Client Constraints Sha256",
+          "type": "string"
+        },
+        "evidence_authority": {
+          "const": "comparison_required",
+          "default": "comparison_required",
+          "title": "Evidence Authority",
+          "type": "string"
+        },
+        "expected_workflow_status_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Expected Workflow Status Sha256",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "freshness_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Freshness Sha256",
+          "type": "string"
+        },
+        "guard_capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Guard Capability Sha256",
+          "type": "string"
+        },
+        "refresh_current_through": {
+          "format": "date-time",
+          "title": "Refresh Current Through",
+          "type": "string"
+        },
+        "runtime_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Runtime Authorized",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Snapshot Sha256",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "technical_production_selection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Technical Production Selection Sha256",
+          "type": "string"
+        },
+        "technical_qualification_capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Technical Qualification Capability Sha256",
+          "type": "string"
+        },
+        "technical_route_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Technical Route Set Sha256",
+          "type": "string"
+        },
+        "verified_at": {
+          "format": "date-time",
+          "title": "Verified At",
+          "type": "string"
+        },
+        "workflow_status_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Workflow Status Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "audit_model_refresh_evidence_sha256",
+        "guard_capability_sha256",
+        "expected_workflow_status_sha256",
+        "workflow_status_sha256",
+        "snapshot_sha256",
+        "freshness_sha256",
+        "technical_route_set_sha256",
+        "audit_route_set_sha256",
+        "audit_model_ids",
+        "audit_routes",
+        "technical_qualification_capability_sha256",
+        "technical_production_selection_sha256",
+        "audit_selection_capability_sha256",
+        "audit_selection_sha256",
+        "audit_scope_sha256",
+        "source_sha256",
+        "audit_context_sha256",
+        "client_constraints_sha256",
+        "verified_at",
+        "refresh_current_through",
+        "expires_at",
+        "binding_sha256"
+      ],
+      "title": "SchedulerAuditModelRefreshBinding",
+      "type": "object"
+    },
+    "SchedulerAuditModelRefreshPricingBinding": {
+      "additionalProperties": false,
+      "description": "Durable comparison-only projection of bounded refreshed pricing.\n\nThe public authority hash is retained only for exact comparison with the\nprocess-local opaque capability. This binding cannot authorize pricing or\nprovider access by itself.",
+      "properties": {
+        "audit_context_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Context Sha256",
+          "type": "string"
+        },
+        "audit_model_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "title": "Audit Model Ids",
+          "type": "array"
+        },
+        "audit_model_refresh_pricing_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Model Refresh Pricing Evidence Sha256",
+          "type": "string"
+        },
+        "audit_pricing_route_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Pricing Route Set Sha256",
+          "type": "string"
+        },
+        "audit_routes": {
+          "items": {
+            "$ref": "#/$defs/SchedulerAuditModelRefreshPricingRouteBinding"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "title": "Audit Routes",
+          "type": "array"
+        },
+        "audit_scope_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Scope Sha256",
+          "type": "string"
+        },
+        "audit_selection_capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Selection Capability Sha256",
+          "type": "string"
+        },
+        "audit_selection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Audit Selection Sha256",
+          "type": "string"
+        },
+        "authority_mode": {
+          "const": "VETO_ONLY_EXTERNAL_PRICING_PIN_REQUIRED",
+          "default": "VETO_ONLY_EXTERNAL_PRICING_PIN_REQUIRED",
+          "title": "Authority Mode",
+          "type": "string"
+        },
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "client_constraints_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Client Constraints Sha256",
+          "type": "string"
+        },
+        "current_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Current Snapshot Sha256",
+          "type": "string"
+        },
+        "evidence_authority": {
+          "const": "comparison_required",
+          "default": "comparison_required",
+          "title": "Evidence Authority",
+          "type": "string"
+        },
+        "expected_workflow_status_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Expected Workflow Status Sha256",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "previous_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Previous Snapshot Sha256",
+          "type": "string"
+        },
+        "pricing_authority_capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Pricing Authority Capability Sha256",
+          "type": "string"
+        },
+        "pricing_tolerance_fraction": {
+          "maxLength": 66,
+          "minLength": 1,
+          "title": "Pricing Tolerance Fraction",
+          "type": "string"
+        },
+        "refresh_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Refresh Evidence Sha256",
+          "type": "string"
+        },
+        "refresh_guard_capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Refresh Guard Capability Sha256",
+          "type": "string"
+        },
+        "runtime_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Runtime Authorized",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "technical_pricing_route_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Technical Pricing Route Set Sha256",
+          "type": "string"
+        },
+        "technical_production_selection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Technical Production Selection Sha256",
+          "type": "string"
+        },
+        "technical_qualification_capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Technical Qualification Capability Sha256",
+          "type": "string"
+        },
+        "verified_at": {
+          "format": "date-time",
+          "title": "Verified At",
+          "type": "string"
+        },
+        "workflow_status_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Workflow Status Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "audit_model_refresh_pricing_evidence_sha256",
+        "pricing_authority_capability_sha256",
+        "expected_workflow_status_sha256",
+        "workflow_status_sha256",
+        "refresh_evidence_sha256",
+        "refresh_guard_capability_sha256",
+        "previous_snapshot_sha256",
+        "current_snapshot_sha256",
+        "pricing_tolerance_fraction",
+        "technical_pricing_route_set_sha256",
+        "audit_pricing_route_set_sha256",
+        "technical_qualification_capability_sha256",
+        "technical_production_selection_sha256",
+        "audit_selection_capability_sha256",
+        "audit_selection_sha256",
+        "audit_scope_sha256",
+        "source_sha256",
+        "audit_context_sha256",
+        "client_constraints_sha256",
+        "verified_at",
+        "expires_at",
+        "audit_model_ids",
+        "audit_routes",
+        "binding_sha256"
+      ],
+      "title": "SchedulerAuditModelRefreshPricingBinding",
+      "type": "object"
+    },
+    "SchedulerAuditModelRefreshPricingRouteBinding": {
+      "additionalProperties": false,
+      "description": "Hash-only scheduler join for one audit-selected refreshed-price route.",
+      "properties": {
+        "approved_provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$",
+          "title": "Approved Provider Endpoint",
+          "type": "string"
+        },
+        "baseline_pricing_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Baseline Pricing Sha256",
+          "type": "string"
+        },
+        "current_pricing_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Current Pricing Sha256",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "pricing_route_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Pricing Route Evidence Sha256",
+          "type": "string"
+        },
+        "qualified_pricing_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Qualified Pricing Snapshot Sha256",
+          "type": "string"
+        },
+        "refresh_route_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Refresh Route Evidence Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "approved_provider_endpoint",
+        "pricing_route_evidence_sha256",
+        "refresh_route_evidence_sha256",
+        "qualified_pricing_snapshot_sha256",
+        "baseline_pricing_sha256",
+        "current_pricing_sha256"
+      ],
+      "title": "SchedulerAuditModelRefreshPricingRouteBinding",
+      "type": "object"
+    },
+    "SchedulerAuditModelRefreshRouteBinding": {
+      "additionalProperties": false,
+      "description": "Exact per-model membership in the audit-selected refresh route set.",
+      "properties": {
+        "exact_model_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "route_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Route Evidence Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "route_evidence_sha256"
+      ],
+      "title": "SchedulerAuditModelRefreshRouteBinding",
+      "type": "object"
+    },
     "SchedulerAuditModelSelectionBinding": {
       "additionalProperties": false,
       "description": "Hash-only campaign join to one durable audit policy-selection bundle.\n\nThis record is comparison evidence, not runtime authority. The live opaque\nselection capability is deliberately absent.",
@@ -265,6 +712,28 @@
           "pattern": "^[0-9a-f]{64}$",
           "title": "Analysis Input Sha256",
           "type": "string"
+        },
+        "audit_model_refresh": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SchedulerAuditModelRefreshBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "audit_model_refresh_pricing": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SchedulerAuditModelRefreshPricingBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "audit_model_selection": {
           "anyOf": [
@@ -963,7 +1432,9 @@
           "default": "1.0",
           "enum": [
             "1.0",
-            "1.1"
+            "1.1",
+            "1.2",
+            "1.3"
           ],
           "title": "Schema Version",
           "type": "string"
@@ -1071,6 +1542,35 @@
           "minimum": 0,
           "title": "Truncated Count",
           "type": "integer"
+        },
+        "truncation_recovery_chain_head_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Truncation Recovery Chain Head Sha256"
+        },
+        "truncation_recovery_entry_count": {
+          "default": 0,
+          "maximum": 144,
+          "minimum": 0,
+          "title": "Truncation Recovery Entry Count",
+          "type": "integer"
+        },
+        "truncation_recovery_entry_sha256s": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 144,
+          "title": "Truncation Recovery Entry Sha256S",
+          "type": "array"
         },
         "unbound_count": {
           "maximum": 700000,
@@ -1806,6 +2306,37 @@
     },
     "SchedulerPassResult": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "not": {
+              "required": [
+                "recovery_promotion_bindings"
+              ]
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.1"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recovery_promotion_bindings": {
+                "minItems": 1
+              }
+            },
+            "required": [
+              "recovery_promotion_bindings"
+            ]
+          }
+        }
+      ],
       "description": "Exact terminal result set for one sealed mandatory pass.",
       "properties": {
         "evidence_authority": {
@@ -1827,9 +2358,21 @@
         "plan": {
           "$ref": "#/$defs/SchedulerPassPlan"
         },
+        "recovery_promotion_bindings": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SchedulerTruncationRecoveryPromotionBinding"
+          },
+          "maxItems": 100000,
+          "title": "Recovery Promotion Bindings",
+          "type": "array"
+        },
         "schema_version": {
-          "const": "1.0",
           "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1"
+          ],
           "title": "Schema Version",
           "type": "string"
         },
@@ -2742,6 +3285,582 @@
       ],
       "title": "SchedulerTerminalStatus",
       "type": "string"
+    },
+    "SchedulerTruncationRecoveryModelRequestEvidence": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "runtime_completion_evidence_sha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "validated_response_sha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "normalization_evidence_sha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "output_artifact_sha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "promotion_entry_sha256"
+                  ]
+                }
+              ]
+            }
+          },
+          "if": {
+            "properties": {
+              "terminal_status": {
+                "const": "SUCCEEDED"
+              }
+            },
+            "required": [
+              "terminal_status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "normalization_evidence_sha256": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "output_artifact_sha256": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "runtime_completion_evidence_sha256": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "validated_response_sha256": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            },
+            "required": [
+              "runtime_completion_evidence_sha256",
+              "validated_response_sha256",
+              "normalization_evidence_sha256",
+              "output_artifact_sha256"
+            ]
+          }
+        }
+      ],
+      "description": "Public hash-only projection of one typed v1.1 recovery child usage.",
+      "properties": {
+        "activation_entry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Activation Entry Sha256",
+          "type": "string"
+        },
+        "activation_id": {
+          "pattern": "^scheduler-recovery-activation-[0-9a-f]{64}$",
+          "title": "Activation Id",
+          "type": "string"
+        },
+        "activation_status": {
+          "const": "ACTIVATED",
+          "default": "ACTIVATED",
+          "title": "Activation Status",
+          "type": "string"
+        },
+        "actual_input_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Actual Input Sha256",
+          "type": "string"
+        },
+        "audit_model_selection_bundle_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Model Selection Bundle Sha256"
+        },
+        "audit_policy_routing_evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Policy Routing Evidence Sha256"
+        },
+        "audit_policy_selection_binding_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Policy Selection Binding Sha256"
+        },
+        "audit_scope_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Scope Sha256"
+        },
+        "audit_selected_model_set_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Selected Model Set Sha256"
+        },
+        "audit_selection_expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Selection Expires At"
+        },
+        "audit_selection_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Selection Sha256"
+        },
+        "audit_source_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audit Source Sha256"
+        },
+        "campaign_id": {
+          "pattern": "^scheduler-campaign-[0-9a-f]{64}$",
+          "title": "Campaign Id",
+          "type": "string"
+        },
+        "child_result_entry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Child Result Entry Sha256",
+          "type": "string"
+        },
+        "child_task_id": {
+          "pattern": "^scheduler-recovery-task-[0-9a-f]{64}$",
+          "title": "Child Task Id",
+          "type": "string"
+        },
+        "completion_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Completion Authorized",
+          "type": "boolean"
+        },
+        "context_request_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Context Request Evidence Sha256",
+          "type": "string"
+        },
+        "coverage_credit_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Coverage Credit Authorized",
+          "type": "boolean"
+        },
+        "delivered_source_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Delivered Source Inventory Sha256",
+          "type": "string"
+        },
+        "evidence_authority": {
+          "const": "comparison_required",
+          "default": "comparison_required",
+          "title": "Evidence Authority",
+          "type": "string"
+        },
+        "logical_request_id": {
+          "pattern": "^scheduler-recovery-request-[0-9a-f]{64}$",
+          "title": "Logical Request Id",
+          "type": "string"
+        },
+        "normalization_evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalization Evidence Sha256"
+        },
+        "output_artifact_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Artifact Sha256"
+        },
+        "parent_task_id": {
+          "pattern": "^scheduler-task-[0-9a-f]{64}$",
+          "title": "Parent Task Id",
+          "type": "string"
+        },
+        "promotion_entry_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Promotion Entry Sha256"
+        },
+        "provider_dispatch_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Provider Dispatch Authorized",
+          "type": "boolean"
+        },
+        "provider_prompt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Provider Prompt Sha256",
+          "type": "string"
+        },
+        "provider_response_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Provider Response Sha256",
+          "type": "string"
+        },
+        "release_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Release Authorized",
+          "type": "boolean"
+        },
+        "request_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Evidence Sha256",
+          "type": "string"
+        },
+        "request_limit_count_after": {
+          "maximum": 9223372036854775807,
+          "minimum": 1,
+          "title": "Request Limit Count After",
+          "type": "integer"
+        },
+        "request_limit_count_before": {
+          "maximum": 9223372036854775807,
+          "minimum": 1,
+          "title": "Request Limit Count Before",
+          "type": "integer"
+        },
+        "request_limit_maximum": {
+          "maximum": 9223372036854775807,
+          "minimum": 1,
+          "title": "Request Limit Maximum",
+          "type": "integer"
+        },
+        "request_limit_reservation_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Limit Reservation Evidence Sha256",
+          "type": "string"
+        },
+        "request_limit_scope": {
+          "pattern": "^scheduler-request-[0-9a-f]{64}$",
+          "title": "Request Limit Scope",
+          "type": "string"
+        },
+        "requested_model": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+          "title": "Requested Model",
+          "type": "string"
+        },
+        "response_schema_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Response Schema Sha256",
+          "type": "string"
+        },
+        "review_credit_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Review Credit Authorized",
+          "type": "boolean"
+        },
+        "role": {
+          "pattern": "^[a-z][a-z0-9_:.-]{0,127}$",
+          "title": "Role",
+          "type": "string"
+        },
+        "root_lineage": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Root Lineage",
+          "type": "string"
+        },
+        "runtime_completion_evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime Completion Evidence Sha256"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "system_prompt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "System Prompt Sha256",
+          "type": "string"
+        },
+        "terminal_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Terminal Evidence Sha256",
+          "type": "string"
+        },
+        "terminal_status": {
+          "enum": [
+            "SUCCEEDED",
+            "TRUNCATED"
+          ],
+          "title": "Terminal Status",
+          "type": "string"
+        },
+        "usage_record_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Usage Record Sha256",
+          "type": "string"
+        },
+        "user_prompt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "User Prompt Sha256",
+          "type": "string"
+        },
+        "validated_response_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Validated Response Sha256"
+        }
+      },
+      "required": [
+        "campaign_id",
+        "parent_task_id",
+        "child_task_id",
+        "logical_request_id",
+        "child_result_entry_sha256",
+        "activation_id",
+        "activation_entry_sha256",
+        "role",
+        "requested_model",
+        "root_lineage",
+        "actual_input_sha256",
+        "system_prompt_sha256",
+        "user_prompt_sha256",
+        "provider_prompt_sha256",
+        "response_schema_sha256",
+        "delivered_source_inventory_sha256",
+        "request_limit_scope",
+        "request_limit_count_before",
+        "request_limit_count_after",
+        "request_limit_maximum",
+        "request_limit_reservation_evidence_sha256",
+        "terminal_status",
+        "terminal_evidence_sha256",
+        "usage_record_sha256",
+        "context_request_evidence_sha256",
+        "provider_response_sha256",
+        "request_evidence_sha256"
+      ],
+      "title": "SchedulerTruncationRecoveryModelRequestEvidence",
+      "type": "object"
+    },
+    "SchedulerTruncationRecoveryPromotionBinding": {
+      "additionalProperties": false,
+      "description": "Hash-only public binding to one private recovery promotion.",
+      "properties": {
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "completion_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Completion Authorized",
+          "type": "boolean"
+        },
+        "coverage_credit_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Coverage Credit Authorized",
+          "type": "boolean"
+        },
+        "delivered_source_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Delivered Source Inventory Sha256",
+          "type": "string"
+        },
+        "direct_child_result_sha256s": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          ],
+          "title": "Direct Child Result Sha256S",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "evidence_authority": {
+          "const": "comparison_required",
+          "default": "comparison_required",
+          "title": "Evidence Authority",
+          "type": "string"
+        },
+        "original_truncated_result_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Original Truncated Result Sha256",
+          "type": "string"
+        },
+        "parent_task_id": {
+          "pattern": "^scheduler-task-[0-9a-f]{64}$",
+          "title": "Parent Task Id",
+          "type": "string"
+        },
+        "promotion_entry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Promotion Entry Sha256",
+          "type": "string"
+        },
+        "provider_dispatch_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Provider Dispatch Authorized",
+          "type": "boolean"
+        },
+        "recovered_output_artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Recovered Output Artifact Sha256",
+          "type": "string"
+        },
+        "release_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Release Authorized",
+          "type": "boolean"
+        },
+        "review_credit_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Review Credit Authorized",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "parent_task_id",
+        "original_truncated_result_sha256",
+        "promotion_entry_sha256",
+        "direct_child_result_sha256s",
+        "recovered_output_artifact_sha256",
+        "delivered_source_inventory_sha256",
+        "binding_sha256"
+      ],
+      "title": "SchedulerTruncationRecoveryPromotionBinding",
+      "type": "object"
     }
   },
   "$id": "https://mmaudit.local/schemas/scheduler_state.schema.json",
@@ -2771,11 +3890,22 @@
       "title": "Model Requests",
       "type": "array"
     },
+    "recovery_model_requests": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/SchedulerTruncationRecoveryModelRequestEvidence"
+      },
+      "maxItems": 32,
+      "title": "Recovery Model Requests",
+      "type": "array"
+    },
     "schema_version": {
       "default": "1.0",
       "enum": [
         "1.0",
-        "1.1"
+        "1.1",
+        "1.2",
+        "1.3"
       ],
       "title": "Schema Version",
       "type": "string"

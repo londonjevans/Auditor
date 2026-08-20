@@ -374,6 +374,35 @@ def _entity_rank(entity: SolidityEntity, role: str) -> tuple[int, str]:
         for token in ("batch", "claim", "execute", "finalize", "liquidate", "queue", "settle")
     ):
         priority -= 16
+    if role == "state_machine_lifecycle" and any(
+        token in entity.name.lower()
+        for token in (
+            "state",
+            "transition",
+            "pause",
+            "unpause",
+            "finalize",
+            "settle",
+            "migrate",
+            "close",
+        )
+    ):
+        priority -= 20
+    if role == "randomness_entropy_commit_reveal" and any(
+        token in entity.name.lower()
+        for token in (
+            "random",
+            "entropy",
+            "seed",
+            "commit",
+            "reveal",
+            "vrf",
+            "winner",
+            "draw",
+            "select",
+        )
+    ):
+        priority -= 20
     if role == "cross_chain_bridge" and any(
         token in entity.name.lower()
         for token in (
@@ -509,6 +538,26 @@ def _edge_rank(edge: SolidityGraphEdge, role: str) -> tuple[int, str]:
             "signature_replay",
             "state_dependency",
             "storage_layout",
+        },
+        "state_machine_lifecycle": {
+            "state_dependency",
+            "state_read",
+            "state_write",
+            "event_state",
+            "event_flow",
+            "initializer",
+            "governance",
+            "sensitive_reachability",
+        },
+        "randomness_entropy_commit_reveal": {
+            "dependency",
+            "offchain_dependency",
+            "oracle_dependency",
+            "state_dependency",
+            "state_read",
+            "state_write",
+            "event_state",
+            "sensitive_reachability",
         },
         "upgradeability_storage": {
             "proxy",

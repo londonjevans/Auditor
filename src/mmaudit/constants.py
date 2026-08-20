@@ -65,18 +65,45 @@ SPECIALIST_INVESTIGATOR_ROLES = (
     "cross_chain_bridge",
     "dependency_supply_chain",
     "formal_methods_property",
+    "state_machine_lifecycle",
+    "randomness_entropy_commit_reveal",
     "false_negative_hunter",
+)
+
+CANDIDATE_INDEPENDENT_SPECIALIST_ROLES = (
+    *SPECIALIST_INVESTIGATOR_ROLES,
+    "invariant_review",
+    "report_quality",
+)
+
+CANDIDATE_DEPENDENT_SPECIALIST_ROLES = (
+    "test_generation",
+    "exploit_reproduction_planner",
+    "falsifier",
 )
 
 SPECIALIST_AUXILIARY_ROLES = (
     "invariant_review",
-    "test_generation",
-    "exploit_reproduction_planner",
-    "falsifier",
+    *CANDIDATE_DEPENDENT_SPECIALIST_ROLES,
     "report_quality",
 )
 
 ALL_SPECIALIST_ROLES = (*SPECIALIST_INVESTIGATOR_ROLES, *SPECIALIST_AUXILIARY_ROLES)
+
+if len(CANDIDATE_INDEPENDENT_SPECIALIST_ROLES) != 24 or len(
+    set(CANDIDATE_INDEPENDENT_SPECIALIST_ROLES)
+) != len(CANDIDATE_INDEPENDENT_SPECIALIST_ROLES):
+    raise RuntimeError("candidate-independent specialist portfolio must contain 24 unique roles")
+if len(CANDIDATE_DEPENDENT_SPECIALIST_ROLES) != 3 or len(
+    set(CANDIDATE_DEPENDENT_SPECIALIST_ROLES)
+) != len(CANDIDATE_DEPENDENT_SPECIALIST_ROLES):
+    raise RuntimeError("candidate-dependent specialist portfolio must contain 3 unique roles")
+if set(CANDIDATE_INDEPENDENT_SPECIALIST_ROLES) & set(CANDIDATE_DEPENDENT_SPECIALIST_ROLES):
+    raise RuntimeError("candidate-independent and candidate-dependent roles must be disjoint")
+if set(CANDIDATE_INDEPENDENT_SPECIALIST_ROLES) | set(CANDIDATE_DEPENDENT_SPECIALIST_ROLES) != set(
+    ALL_SPECIALIST_ROLES
+):
+    raise RuntimeError("specialist responsibility portfolios must cover every specialist role")
 
 PERMANENT_EXCLUSIONS = (
     ".git",

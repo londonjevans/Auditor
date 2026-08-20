@@ -10,12 +10,13 @@ import logging
 import math
 import random
 import re
+import sys
 import time
 import uuid
 from collections.abc import Callable, Coroutine, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, localcontext
 from functools import lru_cache
 from pathlib import Path
 from threading import Lock
@@ -61,8 +62,10 @@ from mmaudit.models.generation_evidence import (
     GenerationVerificationRequest,
     OpenRouterGenerationEvidence,
     TrustedGenerationVerification,
+    _attest_authrunner_generation_origin,
     _issue_trusted_generation_verification,
     _reconcile_generation_evidence_structural,
+    _register_authrunner_generation_origin_issuer,
     validate_generation_id,
     validate_openrouter_generation_payload,
 )
@@ -89,6 +92,7 @@ from mmaudit.models.output_modes import (
     StructuredOutputMode,
     output_mode_capability_parameters,
     output_mode_request_parameters,
+    structured_output_parameters,
     supports_provider_structured_output,
     supports_reasoning_request,
 )
@@ -104,6 +108,10 @@ from mmaudit.models.reasoning import (
 )
 
 if TYPE_CHECKING:
+    from mmaudit.models.coverage_planning import (
+        ModelSurfaceGapTask,
+        ModelSurfaceTaskResourcePreview,
+    )
     from mmaudit.models.policy_eligibility import (
         ClientPolicyConstraints,
         PolicyAuditContext,
@@ -113,8 +121,19 @@ if TYPE_CHECKING:
         VerifiedAuditModelSelection,
     )
     from mmaudit.models.qualification import VerifiedProductionQualification
+    from mmaudit.models.refresh_runtime import (
+        AuditModelRefreshEvidence,
+        AuditModelRefreshPricingEvidence,
+        AuditModelRefreshPricingRouteEvidence,
+        AuditModelRefreshRouteEvidence,
+        VerifiedAuditModelRefreshGuard,
+        VerifiedAuditModelRefreshPricingAuthority,
+    )
+    from mmaudit.models.scheduler import SchedulerCampaignManifest, SchedulerTaskPlan
     from mmaudit.repository.privacy_provenance import PrivacySourceProvenanceObservation
 from mmaudit.models.schemas import (
+    AuditModelRefreshPricingAttemptEvidence,
+    CandidateReviewBatch,
     ContextPackage,
     ContextRequestEvidence,
     ExecutionEvidenceKind,
@@ -147,19 +166,46 @@ from mmaudit.models.token_planning import (
     build_output_token_allocations,
     build_request_token_plan,
 )
+from mmaudit.models.truncation import (
+    _CANONICAL_JSON_DUMPS as _CANDIDATE_REVIEW_CANONICAL_JSON_DUMPS,
+)
+from mmaudit.models.truncation import (
+    CandidateReviewFramedDocument,
+    CandidateReviewNormalizationEvidence,
+    CandidateReviewTruncatedEnvelopeEvidence,
+    CandidateReviewTruncationError,
+    CandidateReviewTruncationProjection,
+    candidate_review_batch_schema_sha256,
+    candidate_review_frame_wire_schema_sha256,
+    candidate_review_protocol_implementation_is_pristine,
+    decode_complete_candidate_review_document,
+    frame_candidate_review_batch,
+    normalize_candidate_review_document,
+    project_truncated_candidate_review_prefix,
+    seal_candidate_review_truncated_envelope_evidence,
+)
 from mmaudit.models.usage import (
     UsageLedger,
+    _attest_authrunner_owned_real_usage_origin,
     _attest_owned_real_usage_record,
     _has_owned_real_usage_attestation,
+    _register_authrunner_owned_real_usage_origin_issuer,
     _validated_usage_copy_preserving_owned_attestation,
 )
 from mmaudit.orchestration.budgets import (
     BudgetExhaustedError,
     BudgetManager,
     BudgetReservationStateError,
+    EndpointPriceComponent,
     EndpointRequestCostBound,
     Reservation,
     UnprovenCostBoundError,
+    _classmethod_function,
+    _property_getter,
+    _require_pristine_endpoint_cost_bound_types,
+    _require_trusted_budget_accounting_state,
+    _trusted_endpoint_request_cost_bound_from_pricing,
+    _trusted_endpoint_request_maximum_cost_usd,
     _TrustedRequestLimitScope,
 )
 from mmaudit.orchestration.context_manifest import (
@@ -170,6 +216,7 @@ from mmaudit.orchestration.context_manifest import (
     ContextPreflightSource,
     ContextRequestState,
 )
+from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.privacy import (
     EffectivePrivacyPolicyEvidence,
     EndpointPolicyClass,
@@ -180,6 +227,81 @@ from mmaudit.privacy import (
 from mmaudit.reporting.json_report import stable_json
 
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
+
+_TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE = CandidateReviewFramedDocument
+_TRUSTED_CANDIDATE_REVIEW_NORMALIZATION_EVIDENCE_TYPE = CandidateReviewNormalizationEvidence
+_TRUSTED_CANDIDATE_REVIEW_TRUNCATION_PROJECTION_TYPE = CandidateReviewTruncationProjection
+_TRUSTED_CANDIDATE_REVIEW_TRUNCATED_ENVELOPE_EVIDENCE_TYPE = (
+    CandidateReviewTruncatedEnvelopeEvidence
+)
+_TRUSTED_CANDIDATE_REVIEW_USAGE_RECORD_TYPE = UsageRecord
+_TRUSTED_CANDIDATE_REVIEW_WIRE_SCHEMA_SHA256 = candidate_review_frame_wire_schema_sha256
+_TRUSTED_CANDIDATE_REVIEW_BATCH_SCHEMA_SHA256 = candidate_review_batch_schema_sha256
+_TRUSTED_CANDIDATE_REVIEW_PROTOCOL_IMPLEMENTATION_IS_PRISTINE = (
+    candidate_review_protocol_implementation_is_pristine
+)
+_TRUSTED_DECODE_COMPLETE_CANDIDATE_REVIEW_DOCUMENT = decode_complete_candidate_review_document
+_TRUSTED_FRAME_CANDIDATE_REVIEW_BATCH = frame_candidate_review_batch
+_TRUSTED_NORMALIZE_CANDIDATE_REVIEW_DOCUMENT = normalize_candidate_review_document
+_TRUSTED_PROJECT_TRUNCATED_CANDIDATE_REVIEW_PREFIX = project_truncated_candidate_review_prefix
+_TRUSTED_SEAL_CANDIDATE_REVIEW_TRUNCATED_ENVELOPE_EVIDENCE = (
+    seal_candidate_review_truncated_envelope_evidence
+)
+
+
+def _candidate_review_protocol_boundary_is_pristine() -> bool:
+    """Reject mutable parser/schema aliases before they can govern spend or credit."""
+
+    from mmaudit.models import truncation as truncation_module
+
+    return bool(
+        truncation_module.CandidateReviewFramedDocument
+        is _TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE
+        and truncation_module.CandidateReviewNormalizationEvidence
+        is _TRUSTED_CANDIDATE_REVIEW_NORMALIZATION_EVIDENCE_TYPE
+        and truncation_module.CandidateReviewTruncationProjection
+        is _TRUSTED_CANDIDATE_REVIEW_TRUNCATION_PROJECTION_TYPE
+        and truncation_module.CandidateReviewTruncatedEnvelopeEvidence
+        is _TRUSTED_CANDIDATE_REVIEW_TRUNCATED_ENVELOPE_EVIDENCE_TYPE
+        and truncation_module.candidate_review_frame_wire_schema_sha256
+        is _TRUSTED_CANDIDATE_REVIEW_WIRE_SCHEMA_SHA256
+        and truncation_module.candidate_review_batch_schema_sha256
+        is _TRUSTED_CANDIDATE_REVIEW_BATCH_SCHEMA_SHA256
+        and truncation_module.candidate_review_protocol_implementation_is_pristine
+        is _TRUSTED_CANDIDATE_REVIEW_PROTOCOL_IMPLEMENTATION_IS_PRISTINE
+        and _TRUSTED_CANDIDATE_REVIEW_PROTOCOL_IMPLEMENTATION_IS_PRISTINE()
+        and truncation_module.decode_complete_candidate_review_document
+        is _TRUSTED_DECODE_COMPLETE_CANDIDATE_REVIEW_DOCUMENT
+        and truncation_module.frame_candidate_review_batch is _TRUSTED_FRAME_CANDIDATE_REVIEW_BATCH
+        and truncation_module.normalize_candidate_review_document
+        is _TRUSTED_NORMALIZE_CANDIDATE_REVIEW_DOCUMENT
+        and truncation_module.project_truncated_candidate_review_prefix
+        is _TRUSTED_PROJECT_TRUNCATED_CANDIDATE_REVIEW_PREFIX
+        and truncation_module.seal_candidate_review_truncated_envelope_evidence
+        is _TRUSTED_SEAL_CANDIDATE_REVIEW_TRUNCATED_ENVELOPE_EVIDENCE
+        and OpenRouterTruncatedResponseError._attach_projection
+        is _TRUSTED_ATTACH_CANDIDATE_REVIEW_TRUNCATION_PROJECTION
+        and OpenRouterTruncatedResponseError._attach_failed_usage_record
+        is _TRUSTED_ATTACH_CANDIDATE_REVIEW_TRUNCATED_USAGE
+        and OpenRouterTruncatedResponseError.projection
+        is _TRUSTED_CANDIDATE_REVIEW_TRUNCATION_PROJECTION_PROPERTY
+        and OpenRouterTruncatedResponseError.envelope_evidence
+        is _TRUSTED_CANDIDATE_REVIEW_TRUNCATED_ENVELOPE_PROPERTY
+        and OpenRouterTruncatedResponseError.failed_usage_record
+        is _TRUSTED_CANDIDATE_REVIEW_TRUNCATED_USAGE_PROPERTY
+        and _candidate_review_error_custody_is_coherent
+        is _TRUSTED_CANDIDATE_REVIEW_ERROR_CUSTODY_IS_COHERENT
+        and _candidate_review_truncation_projection_routing
+        is _TRUSTED_CANDIDATE_REVIEW_TRUNCATION_PROJECTION_ROUTING
+        and _candidate_review_truncated_envelope_routing
+        is _TRUSTED_CANDIDATE_REVIEW_TRUNCATED_ENVELOPE_ROUTING
+        and UsageRecord is _TRUSTED_CANDIDATE_REVIEW_USAGE_RECORD_TYPE
+        and UsageRecord.__pydantic_validator__ is _TRUSTED_CANDIDATE_REVIEW_USAGE_RECORD_VALIDATOR
+        and UsageRecord.__pydantic_core_schema__
+        is _TRUSTED_CANDIDATE_REVIEW_USAGE_RECORD_CORE_SCHEMA
+        and OpenRouterClient._failure_routing_evidence is _TRUSTED_FAILURE_ROUTING_EVIDENCE
+    )
+
 
 _NORMALIZED_OPENROUTER_BASE_URL = OPENROUTER_DEFAULT_BASE_URL.rstrip("/") + "/"
 _PROVIDER_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,127}$")
@@ -988,6 +1110,141 @@ class _OpenRouterAuditPolicyBinding:
     client_constraints: ClientPolicyConstraints
 
 
+@dataclass(frozen=True, slots=True)
+class _OpenRouterAuditModelRefreshBinding:
+    """Atomic durable evidence and opaque veto guard supplied by the audit runtime."""
+
+    evidence: AuditModelRefreshEvidence
+    guard: VerifiedAuditModelRefreshGuard
+
+
+@dataclass(frozen=True, slots=True)
+class _OpenRouterAuditModelRefreshPricingBinding:
+    """Atomic durable price evidence and its exact opaque live authority."""
+
+    evidence: AuditModelRefreshPricingEvidence
+    authority: VerifiedAuditModelRefreshPricingAuthority
+
+
+@dataclass(frozen=True, slots=True)
+class _AuditModelRefreshPricingRequestControl:
+    """One immutable current-price input shared by routing and accounting."""
+
+    exact_model_id: str
+    provider_endpoint: str
+    current_endpoint_snapshot_sha256: str
+    qualified_pricing_snapshot_sha256: str
+    current_pricing: tuple[tuple[str, str], ...]
+    current_pricing_sha256: str
+    route_evidence_sha256: str
+    evidence_sha256: str
+    authority_capability_sha256: str
+    routing_max_price: tuple[tuple[str, float], ...]
+    cost_bound_pricing: tuple[tuple[str, str], ...]
+    control_sha256: str
+
+
+def _canonical_audit_model_refresh_binding(
+    *,
+    evidence: AuditModelRefreshEvidence | None,
+    guard: VerifiedAuditModelRefreshGuard | None,
+) -> _OpenRouterAuditModelRefreshBinding | None:
+    """Copy non-authorizing evidence while retaining the exact opaque live guard."""
+
+    from mmaudit.models.refresh_runtime import (
+        AuditModelRefreshEvidence,
+        VerifiedAuditModelRefreshGuard,
+    )
+
+    if evidence is None and guard is None:
+        return None
+    if evidence is None or guard is None:
+        raise OpenRouterModelRefreshError(
+            "audit model refresh requires both durable evidence and its opaque live guard"
+        )
+    if type(evidence) is not AuditModelRefreshEvidence:
+        raise OpenRouterModelRefreshError("audit model refresh evidence has an invalid type")
+    if type(guard) is not VerifiedAuditModelRefreshGuard:
+        raise OpenRouterModelRefreshError("audit model refresh guard is absent or forged")
+    try:
+        canonical = AuditModelRefreshEvidence.model_validate_json(
+            evidence.model_dump_json(),
+            strict=True,
+        )
+    except (AttributeError, ValueError) as exc:
+        raise OpenRouterModelRefreshError(
+            "audit model refresh evidence is structurally invalid"
+        ) from exc
+    if canonical != evidence:
+        raise OpenRouterModelRefreshError(
+            "audit model refresh evidence changed during canonicalization"
+        )
+    return _OpenRouterAuditModelRefreshBinding(evidence=canonical, guard=guard)
+
+
+def _canonical_audit_model_refresh_pricing_binding(
+    *,
+    evidence: AuditModelRefreshPricingEvidence | None,
+    authority: VerifiedAuditModelRefreshPricingAuthority | None,
+    refresh_binding: _OpenRouterAuditModelRefreshBinding | None,
+) -> _OpenRouterAuditModelRefreshPricingBinding | None:
+    """Copy pricing evidence while retaining the exact opaque authority identity."""
+
+    from mmaudit.models.refresh_runtime import (
+        AuditModelRefreshPricingEvidence,
+        VerifiedAuditModelRefreshPricingAuthority,
+    )
+
+    if evidence is None and authority is None:
+        return None
+    if evidence is None or authority is None:
+        raise OpenRouterModelRefreshPricingError(
+            "audit model refresh pricing requires durable evidence and opaque authority"
+        )
+    if refresh_binding is None:
+        raise OpenRouterModelRefreshPricingError(
+            "audit model refresh pricing requires exact refresh evidence and live guard"
+        )
+    if type(evidence) is not AuditModelRefreshPricingEvidence:
+        raise OpenRouterModelRefreshPricingError(
+            "audit model refresh pricing evidence has an invalid type"
+        )
+    if type(authority) is not VerifiedAuditModelRefreshPricingAuthority:
+        raise OpenRouterModelRefreshPricingError(
+            "audit model refresh pricing authority is absent or forged"
+        )
+    try:
+        canonical = AuditModelRefreshPricingEvidence.model_validate_json(
+            evidence.model_dump_json(),
+            strict=True,
+        )
+    except (AttributeError, ValueError) as exc:
+        raise OpenRouterModelRefreshPricingError(
+            "audit model refresh pricing evidence is structurally invalid"
+        ) from exc
+    try:
+        exact_refresh_custody = (
+            canonical == evidence
+            and canonical.refresh_evidence_sha256 == refresh_binding.evidence.evidence_sha256
+            and canonical.refresh_guard_capability_sha256 == refresh_binding.guard.capability_sha256
+            and authority.pricing_evidence_sha256 == canonical.evidence_sha256
+            and authority.refresh_evidence_sha256 == refresh_binding.evidence.evidence_sha256
+            and authority.refresh_guard_capability_sha256 == refresh_binding.guard.capability_sha256
+        )
+    except AttributeError as exc:
+        raise OpenRouterModelRefreshPricingError(
+            "audit model refresh pricing authority is incomplete or forged"
+        ) from exc
+    if not exact_refresh_custody:
+        raise OpenRouterModelRefreshPricingError(
+            "audit model refresh pricing differs from its exact refresh custody"
+        )
+    return _OpenRouterAuditModelRefreshPricingBinding(
+        evidence=canonical,
+        authority=authority,
+    )
+
+
 def _canonical_audit_policy_binding(
     *,
     policy_audit_context: PolicyAuditContext | None,
@@ -1113,6 +1370,38 @@ class StructuredCompletion[ValueT: BaseModel]:
 
 
 @dataclass(frozen=True, slots=True)
+class CandidateReviewCompletion:
+    """Normalized review plus exact wire-schema and transformation custody."""
+
+    value: CandidateReviewBatch
+    usage_record: UsageRecord
+    normalization_evidence: CandidateReviewNormalizationEvidence
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.value) is not CandidateReviewBatch
+            or type(self.usage_record) is not UsageRecord
+            or type(self.normalization_evidence)
+            is not _TRUSTED_CANDIDATE_REVIEW_NORMALIZATION_EVIDENCE_TYPE
+        ):
+            raise TypeError("candidate-review completion custody has an invalid exact type")
+        evidence = self.normalization_evidence
+        if (
+            self.usage_record.schema_sha256 != _TRUSTED_CANDIDATE_REVIEW_WIRE_SCHEMA_SHA256()
+            or self.usage_record.schema_sha256 != evidence.wire_schema_sha256
+            or self.usage_record.validated_response_sha256
+            != evidence.wire_validated_response_sha256
+            or evidence.normalized_batch_schema_sha256
+            != _TRUSTED_CANDIDATE_REVIEW_BATCH_SCHEMA_SHA256()
+        ):
+            raise ValueError("candidate-review completion wire custody is inconsistent")
+        evidence.require_exact_batch(
+            self.value,
+            request_id=self.usage_record.request_id,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class _StructuredOutputRequestPlan:
     """Exact provider request shape selected from frozen endpoint capability."""
 
@@ -1134,6 +1423,10 @@ class _RegisteredEndpointPricing:
     provider_endpoint: str
     provider_name: str
     provider_identities: tuple[str, ...]
+    endpoint_tag: str | None
+    endpoint_slug: str | None
+    operational_status: str
+    zdr_eligible: bool | None
     pricing: tuple[tuple[str, str], ...]
     pricing_sha256: str
     snapshot_sha256: str
@@ -1228,8 +1521,252 @@ class OpenRouterStructuredOutputError(OpenRouterSchemaError):
         super().__init__(f"model returned invalid structured data ({failure_code.value})")
 
 
+class OpenRouterCandidateReviewBoundaryError(OpenRouterSchemaError):
+    """The frozen candidate-review parser/normalizer boundary changed in-process."""
+
+
 class OpenRouterTruncatedResponseError(OpenRouterSchemaError):
-    pass
+    """Confirmed truncation with optional raw-free provisional recovery custody."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        envelope_evidence: CandidateReviewTruncatedEnvelopeEvidence | None = None,
+    ) -> None:
+        if envelope_evidence is not None:
+            if (
+                type(envelope_evidence)
+                is not _TRUSTED_CANDIDATE_REVIEW_TRUNCATED_ENVELOPE_EVIDENCE_TYPE
+                or not _candidate_review_protocol_boundary_is_pristine()
+            ):
+                raise TypeError("candidate-review truncated envelope custody has an invalid type")
+            try:
+                envelope_evidence = (
+                    _TRUSTED_CANDIDATE_REVIEW_TRUNCATED_ENVELOPE_EVIDENCE_TYPE.model_validate_json(
+                        envelope_evidence.model_dump_json(),
+                        strict=True,
+                    )
+                )
+            except (TypeError, ValueError):
+                raise OpenRouterSchemaError(
+                    "candidate-review truncated envelope custody is invalid"
+                ) from None
+        self._envelope_evidence = envelope_evidence
+        self._projection: CandidateReviewTruncationProjection | None = None
+        self._failed_usage_record: UsageRecord | None = None
+        super().__init__(message)
+
+    @property
+    def envelope_evidence(self) -> CandidateReviewTruncatedEnvelopeEvidence | None:
+        _candidate_review_error_custody_is_coherent(self)
+        return self._envelope_evidence
+
+    @property
+    def projection(self) -> CandidateReviewTruncationProjection | None:
+        _candidate_review_error_custody_is_coherent(self)
+        return self._projection
+
+    @property
+    def failed_usage_record(self) -> UsageRecord | None:
+        _candidate_review_error_custody_is_coherent(self)
+        return self._failed_usage_record
+
+    def _attach_projection(self, projection: CandidateReviewTruncationProjection) -> None:
+        if (
+            self._projection is not None
+            or type(projection) is not _TRUSTED_CANDIDATE_REVIEW_TRUNCATION_PROJECTION_TYPE
+            or not _candidate_review_protocol_boundary_is_pristine()
+        ):
+            raise OpenRouterSchemaError("candidate-review truncation projection is invalid")
+        try:
+            exact_projection = (
+                _TRUSTED_CANDIDATE_REVIEW_TRUNCATION_PROJECTION_TYPE.model_validate_json(
+                    projection.model_dump_json(),
+                    strict=True,
+                )
+            )
+        except (TypeError, ValueError):
+            raise OpenRouterSchemaError(
+                "candidate-review truncation projection is invalid"
+            ) from None
+        self._projection = exact_projection
+        try:
+            _candidate_review_error_custody_is_coherent(self)
+        except OpenRouterSchemaError:
+            self._projection = None
+            raise
+
+    def _attach_failed_usage_record(self, usage: UsageRecord) -> None:
+        if (
+            self._failed_usage_record is not None
+            or type(usage) is not UsageRecord
+            or not _candidate_review_protocol_boundary_is_pristine()
+        ):
+            raise OpenRouterSchemaError("candidate-review truncated usage custody is invalid")
+        try:
+            _TRUSTED_CANDIDATE_REVIEW_USAGE_RECORD_VALIDATOR.validate_python(
+                usage.model_dump(mode="python"),
+                strict=True,
+            )
+        except (TypeError, ValueError):
+            raise OpenRouterSchemaError(
+                "candidate-review truncated usage custody is invalid"
+            ) from None
+        self._failed_usage_record = usage
+        try:
+            _candidate_review_error_custody_is_coherent(self)
+        except OpenRouterSchemaError:
+            self._failed_usage_record = None
+            raise
+
+
+def _candidate_review_truncated_envelope_routing(
+    envelope: CandidateReviewTruncatedEnvelopeEvidence,
+) -> dict[str, Any]:
+    """Return the complete raw-free typed envelope inventory for failed usage."""
+
+    return {
+        "candidate_review_truncated_envelope_evidence": envelope.model_dump(mode="json"),
+        "candidate_review_truncated_envelope_sha256": envelope.evidence_sha256,
+    }
+
+
+def _candidate_review_truncation_projection_routing(
+    projection: CandidateReviewTruncationProjection,
+) -> dict[str, Any]:
+    """Return only non-record projection state needed to join failed usage custody."""
+
+    return {
+        "candidate_review_truncation_projection_sha256": projection.evidence_sha256,
+        "candidate_review_truncation_termination": projection.termination.value,
+        "candidate_review_truncation_findings_state": projection.findings_state.value,
+        "candidate_review_truncation_surface_reviews_state": (
+            projection.surface_reviews_state.value
+        ),
+        "candidate_review_truncation_summary_state": projection.summary_state.value,
+        "candidate_review_truncation_stream_integrity_valid": (projection.stream_integrity_valid),
+        "candidate_review_truncation_document_complete": projection.document_complete,
+        "candidate_review_truncation_declared_finding_count": (projection.declared_finding_count),
+        "candidate_review_truncation_declared_surface_review_count": (
+            projection.declared_surface_review_count
+        ),
+        "candidate_review_truncation_observed_frame_count": projection.observed_frame_count,
+        "candidate_review_truncation_observed_finding_frame_count": (
+            projection.observed_finding_frame_count
+        ),
+        "candidate_review_truncation_observed_surface_review_frame_count": (
+            projection.observed_surface_review_frame_count
+        ),
+        "candidate_review_truncation_accepted_frame_count": len(projection.accepted_frames),
+        "candidate_review_truncation_accepted_finding_count": (projection.accepted_finding_count),
+        "candidate_review_truncation_accepted_surface_review_count": (
+            projection.accepted_surface_review_count
+        ),
+        "candidate_review_truncation_invalid_frame_count": projection.invalid_frame_count,
+        "candidate_review_truncation_credit_eligible": False,
+        "candidate_review_truncation_authority_eligible": False,
+    }
+
+
+def _candidate_review_error_custody_is_coherent(
+    error: OpenRouterTruncatedResponseError,
+) -> bool:
+    """Revalidate every raw-free error join before exposing durable recovery custody."""
+
+    if (
+        type(error) is not OpenRouterTruncatedResponseError
+        or not _candidate_review_protocol_boundary_is_pristine()
+    ):
+        raise OpenRouterSchemaError("candidate-review truncation custody boundary changed")
+    envelope = error._envelope_evidence
+    projection = error._projection
+    usage = error._failed_usage_record
+    if envelope is None:
+        if projection is not None or usage is not None:
+            raise OpenRouterSchemaError("candidate-review truncation envelope custody is missing")
+        return True
+    try:
+        exact_envelope = (
+            _TRUSTED_CANDIDATE_REVIEW_TRUNCATED_ENVELOPE_EVIDENCE_TYPE.model_validate_json(
+                envelope.model_dump_json(),
+                strict=True,
+            )
+        )
+    except (AttributeError, TypeError, ValueError):
+        raise OpenRouterSchemaError(
+            "candidate-review truncation envelope custody is invalid"
+        ) from None
+    if projection is not None:
+        try:
+            exact_projection = (
+                _TRUSTED_CANDIDATE_REVIEW_TRUNCATION_PROJECTION_TYPE.model_validate_json(
+                    projection.model_dump_json(),
+                    strict=True,
+                )
+            )
+        except (AttributeError, TypeError, ValueError):
+            raise OpenRouterSchemaError(
+                "candidate-review truncation projection custody is invalid"
+            ) from None
+        if (
+            exact_projection.original_response_sha256 != exact_envelope.response_sha256
+            or exact_projection.wire_schema_sha256 != exact_envelope.wire_schema_sha256
+            or exact_projection.finish_reason != exact_envelope.finish_reason
+            or exact_projection.native_finish_reason != exact_envelope.native_finish_reason
+            or exact_projection.review_credit_eligible
+            or exact_projection.coverage_credit_eligible
+            or exact_projection.summary_credit_eligible
+            or exact_projection.authority_eligible
+        ):
+            raise OpenRouterSchemaError("candidate-review truncation projection custody differs")
+    if usage is None:
+        return True
+    try:
+        _TRUSTED_CANDIDATE_REVIEW_USAGE_RECORD_VALIDATOR.validate_python(
+            usage.model_dump(mode="python"),
+            strict=True,
+        )
+    except (AttributeError, TypeError, ValueError):
+        raise OpenRouterSchemaError("candidate-review truncated usage custody is invalid") from None
+    routing = usage.routing
+    expected_envelope_routing = _candidate_review_truncated_envelope_routing(exact_envelope)
+    expected_projection_routing = (
+        _candidate_review_truncation_projection_routing(exact_projection)
+        if projection is not None
+        else {}
+    )
+    actual_projection_keys = {
+        key for key in routing if key.startswith("candidate_review_truncation_")
+    }
+    if (
+        usage.request_id != exact_envelope.logical_request_id
+        or usage.requested_model != exact_envelope.requested_model
+        or usage.returned_model != exact_envelope.returned_model
+        or usage.actual_model != exact_envelope.selected_model
+        or usage.provider != exact_envelope.selected_provider_name
+        or usage.openrouter_generation_id != exact_envelope.generation_id
+        or usage.actual_provider_endpoint != exact_envelope.selected_provider_endpoint
+        or usage.response_sha256 != exact_envelope.response_sha256
+        or usage.schema_sha256 != exact_envelope.wire_schema_sha256
+        or usage.finish_reason != exact_envelope.finish_reason
+        or usage.validation_status is not ModelRequestValidationStatus.TRUNCATED
+        or usage.identity_strength is not ModelIdentityStrength.UNBOUND
+        or usage.validated_response_sha256 is not None
+        or usage.status != "rejected_truncated_response"
+        or routing.get("generation_id") != exact_envelope.generation_id
+        or routing.get("generation_header_id") != exact_envelope.generation_header_id
+        or routing.get("provider") != exact_envelope.selected_provider_name
+        or routing.get("router_metadata_sha256") != exact_envelope.router_metadata_sha256
+        or routing.get("finish_reason") != exact_envelope.finish_reason
+        or routing.get("native_finish_reason") != exact_envelope.native_finish_reason
+        or routing.get("schema_sha256") != exact_envelope.wire_schema_sha256
+        or any(routing.get(key) != value for key, value in expected_envelope_routing.items())
+        or actual_projection_keys != set(expected_projection_routing)
+        or any(routing.get(key) != value for key, value in expected_projection_routing.items())
+    ):
+        raise OpenRouterSchemaError("candidate-review truncated usage custody differs")
+    return True
 
 
 class OpenRouterPrivacyError(OpenRouterError):
@@ -1298,6 +1835,14 @@ class OpenRouterPolicyEligibilityError(OpenRouterModelError):
     """Raised when a paid audit route lacks current policy-selection authority."""
 
 
+class OpenRouterModelRefreshError(OpenRouterPolicyEligibilityError):
+    """Raised when a REAL paid route lacks its exact current refresh veto guard."""
+
+
+class OpenRouterModelRefreshPricingError(OpenRouterModelRefreshError):
+    """Raised when a REAL paid route lacks exact refreshed-price authority."""
+
+
 class OpenRouterProviderPolicyError(OpenRouterModelError):
     pass
 
@@ -1339,6 +1884,176 @@ class _OpenRouterGlobalTokenBudgetError(OpenRouterRequestLimitError):
 
 class OpenRouterCostControlError(OpenRouterError):
     pass
+
+
+def _require_exact_openrouter_request_body(
+    body: dict[str, Any],
+    *,
+    model: str,
+    structured_output_plan: _StructuredOutputRequestPlan,
+    provider_policy: OpenRouterProviderPolicy,
+    require_zdr: bool,
+    request_token_plan: RequestTokenPlan,
+    request_metadata: Mapping[str, str],
+    endpoint_policy: _RegisteredEndpointPolicy | None,
+    refresh_pricing_control: _AuditModelRefreshPricingRequestControl | None,
+    expected_sha256: str | None = None,
+) -> str:
+    """Require and hash the canonical semantics of one sealed provider request body."""
+
+    provider: dict[str, Any] = {
+        "allow_fallbacks": provider_policy.allow_fallbacks,
+        "data_collection": "deny",
+    }
+    if structured_output_plan.require_parameters:
+        provider["require_parameters"] = True
+    if require_zdr:
+        provider["zdr"] = True
+    if provider_policy.only:
+        provider["only"] = list(provider_policy.only)
+    elif provider_policy.order:
+        provider["order"] = list(provider_policy.order)
+    if refresh_pricing_control is not None:
+        provider["max_price"] = dict(refresh_pricing_control.routing_max_price)
+    elif endpoint_policy is not None:
+        provider["max_price"] = dict(endpoint_policy.routing_max_price)
+
+    expected: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": structured_output_plan.system_prompt},
+            {"role": "user", "content": structured_output_plan.user_prompt},
+        ],
+        "temperature": 0,
+        "max_tokens": request_token_plan.requested_completion_tokens,
+        "stream": False,
+        "provider": provider,
+    }
+    if structured_output_plan.response_format is not None:
+        expected["response_format"] = structured_output_plan.response_format
+    if structured_output_plan.reasoning_payload is not None:
+        expected["reasoning"] = structured_output_plan.reasoning_payload
+    if request_metadata:
+        expected["metadata"] = dict(request_metadata)
+    if type(body) is not dict or body != expected:
+        error_type = (
+            OpenRouterModelRefreshPricingError
+            if refresh_pricing_control is not None
+            else OpenRouterProviderPolicyError
+        )
+        raise error_type(
+            "request body differs from its sealed provider policy or structured request plan"
+        )
+    body_sha256 = _TRUSTED_CANONICAL_SHA256(body)
+    if expected_sha256 is not None and body_sha256 != expected_sha256:
+        raise OpenRouterModelRefreshPricingError(
+            "request body changed after exact pricing and budget sealing"
+        )
+    return body_sha256
+
+
+def _candidate_review_request_token_plan_projection_sha256(
+    plan: RequestTokenPlan,
+) -> str:
+    """Commit the request-local plan while excluding only live budget-position counters."""
+
+    if type(plan) is not RequestTokenPlan:
+        raise OpenRouterCandidateReviewBoundaryError(
+            "candidate-review token-plan projection requires exact typed evidence"
+        )
+    plan_payload = plan.model_dump(
+        mode="json",
+        exclude={"global_budget", "plan_sha256"},
+    )
+    global_budget = plan.global_budget
+    plan_payload["global_budget"] = {
+        "schema_version": global_budget.schema_version,
+        "global_input_token_budget": global_budget.global_input_token_budget,
+        "global_output_token_budget": global_budget.global_output_token_budget,
+        "request_input_tokens": global_budget.request_input_tokens,
+        "request_output_tokens": global_budget.request_output_tokens,
+    }
+    material = _TRUSTED_CANDIDATE_REVIEW_CANONICAL_JSON_DUMPS(
+        {
+            "domain": "mmaudit.openrouter.candidate-review-token-plan-projection.v1",
+            "request_token_plan": plan_payload,
+        }
+    )
+    return _TRUSTED_HASHLIB_SHA256(material.encode("utf-8")).hexdigest()
+
+
+def _candidate_review_request_material_projection(
+    body: dict[str, Any],
+    *,
+    request_token_plan: RequestTokenPlan,
+) -> tuple[str, str, str]:
+    """Normalize only the live-budget-derived token-plan hash in canonical body material."""
+
+    token_plan_projection_sha256 = _TRUSTED_CANDIDATE_REVIEW_TOKEN_PLAN_PROJECTION_SHA256(
+        request_token_plan
+    )
+    metadata = body.get("metadata")
+    if (
+        type(body) is not dict
+        or type(metadata) is not dict
+        or metadata.get("mmaudit_token_plan_sha256") != request_token_plan.plan_sha256
+    ):
+        raise OpenRouterCandidateReviewBoundaryError(
+            "candidate-review request material lacks its exact live token plan"
+        )
+    projected_metadata = {**metadata}
+    projected_body = {**body, "metadata": projected_metadata}
+    projected_metadata["mmaudit_token_plan_sha256"] = token_plan_projection_sha256
+    projected_material = _TRUSTED_CANDIDATE_REVIEW_CANONICAL_JSON_DUMPS(projected_body)
+    actual_material = _TRUSTED_CANDIDATE_REVIEW_CANONICAL_JSON_DUMPS(body)
+    if len(projected_material.encode("utf-8")) != len(actual_material.encode("utf-8")):
+        raise OpenRouterCandidateReviewBoundaryError(
+            "candidate-review request projection changed the priced material size"
+        )
+    return (
+        token_plan_projection_sha256,
+        projected_material,
+        _TRUSTED_HASHLIB_SHA256(projected_material.encode("utf-8")).hexdigest(),
+    )
+
+
+def _endpoint_request_cost_bound_projection_sha256(
+    bound: EndpointRequestCostBound,
+    *,
+    request_material_projection_sha256: str,
+) -> str:
+    """Hash exact pricing/unit bounds against stable request-local material."""
+
+    _require_pristine_endpoint_cost_bound_types()
+    if (
+        type(bound) is not EndpointRequestCostBound
+        or _SHA256_PATTERN.fullmatch(request_material_projection_sha256) is None
+        or any(type(component) is not EndpointPriceComponent for component in bound.components)
+    ):
+        raise OpenRouterCostControlError("endpoint request cost-bound evidence type is invalid")
+    maximum_cost = _trusted_endpoint_request_maximum_cost_usd(bound)
+    maximum_cost_text = format(maximum_cost, "f")
+    if "." in maximum_cost_text:
+        maximum_cost_text = maximum_cost_text.rstrip("0").rstrip(".")
+    material = _TRUSTED_CANDIDATE_REVIEW_CANONICAL_JSON_DUMPS(
+        {
+            "domain": "mmaudit.openrouter.endpoint-request-cost-bound.v1",
+            "exact_model_id": bound.exact_model_id,
+            "provider_endpoint": bound.provider_endpoint,
+            "request_material_projection_sha256": request_material_projection_sha256,
+            "pricing_snapshot_sha256": bound.pricing_snapshot_sha256,
+            "components": [
+                {
+                    "pricing_field": component.pricing_field,
+                    "unit_price_usd_exact": format(component.unit_price_usd, "f"),
+                    "maximum_units": component.maximum_units,
+                }
+                for component in bound.components
+            ],
+            "maximum_cost_usd_exact": maximum_cost_text or "0",
+        }
+    )
+    return _TRUSTED_HASHLIB_SHA256(material.encode("utf-8")).hexdigest()
 
 
 def _attempt_request_id(request_id: str, attempt: int) -> str:
@@ -1754,6 +2469,22 @@ class ModelRequestLifecycleObserver(Protocol):
     def request_dispatched(self, *, logical_request_id: str) -> None: ...
 
 
+class _TestOnlyContextPackageBudgetObserver(Protocol):
+    """Observe validated context previews on the sealed synthetic transport only."""
+
+    def __call__(
+        self,
+        models: tuple[str, ...],
+        *,
+        role: str | None,
+        workflow_byte_upper_bound_tokens: int | None,
+        workflow_prompt_sha256: str | None,
+        workflow_prompt_provider_visible_bytes: int | None,
+        context_json_escape_overhead_tokens: int,
+        computed_package_budget: int,
+    ) -> None: ...
+
+
 def _fully_delivered_source_descriptors(
     context_package: ContextPackage | None,
 ) -> tuple[DeliveredSourceDescriptor, ...]:
@@ -2164,7 +2895,25 @@ class _TrustedTransportBinding:
     http_client: httpx.AsyncClient
     transport: object
     base_url: str
+    budget_manager: BudgetManager
+    paid_controls_required: bool
+    budget_total_usd: float
+    budget_max_output_tokens: int
+    budget_conservative_rate: float
+    budget_max_requests_per_agent: int
+    budget_require_endpoint_cost_bound: bool
+    budget_global_input_token_budget: int | None
+    budget_global_output_token_budget: int | None
+    budget_per_model_usd_caps: tuple[tuple[str, Decimal], ...]
+    budget_per_role_usd_caps: tuple[tuple[str, Decimal], ...]
+    budget_lock: asyncio.Lock
+    atomic_cost_ledger: AtomicCostLedger | None
+    atomic_cost_ledger_path: Path | None
+    atomic_cost_ledger_lock_path: Path | None
+    atomic_cost_ledger_cap_usd: Decimal | None
+    atomic_cost_ledger_thread_lock: object | None
     mock_handler: object | None = None
+    test_only_context_package_budget_observer: _TestOnlyContextPackageBudgetObserver | None = None
     request_lock: asyncio.Lock | None = None
     client_attribute_names: frozenset[str] = frozenset()
     transport_attribute_names: frozenset[str] = frozenset()
@@ -2211,6 +2960,106 @@ _register_trusted_transport_binding, _lookup_trusted_transport_binding = (
 )
 
 
+def _endpoint_snapshot_binding_registry() -> tuple[
+    Callable[[object, str, str], None],
+    Callable[[object, str], str | None],
+]:
+    bindings: WeakKeyDictionary[object, dict[str, str]] = WeakKeyDictionary()
+    lock = Lock()
+
+    def register(subject: object, exact_model_id: str, snapshot_sha256: str) -> None:
+        if _SHA256_PATTERN.fullmatch(snapshot_sha256) is None:
+            raise OpenRouterCostControlError("endpoint snapshot binding hash is invalid")
+        with lock:
+            current = dict(bindings.get(subject, {}))
+            current[exact_model_id] = snapshot_sha256
+            bindings[subject] = current
+
+    def lookup(subject: object, exact_model_id: str) -> str | None:
+        with lock:
+            current = bindings.get(subject)
+            return None if current is None else current.get(exact_model_id)
+
+    return register, lookup
+
+
+_register_trusted_endpoint_snapshot, _lookup_trusted_endpoint_snapshot = (
+    _endpoint_snapshot_binding_registry()
+)
+
+_TRUSTED_PATH_TYPE = type(Path("/"))
+
+
+def _require_exact_paid_budget_configuration(budget: BudgetManager) -> None:
+    """Reject deceptive container and numeric subclasses in paid budget authority."""
+
+    try:
+        total_usd = object.__getattribute__(budget, "total_usd")
+        max_output_tokens = object.__getattribute__(budget, "max_output_tokens")
+        conservative_rate = object.__getattribute__(budget, "conservative_rate")
+        max_requests = object.__getattribute__(budget, "max_requests_per_agent")
+        require_bound = object.__getattribute__(budget, "require_endpoint_cost_bound")
+        global_input = object.__getattribute__(budget, "global_input_token_budget")
+        global_output = object.__getattribute__(budget, "global_output_token_budget")
+        per_model = object.__getattribute__(budget, "per_model_usd_caps")
+        per_role = object.__getattribute__(budget, "per_role_usd_caps")
+        budget_lock = object.__getattribute__(budget, "_lock")
+    except (AttributeError, TypeError) as exc:
+        raise OpenRouterPrivacyError("paid provider budget configuration is invalid") from exc
+    if (
+        type(total_usd) is not float
+        or not math.isfinite(total_usd)
+        or type(max_output_tokens) is not int
+        or type(conservative_rate) is not float
+        or not math.isfinite(conservative_rate)
+        or type(max_requests) is not int
+        or type(require_bound) is not bool
+        or not (global_input is None or type(global_input) is int)
+        or not (global_output is None or type(global_output) is int)
+        or type(per_model) is not dict
+        or type(per_role) is not dict
+        or type(budget_lock) is not asyncio.Lock
+        or any(
+            type(key) is not str or type(value) is not Decimal
+            for key, value in (*per_model.items(), *per_role.items())
+        )
+    ):
+        raise OpenRouterPrivacyError("paid provider budget configuration is invalid")
+
+
+def _require_exact_atomic_ledger_configuration(ledger: AtomicCostLedger) -> None:
+    """Require exact immutable primitives before binding persistent paid custody."""
+
+    if (
+        type(ledger) is not AtomicCostLedger
+        or type(ledger.path) is not _TRUSTED_PATH_TYPE
+        or type(ledger.lock_path) is not _TRUSTED_PATH_TYPE
+        or type(ledger.cap_usd) is not Decimal
+        or not ledger.cap_usd.is_finite()
+        or ledger.cap_usd <= 0
+    ):
+        raise OpenRouterPrivacyError("paid provider cost-ledger configuration is invalid")
+
+
+def _trusted_paid_controls_required(subject: object) -> bool:
+    """Return the construction-time paid-control requirement or fail closed."""
+
+    binding = _lookup_trusted_transport_binding(subject)
+    try:
+        current = object.__getattribute__(subject, "_requires_paid_controls")
+    except (AttributeError, TypeError) as exc:
+        raise OpenRouterPrivacyError(
+            "provider paid-control requirement changed after validation"
+        ) from exc
+    if (
+        binding is None
+        or type(current) is not bool
+        or current is not binding.paid_controls_required
+    ):
+        raise OpenRouterPrivacyError("provider paid-control requirement changed after validation")
+    return binding.paid_controls_required
+
+
 class OpenRouterClient:
     """Minimal client that never enables tools, web access, or random model routing."""
 
@@ -2236,6 +3085,12 @@ class OpenRouterClient:
         audit_model_selection: VerifiedAuditModelSelection | None = None,
         policy_audit_context: PolicyAuditContext | None = None,
         client_policy_constraints: ClientPolicyConstraints | None = None,
+        audit_model_refresh_evidence: AuditModelRefreshEvidence | None = None,
+        audit_model_refresh_guard: VerifiedAuditModelRefreshGuard | None = None,
+        audit_model_refresh_pricing_evidence: AuditModelRefreshPricingEvidence | None = None,
+        audit_model_refresh_pricing_authority: (
+            VerifiedAuditModelRefreshPricingAuthority | None
+        ) = None,
         effective_privacy_policy: EffectivePrivacyPolicyEvidence | None = None,
         source_provenance_observation: PrivacySourceProvenanceObservation | None = None,
         privacy_authorization: TrustedPrivacyAuthorization | None = None,
@@ -2244,6 +3099,9 @@ class OpenRouterClient:
             Callable[[httpx.Request], httpx.Response]
             | Callable[[httpx.Request], Coroutine[None, None, httpx.Response]]
             | None
+        ) = None,
+        test_only_context_package_budget_observer: (
+            _TestOnlyContextPackageBudgetObserver | None
         ) = None,
     ) -> None:
         if http_client is not None and test_only_mock_handler is not None:
@@ -2254,6 +3112,14 @@ class OpenRouterClient:
             raise OpenRouterPrivacyError(
                 "test-only mock transport requires an explicitly synthetic credential"
             )
+        if test_only_context_package_budget_observer is not None and test_only_mock_handler is None:
+            raise OpenRouterPrivacyError(
+                "test-only context budget observer requires the test-only mock transport"
+            )
+        if test_only_context_package_budget_observer is not None and not callable(
+            test_only_context_package_budget_observer
+        ):
+            raise OpenRouterPrivacyError("test-only context budget observer must be callable")
         if (
             not api_key
             or len(api_key.encode("utf-8")) > 4_096
@@ -2372,6 +3238,33 @@ class OpenRouterClient:
             )
         else:
             self._audit_model_selection = None
+        self._audit_model_refresh_binding = _canonical_audit_model_refresh_binding(
+            evidence=audit_model_refresh_evidence,
+            guard=audit_model_refresh_guard,
+        )
+        self._audit_model_refresh_pricing_binding = _canonical_audit_model_refresh_pricing_binding(
+            evidence=audit_model_refresh_pricing_evidence,
+            authority=audit_model_refresh_pricing_authority,
+            refresh_binding=self._audit_model_refresh_binding,
+        )
+        if self._audit_model_refresh_pricing_binding is not None and (
+            self._production_qualification is None
+            or self._audit_model_selection is None
+            or self._audit_policy_binding is None
+        ):
+            raise OpenRouterModelRefreshPricingError(
+                "audit model refresh pricing lacks exact technical and audit authority"
+            )
+        if self._audit_model_refresh_pricing_binding is not None:
+            self.require_audit_model_refresh_pricing_binding(
+                audit_model_refresh_pricing_evidence=(
+                    self._audit_model_refresh_pricing_binding.evidence
+                ),
+                audit_model_refresh_pricing_authority=(
+                    self._audit_model_refresh_pricing_binding.authority
+                ),
+                checked_at=datetime.now(UTC).replace(microsecond=0),
+            )
         self._metadata_observations: dict[str, str] = {}
         self._unbound_completions: dict[str, StructuredCompletion[Any]] = {}
         self._claimed_request_ids: set[str] = set()
@@ -2427,6 +3320,10 @@ class OpenRouterClient:
         self._requires_paid_controls = (
             not closed_mock_transport or self.budget.atomic_ledger is not None
         )
+        if self._requires_paid_controls:
+            _require_exact_paid_budget_configuration(self.budget)
+            if self.budget.atomic_ledger is not None:
+                _require_exact_atomic_ledger_configuration(self.budget.atomic_ledger)
         self._credential = bytearray(api_key.encode("utf-8"))
         self._headers = {
             "Authorization": f"Bearer {api_key}",
@@ -2495,7 +3392,43 @@ class OpenRouterClient:
                     http_client=self._client,
                     transport=self._transport_identity,
                     base_url=self._base_url_identity,
+                    budget_manager=self.budget,
+                    paid_controls_required=self._requires_paid_controls,
+                    budget_total_usd=self.budget.total_usd,
+                    budget_max_output_tokens=self.budget.max_output_tokens,
+                    budget_conservative_rate=self.budget.conservative_rate,
+                    budget_max_requests_per_agent=self.budget.max_requests_per_agent,
+                    budget_require_endpoint_cost_bound=(self.budget.require_endpoint_cost_bound),
+                    budget_global_input_token_budget=(self.budget.global_input_token_budget),
+                    budget_global_output_token_budget=(self.budget.global_output_token_budget),
+                    budget_per_model_usd_caps=tuple(sorted(self.budget.per_model_usd_caps.items())),
+                    budget_per_role_usd_caps=tuple(sorted(self.budget.per_role_usd_caps.items())),
+                    budget_lock=self.budget._lock,
+                    atomic_cost_ledger=self.budget.atomic_ledger,
+                    atomic_cost_ledger_path=(
+                        self.budget.atomic_ledger.path
+                        if self.budget.atomic_ledger is not None
+                        else None
+                    ),
+                    atomic_cost_ledger_lock_path=(
+                        self.budget.atomic_ledger.lock_path
+                        if self.budget.atomic_ledger is not None
+                        else None
+                    ),
+                    atomic_cost_ledger_cap_usd=(
+                        self.budget.atomic_ledger.cap_usd
+                        if self.budget.atomic_ledger is not None
+                        else None
+                    ),
+                    atomic_cost_ledger_thread_lock=(
+                        self.budget.atomic_ledger._thread_lock
+                        if self.budget.atomic_ledger is not None
+                        else None
+                    ),
                     mock_handler=self._mock_handler_identity,
+                    test_only_context_package_budget_observer=(
+                        test_only_context_package_budget_observer
+                    ),
                     request_lock=(
                         asyncio.Lock()
                         if initial_execution_evidence is ExecutionEvidenceKind.REAL
@@ -3399,11 +4332,12 @@ class OpenRouterClient:
         )
         OpenRouterClient._validate_transport_provenance(self)
         try:
-            return _issue_trusted_generation_verification(
+            capability = _issue_trusted_generation_verification(
                 requests=normalized,
                 attestations=attestations,
                 verification_started_at=verification_started_at,
             )
+            return _attest_authrunner_generation_origin(capability, normalized)
         except GenerationReconciliationMismatchError as exc:
             raise OpenRouterGenerationReconciliationError(
                 exc.code,
@@ -3814,6 +4748,13 @@ class OpenRouterClient:
             raise OpenRouterModelError(
                 "model identity binding cannot replace its owned usage evidence"
             ) from None
+        if require_bound and concluded_usage.execution_evidence is ExecutionEvidenceKind.REAL:
+            try:
+                concluded_usage = _attest_authrunner_owned_real_usage_origin(concluded_usage)
+            except ValueError:
+                raise OpenRouterPrivacyError(
+                    "REAL bound usage lacks AUTHRUNNER transport-origin custody"
+                ) from None
         return concluded_usage
 
     def register_endpoint_snapshot(
@@ -3901,6 +4842,10 @@ class OpenRouterClient:
                     provider_endpoint=endpoint.provider_endpoint,
                     provider_name=endpoint.provider_name,
                     provider_identities=provider_identities,
+                    endpoint_tag=endpoint.endpoint_tag,
+                    endpoint_slug=endpoint.endpoint_slug,
+                    operational_status=endpoint.operational_status,
+                    zdr_eligible=endpoint.zdr_eligible,
                     pricing=tuple(pricing.items()),
                     pricing_sha256=endpoint.pricing_sha256,
                     snapshot_sha256=endpoint.endpoint_snapshot_sha256,
@@ -3918,6 +4863,17 @@ class OpenRouterClient:
             )
             pricing_hashes[endpoint.provider_endpoint] = endpoint.pricing_sha256
         routing_max_price = _routing_max_price(tuple(registered))
+        trusted_existing_snapshot = _lookup_trusted_endpoint_snapshot(
+            self,
+            evidence.exact_model_id,
+        )
+        if (
+            trusted_existing_snapshot is not None
+            and trusted_existing_snapshot != evidence.snapshot_sha256
+        ):
+            raise OpenRouterCostControlError(
+                "endpoint snapshot binding cannot be replaced on an existing provider client"
+            )
         self._endpoint_pricing[evidence.exact_model_id] = _RegisteredEndpointPolicy(
             snapshot_sha256=evidence.snapshot_sha256,
             policy_pricing_sha256=_canonical_sha256(pricing_hashes),
@@ -3930,6 +4886,11 @@ class OpenRouterClient:
             supported_output_modes=evidence.supported_output_modes,
             structured_output_mode=evidence.structured_output_mode,
             output_capability_sha256=evidence.output_capability_sha256,
+        )
+        _register_trusted_endpoint_snapshot(
+            self,
+            evidence.exact_model_id,
+            evidence.snapshot_sha256,
         )
 
     def _required_output_tokens(self) -> int:
@@ -4057,6 +5018,57 @@ class OpenRouterClient:
             )
         )
 
+    def _requires_real_audit_model_refresh(
+        self,
+        role: str,
+        *,
+        system_prompt: str | None = None,
+        user_prompt: str | None = None,
+        response_model: type[BaseModel] | None = None,
+        schema_name: str | None = None,
+        structured_output_mode: StructuredOutputMode | None = None,
+        context_package: ContextPackage | None = None,
+    ) -> bool:
+        """Apply refresh vetoes only to owned REAL requests outside prequalification."""
+
+        return (
+            trusted_openrouter_execution_evidence(self) is ExecutionEvidenceKind.REAL
+            and not OpenRouterClient._is_trusted_prequalification_request(
+                self,
+                role,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                structured_output_mode=structured_output_mode,
+                context_package=context_package,
+            )
+        )
+
+    def _requires_real_audit_model_refresh_pricing(
+        self,
+        role: str,
+        *,
+        system_prompt: str | None = None,
+        user_prompt: str | None = None,
+        response_model: type[BaseModel] | None = None,
+        schema_name: str | None = None,
+        structured_output_mode: StructuredOutputMode | None = None,
+        context_package: ContextPackage | None = None,
+    ) -> bool:
+        """Require live pricing authority on every owned REAL postqualification call."""
+
+        return _TRUSTED_REQUIRES_REAL_AUDIT_MODEL_REFRESH(
+            self,
+            role,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_model=response_model,
+            schema_name=schema_name,
+            structured_output_mode=structured_output_mode,
+            context_package=context_package,
+        )
+
     def _is_trusted_prequalification_request(
         self,
         role: str,
@@ -4086,7 +5098,6 @@ class OpenRouterClient:
             or response_model is None
             or schema_name is None
             or structured_output_mode is None
-            or canonical_policy.source_proof_kind != "RELEASE_PINNED_MODEL_BENCHMARK"
         ):
             return False
         _validate_live_privacy_source_provenance(
@@ -4094,11 +5105,11 @@ class OpenRouterClient:
             policy=canonical_policy,
         )
         from mmaudit.repository.privacy_provenance import (
-            validate_release_pinned_model_benchmark_request,
+            validate_provider_visible_source_request,
         )
 
         try:
-            validate_release_pinned_model_benchmark_request(
+            validate_provider_visible_source_request(
                 observation,
                 request_role=role,
                 system_prompt=system_prompt,
@@ -4129,6 +5140,7 @@ class OpenRouterClient:
         context_package: ContextPackage | None,
         checked_at: datetime,
         require_runtime_snapshots: bool,
+        allow_refreshed_pricing: bool = False,
     ) -> OpenRouterQualificationRoutingEvidence:
         """Revalidate opaque production authority and its exact request projection."""
 
@@ -4167,13 +5179,26 @@ class OpenRouterClient:
             provider_endpoints=self.provider_policy.configured_endpoints,
             now=checked_at,
             endpoint_policy=(
-                self._endpoint_pricing.get(model) if require_runtime_snapshots else None
+                self._endpoint_pricing.get(model)
+                if require_runtime_snapshots and not allow_refreshed_pricing
+                else None
             ),
             model_identity=(
                 self._model_identities.get(model) if require_runtime_snapshots else None
             ),
-            require_runtime_snapshots=require_runtime_snapshots,
+            require_runtime_snapshots=(require_runtime_snapshots and not allow_refreshed_pricing),
         )
+        if (
+            allow_refreshed_pricing
+            and require_runtime_snapshots
+            and (
+                self._endpoint_pricing.get(model) is None
+                or self._model_identities.get(model) is None
+            )
+        ):
+            raise OpenRouterQualificationError(
+                "refreshed-price production routing requires current model and endpoint snapshots"
+            )
         return binding
 
     def _require_real_audit_model_selection(
@@ -4280,6 +5305,472 @@ class OpenRouterClient:
             )
         return evidence
 
+    def _require_real_audit_model_refresh(
+        self,
+        *,
+        role: str,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        response_model: type[BaseModel],
+        schema_name: str,
+        structured_output_mode: StructuredOutputMode,
+        context_package: ContextPackage | None,
+        checked_at: datetime,
+        qualification_binding: OpenRouterQualificationRoutingEvidence | None,
+        audit_routing_evidence: AuditModelRoutingEvidence | None,
+        provider_policy: OpenRouterProviderPolicy,
+    ) -> AuditModelRefreshRouteEvidence:
+        """Recheck the exact non-authorizing refresh veto for one paid route."""
+
+        from mmaudit.models.refresh_runtime import (
+            AuditModelRefreshEvidence,
+            AuditModelRefreshRouteEvidence,
+        )
+
+        if not _TRUSTED_REQUIRES_REAL_AUDIT_MODEL_REFRESH(
+            self,
+            role,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_model=response_model,
+            schema_name=schema_name,
+            structured_output_mode=structured_output_mode,
+            context_package=context_package,
+        ):
+            raise OpenRouterModelRefreshError(
+                "audit model refresh was requested outside its REAL paid-audit boundary"
+            )
+        binding = self._audit_model_refresh_binding
+        if binding is None:
+            raise OpenRouterModelRefreshError(
+                "REAL audit request requires current model refresh evidence and opaque guard"
+            )
+        if (
+            self._production_qualification is None
+            or self._audit_model_selection is None
+            or self._audit_policy_binding is None
+            or qualification_binding is None
+            or audit_routing_evidence is None
+        ):
+            raise OpenRouterModelRefreshError(
+                "audit model refresh lacks exact technical and audit selection authority"
+            )
+        try:
+            evidence = AuditModelRefreshEvidence.model_validate_json(
+                binding.evidence.model_dump_json(),
+                strict=True,
+            )
+        except (AttributeError, ValueError) as exc:
+            raise OpenRouterModelRefreshError(
+                "audit model refresh evidence is no longer structurally current"
+            ) from exc
+        if evidence != binding.evidence:
+            raise OpenRouterModelRefreshError(
+                "audit model refresh evidence changed before provider use"
+            )
+        audit_context = self._audit_policy_binding.audit_context
+        client_constraints = self._audit_policy_binding.client_constraints
+        used_at = checked_at.replace(microsecond=0)
+        try:
+            raw_route = binding.guard.route_for(
+                model,
+                now=used_at,
+                expected_workflow_status_sha256=(evidence.expected_workflow_status_sha256),
+                technical_qualification=self._production_qualification,
+                audit_selection=self._audit_model_selection,
+                expected_audit_scope_sha256=audit_context.audit_scope_sha256,
+                expected_source_sha256=audit_context.source_sha256,
+                expected_audit_context_sha256=audit_context.context_sha256,
+                expected_client_constraints_sha256=client_constraints.constraints_sha256,
+            )
+            route = AuditModelRefreshRouteEvidence.model_validate_json(
+                raw_route.model_dump_json(),
+                strict=True,
+            )
+        except (AttributeError, ValueError) as exc:
+            raise OpenRouterModelRefreshError(
+                f"audit model refresh guard rejected exact route: {exc}"
+            ) from exc
+        audit_route = audit_routing_evidence.route
+        exact_evidence_joins = (
+            evidence.expected_workflow_status_sha256 == evidence.workflow_status_sha256,
+            evidence.workflow_status_sha256 == binding.guard.workflow_status_sha256,
+            evidence.snapshot_sha256 == binding.guard.snapshot_sha256,
+            evidence.evidence_sha256 == binding.guard.evidence_sha256,
+            evidence.technical_qualification_capability_sha256
+            == self._production_qualification.capability_sha256,
+            evidence.technical_production_selection_sha256
+            == self._production_qualification.production_selection_sha256,
+            evidence.audit_selection_capability_sha256
+            == self._audit_model_selection.capability_sha256,
+            evidence.audit_selection_sha256 == self._audit_model_selection.audit_selection_sha256,
+            evidence.audit_scope_sha256 == audit_context.audit_scope_sha256,
+            evidence.source_sha256 == audit_context.source_sha256,
+            evidence.audit_context_sha256 == audit_context.context_sha256,
+            evidence.client_constraints_sha256 == client_constraints.constraints_sha256,
+            audit_routing_evidence.audit_scope_sha256 == evidence.audit_scope_sha256,
+            audit_routing_evidence.source_sha256 == evidence.source_sha256,
+            audit_routing_evidence.audit_context_sha256 == evidence.audit_context_sha256,
+            audit_routing_evidence.client_constraints_sha256 == evidence.client_constraints_sha256,
+            audit_routing_evidence.audit_selection_sha256 == evidence.audit_selection_sha256,
+            audit_routing_evidence.technical_production_selection_sha256
+            == evidence.technical_production_selection_sha256,
+            audit_routing_evidence.technical_qualification_capability_sha256
+            == evidence.technical_qualification_capability_sha256,
+        )
+        exact_route_joins = (
+            raw_route == route,
+            route.exact_model_id == model == qualification_binding.exact_model_id,
+            route.canonical_model_slug == qualification_binding.canonical_model_slug,
+            route.root_lineage == qualification_binding.root_lineage,
+            route.approved_provider_endpoint
+            == qualification_binding.approved_provider_endpoint
+            == audit_route.provider_endpoint,
+            route.approved_provider_name
+            == qualification_binding.approved_provider_name
+            == audit_route.provider_name,
+            route.endpoint_snapshot_sha256 == qualification_binding.endpoint_snapshot_sha256,
+            route.output_capability_sha256 == qualification_binding.output_capability_sha256,
+            route.model_metadata_snapshot_sha256
+            == qualification_binding.model_metadata_snapshot_sha256,
+            route.qualified_pricing_snapshot_sha256
+            == qualification_binding.pricing_snapshot_sha256,
+            route.structured_output_mode
+            is qualification_binding.structured_output_mode
+            is structured_output_mode,
+            route.approved_roles == qualification_binding.approved_roles,
+            route.benchmark_report_sha256 == qualification_binding.benchmark_report_sha256,
+            route.qualification_expires_at == qualification_binding.expires_at,
+            route.audit_selected,
+            not route.runtime_authorized,
+            audit_route.exact_model_id == model,
+            provider_policy.configured_endpoints == (route.approved_provider_endpoint,),
+            not provider_policy.allow_fallbacks,
+        )
+        if (
+            not all(exact_evidence_joins)
+            or not all(exact_route_joins)
+            or evidence.technical_selection_authorized
+            or evidence.audit_selection_authorized
+            or evidence.provider_access_authorized
+            or evidence.production_promotion_authorized
+        ):
+            raise OpenRouterModelRefreshError(
+                "audit model refresh differs from the exact technical, audit, or provider route"
+            )
+        return route
+
+    def _require_real_audit_model_refresh_pricing(
+        self,
+        *,
+        role: str,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        response_model: type[BaseModel],
+        schema_name: str,
+        structured_output_mode: StructuredOutputMode,
+        context_package: ContextPackage | None,
+        checked_at: datetime,
+        qualification_binding: OpenRouterQualificationRoutingEvidence | None,
+        audit_routing_evidence: AuditModelRoutingEvidence | None,
+        refresh_routing_evidence: AuditModelRefreshRouteEvidence | None,
+        provider_policy: OpenRouterProviderPolicy,
+    ) -> AuditModelRefreshPricingRouteEvidence:
+        """Recheck exact bounded current prices and their live provider route."""
+
+        from mmaudit.models.refresh_runtime import (
+            AuditModelRefreshPricingEvidence,
+            AuditModelRefreshPricingRouteEvidence,
+        )
+
+        if not _TRUSTED_REQUIRES_REAL_AUDIT_MODEL_REFRESH_PRICING(
+            self,
+            role,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_model=response_model,
+            schema_name=schema_name,
+            structured_output_mode=structured_output_mode,
+            context_package=context_package,
+        ):
+            raise OpenRouterModelRefreshPricingError(
+                "audit model refresh pricing was requested outside its REAL paid-audit boundary"
+            )
+        binding = self._audit_model_refresh_pricing_binding
+        refresh_binding = self._audit_model_refresh_binding
+        if binding is None:
+            raise OpenRouterModelRefreshPricingError(
+                "REAL audit request requires refresh pricing evidence and opaque authority"
+            )
+        if (
+            refresh_binding is None
+            or self._production_qualification is None
+            or self._audit_model_selection is None
+            or self._audit_policy_binding is None
+            or qualification_binding is None
+            or audit_routing_evidence is None
+            or refresh_routing_evidence is None
+        ):
+            raise OpenRouterModelRefreshPricingError(
+                "audit model refresh pricing lacks exact technical, audit, or refresh authority"
+            )
+        try:
+            evidence = AuditModelRefreshPricingEvidence.model_validate_json(
+                binding.evidence.model_dump_json(),
+                strict=True,
+            )
+        except (AttributeError, ValueError) as exc:
+            raise OpenRouterModelRefreshPricingError(
+                "audit model refresh pricing evidence is no longer structurally current"
+            ) from exc
+        if evidence != binding.evidence:
+            raise OpenRouterModelRefreshPricingError(
+                "audit model refresh pricing evidence changed before provider use"
+            )
+        audit_context = self._audit_policy_binding.audit_context
+        client_constraints = self._audit_policy_binding.client_constraints
+        used_at = checked_at.replace(microsecond=0)
+        try:
+            raw_route = binding.authority.route_for(
+                model,
+                now=used_at,
+                expected_workflow_status_sha256=(evidence.expected_workflow_status_sha256),
+                refresh_evidence=refresh_binding.evidence,
+                refresh_guard=refresh_binding.guard,
+                technical_qualification=self._production_qualification,
+                audit_selection=self._audit_model_selection,
+                expected_audit_scope_sha256=audit_context.audit_scope_sha256,
+                expected_source_sha256=audit_context.source_sha256,
+                expected_audit_context_sha256=audit_context.context_sha256,
+                expected_client_constraints_sha256=client_constraints.constraints_sha256,
+            )
+            route = AuditModelRefreshPricingRouteEvidence.model_validate_json(
+                raw_route.model_dump_json(),
+                strict=True,
+            )
+        except (AttributeError, ValueError) as exc:
+            raise OpenRouterModelRefreshPricingError(
+                f"audit model refresh pricing authority rejected exact route: {exc}"
+            ) from exc
+        registered_policy = self._endpoint_pricing.get(model)
+        registered_endpoint = (
+            registered_policy.endpoint(route.approved_provider_endpoint)
+            if registered_policy is not None
+            else None
+        )
+        live_route = refresh_routing_evidence.refresh_route
+        exact_evidence_joins = (
+            evidence.expected_workflow_status_sha256 == evidence.workflow_status_sha256,
+            evidence.workflow_status_sha256 == binding.authority.workflow_status_sha256,
+            evidence.refresh_evidence_sha256 == refresh_binding.evidence.evidence_sha256,
+            evidence.refresh_guard_capability_sha256 == refresh_binding.guard.capability_sha256,
+            evidence.technical_qualification_capability_sha256
+            == self._production_qualification.capability_sha256,
+            evidence.technical_production_selection_sha256
+            == self._production_qualification.production_selection_sha256,
+            evidence.audit_selection_capability_sha256
+            == self._audit_model_selection.capability_sha256,
+            evidence.audit_selection_sha256 == self._audit_model_selection.audit_selection_sha256,
+            evidence.audit_scope_sha256 == audit_context.audit_scope_sha256,
+            evidence.source_sha256 == audit_context.source_sha256,
+            evidence.audit_context_sha256 == audit_context.context_sha256,
+            evidence.client_constraints_sha256 == client_constraints.constraints_sha256,
+            evidence.evidence_sha256 == binding.authority.pricing_evidence_sha256,
+        )
+        exact_route_joins = (
+            raw_route == route,
+            route.exact_model_id
+            == model
+            == qualification_binding.exact_model_id
+            == audit_routing_evidence.route.exact_model_id
+            == refresh_routing_evidence.exact_model_id,
+            route.approved_provider_endpoint
+            == qualification_binding.approved_provider_endpoint
+            == audit_routing_evidence.route.provider_endpoint
+            == refresh_routing_evidence.approved_provider_endpoint,
+            route.qualified_pricing_snapshot_sha256
+            == route.baseline_pricing_sha256
+            == qualification_binding.pricing_snapshot_sha256,
+            route.baseline_snapshot_sha256 == evidence.previous_snapshot_sha256,
+            route.current_snapshot_sha256 == evidence.current_snapshot_sha256,
+            route.current_snapshot_sha256 == refresh_binding.evidence.snapshot_sha256,
+            route.current_pricing == live_route.pricing,
+            route.current_pricing_sha256 == live_route.pricing_sha256,
+            route.refresh_route_evidence_sha256 == refresh_routing_evidence.route_evidence_sha256,
+            route.audit_selected,
+            not route.pricing_use_authorized,
+            not route.provider_access_authorized,
+            not route.model_selection_authorized,
+            provider_policy.configured_endpoints == (route.approved_provider_endpoint,),
+            not provider_policy.allow_fallbacks,
+        )
+        exact_registered_joins = (
+            registered_policy is not None,
+            registered_endpoint is not None,
+            registered_policy is not None and len(registered_policy.endpoints) == 1,
+            registered_policy is not None
+            and registered_policy.output_capability_sha256
+            == qualification_binding.output_capability_sha256,
+            registered_policy is not None
+            and registered_policy.structured_output_mode is structured_output_mode,
+            registered_endpoint is not None
+            and registered_endpoint.provider_endpoint == live_route.provider_endpoint,
+            registered_endpoint is not None
+            and registered_endpoint.provider_name == live_route.provider_name,
+            registered_endpoint is not None
+            and registered_endpoint.provider_identities
+            == tuple(
+                sorted(
+                    {
+                        identity
+                        for identity in (
+                            live_route.provider_endpoint,
+                            live_route.endpoint_tag,
+                            live_route.endpoint_slug,
+                            live_route.provider_name,
+                        )
+                        if identity is not None
+                    },
+                    key=str.casefold,
+                )
+            ),
+            registered_endpoint is not None
+            and registered_endpoint.endpoint_tag == live_route.endpoint_tag,
+            registered_endpoint is not None
+            and registered_endpoint.endpoint_slug == live_route.endpoint_slug,
+            registered_endpoint is not None
+            and registered_endpoint.operational_status == live_route.operational_status,
+            registered_endpoint is not None
+            and registered_endpoint.zdr_eligible is live_route.zdr_eligible,
+            registered_endpoint is not None
+            and registered_endpoint.context_length == live_route.context_limit,
+            registered_endpoint is not None
+            and registered_endpoint.max_prompt_tokens == live_route.max_prompt_tokens,
+            registered_endpoint is not None
+            and registered_endpoint.max_prompt_tokens_source == live_route.max_prompt_tokens_source,
+            registered_endpoint is not None
+            and registered_endpoint.max_completion_tokens == live_route.output_limit,
+            registered_endpoint is not None
+            and registered_endpoint.max_completion_tokens_source == live_route.output_limit_source,
+            registered_endpoint is not None
+            and registered_endpoint.supported_parameters == live_route.supported_parameters,
+            registered_endpoint is not None
+            and registered_endpoint.required_request_parameters
+            == tuple(
+                sorted(
+                    {
+                        "max_tokens",
+                        "temperature",
+                        *output_mode_request_parameters(live_route.structured_output_mode),
+                    }
+                )
+            ),
+            registered_endpoint is not None
+            and registered_endpoint.structured_output_parameters
+            == structured_output_parameters(live_route.supported_parameters),
+            registered_endpoint is not None
+            and registered_endpoint.supported_output_modes == live_route.supported_output_modes,
+            registered_endpoint is not None
+            and registered_endpoint.structured_output_mode is live_route.structured_output_mode,
+            registered_endpoint is not None
+            and dict(registered_endpoint.pricing) == route.current_pricing,
+            registered_endpoint is not None
+            and registered_endpoint.pricing_sha256 == route.current_pricing_sha256,
+            live_route.routing_identity_unambiguous,
+            live_route.operational,
+            live_route.structured_output_supported,
+        )
+        if (
+            not all(exact_evidence_joins)
+            or not all(exact_route_joins)
+            or not all(exact_registered_joins)
+            or evidence.pricing_use_authorized
+            or evidence.technical_selection_authorized
+            or evidence.audit_selection_authorized
+            or evidence.provider_access_authorized
+            or evidence.production_promotion_authorized
+        ):
+            raise OpenRouterModelRefreshPricingError(
+                "audit model refresh pricing differs from the exact current provider route"
+            )
+        return route
+
+    def _seal_audit_model_refresh_pricing_control(
+        self,
+        route: AuditModelRefreshPricingRouteEvidence,
+    ) -> _AuditModelRefreshPricingRequestControl:
+        """Seal one exact Decimal price map for both provider cap and reservation."""
+
+        binding = self._audit_model_refresh_pricing_binding
+        registered_policy = self._endpoint_pricing.get(route.exact_model_id)
+        trusted_endpoint_snapshot_sha256 = _lookup_trusted_endpoint_snapshot(
+            self,
+            route.exact_model_id,
+        )
+        registered_endpoint = (
+            registered_policy.endpoint(route.approved_provider_endpoint)
+            if registered_policy is not None
+            else None
+        )
+        if (
+            binding is None
+            or registered_policy is None
+            or trusted_endpoint_snapshot_sha256 is None
+            or registered_policy.snapshot_sha256 != trusted_endpoint_snapshot_sha256
+            or registered_endpoint is None
+            or dict(registered_endpoint.pricing) != route.current_pricing
+            or registered_endpoint.pricing_sha256 != route.current_pricing_sha256
+        ):
+            raise OpenRouterModelRefreshPricingError(
+                "current endpoint pricing changed before request-price sealing"
+            )
+        routing_max_price = tuple(_routing_max_price((registered_endpoint,)).items())
+        router_caps = dict(routing_max_price)
+        cost_bound_pricing: list[tuple[str, str]] = []
+        with localcontext() as context:
+            context.prec = 160
+            for field, raw_current in registered_endpoint.pricing:
+                current = Decimal(raw_current)
+                if field in _ROUTER_MAX_PRICE_FIELDS:
+                    try:
+                        cap = Decimal(str(router_caps[field]))
+                    except (KeyError, InvalidOperation) as exc:
+                        raise OpenRouterModelRefreshPricingError(
+                            "current endpoint price lacks an exact transmitted provider cap"
+                        ) from exc
+                    if field in _PER_MILLION_ROUTER_PRICE_FIELDS:
+                        cap /= Decimal(1_000_000)
+                    if cap < current:
+                        raise OpenRouterModelRefreshPricingError(
+                            "transmitted provider max_price rounds below the current endpoint price"
+                        )
+                    bounded = max(current, cap)
+                else:
+                    bounded = current
+                canonical_bound = format(bounded, "f")
+                if "." in canonical_bound:
+                    canonical_bound = canonical_bound.rstrip("0").rstrip(".")
+                cost_bound_pricing.append((field, canonical_bound or "0"))
+        values: dict[str, Any] = {
+            "exact_model_id": route.exact_model_id,
+            "provider_endpoint": route.approved_provider_endpoint,
+            "current_endpoint_snapshot_sha256": trusted_endpoint_snapshot_sha256,
+            "qualified_pricing_snapshot_sha256": route.qualified_pricing_snapshot_sha256,
+            "current_pricing": tuple(route.current_pricing.items()),
+            "current_pricing_sha256": route.current_pricing_sha256,
+            "route_evidence_sha256": route.route_evidence_sha256,
+            "evidence_sha256": binding.evidence.evidence_sha256,
+            "authority_capability_sha256": binding.authority.capability_sha256,
+            "routing_max_price": routing_max_price,
+            "cost_bound_pricing": tuple(cost_bound_pricing),
+        }
+        return _AuditModelRefreshPricingRequestControl(
+            **values,
+            control_sha256=_canonical_sha256(values),
+        )
+
     def require_audit_policy_binding(
         self,
         *,
@@ -4308,6 +5799,117 @@ class OpenRouterClient:
             binding=supplied_binding,
             now=checked_at.replace(microsecond=0),
         )
+
+    def require_audit_model_refresh_binding(
+        self,
+        *,
+        audit_model_refresh_evidence: AuditModelRefreshEvidence,
+        audit_model_refresh_guard: VerifiedAuditModelRefreshGuard,
+        checked_at: datetime,
+    ) -> None:
+        """Verify that an existing client owns the exact live refresh pair."""
+
+        supplied = _canonical_audit_model_refresh_binding(
+            evidence=audit_model_refresh_evidence,
+            guard=audit_model_refresh_guard,
+        )
+        current = self._audit_model_refresh_binding
+        if (
+            supplied is None
+            or current is None
+            or supplied.evidence != current.evidence
+            or supplied.guard is not current.guard
+            or self._production_qualification is None
+            or self._audit_model_selection is None
+            or self._audit_policy_binding is None
+        ):
+            raise OpenRouterModelRefreshError(
+                "OpenRouter client binds different audit model refresh authority"
+            )
+        context = self._audit_policy_binding.audit_context
+        constraints = self._audit_policy_binding.client_constraints
+        try:
+            verified = current.guard.require_current(
+                now=checked_at.replace(microsecond=0),
+                expected_workflow_status_sha256=(current.evidence.expected_workflow_status_sha256),
+                technical_qualification=self._production_qualification,
+                audit_selection=self._audit_model_selection,
+                expected_audit_scope_sha256=context.audit_scope_sha256,
+                expected_source_sha256=context.source_sha256,
+                expected_audit_context_sha256=context.context_sha256,
+                expected_client_constraints_sha256=constraints.constraints_sha256,
+            )
+        except ValueError as exc:
+            raise OpenRouterModelRefreshError(
+                f"audit model refresh authority rejected use: {exc}"
+            ) from exc
+        if (
+            verified is not current.guard
+            or current.evidence.evidence_sha256 != current.guard.evidence_sha256
+            or current.evidence.workflow_status_sha256 != current.guard.workflow_status_sha256
+            or current.evidence.snapshot_sha256 != current.guard.snapshot_sha256
+        ):
+            raise OpenRouterModelRefreshError(
+                "audit model refresh authority differs from its durable evidence"
+            )
+
+    def require_audit_model_refresh_pricing_binding(
+        self,
+        *,
+        audit_model_refresh_pricing_evidence: AuditModelRefreshPricingEvidence,
+        audit_model_refresh_pricing_authority: VerifiedAuditModelRefreshPricingAuthority,
+        checked_at: datetime,
+    ) -> None:
+        """Verify that an existing client owns the exact refreshed-pricing pair."""
+
+        current = self._audit_model_refresh_pricing_binding
+        refresh = self._audit_model_refresh_binding
+        supplied = _canonical_audit_model_refresh_pricing_binding(
+            evidence=audit_model_refresh_pricing_evidence,
+            authority=audit_model_refresh_pricing_authority,
+            refresh_binding=refresh,
+        )
+        if (
+            supplied is None
+            or current is None
+            or supplied.evidence != current.evidence
+            or supplied.authority is not current.authority
+            or refresh is None
+            or self._production_qualification is None
+            or self._audit_model_selection is None
+            or self._audit_policy_binding is None
+        ):
+            raise OpenRouterModelRefreshPricingError(
+                "OpenRouter client binds different audit model refresh pricing authority"
+            )
+        context = self._audit_policy_binding.audit_context
+        constraints = self._audit_policy_binding.client_constraints
+        try:
+            verified = current.authority.require_current(
+                now=checked_at.replace(microsecond=0),
+                expected_workflow_status_sha256=(current.evidence.expected_workflow_status_sha256),
+                refresh_evidence=refresh.evidence,
+                refresh_guard=refresh.guard,
+                technical_qualification=self._production_qualification,
+                audit_selection=self._audit_model_selection,
+                expected_audit_scope_sha256=context.audit_scope_sha256,
+                expected_source_sha256=context.source_sha256,
+                expected_audit_context_sha256=context.context_sha256,
+                expected_client_constraints_sha256=constraints.constraints_sha256,
+            )
+        except ValueError as exc:
+            raise OpenRouterModelRefreshPricingError(
+                f"audit model refresh pricing authority rejected use: {exc}"
+            ) from exc
+        if (
+            verified is not current.authority
+            or current.evidence.evidence_sha256 != current.authority.pricing_evidence_sha256
+            or current.evidence.refresh_evidence_sha256 != refresh.evidence.evidence_sha256
+            or current.evidence.refresh_guard_capability_sha256 != refresh.guard.capability_sha256
+        ):
+            raise OpenRouterModelRefreshPricingError(
+                "audit model refresh pricing authority differs from durable evidence"
+            )
 
     def _require_real_postqualification_reasoning_plan(
         self,
@@ -4484,6 +6086,8 @@ class OpenRouterClient:
                 "context budget preview context JSON escape overhead tokens are invalid"
             )
         effective_workflow_bound = workflow_byte_upper_bound_tokens or 0
+        workflow_prompt_sha256: str | None = None
+        workflow_prompt_provider_visible_bytes: int | None = None
         if workflow_prompt is not None:
             raw_workflow_bound = len(workflow_prompt.encode("utf-8"))
             if (
@@ -4493,7 +6097,11 @@ class OpenRouterClient:
                 raise OpenRouterRequestLimitError(
                     "context budget preview raw workflow bound does not match prompt"
                 )
-            effective_workflow_bound = len(_compact_json(workflow_prompt).encode("utf-8"))
+            workflow_prompt_sha256 = hashlib.sha256(workflow_prompt.encode("utf-8")).hexdigest()
+            workflow_prompt_provider_visible_bytes = len(
+                _compact_json(workflow_prompt).encode("utf-8")
+            )
+            effective_workflow_bound = workflow_prompt_provider_visible_bytes
         required_output_tokens = self._required_output_tokens()
         requested_completion_tokens = required_output_tokens + self._reserved_reasoning_tokens(
             required_output_tokens,
@@ -4560,7 +6168,36 @@ class OpenRouterClient:
                     "endpoint reserves leave no serialized context-package capacity"
                 )
             budgets.append(package_budget)
-        return min(budgets)
+        computed_package_budget = min(budgets)
+        binding = _lookup_trusted_transport_binding(self)
+        observer = (
+            binding.test_only_context_package_budget_observer
+            if binding is not None
+            and binding.execution_evidence is ExecutionEvidenceKind.MOCK
+            and trusted_openrouter_execution_evidence(self) is ExecutionEvidenceKind.MOCK
+            else None
+        )
+        if observer is not None:
+            try:
+                observer_result = observer(
+                    canonical_models,
+                    role=role,
+                    workflow_byte_upper_bound_tokens=workflow_byte_upper_bound_tokens,
+                    workflow_prompt_sha256=workflow_prompt_sha256,
+                    workflow_prompt_provider_visible_bytes=(workflow_prompt_provider_visible_bytes),
+                    context_json_escape_overhead_tokens=context_json_escape_overhead_tokens,
+                    computed_package_budget=computed_package_budget,
+                )
+            finally:
+                if trusted_openrouter_execution_evidence(self) is not ExecutionEvidenceKind.MOCK:
+                    raise OpenRouterPrivacyError(
+                        "test-only context budget observer changed the trusted mock boundary"
+                    )
+            if observer_result is not None:
+                raise OpenRouterPrivacyError(
+                    "test-only context budget observer must return exact None"
+                )
+        return computed_package_budget
 
     def _diagnostic_planning_snapshot(
         self,
@@ -4877,7 +6514,7 @@ class OpenRouterClient:
             payload = None
         if not isinstance(payload, dict):
             raise OpenRouterModelError("OpenRouter metadata response was not a valid object")
-        self._ensure_no_credential_in_value(payload)
+        _TRUSTED_ENSURE_NO_CREDENTIAL_IN_VALUE(self, payload)
         observation_path = "/" + path.lstrip("/")
         self._metadata_observations[observation_path] = _canonical_sha256(payload)
         return payload
@@ -4889,6 +6526,7 @@ class OpenRouterClient:
         *,
         json_body: dict[str, Any] | None = None,
         max_bytes: int,
+        trusted_pre_transport_check: Callable[[], Coroutine[Any, Any, None]] | None = None,
     ) -> httpx.Response:
         binding = _lookup_trusted_transport_binding(self)
         if binding is None:
@@ -4902,6 +6540,8 @@ class OpenRouterClient:
             total = 0
             relative_path = path.lstrip("/")
             try:
+                if trusted_pre_transport_check is not None:
+                    await trusted_pre_transport_check()
                 async with self._client.stream(
                     method,
                     relative_path,
@@ -4953,6 +6593,36 @@ class OpenRouterClient:
                 "_request_metadata",
                 "_bounded_request",
                 "_validate_transport_provenance",
+                "build_request",
+                "_endpoint_request_cost_bound",
+                "_seal_audit_model_refresh_pricing_control",
+                "_ensure_request_size",
+                "_store_debug",
+                "_ensure_no_credential_in_value",
+                "_validate_paid_privacy_policy",
+            )
+        ) or any(
+            current is not trusted
+            for current, trusted in (
+                (OpenRouterClient.build_request, _TRUSTED_BUILD_REQUEST),
+                (
+                    OpenRouterClient._endpoint_request_cost_bound,
+                    _TRUSTED_ENDPOINT_REQUEST_COST_BOUND,
+                ),
+                (
+                    OpenRouterClient._seal_audit_model_refresh_pricing_control,
+                    _TRUSTED_SEAL_AUDIT_MODEL_REFRESH_PRICING_CONTROL,
+                ),
+                (OpenRouterClient._ensure_request_size, _TRUSTED_ENSURE_REQUEST_SIZE),
+                (OpenRouterClient._store_debug, _TRUSTED_STORE_DEBUG),
+                (
+                    OpenRouterClient._ensure_no_credential_in_value,
+                    _TRUSTED_ENSURE_NO_CREDENTIAL_IN_VALUE,
+                ),
+                (
+                    OpenRouterClient._validate_paid_privacy_policy,
+                    _TRUSTED_VALIDATE_PAID_PRIVACY_POLICY,
+                ),
             )
         ):
             raise OpenRouterPrivacyError("provider client callables changed after validation")
@@ -4964,16 +6634,139 @@ class OpenRouterClient:
         try:
             current_client = object.__getattribute__(self, "_client")
             current_transport = object.__getattribute__(current_client, "_transport")
+            current_budget = object.__getattribute__(self, "budget")
+            current_ledger = object.__getattribute__(current_budget, "atomic_ledger")
+            current_paid_controls = object.__getattribute__(
+                self,
+                "_requires_paid_controls",
+            )
         except (AttributeError, TypeError) as exc:
             raise OpenRouterPrivacyError(
                 "provider transport provenance changed after validation"
             ) from exc
+        if type(current_budget) is not BudgetManager:
+            raise OpenRouterPrivacyError("provider transport provenance changed after validation")
+        if type(current_paid_controls) is not bool:
+            raise OpenRouterPrivacyError("provider transport provenance changed after validation")
+        if current_paid_controls:
+            _require_exact_paid_budget_configuration(current_budget)
+            if current_ledger is not None:
+                _require_exact_atomic_ledger_configuration(current_ledger)
+            try:
+                _require_trusted_budget_accounting_state(current_budget)
+            except BudgetReservationStateError as exc:
+                raise OpenRouterPrivacyError(
+                    "provider budget accounting state changed after validation"
+                ) from exc
+        current_model_caps = tuple(sorted(current_budget.per_model_usd_caps.items()))
+        current_role_caps = tuple(sorted(current_budget.per_role_usd_caps.items()))
         if (
             current_client is not binding.http_client
             or current_transport is not binding.transport
             or str(current_client.base_url) != binding.base_url
+            or current_budget is not binding.budget_manager
+            or current_ledger is not binding.atomic_cost_ledger
+            or current_paid_controls is not binding.paid_controls_required
+            or current_budget.total_usd != binding.budget_total_usd
+            or current_budget.max_output_tokens != binding.budget_max_output_tokens
+            or current_budget.conservative_rate != binding.budget_conservative_rate
+            or current_budget.max_requests_per_agent != binding.budget_max_requests_per_agent
+            or current_budget.require_endpoint_cost_bound
+            is not binding.budget_require_endpoint_cost_bound
+            or current_budget.global_input_token_budget != binding.budget_global_input_token_budget
+            or current_budget.global_output_token_budget
+            != binding.budget_global_output_token_budget
+            or current_model_caps != binding.budget_per_model_usd_caps
+            or current_role_caps != binding.budget_per_role_usd_caps
+            or current_budget._lock is not binding.budget_lock
+            or current_budget._atomic_ledger_identity is not binding.atomic_cost_ledger
         ):
             raise OpenRouterPrivacyError("provider transport provenance changed after validation")
+        try:
+            _require_pristine_endpoint_cost_bound_types()
+        except BudgetReservationStateError as exc:
+            raise OpenRouterPrivacyError(
+                "provider endpoint cost-bound callables changed after validation"
+            ) from exc
+        if (
+            _provider_callable_descriptor_surface(BudgetManager)
+            != _TRUSTED_BUDGET_MANAGER_DESCRIPTOR_SURFACE
+            or any(
+                name in vars(current_budget)
+                for name, _descriptor in _TRUSTED_BUDGET_MANAGER_DESCRIPTOR_SURFACE
+            )
+            or any(
+                name in vars(current_budget)
+                for name in (
+                    "reserve",
+                    "reconcile",
+                    "reconciled_cost_usd_exact",
+                    "release",
+                    "commit_active_reservation_for_transport",
+                    "_current_atomic_ledger",
+                )
+            )
+            or any(
+                current is not trusted
+                for current, trusted in (
+                    (BudgetManager.reserve, _TRUSTED_BUDGET_RESERVE),
+                    (BudgetManager.reconcile, _TRUSTED_BUDGET_RECONCILE),
+                    (
+                        BudgetManager.reconciled_cost_usd_exact,
+                        _TRUSTED_BUDGET_RECONCILED_COST_USD_EXACT,
+                    ),
+                    (BudgetManager.release, _TRUSTED_BUDGET_RELEASE),
+                    (
+                        BudgetManager.commit_active_reservation_for_transport,
+                        _TRUSTED_BUDGET_COMMIT_FOR_TRANSPORT,
+                    ),
+                    (
+                        BudgetManager._current_atomic_ledger,
+                        _TRUSTED_BUDGET_CURRENT_ATOMIC_LEDGER,
+                    ),
+                )
+            )
+        ):
+            raise OpenRouterPrivacyError("provider budget callables changed after validation")
+        if current_ledger is not None and (
+            type(current_ledger) is not AtomicCostLedger
+            or _provider_callable_descriptor_surface(AtomicCostLedger)
+            != _TRUSTED_ATOMIC_LEDGER_DESCRIPTOR_SURFACE
+            or any(
+                name in vars(current_ledger)
+                for name, _descriptor in _TRUSTED_ATOMIC_LEDGER_DESCRIPTOR_SURFACE
+            )
+            or any(
+                name in vars(current_ledger)
+                for name in (
+                    "reserve",
+                    "reconcile",
+                    "release",
+                    "active_reservation",
+                    "snapshot",
+                    "_locked",
+                    "_required_state",
+                    "_read_state",
+                    "_write_state",
+                )
+            )
+            or AtomicCostLedger.reserve is not _TRUSTED_ATOMIC_LEDGER_RESERVE
+            or AtomicCostLedger.reconcile is not _TRUSTED_ATOMIC_LEDGER_RECONCILE
+            or AtomicCostLedger.release is not _TRUSTED_ATOMIC_LEDGER_RELEASE
+            or (
+                AtomicCostLedger.active_reservation is not _TRUSTED_ATOMIC_LEDGER_ACTIVE_RESERVATION
+            )
+            or AtomicCostLedger.snapshot is not _TRUSTED_ATOMIC_LEDGER_SNAPSHOT
+            or AtomicCostLedger._locked is not _TRUSTED_ATOMIC_LEDGER_LOCKED
+            or AtomicCostLedger._required_state is not _TRUSTED_ATOMIC_LEDGER_REQUIRED_STATE
+            or AtomicCostLedger._read_state is not _TRUSTED_ATOMIC_LEDGER_READ_STATE
+            or AtomicCostLedger._write_state is not _TRUSTED_ATOMIC_LEDGER_WRITE_STATE
+            or current_ledger.path is not binding.atomic_cost_ledger_path
+            or current_ledger.lock_path is not binding.atomic_cost_ledger_lock_path
+            or current_ledger.cap_usd is not binding.atomic_cost_ledger_cap_usd
+            or current_ledger._thread_lock is not binding.atomic_cost_ledger_thread_lock
+        ):
+            raise OpenRouterPrivacyError("provider cost-ledger callables changed after validation")
         if (
             binding.execution_evidence is ExecutionEvidenceKind.REAL
             and not _owned_httpx_callables_are_pristine(current_client, current_transport)
@@ -5008,6 +6801,7 @@ class OpenRouterClient:
         request_token_plan: RequestTokenPlan | None = None,
         request_role: str | None = None,
         response_schema_generation: _PydanticSchemaGeneration | None = None,
+        refresh_pricing_control: _AuditModelRefreshPricingRequestControl | None = None,
     ) -> dict[str, Any]:
         _require_exact_model_id(model)
         effective_provider_policy = provider_policy or self.provider_policy
@@ -5157,7 +6951,41 @@ class OpenRouterClient:
         }
         if request_plan.response_format is not None:
             body["response_format"] = request_plan.response_format
-        if endpoint_policy is not None:
+        if refresh_pricing_control is not None:
+            if (
+                refresh_pricing_control.exact_model_id != model
+                or effective_provider_policy.configured_endpoints
+                != (refresh_pricing_control.provider_endpoint,)
+                or refresh_pricing_control.control_sha256
+                != _canonical_sha256(
+                    {
+                        "exact_model_id": refresh_pricing_control.exact_model_id,
+                        "provider_endpoint": refresh_pricing_control.provider_endpoint,
+                        "current_endpoint_snapshot_sha256": (
+                            refresh_pricing_control.current_endpoint_snapshot_sha256
+                        ),
+                        "qualified_pricing_snapshot_sha256": (
+                            refresh_pricing_control.qualified_pricing_snapshot_sha256
+                        ),
+                        "current_pricing": refresh_pricing_control.current_pricing,
+                        "current_pricing_sha256": (refresh_pricing_control.current_pricing_sha256),
+                        "route_evidence_sha256": refresh_pricing_control.route_evidence_sha256,
+                        "evidence_sha256": refresh_pricing_control.evidence_sha256,
+                        "authority_capability_sha256": (
+                            refresh_pricing_control.authority_capability_sha256
+                        ),
+                        "routing_max_price": refresh_pricing_control.routing_max_price,
+                        "cost_bound_pricing": refresh_pricing_control.cost_bound_pricing,
+                    }
+                )
+            ):
+                raise OpenRouterModelRefreshPricingError(
+                    "sealed refresh pricing control differs from the exact request route"
+                )
+            provider = body["provider"]
+            assert isinstance(provider, dict)
+            provider["max_price"] = dict(refresh_pricing_control.routing_max_price)
+        elif endpoint_policy is not None:
             provider = body["provider"]
             assert isinstance(provider, dict)
             provider["max_price"] = dict(endpoint_policy.routing_max_price)
@@ -5172,6 +7000,629 @@ class OpenRouterClient:
             if len(body["metadata"]) != len(request_metadata):
                 raise OpenRouterRequestLimitError("request metadata is invalid")
         return body
+
+    def preview_candidate_review_task_resources(
+        self,
+        *,
+        coverage_task: ModelSurfaceGapTask,
+        scheduler_task: SchedulerTaskPlan,
+        campaign_manifest: SchedulerCampaignManifest,
+        context_package: ContextPackage,
+        system_prompt: str,
+        schema_name: str,
+        checked_at: datetime,
+    ) -> ModelSurfaceTaskResourcePreview:
+        """Return a non-authorizing exact bound for one sealed blind-review task."""
+
+        from mmaudit.models.coverage_planning import (
+            ModelSurfaceGapTask,
+            ModelSurfaceTaskResourcePreview,
+        )
+        from mmaudit.models.scheduler import (
+            SchedulerCampaignManifest,
+            SchedulerPassKind,
+            SchedulerScopeKind,
+            SchedulerTaskKind,
+            SchedulerTaskPlan,
+        )
+        from mmaudit.models.schemas import ModelSurfaceReviewArtifact
+        from mmaudit.orchestration.context import (
+            ContextBoundaryError,
+            render_context,
+            revalidate_model_surface_context_package,
+        )
+
+        if (
+            type(coverage_task) is not ModelSurfaceGapTask
+            or type(scheduler_task) is not SchedulerTaskPlan
+            or type(campaign_manifest) is not SchedulerCampaignManifest
+            or type(context_package) is not ContextPackage
+        ):
+            raise OpenRouterCandidateReviewBoundaryError(
+                "candidate-review resource preview requires exact typed task and context evidence"
+            )
+        if type(system_prompt) is not str or type(schema_name) is not str:
+            raise OpenRouterCandidateReviewBoundaryError(
+                "candidate-review resource preview prompt contract is invalid"
+            )
+        if type(checked_at) is not datetime:
+            raise OpenRouterCandidateReviewBoundaryError(
+                "candidate-review resource preview timestamp is invalid"
+            )
+        try:
+            sealed_coverage_task = ModelSurfaceGapTask.model_validate_json(
+                coverage_task.model_dump_json(),
+                strict=True,
+            )
+            sealed_scheduler_task = SchedulerTaskPlan.model_validate_json(
+                scheduler_task.model_dump_json(),
+                strict=True,
+            )
+            sealed_campaign_manifest = SchedulerCampaignManifest.model_validate_json(
+                campaign_manifest.model_dump_json(),
+                strict=True,
+            )
+            sealed_context = revalidate_model_surface_context_package(context_package)
+            preview_checked_at = _whole_second_utc(checked_at)
+        except (AttributeError, ContextBoundaryError, TypeError, ValueError) as exc:
+            raise OpenRouterCandidateReviewBoundaryError(
+                "candidate-review resource preview evidence failed detached validation"
+            ) from exc
+        if (
+            sealed_coverage_task != coverage_task
+            or sealed_scheduler_task != scheduler_task
+            or sealed_campaign_manifest != campaign_manifest
+            or sealed_scheduler_task.campaign_id != sealed_campaign_manifest.campaign_id
+            or sealed_scheduler_task.manifest_sha256 != sealed_campaign_manifest.manifest_sha256
+            or sealed_scheduler_task.pass_id
+            != sealed_campaign_manifest.pass_id(SchedulerPassKind.BLIND_SHARD_REVIEW)
+            or sealed_scheduler_task.pass_kind is not SchedulerPassKind.BLIND_SHARD_REVIEW
+            or sealed_scheduler_task.task_kind is not SchedulerTaskKind.MODEL_REQUEST
+            or sealed_scheduler_task.scope.kind is not SchedulerScopeKind.SINGLE_SHARD
+            or sealed_scheduler_task.scope.shard_ids != (sealed_coverage_task.scope_id,)
+            or sealed_scheduler_task.task_key != sealed_coverage_task.task_id
+            or sealed_scheduler_task.role != sealed_coverage_task.review_role
+            or sealed_scheduler_task.requested_model != sealed_coverage_task.requested_model
+            or sealed_scheduler_task.root_lineage != sealed_coverage_task.root_lineage
+            or sealed_scheduler_task.candidate_ids != ()
+            or sealed_coverage_task.scope_id not in sealed_campaign_manifest.shard_ids
+        ):
+            raise OpenRouterCandidateReviewBoundaryError(
+                "coverage task differs from its exact blind scheduler task"
+            )
+        expected_input_recipe_sha256 = _canonical_sha256(
+            {
+                "domain": "mmaudit.scheduler.model-input-recipe.v1",
+                "pass_kind": sealed_scheduler_task.pass_kind,
+                "scope_sha256": sealed_scheduler_task.scope.scope_sha256,
+                "task_key": sealed_scheduler_task.task_key,
+                "role": sealed_scheduler_task.role,
+            }
+        )
+        if sealed_scheduler_task.input_sha256 != expected_input_recipe_sha256:
+            raise OpenRouterCandidateReviewBoundaryError(
+                "scheduler task input recipe differs from the compact coverage task"
+            )
+        expected_prompt_recipe_sha256 = _canonical_sha256(
+            {
+                "domain": "mmaudit.scheduler.model-prompt-recipe.v1",
+                "prompt_set_sha256": sealed_campaign_manifest.bindings.prompt_set_sha256,
+                "task_key": sealed_scheduler_task.task_key,
+                "role": sealed_scheduler_task.role,
+            }
+        )
+        if sealed_scheduler_task.prompt_sha256 != expected_prompt_recipe_sha256:
+            raise OpenRouterCandidateReviewBoundaryError(
+                "scheduler task prompt recipe differs from the trusted campaign manifest"
+            )
+        context_surface_ids = tuple(
+            request.surface_id for request in sealed_context.requested_model_surfaces
+        )
+        context_surface_manifest_sha256 = (
+            ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256(
+                sealed_context.requested_model_surfaces
+            )
+        )
+        if (
+            sealed_context.role != sealed_coverage_task.review_role
+            or context_surface_ids != sealed_coverage_task.surface_ids
+            or context_surface_manifest_sha256
+            != sealed_coverage_task.requested_surface_manifest_sha256
+        ):
+            raise OpenRouterCandidateReviewBoundaryError(
+                "provider context differs from the exact compact coverage task"
+            )
+        if (
+            not _candidate_review_protocol_boundary_is_pristine()
+            or not _openrouter_client_callables_are_pristine()
+        ):
+            raise OpenRouterCandidateReviewBoundaryError(
+                "candidate-review completion boundary changed before resource preview"
+            )
+
+        role = sealed_coverage_task.review_role
+        model = sealed_coverage_task.requested_model
+        user_prompt = render_context(sealed_context)
+        response_model = _TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE
+        response_schema_sha256 = _TRUSTED_CANDIDATE_REVIEW_WIRE_SCHEMA_SHA256()
+        response_normalizer_sha256 = _canonical_sha256(
+            {
+                "domain": "mmaudit.scheduler.candidate-review-wire-normalizer.v1",
+                "protocol": "CANDIDATE_REVIEW_NORMALIZATION_V1",
+                "wire_schema_sha256": response_schema_sha256,
+                "normalized_batch_schema_sha256": (_TRUSTED_CANDIDATE_REVIEW_BATCH_SCHEMA_SHA256()),
+                "json_encoding": "sorted-keys,compact,ascii,no-nan",
+                "control_frames_removed": True,
+                "semantic_records_unchanged": True,
+            }
+        )
+        if (
+            sealed_scheduler_task.response_schema_sha256 != response_schema_sha256
+            or sealed_scheduler_task.normalizer_sha256 != response_normalizer_sha256
+        ):
+            raise OpenRouterCandidateReviewBoundaryError(
+                "scheduler task lacks the exact framed candidate-review contract"
+            )
+
+        maximum_attempts = self.execution.max_model_retries + 1
+        if self.budget.max_requests_per_agent < maximum_attempts:
+            raise OpenRouterRequestLimitError(
+                "candidate-review retry attempts exceed the configured request limit"
+            )
+        request_id = _request_ids_for_routes(
+            sealed_scheduler_task.logical_request_id,
+            route_count=1,
+            maximum_attempts=maximum_attempts,
+        )[0]
+        execution_evidence = trusted_openrouter_execution_evidence(self)
+        if execution_evidence is ExecutionEvidenceKind.UNVERIFIED:
+            raise OpenRouterPrivacyError(
+                "network-capable injected provider clients are not permitted"
+            )
+        paid_controls_required = _trusted_paid_controls_required(self)
+        _TRUSTED_VALIDATE_TRANSPORT_PROVENANCE(self)
+        if paid_controls_required and self.budget.atomic_ledger is None:
+            raise OpenRouterCostControlError(
+                "real provider resource preview requires a durable atomic cost ledger"
+            )
+        if paid_controls_required and not self.budget.require_endpoint_cost_bound:
+            raise OpenRouterCostControlError(
+                "real provider resource preview requires endpoint-bound maximum cost proof"
+            )
+        if paid_controls_required and not self.privacy.require_zdr:
+            self._validate_non_zdr_privacy_authorization((model,))
+        if paid_controls_required and not self.provider_policy.configured_endpoints:
+            raise OpenRouterProviderPolicyError(
+                "real provider resource preview requires an explicit endpoint allowlist"
+            )
+        if model not in self._endpoint_pricing:
+            raise OpenRouterCostControlError(
+                "candidate-review resource preview lacks validated endpoint pricing"
+            )
+        if execution_evidence is ExecutionEvidenceKind.REAL:
+            if (
+                type(self) is not _TRUSTED_OPENROUTER_CLIENT_TYPE
+                or not self._owns_client
+                or not self._authentication_validated
+            ):
+                raise OpenRouterPrivacyError(
+                    "real provider resource preview requires an authenticated owned client"
+                )
+            if model not in self._model_identities:
+                raise OpenRouterModelError(
+                    "real provider resource preview requires frozen model identity metadata"
+                )
+
+        response_schema_generation = _pydantic_schema_generation(response_model)
+        endpoint_policy = self._endpoint_pricing.get(model)
+        structured_output_mode = self._selected_structured_output_mode(model)
+        pricing_required = _TRUSTED_REQUIRES_REAL_AUDIT_MODEL_REFRESH_PRICING(
+            self,
+            role,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_model=response_model,
+            schema_name=schema_name,
+            structured_output_mode=structured_output_mode,
+            context_package=sealed_context,
+        )
+        qualification_binding = self._qualification_routing.get(model)
+        if (
+            self.provider_policy.certification
+            and not _is_prequalification_provider_role(role)
+            and qualification_binding is None
+        ):
+            raise OpenRouterQualificationError(
+                "certification requires current qualification routing evidence"
+            )
+        if (
+            self.provider_policy.certification
+            and qualification_binding is None
+            and len(self.provider_policy.configured_endpoints) != 1
+        ):
+            raise OpenRouterQualificationError(
+                "unqualified certification roles require one exact provider endpoint"
+            )
+        if qualification_binding is not None:
+            real_runtime_snapshots = execution_evidence is ExecutionEvidenceKind.REAL
+            qualification_binding.require_current(
+                role=role,
+                model=model,
+                provider_endpoints=self.provider_policy.configured_endpoints,
+                now=preview_checked_at,
+                endpoint_policy=(None if pricing_required else endpoint_policy),
+                model_identity=self._model_identities.get(model),
+                require_runtime_snapshots=(real_runtime_snapshots and not pricing_required),
+            )
+            if (
+                pricing_required
+                and real_runtime_snapshots
+                and (endpoint_policy is None or self._model_identities.get(model) is None)
+            ):
+                raise OpenRouterQualificationError(
+                    "refreshed-price routing requires current model and endpoint snapshots"
+                )
+
+        real_audit_required = _TRUSTED_REQUIRES_REAL_AUDIT_POLICY_SELECTION(
+            self,
+            role,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_model=response_model,
+            schema_name=schema_name,
+            structured_output_mode=structured_output_mode,
+            context_package=sealed_context,
+        )
+        reasoning_plan: ReasoningRequestPlanEvidence | None
+        if real_audit_required:
+            current_qualification_binding = self._require_real_postqualification_routing(
+                role=role,
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                structured_output_mode=structured_output_mode,
+                context_package=sealed_context,
+                checked_at=preview_checked_at,
+                require_runtime_snapshots=True,
+                allow_refreshed_pricing=pricing_required,
+            )
+            if qualification_binding != current_qualification_binding:
+                raise OpenRouterQualificationError(
+                    "post-qualification routing authority changed before resource preview"
+                )
+            reasoning_plan = self._require_real_postqualification_reasoning_plan(
+                role=role,
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                structured_output_mode=structured_output_mode,
+                context_package=sealed_context,
+                qualification_binding=current_qualification_binding,
+            )
+        else:
+            reasoning_plan = self._reasoning_request_plan(
+                role=role,
+                model=model,
+                qualification_binding=qualification_binding,
+            )
+        request_provider_policy = (
+            qualification_binding.request_provider_policy()
+            if qualification_binding is not None and self.provider_policy.certification
+            else self.provider_policy
+        )
+        request_provider_policy = _canonical_provider_policy(request_provider_policy)
+        audit_routing_evidence = (
+            _TRUSTED_REQUIRE_REAL_AUDIT_MODEL_SELECTION(
+                self,
+                role=role,
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                structured_output_mode=structured_output_mode,
+                context_package=sealed_context,
+                checked_at=preview_checked_at,
+                qualification_binding=qualification_binding,
+                provider_policy=request_provider_policy,
+            )
+            if real_audit_required
+            else None
+        )
+        refresh_routing_evidence = (
+            _TRUSTED_REQUIRE_REAL_AUDIT_MODEL_REFRESH(
+                self,
+                role=role,
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                structured_output_mode=structured_output_mode,
+                context_package=sealed_context,
+                checked_at=preview_checked_at,
+                qualification_binding=qualification_binding,
+                audit_routing_evidence=audit_routing_evidence,
+                provider_policy=request_provider_policy,
+            )
+            if _TRUSTED_REQUIRES_REAL_AUDIT_MODEL_REFRESH(
+                self,
+                role,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                structured_output_mode=structured_output_mode,
+                context_package=sealed_context,
+            )
+            else None
+        )
+        refresh_pricing_routing_evidence = (
+            _TRUSTED_REQUIRE_REAL_AUDIT_MODEL_REFRESH_PRICING(
+                self,
+                role=role,
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                structured_output_mode=structured_output_mode,
+                context_package=sealed_context,
+                checked_at=preview_checked_at,
+                qualification_binding=qualification_binding,
+                audit_routing_evidence=audit_routing_evidence,
+                refresh_routing_evidence=refresh_routing_evidence,
+                provider_policy=request_provider_policy,
+            )
+            if pricing_required
+            else None
+        )
+        refresh_pricing_control = (
+            _TRUSTED_SEAL_AUDIT_MODEL_REFRESH_PRICING_CONTROL(
+                self,
+                refresh_pricing_routing_evidence,
+            )
+            if refresh_pricing_routing_evidence is not None
+            else None
+        )
+        if paid_controls_required:
+            _TRUSTED_VALIDATE_PAID_PRIVACY_POLICY(
+                self,
+                (model,),
+                request_provider_endpoints=request_provider_policy.configured_endpoints,
+            )
+
+        structured_output_plan = _structured_output_request_plan(
+            mode=structured_output_mode,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_model=response_model,
+            schema_name=schema_name,
+            reasoning=self._reasoning_for_role(role),
+            schema_generation=response_schema_generation,
+        )
+        response_schema_generation.require_current(
+            response_model,
+            phase="during candidate-review resource preview planning",
+        )
+        prompt_hash = _structured_output_prompt_sha256_from_plan(structured_output_plan)
+        system_prompt_hash = hashlib.sha256(
+            structured_output_plan.system_prompt.encode("utf-8")
+        ).hexdigest()
+        user_prompt_hash = hashlib.sha256(user_prompt.encode("utf-8")).hexdigest()
+        schema_hash = structured_output_plan.schema_sha256
+        if (
+            schema_hash != response_schema_sha256
+            or sealed_scheduler_task.system_prompt_sha256 != system_prompt_hash
+        ):
+            raise OpenRouterCandidateReviewBoundaryError(
+                "scheduler task differs from the exact framed provider request"
+            )
+        request_token_plan, context_request_evidence = self._request_token_plan(
+            request_id=request_id,
+            role=role,
+            model=model,
+            provider_policy=request_provider_policy,
+            structured_output_plan=structured_output_plan,
+            original_system_prompt=system_prompt,
+            response_model=response_model,
+            schema_name=schema_name,
+            reasoning_plan=reasoning_plan,
+            context_package=sealed_context,
+        )
+        response_schema_generation.require_current(
+            response_model,
+            phase="during candidate-review resource preview token planning",
+        )
+
+        request_metadata = {
+            "mmaudit_request_id": request_id,
+            "mmaudit_role": role,
+            "mmaudit_prompt_sha256": prompt_hash,
+            "mmaudit_user_prompt_sha256": user_prompt_hash,
+            "mmaudit_schema_sha256": schema_hash,
+            "mmaudit_output_mode": structured_output_mode.value,
+            "mmaudit_output_request_shape_sha256": structured_output_plan.request_shape_sha256,
+            "mmaudit_required_provider_parameters_sha256": _canonical_sha256(
+                structured_output_plan.required_provider_parameters
+            ),
+            "mmaudit_token_plan_sha256": request_token_plan.plan_sha256,
+        }
+        if request_token_plan.reasoning_plan is not None:
+            request_metadata.update(
+                {
+                    "mmaudit_reasoning_plan_sha256": (
+                        request_token_plan.reasoning_plan.evidence_sha256
+                    ),
+                    "mmaudit_reasoning_policy_sha256": (
+                        request_token_plan.reasoning_plan.policy_artifact_sha256
+                    ),
+                    "mmaudit_reasoning_profile_sha256": (
+                        request_token_plan.reasoning_plan.control_profile.profile_sha256
+                    ),
+                }
+            )
+            if request_token_plan.reasoning_plan.endpoint_capability_sha256 is not None:
+                request_metadata["mmaudit_reasoning_capability_sha256"] = (
+                    request_token_plan.reasoning_plan.endpoint_capability_sha256
+                )
+            if request_token_plan.reasoning_plan.qualification_binding_sha256 is not None:
+                request_metadata["mmaudit_reasoning_qualification_sha256"] = (
+                    request_token_plan.reasoning_plan.qualification_binding_sha256
+                )
+        if context_request_evidence is not None:
+            request_metadata["mmaudit_context_request_evidence_sha256"] = (
+                context_request_evidence.evidence_sha256
+            )
+        if structured_output_plan.strict_protocol_sha256 is not None:
+            request_metadata["mmaudit_output_protocol_sha256"] = (
+                structured_output_plan.strict_protocol_sha256
+            )
+        if endpoint_policy is not None:
+            request_metadata["mmaudit_endpoint_snapshot_sha256"] = endpoint_policy.snapshot_sha256
+            request_metadata["mmaudit_endpoint_pricing_sha256"] = (
+                endpoint_policy.policy_pricing_sha256
+            )
+            request_metadata["mmaudit_output_capability_sha256"] = (
+                endpoint_policy.output_capability_sha256
+            )
+        model_identity = self._model_identities.get(model)
+        if model_identity is not None:
+            request_metadata["mmaudit_identity_snapshot_sha256"] = (
+                model_identity.snapshot.snapshot_sha256
+            )
+        if qualification_binding is not None:
+            request_metadata.update(qualification_binding.request_metadata())
+        if audit_routing_evidence is not None:
+            request_metadata.update(
+                {
+                    f"mmaudit_policy_{key}": value
+                    for key, value in audit_routing_evidence.request_metadata().items()
+                }
+            )
+            assert self._audit_model_selection is not None
+            request_metadata["mmaudit_policy_selection_capability_sha256"] = (
+                self._audit_model_selection.capability_sha256
+            )
+        request_metadata.update(
+            self._audit_model_refresh_request_metadata(refresh_routing_evidence)
+        )
+        request_metadata.update(
+            self._audit_model_refresh_pricing_request_metadata(refresh_pricing_routing_evidence)
+        )
+        body = _TRUSTED_BUILD_REQUEST(
+            self,
+            model=model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_model=response_model,
+            schema_name=schema_name,
+            context_package=sealed_context,
+            request_metadata=request_metadata,
+            provider_policy=request_provider_policy,
+            structured_output_mode=structured_output_mode,
+            request_token_plan=request_token_plan,
+            request_role=role,
+            response_schema_generation=response_schema_generation,
+            refresh_pricing_control=refresh_pricing_control,
+        )
+        _TRUSTED_ENSURE_REQUEST_SIZE(self, body)
+        request_body_hash = _require_exact_openrouter_request_body(
+            body,
+            model=model,
+            structured_output_plan=structured_output_plan,
+            provider_policy=request_provider_policy,
+            require_zdr=self.privacy.require_zdr,
+            request_token_plan=request_token_plan,
+            request_metadata=request_metadata,
+            endpoint_policy=endpoint_policy,
+            refresh_pricing_control=refresh_pricing_control,
+        )
+        response_schema_generation.require_current(
+            response_model,
+            phase="during candidate-review resource preview request hashing",
+        )
+        request_material = _TRUSTED_CANDIDATE_REVIEW_CANONICAL_JSON_DUMPS(body)
+        (
+            request_token_plan_projection_sha256,
+            request_material_projection,
+            request_material_projection_sha256,
+        ) = _TRUSTED_CANDIDATE_REVIEW_REQUEST_MATERIAL_PROJECTION(
+            body,
+            request_token_plan=request_token_plan,
+        )
+        endpoint_cost_bound = _TRUSTED_ENDPOINT_REQUEST_COST_BOUND(
+            self,
+            model=model,
+            request_material=request_material,
+            request_token_plan=request_token_plan,
+            refresh_pricing_control=refresh_pricing_control,
+        )
+        if endpoint_cost_bound is None:
+            raise OpenRouterCostControlError(
+                "candidate-review resource preview requires endpoint-bound maximum cost proof"
+            )
+        if context_request_evidence is None or endpoint_policy is None:
+            raise OpenRouterCandidateReviewBoundaryError(
+                "candidate-review resource preview lacks exact context or endpoint evidence"
+            )
+        if refresh_pricing_control is not None:
+            provider_request = body.get("provider")
+            bound_components = {
+                component.pricing_field: component.unit_price_usd
+                for component in endpoint_cost_bound.components
+            }
+            expected_bound_components = {
+                field: Decimal(value) for field, value in refresh_pricing_control.cost_bound_pricing
+            }
+            if (
+                not isinstance(provider_request, dict)
+                or provider_request.get("max_price")
+                != dict(refresh_pricing_control.routing_max_price)
+                or endpoint_cost_bound.exact_model_id != refresh_pricing_control.exact_model_id
+                or endpoint_cost_bound.provider_endpoint
+                != refresh_pricing_control.provider_endpoint
+                or endpoint_cost_bound.request_material_sha256 != request_body_hash
+                or bound_components != expected_bound_components
+            ):
+                raise OpenRouterModelRefreshPricingError(
+                    "resource preview differs from sealed refreshed pricing"
+                )
+        maximum_cost_text = format(
+            _trusted_endpoint_request_maximum_cost_usd(endpoint_cost_bound),
+            "f",
+        )
+        if "." in maximum_cost_text:
+            maximum_cost_text = maximum_cost_text.rstrip("0").rstrip(".")
+        return ModelSurfaceTaskResourcePreview.build(
+            task=sealed_coverage_task,
+            scheduler_task_id=sealed_scheduler_task.task_id,
+            scheduler_task_plan_sha256=sealed_scheduler_task.task_plan_sha256,
+            campaign_manifest_sha256=sealed_campaign_manifest.manifest_sha256,
+            rendered_context_sha256=context_request_evidence.rendered_sha256,
+            context_request_evidence_sha256=context_request_evidence.evidence_sha256,
+            request_token_plan_projection_sha256=(request_token_plan_projection_sha256),
+            request_material_projection_sha256=request_material_projection_sha256,
+            request_material_projection_utf8_bytes=len(request_material_projection.encode("utf-8")),
+            endpoint_policy_snapshot_sha256=endpoint_policy.snapshot_sha256,
+            endpoint_policy_pricing_sha256=endpoint_policy.policy_pricing_sha256,
+            provider_endpoint=endpoint_cost_bound.provider_endpoint,
+            endpoint_pricing_snapshot_sha256=endpoint_cost_bound.pricing_snapshot_sha256,
+            endpoint_cost_bound_projection_sha256=(
+                _TRUSTED_ENDPOINT_REQUEST_COST_BOUND_PROJECTION_SHA256(
+                    endpoint_cost_bound,
+                    request_material_projection_sha256=(request_material_projection_sha256),
+                )
+            ),
+            maximum_attempts=maximum_attempts,
+            maximum_prompt_tokens_per_attempt=(request_token_plan.prompt_byte_upper_bound_tokens),
+            maximum_completion_tokens_per_attempt=(request_token_plan.requested_completion_tokens),
+            maximum_cost_usd_per_attempt_exact=maximum_cost_text or "0",
+        )
 
     def preview_structured_request_hashes(
         self,
@@ -5239,6 +7690,188 @@ class OpenRouterClient:
             )
         return completion.value
 
+    async def complete_candidate_review_with_evidence(
+        self,
+        *,
+        role: str,
+        models: list[str],
+        system_prompt: str,
+        user_prompt: str,
+        context_package: ContextPackage | None = None,
+        schema_name: str,
+        logical_request_id: str | None = None,
+        single_route_single_attempt: bool = False,
+        expected_resource_preview: ModelSurfaceTaskResourcePreview | None = None,
+        coverage_task: ModelSurfaceGapTask | None = None,
+        scheduler_task: SchedulerTaskPlan | None = None,
+        campaign_manifest: SchedulerCampaignManifest | None = None,
+        resource_preview_checked_at: datetime | None = None,
+    ) -> CandidateReviewCompletion:
+        """Request the framed wire protocol and return an explicitly normalized review."""
+
+        instance_state = vars(self)
+        if (
+            type(single_route_single_attempt) is not bool
+            or not _candidate_review_protocol_boundary_is_pristine()
+            or not _openrouter_client_callables_are_pristine()
+            or any(
+                name in instance_state
+                for name in (
+                    "complete_candidate_review_with_evidence",
+                    "complete_with_evidence",
+                    "_complete_one",
+                    "_failure_routing_evidence",
+                )
+            )
+        ):
+            raise OpenRouterCandidateReviewBoundaryError(
+                "candidate-review completion boundary changed before provider transport"
+            )
+        if single_route_single_attempt and len(models) != 1:
+            raise OpenRouterRequestLimitError(
+                "single-attempt candidate review requires one exact model route"
+            )
+        preview_coordinates = (
+            expected_resource_preview,
+            coverage_task,
+            scheduler_task,
+            campaign_manifest,
+            resource_preview_checked_at,
+        )
+        coordinate_count = sum(value is not None for value in preview_coordinates)
+        if coordinate_count not in {0, len(preview_coordinates)}:
+            raise OpenRouterCandidateReviewBoundaryError(
+                "candidate-review resource preview coordinates must be supplied together"
+            )
+        sealed_expected_resource_preview: ModelSurfaceTaskResourcePreview | None = None
+        if coordinate_count:
+            from mmaudit.models.coverage_planning import (
+                ModelSurfaceGapTask,
+                ModelSurfaceTaskResourcePreview,
+            )
+            from mmaudit.models.scheduler import SchedulerCampaignManifest, SchedulerTaskPlan
+            from mmaudit.orchestration.context import (
+                ContextBoundaryError,
+                render_context,
+                revalidate_model_surface_context_package,
+            )
+
+            if (
+                type(expected_resource_preview) is not ModelSurfaceTaskResourcePreview
+                or type(coverage_task) is not ModelSurfaceGapTask
+                or type(scheduler_task) is not SchedulerTaskPlan
+                or type(campaign_manifest) is not SchedulerCampaignManifest
+                or type(resource_preview_checked_at) is not datetime
+                or type(context_package) is not ContextPackage
+                or type(models) is not list
+                or any(type(model) is not str for model in models)
+                or type(role) is not str
+                or type(system_prompt) is not str
+                or type(user_prompt) is not str
+                or type(schema_name) is not str
+                or type(logical_request_id) is not str
+                or single_route_single_attempt
+            ):
+                raise OpenRouterCandidateReviewBoundaryError(
+                    "candidate-review dispatch requires exact full-retry preview evidence"
+                )
+            assert expected_resource_preview is not None
+            assert coverage_task is not None
+            assert scheduler_task is not None
+            assert campaign_manifest is not None
+            assert resource_preview_checked_at is not None
+            assert context_package is not None
+            try:
+                sealed_expected_resource_preview = (
+                    ModelSurfaceTaskResourcePreview.model_validate_json(
+                        expected_resource_preview.model_dump_json(),
+                        strict=True,
+                    )
+                )
+                sealed_context = revalidate_model_surface_context_package(context_package)
+                rendered_context = render_context(sealed_context)
+            except (AttributeError, ContextBoundaryError, TypeError, ValueError) as exc:
+                raise OpenRouterCandidateReviewBoundaryError(
+                    "candidate-review dispatch preview evidence failed detached validation"
+                ) from exc
+            if (
+                sealed_expected_resource_preview != expected_resource_preview
+                or role != coverage_task.review_role
+                or models != [coverage_task.requested_model]
+                or logical_request_id != scheduler_task.logical_request_id
+                or user_prompt != rendered_context
+            ):
+                raise OpenRouterCandidateReviewBoundaryError(
+                    "candidate-review dispatch differs from its exact preview coordinates"
+                )
+            recomputed_preview = _TRUSTED_PREVIEW_CANDIDATE_REVIEW_TASK_RESOURCES(
+                self,
+                coverage_task=coverage_task,
+                scheduler_task=scheduler_task,
+                campaign_manifest=campaign_manifest,
+                context_package=sealed_context,
+                system_prompt=system_prompt,
+                schema_name=schema_name,
+                checked_at=resource_preview_checked_at,
+            )
+            if recomputed_preview != sealed_expected_resource_preview:
+                raise OpenRouterCandidateReviewBoundaryError(
+                    "candidate-review request resources changed after aggregate preflight"
+                )
+            context_package = sealed_context
+            user_prompt = rendered_context
+        sanitized_truncation: OpenRouterTruncatedResponseError | None = None
+        try:
+            completion = await _TRUSTED_COMPLETE_WITH_EVIDENCE(
+                self,
+                role=role,
+                models=models,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                context_package=context_package,
+                response_model=_TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE,
+                schema_name=schema_name,
+                logical_request_id=logical_request_id,
+                _maximum_attempts=(1 if single_route_single_attempt else None),
+                _expected_resource_preview=sealed_expected_resource_preview,
+            )
+        except OpenRouterTruncatedResponseError as error:
+            if type(error) is not OpenRouterTruncatedResponseError:
+                raise OpenRouterCandidateReviewBoundaryError(
+                    "candidate-review truncation error has an invalid exact type"
+                ) from None
+            error.__traceback__ = None
+            error.__context__ = None
+            error.__cause__ = None
+            sanitized_truncation = error
+        if sanitized_truncation is not None:
+            raise sanitized_truncation from None
+        if (
+            not _candidate_review_protocol_boundary_is_pristine()
+            or type(completion.value) is not _TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE
+        ):
+            raise OpenRouterCandidateReviewBoundaryError(
+                "candidate-review completion boundary changed after provider transport"
+            )
+        try:
+            batch, normalization_evidence = _TRUSTED_NORMALIZE_CANDIDATE_REVIEW_DOCUMENT(
+                completion.value,
+                request_id=completion.usage_record.request_id,
+            )
+            return CandidateReviewCompletion(
+                value=batch,
+                usage_record=completion.usage_record,
+                normalization_evidence=normalization_evidence,
+            )
+        except CandidateReviewTruncationError:
+            if not _candidate_review_protocol_boundary_is_pristine():
+                raise OpenRouterCandidateReviewBoundaryError(
+                    "candidate-review normalization boundary changed after provider transport"
+                ) from None
+            raise OpenRouterSchemaError(
+                "complete candidate-review wire response could not be normalized"
+            ) from None
+
     def _claim_request_ids(self, request_ids: Sequence[str]) -> None:
         """Claim route identities once so retries and resumed work cannot alias evidence."""
 
@@ -5262,11 +7895,47 @@ class OpenRouterClient:
         response_model: type[ResponseT],
         schema_name: str,
         logical_request_id: str | None = None,
+        _maximum_attempts: int | None = None,
+        _expected_resource_preview: ModelSurfaceTaskResourcePreview | None = None,
     ) -> StructuredCompletion[ResponseT]:
         """Call only the explicitly supplied models, in order."""
 
+        if _expected_resource_preview is not None:
+            from mmaudit.models.coverage_planning import ModelSurfaceTaskResourcePreview
+
+            if (
+                type(_expected_resource_preview) is not ModelSurfaceTaskResourcePreview
+                or response_model is not _TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE
+                or len(models) != 1
+                or _maximum_attempts is not None
+            ):
+                raise OpenRouterCandidateReviewBoundaryError(
+                    "exact resource previews are restricted to one full-retry candidate review"
+                )
+            try:
+                sealed_expected_resource_preview = (
+                    ModelSurfaceTaskResourcePreview.model_validate_json(
+                        _expected_resource_preview.model_dump_json(),
+                        strict=True,
+                    )
+                )
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise OpenRouterCandidateReviewBoundaryError(
+                    "candidate-review resource preview failed detached validation"
+                ) from exc
+            if sealed_expected_resource_preview != _expected_resource_preview:
+                raise OpenRouterCandidateReviewBoundaryError(
+                    "candidate-review resource preview changed across its boundary"
+                )
+            _expected_resource_preview = sealed_expected_resource_preview
         if not models:
             raise OpenRouterModelError(f"no model configured for role {role}")
+        configured_attempts = self.execution.max_model_retries + 1
+        maximum_attempts = configured_attempts if _maximum_attempts is None else _maximum_attempts
+        if type(maximum_attempts) is not int or not 1 <= maximum_attempts <= configured_attempts:
+            raise OpenRouterRequestLimitError(
+                "model attempt override must only tighten the configured retry bound"
+            )
         for model in models:
             _require_exact_model_id(model)
         if self.provider_policy.certification and len(models) != 1:
@@ -5276,7 +7945,7 @@ class OpenRouterClient:
         request_ids = _request_ids_for_routes(
             logical_request_id,
             route_count=len(models),
-            maximum_attempts=self.execution.max_model_retries + 1,
+            maximum_attempts=maximum_attempts,
         )
         checked_at = datetime.now(UTC)
         qualification_bound_reasoning_plans: dict[
@@ -5341,21 +8010,23 @@ class OpenRouterClient:
             raise OpenRouterPrivacyError(
                 "network-capable injected provider clients are not permitted"
             )
-        if self._requires_paid_controls and self.budget.atomic_ledger is None:
+        paid_controls_required = _trusted_paid_controls_required(self)
+        _TRUSTED_VALIDATE_TRANSPORT_PROVENANCE(self)
+        if paid_controls_required and self.budget.atomic_ledger is None:
             raise OpenRouterCostControlError(
                 "real provider completions require a durable atomic cost ledger"
             )
-        if self._requires_paid_controls and not self.budget.require_endpoint_cost_bound:
+        if paid_controls_required and not self.budget.require_endpoint_cost_bound:
             raise OpenRouterCostControlError(
                 "real provider completions require endpoint-bound maximum cost proof"
             )
-        if self._requires_paid_controls and not self.privacy.require_zdr:
+        if paid_controls_required and not self.privacy.require_zdr:
             self._validate_non_zdr_privacy_authorization(models)
-        if self._requires_paid_controls and not self.provider_policy.configured_endpoints:
+        if paid_controls_required and not self.provider_policy.configured_endpoints:
             raise OpenRouterProviderPolicyError(
                 "real provider completions require an explicit provider endpoint allowlist"
             )
-        if self._requires_paid_controls:
+        if paid_controls_required:
             unbound_models = [model for model in models if model not in self._endpoint_pricing]
             if unbound_models:
                 raise OpenRouterCostControlError(
@@ -5377,8 +8048,27 @@ class OpenRouterClient:
                 )
         qualification_bindings: dict[str, OpenRouterQualificationRoutingEvidence | None] = {}
         audit_routing_bindings: dict[str, AuditModelRoutingEvidence | None] = {}
+        refresh_routing_bindings: dict[str, AuditModelRefreshRouteEvidence | None] = {}
+        refresh_pricing_routing_bindings: dict[
+            str,
+            AuditModelRefreshPricingRouteEvidence | None,
+        ] = {}
+        refresh_pricing_controls: dict[
+            str,
+            _AuditModelRefreshPricingRequestControl | None,
+        ] = {}
         for model_index, model in enumerate(models):
             binding = self._qualification_routing.get(model)
+            pricing_required = _TRUSTED_REQUIRES_REAL_AUDIT_MODEL_REFRESH_PRICING(
+                self,
+                role,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                structured_output_mode=self._selected_structured_output_mode(model),
+                context_package=context_package,
+            )
             if (
                 self.provider_policy.certification
                 and not _is_prequalification_provider_role(role)
@@ -5396,20 +8086,37 @@ class OpenRouterClient:
                     "unqualified certification roles require one exact provider endpoint"
                 )
             if binding is not None:
+                real_runtime_snapshots = (
+                    trusted_openrouter_execution_evidence(self) is ExecutionEvidenceKind.REAL
+                )
                 binding.require_current(
                     role=role,
                     model=model,
                     provider_endpoints=self.provider_policy.configured_endpoints,
                     now=checked_at,
-                    endpoint_policy=self._endpoint_pricing.get(model),
-                    model_identity=self._model_identities.get(model),
-                    require_runtime_snapshots=(
-                        trusted_openrouter_execution_evidence(self) is ExecutionEvidenceKind.REAL
+                    endpoint_policy=(
+                        None if pricing_required else self._endpoint_pricing.get(model)
                     ),
+                    model_identity=self._model_identities.get(model),
+                    require_runtime_snapshots=(real_runtime_snapshots and not pricing_required),
                 )
+                if (
+                    pricing_required
+                    and real_runtime_snapshots
+                    and (
+                        self._endpoint_pricing.get(model) is None
+                        or self._model_identities.get(model) is None
+                    )
+                ):
+                    raise OpenRouterQualificationError(
+                        "refreshed-price routing requires current model and endpoint snapshots"
+                    )
             qualification_bindings[model] = binding
+            audit_routing_evidence: AuditModelRoutingEvidence | None = None
+            refresh_routing_evidence: AuditModelRefreshRouteEvidence | None = None
+            refresh_pricing_routing_evidence: AuditModelRefreshPricingRouteEvidence | None = None
             try:
-                audit_routing_bindings[model] = (
+                audit_routing_evidence = (
                     _TRUSTED_REQUIRE_REAL_AUDIT_MODEL_SELECTION(
                         self,
                         role=role,
@@ -5440,6 +8147,58 @@ class OpenRouterClient:
                     )
                     else None
                 )
+                if _TRUSTED_REQUIRES_REAL_AUDIT_MODEL_REFRESH(
+                    self,
+                    role,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    response_model=response_model,
+                    schema_name=schema_name,
+                    structured_output_mode=self._selected_structured_output_mode(model),
+                    context_package=context_package,
+                ):
+                    refresh_routing_evidence = _TRUSTED_REQUIRE_REAL_AUDIT_MODEL_REFRESH(
+                        self,
+                        role=role,
+                        model=model,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        response_model=response_model,
+                        schema_name=schema_name,
+                        structured_output_mode=self._selected_structured_output_mode(model),
+                        context_package=context_package,
+                        checked_at=checked_at,
+                        qualification_binding=binding,
+                        audit_routing_evidence=audit_routing_evidence,
+                        provider_policy=(
+                            binding.request_provider_policy()
+                            if binding is not None and self.provider_policy.certification
+                            else self.provider_policy
+                        ),
+                    )
+                if pricing_required:
+                    refresh_pricing_routing_evidence = (
+                        _TRUSTED_REQUIRE_REAL_AUDIT_MODEL_REFRESH_PRICING(
+                            self,
+                            role=role,
+                            model=model,
+                            system_prompt=system_prompt,
+                            user_prompt=user_prompt,
+                            response_model=response_model,
+                            schema_name=schema_name,
+                            structured_output_mode=self._selected_structured_output_mode(model),
+                            context_package=context_package,
+                            checked_at=checked_at,
+                            qualification_binding=binding,
+                            audit_routing_evidence=audit_routing_evidence,
+                            refresh_routing_evidence=refresh_routing_evidence,
+                            provider_policy=(
+                                binding.request_provider_policy()
+                                if binding is not None and self.provider_policy.certification
+                                else self.provider_policy
+                            ),
+                        )
+                    )
             except OpenRouterPolicyEligibilityError as exc:
                 diagnostic_provider_policy = (
                     binding.request_provider_policy()
@@ -5475,14 +8234,36 @@ class OpenRouterClient:
                     decision_source=ContextPreflightSource.TOKEN_PLANNER,
                     reason=ContextPreflightReason.ROUTE_UNAVAILABLE,
                     error=exc,
-                    decision_evidence_sha256s=(self._audit_policy_decision_evidence_sha256s(None)),
+                    decision_evidence_sha256s=self._audit_policy_decision_evidence_sha256s(
+                        audit_routing_evidence,
+                        refresh_routing_evidence=refresh_routing_evidence,
+                    ),
                 )
                 raise
+            audit_routing_bindings[model] = audit_routing_evidence
+            refresh_routing_bindings[model] = refresh_routing_evidence
+            refresh_pricing_routing_bindings[model] = refresh_pricing_routing_evidence
+            refresh_pricing_controls[model] = (
+                _TRUSTED_SEAL_AUDIT_MODEL_REFRESH_PRICING_CONTROL(
+                    self,
+                    refresh_pricing_routing_evidence,
+                )
+                if refresh_pricing_routing_evidence is not None
+                else None
+            )
         self._claim_request_ids(request_ids)
         last_error: OpenRouterError | None = None
         for index, model in enumerate(models):
             try:
-                completion = await self._complete_one(
+                complete_one = (
+                    _TRUSTED_COMPLETE_ONE.__get__(
+                        self,
+                        _TRUSTED_OPENROUTER_CLIENT_TYPE,
+                    )
+                    if response_model is _TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE
+                    else self._complete_one
+                )
+                completion = await complete_one(
                     request_id=request_ids[index],
                     role=role,
                     model=model,
@@ -5494,9 +8275,14 @@ class OpenRouterClient:
                     fallback_used=index > 0,
                     qualification_binding=qualification_bindings[model],
                     audit_routing_evidence=audit_routing_bindings[model],
+                    refresh_routing_evidence=refresh_routing_bindings[model],
+                    refresh_pricing_routing_evidence=(refresh_pricing_routing_bindings[model]),
+                    refresh_pricing_control=refresh_pricing_controls[model],
                     qualification_bound_reasoning_plan=(
                         qualification_bound_reasoning_plans.get(model)
                     ),
+                    maximum_attempts=maximum_attempts,
+                    expected_resource_preview=_expected_resource_preview,
                 )
             except (
                 OpenRouterTransientError,
@@ -5504,6 +8290,13 @@ class OpenRouterClient:
                 OpenRouterSchemaError,
             ) as exc:
                 last_error = exc
+                if response_model is _TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE and isinstance(
+                    exc,
+                    OpenRouterTruncatedResponseError | OpenRouterCandidateReviewBoundaryError,
+                ):
+                    # A confirmed framed prefix is scheduler input, never a signal to spend on
+                    # an implicit model retry/fallback inside this logical request.
+                    raise
                 self.logger.warning(
                     "Configured model failed; considering the next explicit fallback",
                     extra={"role": role, "status": "fallback"},
@@ -5717,12 +8510,38 @@ class OpenRouterClient:
         fallback_used: bool,
         qualification_binding: OpenRouterQualificationRoutingEvidence | None,
         audit_routing_evidence: AuditModelRoutingEvidence | None = None,
+        refresh_routing_evidence: AuditModelRefreshRouteEvidence | None = None,
+        refresh_pricing_routing_evidence: (AuditModelRefreshPricingRouteEvidence | None) = None,
+        refresh_pricing_control: _AuditModelRefreshPricingRequestControl | None = None,
         qualification_bound_reasoning_plan: ReasoningRequestPlanEvidence | None = None,
+        maximum_attempts: int | None = None,
+        expected_resource_preview: ModelSurfaceTaskResourcePreview | None = None,
     ) -> StructuredCompletion[ResponseT]:
+        paid_controls_required = _trusted_paid_controls_required(self)
+        configured_attempts = self.execution.max_model_retries + 1
+        attempt_limit = configured_attempts if maximum_attempts is None else maximum_attempts
+        if type(attempt_limit) is not int or not 1 <= attempt_limit <= configured_attempts:
+            raise OpenRouterRequestLimitError(
+                "model attempt bound must only tighten the configured retry policy"
+            )
+        if expected_resource_preview is not None and (
+            response_model is not _TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE
+            or attempt_limit != expected_resource_preview.maximum_attempts
+        ):
+            raise OpenRouterCandidateReviewBoundaryError(
+                "candidate-review attempt plan differs from aggregate resource preflight"
+            )
+        if response_model is _TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE and (
+            not _candidate_review_protocol_boundary_is_pristine()
+            or not _openrouter_client_callables_are_pristine()
+        ):
+            raise OpenRouterCandidateReviewBoundaryError(
+                "candidate-review completion boundary changed before request planning"
+            )
         request_id = _request_ids_for_routes(
             request_id,
             route_count=1,
-            maximum_attempts=self.execution.max_model_retries + 1,
+            maximum_attempts=attempt_limit,
         )[0]
         required_output_tokens = self._required_output_tokens()
         requested_completion_tokens = required_output_tokens + self._reserved_reasoning_tokens(
@@ -5735,6 +8554,100 @@ class OpenRouterClient:
         structured_output_mode = self._selected_structured_output_mode(model)
         structured_output_plan: _StructuredOutputRequestPlan | None = None
         reasoning_plan: ReasoningRequestPlanEvidence | None = None
+        pricing_required = _TRUSTED_REQUIRES_REAL_AUDIT_MODEL_REFRESH_PRICING(
+            self,
+            role,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_model=response_model,
+            schema_name=schema_name,
+            structured_output_mode=structured_output_mode,
+            context_package=context_package,
+        )
+
+        def require_current_refresh_pricing(
+            *,
+            phase: str,
+            checked_at: datetime | None = None,
+        ) -> AuditModelRefreshPricingRouteEvidence | None:
+            if not pricing_required:
+                if (
+                    refresh_pricing_routing_evidence is not None
+                    or refresh_pricing_control is not None
+                ):
+                    raise OpenRouterModelRefreshPricingError(
+                        "refresh pricing custody is invalid outside a REAL paid audit request"
+                    )
+                return None
+            current = _TRUSTED_REQUIRE_REAL_AUDIT_MODEL_REFRESH_PRICING(
+                self,
+                role=role,
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                structured_output_mode=structured_output_mode,
+                context_package=context_package,
+                checked_at=(checked_at or datetime.now(UTC)).replace(microsecond=0),
+                qualification_binding=qualification_binding,
+                audit_routing_evidence=audit_routing_evidence,
+                refresh_routing_evidence=refresh_routing_evidence,
+                provider_policy=request_provider_policy,
+            )
+            current_control = _TRUSTED_SEAL_AUDIT_MODEL_REFRESH_PRICING_CONTROL(
+                self,
+                current,
+            )
+            if (
+                refresh_pricing_routing_evidence != current
+                or refresh_pricing_control != current_control
+            ):
+                raise OpenRouterModelRefreshPricingError(
+                    f"sealed audit model refresh pricing changed {phase}"
+                )
+            return current
+
+        def require_current_audit_selection(
+            *,
+            phase: str,
+            checked_at: datetime | None = None,
+        ) -> AuditModelRoutingEvidence | None:
+            if not _TRUSTED_REQUIRES_REAL_AUDIT_POLICY_SELECTION(
+                self,
+                role,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                structured_output_mode=structured_output_mode,
+                context_package=context_package,
+            ):
+                if audit_routing_evidence is not None:
+                    raise OpenRouterPolicyEligibilityError(
+                        "audit model routing evidence is invalid outside a paid audit request"
+                    )
+                return None
+            current = _TRUSTED_REQUIRE_REAL_AUDIT_MODEL_SELECTION(
+                self,
+                role=role,
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                structured_output_mode=structured_output_mode,
+                context_package=context_package,
+                checked_at=checked_at or datetime.now(UTC),
+                qualification_binding=qualification_binding,
+                provider_policy=request_provider_policy,
+            )
+            if current != audit_routing_evidence:
+                raise OpenRouterPolicyEligibilityError(
+                    f"sealed audit model selection changed {phase}"
+                )
+            return current
+
         try:
             if _TRUSTED_REQUIRES_REAL_AUDIT_POLICY_SELECTION(
                 self,
@@ -5757,6 +8670,7 @@ class OpenRouterClient:
                     context_package=context_package,
                     checked_at=datetime.now(UTC),
                     require_runtime_snapshots=True,
+                    allow_refreshed_pricing=pricing_required,
                 )
                 if qualification_binding != current_qualification_binding:
                     raise OpenRouterQualificationError(
@@ -5826,8 +8740,26 @@ class OpenRouterClient:
                 raise OpenRouterPolicyEligibilityError(
                     "audit model routing evidence is invalid outside a paid audit request"
                 )
-            if self._requires_paid_controls:
-                self._validate_paid_privacy_policy(
+            if (
+                not _TRUSTED_REQUIRES_REAL_AUDIT_MODEL_REFRESH(
+                    self,
+                    role,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    response_model=response_model,
+                    schema_name=schema_name,
+                    structured_output_mode=structured_output_mode,
+                    context_package=context_package,
+                )
+                and refresh_routing_evidence is not None
+            ):
+                raise OpenRouterModelRefreshError(
+                    "audit model refresh route is invalid outside a REAL paid audit request"
+                )
+            require_current_refresh_pricing(phase="before request planning")
+            if paid_controls_required:
+                _TRUSTED_VALIDATE_PAID_PRIVACY_POLICY(
+                    self,
                     (model,),
                     request_provider_endpoints=request_provider_policy.configured_endpoints,
                 )
@@ -5919,6 +8851,32 @@ class OpenRouterClient:
                 response_model,
                 phase="during token planning",
             )
+            if expected_resource_preview is not None and (
+                context_request_evidence is None
+                or context_request_evidence.rendered_sha256
+                != expected_resource_preview.rendered_context_sha256
+                or context_request_evidence.evidence_sha256
+                != expected_resource_preview.context_request_evidence_sha256
+                or _TRUSTED_CANDIDATE_REVIEW_TOKEN_PLAN_PROJECTION_SHA256(request_token_plan)
+                != expected_resource_preview.request_token_plan_projection_sha256
+                or request_token_plan.prompt_byte_upper_bound_tokens
+                != expected_resource_preview.maximum_prompt_tokens_per_attempt
+                or request_token_plan.requested_completion_tokens
+                != expected_resource_preview.maximum_completion_tokens_per_attempt
+            ):
+                raise OpenRouterCandidateReviewBoundaryError(
+                    "candidate-review context or token plan changed after aggregate preflight"
+                )
+            if expected_resource_preview is not None and (
+                endpoint_policy is None
+                or endpoint_policy.snapshot_sha256
+                != expected_resource_preview.endpoint_policy_snapshot_sha256
+                or endpoint_policy.policy_pricing_sha256
+                != expected_resource_preview.endpoint_policy_pricing_sha256
+            ):
+                raise OpenRouterCandidateReviewBoundaryError(
+                    "candidate-review endpoint policy changed after aggregate preflight"
+                )
         except Exception as exc:
             if isinstance(exc, _OpenRouterGlobalTokenBudgetError):
                 reason = ContextPreflightReason.GLOBAL_TOKEN_BUDGET
@@ -6022,8 +8980,15 @@ class OpenRouterClient:
             request_metadata["mmaudit_policy_selection_capability_sha256"] = (
                 self._audit_model_selection.capability_sha256
             )
+        request_metadata.update(
+            self._audit_model_refresh_request_metadata(refresh_routing_evidence)
+        )
+        request_metadata.update(
+            self._audit_model_refresh_pricing_request_metadata(refresh_pricing_routing_evidence)
+        )
         try:
-            body = self.build_request(
+            body = _TRUSTED_BUILD_REQUEST(
+                self,
                 model=model,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
@@ -6036,24 +9001,110 @@ class OpenRouterClient:
                 request_token_plan=request_token_plan,
                 request_role=role,
                 response_schema_generation=response_schema_generation,
+                refresh_pricing_control=refresh_pricing_control,
             )
-            self._ensure_request_size(body)
-            request_body_hash = _canonical_sha256(body)
+            _TRUSTED_ENSURE_REQUEST_SIZE(self, body)
+            request_body_hash = _require_exact_openrouter_request_body(
+                body,
+                model=model,
+                structured_output_plan=structured_output_plan,
+                provider_policy=request_provider_policy,
+                require_zdr=self.privacy.require_zdr,
+                request_token_plan=request_token_plan,
+                request_metadata=request_metadata,
+                endpoint_policy=endpoint_policy,
+                refresh_pricing_control=refresh_pricing_control,
+            )
             response_schema_generation.require_current(
                 response_model,
                 phase="during request body hashing",
             )
-            request_material = json.dumps(
-                body,
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=True,
+            request_material = (
+                _TRUSTED_CANDIDATE_REVIEW_CANONICAL_JSON_DUMPS(body)
+                if expected_resource_preview is not None
+                else json.dumps(
+                    body,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                )
             )
-            endpoint_cost_bound = self._endpoint_request_cost_bound(
+            (
+                _request_token_plan_projection_sha256,
+                request_material_projection,
+                request_material_projection_sha256,
+            ) = _TRUSTED_CANDIDATE_REVIEW_REQUEST_MATERIAL_PROJECTION(
+                body,
+                request_token_plan=request_token_plan,
+            )
+            endpoint_cost_bound = _TRUSTED_ENDPOINT_REQUEST_COST_BOUND(
+                self,
                 model=model,
                 request_material=request_material,
                 request_token_plan=request_token_plan,
+                refresh_pricing_control=refresh_pricing_control,
             )
+            if expected_resource_preview is not None:
+                maximum_cost_text = (
+                    format(
+                        _trusted_endpoint_request_maximum_cost_usd(endpoint_cost_bound),
+                        "f",
+                    )
+                    if endpoint_cost_bound is not None
+                    else ""
+                )
+                if "." in maximum_cost_text:
+                    maximum_cost_text = maximum_cost_text.rstrip("0").rstrip(".")
+                if (
+                    endpoint_cost_bound is None
+                    or request_material_projection_sha256
+                    != expected_resource_preview.request_material_projection_sha256
+                    or len(request_material_projection.encode("utf-8"))
+                    != expected_resource_preview.request_material_projection_utf8_bytes
+                    or endpoint_cost_bound.request_material_sha256 != request_body_hash
+                    or endpoint_cost_bound.provider_endpoint
+                    != expected_resource_preview.provider_endpoint
+                    or endpoint_cost_bound.pricing_snapshot_sha256
+                    != expected_resource_preview.endpoint_pricing_snapshot_sha256
+                    or _TRUSTED_ENDPOINT_REQUEST_COST_BOUND_PROJECTION_SHA256(
+                        endpoint_cost_bound,
+                        request_material_projection_sha256=(request_material_projection_sha256),
+                    )
+                    != expected_resource_preview.endpoint_cost_bound_projection_sha256
+                    or (maximum_cost_text or "0")
+                    != expected_resource_preview.maximum_cost_usd_per_attempt_exact
+                ):
+                    raise OpenRouterCandidateReviewBoundaryError(
+                        "candidate-review request body or pricing changed after aggregate preflight"
+                    )
+            if refresh_pricing_control is not None:
+                provider_request = body.get("provider")
+                bound_components = (
+                    {
+                        component.pricing_field: component.unit_price_usd
+                        for component in endpoint_cost_bound.components
+                    }
+                    if endpoint_cost_bound is not None
+                    else None
+                )
+                expected_bound_components = {
+                    field: Decimal(value)
+                    for field, value in refresh_pricing_control.cost_bound_pricing
+                }
+                if (
+                    not isinstance(provider_request, dict)
+                    or provider_request.get("max_price")
+                    != dict(refresh_pricing_control.routing_max_price)
+                    or endpoint_cost_bound is None
+                    or endpoint_cost_bound.exact_model_id != refresh_pricing_control.exact_model_id
+                    or endpoint_cost_bound.provider_endpoint
+                    != refresh_pricing_control.provider_endpoint
+                    or endpoint_cost_bound.request_material_sha256 != request_body_hash
+                    or bound_components != expected_bound_components
+                ):
+                    raise OpenRouterModelRefreshPricingError(
+                        "request body or exact cost bound differs from sealed refreshed pricing"
+                    )
         except Exception as exc:
             self._record_context_preflight(
                 request_id=request_id,
@@ -6072,15 +9123,28 @@ class OpenRouterClient:
             )
             raise
         if self.privacy.store_raw_prompts:
-            self._store_debug(request_id, "prompt.json", body)
+            _TRUSTED_STORE_DEBUG(
+                self,
+                request_id,
+                "prompt.json",
+                json.loads(request_material),
+            )
         attempts = 0
         usage_recorded = False
         accounted_cost_usd = 0.0
         accounted_cost_usd_exact = Decimal(0)
         active_reservation: Reservation | None = None
         attempt_reservations: list[Reservation] = []
+        refresh_pricing_reservation_checks: dict[str, datetime] = {}
+        refresh_pricing_transport_checks: dict[str, datetime] = {}
+        refresh_pricing_attempt_routes: dict[str, AuditModelRefreshPricingRouteEvidence] = {}
         last_dispatched_audit_routing_evidence: AuditModelRoutingEvidence | None = None
+        last_dispatched_refresh_routing_evidence: AuditModelRefreshRouteEvidence | None = None
+        last_dispatched_refresh_pricing_routing_evidence: (
+            AuditModelRefreshPricingRouteEvidence | None
+        ) = None
         active_network_attempted = False
+        active_reservation_committed = False
         active_actual_cost: Decimal | None = None
         active_actual_prompt_tokens: int | None = None
         active_actual_completion_tokens: int | None = None
@@ -6093,6 +9157,7 @@ class OpenRouterClient:
         validated_response_hash: str | None = None
         decoded_output: StructuredOutputDecodeResult[ResponseT] | None = None
         preserved_unbound_response: ResponseT | None = None
+        validated_envelope: CompletionEnvelope | None = None
         raw_payload: dict[str, Any] | None = None
         response_headers: Mapping[str, str] = {}
 
@@ -6103,19 +9168,28 @@ class OpenRouterClient:
             reservation = active_reservation
             active_reservation = None
             try:
-                presented = await self.budget.reconcile(
+                await _TRUSTED_BUDGET_RECONCILE(
+                    self.budget,
                     reservation,
                     actual_cost,
                     actual_prompt_tokens=active_actual_prompt_tokens,
                     actual_completion_tokens=active_actual_completion_tokens,
                     actual_reasoning_tokens=active_actual_reasoning_tokens,
                 )
-                exact = await self.budget.reconciled_cost_usd_exact(reservation)
-                accounted_cost_usd += presented
-                accounted_cost_usd_exact += exact
+                exact = await _TRUSTED_BUDGET_RECONCILED_COST_USD_EXACT(
+                    self.budget,
+                    reservation,
+                )
+                with localcontext() as context:
+                    context.prec = 160
+                    accounted_cost_usd_exact += exact
+                accounted_cost_usd = float(accounted_cost_usd_exact)
             except Exception:
                 try:
-                    exact = await self.budget.reconciled_cost_usd_exact(reservation)
+                    exact = await _TRUSTED_BUDGET_RECONCILED_COST_USD_EXACT(
+                        self.budget,
+                        reservation,
+                    )
                 except BudgetReservationStateError:
                     exact = (
                         reservation.persistent.reserved_usd
@@ -6126,8 +9200,10 @@ class OpenRouterClient:
                             else max(Decimal(0), actual_cost)
                         )
                     )
-                accounted_cost_usd += float(exact)
-                accounted_cost_usd_exact += exact
+                with localcontext() as context:
+                    context.prec = 160
+                    accounted_cost_usd_exact += exact
+                accounted_cost_usd = float(accounted_cost_usd_exact)
                 raise
 
         async def release_active() -> None:
@@ -6136,12 +9212,160 @@ class OpenRouterClient:
                 return
             reservation = active_reservation
             active_reservation = None
-            await self.budget.release(reservation)
+            await _TRUSTED_BUDGET_RELEASE(self.budget, reservation)
+
+        async def require_current_refresh_inside_transport_lock() -> None:
+            nonlocal active_network_attempted
+            nonlocal active_reservation_committed
+            nonlocal last_dispatched_refresh_pricing_routing_evidence
+            if expected_resource_preview is not None and (
+                not _candidate_review_protocol_boundary_is_pristine()
+                or not _openrouter_client_callables_are_pristine()
+            ):
+                raise OpenRouterCandidateReviewBoundaryError(
+                    "candidate-review projection boundary changed inside provider transport lock"
+                )
+            _TRUSTED_ENSURE_REQUEST_SIZE(self, body)
+            locked_request_body_sha256 = _require_exact_openrouter_request_body(
+                body,
+                model=model,
+                structured_output_plan=structured_output_plan,
+                provider_policy=request_provider_policy,
+                require_zdr=self.privacy.require_zdr,
+                request_token_plan=request_token_plan,
+                request_metadata=request_metadata,
+                endpoint_policy=endpoint_policy,
+                refresh_pricing_control=refresh_pricing_control,
+                expected_sha256=request_body_hash,
+            )
+            locked_request_material = (
+                _TRUSTED_CANDIDATE_REVIEW_CANONICAL_JSON_DUMPS(body)
+                if expected_resource_preview is not None
+                else json.dumps(
+                    body,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                )
+            )
+            locked_cost_bound = _TRUSTED_ENDPOINT_REQUEST_COST_BOUND(
+                self,
+                model=model,
+                request_material=locked_request_material,
+                request_token_plan=request_token_plan,
+                refresh_pricing_control=refresh_pricing_control,
+            )
+            if (
+                locked_request_body_sha256 != request_body_hash
+                or locked_request_material != request_material
+                or locked_cost_bound != endpoint_cost_bound
+            ):
+                raise OpenRouterModelRefreshPricingError(
+                    "request body or exact reservation changed inside provider transport lock"
+                )
+            if paid_controls_required:
+                _TRUSTED_VALIDATE_PAID_PRIVACY_POLICY(
+                    self,
+                    (model,),
+                    request_provider_endpoints=request_provider_policy.configured_endpoints,
+                )
+                if (
+                    _model_request_privacy_binding(self.effective_privacy_policy)
+                    != accepted_privacy_binding
+                ):
+                    raise OpenRouterPrivacyError(
+                        "effective privacy authority changed inside provider transport lock"
+                    )
+            require_current_audit_selection(
+                phase="inside provider transport lock",
+                checked_at=datetime.now(UTC),
+            )
+            if refresh_routing_evidence is not None:
+                locked_refresh_routing_evidence = _TRUSTED_REQUIRE_REAL_AUDIT_MODEL_REFRESH(
+                    self,
+                    role=role,
+                    model=model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    response_model=response_model,
+                    schema_name=schema_name,
+                    structured_output_mode=structured_output_mode,
+                    context_package=context_package,
+                    checked_at=datetime.now(UTC),
+                    qualification_binding=qualification_binding,
+                    audit_routing_evidence=audit_routing_evidence,
+                    provider_policy=request_provider_policy,
+                )
+                if locked_refresh_routing_evidence != refresh_routing_evidence:
+                    raise OpenRouterModelRefreshError(
+                        "sealed audit model refresh changed inside provider transport lock"
+                    )
+            locked_pricing = require_current_refresh_pricing(
+                phase="inside provider transport lock",
+                checked_at=datetime.now(UTC).replace(microsecond=0),
+            )
+            if active_reservation is None:
+                raise OpenRouterCostControlError(
+                    "inside-lock transport check lacks its exact active reservation"
+                )
+            if paid_controls_required:
+                await _TRUSTED_BUDGET_COMMIT_FOR_TRANSPORT(self.budget, active_reservation)
+                active_reservation_committed = True
+            transport_checked_at = datetime.now(UTC).replace(microsecond=0)
+            if paid_controls_required:
+                _TRUSTED_VALIDATE_PAID_PRIVACY_POLICY(
+                    self,
+                    (model,),
+                    request_provider_endpoints=request_provider_policy.configured_endpoints,
+                )
+                if (
+                    _model_request_privacy_binding(self.effective_privacy_policy)
+                    != accepted_privacy_binding
+                ):
+                    raise OpenRouterPrivacyError(
+                        "effective privacy authority changed after durable transport commit"
+                    )
+            require_current_audit_selection(
+                phase="after durable transport commit",
+                checked_at=transport_checked_at,
+            )
+            if refresh_routing_evidence is not None:
+                post_commit_refresh_routing_evidence = _TRUSTED_REQUIRE_REAL_AUDIT_MODEL_REFRESH(
+                    self,
+                    role=role,
+                    model=model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    response_model=response_model,
+                    schema_name=schema_name,
+                    structured_output_mode=structured_output_mode,
+                    context_package=context_package,
+                    checked_at=transport_checked_at,
+                    qualification_binding=qualification_binding,
+                    audit_routing_evidence=audit_routing_evidence,
+                    provider_policy=request_provider_policy,
+                )
+                if post_commit_refresh_routing_evidence != refresh_routing_evidence:
+                    raise OpenRouterModelRefreshError(
+                        "sealed audit model refresh changed after durable transport commit"
+                    )
+            locked_pricing = require_current_refresh_pricing(
+                phase="after durable transport commit",
+                checked_at=transport_checked_at,
+            )
+            if locked_pricing is not None:
+                refresh_pricing_transport_checks[active_reservation.identifier] = (
+                    transport_checked_at
+                )
+            last_dispatched_refresh_pricing_routing_evidence = locked_pricing
+            active_network_attempted = True
 
         try:
             while True:
                 next_attempt = attempts + 1
                 reservation_id = _attempt_request_id(request_id, next_attempt)
+                reservation_pricing_checked_at: datetime | None = None
+                reservation_pricing_route: AuditModelRefreshPricingRouteEvidence | None = None
                 try:
                     if _TRUSTED_REQUIRES_REAL_AUDIT_POLICY_SELECTION(
                         self,
@@ -6173,7 +9397,46 @@ class OpenRouterClient:
                             raise OpenRouterPolicyEligibilityError(
                                 "sealed audit model selection changed before budget reservation"
                             )
-                    active_reservation = await self.budget.reserve(
+                    if _TRUSTED_REQUIRES_REAL_AUDIT_MODEL_REFRESH(
+                        self,
+                        role,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        response_model=response_model,
+                        schema_name=schema_name,
+                        structured_output_mode=structured_output_mode,
+                        context_package=context_package,
+                    ):
+                        current_refresh_routing_evidence = (
+                            _TRUSTED_REQUIRE_REAL_AUDIT_MODEL_REFRESH(
+                                self,
+                                role=role,
+                                model=model,
+                                system_prompt=system_prompt,
+                                user_prompt=user_prompt,
+                                response_model=response_model,
+                                schema_name=schema_name,
+                                structured_output_mode=structured_output_mode,
+                                context_package=context_package,
+                                checked_at=datetime.now(UTC),
+                                qualification_binding=qualification_binding,
+                                audit_routing_evidence=audit_routing_evidence,
+                                provider_policy=request_provider_policy,
+                            )
+                        )
+                        if current_refresh_routing_evidence != refresh_routing_evidence:
+                            raise OpenRouterModelRefreshError(
+                                "sealed audit model refresh changed before budget reservation"
+                            )
+                    reservation_pricing_checked_at = datetime.now(UTC).replace(microsecond=0)
+                    reservation_pricing_route = require_current_refresh_pricing(
+                        phase="before budget reservation",
+                        checked_at=reservation_pricing_checked_at,
+                    )
+                    if paid_controls_required:
+                        _TRUSTED_VALIDATE_TRANSPORT_PROVENANCE(self)
+                    active_reservation = await _TRUSTED_BUDGET_RESERVE(
+                        self.budget,
                         reservation_id,
                         role,
                         request_material,
@@ -6210,13 +9473,15 @@ class OpenRouterClient:
                         ),
                         error=exc,
                         decision_evidence_sha256s=(
-                            (audit_routing_evidence.routing_evidence_sha256,)
-                            if audit_routing_evidence is not None
-                            else ()
+                            self._audit_policy_decision_evidence_sha256s(
+                                audit_routing_evidence,
+                                refresh_routing_evidence=refresh_routing_evidence,
+                            )
                         ),
                     )
                     raise
                 active_network_attempted = False
+                active_reservation_committed = False
                 active_actual_cost = None
                 active_actual_prompt_tokens = None
                 active_actual_completion_tokens = None
@@ -6230,8 +9495,9 @@ class OpenRouterClient:
                     },
                 )
                 try:
-                    if self._requires_paid_controls:
-                        self._validate_paid_privacy_policy(
+                    if paid_controls_required:
+                        _TRUSTED_VALIDATE_PAID_PRIVACY_POLICY(
+                            self,
                             (model,),
                             request_provider_endpoints=(
                                 request_provider_policy.configured_endpoints
@@ -6335,11 +9601,137 @@ class OpenRouterClient:
                             )
                             raise
                         last_dispatched_audit_routing_evidence = current_audit_routing_evidence
+                    if _TRUSTED_REQUIRES_REAL_AUDIT_MODEL_REFRESH(
+                        self,
+                        role,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        response_model=response_model,
+                        schema_name=schema_name,
+                        structured_output_mode=structured_output_mode,
+                        context_package=context_package,
+                    ):
+                        try:
+                            current_refresh_routing_evidence = (
+                                _TRUSTED_REQUIRE_REAL_AUDIT_MODEL_REFRESH(
+                                    self,
+                                    role=role,
+                                    model=model,
+                                    system_prompt=system_prompt,
+                                    user_prompt=user_prompt,
+                                    response_model=response_model,
+                                    schema_name=schema_name,
+                                    structured_output_mode=structured_output_mode,
+                                    context_package=context_package,
+                                    checked_at=datetime.now(UTC),
+                                    qualification_binding=qualification_binding,
+                                    audit_routing_evidence=audit_routing_evidence,
+                                    provider_policy=request_provider_policy,
+                                )
+                            )
+                            if current_refresh_routing_evidence != refresh_routing_evidence:
+                                raise OpenRouterModelRefreshError(
+                                    "sealed audit model refresh changed before provider transport"
+                                )
+                        except OpenRouterModelRefreshError as exc:
+                            reservation_evidence = active_reservation.token_reservation_evidence
+                            self._record_context_preflight(
+                                request_id=(
+                                    request_id if attempts == 0 else f"{reservation_id}:preflight"
+                                ),
+                                logical_request_id=request_id,
+                                role=role,
+                                model=model,
+                                requested_completion_tokens=requested_completion_tokens,
+                                request_plan=request_token_plan,
+                                decision_source=ContextPreflightSource.TOKEN_PLANNER,
+                                reason=ContextPreflightReason.ROUTE_UNAVAILABLE,
+                                error=exc,
+                                decision_evidence_sha256s=tuple(
+                                    sorted(
+                                        {
+                                            *self._audit_policy_decision_evidence_sha256s(
+                                                audit_routing_evidence,
+                                                refresh_routing_evidence=(refresh_routing_evidence),
+                                            ),
+                                            *(
+                                                (reservation_evidence.evidence_sha256,)
+                                                if reservation_evidence is not None
+                                                else ()
+                                            ),
+                                        }
+                                    )
+                                ),
+                            )
+                            raise
+                        last_dispatched_refresh_routing_evidence = current_refresh_routing_evidence
+                    require_current_refresh_pricing(phase="after budget reservation")
                     attempt_reservations.append(active_reservation)
+                    if reservation_pricing_route is not None:
+                        if reservation_pricing_checked_at is None:
+                            raise OpenRouterModelRefreshPricingError(
+                                "reserved refreshed price lacks its pre-reserve check"
+                            )
+                        refresh_pricing_reservation_checks[reservation_id] = (
+                            reservation_pricing_checked_at
+                        )
+                        refresh_pricing_attempt_routes[reservation_id] = reservation_pricing_route
                     attempts = next_attempt
                     if observer is not None and attempts == 1:
                         observer.request_dispatched(logical_request_id=request_id)
-                    active_network_attempted = True
+                    if paid_controls_required:
+                        _TRUSTED_VALIDATE_PAID_PRIVACY_POLICY(
+                            self,
+                            (model,),
+                            request_provider_endpoints=(
+                                request_provider_policy.configured_endpoints
+                            ),
+                        )
+                        if (
+                            _model_request_privacy_binding(self.effective_privacy_policy)
+                            != accepted_privacy_binding
+                        ):
+                            raise OpenRouterPrivacyError(
+                                "effective privacy authority changed before provider transport"
+                            )
+                    final_audit_routing_evidence = require_current_audit_selection(
+                        phase="after lifecycle dispatch observation",
+                        checked_at=datetime.now(UTC),
+                    )
+                    if final_audit_routing_evidence is not None:
+                        last_dispatched_audit_routing_evidence = final_audit_routing_evidence
+                    if _TRUSTED_REQUIRES_REAL_AUDIT_MODEL_REFRESH(
+                        self,
+                        role,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        response_model=response_model,
+                        schema_name=schema_name,
+                        structured_output_mode=structured_output_mode,
+                        context_package=context_package,
+                    ):
+                        final_refresh_routing_evidence = _TRUSTED_REQUIRE_REAL_AUDIT_MODEL_REFRESH(
+                            self,
+                            role=role,
+                            model=model,
+                            system_prompt=system_prompt,
+                            user_prompt=user_prompt,
+                            response_model=response_model,
+                            schema_name=schema_name,
+                            structured_output_mode=structured_output_mode,
+                            context_package=context_package,
+                            checked_at=datetime.now(UTC),
+                            qualification_binding=qualification_binding,
+                            audit_routing_evidence=audit_routing_evidence,
+                            provider_policy=request_provider_policy,
+                        )
+                        if final_refresh_routing_evidence != refresh_routing_evidence:
+                            raise OpenRouterModelRefreshError(
+                                "sealed audit model refresh changed immediately before provider "
+                                "transport"
+                            )
+                        last_dispatched_refresh_routing_evidence = final_refresh_routing_evidence
+                    require_current_refresh_pricing(phase="after lifecycle dispatch observation")
                     response = await _TRUSTED_BOUNDED_REQUEST(
                         self,
                         "POST",
@@ -6349,10 +9741,13 @@ class OpenRouterClient:
                             1_000_000,
                             request_token_plan.requested_completion_tokens * 32,
                         ),
+                        trusted_pre_transport_check=(require_current_refresh_inside_transport_lock),
                     )
+                    if paid_controls_required:
+                        _TRUSTED_VALIDATE_TRANSPORT_PROVENANCE(self)
                 except (httpx.TimeoutException, httpx.NetworkError):
                     await finalize_active(None)
-                    if attempts >= self.execution.max_model_retries + 1:
+                    if attempts >= attempt_limit:
                         raise OpenRouterTimeoutError("model request timed out") from None
                     await self._backoff(attempts, None)
                     continue
@@ -6368,7 +9763,7 @@ class OpenRouterClient:
                 except (UnicodeDecodeError, ValueError):
                     response_value = None
                 if isinstance(response_value, dict):
-                    self._ensure_no_credential_in_value(response_value)
+                    _TRUSTED_ENSURE_NO_CREDENTIAL_IN_VALUE(self, response_value)
                     raw_payload = response_value
                 if response.status_code in {401, 403}:
                     await finalize_active(None)
@@ -6381,7 +9776,7 @@ class OpenRouterClient:
                     raise OpenRouterModelError(f"configured model is unavailable: {model}")
                 if is_retryable_status(response.status_code):
                     await finalize_active(None)
-                    if attempts >= self.execution.max_model_retries + 1:
+                    if attempts >= attempt_limit:
                         if response.status_code == 429:
                             raise OpenRouterRateLimitError(
                                 "OpenRouter rate limit exhausted the retry policy"
@@ -6426,6 +9821,51 @@ class OpenRouterClient:
                 endpoint_policy=endpoint_policy,
                 model_identity=self._model_identities.get(model),
             )
+            validated_envelope = envelope
+            truncated_envelope_evidence = None
+            if response_model is _TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE and (
+                envelope.finish_reason.casefold() in _TRUNCATED_FINISH_REASONS
+                or (
+                    envelope.native_finish_reason is not None
+                    and envelope.native_finish_reason.casefold() in _TRUNCATED_FINISH_REASONS
+                )
+            ):
+                if not _candidate_review_protocol_boundary_is_pristine():
+                    raise OpenRouterCandidateReviewBoundaryError(
+                        "candidate-review completion boundary changed during transport"
+                    )
+                assert response_hash is not None
+                try:
+                    truncated_envelope_evidence = (
+                        _TRUSTED_SEAL_CANDIDATE_REVIEW_TRUNCATED_ENVELOPE_EVIDENCE(
+                            logical_request_id=request_id,
+                            generation_id=envelope.generation_id,
+                            generation_header_id=_header_value(
+                                response.headers,
+                                "x-generation-id",
+                            ),
+                            requested_model=envelope.requested_model,
+                            returned_model=envelope.returned_model,
+                            selected_model=envelope.selected_model,
+                            response_provider_identity=(envelope.response_provider_identity),
+                            selected_provider_endpoint=envelope.selected_provider,
+                            selected_provider_identity=(envelope.selected_provider_identity),
+                            selected_provider_name=envelope.selected_provider_name,
+                            router_metadata_sha256=_canonical_sha256(envelope.router_metadata),
+                            finish_reason=envelope.finish_reason,
+                            native_finish_reason=envelope.native_finish_reason,
+                            wire_schema_sha256=schema_hash,
+                            response_sha256=response_hash,
+                        )
+                    )
+                except CandidateReviewTruncationError:
+                    raise OpenRouterCandidateReviewBoundaryError(
+                        "candidate-review truncated envelope custody could not be sealed"
+                    ) from None
+            _raise_for_completion_finish(
+                envelope,
+                truncated_envelope_evidence=truncated_envelope_evidence,
+            )
             initial_usage = envelope.usage
             active_actual_prompt_tokens = _nonnegative_int(initial_usage.get("prompt_tokens"))
             active_actual_completion_tokens = _nonnegative_int(
@@ -6440,20 +9880,53 @@ class OpenRouterClient:
             )
             response_hash = hashlib.sha256(envelope.content.encode()).hexdigest()
             if self.privacy.store_raw_responses:
-                self._store_debug(request_id, "response.json", payload)
+                _TRUSTED_STORE_DEBUG(
+                    self,
+                    request_id,
+                    "response.json",
+                    copy.deepcopy(payload),
+                )
             content = envelope.content
             try:
                 response_schema_generation.require_current(
                     response_model,
                     phase="before provider response decoding",
                 )
-                decoded_output = _decode_structured_output_with_schema_generation(
-                    content,
-                    response_model,
-                    schema_validator=response_schema_generation.validator,
-                    core_schema=response_schema_generation.core_schema,
-                    max_repair_attempts=self.execution.max_json_repair_attempts,
-                )
+                if response_model is _TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE:
+                    if not _candidate_review_protocol_boundary_is_pristine():
+                        raise OpenRouterCandidateReviewBoundaryError(
+                            "candidate-review completion boundary changed during transport"
+                        )
+                    assert response_hash is not None
+                    try:
+                        framed_document = _TRUSTED_DECODE_COMPLETE_CANDIDATE_REVIEW_DOCUMENT(
+                            content
+                        )
+                        _TRUSTED_NORMALIZE_CANDIDATE_REVIEW_DOCUMENT(
+                            framed_document,
+                            request_id=request_id,
+                        )
+                    except CandidateReviewTruncationError:
+                        raise OpenRouterStructuredOutputError(
+                            failure_code=StructuredOutputFailureCode.SCHEMA_VALIDATION_FAILED,
+                        ) from None
+                    decoded_output = cast(
+                        StructuredOutputDecodeResult[ResponseT],
+                        StructuredOutputDecodeResult(
+                            value=framed_document,
+                            original_response_sha256=response_hash,
+                            validated_json_sha256=response_hash,
+                            repair_evidence=None,
+                        ),
+                    )
+                else:
+                    decoded_output = _decode_structured_output_with_schema_generation(
+                        content,
+                        response_model,
+                        schema_validator=response_schema_generation.validator,
+                        core_schema=response_schema_generation.core_schema,
+                        max_repair_attempts=self.execution.max_json_repair_attempts,
+                    )
                 response_schema_generation.require_current(
                     response_model,
                     phase="during provider response decoding",
@@ -6496,6 +9969,12 @@ class OpenRouterClient:
                 token_reservations=attempt_reservations,
                 context_request_evidence=context_request_evidence,
                 audit_routing_evidence=last_dispatched_audit_routing_evidence,
+                refresh_routing_evidence=last_dispatched_refresh_routing_evidence,
+                refresh_pricing_routing_evidence=(last_dispatched_refresh_pricing_routing_evidence),
+                refresh_pricing_control=refresh_pricing_control,
+                refresh_pricing_attempt_routes=refresh_pricing_attempt_routes,
+                refresh_pricing_reservation_checks=refresh_pricing_reservation_checks,
+                refresh_pricing_transport_checks=refresh_pricing_transport_checks,
             )
             reasoning_execution_evidence = (
                 ReasoningExecutionEvidence.build(
@@ -6576,7 +10055,7 @@ class OpenRouterClient:
             terminal_error = exc
             if active_reservation is not None:
                 try:
-                    if active_network_attempted:
+                    if active_network_attempted or active_reservation_committed:
                         await finalize_active(active_actual_cost)
                     else:
                         await release_active()
@@ -6586,6 +10065,35 @@ class OpenRouterClient:
                 raw_content = (
                     _response_content_if_string(raw_payload) if raw_payload is not None else None
                 )
+                if (
+                    response_model is _TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE
+                    and type(terminal_error) is OpenRouterTruncatedResponseError
+                    and raw_content is not None
+                    and _candidate_review_protocol_boundary_is_pristine()
+                ):
+                    finish_reason = _optional_finish_reason(raw_payload)
+                    native_finish_reason = _optional_native_finish_reason(raw_payload)
+                    if finish_reason is not None:
+                        try:
+                            truncation_projection = (
+                                _TRUSTED_PROJECT_TRUNCATED_CANDIDATE_REVIEW_PREFIX(
+                                    raw_content,
+                                    finish_reason=finish_reason,
+                                    native_finish_reason=native_finish_reason,
+                                )
+                            )
+                            projection_custody_invalid = (
+                                truncation_projection.original_response_sha256 != response_hash
+                                or truncation_projection.wire_schema_sha256 != schema_hash
+                            )
+                        except CandidateReviewTruncationError:
+                            pass
+                        else:
+                            if not projection_custody_invalid:
+                                _TRUSTED_ATTACH_CANDIDATE_REVIEW_TRUNCATION_PROJECTION(
+                                    terminal_error,
+                                    truncation_projection,
+                                )
                 if (
                     isinstance(terminal_error, OpenRouterResponseIdentityError)
                     and raw_payload is not None
@@ -6597,7 +10105,14 @@ class OpenRouterClient:
                             response_schema_generation=response_schema_generation,
                         )
                     except OpenRouterSchemaError as preservation_error:
-                        terminal_error = preservation_error
+                        # A length marker cannot turn an already established
+                        # identity violation into recoverable truncation.  Keep
+                        # the stronger identity error and retain no value.
+                        if not isinstance(
+                            preservation_error,
+                            OpenRouterTruncatedResponseError,
+                        ):
+                            terminal_error = preservation_error
                     if preserved_unbound_response is not None:
                         validated_response_hash = _canonical_sha256(
                             preserved_unbound_response.model_dump(mode="json")
@@ -6607,6 +10122,7 @@ class OpenRouterClient:
                     and validated_response_hash is None
                     and raw_content is not None
                     and not isinstance(terminal_error, OpenRouterTruncatedResponseError)
+                    and not _payload_has_truncation_marker(raw_payload)
                 ):
                     try:
                         response_schema_generation.require_current(
@@ -6628,12 +10144,22 @@ class OpenRouterClient:
                 ended_at = datetime.now(UTC)
                 latency_ms = max(0, round((time.perf_counter() - started_clock) * 1_000))
                 returned_model = (
-                    _optional_string(raw_payload.get("model")) if raw_payload is not None else None
+                    validated_envelope.returned_model
+                    if validated_envelope is not None
+                    else (
+                        _optional_string(raw_payload.get("model"))
+                        if raw_payload is not None
+                        else None
+                    )
                 )
                 actual_provider = (
-                    _optional_string(raw_payload.get("provider"))
-                    if raw_payload is not None
-                    else None
+                    validated_envelope.selected_provider_name
+                    if validated_envelope is not None
+                    else (
+                        _optional_string(raw_payload.get("provider"))
+                        if raw_payload is not None
+                        else None
+                    )
                 )
                 failed_reasoning_evidence = (
                     ReasoningExecutionEvidence.build(
@@ -6652,6 +10178,11 @@ class OpenRouterClient:
                     execution_evidence=trusted_openrouter_execution_evidence(self),
                     requested_model=model,
                     returned_model=returned_model,
+                    actual_model=(
+                        validated_envelope.selected_model
+                        if validated_envelope is not None
+                        else None
+                    ),
                     provider=actual_provider,
                     model_family=model_family(model),
                     timestamp=started_at,
@@ -6664,7 +10195,8 @@ class OpenRouterClient:
                         format(initial_cost, "f") if initial_cost is not None else None
                     ),
                     accounted_cost_usd_exact=format(accounted_cost_usd_exact, "f"),
-                    routing=self._failure_routing_evidence(
+                    routing=_TRUSTED_FAILURE_ROUTING_EVIDENCE(
+                        self,
                         payload=raw_payload,
                         response_headers=response_headers,
                         schema_hash=schema_hash,
@@ -6684,6 +10216,12 @@ class OpenRouterClient:
                         token_reservations=attempt_reservations,
                         context_request_evidence=context_request_evidence,
                         audit_routing_evidence=last_dispatched_audit_routing_evidence,
+                        refresh_routing_evidence=(last_dispatched_refresh_routing_evidence),
+                        refresh_pricing_routing_evidence=(refresh_pricing_routing_evidence),
+                        refresh_pricing_control=refresh_pricing_control,
+                        refresh_pricing_attempt_routes=refresh_pricing_attempt_routes,
+                        refresh_pricing_reservation_checks=(refresh_pricing_reservation_checks),
+                        refresh_pricing_transport_checks=refresh_pricing_transport_checks,
                     ),
                     prompt_sha256=prompt_hash,
                     user_prompt_sha256=user_prompt_hash,
@@ -6691,24 +10229,47 @@ class OpenRouterClient:
                     validated_response_sha256=validated_response_hash,
                     request_body_sha256=request_body_hash,
                     schema_sha256=schema_hash,
-                    openrouter_generation_id=_response_generation_id(raw_payload, response_headers),
+                    openrouter_generation_id=(
+                        validated_envelope.generation_id
+                        if validated_envelope is not None
+                        else _response_generation_id(raw_payload, response_headers)
+                    ),
                     configured_provider_endpoints=list(
                         request_provider_policy.configured_endpoints
                     ),
-                    actual_provider_endpoint=actual_provider,
+                    actual_provider_endpoint=(
+                        validated_envelope.selected_provider
+                        if validated_envelope is not None
+                        else actual_provider
+                    ),
                     started_at=started_at,
                     ended_at=ended_at,
                     latency_ms=latency_ms,
-                    finish_reason=_optional_finish_reason(raw_payload),
+                    finish_reason=(
+                        validated_envelope.finish_reason
+                        if validated_envelope is not None
+                        else _optional_finish_reason(raw_payload)
+                    ),
                     reasoning_tokens=_reasoning_tokens(initial_usage),
                     reasoning_evidence=failed_reasoning_evidence,
                     cached_tokens=_cached_tokens(initial_usage),
                     retry_count=max(0, attempts - 1),
                     provider_error_classification=_provider_error_classification(terminal_error),
                     validation_status=_failure_validation_status(terminal_error),
-                    fallback_used=fallback_used,
+                    fallback_used=(
+                        fallback_used
+                        or (
+                            validated_envelope is not None
+                            and (
+                                validated_envelope.router_attempt > 1
+                                or validated_envelope.router_attempt_count > 1
+                                or validated_envelope.router_metadata["strategy"] == "fallback"
+                            )
+                        )
+                    ),
                     substitution_detected=(
-                        returned_model is not None
+                        validated_envelope is None
+                        and returned_model is not None
                         and returned_model
                         not in _accepted_response_models(
                             model,
@@ -6728,6 +10289,18 @@ class OpenRouterClient:
                 )
                 if failed_usage.execution_evidence is ExecutionEvidenceKind.REAL:
                     failed_usage = _attest_owned_real_usage_record(failed_usage)
+                if (
+                    response_model is _TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE
+                    and type(terminal_error) is OpenRouterTruncatedResponseError
+                ):
+                    if not _candidate_review_protocol_boundary_is_pristine():
+                        raise OpenRouterCandidateReviewBoundaryError(
+                            "candidate-review completion boundary changed before usage custody"
+                        ) from None
+                    _TRUSTED_ATTACH_CANDIDATE_REVIEW_TRUNCATED_USAGE(
+                        terminal_error,
+                        failed_usage,
+                    )
                 self.usage.add(failed_usage)
                 if preserved_unbound_response is not None and isinstance(
                     terminal_error, OpenRouterResponseIdentityError
@@ -6846,6 +10419,7 @@ class OpenRouterClient:
         model: str,
         request_material: str,
         request_token_plan: RequestTokenPlan,
+        refresh_pricing_control: _AuditModelRefreshPricingRequestControl | None = None,
     ) -> EndpointRequestCostBound | None:
         if not self.budget.require_endpoint_cost_bound:
             return None
@@ -6871,14 +10445,28 @@ class OpenRouterClient:
             "request": 1,
             "web_search": 0,
         }
-        policy_prices: dict[str, str] = {}
-        for field, price in registered_policy.routing_max_price:
-            normalized = Decimal(str(price))
-            if field in _PER_MILLION_ROUTER_PRICE_FIELDS:
-                normalized /= Decimal(1_000_000)
-            policy_prices[field] = format(normalized, "f")
+        registered_endpoints = registered_policy.endpoints
+        if refresh_pricing_control is not None:
+            if refresh_pricing_control.exact_model_id != model:
+                raise UnprovenCostBoundError(
+                    "refreshed-price control differs from the priced model"
+                )
+            matches = tuple(
+                endpoint
+                for endpoint in registered_endpoints
+                if endpoint.provider_endpoint == refresh_pricing_control.provider_endpoint
+            )
+            if (
+                len(matches) != 1
+                or dict(matches[0].pricing) != dict(refresh_pricing_control.current_pricing)
+                or matches[0].pricing_sha256 != refresh_pricing_control.current_pricing_sha256
+            ):
+                raise UnprovenCostBoundError(
+                    "refreshed-price control differs from exact endpoint pricing"
+                )
+            registered_endpoints = matches
         bounds: list[EndpointRequestCostBound] = []
-        for registered in registered_policy.endpoints:
+        for registered in registered_endpoints:
             if request_token_plan.prompt_byte_upper_bound_tokens > registered.max_prompt_tokens:
                 raise UnprovenCostBoundError(
                     "conservative prompt bound exceeds an endpoint prompt-token limit"
@@ -6894,9 +10482,13 @@ class OpenRouterClient:
                 raise UnprovenCostBoundError(
                     "conservative prompt and completion bounds exceed endpoint context"
                 )
-            bounded_pricing = {**dict(registered.pricing), **policy_prices}
+            bounded_pricing = (
+                dict(refresh_pricing_control.cost_bound_pricing)
+                if refresh_pricing_control is not None
+                else dict(registered.pricing)
+            )
             bounds.append(
-                EndpointRequestCostBound.from_endpoint_pricing(
+                _trusted_endpoint_request_cost_bound_from_pricing(
                     exact_model_id=model,
                     provider_endpoint=registered.provider_endpoint,
                     request_material=request_material,
@@ -6906,16 +10498,25 @@ class OpenRouterClient:
             )
         return max(
             bounds,
-            key=lambda bound: (bound.maximum_cost_usd, bound.provider_endpoint),
+            key=lambda bound: (
+                _trusted_endpoint_request_maximum_cost_usd(bound),
+                bound.provider_endpoint,
+            ),
         )
 
-    @staticmethod
     def _token_plan_routing_evidence(
+        self,
         *,
         request_token_plan: RequestTokenPlan,
         reservations: Sequence[Reservation],
         context_request_evidence: ContextRequestEvidence | None,
+        request_body_sha256: str,
+        refresh_pricing_control: _AuditModelRefreshPricingRequestControl | None,
+        refresh_pricing_attempt_routes: Mapping[str, AuditModelRefreshPricingRouteEvidence],
+        refresh_pricing_reservation_checks: Mapping[str, datetime],
+        refresh_pricing_transport_checks: Mapping[str, datetime],
     ) -> dict[str, Any]:
+        _require_pristine_endpoint_cost_bound_types()
         if not reservations or len(reservations) > 32:
             raise OpenRouterCostControlError(
                 "request usage lacks matching atomic token reservation evidence"
@@ -6957,14 +10558,25 @@ class OpenRouterClient:
             scheduled_inventory = tuple(
                 item for item in request_limit_inventory if item is not None
             )
+            request_limit_start = scheduled_inventory[0].request_limit_count_before
             if (
                 tuple(item.request_id for item in scheduled_inventory) != expected_ids
-                or tuple(item.request_limit_scope for item in scheduled_inventory)
-                != (request_token_plan.request_id,) * len(scheduled_inventory)
+                or len({item.request_limit_scope for item in scheduled_inventory}) != 1
                 or tuple(item.request_limit_count_before for item in scheduled_inventory)
-                != tuple(range(len(scheduled_inventory)))
+                != tuple(
+                    range(
+                        request_limit_start,
+                        request_limit_start + len(scheduled_inventory),
+                    )
+                )
                 or tuple(item.request_limit_count_after for item in scheduled_inventory)
-                != tuple(range(1, len(scheduled_inventory) + 1))
+                != tuple(
+                    range(
+                        request_limit_start + 1,
+                        request_limit_start + len(scheduled_inventory) + 1,
+                    )
+                )
+                or len({item.request_limit_maximum for item in scheduled_inventory}) != 1
             ):
                 raise OpenRouterCostControlError(
                     "scheduled request-limit reservation attempts are incomplete or unordered"
@@ -7005,6 +10617,80 @@ class OpenRouterClient:
         if context_request_evidence is not None:
             evidence["context_request_evidence"] = context_request_evidence.model_dump(mode="json")
             evidence["context_request_evidence_sha256"] = context_request_evidence.evidence_sha256
+        pricing_maps_present = bool(
+            refresh_pricing_attempt_routes
+            or refresh_pricing_reservation_checks
+            or refresh_pricing_transport_checks
+        )
+        if refresh_pricing_control is None:
+            if pricing_maps_present:
+                raise OpenRouterCostControlError(
+                    "request usage has refreshed-price attempts without a sealed control"
+                )
+            return evidence
+        binding = self._audit_model_refresh_pricing_binding
+        if binding is None:
+            raise OpenRouterCostControlError(
+                "request usage refreshed-price attempts lack their exact live authority"
+            )
+        reservation_ids = tuple(reservation.identifier for reservation in reservations)
+        if (
+            tuple(refresh_pricing_attempt_routes) != reservation_ids
+            or tuple(refresh_pricing_reservation_checks) != reservation_ids
+            or not set(refresh_pricing_transport_checks).issubset(reservation_ids)
+        ):
+            raise OpenRouterCostControlError(
+                "request usage refreshed-price attempts are incomplete or unordered"
+            )
+        pricing_attempts: list[AuditModelRefreshPricingAttemptEvidence] = []
+        try:
+            for attempt_index, reservation in enumerate(reservations, start=1):
+                endpoint_cost_bound = reservation.endpoint_cost_bound
+                if endpoint_cost_bound is None:
+                    raise ValueError("refreshed-price attempt lacks its endpoint cost bound")
+                pricing_attempts.append(
+                    AuditModelRefreshPricingAttemptEvidence.from_bound(
+                        logical_request_id=request_token_plan.request_id,
+                        attempt_request_id=reservation.identifier,
+                        attempt_index=attempt_index,
+                        reservation_checked_at=(
+                            refresh_pricing_reservation_checks[reservation.identifier]
+                        ),
+                        transport_checked_at=refresh_pricing_transport_checks.get(
+                            reservation.identifier
+                        ),
+                        current_endpoint_snapshot_sha256=(
+                            refresh_pricing_control.current_endpoint_snapshot_sha256
+                        ),
+                        request_body_sha256=request_body_sha256,
+                        pricing_evidence=binding.evidence,
+                        pricing_authority=binding.authority,
+                        pricing_route=refresh_pricing_attempt_routes[reservation.identifier],
+                        endpoint_cost_bound=endpoint_cost_bound,
+                        provider_max_price=dict(refresh_pricing_control.routing_max_price),
+                    )
+                )
+        except (AttributeError, KeyError, ValueError) as exc:
+            raise OpenRouterCostControlError(
+                f"request usage refreshed-price attempt evidence is invalid: {exc}"
+            ) from exc
+        final_pricing_attempt = pricing_attempts[-1]
+        evidence.update(
+            {
+                "audit_model_refresh_pricing_attempts": [
+                    item.model_dump(mode="json") for item in pricing_attempts
+                ],
+                "audit_model_refresh_pricing_attempt_sha256s": [
+                    item.evidence_sha256 for item in pricing_attempts
+                ],
+                "audit_model_refresh_pricing_attempt": final_pricing_attempt.model_dump(
+                    mode="json"
+                ),
+                "audit_model_refresh_pricing_attempt_sha256": (
+                    final_pricing_attempt.evidence_sha256
+                ),
+            }
+        )
         return evidence
 
     def _privacy_routing_evidence(
@@ -7094,9 +10780,229 @@ class OpenRouterClient:
             "audit_model_routing_evidence": validated.model_dump(mode="json"),
         }
 
+    def _audit_model_refresh_routing_evidence(
+        self,
+        route_evidence: AuditModelRefreshRouteEvidence | None,
+    ) -> dict[str, Any]:
+        """Project the last dispatched typed refresh veto without granting authority."""
+
+        if route_evidence is None:
+            return {}
+        from mmaudit.models.refresh_runtime import (
+            AuditModelRefreshEvidence,
+            AuditModelRefreshRouteEvidence,
+        )
+
+        binding = self._audit_model_refresh_binding
+        if binding is None:
+            raise OpenRouterModelRefreshError(
+                "refresh route usage evidence lacks its live guard binding"
+            )
+        try:
+            evidence = AuditModelRefreshEvidence.model_validate_json(
+                binding.evidence.model_dump_json(),
+                strict=True,
+            )
+            route = AuditModelRefreshRouteEvidence.model_validate_json(
+                route_evidence.model_dump_json(),
+                strict=True,
+            )
+        except (AttributeError, ValueError) as exc:
+            raise OpenRouterModelRefreshError(
+                "refresh route usage evidence is structurally invalid"
+            ) from exc
+        matches = tuple(
+            item
+            for item in evidence.routes
+            if item.exact_model_id == route.exact_model_id and item.audit_selected
+        )
+        if (
+            evidence != binding.evidence
+            or route != route_evidence
+            or len(matches) != 1
+            or matches[0] != route
+            or evidence.evidence_sha256 != binding.guard.evidence_sha256
+            or evidence.workflow_status_sha256 != binding.guard.workflow_status_sha256
+            or evidence.snapshot_sha256 != binding.guard.snapshot_sha256
+            or route.runtime_authorized
+            or evidence.technical_selection_authorized
+            or evidence.audit_selection_authorized
+            or evidence.provider_access_authorized
+            or evidence.production_promotion_authorized
+        ):
+            raise OpenRouterModelRefreshError(
+                "refresh route usage evidence differs from its dispatched veto guard"
+            )
+        return {
+            "audit_model_refresh_evidence_sha256": evidence.evidence_sha256,
+            "audit_model_refresh_workflow_status_sha256": (evidence.workflow_status_sha256),
+            "audit_model_refresh_snapshot_sha256": evidence.snapshot_sha256,
+            "audit_model_refresh_route_evidence_sha256": route.route_evidence_sha256,
+            "audit_model_refresh_guard_capability_sha256": (binding.guard.capability_sha256),
+            "audit_model_refresh_technical_route_set_sha256": (evidence.technical_route_set_sha256),
+            "audit_model_refresh_audit_route_set_sha256": evidence.audit_route_set_sha256,
+            "audit_model_refresh_expires_at": evidence.expires_at.isoformat(),
+            "audit_model_refresh_route_evidence": route.model_dump(mode="json"),
+        }
+
+    def _audit_model_refresh_request_metadata(
+        self,
+        route_evidence: AuditModelRefreshRouteEvidence | None,
+    ) -> dict[str, str]:
+        """Return namespaced scalar refresh joins for the exact provider request body."""
+
+        if route_evidence is None:
+            return {}
+        projection = self._audit_model_refresh_routing_evidence(route_evidence)
+        return {
+            "mmaudit_refresh_evidence_sha256": projection["audit_model_refresh_evidence_sha256"],
+            "mmaudit_refresh_workflow_status_sha256": projection[
+                "audit_model_refresh_workflow_status_sha256"
+            ],
+            "mmaudit_refresh_snapshot_sha256": projection["audit_model_refresh_snapshot_sha256"],
+            "mmaudit_refresh_route_evidence_sha256": projection[
+                "audit_model_refresh_route_evidence_sha256"
+            ],
+            "mmaudit_refresh_guard_capability_sha256": projection[
+                "audit_model_refresh_guard_capability_sha256"
+            ],
+            "mmaudit_refresh_technical_route_set_sha256": projection[
+                "audit_model_refresh_technical_route_set_sha256"
+            ],
+            "mmaudit_refresh_audit_route_set_sha256": projection[
+                "audit_model_refresh_audit_route_set_sha256"
+            ],
+            "mmaudit_refresh_expires_at": projection["audit_model_refresh_expires_at"],
+        }
+
+    def _audit_model_refresh_pricing_routing_evidence(
+        self,
+        route_evidence: AuditModelRefreshPricingRouteEvidence | None,
+    ) -> dict[str, Any]:
+        """Project the exact accepted current price route without granting authority."""
+
+        if route_evidence is None:
+            return {}
+        from mmaudit.models.refresh_runtime import (
+            AuditModelRefreshPricingEvidence,
+            AuditModelRefreshPricingRouteEvidence,
+        )
+
+        binding = self._audit_model_refresh_pricing_binding
+        refresh = self._audit_model_refresh_binding
+        if binding is None or refresh is None:
+            raise OpenRouterModelRefreshPricingError(
+                "refresh pricing usage evidence lacks exact live authority custody"
+            )
+        try:
+            evidence = AuditModelRefreshPricingEvidence.model_validate_json(
+                binding.evidence.model_dump_json(),
+                strict=True,
+            )
+            route = AuditModelRefreshPricingRouteEvidence.model_validate_json(
+                route_evidence.model_dump_json(),
+                strict=True,
+            )
+        except (AttributeError, ValueError) as exc:
+            raise OpenRouterModelRefreshPricingError(
+                "refresh pricing usage evidence is structurally invalid"
+            ) from exc
+        matches = tuple(
+            item
+            for item in evidence.routes
+            if item.exact_model_id == route.exact_model_id and item.audit_selected
+        )
+        if (
+            evidence != binding.evidence
+            or route != route_evidence
+            or len(matches) != 1
+            or matches[0] != route
+            or evidence.evidence_sha256 != binding.authority.pricing_evidence_sha256
+            or evidence.refresh_evidence_sha256 != refresh.evidence.evidence_sha256
+            or evidence.refresh_guard_capability_sha256 != refresh.guard.capability_sha256
+            or route.pricing_use_authorized
+            or route.provider_access_authorized
+            or route.model_selection_authorized
+            or evidence.pricing_use_authorized
+            or evidence.technical_selection_authorized
+            or evidence.audit_selection_authorized
+            or evidence.provider_access_authorized
+            or evidence.production_promotion_authorized
+        ):
+            raise OpenRouterModelRefreshPricingError(
+                "refresh pricing usage route differs from its exact live authority"
+            )
+        return {
+            "audit_model_refresh_pricing_evidence_sha256": evidence.evidence_sha256,
+            "audit_model_refresh_pricing_workflow_status_sha256": (evidence.workflow_status_sha256),
+            "audit_model_refresh_pricing_previous_snapshot_sha256": (
+                evidence.previous_snapshot_sha256
+            ),
+            "audit_model_refresh_pricing_current_snapshot_sha256": (
+                evidence.current_snapshot_sha256
+            ),
+            "audit_model_refresh_pricing_refresh_evidence_sha256": (
+                evidence.refresh_evidence_sha256
+            ),
+            "audit_model_refresh_pricing_refresh_guard_capability_sha256": (
+                evidence.refresh_guard_capability_sha256
+            ),
+            "audit_model_refresh_pricing_route_evidence_sha256": (route.route_evidence_sha256),
+            "audit_model_refresh_pricing_authority_capability_sha256": (
+                binding.authority.capability_sha256
+            ),
+            "audit_model_refresh_pricing_technical_route_set_sha256": (
+                evidence.technical_pricing_route_set_sha256
+            ),
+            "audit_model_refresh_pricing_audit_route_set_sha256": (
+                evidence.audit_pricing_route_set_sha256
+            ),
+            "audit_model_refresh_pricing_qualified_pricing_snapshot_sha256": (
+                route.qualified_pricing_snapshot_sha256
+            ),
+            "audit_model_refresh_pricing_current_pricing_snapshot_sha256": (
+                route.current_pricing_sha256
+            ),
+            "audit_model_refresh_pricing_tolerance_fraction": (evidence.pricing_tolerance_fraction),
+            "audit_model_refresh_pricing_expires_at": evidence.expires_at.isoformat(),
+            "audit_model_refresh_pricing_route_evidence": route.model_dump(mode="json"),
+        }
+
+    def _audit_model_refresh_pricing_request_metadata(
+        self,
+        route_evidence: AuditModelRefreshPricingRouteEvidence | None,
+    ) -> dict[str, str]:
+        """Return scalar refreshed-price hashes committed into the provider body."""
+
+        if route_evidence is None:
+            return {}
+        projection = self._audit_model_refresh_pricing_routing_evidence(route_evidence)
+        return {
+            "mmaudit_refresh_pricing_evidence_sha256": projection[
+                "audit_model_refresh_pricing_evidence_sha256"
+            ],
+            "mmaudit_refresh_pricing_route_sha256": projection[
+                "audit_model_refresh_pricing_route_evidence_sha256"
+            ],
+            "mmaudit_refresh_pricing_authority_sha256": projection[
+                "audit_model_refresh_pricing_authority_capability_sha256"
+            ],
+            "mmaudit_refresh_pricing_baseline_sha256": projection[
+                "audit_model_refresh_pricing_qualified_pricing_snapshot_sha256"
+            ],
+            "mmaudit_refresh_pricing_current_sha256": projection[
+                "audit_model_refresh_pricing_current_pricing_snapshot_sha256"
+            ],
+            "mmaudit_refresh_pricing_expires_at": projection[
+                "audit_model_refresh_pricing_expires_at"
+            ],
+        }
+
     def _audit_policy_decision_evidence_sha256s(
         self,
         routing_evidence: AuditModelRoutingEvidence | None,
+        *,
+        refresh_routing_evidence: AuditModelRefreshRouteEvidence | None = None,
     ) -> tuple[str, ...]:
         """Return hash-only joins for a policy routing decision or refusal."""
 
@@ -7114,6 +11020,18 @@ class OpenRouterClient:
             )
         if routing_evidence is not None:
             hashes.add(routing_evidence.routing_evidence_sha256)
+        refresh_binding = self._audit_model_refresh_binding
+        if refresh_binding is not None:
+            hashes.update(
+                {
+                    refresh_binding.evidence.evidence_sha256,
+                    refresh_binding.evidence.workflow_status_sha256,
+                    refresh_binding.evidence.snapshot_sha256,
+                    refresh_binding.guard.capability_sha256,
+                }
+            )
+        if refresh_routing_evidence is not None:
+            hashes.add(refresh_routing_evidence.route_evidence_sha256)
         return tuple(sorted(hashes))
 
     def _routing_evidence(
@@ -7140,6 +11058,12 @@ class OpenRouterClient:
         token_reservations: Sequence[Reservation],
         context_request_evidence: ContextRequestEvidence | None,
         audit_routing_evidence: AuditModelRoutingEvidence | None,
+        refresh_routing_evidence: AuditModelRefreshRouteEvidence | None,
+        refresh_pricing_routing_evidence: (AuditModelRefreshPricingRouteEvidence | None),
+        refresh_pricing_control: _AuditModelRefreshPricingRequestControl | None,
+        refresh_pricing_attempt_routes: Mapping[str, AuditModelRefreshPricingRouteEvidence],
+        refresh_pricing_reservation_checks: Mapping[str, datetime],
+        refresh_pricing_transport_checks: Mapping[str, datetime],
         repair_request: bool = False,
     ) -> dict[str, Any]:
         usage = envelope.usage
@@ -7229,6 +11153,27 @@ class OpenRouterClient:
                 diagnostic_code="policy_eligible_route_mismatch",
                 validation_status=ModelRequestValidationStatus.PROVIDER_MISMATCH,
             )
+        if refresh_routing_evidence is not None and (
+            refresh_routing_evidence.exact_model_id != envelope.requested_model
+            or refresh_routing_evidence.approved_provider_endpoint != envelope.selected_provider
+            or refresh_routing_evidence.approved_provider_name != envelope.selected_provider_name
+            or refresh_routing_evidence.structured_output_mode is not structured_output_plan.mode
+        ):
+            raise OpenRouterResponseIdentityError(
+                "provider response differs from the current model refresh route",
+                diagnostic_code="model_refresh_route_mismatch",
+                validation_status=ModelRequestValidationStatus.PROVIDER_MISMATCH,
+            )
+        if refresh_pricing_routing_evidence is not None and (
+            refresh_pricing_routing_evidence.exact_model_id != envelope.requested_model
+            or refresh_pricing_routing_evidence.approved_provider_endpoint
+            != envelope.selected_provider
+        ):
+            raise OpenRouterResponseIdentityError(
+                "provider response differs from the refreshed-price route",
+                diagnostic_code="model_refresh_pricing_route_mismatch",
+                validation_status=ModelRequestValidationStatus.PROVIDER_MISMATCH,
+            )
         evidence: dict[str, Any] = {
             "generation_id": envelope.generation_id,
             "requested_model": envelope.requested_model,
@@ -7256,7 +11201,9 @@ class OpenRouterClient:
             "schema_sha256": schema_hash,
             "provider_policy_sha256": provider_policy_sha256,
             "endpoint_snapshot_sha256": (
-                endpoint_policy.snapshot_sha256 if endpoint_policy is not None else None
+                refresh_pricing_control.current_endpoint_snapshot_sha256
+                if refresh_pricing_control is not None
+                else (endpoint_policy.snapshot_sha256 if endpoint_policy is not None else None)
             ),
             "endpoint_pricing_sha256": (
                 endpoint_pricing.pricing_sha256 if endpoint_pricing is not None else None
@@ -7372,11 +11319,20 @@ class OpenRouterClient:
                 request_token_plan=request_token_plan,
                 reservations=token_reservations,
                 context_request_evidence=context_request_evidence,
+                request_body_sha256=request_body_sha256,
+                refresh_pricing_control=refresh_pricing_control,
+                refresh_pricing_attempt_routes=refresh_pricing_attempt_routes,
+                refresh_pricing_reservation_checks=refresh_pricing_reservation_checks,
+                refresh_pricing_transport_checks=refresh_pricing_transport_checks,
             )
         )
         if qualification_binding is not None:
             evidence.update(qualification_binding.routing_evidence())
         evidence.update(self._audit_model_selection_routing_evidence(audit_routing_evidence))
+        evidence.update(self._audit_model_refresh_routing_evidence(refresh_routing_evidence))
+        evidence.update(
+            self._audit_model_refresh_pricing_routing_evidence(refresh_pricing_routing_evidence)
+        )
         return evidence
 
     def _failure_routing_evidence(
@@ -7401,20 +11357,69 @@ class OpenRouterClient:
         token_reservations: Sequence[Reservation],
         context_request_evidence: ContextRequestEvidence | None,
         audit_routing_evidence: AuditModelRoutingEvidence | None,
+        refresh_routing_evidence: AuditModelRefreshRouteEvidence | None,
+        refresh_pricing_routing_evidence: (AuditModelRefreshPricingRouteEvidence | None),
+        refresh_pricing_control: _AuditModelRefreshPricingRequestControl | None,
+        refresh_pricing_attempt_routes: Mapping[str, AuditModelRefreshPricingRouteEvidence],
+        refresh_pricing_reservation_checks: Mapping[str, datetime],
+        refresh_pricing_transport_checks: Mapping[str, datetime],
     ) -> dict[str, Any]:
         router_metadata = payload.get("openrouter_metadata") if isinstance(payload, dict) else None
         finish_reason = _optional_finish_reason(payload)
+        native_finish_reason = _optional_native_finish_reason(payload)
+        truncated_envelope = (
+            _TRUSTED_CANDIDATE_REVIEW_TRUNCATED_ENVELOPE_FGET(error)
+            if type(error) is OpenRouterTruncatedResponseError
+            and _TRUSTED_CANDIDATE_REVIEW_TRUNCATED_ENVELOPE_FGET is not None
+            else None
+        )
+        truncation_projection = (
+            _TRUSTED_CANDIDATE_REVIEW_TRUNCATION_PROJECTION_FGET(error)
+            if type(error) is OpenRouterTruncatedResponseError
+            and _TRUSTED_CANDIDATE_REVIEW_TRUNCATION_PROJECTION_FGET is not None
+            else None
+        )
         endpoint_policy = self._endpoint_pricing.get(requested_model)
+        selected_endpoint_pricing = (
+            endpoint_policy.endpoint(provider_policy.configured_endpoints[0])
+            if endpoint_policy is not None and len(provider_policy.configured_endpoints) == 1
+            else None
+        )
         evidence: dict[str, Any] = {
-            "generation_id": (_optional_string(payload.get("id")) if payload is not None else None),
-            "generation_header_id": _header_value(response_headers, "x-generation-id"),
+            "generation_id": (
+                truncated_envelope.generation_id
+                if truncated_envelope is not None
+                else (_optional_string(payload.get("id")) if payload is not None else None)
+            ),
+            "generation_header_id": (
+                truncated_envelope.generation_header_id
+                if truncated_envelope is not None
+                else _header_value(response_headers, "x-generation-id")
+            ),
             "provider": (
-                _optional_string(payload.get("provider")) if payload is not None else None
+                truncated_envelope.selected_provider_name
+                if truncated_envelope is not None
+                else (_optional_string(payload.get("provider")) if payload is not None else None)
             ),
             "router_metadata_sha256": (
-                _canonical_sha256(router_metadata) if isinstance(router_metadata, dict) else None
+                truncated_envelope.router_metadata_sha256
+                if truncated_envelope is not None
+                else (
+                    _canonical_sha256(router_metadata)
+                    if isinstance(router_metadata, dict)
+                    else None
+                )
             ),
-            "finish_reason": finish_reason,
+            "finish_reason": (
+                truncated_envelope.finish_reason
+                if truncated_envelope is not None
+                else finish_reason
+            ),
+            "native_finish_reason": (
+                truncated_envelope.native_finish_reason
+                if truncated_envelope is not None
+                else native_finish_reason
+            ),
             "schema_sha256": schema_hash,
             "provider_policy_sha256": _canonical_sha256(
                 provider_policy.as_request_payload(
@@ -7435,7 +11440,18 @@ class OpenRouterClient:
             "provider_error_classification": _provider_error_classification(error),
             "identity_strength": ModelIdentityStrength.UNBOUND.value,
             "endpoint_snapshot_sha256": (
-                endpoint_policy.snapshot_sha256 if endpoint_policy is not None else None
+                refresh_pricing_control.current_endpoint_snapshot_sha256
+                if refresh_pricing_control is not None
+                else (endpoint_policy.snapshot_sha256 if endpoint_policy is not None else None)
+            ),
+            "endpoint_pricing_sha256": (
+                refresh_pricing_routing_evidence.current_pricing_sha256
+                if refresh_pricing_routing_evidence is not None
+                else (
+                    selected_endpoint_pricing.pricing_sha256
+                    if selected_endpoint_pricing is not None
+                    else None
+                )
             ),
             "output_capability_sha256": (
                 endpoint_policy.output_capability_sha256 if endpoint_policy is not None else None
@@ -7464,6 +11480,14 @@ class OpenRouterClient:
             "structured_output_original_response_sha256": response_sha256,
             "structured_output_validated_response_sha256": (validated_response_sha256),
         }
+        if truncated_envelope is not None:
+            evidence.update(
+                _TRUSTED_CANDIDATE_REVIEW_TRUNCATED_ENVELOPE_ROUTING(truncated_envelope)
+            )
+        if truncation_projection is not None:
+            evidence.update(
+                _TRUSTED_CANDIDATE_REVIEW_TRUNCATION_PROJECTION_ROUTING(truncation_projection)
+            )
         evidence.update(
             self._privacy_routing_evidence(
                 selected_provider_endpoint=(
@@ -7478,6 +11502,11 @@ class OpenRouterClient:
                 request_token_plan=request_token_plan,
                 reservations=token_reservations,
                 context_request_evidence=context_request_evidence,
+                request_body_sha256=request_body_sha256,
+                refresh_pricing_control=refresh_pricing_control,
+                refresh_pricing_attempt_routes=refresh_pricing_attempt_routes,
+                refresh_pricing_reservation_checks=refresh_pricing_reservation_checks,
+                refresh_pricing_transport_checks=refresh_pricing_transport_checks,
             )
         )
         identity_diagnostic = _identity_failure_diagnostic(
@@ -7502,6 +11531,10 @@ class OpenRouterClient:
         if qualification_binding is not None:
             evidence.update(qualification_binding.routing_evidence())
         evidence.update(self._audit_model_selection_routing_evidence(audit_routing_evidence))
+        evidence.update(self._audit_model_refresh_routing_evidence(refresh_routing_evidence))
+        evidence.update(
+            self._audit_model_refresh_pricing_routing_evidence(refresh_pricing_routing_evidence)
+        )
         return evidence
 
     async def _backoff(self, attempt: int, retry_after: str | None) -> None:
@@ -7517,7 +11550,7 @@ class OpenRouterClient:
     def _store_debug(self, request_id: str, filename: str, value: Any) -> None:
         if self.run_dir is None:
             raise OpenRouterPrivacyError("debug storage requested without a private run directory")
-        self._ensure_no_credential_in_value(value)
+        _TRUSTED_ENSURE_NO_CREDENTIAL_IN_VALUE(self, value)
         debug_dir = self.run_dir / "debug" / request_id
         debug_dir.mkdir(parents=True, exist_ok=True)
         path = debug_dir / filename
@@ -7532,7 +11565,7 @@ class OpenRouterClient:
         )
 
     def _ensure_request_size(self, body: dict[str, Any]) -> None:
-        self._ensure_no_credential_in_value(body)
+        _TRUSTED_ENSURE_NO_CREDENTIAL_IN_VALUE(self, body)
         serialized = json.dumps(body, sort_keys=True, ensure_ascii=True)
         size = len(serialized.encode("utf-8"))
         if size > self.execution.max_request_bytes:
@@ -7731,34 +11764,309 @@ def _whole_second_utc(value: datetime) -> datetime:
     return value.astimezone(UTC).replace(microsecond=0)
 
 
+def _require_trusted_candidate_review_dispatch_boundary(
+    client: OpenRouterClient,
+    *,
+    operation: Literal["completion", "resource_preview"],
+) -> None:
+    """Reject substituted candidate-review dispatch authority before any client lookup."""
+
+    if type(client) is not _TRUSTED_OPENROUTER_CLIENT_TYPE:
+        raise OpenRouterCandidateReviewBoundaryError(
+            f"candidate-review {operation} dispatch requires the exact provider client"
+        )
+    try:
+        instance_state = object.__getattribute__(client, "__dict__")
+    except (AttributeError, TypeError) as exc:
+        raise OpenRouterCandidateReviewBoundaryError(
+            f"candidate-review {operation} dispatch boundary is unavailable"
+        ) from exc
+    if type(instance_state) is not dict or any(
+        name in instance_state for name in _TRUSTED_OPENROUTER_CLIENT_CALLABLE_NAMES
+    ):
+        raise OpenRouterCandidateReviewBoundaryError(
+            f"candidate-review {operation} dispatch boundary changed before provider work"
+        )
+    if (
+        _candidate_review_protocol_boundary_is_pristine
+        is not _TRUSTED_CANDIDATE_REVIEW_PROTOCOL_BOUNDARY_IS_PRISTINE
+        or _openrouter_client_callables_are_pristine
+        is not _TRUSTED_OPENROUTER_CLIENT_CALLABLES_ARE_PRISTINE
+        or _require_trusted_candidate_review_dispatch_boundary
+        is not _TRUSTED_REQUIRE_CANDIDATE_REVIEW_DISPATCH_BOUNDARY
+        or not _TRUSTED_CANDIDATE_REVIEW_PROTOCOL_BOUNDARY_IS_PRISTINE()
+        or not _TRUSTED_OPENROUTER_CLIENT_CALLABLES_ARE_PRISTINE()
+    ):
+        raise OpenRouterCandidateReviewBoundaryError(
+            f"candidate-review {operation} dispatch boundary changed before provider work"
+        )
+
+
+def trusted_preview_candidate_review_task_resources(
+    client: OpenRouterClient,
+    *,
+    coverage_task: ModelSurfaceGapTask,
+    scheduler_task: SchedulerTaskPlan,
+    campaign_manifest: SchedulerCampaignManifest,
+    context_package: ContextPackage,
+    system_prompt: str,
+    schema_name: str,
+    checked_at: datetime,
+) -> ModelSurfaceTaskResourcePreview:
+    """Invoke the frozen resource-preview descriptor without dynamic client dispatch."""
+
+    _TRUSTED_REQUIRE_CANDIDATE_REVIEW_DISPATCH_BOUNDARY(
+        client,
+        operation="resource_preview",
+    )
+    return _TRUSTED_PREVIEW_CANDIDATE_REVIEW_TASK_RESOURCES(
+        client,
+        coverage_task=coverage_task,
+        scheduler_task=scheduler_task,
+        campaign_manifest=campaign_manifest,
+        context_package=context_package,
+        system_prompt=system_prompt,
+        schema_name=schema_name,
+        checked_at=checked_at,
+    )
+
+
+async def trusted_complete_candidate_review_with_evidence(
+    client: OpenRouterClient,
+    *,
+    role: str,
+    models: list[str],
+    system_prompt: str,
+    user_prompt: str,
+    context_package: ContextPackage | None = None,
+    schema_name: str,
+    logical_request_id: str | None = None,
+    single_route_single_attempt: bool = False,
+    expected_resource_preview: ModelSurfaceTaskResourcePreview | None = None,
+    coverage_task: ModelSurfaceGapTask | None = None,
+    scheduler_task: SchedulerTaskPlan | None = None,
+    campaign_manifest: SchedulerCampaignManifest | None = None,
+    resource_preview_checked_at: datetime | None = None,
+) -> CandidateReviewCompletion:
+    """Invoke the frozen candidate-review descriptor without dynamic client dispatch."""
+
+    _TRUSTED_REQUIRE_CANDIDATE_REVIEW_DISPATCH_BOUNDARY(
+        client,
+        operation="completion",
+    )
+    return await _TRUSTED_COMPLETE_CANDIDATE_REVIEW_WITH_EVIDENCE(
+        client,
+        role=role,
+        models=models,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        context_package=context_package,
+        schema_name=schema_name,
+        logical_request_id=logical_request_id,
+        single_route_single_attempt=single_route_single_attempt,
+        expected_resource_preview=expected_resource_preview,
+        coverage_task=coverage_task,
+        scheduler_task=scheduler_task,
+        campaign_manifest=campaign_manifest,
+        resource_preview_checked_at=resource_preview_checked_at,
+    )
+
+
 _TRUSTED_OPENROUTER_CLIENT_TYPE = OpenRouterClient
+_TRUSTED_CANDIDATE_REVIEW_PROTOCOL_BOUNDARY_IS_PRISTINE = (
+    _candidate_review_protocol_boundary_is_pristine
+)
+_TRUSTED_REQUIRE_CANDIDATE_REVIEW_DISPATCH_BOUNDARY = (
+    _require_trusted_candidate_review_dispatch_boundary
+)
+_TRUSTED_PUBLIC_CANDIDATE_REVIEW_RESOURCE_PREVIEW = trusted_preview_candidate_review_task_resources
+_TRUSTED_PUBLIC_CANDIDATE_REVIEW_COMPLETION = trusted_complete_candidate_review_with_evidence
+_TRUSTED_ATTACH_CANDIDATE_REVIEW_TRUNCATION_PROJECTION = (
+    OpenRouterTruncatedResponseError._attach_projection
+)
+_TRUSTED_ATTACH_CANDIDATE_REVIEW_TRUNCATED_USAGE = (
+    OpenRouterTruncatedResponseError._attach_failed_usage_record
+)
+_TRUSTED_CANDIDATE_REVIEW_TRUNCATION_PROJECTION_PROPERTY = (
+    OpenRouterTruncatedResponseError.projection
+)
+_TRUSTED_CANDIDATE_REVIEW_TRUNCATION_PROJECTION_FGET = cast(
+    Callable[[OpenRouterTruncatedResponseError], CandidateReviewTruncationProjection | None],
+    _property_getter(OpenRouterTruncatedResponseError, "projection"),
+)
+_TRUSTED_CANDIDATE_REVIEW_TRUNCATED_ENVELOPE_PROPERTY = (
+    OpenRouterTruncatedResponseError.envelope_evidence
+)
+_TRUSTED_CANDIDATE_REVIEW_TRUNCATED_ENVELOPE_FGET = cast(
+    Callable[
+        [OpenRouterTruncatedResponseError],
+        CandidateReviewTruncatedEnvelopeEvidence | None,
+    ],
+    _property_getter(OpenRouterTruncatedResponseError, "envelope_evidence"),
+)
+_TRUSTED_CANDIDATE_REVIEW_TRUNCATED_USAGE_PROPERTY = (
+    OpenRouterTruncatedResponseError.failed_usage_record
+)
+_TRUSTED_CANDIDATE_REVIEW_TRUNCATED_USAGE_FGET = cast(
+    Callable[[OpenRouterTruncatedResponseError], UsageRecord | None],
+    _property_getter(OpenRouterTruncatedResponseError, "failed_usage_record"),
+)
+_TRUSTED_CANDIDATE_REVIEW_ERROR_CUSTODY_IS_COHERENT = _candidate_review_error_custody_is_coherent
+_TRUSTED_CANDIDATE_REVIEW_TRUNCATION_PROJECTION_ROUTING = (
+    _candidate_review_truncation_projection_routing
+)
+_TRUSTED_CANDIDATE_REVIEW_TRUNCATED_ENVELOPE_ROUTING = _candidate_review_truncated_envelope_routing
+_TRUSTED_CANDIDATE_REVIEW_USAGE_RECORD_VALIDATOR = UsageRecord.__pydantic_validator__
+_TRUSTED_CANDIDATE_REVIEW_USAGE_RECORD_CORE_SCHEMA = UsageRecord.__pydantic_core_schema__
 _TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER = object()
 _TRUSTED_RECONCILIATION_EXPECTATION = GenerationVerificationRequest.reconciliation_expectation
 _TRUSTED_VALIDATE_AUTHENTICATION = OpenRouterClient.validate_authentication
 _TRUSTED_GET_GENERATION_EVIDENCE = OpenRouterClient.get_generation_evidence
+_TRUSTED_ISSUE_GENERATION_VERIFICATION = _issue_trusted_generation_verification
+_TRUSTED_ATTEST_AUTHRUNNER_GENERATION_ORIGIN = _attest_authrunner_generation_origin
+_TRUSTED_ATTEST_AUTHRUNNER_USAGE_ORIGIN = _attest_authrunner_owned_real_usage_origin
+_TRUSTED_VALIDATED_USAGE_COPY = _validated_usage_copy_preserving_owned_attestation
 _TRUSTED_CREATE_GENERATION_VERIFICATION = OpenRouterClient.create_trusted_generation_verification
 _TRUSTED_FETCH_GENERATION_ATTESTATIONS = (
     OpenRouterClient._fetch_generation_attestations_with_deadline
 )
 _TRUSTED_REQUEST_METADATA = OpenRouterClient._request_metadata
 _TRUSTED_BOUNDED_REQUEST = OpenRouterClient._bounded_request
+_TRUSTED_BUILD_REQUEST = OpenRouterClient.build_request
+_TRUSTED_PREVIEW_CANDIDATE_REVIEW_TASK_RESOURCES = (
+    OpenRouterClient.preview_candidate_review_task_resources
+)
+_TRUSTED_COMPLETE_WITH_EVIDENCE = OpenRouterClient.complete_with_evidence
+_TRUSTED_COMPLETE_ONE = OpenRouterClient._complete_one
+_TRUSTED_COMPLETE_CANDIDATE_REVIEW_WITH_EVIDENCE = (
+    OpenRouterClient.complete_candidate_review_with_evidence
+)
+_TRUSTED_FAILURE_ROUTING_EVIDENCE = OpenRouterClient._failure_routing_evidence
+_TRUSTED_ENDPOINT_REQUEST_COST_BOUND = OpenRouterClient._endpoint_request_cost_bound
+_TRUSTED_ENSURE_REQUEST_SIZE = OpenRouterClient._ensure_request_size
+_TRUSTED_STORE_DEBUG = OpenRouterClient._store_debug
+_TRUSTED_ENSURE_NO_CREDENTIAL_IN_VALUE = OpenRouterClient._ensure_no_credential_in_value
+_TRUSTED_VALIDATE_PAID_PRIVACY_POLICY = OpenRouterClient._validate_paid_privacy_policy
 _TRUSTED_VALIDATE_TRANSPORT_PROVENANCE = OpenRouterClient._validate_transport_provenance
+_TRUSTED_BUDGET_RESERVE = BudgetManager.reserve
+_TRUSTED_BUDGET_RECONCILE = BudgetManager.reconcile
+_TRUSTED_BUDGET_RECONCILED_COST_USD_EXACT = BudgetManager.reconciled_cost_usd_exact
+_TRUSTED_BUDGET_RELEASE = BudgetManager.release
+_TRUSTED_BUDGET_COMMIT_FOR_TRANSPORT = BudgetManager.commit_active_reservation_for_transport
+_TRUSTED_BUDGET_CURRENT_ATOMIC_LEDGER = BudgetManager._current_atomic_ledger
+_TRUSTED_ATOMIC_LEDGER_RESERVE = AtomicCostLedger.reserve
+_TRUSTED_ATOMIC_LEDGER_RECONCILE = AtomicCostLedger.reconcile
+_TRUSTED_ATOMIC_LEDGER_RELEASE = AtomicCostLedger.release
+_TRUSTED_ATOMIC_LEDGER_ACTIVE_RESERVATION = AtomicCostLedger.active_reservation
+_TRUSTED_ATOMIC_LEDGER_SNAPSHOT = AtomicCostLedger.snapshot
+_TRUSTED_ATOMIC_LEDGER_LOCKED = AtomicCostLedger._locked
+_TRUSTED_ATOMIC_LEDGER_REQUIRED_STATE = AtomicCostLedger._required_state
+_TRUSTED_ATOMIC_LEDGER_READ_STATE = AtomicCostLedger._read_state
+_TRUSTED_ATOMIC_LEDGER_WRITE_STATE = AtomicCostLedger._write_state
+_TRUSTED_ENDPOINT_COMPONENT_MAXIMUM_COST_FGET = _property_getter(
+    EndpointPriceComponent,
+    "maximum_cost_usd",
+)
+_TRUSTED_ENDPOINT_REQUEST_MAXIMUM_COST_FGET = _property_getter(
+    EndpointRequestCostBound,
+    "maximum_cost_usd",
+)
+_TRUSTED_ENDPOINT_REQUEST_FROM_PRICING = _classmethod_function(
+    EndpointRequestCostBound,
+    "from_endpoint_pricing",
+)
+_TRUSTED_ENDPOINT_REQUEST_MAXIMUM_UNITS_FOR = EndpointRequestCostBound.maximum_units_for
 _TRUSTED_REQUIRES_REAL_AUDIT_POLICY_SELECTION = (
     OpenRouterClient._requires_real_audit_policy_selection
 )
+_TRUSTED_REQUIRES_REAL_AUDIT_MODEL_REFRESH = OpenRouterClient._requires_real_audit_model_refresh
+_TRUSTED_REQUIRES_REAL_AUDIT_MODEL_REFRESH_PRICING = (
+    OpenRouterClient._requires_real_audit_model_refresh_pricing
+)
 _TRUSTED_IS_TRUSTED_PREQUALIFICATION_REQUEST = OpenRouterClient._is_trusted_prequalification_request
 _TRUSTED_REQUIRE_REAL_AUDIT_MODEL_SELECTION = OpenRouterClient._require_real_audit_model_selection
+_TRUSTED_REQUIRE_REAL_AUDIT_MODEL_REFRESH = OpenRouterClient._require_real_audit_model_refresh
+_TRUSTED_REQUIRE_REAL_AUDIT_MODEL_REFRESH_PRICING = (
+    OpenRouterClient._require_real_audit_model_refresh_pricing
+)
+_TRUSTED_SEAL_AUDIT_MODEL_REFRESH_PRICING_CONTROL = (
+    OpenRouterClient._seal_audit_model_refresh_pricing_control
+)
 _TRUSTED_REQUIRE_AUDIT_POLICY_BINDING = OpenRouterClient.require_audit_policy_binding
+_TRUSTED_REQUIRE_AUDIT_MODEL_REFRESH_BINDING = OpenRouterClient.require_audit_model_refresh_binding
+_TRUSTED_REQUIRE_AUDIT_MODEL_REFRESH_PRICING_BINDING = (
+    OpenRouterClient.require_audit_model_refresh_pricing_binding
+)
+
+
+def _provider_callable_descriptor_surface(
+    subject_type: type[object],
+) -> tuple[tuple[str, object], ...]:
+    return tuple(
+        sorted(
+            (
+                (name, descriptor)
+                for name, descriptor in vars(subject_type).items()
+                if callable(descriptor)
+                or isinstance(descriptor, (classmethod, staticmethod, property))
+            ),
+            key=lambda item: item[0],
+        )
+    )
+
+
+_TRUSTED_PROVIDER_CALLABLE_DESCRIPTOR_SURFACE = _provider_callable_descriptor_surface
+_TRUSTED_OPENROUTER_CLIENT_DESCRIPTOR_SURFACE = _TRUSTED_PROVIDER_CALLABLE_DESCRIPTOR_SURFACE(
+    OpenRouterClient
+)
+_TRUSTED_OPENROUTER_CLIENT_CALLABLE_NAMES = frozenset(
+    name for name, _descriptor in _TRUSTED_OPENROUTER_CLIENT_DESCRIPTOR_SURFACE
+)
+
+
+def _copy_deepcopy_dispatch_is_pristine() -> bool:
+    """Reject mutation of deepcopy internals still used by schema/evidence planning."""
+
+    current = getattr(copy, "_deepcopy_dispatch", None)
+    return bool(
+        type(current) is dict
+        and current is _TRUSTED_COPY_DEEPCOPY_DISPATCH
+        and len(current) == len(_TRUSTED_COPY_DEEPCOPY_DISPATCH_ITEMS)
+        and all(current.get(key) is value for key, value in _TRUSTED_COPY_DEEPCOPY_DISPATCH_ITEMS)
+    )
+
+
+_TRUSTED_BUDGET_MANAGER_DESCRIPTOR_SURFACE = _provider_callable_descriptor_surface(BudgetManager)
+_TRUSTED_ATOMIC_LEDGER_DESCRIPTOR_SURFACE = _provider_callable_descriptor_surface(AtomicCostLedger)
 
 
 def _openrouter_client_callables_are_pristine() -> bool:
     """Verify the client-owned request and evidence dispatch boundary is unchanged."""
 
     return (
-        (
+        _openrouter_client_callables_are_pristine
+        is _TRUSTED_OPENROUTER_CLIENT_CALLABLES_ARE_PRISTINE
+        and _candidate_review_protocol_boundary_is_pristine
+        is _TRUSTED_CANDIDATE_REVIEW_PROTOCOL_BOUNDARY_IS_PRISTINE
+        and _require_trusted_candidate_review_dispatch_boundary
+        is _TRUSTED_REQUIRE_CANDIDATE_REVIEW_DISPATCH_BOUNDARY
+        and (
+            trusted_preview_candidate_review_task_resources
+            is _TRUSTED_PUBLIC_CANDIDATE_REVIEW_RESOURCE_PREVIEW
+        )
+        and (
+            trusted_complete_candidate_review_with_evidence
+            is _TRUSTED_PUBLIC_CANDIDATE_REVIEW_COMPLETION
+        )
+        and _provider_callable_descriptor_surface is _TRUSTED_PROVIDER_CALLABLE_DESCRIPTOR_SURFACE
+        and (
             GenerationVerificationRequest.reconciliation_expectation
             is _TRUSTED_RECONCILIATION_EXPECTATION
         )
+        and _issue_trusted_generation_verification is _TRUSTED_ISSUE_GENERATION_VERIFICATION
+        and (_attest_authrunner_generation_origin is _TRUSTED_ATTEST_AUTHRUNNER_GENERATION_ORIGIN)
+        and (_attest_authrunner_owned_real_usage_origin is _TRUSTED_ATTEST_AUTHRUNNER_USAGE_ORIGIN)
+        and _validated_usage_copy_preserving_owned_attestation is _TRUSTED_VALIDATED_USAGE_COPY
         and OpenRouterClient.validate_authentication is _TRUSTED_VALIDATE_AUTHENTICATION
         and OpenRouterClient.get_generation_evidence is _TRUSTED_GET_GENERATION_EVIDENCE
         and (
@@ -7771,6 +12079,57 @@ def _openrouter_client_callables_are_pristine() -> bool:
         )
         and OpenRouterClient._request_metadata is _TRUSTED_REQUEST_METADATA
         and OpenRouterClient._bounded_request is _TRUSTED_BOUNDED_REQUEST
+        and OpenRouterClient.build_request is _TRUSTED_BUILD_REQUEST
+        and _canonical_sha256 is _TRUSTED_CANONICAL_SHA256
+        and (
+            _candidate_review_request_token_plan_projection_sha256
+            is _TRUSTED_CANDIDATE_REVIEW_TOKEN_PLAN_PROJECTION_SHA256
+        )
+        and (
+            _candidate_review_request_material_projection
+            is _TRUSTED_CANDIDATE_REVIEW_REQUEST_MATERIAL_PROJECTION
+        )
+        and (
+            _endpoint_request_cost_bound_projection_sha256
+            is _TRUSTED_ENDPOINT_REQUEST_COST_BOUND_PROJECTION_SHA256
+        )
+        and copy.deepcopy is _TRUSTED_COPY_DEEPCOPY
+        and _copy_deepcopy_dispatch_is_pristine()
+        and hashlib.sha256 is _TRUSTED_HASHLIB_SHA256
+        and json.dumps is _TRUSTED_JSON_DUMPS
+        and json.JSONEncoder is _TRUSTED_JSON_ENCODER
+        and json.JSONEncoder.encode is _TRUSTED_JSON_ENCODER_ENCODE
+        and json.JSONEncoder.iterencode is _TRUSTED_JSON_ENCODER_ITERENCODE
+        and json.encoder is _TRUSTED_JSON_ENCODER_MODULE
+        and (
+            _TRUSTED_JSON_ENCODER_MODULE.encode_basestring_ascii
+            is _TRUSTED_JSON_ENCODE_BASESTRING_ASCII
+        )
+        and _TRUSTED_JSON_ENCODER_MODULE.c_make_encoder is _TRUSTED_JSON_MAKE_ENCODER
+        and (
+            _CANDIDATE_REVIEW_CANONICAL_JSON_DUMPS is _TRUSTED_CANDIDATE_REVIEW_CANONICAL_JSON_DUMPS
+        )
+        and (
+            OpenRouterClient.preview_candidate_review_task_resources
+            is _TRUSTED_PREVIEW_CANDIDATE_REVIEW_TASK_RESOURCES
+        )
+        and OpenRouterClient.complete_with_evidence is _TRUSTED_COMPLETE_WITH_EVIDENCE
+        and OpenRouterClient._complete_one is _TRUSTED_COMPLETE_ONE
+        and (
+            OpenRouterClient.complete_candidate_review_with_evidence
+            is _TRUSTED_COMPLETE_CANDIDATE_REVIEW_WITH_EVIDENCE
+        )
+        and OpenRouterClient._failure_routing_evidence is _TRUSTED_FAILURE_ROUTING_EVIDENCE
+        and (OpenRouterClient._endpoint_request_cost_bound is _TRUSTED_ENDPOINT_REQUEST_COST_BOUND)
+        and OpenRouterClient._ensure_request_size is _TRUSTED_ENSURE_REQUEST_SIZE
+        and OpenRouterClient._store_debug is _TRUSTED_STORE_DEBUG
+        and (
+            OpenRouterClient._ensure_no_credential_in_value
+            is _TRUSTED_ENSURE_NO_CREDENTIAL_IN_VALUE
+        )
+        and (
+            OpenRouterClient._validate_paid_privacy_policy is _TRUSTED_VALIDATE_PAID_PRIVACY_POLICY
+        )
         and (
             OpenRouterClient._requires_real_audit_policy_selection
             is _TRUSTED_REQUIRES_REAL_AUDIT_POLICY_SELECTION
@@ -7780,15 +12139,77 @@ def _openrouter_client_callables_are_pristine() -> bool:
             is _TRUSTED_IS_TRUSTED_PREQUALIFICATION_REQUEST
         )
         and (
+            OpenRouterClient._requires_real_audit_model_refresh
+            is _TRUSTED_REQUIRES_REAL_AUDIT_MODEL_REFRESH
+        )
+        and (
+            OpenRouterClient._requires_real_audit_model_refresh_pricing
+            is _TRUSTED_REQUIRES_REAL_AUDIT_MODEL_REFRESH_PRICING
+        )
+        and (
             OpenRouterClient._require_real_audit_model_selection
             is _TRUSTED_REQUIRE_REAL_AUDIT_MODEL_SELECTION
         )
+        and (
+            OpenRouterClient._require_real_audit_model_refresh
+            is _TRUSTED_REQUIRE_REAL_AUDIT_MODEL_REFRESH
+        )
+        and (
+            OpenRouterClient._require_real_audit_model_refresh_pricing
+            is _TRUSTED_REQUIRE_REAL_AUDIT_MODEL_REFRESH_PRICING
+        )
+        and (
+            OpenRouterClient._seal_audit_model_refresh_pricing_control
+            is _TRUSTED_SEAL_AUDIT_MODEL_REFRESH_PRICING_CONTROL
+        )
         and (OpenRouterClient.require_audit_policy_binding is _TRUSTED_REQUIRE_AUDIT_POLICY_BINDING)
+        and (
+            OpenRouterClient.require_audit_model_refresh_binding
+            is _TRUSTED_REQUIRE_AUDIT_MODEL_REFRESH_BINDING
+        )
+        and (
+            OpenRouterClient.require_audit_model_refresh_pricing_binding
+            is _TRUSTED_REQUIRE_AUDIT_MODEL_REFRESH_PRICING_BINDING
+        )
         and (
             OpenRouterClient._validate_transport_provenance
             is _TRUSTED_VALIDATE_TRANSPORT_PROVENANCE
         )
+        and BudgetManager.reserve is _TRUSTED_BUDGET_RESERVE
+        and BudgetManager.reconcile is _TRUSTED_BUDGET_RECONCILE
+        and (BudgetManager.reconciled_cost_usd_exact is _TRUSTED_BUDGET_RECONCILED_COST_USD_EXACT)
+        and BudgetManager.release is _TRUSTED_BUDGET_RELEASE
+        and (
+            BudgetManager.commit_active_reservation_for_transport
+            is _TRUSTED_BUDGET_COMMIT_FOR_TRANSPORT
+        )
+        and AtomicCostLedger.reserve is _TRUSTED_ATOMIC_LEDGER_RESERVE
+        and AtomicCostLedger.reconcile is _TRUSTED_ATOMIC_LEDGER_RECONCILE
+        and AtomicCostLedger.release is _TRUSTED_ATOMIC_LEDGER_RELEASE
+        and (AtomicCostLedger.active_reservation is _TRUSTED_ATOMIC_LEDGER_ACTIVE_RESERVATION)
+        and AtomicCostLedger.snapshot is _TRUSTED_ATOMIC_LEDGER_SNAPSHOT
+        and AtomicCostLedger._locked is _TRUSTED_ATOMIC_LEDGER_LOCKED
+        and AtomicCostLedger._required_state is _TRUSTED_ATOMIC_LEDGER_REQUIRED_STATE
+        and AtomicCostLedger._read_state is _TRUSTED_ATOMIC_LEDGER_READ_STATE
+        and AtomicCostLedger._write_state is _TRUSTED_ATOMIC_LEDGER_WRITE_STATE
+        and _property_getter(EndpointPriceComponent, "maximum_cost_usd")
+        is _TRUSTED_ENDPOINT_COMPONENT_MAXIMUM_COST_FGET
+        and _property_getter(EndpointRequestCostBound, "maximum_cost_usd")
+        is _TRUSTED_ENDPOINT_REQUEST_MAXIMUM_COST_FGET
+        and _classmethod_function(EndpointRequestCostBound, "from_endpoint_pricing")
+        is _TRUSTED_ENDPOINT_REQUEST_FROM_PRICING
+        and EndpointRequestCostBound.maximum_units_for
+        is _TRUSTED_ENDPOINT_REQUEST_MAXIMUM_UNITS_FOR
+        and _TRUSTED_PROVIDER_CALLABLE_DESCRIPTOR_SURFACE(OpenRouterClient)
+        == _TRUSTED_OPENROUTER_CLIENT_DESCRIPTOR_SURFACE
+        and _TRUSTED_PROVIDER_CALLABLE_DESCRIPTOR_SURFACE(BudgetManager)
+        == _TRUSTED_BUDGET_MANAGER_DESCRIPTOR_SURFACE
+        and _TRUSTED_PROVIDER_CALLABLE_DESCRIPTOR_SURFACE(AtomicCostLedger)
+        == _TRUSTED_ATOMIC_LEDGER_DESCRIPTOR_SURFACE
     )
+
+
+_TRUSTED_OPENROUTER_CLIENT_CALLABLES_ARE_PRISTINE = _openrouter_client_callables_are_pristine
 
 
 def _network_backend_graph_is_current(binding: _TrustedTransportBinding) -> bool:
@@ -7926,6 +12347,26 @@ def trusted_openrouter_execution_evidence(client: OpenRouterClient) -> Execution
     ):
         return ExecutionEvidenceKind.MOCK
     return ExecutionEvidenceKind.UNVERIFIED
+
+
+_register_authrunner_owned_real_usage_origin_issuer(
+    module=sys.modules[__name__],
+    client_type=_TRUSTED_OPENROUTER_CLIENT_TYPE,
+    completion_method=OpenRouterClient.complete_with_evidence,
+    bound_origin_method=OpenRouterClient._bind_real_completion_identity,
+    bound_wrapper_method=OpenRouterClient._usage_with_bound_identity,
+    bound_result_method=OpenRouterClient._usage_with_identity_result,
+    trusted_identity_issuer=_TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER,
+    pristine_predicate=_TRUSTED_OPENROUTER_CLIENT_CALLABLES_ARE_PRISTINE,
+    execution_evidence_resolver=trusted_openrouter_execution_evidence,
+)
+_register_authrunner_generation_origin_issuer(
+    module=sys.modules[__name__],
+    client_type=_TRUSTED_OPENROUTER_CLIENT_TYPE,
+    refetch_method=OpenRouterClient.create_trusted_generation_verification,
+    pristine_predicate=_TRUSTED_OPENROUTER_CLIENT_CALLABLES_ARE_PRISTINE,
+    execution_evidence_resolver=trusted_openrouter_execution_evidence,
+)
 
 
 def _mock_httpx_callables_are_pristine(
@@ -8077,6 +12518,30 @@ def _canonical_sha256(value: Any) -> str:
     ).hexdigest()
 
 
+_TRUSTED_COPY_DEEPCOPY = copy.deepcopy
+_TRUSTED_COPY_DEEPCOPY_DISPATCH: Any = copy._deepcopy_dispatch  # type: ignore[attr-defined]
+_TRUSTED_COPY_DEEPCOPY_DISPATCH_ITEMS = tuple(_TRUSTED_COPY_DEEPCOPY_DISPATCH.items())
+_TRUSTED_HASHLIB_SHA256 = hashlib.sha256
+_TRUSTED_JSON_DUMPS = json.dumps
+_TRUSTED_JSON_ENCODER = json.JSONEncoder
+_TRUSTED_JSON_ENCODER_ENCODE = json.JSONEncoder.encode
+_TRUSTED_JSON_ENCODER_ITERENCODE = json.JSONEncoder.iterencode
+_TRUSTED_JSON_ENCODER_MODULE: Any = json.encoder
+_TRUSTED_JSON_ENCODE_BASESTRING_ASCII = _TRUSTED_JSON_ENCODER_MODULE.encode_basestring_ascii
+_TRUSTED_JSON_MAKE_ENCODER: Any = _TRUSTED_JSON_ENCODER_MODULE.c_make_encoder
+_TRUSTED_CANDIDATE_REVIEW_CANONICAL_JSON_DUMPS = _CANDIDATE_REVIEW_CANONICAL_JSON_DUMPS
+_TRUSTED_CANONICAL_SHA256 = _canonical_sha256
+_TRUSTED_CANDIDATE_REVIEW_TOKEN_PLAN_PROJECTION_SHA256 = (
+    _candidate_review_request_token_plan_projection_sha256
+)
+_TRUSTED_CANDIDATE_REVIEW_REQUEST_MATERIAL_PROJECTION = (
+    _candidate_review_request_material_projection
+)
+_TRUSTED_ENDPOINT_REQUEST_COST_BOUND_PROJECTION_SHA256 = (
+    _endpoint_request_cost_bound_projection_sha256
+)
+
+
 def _routing_max_price(
     endpoints: tuple[_RegisteredEndpointPricing, ...],
 ) -> dict[str, float]:
@@ -8084,37 +12549,39 @@ def _routing_max_price(
 
     if not endpoints:
         raise OpenRouterCostControlError("endpoint pricing policy is empty")
-    maxima: dict[str, Decimal] = {}
-    for endpoint in endpoints:
-        for field, raw_price in endpoint.pricing:
-            if field in _UNENFORCEABLE_VARIABLE_PRICING_FIELDS:
-                raise OpenRouterCostControlError(
-                    "variable endpoint pricing component cannot be provider-capped"
-                )
-            if field not in _ROUTER_MAX_PRICE_FIELDS:
-                if Decimal(raw_price) != 0:
+    with localcontext() as context:
+        context.prec = 160
+        maxima: dict[str, Decimal] = {}
+        for endpoint in endpoints:
+            for field, raw_price in endpoint.pricing:
+                if field in _UNENFORCEABLE_VARIABLE_PRICING_FIELDS:
                     raise OpenRouterCostControlError(
-                        "nonzero endpoint pricing component cannot be provider-capped"
+                        "variable endpoint pricing component cannot be provider-capped"
                     )
-                continue
-            price = Decimal(raw_price)
-            maxima[field] = max(maxima.get(field, Decimal(0)), price)
-    if not {"prompt", "completion"}.issubset(maxima):
-        raise OpenRouterCostControlError(
-            "endpoint pricing cannot produce provider-side prompt and completion caps"
-        )
-    result: dict[str, float] = {}
-    for field in sorted(maxima):
-        ceiling = maxima[field]
-        if field in _PER_MILLION_ROUTER_PRICE_FIELDS:
-            ceiling *= Decimal(1_000_000)
-        candidate = float(ceiling)
-        if not math.isfinite(candidate) or candidate < 0:
-            raise OpenRouterCostControlError("endpoint price cannot be represented safely")
-        while Decimal(str(candidate)) < ceiling:
-            candidate = math.nextafter(candidate, math.inf)
-        result[field] = candidate
-    return result
+                if field not in _ROUTER_MAX_PRICE_FIELDS:
+                    if Decimal(raw_price) != 0:
+                        raise OpenRouterCostControlError(
+                            "nonzero endpoint pricing component cannot be provider-capped"
+                        )
+                    continue
+                price = Decimal(raw_price)
+                maxima[field] = max(maxima.get(field, Decimal(0)), price)
+        if not {"prompt", "completion"}.issubset(maxima):
+            raise OpenRouterCostControlError(
+                "endpoint pricing cannot produce provider-side prompt and completion caps"
+            )
+        result: dict[str, float] = {}
+        for field in sorted(maxima):
+            ceiling = maxima[field]
+            if field in _PER_MILLION_ROUTER_PRICE_FIELDS:
+                ceiling *= Decimal(1_000_000)
+            candidate = float(ceiling)
+            if not math.isfinite(candidate) or candidate < 0:
+                raise OpenRouterCostControlError("endpoint price cannot be represented safely")
+            while Decimal(str(candidate)) < ceiling:
+                candidate = math.nextafter(candidate, math.inf)
+            result[field] = candidate
+        return result
 
 
 def _validated_model_catalog(response: dict[str, Any]) -> list[dict[str, Any]]:
@@ -8275,10 +12742,6 @@ def _validate_preservable_structured_response[ValueT: BaseModel](
         field="finish reason",
         max_length=100,
     )
-    if finish_reason != "stop":
-        if finish_reason.casefold() in _TRUNCATED_FINISH_REASONS:
-            raise OpenRouterTruncatedResponseError("model response was incomplete or truncated")
-        raise OpenRouterSchemaError("model response did not finish normally")
     native_finish_reason = _optional_string(choice.get("native_finish_reason"))
     if native_finish_reason is not None:
         native_finish_reason = _required_safe_string(
@@ -8286,10 +12749,17 @@ def _validate_preservable_structured_response[ValueT: BaseModel](
             field="native finish reason",
             max_length=100,
         )
-        if native_finish_reason.casefold() in _TRUNCATED_FINISH_REASONS:
-            raise OpenRouterTruncatedResponseError(
-                "model response native finish reason indicates truncation"
-            )
+    if finish_reason != "stop":
+        if finish_reason.casefold() in _TRUNCATED_FINISH_REASONS:
+            raise OpenRouterTruncatedResponseError("model response was incomplete or truncated")
+        raise OpenRouterSchemaError("model response did not finish normally")
+    if (
+        native_finish_reason is not None
+        and native_finish_reason.casefold() in _TRUNCATED_FINISH_REASONS
+    ):
+        raise OpenRouterTruncatedResponseError(
+            "model response native finish reason indicates truncation"
+        )
     message = choice.get("message")
     if not isinstance(message, dict) or message.get("role") != "assistant":
         raise OpenRouterSchemaError("model response omitted the assistant message role")
@@ -8414,10 +12884,6 @@ def _validate_completion_envelope(
         field="finish reason",
         max_length=100,
     )
-    if finish_reason != "stop":
-        if finish_reason.casefold() in _TRUNCATED_FINISH_REASONS:
-            raise OpenRouterTruncatedResponseError("model response was incomplete or truncated")
-        raise OpenRouterSchemaError("model response did not finish normally")
     native_finish_reason = _optional_string(choice.get("native_finish_reason"))
     if native_finish_reason is not None:
         native_finish_reason = _required_safe_string(
@@ -8425,10 +12891,6 @@ def _validate_completion_envelope(
             field="native finish reason",
             max_length=100,
         )
-        if native_finish_reason.casefold() in _TRUNCATED_FINISH_REASONS:
-            raise OpenRouterTruncatedResponseError(
-                "model response native finish reason indicates truncation"
-            )
 
     message = choice.get("message")
     if not isinstance(message, dict) or message.get("role") != "assistant":
@@ -8482,6 +12944,32 @@ def _validate_completion_envelope(
         router_attempts_observed=router_attempts_observed,
         pipeline=pipeline,
     )
+
+
+def _raise_for_completion_finish(
+    envelope: CompletionEnvelope,
+    *,
+    truncated_envelope_evidence: CandidateReviewTruncatedEnvelopeEvidence | None = None,
+) -> None:
+    """Apply finish semantics only after the complete identity envelope was validated."""
+
+    if envelope.finish_reason != "stop":
+        if envelope.finish_reason.casefold() in _TRUNCATED_FINISH_REASONS:
+            raise OpenRouterTruncatedResponseError(
+                "model response was incomplete or truncated",
+                envelope_evidence=truncated_envelope_evidence,
+            )
+        raise OpenRouterSchemaError("model response did not finish normally")
+    if (
+        envelope.native_finish_reason is not None
+        and envelope.native_finish_reason.casefold() in _TRUNCATED_FINISH_REASONS
+    ):
+        raise OpenRouterTruncatedResponseError(
+            "model response native finish reason indicates truncation",
+            envelope_evidence=truncated_envelope_evidence,
+        )
+    if truncated_envelope_evidence is not None:
+        raise OpenRouterSchemaError("normal completion cannot carry truncation envelope evidence")
 
 
 def _validate_usage(value: Any) -> dict[str, Any]:
@@ -8922,6 +13410,32 @@ def _optional_finish_reason(payload: dict[str, Any] | None) -> str | None:
     if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
         return None
     return _optional_string(choices[0].get("finish_reason"))
+
+
+def _optional_native_finish_reason(payload: dict[str, Any] | None) -> str | None:
+    if payload is None:
+        return None
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
+        return None
+    return _optional_string(choices[0].get("native_finish_reason"))
+
+
+def _payload_has_truncation_marker(payload: dict[str, Any] | None) -> bool:
+    """Return true only for a recognized normalized or native length marker."""
+
+    if payload is None:
+        return False
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
+        return False
+    return any(
+        isinstance(value, str) and value.casefold() in _TRUNCATED_FINISH_REASONS
+        for value in (
+            choices[0].get("finish_reason"),
+            choices[0].get("native_finish_reason"),
+        )
+    )
 
 
 def _response_generation_id(

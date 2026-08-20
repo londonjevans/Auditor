@@ -23,6 +23,8 @@ from mmaudit.benchmark.certificate import (
 from mmaudit.config import AuditConfig, model_family, model_lineage_index
 from mmaudit.constants import (
     ALL_SPECIALIST_ROLES,
+    CANDIDATE_DEPENDENT_SPECIALIST_ROLES,
+    CANDIDATE_INDEPENDENT_SPECIALIST_ROLES,
     SPECIALIST_AUXILIARY_ROLES,
     SPECIALIST_INVESTIGATOR_ROLES,
 )
@@ -40,15 +42,27 @@ from mmaudit.models.reasoning import (
     ReasoningPolicyError,
     resolve_reasoning_request_role,
 )
+from mmaudit.models.refresh_runtime import (
+    AuditModelRefreshEvidence,
+    AuditModelRefreshPricingEvidence,
+    AuditModelRefreshPricingRouteEvidence,
+    AuditModelRefreshRouteEvidence,
+    VerifiedAuditModelRefreshGuard,
+    VerifiedAuditModelRefreshPricingAuthority,
+)
 from mmaudit.models.scheduler import (
     SchedulerArtifact,
+    SchedulerAuditModelRefreshBinding,
+    SchedulerAuditModelRefreshPricingBinding,
     SchedulerAuditModelSelectionBinding,
     SchedulerBindings,
     SchedulerCampaignStatus,
     SchedulerCostLedgerBaseline,
+    SchedulerModelRequestEvidence,
     SchedulerScope,
     SchedulerShardInventory,
     SchedulerTerminalStatus,
+    SchedulerTruncationRecoveryModelRequestEvidence,
     scheduler_canonical_sha256,
 )
 from mmaudit.models.schemas import (
@@ -98,10 +112,13 @@ from mmaudit.models.schemas import (
     SpecialistAcceptedOutcomeKind,
     SpecialistExecutionRecord,
     UsageRecord,
+    audit_model_refresh_guard_capability_projection_sha256,
+    validate_audit_model_refresh_pricing_usage_custody,
 )
 from mmaudit.models.usage import (
     candidate_falsifier_role_prefix,
     is_creditable_usage_record,
+    is_recovery_creditable_usage_record,
     source_backed_whole_protocol_context,
     usage_requires_audit_policy_evidence,
 )
@@ -154,6 +171,13 @@ CERTIFIED_ENSEMBLE_MIN_SPECIALIST_RESPONSIBILITIES = 24
 CERTIFIED_ENSEMBLE_MIN_WHOLE_PROTOCOL_LINEAGES = 4
 CERTIFIED_ENSEMBLE_MIN_CRITICAL_SURFACE_LINEAGES = 3
 CERTIFIED_ENSEMBLE_MIN_FALSIFIER_LINEAGES = 2
+if (
+    len(CANDIDATE_INDEPENDENT_SPECIALIST_ROLES)
+    != CERTIFIED_ENSEMBLE_MIN_SPECIALIST_RESPONSIBILITIES
+):
+    raise RuntimeError(
+        "certified specialist minimum must equal the frozen candidate-independent portfolio"
+    )
 
 _PROVIDER_SESSION_PROVENANCE_ISSUER = object()
 
@@ -260,6 +284,10 @@ class AssuranceRuntime:
     production_qualification: VerifiedProductionQualification | None = None
     audit_model_selection_evidence: AuditModelSelectionEvidenceBundle | None = None
     verified_audit_model_selection: VerifiedAuditModelSelection | None = None
+    audit_model_refresh_evidence: AuditModelRefreshEvidence | None = None
+    audit_model_refresh_guard: VerifiedAuditModelRefreshGuard | None = None
+    audit_model_refresh_pricing_evidence: AuditModelRefreshPricingEvidence | None = None
+    audit_model_refresh_pricing_authority: VerifiedAuditModelRefreshPricingAuthority | None = None
     language_capability: LanguageCapabilityAssessment | None = None
     scope_assessment: AuditScopeAssessment | None = None
     benchmark_verification: BenchmarkCertificateVerification | None = None
@@ -287,6 +315,29 @@ class _CurrentAuditModelSelection:
     capability: VerifiedAuditModelSelection
     binding: SchedulerAuditModelSelectionBinding
     selected_model_ids: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
+class _CurrentAuditModelRefresh:
+    """Current durable refresh comparison joined to independent live selections.
+
+    This projection deliberately excludes the opaque refresh guard and grants no routing,
+    provider-access, promotion, or pricing authority.
+    """
+
+    evidence: AuditModelRefreshEvidence
+    binding: SchedulerAuditModelRefreshBinding
+    audit_model_ids: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
+class _CurrentAuditModelRefreshPricing:
+    """Current live pricing authority plus its non-authorizing scheduler projection."""
+
+    evidence: AuditModelRefreshPricingEvidence
+    authority: VerifiedAuditModelRefreshPricingAuthority
+    binding: SchedulerAuditModelRefreshPricingBinding
+    audit_model_ids: frozenset[str]
 
 
 def _routing_evidence_matches_audit_selection(
@@ -465,8 +516,301 @@ def _usage_matches_audit_model_selection(
         and record.actual_provider_endpoint == route.provider_endpoint
         and record.started_at is not None
         and record.ended_at is not None
+        and record.started_at >= selection.capability.selected_at
         and record.started_at < selection.binding.selection_expires_at
-        and record.ended_at < selection.binding.selection_expires_at
+        and record.ended_at >= record.started_at
+    )
+
+
+def _current_audit_model_refresh(
+    evidence: AuditModelRefreshEvidence | None,
+    guard: VerifiedAuditModelRefreshGuard | None,
+    technical_qualification: VerifiedProductionQualification | None,
+    audit_selection: _CurrentAuditModelSelection | None,
+) -> _CurrentAuditModelRefresh | None:
+    """Return current comparison custody joined to independently live selections."""
+
+    if (
+        type(evidence) is not AuditModelRefreshEvidence
+        or type(guard) is not VerifiedAuditModelRefreshGuard
+        or type(technical_qualification) is not VerifiedProductionQualification
+        or audit_selection is None
+    ):
+        return None
+    try:
+        canonical = AuditModelRefreshEvidence.model_validate_json(
+            evidence.model_dump_json(),
+            strict=True,
+        )
+        now = datetime.now(UTC).replace(microsecond=0)
+        technical_qualification.require_current(now=now)
+        audit_selection.capability.require_current(
+            now=now,
+            expected_audit_scope_sha256=canonical.audit_scope_sha256,
+            expected_source_sha256=canonical.source_sha256,
+            expected_audit_context_sha256=canonical.audit_context_sha256,
+            expected_client_constraints_sha256=canonical.client_constraints_sha256,
+        )
+        guard.require_current(
+            now=now,
+            expected_workflow_status_sha256=canonical.expected_workflow_status_sha256,
+            technical_qualification=technical_qualification,
+            audit_selection=audit_selection.capability,
+            expected_audit_scope_sha256=canonical.audit_scope_sha256,
+            expected_source_sha256=canonical.source_sha256,
+            expected_audit_context_sha256=canonical.audit_context_sha256,
+            expected_client_constraints_sha256=canonical.client_constraints_sha256,
+        )
+        binding = SchedulerAuditModelRefreshBinding.from_evidence(canonical)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    technical_by_id = {model.exact_model_id: model for model in technical_qualification.models}
+    refresh_by_id = {route.exact_model_id: route for route in canonical.routes}
+    if (
+        canonical != evidence
+        or now < canonical.verified_at
+        or now >= canonical.expires_at
+        or guard.evidence_sha256 != canonical.evidence_sha256
+        or guard.capability_sha256 != binding.guard_capability_sha256
+        or canonical.expected_workflow_status_sha256 != canonical.workflow_status_sha256
+        or canonical.technical_qualification_capability_sha256
+        != technical_qualification.capability_sha256
+        or canonical.technical_production_selection_sha256
+        != technical_qualification.production_selection_sha256
+        or canonical.technical_candidate_registry_sha256
+        != technical_qualification.candidate_registry_sha256
+        or canonical.technical_qualification_expires_at != technical_qualification.expires_at
+        or canonical.audit_selection_capability_sha256
+        != audit_selection.capability.capability_sha256
+        or canonical.audit_selection_sha256 != audit_selection.binding.audit_selection_sha256
+        or canonical.audit_selection_expires_at != audit_selection.binding.selection_expires_at
+        or canonical.audit_scope_sha256 != audit_selection.binding.audit_scope_sha256
+        or canonical.source_sha256 != audit_selection.binding.source_sha256
+        or canonical.audit_context_sha256 != audit_selection.binding.audit_context_sha256
+        or canonical.client_constraints_sha256 != audit_selection.binding.client_constraints_sha256
+        or canonical.technical_model_ids != tuple(technical_by_id)
+        or canonical.audit_model_ids != audit_selection.binding.selected_model_ids
+        or tuple(refresh_by_id) != canonical.technical_model_ids
+    ):
+        return None
+    for route in canonical.routes:
+        qualified = technical_by_id.get(route.exact_model_id)
+        if qualified is None or (
+            route.canonical_model_slug != qualified.canonical_model_slug
+            or route.root_lineage != qualified.root_lineage
+            or route.approved_provider_endpoint != qualified.approved_provider_endpoint
+            or route.approved_provider_name != qualified.approved_provider_name
+            or route.endpoint_snapshot_sha256 != qualified.endpoint_snapshot_sha256
+            or route.output_capability_sha256 != qualified.output_capability_sha256
+            or route.model_metadata_snapshot_sha256 != qualified.model_metadata_snapshot_sha256
+            or route.qualified_pricing_snapshot_sha256 != qualified.pricing_snapshot_sha256
+            or route.structured_output_mode is not qualified.structured_output_mode
+            or route.approved_roles != qualified.approved_roles
+            or route.benchmark_report_sha256 != qualified.benchmark_report_sha256
+            or route.qualification_expires_at != qualified.expires_at
+            or route.audit_selected != (route.exact_model_id in audit_selection.selected_model_ids)
+            or route.runtime_authorized
+        ):
+            return None
+    return _CurrentAuditModelRefresh(
+        evidence=canonical,
+        binding=binding,
+        audit_model_ids=frozenset(canonical.audit_model_ids),
+    )
+
+
+def _usage_matches_audit_model_refresh(
+    record: UsageRecord,
+    refresh: _CurrentAuditModelRefresh | None,
+) -> bool:
+    """Match one detached REAL usage record to exact current refresh custody."""
+
+    if refresh is None or record.execution_evidence is not ExecutionEvidenceKind.REAL:
+        return False
+    raw = record.routing.get("audit_model_refresh_route_evidence")
+    if not isinstance(raw, dict):
+        return False
+    try:
+        route = AuditModelRefreshRouteEvidence.model_validate_json(
+            json.dumps(
+                raw,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ),
+            strict=True,
+        )
+    except (TypeError, ValueError):
+        return False
+    retained = tuple(
+        item
+        for item in refresh.evidence.routes
+        if item.exact_model_id == record.requested_model and item.audit_selected
+    )
+    started_at = record.started_at or record.timestamp
+    ended_at = record.ended_at
+    return (
+        route.model_dump(mode="json") == raw
+        and len(retained) == 1
+        and route == retained[0]
+        and route.exact_model_id in refresh.audit_model_ids
+        and route.exact_model_id == record.requested_model
+        and record.routing.get("audit_model_refresh_evidence_sha256")
+        == refresh.evidence.evidence_sha256
+        and record.routing.get("audit_model_refresh_workflow_status_sha256")
+        == refresh.evidence.workflow_status_sha256
+        and record.routing.get("audit_model_refresh_snapshot_sha256")
+        == refresh.evidence.snapshot_sha256
+        and record.routing.get("audit_model_refresh_route_evidence_sha256")
+        == route.route_evidence_sha256
+        and record.routing.get("audit_model_refresh_technical_route_set_sha256")
+        == refresh.evidence.technical_route_set_sha256
+        and record.routing.get("audit_model_refresh_audit_route_set_sha256")
+        == refresh.evidence.audit_route_set_sha256
+        and record.routing.get("audit_model_refresh_expires_at")
+        == refresh.evidence.expires_at.isoformat()
+        and record.routing.get("audit_model_refresh_guard_capability_sha256")
+        == audit_model_refresh_guard_capability_projection_sha256(refresh.evidence)
+        and not route.runtime_authorized
+        and started_at >= refresh.evidence.verified_at
+        and started_at < refresh.evidence.expires_at
+        and started_at < route.qualification_expires_at
+        and ended_at is not None
+        and ended_at >= started_at
+    )
+
+
+def _current_audit_model_refresh_pricing(
+    evidence: AuditModelRefreshPricingEvidence | None,
+    authority: VerifiedAuditModelRefreshPricingAuthority | None,
+    technical_qualification: VerifiedProductionQualification | None,
+    audit_selection: _CurrentAuditModelSelection | None,
+    audit_refresh: _CurrentAuditModelRefresh | None,
+    refresh_guard: VerifiedAuditModelRefreshGuard | None,
+) -> _CurrentAuditModelRefreshPricing | None:
+    """Return current pricing custody only while every live authority remains exact."""
+
+    if (
+        type(evidence) is not AuditModelRefreshPricingEvidence
+        or type(authority) is not VerifiedAuditModelRefreshPricingAuthority
+        or type(technical_qualification) is not VerifiedProductionQualification
+        or audit_selection is None
+        or audit_refresh is None
+        or type(refresh_guard) is not VerifiedAuditModelRefreshGuard
+    ):
+        return None
+    try:
+        canonical = AuditModelRefreshPricingEvidence.model_validate_json(
+            evidence.model_dump_json(),
+            strict=True,
+        )
+        now = datetime.now(UTC).replace(microsecond=0)
+        authority.require_current(
+            now=now,
+            expected_workflow_status_sha256=canonical.expected_workflow_status_sha256,
+            refresh_evidence=audit_refresh.evidence,
+            refresh_guard=refresh_guard,
+            technical_qualification=technical_qualification,
+            audit_selection=audit_selection.capability,
+            expected_audit_scope_sha256=canonical.audit_scope_sha256,
+            expected_source_sha256=canonical.source_sha256,
+            expected_audit_context_sha256=canonical.audit_context_sha256,
+            expected_client_constraints_sha256=canonical.client_constraints_sha256,
+        )
+        binding = SchedulerAuditModelRefreshPricingBinding.from_evidence(canonical)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    refresh_routes = {route.exact_model_id: route for route in audit_refresh.evidence.routes}
+    if (
+        canonical != evidence
+        or now < canonical.verified_at
+        or now >= canonical.expires_at
+        or canonical.refresh_evidence_sha256 != audit_refresh.evidence.evidence_sha256
+        or canonical.refresh_guard_capability_sha256 != refresh_guard.capability_sha256
+        or canonical.technical_qualification_capability_sha256
+        != technical_qualification.capability_sha256
+        or canonical.technical_production_selection_sha256
+        != technical_qualification.production_selection_sha256
+        or canonical.audit_selection_capability_sha256
+        != audit_selection.capability.capability_sha256
+        or canonical.audit_selection_sha256 != audit_selection.binding.audit_selection_sha256
+        or canonical.audit_scope_sha256 != audit_selection.binding.audit_scope_sha256
+        or canonical.source_sha256 != audit_selection.binding.source_sha256
+        or canonical.audit_context_sha256 != audit_selection.binding.audit_context_sha256
+        or canonical.client_constraints_sha256 != audit_selection.binding.client_constraints_sha256
+        or canonical.audit_model_ids != audit_selection.binding.selected_model_ids
+        or authority.capability_sha256 != binding.pricing_authority_capability_sha256
+        or authority.pricing_evidence_sha256 != canonical.evidence_sha256
+    ):
+        return None
+    if any(
+        (refresh_route := refresh_routes.get(route.exact_model_id)) is None
+        or route.refresh_route_evidence_sha256 != refresh_route.route_evidence_sha256
+        or route.audit_selected != refresh_route.audit_selected
+        or route.pricing_use_authorized
+        or route.provider_access_authorized
+        or route.model_selection_authorized
+        for route in canonical.routes
+    ):
+        return None
+    return _CurrentAuditModelRefreshPricing(
+        evidence=canonical,
+        authority=authority,
+        binding=binding,
+        audit_model_ids=frozenset(canonical.audit_model_ids),
+    )
+
+
+def _usage_matches_audit_model_refresh_pricing(
+    record: UsageRecord,
+    pricing: _CurrentAuditModelRefreshPricing | None,
+    selection: _CurrentAuditModelSelection | None,
+    refresh: _CurrentAuditModelRefresh | None,
+) -> bool:
+    """Match one REAL usage record to exact current prices and attempt bounds."""
+
+    if (
+        pricing is None
+        or selection is None
+        or refresh is None
+        or record.execution_evidence is not ExecutionEvidenceKind.REAL
+    ):
+        return False
+    try:
+        validate_audit_model_refresh_pricing_usage_custody(
+            audit_model_refresh_pricing_evidence=pricing.evidence,
+            audit_model_refresh_evidence=refresh.evidence,
+            audit_model_selection=selection.evidence_bundle.selection,
+            usage=(record,),
+        )
+        raw = record.routing.get("audit_model_refresh_pricing_route_evidence")
+        if not isinstance(raw, dict):
+            return False
+        route = AuditModelRefreshPricingRouteEvidence.model_validate_json(
+            json.dumps(
+                raw,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ),
+            strict=True,
+        )
+    except (TypeError, ValueError):
+        return False
+    retained = tuple(
+        item
+        for item in pricing.evidence.routes
+        if item.exact_model_id == record.requested_model and item.audit_selected
+    )
+    return (
+        len(retained) == 1
+        and route == retained[0]
+        and route.exact_model_id in pricing.audit_model_ids
+        and record.routing.get("endpoint_pricing_sha256") == route.current_pricing_sha256
+        and record.routing.get("qualified_pricing_snapshot_sha256")
+        == route.qualified_pricing_snapshot_sha256
     )
 
 
@@ -474,6 +818,8 @@ def _scheduler_assurance_errors(
     config: AuditConfig,
     runtime: AssuranceRuntime,
     audit_selection: _CurrentAuditModelSelection | None,
+    audit_refresh: _CurrentAuditModelRefresh | None,
+    audit_refresh_pricing: _CurrentAuditModelRefreshPricing | None,
 ) -> tuple[str, ...]:
     """Return fail-closed scheduler binding and real-provider evidence defects."""
 
@@ -491,6 +837,10 @@ def _scheduler_assurance_errors(
     errors: list[str] = []
     if audit_selection is None:
         errors.append("current audit policy-selected model authority was not supplied")
+    if audit_refresh is None:
+        errors.append("current veto-only model-refresh custody was not supplied")
+    if audit_refresh_pricing is None:
+        errors.append("current bounded model-refresh pricing custody was not supplied")
     if artifact.summary.status is not SchedulerCampaignStatus.COMPLETE:
         errors.append(f"seven-pass scheduler did not complete: {artifact.summary.status.value}")
     if expected_bindings is None:
@@ -520,6 +870,18 @@ def _scheduler_assurance_errors(
         or expected_bindings.audit_model_selection != audit_selection.binding
     ):
         errors.append("scheduler audit-selection binding differs from current policy authority")
+    if audit_refresh is not None and (
+        manifest.bindings.audit_model_refresh != audit_refresh.binding
+        or expected_bindings is None
+        or expected_bindings.audit_model_refresh != audit_refresh.binding
+    ):
+        errors.append("scheduler model-refresh binding differs from current refresh custody")
+    if audit_refresh_pricing is not None and (
+        manifest.bindings.audit_model_refresh_pricing != audit_refresh_pricing.binding
+        or expected_bindings is None
+        or expected_bindings.audit_model_refresh_pricing != audit_refresh_pricing.binding
+    ):
+        errors.append("scheduler pricing binding differs from current pricing authority")
     if manifest.cost_ledger_baseline != expected_cost_baseline:
         errors.append(
             "scheduler artifact cost-ledger baseline differs from trusted runtime baseline"
@@ -546,6 +908,12 @@ def _scheduler_assurance_errors(
                 audit_model_selection_evidence=(
                     audit_selection.evidence_bundle if audit_selection is not None else None
                 ),
+                audit_model_refresh_evidence=(
+                    audit_refresh.evidence if audit_refresh is not None else None
+                ),
+                audit_model_refresh_pricing_evidence=(
+                    audit_refresh_pricing.evidence if audit_refresh_pricing is not None else None
+                ),
             )
         except ValueError:
             errors.append("trusted runtime scheduler analysis-input binding is invalid")
@@ -557,14 +925,24 @@ def _scheduler_assurance_errors(
             )
 
     requests = {item.logical_request_id: item for item in artifact.model_requests}
-    if not requests or len(requests) != len(artifact.model_requests):
+    recovery_requests = {item.logical_request_id: item for item in artifact.recovery_model_requests}
+    all_requests: dict[
+        str,
+        SchedulerModelRequestEvidence | SchedulerTruncationRecoveryModelRequestEvidence,
+    ] = {**requests, **recovery_requests}
+    if (
+        not requests
+        or len(requests) != len(artifact.model_requests)
+        or len(recovery_requests) != len(artifact.recovery_model_requests)
+        or len(all_requests) != len(requests) + len(recovery_requests)
+    ):
         errors.append("scheduler artifact lacks a unique substantive model-request inventory")
         return tuple(errors)
     usages = {item.request_id: item for item in runtime.model_usage}
     if len(usages) != len(runtime.model_usage):
         errors.append("runtime provider usage contains duplicate request identities")
         return tuple(errors)
-    if set(usages) != set(requests):
+    if set(usages) != set(all_requests):
         errors.append("runtime provider usage differs from the scheduler request inventory")
         return tuple(errors)
     surface_artifacts: dict[str, ModelSurfaceReviewArtifact] = {}
@@ -585,6 +963,11 @@ def _scheduler_assurance_errors(
         for request_id, request in requests.items()
         if request.model_surface_review_request_count > 0
     }
+    scheduler_surface_requests.update(
+        request_id
+        for request_id, request in recovery_requests.items()
+        if request.promotion_entry_sha256 is not None and request.output_artifact_sha256 is not None
+    )
     if duplicate_surface_artifact or set(surface_artifacts) != scheduler_surface_requests:
         errors.append("runtime model-surface artifacts differ from scheduler request custody")
     specialist_outcomes: dict[str, SpecialistAcceptedOutcome] = {}
@@ -621,9 +1004,131 @@ def _scheduler_assurance_errors(
     )
     global_scope_sha256 = SchedulerScope.global_scope().scope_sha256
     production_qualification = _current_production_qualification(runtime.production_qualification)
-    for request_id, request in sorted(requests.items()):
+    promoted_parent_task_ids = {
+        binding.parent_task_id
+        for pass_result in artifact.summary.pass_results
+        for binding in pass_result.recovery_promotion_bindings
+    }
+    for request_id, request in sorted(all_requests.items()):
         usage = usages[request_id]
         routed_lineage = usage.routing.get("qualified_root_lineage")
+        if isinstance(request, SchedulerTruncationRecoveryModelRequestEvidence):
+            if request.promotion_entry_sha256 is None:
+                errors.append(f"scheduler recovery request {request_id} lacks a guarded promotion")
+                continue
+            if request.terminal_status is not SchedulerTerminalStatus.SUCCEEDED:
+                errors.append(f"scheduler recovery request {request_id} did not succeed")
+                continue
+            if not is_recovery_creditable_usage_record(
+                usage,
+                request_limit_scope=request.request_limit_scope,
+                request_limit_count_before=request.request_limit_count_before,
+                require_real=True,
+            ):
+                errors.append(
+                    f"scheduler recovery request {request_id} lacks real creditable usage"
+                )
+                continue
+            if not _is_real_model_usage(
+                usage,
+                config,
+                production_qualification,
+                runtime.provider_session,
+                audit_selection,
+                audit_refresh,
+                audit_refresh_pricing,
+                recovery_request_limit_scope=request.request_limit_scope,
+                recovery_request_limit_count_before=request.request_limit_count_before,
+            ):
+                errors.append(
+                    f"scheduler recovery request {request_id} lacks current qualified "
+                    "certification-grade provider evidence"
+                )
+                continue
+            if audit_selection is None:
+                errors.append(
+                    f"scheduler recovery request {request_id} lacks audit policy authority"
+                )
+                continue
+            policy_binding = audit_selection.binding
+            if (
+                request.audit_policy_selection_binding_sha256 != policy_binding.binding_sha256
+                or request.audit_model_selection_bundle_sha256
+                != policy_binding.audit_model_selection_bundle_sha256
+                or request.audit_selection_sha256 != policy_binding.audit_selection_sha256
+                or request.audit_selected_model_set_sha256
+                != policy_binding.selected_model_set_sha256
+                or request.audit_scope_sha256 != policy_binding.audit_scope_sha256
+                or request.audit_source_sha256 != policy_binding.source_sha256
+                or request.audit_selection_expires_at != policy_binding.selection_expires_at
+                or request.audit_policy_routing_evidence_sha256
+                != usage.routing.get("audit_policy_routing_evidence_sha256")
+            ):
+                errors.append(
+                    f"scheduler recovery request {request_id} differs from audit policy selection"
+                )
+                continue
+            assert production_qualification is not None
+            try:
+                qualified_model = production_qualification.model_for(
+                    usage.requested_model,
+                    now=datetime.now(UTC).replace(microsecond=0),
+                )
+            except ValueError:
+                errors.append(
+                    f"scheduler recovery request {request_id} lacks a current qualified model"
+                )
+                continue
+            raw_context = usage.routing.get("context_request_evidence")
+            try:
+                context_evidence = ContextRequestEvidence.model_validate(raw_context)
+            except ValueError:
+                errors.append(
+                    f"scheduler recovery request {request_id} lacks exact context evidence"
+                )
+                continue
+            surface_artifact = surface_artifacts.get(request_id)
+            if (
+                surface_artifact is None
+                or surface_artifact.request_id != request.logical_request_id
+                or surface_artifact.review_role != request.role
+                or surface_artifact.artifact_sha256 != request.output_artifact_sha256
+                or surface_artifact.rendered_context_sha256 != context_evidence.rendered_sha256
+                or surface_artifact.prompt_sha256 != request.provider_prompt_sha256
+                or surface_artifact.response_sha256 != request.provider_response_sha256
+                or surface_artifact.validated_response_sha256 != request.validated_response_sha256
+                or surface_artifact.response_schema_sha256 != request.response_schema_sha256
+            ):
+                errors.append(
+                    f"scheduler recovery request {request_id} differs from exact runtime "
+                    "model-surface artifact"
+                )
+                continue
+            if (
+                usage.role != request.role
+                or usage.requested_model != request.requested_model
+                or usage.prompt_sha256 != request.provider_prompt_sha256
+                or usage.user_prompt_sha256 != request.user_prompt_sha256
+                or usage.schema_sha256 != request.response_schema_sha256
+                or request.usage_record_sha256
+                != scheduler_canonical_sha256(usage.model_dump(mode="json"))
+                or request.context_request_evidence_sha256 != context_evidence.evidence_sha256
+                or request.provider_response_sha256 != usage.response_sha256
+                or request.validated_response_sha256 != usage.validated_response_sha256
+                or context_evidence.request_id != request.logical_request_id
+                or context_evidence.request_role != request.role
+                or usage.routing.get("context_request_evidence_sha256")
+                != context_evidence.evidence_sha256
+                or usage.fallback_used
+                or usage.substitution_detected
+                or routed_lineage != request.root_lineage
+                or request.root_lineage != qualified_model.root_lineage
+            ):
+                errors.append(
+                    f"scheduler recovery request {request_id} differs from exact provider evidence"
+                )
+            continue
+
         specialist_role = scheduler_specialist_requests.get(request_id)
         if specialist_role is not None:
             accepted_outcome = specialist_outcomes.get(request_id)
@@ -661,6 +1166,12 @@ def _scheduler_assurance_errors(
                 f"non-specialist scheduler request {request_id} claims a specialist outcome"
             )
             continue
+        if request.task_id in promoted_parent_task_ids:
+            if request.terminal_status is not SchedulerTerminalStatus.TRUNCATED:
+                errors.append(
+                    f"promoted scheduler parent {request_id} did not retain its truncation"
+                )
+            continue
         if request.terminal_status is not SchedulerTerminalStatus.SUCCEEDED:
             errors.append(f"scheduler model request {request_id} did not succeed")
             continue
@@ -673,6 +1184,8 @@ def _scheduler_assurance_errors(
             production_qualification,
             runtime.provider_session,
             audit_selection,
+            audit_refresh,
+            audit_refresh_pricing,
         ):
             errors.append(
                 f"scheduler model request {request_id} lacks current qualified "
@@ -1337,7 +1850,24 @@ class MaximumAssuranceContract:
             runtime.verified_audit_model_selection,
             production_qualification,
         )
+        audit_refresh = _current_audit_model_refresh(
+            runtime.audit_model_refresh_evidence,
+            runtime.audit_model_refresh_guard,
+            production_qualification,
+            audit_selection,
+        )
+        audit_refresh_pricing = _current_audit_model_refresh_pricing(
+            runtime.audit_model_refresh_pricing_evidence,
+            runtime.audit_model_refresh_pricing_authority,
+            production_qualification,
+            audit_selection,
+            audit_refresh,
+            runtime.audit_model_refresh_guard,
+        )
         real_provider_session = _real_provider_session_is_qualifying(runtime.provider_session)
+        promoted_recovery_coordinates = _promoted_recovery_request_coordinates(
+            runtime.scheduler_artifact
+        )
         real_model_records = [
             record
             for record in runtime.model_usage
@@ -1347,6 +1877,14 @@ class MaximumAssuranceContract:
                 production_qualification,
                 runtime.provider_session,
                 audit_selection,
+                audit_refresh,
+                audit_refresh_pricing,
+                recovery_request_limit_scope=(
+                    promoted_recovery_coordinates.get(record.request_id, (None, None))[0]
+                ),
+                recovery_request_limit_count_before=(
+                    promoted_recovery_coordinates.get(record.request_id, (None, None))[1]
+                ),
             )
         ]
         real_model_roles = {record.role for record in real_model_records}
@@ -1365,13 +1903,17 @@ class MaximumAssuranceContract:
             production_qualification,
             runtime.provider_session,
             audit_selection,
+            audit_refresh,
+            audit_refresh_pricing,
+            recovery_request_limit_coordinates=promoted_recovery_coordinates,
         )
         if runtime.model_review_coverage is None:
             model_coverage_detail = "per-surface model review coverage was not produced"
         elif not model_coverage_backed_by_real_usage:
             model_coverage_detail = (
                 "model surface credits are not backed by matching certification-grade "
-                "technical qualification and audit-policy-selected real-provider usage"
+                "technical qualification, audit-policy selection, and current model-refresh "
+                "custody for real-provider usage"
             )
         elif runtime.model_review_coverage.critical.denominator == 0:
             model_coverage_detail = (
@@ -1416,6 +1958,16 @@ class MaximumAssuranceContract:
         )
         specialist_execution_bound = not specialist_execution_errors
         accepted_real_specialist_roles = completed_specialist_evidence & real_specialist_roles
+        required_candidate_independent_roles = set(CANDIDATE_INDEPENDENT_SPECIALIST_ROLES)
+        accepted_real_candidate_independent_roles = (
+            accepted_real_specialist_roles & required_candidate_independent_roles
+        )
+        missing_candidate_independent_roles = (
+            required_candidate_independent_roles - accepted_real_candidate_independent_roles
+        )
+        accepted_real_candidate_dependent_roles = accepted_real_specialist_roles & set(
+            CANDIDATE_DEPENDENT_SPECIALIST_ROLES
+        )
         executed_root_lineages = _real_model_usage_lineages(
             real_model_records,
             production_qualification,
@@ -1450,8 +2002,7 @@ class MaximumAssuranceContract:
             and qualified_selection_execution_complete
             and len(executed_root_lineages) >= CERTIFIED_ENSEMBLE_MIN_ROOT_LINEAGES
             and specialist_execution_bound
-            and len(accepted_real_specialist_roles)
-            >= CERTIFIED_ENSEMBLE_MIN_SPECIALIST_RESPONSIBILITIES
+            and not missing_candidate_independent_roles
             and len(whole_protocol_root_lineages) >= CERTIFIED_ENSEMBLE_MIN_WHOLE_PROTOCOL_LINEAGES
             and critical_surface_ensemble_complete
             and (candidate_falsifier_complete or not runtime.eligible_high_critical_ids)
@@ -1472,8 +2023,14 @@ class MaximumAssuranceContract:
             f"{len(qualified_selection_model_ids)}; "
             f"root lineages={len(executed_root_lineages)}/"
             f"{CERTIFIED_ENSEMBLE_MIN_ROOT_LINEAGES}; "
-            f"specialist responsibilities={len(accepted_real_specialist_roles)}/"
+            "candidate-independent specialist responsibilities="
+            f"{len(accepted_real_candidate_independent_roles)}/"
             f"{CERTIFIED_ENSEMBLE_MIN_SPECIALIST_RESPONSIBILITIES}; "
+            "candidate-dependent specialist extras="
+            f"{len(accepted_real_candidate_dependent_roles)}/"
+            f"{len(CANDIDATE_DEPENDENT_SPECIALIST_ROLES)}; "
+            "missing candidate-independent roles="
+            f"{','.join(sorted(missing_candidate_independent_roles)) or 'none'}; "
             f"whole-protocol lineages={len(whole_protocol_root_lineages)}/"
             f"{CERTIFIED_ENSEMBLE_MIN_WHOLE_PROTOCOL_LINEAGES}; "
             f"critical surfaces={len(critical_surface_lineages)} with minimum "
@@ -1518,6 +2075,8 @@ class MaximumAssuranceContract:
             self.config,
             runtime,
             audit_selection,
+            audit_refresh,
+            audit_refresh_pricing,
         )
         scheduler_complete = not scheduler_errors
         language_capability_complete = (
@@ -2109,6 +2668,59 @@ class MaximumAssuranceContract:
                 ),
             ),
             _requirement(
+                "audit_model_refresh_custody",
+                audit_refresh is not None,
+                (
+                    "current veto-only refresh evidence is exact-joined to the independently "
+                    "verified technical and audit selections"
+                    if audit_refresh is not None
+                    else (
+                        "no current exact model-refresh custody matched the independently "
+                        "verified technical selection, audit selection, scheduler binding, and "
+                        "usage routes"
+                    )
+                ),
+                state=(
+                    AnalysisState.DETERMINISTIC
+                    if audit_refresh is not None
+                    else (
+                        AnalysisState.ATTEMPTED_FAILED
+                        if runtime.audit_model_refresh_evidence is not None
+                        else AnalysisState.NOT_ANALYZED
+                    )
+                ),
+                artifacts=_present(
+                    runtime.artifacts,
+                    "audit-model-refresh-evidence.json",
+                ),
+            ),
+            _requirement(
+                "audit_model_refresh_pricing_custody",
+                audit_refresh_pricing is not None,
+                (
+                    "current bounded pricing evidence is exact-joined to refresh, technical, "
+                    "audit-selection, scheduler, and per-attempt cost custody"
+                    if audit_refresh_pricing is not None
+                    else (
+                        "no current bounded pricing authority matched refresh, technical, "
+                        "audit-selection, scheduler, and per-attempt cost custody"
+                    )
+                ),
+                state=(
+                    AnalysisState.DETERMINISTIC
+                    if audit_refresh_pricing is not None
+                    else (
+                        AnalysisState.ATTEMPTED_FAILED
+                        if runtime.audit_model_refresh_pricing_evidence is not None
+                        else AnalysisState.NOT_ANALYZED
+                    )
+                ),
+                artifacts=_present(
+                    runtime.artifacts,
+                    "audit-model-refresh-pricing-evidence.json",
+                ),
+            ),
+            _requirement(
                 "real_provider_session_provenance",
                 real_provider_session,
                 (
@@ -2136,7 +2748,7 @@ class MaximumAssuranceContract:
                 (
                     f"{len(executed_qualified_model_ids)}/"
                     f"{len(qualified_selection_model_ids)} exact audit-policy-selected "
-                    "Tier A model(s) have successful policy-bound real-provider usage"
+                    "Tier A model(s) have successful policy- and refresh-bound real-provider usage"
                     if qualified_selection_model_ids
                     else "no current audit policy-selected model authority was available"
                 ),
@@ -2158,8 +2770,8 @@ class MaximumAssuranceContract:
                 "real_model_execution",
                 bool(real_model_records),
                 (
-                    f"{len(real_model_records)} policy-selected real-provider model request(s) "
-                    "completed"
+                    f"{len(real_model_records)} policy-selected, refresh-bound real-provider "
+                    "model request(s) completed"
                     if real_model_records
                     else "no audit-policy-selected real-provider model request completed"
                 ),
@@ -3064,6 +3676,27 @@ def _current_production_qualification(
         return None
 
 
+def _promoted_recovery_request_coordinates(
+    artifact: SchedulerArtifact | None,
+) -> dict[str, tuple[str, int]]:
+    """Project only promoted child request-limit coordinates from validated scheduler state."""
+
+    if artifact is None:
+        return {}
+    try:
+        validated = SchedulerArtifact.model_validate(artifact.model_dump(mode="python"))
+    except ValueError:
+        return {}
+    return {
+        request.logical_request_id: (
+            request.request_limit_scope,
+            request.request_limit_count_before,
+        )
+        for request in validated.recovery_model_requests
+        if request.promotion_entry_sha256 is not None
+    }
+
+
 def _real_provider_session_is_qualifying(
     provider_session: ProviderSessionProvenance | None,
 ) -> bool:
@@ -3081,11 +3714,46 @@ def _is_real_model_usage(
     qualification: VerifiedProductionQualification | None,
     provider_session: ProviderSessionProvenance | None,
     audit_selection: _CurrentAuditModelSelection | None = None,
+    audit_refresh: _CurrentAuditModelRefresh | None = None,
+    audit_refresh_pricing: _CurrentAuditModelRefreshPricing | None = None,
+    *,
+    recovery_request_limit_scope: str | None = None,
+    recovery_request_limit_count_before: int | None = None,
 ) -> bool:
+    recovery_coordinates_present = (
+        recovery_request_limit_scope is not None,
+        recovery_request_limit_count_before is not None,
+    )
+    if recovery_coordinates_present[0] != recovery_coordinates_present[1]:
+        return False
+    usage_is_creditable = (
+        is_recovery_creditable_usage_record(
+            record,
+            request_limit_scope=recovery_request_limit_scope,
+            request_limit_count_before=recovery_request_limit_count_before,
+            require_real=True,
+            require_certification=True,
+        )
+        if recovery_request_limit_scope is not None
+        and recovery_request_limit_count_before is not None
+        else is_creditable_usage_record(
+            record,
+            require_real=True,
+            require_certification=True,
+        )
+    )
     if (
-        qualification is None
+        not usage_is_creditable
+        or qualification is None
         or not _real_provider_session_is_qualifying(provider_session)
         or not _usage_matches_audit_model_selection(record, audit_selection)
+        or not _usage_matches_audit_model_refresh(record, audit_refresh)
+        or not _usage_matches_audit_model_refresh_pricing(
+            record,
+            audit_refresh_pricing,
+            audit_selection,
+            audit_refresh,
+        )
     ):
         return False
     try:
@@ -3125,12 +3793,7 @@ def _is_real_model_usage(
         return False
     routing = record.routing
     return (
-        is_creditable_usage_record(
-            record,
-            require_real=True,
-            require_certification=True,
-        )
-        and record.requested_model in configured_models
+        record.requested_model in configured_models
         and record.returned_model
         in {
             qualified_model.exact_model_id,
@@ -3146,8 +3809,6 @@ def _is_real_model_usage(
         and routing.get("canonical_model") == qualified_model.canonical_model_slug
         and routing.get("selected_provider_endpoint") == qualified_model.approved_provider_endpoint
         and routing.get("selected_provider_name") == qualified_model.approved_provider_name
-        and routing.get("endpoint_snapshot_sha256") == qualified_model.endpoint_snapshot_sha256
-        and routing.get("endpoint_pricing_sha256") == qualified_model.pricing_snapshot_sha256
         and routing.get("model_metadata_snapshot_sha256")
         == qualified_model.model_metadata_snapshot_sha256
         and _qualified_usage_role(role, qualified_model)
@@ -3177,6 +3838,8 @@ def _is_real_model_usage(
             record=record,
             production_qualification=qualification,
             now=datetime.now(UTC).replace(microsecond=0),
+            recovery_request_limit_scope=recovery_request_limit_scope,
+            recovery_request_limit_count_before=recovery_request_limit_count_before,
         )
     )
 
@@ -3217,6 +3880,10 @@ def _model_coverage_is_backed_by_real_usage(
     qualification: VerifiedProductionQualification | None,
     provider_session: ProviderSessionProvenance | None,
     audit_selection: _CurrentAuditModelSelection | None,
+    audit_refresh: _CurrentAuditModelRefresh | None,
+    audit_refresh_pricing: _CurrentAuditModelRefreshPricing | None,
+    *,
+    recovery_request_limit_coordinates: dict[str, tuple[str, int]] | None = None,
 ) -> bool:
     if coverage is None:
         return False
@@ -3254,12 +3921,21 @@ def _model_coverage_is_backed_by_real_usage(
             if len(matching_usage) != 1:
                 return False
             usage = matching_usage[0]
+            recovery_coordinates = (recovery_request_limit_coordinates or {}).get(usage.request_id)
             if not _is_real_model_usage(
                 usage,
                 config,
                 qualification,
                 provider_session,
                 audit_selection,
+                audit_refresh,
+                audit_refresh_pricing,
+                recovery_request_limit_scope=(
+                    recovery_coordinates[0] if recovery_coordinates is not None else None
+                ),
+                recovery_request_limit_count_before=(
+                    recovery_coordinates[1] if recovery_coordinates is not None else None
+                ),
             ):
                 return False
 

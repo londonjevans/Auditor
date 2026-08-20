@@ -47,6 +47,7 @@ from mmaudit.models.schemas import (
     SolidityGraphEdge,
     SolidityGraphKind,
     SolidityGraphOccurrenceKind,
+    SolidityGraphOmission,
     SolidityGraphRetainedOccurrence,
     SolidityGraphSet,
     SolidityProjectMetadata,
@@ -71,12 +72,14 @@ from mmaudit.orchestration.model_coverage import (
     plan_model_surface_review_assignments,
 )
 from tests.fake_openrouter import (
+    _maximum_assurance_candidates,
     _request_scoped_candidate_id,
     _requested_surface_covers_path,
 )
 from tests.identity_fixtures import (
     bind_synthetic_usage_identity,
     reattest_synthetic_real_usage,
+    rebind_synthetic_token_plan,
 )
 
 _PATH = "src/Vault.sol"
@@ -1613,6 +1616,93 @@ def test_public_model_coverage_paths_reject_incomplete_critical_classification_i
         assert gate.state is AnalysisState.NOT_ANALYZED, label
 
 
+def test_omitted_external_call_cannot_shrink_complete_surface_inventory(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = config_factory()
+    index, graphs, invariants = _inventory()
+    audited_suite = _audited_gap_coverage(index, graphs, invariants)
+    complete_requests = build_model_surface_requests(
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+        audited_suite_coverage=audited_suite,
+    )
+    retained_edges = [
+        edge for edge in graphs.edges if edge.graph is not SolidityGraphKind.EXTERNAL_CALL
+    ]
+    omission = SolidityGraphOmission.build(
+        graph=SolidityGraphKind.EXTERNAL_CALL,
+        candidate_count=1,
+        retained_count=0,
+        omitted_count=1,
+        omitted_canonical_bytes=320,
+        omitted_stream_sha256=hashlib.sha256(b"synthetic omitted external call").hexdigest(),
+        omitted_sample_sha256s=(
+            hashlib.sha256(b"synthetic omitted external call sample").hexdigest(),
+        ),
+    )
+    partial_graphs = SolidityGraphSet.model_validate(
+        {
+            **graphs.model_dump(mode="python"),
+            "edges": retained_edges,
+            "retained_occurrences": _edge_occurrences(retained_edges),
+            "coverage": {
+                **graphs.coverage,
+                SolidityGraphKind.EXTERNAL_CALL.value: 0,
+            },
+            "generation_complete": False,
+            "edge_omissions": (omission,),
+        }
+    )
+    partial_requests = build_model_surface_requests(
+        index=index,
+        graphs=partial_graphs,
+        invariants=invariants,
+        economic_simulations=[],
+    )
+
+    assert len(partial_requests) == len(complete_requests) - 1
+    assert all(request.kind is not ModelReviewSurfaceKind.CALL for request in partial_requests)
+    with pytest.raises(ValueError, match="claims complete"):
+        build_model_surface_requests(
+            index=index,
+            graphs=partial_graphs,
+            invariants=invariants,
+            economic_simulations=[],
+            audited_suite_coverage=audited_suite,
+        )
+    with pytest.raises(ValueError, match="claims complete"):
+        build_model_review_coverage(
+            config,
+            usage_records=[],
+            review_artifacts=[],
+            review_contexts_by_request={},
+            index=index,
+            graphs=partial_graphs,
+            invariants=invariants,
+            economic_simulations=[],
+            audited_suite_coverage=audited_suite,
+        )
+
+    gate = model_surface_assignment_feasibility_gate(
+        config,
+        index=index,
+        graphs=partial_graphs,
+        invariants=invariants,
+        economic_simulations=[],
+        audited_suite_coverage=audited_suite,
+        requests=partial_requests,
+        assignments={},
+        required=True,
+    )
+
+    assert not gate.passed
+    assert gate.state is AnalysisState.NOT_ANALYZED
+    assert "critical classification was incomplete" in gate.detail
+
+
 def test_incomplete_typed_audited_suite_coverage_fails_priority_preflight(
     config_factory: Callable[..., AuditConfig],
 ) -> None:
@@ -2707,6 +2797,59 @@ def test_synthetic_candidate_identity_is_bound_to_request_and_exact_delivered_ex
     )
 
 
+def test_maximum_assurance_fixture_candidates_follow_exact_delivered_source() -> None:
+    source = "\n".join(
+        (
+            "    function drain(address payable recipient) external {",
+            "        recipient.transfer(address(this).balance);",
+            "    }",
+        )
+    )
+    source_sha256 = hashlib.sha256(source.encode()).hexdigest()
+    sentinel = f"MMAUDIT-UNTRUSTED-{source_sha256.upper()}"
+    prompt = "\n".join(
+        (
+            "<REPOSITORY_EXCERPT_METADATA_JSON>",
+            json.dumps(
+                {
+                    "path": "src/AccessVault.sol",
+                    "start_line": 12,
+                    "end_line": 14,
+                    "content_sha256": source_sha256,
+                },
+                sort_keys=True,
+            ),
+            "</REPOSITORY_EXCERPT_METADATA_JSON>",
+            f"-----BEGIN {sentinel}-----",
+            source,
+            f"-----END {sentinel}-----",
+        )
+    )
+
+    findings = _maximum_assurance_candidates(
+        prompt,
+        logical_request_id=f"scheduler-request-{'a' * 64}",
+        role="source_audit",
+        include_vulnerabilities=True,
+        include_safe_control=False,
+    )
+
+    assert len(findings) == 1
+    assert findings[0]["locations"][0]["path"] == "src/AccessVault.sol"
+    assert findings[0]["role"] == "source_audit"
+    assert findings[0]["evidence"][0]["source"] == "source_audit"
+    assert (
+        _maximum_assurance_candidates(
+            "no source excerpt",
+            logical_request_id=f"scheduler-request-{'b' * 64}",
+            role="source_audit",
+            include_vulnerabilities=True,
+            include_safe_control=False,
+        )
+        == []
+    )
+
+
 def test_synthetic_candidate_identity_rejects_tampered_delivered_excerpt() -> None:
     content = "line one\nline two\n"
     content_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -2825,6 +2968,86 @@ def test_direct_entry_and_graph_adjacent_state_records_receive_credit(
 
     by_id = {surface.surface_id: surface for surface in coverage.surfaces}
     assert all(by_id[request.surface_id].reviewed for request in selected)
+
+
+def test_recovery_surface_usage_requires_exact_external_request_limit_coordinates(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    from tests.unit.test_usage import _with_request_limit_inventory
+
+    config = config_factory()
+    index, graphs, invariants, requests = _requests()
+    selected = [
+        next(request for request in requests if request.kind is ModelReviewSurfaceKind.ENTRY_POINT)
+    ]
+    request_id = "scheduler-recovery-request-" + "a" * 64
+    request_limit_scope = "scheduler-request-" + "b" * 64
+    provisional = _usage(
+        "source_audit",
+        config.models.source_audit.primary,
+        request_id,
+    )
+    contexts = _review_contexts(selected, [provisional], index, graphs)
+    planned = rebind_synthetic_token_plan(provisional)
+    usage = reattest_synthetic_real_usage(
+        _with_request_limit_inventory(
+            planned,
+            request_limit_scope=request_limit_scope,
+            request_limit_count_before=1,
+        )
+    )
+    artifact = _artifact(
+        selected,
+        usage,
+        index,
+        graphs,
+        context=contexts[request_id][0],
+    )
+
+    missing = build_model_review_coverage(
+        config,
+        usage_records=[usage],
+        review_artifacts=[artifact],
+        review_contexts_by_request=contexts,
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+    )
+    exact = build_model_review_coverage(
+        config,
+        usage_records=[usage],
+        review_artifacts=[artifact],
+        review_contexts_by_request=contexts,
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+        recovery_usage_coordinates=((request_id, request_limit_scope, 1),),
+    )
+    missing_surface = next(
+        surface for surface in missing.surfaces if surface.surface_id == selected[0].surface_id
+    )
+    exact_surface = next(
+        surface for surface in exact.surfaces if surface.surface_id == selected[0].surface_id
+    )
+    assert not missing_surface.reviewed
+    assert exact_surface.reviewed
+    with pytest.raises(ValueError, match="unique and sorted"):
+        build_model_review_coverage(
+            config,
+            usage_records=[usage],
+            review_artifacts=[artifact],
+            review_contexts_by_request=contexts,
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=[],
+            recovery_usage_coordinates=(
+                (request_id, request_limit_scope, 1),
+                (request_id, request_limit_scope, 1),
+            ),
+        )
 
 
 def test_compact_source_context_inventory_subset_receives_credit(

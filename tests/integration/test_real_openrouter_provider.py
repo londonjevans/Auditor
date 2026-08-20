@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -34,6 +35,19 @@ from mmaudit.models.openrouter import (
     OpenRouterProviderPolicy,
     OpenRouterReasoning,
 )
+from mmaudit.models.provider_smoke import (
+    REAL_PROVIDER_SMOKE_MARKER,
+    REAL_PROVIDER_SMOKE_ROLE,
+    REAL_PROVIDER_SMOKE_SCHEMA_NAME,
+    build_provider_smoke_user_prompt,
+    provider_smoke_system_prompt,
+)
+from mmaudit.models.public_lineage_authority import (
+    VerifiedPublicModelLineage,
+    VerifiedPublicModelLineageBindingProjection,
+    require_verified_public_model_lineage,
+    resolve_verified_public_model_lineage,
+)
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     ModelIdentityStrength,
@@ -56,17 +70,31 @@ from mmaudit.orchestration.cost_ledger import (
     CostLedgerSnapshot,
 )
 from mmaudit.orchestration.manifest import canonical_sha256
+from mmaudit.privacy import (
+    EffectivePrivacyPolicyEvidence,
+    PrivacyProfile,
+    PrivacySourceClassification,
+    resolve_effective_privacy_policy,
+)
 from mmaudit.release_io import read_json_evidence
+from mmaudit.repository.discovery import DiscoveredFile, DiscoveryResult
+from mmaudit.repository.privacy_provenance import (
+    PrivacySourceProvenanceObservation,
+    prove_privacy_source_classification,
+)
 from tests.real_provider_harness import (
     REAL_PROVIDER_OPT_IN,
     SMOKE_FIXTURE_PATH,
     SMOKE_MAX_OUTPUT_TOKENS,
     SMOKE_REASONING_EFFORT,
+    SMOKE_STAGE_CAP_USD,
     RealProviderSmokeEvidence,
     RealProviderSmokeRejectionEvidence,
     RealProviderSmokeVerificationRejectionEvidence,
+    RealProviderTestConfigurationError,
     RealProviderTestSettings,
     SyntheticProviderSmokeResponse,
+    canonical_provider_attempt_request_id,
     load_pinned_synthetic_smoke_fixture,
     load_real_provider_test_settings,
     preflight_real_provider_smoke_output,
@@ -74,6 +102,7 @@ from tests.real_provider_harness import (
     real_provider_smoke_verification_rejection_output_path,
     real_provider_smoke_verification_subject_sha256,
     real_provider_tests_enabled,
+    recover_real_provider_smoke_budget_baseline,
     seal_real_provider_smoke_evidence,
     seal_real_provider_smoke_rejection_evidence,
     seal_real_provider_smoke_verification_rejection_evidence,
@@ -88,14 +117,10 @@ pytestmark = pytest.mark.skipif(
     reason=f"paid provider tests require explicit {REAL_PROVIDER_OPT_IN}=1",
 )
 
-_SYNTHETIC_MARKER = "mmaudit-synthetic-provider-smoke-v1"
+_SYNTHETIC_MARKER = REAL_PROVIDER_SMOKE_MARKER
 _ROOT = Path(__file__).resolve().parents[2]
 _FIXTURE = _ROOT / SMOKE_FIXTURE_PATH
-_SMOKE_STAGE_CAP_USD = Decimal("5.00")
-_SYSTEM_PROMPT = (
-    "This is a synthetic transport validation with no repository or target data. "
-    "Return only the strict response schema and do not use tools or external data."
-)
+_SYSTEM_PROMPT = provider_smoke_system_prompt()
 
 
 @dataclass(frozen=True)
@@ -110,36 +135,49 @@ class _SmokeLedgerEvidence:
     delta_reconciled: bool
 
 
+@dataclass(frozen=True)
+class _SmokeLaunchPreflight:
+    """Immutable identity and privacy authority proven before mutable launch state."""
+
+    public_lineage: VerifiedPublicModelLineageBindingProjection
+    source_sha256: str
+    source_provenance: PrivacySourceProvenanceObservation
+    effective_privacy_policy: EffectivePrivacyPolicyEvidence
+
+
 @pytest.mark.asyncio
 async def test_real_openrouter_exact_private_structured_smoke() -> None:
     """Make exactly one bounded paid call after every explicit gate succeeds."""
 
     settings = load_real_provider_test_settings(os.environ)
-    assert settings.privacy_profile == "STRICT_ZDR"
+    assert settings.privacy_profile == "SYNTHETIC_BENCHMARK"
     fixture_source, fixture_sha256 = load_pinned_synthetic_smoke_fixture(_ROOT)
     preflight_real_provider_smoke_output(
         output_path=settings.evidence_output,
         forbidden_paths=(settings.secret_file, settings.cost_ledger, _FIXTURE),
     )
-    user_prompt = (
-        "Set status to OK and marker to mmaudit-synthetic-provider-smoke-v1 after "
-        "reading this committed synthetic Solidity transport fixture. Do not report "
-        "findings.\n"
-        f'<synthetic_source path="{SMOKE_FIXTURE_PATH}" '
-        f'sha256="{fixture_sha256}">\n'
-        f"{fixture_source}\n"
-        "</synthetic_source>"
+    launch_preflight = _preflight_real_provider_smoke_launch(
+        settings=settings,
+        fixture_source=fixture_source,
+        fixture_sha256=fixture_sha256,
+        observed_at=datetime.now(UTC).replace(microsecond=0),
+    )
+    user_prompt = build_provider_smoke_user_prompt(
+        fixture_path=SMOKE_FIXTURE_PATH,
+        fixture_sha256=fixture_sha256,
+        fixture_source=fixture_source,
     )
     execution = ExecutionConfig(
         request_timeout_seconds=120,
         max_model_retries=0,
         max_json_repair_attempts=0,
-        budget_usd=float(settings.cost_cap_usd),
+        budget_usd=float(SMOKE_STAGE_CAP_USD),
         max_output_tokens_per_request=SMOKE_MAX_OUTPUT_TOKENS,
         max_requests_per_agent=1,
         conservative_usd_per_million_tokens=60,
     )
     privacy = PrivacyConfig(
+        profile=PrivacyProfile.SYNTHETIC_BENCHMARK,
         allow_code_egress=True,
         require_zdr=True,
         redact_secrets=True,
@@ -153,14 +191,18 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
         cap_usd=settings.cost_cap_usd,
     )
     ledger_before = atomic_ledger.snapshot()
-    stage_cap = min(settings.cost_cap_usd, _SMOKE_STAGE_CAP_USD)
     budget = BudgetManager(
-        total_usd=float(stage_cap),
+        total_usd=float(SMOKE_STAGE_CAP_USD),
         max_output_tokens=execution.max_output_tokens_per_request,
         conservative_usd_per_million_tokens=(execution.conservative_usd_per_million_tokens),
         max_requests_per_agent=1,
         atomic_ledger=atomic_ledger,
         require_endpoint_cost_bound=True,
+    )
+    await recover_real_provider_smoke_budget_baseline(
+        budget=budget,
+        atomic_ledger=atomic_ledger,
+        ledger_before=ledger_before,
     )
     usage = UsageLedger()
     api_key: str | None = None
@@ -186,6 +228,8 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     effort=SMOKE_REASONING_EFFORT,
                     exclude=True,
                 ),
+                effective_privacy_policy=launch_preflight.effective_privacy_policy,
+                source_provenance_observation=launch_preflight.source_provenance,
             )
             async with client:
                 await client.validate_authentication()
@@ -249,7 +293,8 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     system_prompt=_SYSTEM_PROMPT,
                     user_prompt=user_prompt,
                     response_model=SyntheticProviderSmokeResponse,
-                    schema_name="mmaudit_real_provider_smoke_v1",
+                    schema_name=REAL_PROVIDER_SMOKE_SCHEMA_NAME,
+                    request_role=REAL_PROVIDER_SMOKE_ROLE,
                 )
                 _assert_private_exact_request(
                     preview,
@@ -264,12 +309,12 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     "effort": SMOKE_REASONING_EFFORT,
                 }
                 completion = await client.complete_with_evidence(
-                    role="real_provider_smoke",
+                    role=REAL_PROVIDER_SMOKE_ROLE,
                     models=[settings.model_id],
                     system_prompt=_SYSTEM_PROMPT,
                     user_prompt=user_prompt,
                     response_model=SyntheticProviderSmokeResponse,
-                    schema_name="mmaudit_real_provider_smoke_v1",
+                    schema_name=REAL_PROVIDER_SMOKE_SCHEMA_NAME,
                 )
                 response = completion.value
                 record = completion.usage_record
@@ -283,6 +328,7 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     )
                     rejection_output, rejection = _write_unbound_smoke_rejection(
                         settings=settings,
+                        public_lineage=launch_preflight.public_lineage,
                         fixture_source=fixture_source,
                         fixture_sha256=fixture_sha256,
                         user_prompt=user_prompt,
@@ -358,6 +404,7 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     rejection_output, verification_rejection = (
                         _write_generation_verification_smoke_rejection(
                             settings=settings,
+                            public_lineage=launch_preflight.public_lineage,
                             fixture_source=fixture_source,
                             fixture_sha256=fixture_sha256,
                             user_prompt=user_prompt,
@@ -471,6 +518,16 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                 record.routing["catalog_identity_binding_sha256"]
                 == discovery_payload.catalog_identity_binding_sha256
             )
+            assert record.routing["privacy_profile"] == "SYNTHETIC_BENCHMARK"
+            assert record.routing["privacy_source_classification"] == "SYNTHETIC_COMMITTED"
+            assert record.routing["effective_privacy_policy_sha256"] == (
+                launch_preflight.effective_privacy_policy.evidence_sha256
+            )
+            assert record.routing["privacy_source_sha256"] == launch_preflight.source_sha256
+            assert record.routing["privacy_source_provenance_sha256"] == (
+                launch_preflight.effective_privacy_policy.source_provenance_sha256
+            )
+            assert record.routing["privacy_source_proof_kind"] == "DISTRIBUTION_COMMITTED_SYNTHETIC"
             assert not record.fallback_used
             assert not record.substitution_detected
 
@@ -493,8 +550,12 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
             assert not snapshot.has_reservation_overrun
             assert snapshot.spent_usd <= settings.cost_cap_usd
             assert smoke_spend_delta == ledger_entry.accounted_cost_usd
-            assert smoke_spend_delta <= _SMOKE_STAGE_CAP_USD
+            assert smoke_spend_delta <= SMOKE_STAGE_CAP_USD
 
+            current_public_lineage = _refresh_smoke_public_lineage(
+                settings=settings,
+                expected=launch_preflight.public_lineage,
+            )
             evidence = seal_real_provider_smoke_evidence(
                 {
                     "schema_version": "1.0",
@@ -508,6 +569,12 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     "openrouter_generation_id": record.openrouter_generation_id,
                     "requested_model_id": settings.model_id,
                     "canonical_model_id": discovery_payload.canonical_slug,
+                    "public_lineage_exact_model_id": current_public_lineage.exact_model_id,
+                    "public_lineage_root": current_public_lineage.root_lineage,
+                    "public_lineage_bundle_sha256": current_public_lineage.bundle_sha256,
+                    "public_lineage_manifest_file_sha256": (
+                        current_public_lineage.manifest_file_sha256
+                    ),
                     "returned_model_id": record.returned_model,
                     "generation_model_id": refetched_generation.exact_model_id,
                     "approved_provider_endpoint": settings.provider_endpoint_allowlist[0],
@@ -564,7 +631,7 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     "ledger_remaining_usd": _canonical_money(snapshot.remaining_usd),
                     "validation_status": record.validation_status.value,
                     "identity_strength": record.identity_strength.value,
-                    "privacy_profile": "STRICT_ZDR",
+                    "privacy_profile": settings.privacy_profile,
                     "require_zdr": True,
                     "data_collection": "deny",
                     "allow_fallbacks": False,
@@ -595,20 +662,252 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
         api_key = None
 
 
+def _prove_smoke_source_provenance(
+    *,
+    fixture_source: str,
+    fixture_sha256: str,
+    observed_at: datetime,
+) -> tuple[str, PrivacySourceProvenanceObservation]:
+    """Prove the exact committed fixture inventory before any secret or transport access."""
+
+    target_root = _FIXTURE.parent.parent.resolve(strict=True)
+    source = _FIXTURE.resolve(strict=True)
+    source_bytes = source.read_bytes()
+    observed_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    observed_source = source_bytes.decode("utf-8", errors="replace")
+    if observed_sha256 != fixture_sha256 or observed_source != fixture_source:
+        raise AssertionError("provider smoke fixture changed after its pinned preflight")
+    discovery = DiscoveryResult(
+        root=target_root,
+        files=(
+            DiscoveredFile(
+                absolute_path=source,
+                relative_path="src/ProviderSmoke.sol",
+                content=observed_source,
+                size=len(source_bytes),
+                lines=source_bytes.count(b"\n"),
+                sha256=observed_sha256,
+                language="Solidity",
+                categories=("smart_contract",),
+            ),
+        ),
+        omitted=(),
+        changed_paths=frozenset(),
+        git_commit=None,
+    )
+    source_sha256 = canonical_sha256(
+        [
+            {
+                "path": item.relative_path,
+                "sha256": item.sha256,
+                "size": item.size,
+            }
+            for item in discovery.files
+        ]
+    )
+    observation = prove_privacy_source_classification(
+        discovery,
+        requested_classification=PrivacySourceClassification.SYNTHETIC_COMMITTED,
+        source_sha256=source_sha256,
+        now=observed_at,
+    )
+    return source_sha256, observation
+
+
+def _require_smoke_public_lineage(
+    *,
+    settings: RealProviderTestSettings,
+    resolve_lineage: Callable[[], VerifiedPublicModelLineage] = (
+        resolve_verified_public_model_lineage
+    ),
+    require_lineage: Callable[
+        [VerifiedPublicModelLineage, str],
+        VerifiedPublicModelLineageBindingProjection,
+    ] = require_verified_public_model_lineage,
+) -> VerifiedPublicModelLineageBindingProjection:
+    """Resolve one fresh identity-only documentary binding for the exact smoke model."""
+
+    capability = resolve_lineage()
+    projection = require_lineage(capability, settings.model_id)
+    if type(projection) is not VerifiedPublicModelLineageBindingProjection:
+        raise RealProviderTestConfigurationError(
+            "smoke model public lineage binding has an invalid authority type"
+        )
+    authority_flags = (
+        projection.provider_call_authorized,
+        projection.source_egress_authorized,
+        projection.runner_authority_authorized,
+        projection.model_qualification_authorized,
+        projection.production_selection_authorized,
+        projection.seal_publication_authorized,
+        projection.release_authorized,
+        projection.benchmark_authorized,
+    )
+    hashes = (
+        projection.bundle_sha256,
+        projection.manifest_file_sha256,
+    )
+    root_hash = projection.root_lineage.removeprefix("sha256:")
+    if (
+        projection.exact_model_id != settings.model_id
+        or projection.lineage_identity_authorized is not True
+        or any(flag is not False for flag in authority_flags)
+        or not projection.root_lineage.startswith("sha256:")
+        or len(root_hash) != 64
+        or any(character not in "0123456789abcdef" for character in root_hash)
+        or any(
+            len(value) != 64 or any(character not in "0123456789abcdef" for character in value)
+            for value in hashes
+        )
+    ):
+        raise RealProviderTestConfigurationError(
+            "smoke model lacks an exact identity-only verified public lineage binding"
+        )
+    return projection
+
+
+def _refresh_smoke_public_lineage(
+    *,
+    settings: RealProviderTestSettings,
+    expected: VerifiedPublicModelLineageBindingProjection,
+    resolve_lineage: Callable[[], VerifiedPublicModelLineage] = (
+        resolve_verified_public_model_lineage
+    ),
+    require_lineage: Callable[
+        [VerifiedPublicModelLineage, str],
+        VerifiedPublicModelLineageBindingProjection,
+    ] = require_verified_public_model_lineage,
+) -> VerifiedPublicModelLineageBindingProjection:
+    """Re-resolve documentary identity and reject any pre-seal lineage swap."""
+
+    observed = _require_smoke_public_lineage(
+        settings=settings,
+        resolve_lineage=resolve_lineage,
+        require_lineage=require_lineage,
+    )
+    expected_values = (
+        expected.exact_model_id,
+        expected.root_lineage,
+        expected.bundle_sha256,
+        expected.manifest_file_sha256,
+    )
+    observed_values = (
+        observed.exact_model_id,
+        observed.root_lineage,
+        observed.bundle_sha256,
+        observed.manifest_file_sha256,
+    )
+    if observed_values != expected_values:
+        raise RealProviderTestConfigurationError(
+            "smoke public lineage binding changed before evidence sealing"
+        )
+    return observed
+
+
+def _resolve_smoke_privacy_preflight(
+    *,
+    settings: RealProviderTestSettings,
+    source_sha256: str,
+    source_classification: PrivacySourceClassification,
+    source_provenance: PrivacySourceProvenanceObservation | None,
+    observed_at: datetime,
+) -> EffectivePrivacyPolicyEvidence:
+    """Require exact committed-source evidence before permitting smoke egress."""
+
+    if settings.privacy_profile != "SYNTHETIC_BENCHMARK":
+        raise RealProviderTestConfigurationError(
+            "prospective provider smoke requires SYNTHETIC_BENCHMARK"
+        )
+    if source_classification is not PrivacySourceClassification.SYNTHETIC_COMMITTED:
+        raise RealProviderTestConfigurationError(
+            "prospective provider smoke rejects private or unclassified source"
+        )
+    if source_provenance is None:
+        raise RealProviderTestConfigurationError(
+            "prospective provider smoke requires committed-source provenance"
+        )
+    provenance = source_provenance.evidence
+    if (
+        provenance.source_classification != "SYNTHETIC_COMMITTED"
+        or provenance.source_sha256 != source_sha256
+        or provenance.proof_kind != "DISTRIBUTION_COMMITTED_SYNTHETIC"
+    ):
+        raise RealProviderTestConfigurationError(
+            "prospective provider smoke source provenance is not exact and committed"
+        )
+    return resolve_effective_privacy_policy(
+        profile=PrivacyProfile.SYNTHETIC_BENCHMARK,
+        require_zdr=True,
+        consent_observation=None,
+        source_sha256=source_sha256,
+        source_classification=source_classification,
+        source_provenance_observation=source_provenance,
+        configured_model_ids=(settings.model_id,),
+        configured_provider_endpoints=settings.provider_endpoint_allowlist,
+        requested_budget_usd=SMOKE_STAGE_CAP_USD,
+        now=observed_at,
+    )
+
+
+def _preflight_real_provider_smoke_launch(
+    *,
+    settings: RealProviderTestSettings,
+    fixture_source: str,
+    fixture_sha256: str,
+    observed_at: datetime,
+    resolve_lineage: Callable[[], VerifiedPublicModelLineage] = (
+        resolve_verified_public_model_lineage
+    ),
+    require_lineage: Callable[
+        [VerifiedPublicModelLineage, str],
+        VerifiedPublicModelLineageBindingProjection,
+    ] = require_verified_public_model_lineage,
+) -> _SmokeLaunchPreflight:
+    """Build all identity and source authority before ledger, secret, or client state."""
+
+    if settings.privacy_profile != "SYNTHETIC_BENCHMARK":
+        raise RealProviderTestConfigurationError(
+            "prospective provider smoke requires SYNTHETIC_BENCHMARK"
+        )
+    public_lineage = _require_smoke_public_lineage(
+        settings=settings,
+        resolve_lineage=resolve_lineage,
+        require_lineage=require_lineage,
+    )
+    source_sha256, source_provenance = _prove_smoke_source_provenance(
+        fixture_source=fixture_source,
+        fixture_sha256=fixture_sha256,
+        observed_at=observed_at,
+    )
+    effective_privacy_policy = _resolve_smoke_privacy_preflight(
+        settings=settings,
+        source_sha256=source_sha256,
+        source_classification=PrivacySourceClassification.SYNTHETIC_COMMITTED,
+        source_provenance=source_provenance,
+        observed_at=observed_at,
+    )
+    return _SmokeLaunchPreflight(
+        public_lineage=public_lineage,
+        source_sha256=source_sha256,
+        source_provenance=source_provenance,
+        effective_privacy_policy=effective_privacy_policy,
+    )
+
+
 def _terminal_smoke_ledger_evidence(
     *,
     snapshot: CostLedgerSnapshot,
     ledger_before: CostLedgerSnapshot,
     record: UsageRecord,
 ) -> _SmokeLedgerEvidence:
-    attempt_request_id = f"{record.request_id}:attempt:1"
+    attempt_request_id = canonical_provider_attempt_request_id(record.request_id, attempt=1)
     if any(entry.request_id == attempt_request_id for entry in ledger_before.entries):
         raise AssertionError("provider smoke attempt already existed before the request")
     matching_entries = [
         entry for entry in snapshot.entries if entry.request_id == attempt_request_id
     ]
     if len(matching_entries) != 1:
-        raise AssertionError("provider smoke ledger lacks one exact attempt-qualified entry")
+        raise AssertionError("provider smoke ledger lacks one exact first-attempt entry")
     ledger_entry = matching_entries[0]
     if ledger_entry.status not in {
         CostEntryStatus.RECONCILED,
@@ -672,6 +971,7 @@ def _ledger_entries_sha256(entries: tuple[CostEntry, ...]) -> str:
 def _write_unbound_smoke_rejection(
     *,
     settings: RealProviderTestSettings,
+    public_lineage: VerifiedPublicModelLineageBindingProjection,
     fixture_source: str,
     fixture_sha256: str,
     user_prompt: str,
@@ -686,6 +986,13 @@ def _write_unbound_smoke_rejection(
     snapshot: CostLedgerSnapshot,
     ledger_evidence: _SmokeLedgerEvidence,
     api_key: str,
+    resolve_lineage: Callable[[], VerifiedPublicModelLineage] = (
+        resolve_verified_public_model_lineage
+    ),
+    require_lineage: Callable[
+        [VerifiedPublicModelLineage, str],
+        VerifiedPublicModelLineageBindingProjection,
+    ] = require_verified_public_model_lineage,
 ) -> tuple[Path, RealProviderSmokeRejectionEvidence]:
     ledger_entry = ledger_evidence.entry
     smoke_spend_delta = ledger_evidence.spend_delta_usd
@@ -750,6 +1057,12 @@ def _write_unbound_smoke_rejection(
         if raw_generation_observation is None
         else OpenRouterGenerationEvidence.model_validate(raw_generation_observation)
     )
+    current_public_lineage = _refresh_smoke_public_lineage(
+        settings=settings,
+        expected=public_lineage,
+        resolve_lineage=resolve_lineage,
+        require_lineage=require_lineage,
+    )
     rejection = seal_real_provider_smoke_rejection_evidence(
         {
             "schema_version": "1.0",
@@ -764,6 +1077,10 @@ def _write_unbound_smoke_rejection(
             "openrouter_generation_id": record.openrouter_generation_id,
             "requested_model_id": settings.model_id,
             "canonical_model_id": canonical_model_id,
+            "public_lineage_exact_model_id": current_public_lineage.exact_model_id,
+            "public_lineage_root": current_public_lineage.root_lineage,
+            "public_lineage_bundle_sha256": current_public_lineage.bundle_sha256,
+            "public_lineage_manifest_file_sha256": (current_public_lineage.manifest_file_sha256),
             "returned_model_id": record.returned_model,
             "selected_model_id": record.actual_model,
             "approved_provider_endpoint": settings.provider_endpoint_allowlist[0],
@@ -841,7 +1158,7 @@ def _write_unbound_smoke_rejection(
             "ledger_has_reservation_overrun": snapshot.has_reservation_overrun,
             "ledger_remaining_usd": _canonical_money(snapshot.remaining_usd),
             "stage_cost_control_satisfied": (
-                ledger_entry.accounted_cost_usd <= _SMOKE_STAGE_CAP_USD
+                ledger_entry.accounted_cost_usd <= SMOKE_STAGE_CAP_USD
             ),
             "validation_status": record.validation_status.value,
             "identity_strength": record.identity_strength.value,
@@ -888,6 +1205,7 @@ def _write_unbound_smoke_rejection(
 def _write_generation_verification_smoke_rejection(
     *,
     settings: RealProviderTestSettings,
+    public_lineage: VerifiedPublicModelLineageBindingProjection,
     fixture_source: str,
     fixture_sha256: str,
     user_prompt: str,
@@ -901,6 +1219,13 @@ def _write_generation_verification_smoke_rejection(
     snapshot: CostLedgerSnapshot,
     ledger_evidence: _SmokeLedgerEvidence,
     api_key: str,
+    resolve_lineage: Callable[[], VerifiedPublicModelLineage] = (
+        resolve_verified_public_model_lineage
+    ),
+    require_lineage: Callable[
+        [VerifiedPublicModelLineage, str],
+        VerifiedPublicModelLineageBindingProjection,
+    ] = require_verified_public_model_lineage,
 ) -> tuple[Path, RealProviderSmokeVerificationRejectionEvidence]:
     """Persist a bound response that failed mandatory fresh generation verification."""
 
@@ -959,6 +1284,12 @@ def _write_generation_verification_smoke_rejection(
     else:
         raise AssertionError("verification rejection evidence unexpectedly reconciled")
     actual_cost_usd = ledger_entry.actual_cost_usd
+    current_public_lineage = _refresh_smoke_public_lineage(
+        settings=settings,
+        expected=public_lineage,
+        resolve_lineage=resolve_lineage,
+        require_lineage=require_lineage,
+    )
     rejection = seal_real_provider_smoke_verification_rejection_evidence(
         {
             "schema_version": "1.0",
@@ -969,6 +1300,10 @@ def _write_generation_verification_smoke_rejection(
             "fixture_path": SMOKE_FIXTURE_PATH,
             "fixture_sha256": fixture_sha256,
             "canonical_model_id": canonical_model_id,
+            "public_lineage_exact_model_id": current_public_lineage.exact_model_id,
+            "public_lineage_root": current_public_lineage.root_lineage,
+            "public_lineage_bundle_sha256": current_public_lineage.bundle_sha256,
+            "public_lineage_manifest_file_sha256": (current_public_lineage.manifest_file_sha256),
             "approved_provider_endpoint": settings.provider_endpoint_allowlist[0],
             "verification_subject_sha256": verification_subject_sha256,
             "identity_binding_sha256": identity_binding.binding_sha256,
@@ -1002,7 +1337,7 @@ def _write_generation_verification_smoke_rejection(
             "ledger_has_reservation_overrun": snapshot.has_reservation_overrun,
             "ledger_remaining_usd": _canonical_money(snapshot.remaining_usd),
             "stage_cost_control_satisfied": (
-                ledger_entry.accounted_cost_usd <= _SMOKE_STAGE_CAP_USD
+                ledger_entry.accounted_cost_usd <= SMOKE_STAGE_CAP_USD
             ),
             "privacy_profile": settings.privacy_profile,
             "require_zdr": True,

@@ -840,10 +840,18 @@ class ForkReproductionRunner:
                     preexec_fn=_limit_process if os.name != "nt" else None,
                 )
                 deadline = time.monotonic() + self.reproduction.timeout_seconds
-                while process.poll() is None:
-                    if time.monotonic() >= deadline:
+                while True:
+                    # Observe the deadline before trusting a completed poll. The controller can be
+                    # descheduled until after the child exits; polling first would then accept work
+                    # that exceeded the configured wall-clock limit.
+                    deadline_reached = time.monotonic() >= deadline
+                    return_code = process.poll()
+                    if deadline_reached:
                         timed_out = True
-                        _stop_process(process)
+                        if return_code is None:
+                            _stop_process(process)
+                        break
+                    if return_code is not None:
                         break
                     if (
                         stdout_path.stat().st_size > self.reproduction.max_output_bytes

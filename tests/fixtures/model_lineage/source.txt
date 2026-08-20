@@ -1,0 +1,4 @@
+MMAUDIT_SYNTHETIC_MODEL_LINEAGE_SOURCE_V1
+constructed-root-alpha|synthetic-lineage:alpha/model-core|synthetic-lineage:alpha/model-core,synthetic-lineage:alpha/model-core-v1
+constructed-root-beta|synthetic-lineage:beta/model-core|synthetic-lineage:beta/model-core
+constructed-root-gamma|synthetic-lineage:gamma/model-core|synthetic-lineage:gamma/model-core

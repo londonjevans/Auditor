@@ -11,7 +11,7 @@ import uuid
 from collections.abc import Sequence
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal, Self
@@ -33,11 +33,17 @@ from mmaudit.models.policy_eligibility_refresh import (
 from mmaudit.models.qualification import CandidateRegistry
 from mmaudit.models.refresh import (
     ATTEMPT_FILENAME,
+    CANDIDATE_REGISTRY_FILENAME,
     DIFF_FILENAME,
     FRESHNESS_FILENAME,
+    MAX_MODEL_REFRESH_FRACTION_TEXT_LENGTH,
+    MODEL_REFRESH_FRACTION_PATTERN,
     SNAPSHOT_FILENAME,
     SOURCE_EVIDENCE_FILENAME,
+    ModelRefreshAttempt,
     ModelRefreshAttemptStatus,
+    ModelRefreshDiff,
+    ModelRefreshFreshness,
     ModelRefreshFreshnessState,
     ModelRefreshSnapshot,
     ModelRefreshSourceEvidence,
@@ -51,12 +57,25 @@ from mmaudit.models.refresh import (
     load_model_refresh_freshness,
     load_model_refresh_snapshot,
     load_model_refresh_source_evidence,
+    parse_model_refresh_fraction,
 )
 from mmaudit.release_io import read_json_evidence, write_json_evidence
 from mmaudit.reporting.json_report import stable_json
 
 WORKFLOW_STATUS_FILENAME = "workflow-status.json"
-_SUCCESS_FILENAMES = frozenset(
+PREVIOUS_WORKFLOW_STATUS_FILENAME = "previous-workflow-status.json"
+PREVIOUS_CANDIDATE_REGISTRY_FILENAME = "previous-candidate-registry.json"
+PREVIOUS_SOURCE_EVIDENCE_FILENAME = "previous-source-evidence.json"
+PREVIOUS_SNAPSHOT_FILENAME = "previous-snapshot.json"
+_IMMEDIATE_PREDECESSOR_FILENAMES = frozenset(
+    {
+        PREVIOUS_WORKFLOW_STATUS_FILENAME,
+        PREVIOUS_CANDIDATE_REGISTRY_FILENAME,
+        PREVIOUS_SOURCE_EVIDENCE_FILENAME,
+        PREVIOUS_SNAPSHOT_FILENAME,
+    }
+)
+_REFRESH_SUCCESS_FILENAMES = frozenset(
     {
         SOURCE_EVIDENCE_FILENAME,
         SNAPSHOT_FILENAME,
@@ -65,6 +84,10 @@ _SUCCESS_FILENAMES = frozenset(
         FRESHNESS_FILENAME,
     }
 )
+_SUCCESS_FILENAMES = _REFRESH_SUCCESS_FILENAMES | {CANDIDATE_REGISTRY_FILENAME}
+_REFRESH_POLICY_SUCCESS_FILENAMES = _REFRESH_SUCCESS_FILENAMES | {
+    POLICY_ELIGIBILITY_REFRESH_FILENAME
+}
 _POLICY_SUCCESS_FILENAMES = _SUCCESS_FILENAMES | {POLICY_ELIGIBILITY_REFRESH_FILENAME}
 _FAILURE_FILENAMES = frozenset({ATTEMPT_FILENAME})
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -95,12 +118,17 @@ class StagedModelRefreshArtifact(_FrozenModel):
     """Content and internal identity for one validated staged artifact."""
 
     filename: Literal[
+        "model-refresh-candidate-registry.json",
         "model-refresh-source-evidence.json",
         "model-refresh-snapshot.json",
         "model-refresh-diff.json",
         "model-refresh-attempt.json",
         "model-refresh-freshness.json",
         "model-policy-eligibility-refresh.json",
+        "previous-workflow-status.json",
+        "previous-candidate-registry.json",
+        "previous-source-evidence.json",
+        "previous-snapshot.json",
     ]
     content_sha256: str = Field(pattern=_SHA256_PATTERN)
     artifact_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -110,15 +138,28 @@ class StagedModelRefreshArtifact(_FrozenModel):
 class ModelRefreshWorkflowStatus(_FrozenModel):
     """Commit-bound inventory for one scheduled refresh attempt."""
 
-    schema_version: Literal["3.0"] = "3.0"
+    schema_version: Literal["4.0"] = "4.0"
     validated_at: datetime
     disposition: ModelRefreshWorkflowDisposition
     refresh_exit_status: int = Field(ge=0, le=255)
     source_commit: str = Field(pattern=_GIT_COMMIT_PATTERN)
     workflow_run_id: str = Field(pattern=_WORKFLOW_NUMBER_PATTERN)
     workflow_run_attempt: str = Field(pattern=_WORKFLOW_NUMBER_PATTERN)
+    previous_workflow_run_id: str | None = Field(
+        default=None,
+        pattern=_WORKFLOW_NUMBER_PATTERN,
+    )
+    previous_workflow_run_attempt: str | None = Field(
+        default=None,
+        pattern=_WORKFLOW_NUMBER_PATTERN,
+    )
+    previous_workflow_status_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
     candidate_registry_sha256: str = Field(pattern=_SHA256_PATTERN)
-    pricing_tolerance_fraction: str
+    pricing_tolerance_fraction: str = Field(
+        min_length=1,
+        max_length=MAX_MODEL_REFRESH_FRACTION_TEXT_LENGTH,
+        pattern=MODEL_REFRESH_FRACTION_PATTERN,
+    )
     soft_max_age_hours: int = Field(ge=1, le=24 * 30)
     hard_max_age_hours: int = Field(ge=2, le=24 * 90)
     policy_projection_expected: bool
@@ -149,6 +190,16 @@ class ModelRefreshWorkflowStatus(_FrozenModel):
     def status_is_canonical_and_self_bound(self) -> Self:
         if self.hard_max_age_hours <= self.soft_max_age_hours:
             raise ValueError("refresh workflow hard age must exceed its soft age")
+        prior_identity = (
+            self.previous_workflow_run_id,
+            self.previous_workflow_run_attempt,
+            self.previous_workflow_status_sha256,
+        )
+        if any(value is not None for value in prior_identity) and not all(
+            value is not None for value in prior_identity
+        ):
+            raise ValueError("prior refresh workflow identity must be supplied atomically")
+        predecessor_present = all(value is not None for value in prior_identity)
         filenames = tuple(artifact.filename for artifact in self.artifacts)
         if filenames != tuple(sorted(set(filenames))):
             raise ValueError("staged refresh artifact inventory must be unique and sorted")
@@ -160,12 +211,23 @@ class ModelRefreshWorkflowStatus(_FrozenModel):
             expected_names = (
                 _POLICY_SUCCESS_FILENAMES if self.policy_projection_expected else _SUCCESS_FILENAMES
             )
+            if predecessor_present:
+                expected_names |= _IMMEDIATE_PREDECESSOR_FILENAMES
         elif self.disposition is ModelRefreshWorkflowDisposition.FAILED:
             expected_names = _FAILURE_FILENAMES
         else:
             expected_names = frozenset()
         if set(filenames) != expected_names:
             raise ValueError("staged refresh artifact inventory differs from its disposition")
+        if self.previous_workflow_run_id is not None:
+            assert self.previous_workflow_run_attempt is not None
+            previous_run_id = int(self.previous_workflow_run_id)
+            current_run_id = int(self.workflow_run_id)
+            if previous_run_id > current_run_id or (
+                previous_run_id == current_run_id
+                and int(self.previous_workflow_run_attempt) >= int(self.workflow_run_attempt)
+            ):
+                raise ValueError("prior refresh workflow attempt is not earlier than this attempt")
         expected_exit_disposition = _disposition_for_exit(self.refresh_exit_status)
         if self.disposition is not expected_exit_disposition:
             raise ValueError("staged refresh disposition differs from its exit status")
@@ -174,6 +236,40 @@ class ModelRefreshWorkflowStatus(_FrozenModel):
         )
         if self.workflow_status_sha256 != expected:
             raise ValueError("staged refresh workflow status self-hash is inconsistent")
+        return self
+
+
+class ValidatedModelRefreshHistory(_FrozenModel):
+    """Exact non-authorizing workflow bundle retained for deterministic replay."""
+
+    workflow_status: ModelRefreshWorkflowStatus
+    candidate_registry: CandidateRegistry
+    source_evidence: ModelRefreshSourceEvidence
+    snapshot: ModelRefreshSnapshot
+    diff: ModelRefreshDiff
+    attempt: ModelRefreshAttempt
+    freshness: ModelRefreshFreshness
+    previous_workflow_status: ModelRefreshWorkflowStatus | None = None
+    previous_candidate_registry: CandidateRegistry | None = None
+    previous_source_evidence: ModelRefreshSourceEvidence | None = None
+    previous_snapshot: ModelRefreshSnapshot | None = None
+
+    @model_validator(mode="after")
+    def predecessor_is_atomic_and_non_authorizing(self) -> Self:
+        predecessor = (
+            self.previous_workflow_status,
+            self.previous_candidate_registry,
+            self.previous_source_evidence,
+            self.previous_snapshot,
+        )
+        if any(item is not None for item in predecessor) and not all(
+            item is not None for item in predecessor
+        ):
+            raise ValueError("validated refresh predecessor evidence must be atomic")
+        if (self.diff.baseline_kind is RefreshBaselineKind.PREVIOUS_SNAPSHOT) is not all(
+            item is not None for item in predecessor
+        ):
+            raise ValueError("validated refresh predecessor differs from its diff baseline")
         return self
 
 
@@ -191,6 +287,8 @@ def stage_model_refresh_evidence(
     hard_max_age_hours: int,
     previous_snapshot: ModelRefreshSnapshot | None = None,
     previous_source_evidence: ModelRefreshSourceEvidence | None = None,
+    previous_candidate_registry: CandidateRegistry | None = None,
+    previous_workflow_status: ModelRefreshWorkflowStatus | None = None,
     expected_selected_routes: Sequence[SelectedModelRoute] = (),
     policy_eligibility_artifact: ModelPolicyEligibilityArtifact | None = None,
     policy_source_observation: PolicyEligibilitySourceObservation | None = None,
@@ -210,10 +308,90 @@ def stage_model_refresh_evidence(
             label="refresh workflow validation time",
         )
     )
-    if (previous_snapshot is None) is not (previous_source_evidence is None):
+    previous_inputs = (
+        previous_snapshot,
+        previous_source_evidence,
+        previous_candidate_registry,
+    )
+    if any(item is not None for item in previous_inputs) and not all(
+        item is not None for item in previous_inputs
+    ):
         raise ModelRefreshStagingError(
-            "refresh previous snapshot and source evidence must be supplied together"
+            "refresh previous snapshot, source evidence, and candidate registry "
+            "must be supplied together"
         )
+    if (
+        previous_candidate_registry is not None
+        and previous_candidate_registry.created_at > registry.created_at
+    ):
+        raise ModelRefreshStagingError(
+            "refresh previous candidate registry is newer than the current registry"
+        )
+    validated_previous_status: ModelRefreshWorkflowStatus | None = None
+    validated_previous_registry: CandidateRegistry | None = None
+    validated_previous_source: ModelRefreshSourceEvidence | None = None
+    validated_previous_snapshot: ModelRefreshSnapshot | None = None
+    if previous_workflow_status is not None:
+        if not all(item is not None for item in previous_inputs):
+            raise ModelRefreshStagingError(
+                "refresh previous workflow status requires the exact previous evidence triple"
+            )
+        try:
+            validated_previous_status = ModelRefreshWorkflowStatus.model_validate_json(
+                previous_workflow_status.model_dump_json(),
+                strict=True,
+            )
+        except (AttributeError, ValueError) as exc:
+            raise ModelRefreshStagingError("refresh previous workflow status is invalid") from exc
+        assert previous_candidate_registry is not None
+        assert previous_source_evidence is not None
+        assert previous_snapshot is not None
+        try:
+            validated_previous_registry = CandidateRegistry.model_validate_json(
+                previous_candidate_registry.model_dump_json(),
+                strict=True,
+            )
+            validated_previous_source = ModelRefreshSourceEvidence.model_validate_json(
+                previous_source_evidence.model_dump_json(),
+                strict=True,
+            )
+            validated_previous_snapshot = ModelRefreshSnapshot.model_validate_json(
+                previous_snapshot.model_dump_json(),
+                strict=True,
+            )
+        except (AttributeError, ValueError) as exc:
+            raise ModelRefreshStagingError("refresh previous evidence triple is invalid") from exc
+        if (
+            validated_previous_status.disposition
+            not in {
+                ModelRefreshWorkflowDisposition.COMPLETED,
+                ModelRefreshWorkflowDisposition.PRODUCTION_BLOCKED,
+            }
+            or validated_previous_status.candidate_registry_sha256
+            != validated_previous_registry.registry_sha256
+        ):
+            raise ModelRefreshStagingError(
+                "refresh previous workflow status does not bind the previous candidate registry"
+            )
+        _validate_status_artifact_binding(
+            status=validated_previous_status,
+            filename=CANDIDATE_REGISTRY_FILENAME,
+            artifact=validated_previous_registry,
+        )
+        _validate_status_artifact_binding(
+            status=validated_previous_status,
+            filename=SOURCE_EVIDENCE_FILENAME,
+            artifact=validated_previous_source,
+        )
+        _validate_status_artifact_binding(
+            status=validated_previous_status,
+            filename=SNAPSHOT_FILENAME,
+            artifact=validated_previous_snapshot,
+        )
+        if validated_previous_status.validated_at > validated_at + _MAX_CLOCK_SKEW:
+            raise ModelRefreshStagingError(
+                "refresh previous workflow status is newer than the current workflow"
+            )
     policy_inputs = (
         policy_eligibility_artifact,
         policy_source_observation,
@@ -265,7 +443,19 @@ def stage_model_refresh_evidence(
     ):
         raise ModelRefreshStagingError("refresh staging freshness policy is invalid")
     disposition = _disposition_for_exit(refresh_exit_status)
-    expected_names = _expected_output_names(
+    if (
+        disposition
+        in {
+            ModelRefreshWorkflowDisposition.COMPLETED,
+            ModelRefreshWorkflowDisposition.PRODUCTION_BLOCKED,
+        }
+        and all(item is not None for item in previous_inputs)
+        and validated_previous_status is None
+    ):
+        raise ModelRefreshStagingError(
+            "successful refresh previous evidence requires its workflow status"
+        )
+    output_names = _expected_output_names(
         disposition,
         policy_projection_expected=policy_projection_expected,
     )
@@ -276,13 +466,14 @@ def stage_model_refresh_evidence(
             )
         validated: dict[str, BaseModel] = {}
     else:
-        before = _observe_exact_private_directory(output_dir, expected_names=expected_names)
+        before = _observe_exact_private_directory(output_dir, expected_names=output_names)
         validated = _load_and_validate_bundle(
             output_dir=output_dir,
             disposition=disposition,
             registry=registry,
             previous_snapshot=previous_snapshot,
             previous_source_evidence=previous_source_evidence,
+            previous_candidate_registry=previous_candidate_registry,
             expected_selected_routes=expected_selected_routes,
             pricing_tolerance_fraction=pricing_tolerance_fraction,
             soft_max_age_hours=soft_max_age_hours,
@@ -292,7 +483,22 @@ def stage_model_refresh_evidence(
             policy_source_observation=validated_policy_observation,
             policy_checked_routes=validated_policy_routes,
         )
-        after = _observe_exact_private_directory(output_dir, expected_names=expected_names)
+        if validated_previous_status is not None and disposition in {
+            ModelRefreshWorkflowDisposition.COMPLETED,
+            ModelRefreshWorkflowDisposition.PRODUCTION_BLOCKED,
+        }:
+            assert validated_previous_registry is not None
+            assert validated_previous_source is not None
+            assert validated_previous_snapshot is not None
+            validated.update(
+                {
+                    PREVIOUS_WORKFLOW_STATUS_FILENAME: validated_previous_status,
+                    PREVIOUS_CANDIDATE_REGISTRY_FILENAME: validated_previous_registry,
+                    PREVIOUS_SOURCE_EVIDENCE_FILENAME: validated_previous_source,
+                    PREVIOUS_SNAPSHOT_FILENAME: validated_previous_snapshot,
+                }
+            )
+        after = _observe_exact_private_directory(output_dir, expected_names=output_names)
         if before != after:
             raise ModelRefreshStagingError("refresh output changed while being validated")
 
@@ -319,13 +525,28 @@ def stage_model_refresh_evidence(
             )
 
         status_values = {
-            "schema_version": "3.0",
+            "schema_version": "4.0",
             "validated_at": validated_at.isoformat().replace("+00:00", "Z"),
             "disposition": disposition.value,
             "refresh_exit_status": refresh_exit_status,
             "source_commit": source_commit,
             "workflow_run_id": workflow_run_id,
             "workflow_run_attempt": workflow_run_attempt,
+            "previous_workflow_run_id": (
+                None
+                if validated_previous_status is None
+                else validated_previous_status.workflow_run_id
+            ),
+            "previous_workflow_run_attempt": (
+                None
+                if validated_previous_status is None
+                else validated_previous_status.workflow_run_attempt
+            ),
+            "previous_workflow_status_sha256": (
+                None
+                if validated_previous_status is None
+                else validated_previous_status.workflow_status_sha256
+            ),
             "candidate_registry_sha256": registry.registry_sha256,
             "pricing_tolerance_fraction": pricing_tolerance_fraction,
             "soft_max_age_hours": soft_max_age_hours,
@@ -346,7 +567,12 @@ def stage_model_refresh_evidence(
         )
         _observe_exact_private_directory(
             staging_root,
-            expected_names=expected_names | {WORKFLOW_STATUS_FILENAME},
+            expected_names=_expected_staged_names(
+                disposition,
+                policy_projection_expected=policy_projection_expected,
+                predecessor_present=validated_previous_status is not None,
+            )
+            | {WORKFLOW_STATUS_FILENAME},
         )
         completed = True
         return status
@@ -358,7 +584,15 @@ def stage_model_refresh_evidence(
 def load_model_refresh_workflow_status(path: Path) -> ModelRefreshWorkflowStatus:
     """Load one canonical status through descriptor-safe evidence I/O."""
 
-    if path.name != WORKFLOW_STATUS_FILENAME:
+    return _load_staged_workflow_status(path, expected_filename=WORKFLOW_STATUS_FILENAME)
+
+
+def _load_staged_workflow_status(
+    path: Path,
+    *,
+    expected_filename: str,
+) -> ModelRefreshWorkflowStatus:
+    if path.name != expected_filename:
         raise ModelRefreshStagingError("refresh workflow status filename is invalid")
     try:
         observation = read_json_evidence(
@@ -374,6 +608,318 @@ def load_model_refresh_workflow_status(path: Path) -> ModelRefreshWorkflowStatus
     return status
 
 
+def load_previous_model_refresh_history(
+    history_dir: Path,
+    *,
+    expected_workflow_run_id: str,
+    expected_workflow_run_attempt: str,
+    expected_source_commit: str,
+) -> ValidatedModelRefreshHistory:
+    """Load one exact same-workflow artifact bundle as a non-authorizing baseline.
+
+    The caller remains responsible for selecting an artifact from the trusted repository and
+    default branch. This function proves only the downloaded bundle's internal custody chain.
+    """
+
+    if (
+        re.fullmatch(_WORKFLOW_NUMBER_PATTERN, expected_workflow_run_id) is None
+        or re.fullmatch(
+            _WORKFLOW_NUMBER_PATTERN,
+            expected_workflow_run_attempt,
+        )
+        is None
+        or re.fullmatch(_GIT_COMMIT_PATTERN, expected_source_commit) is None
+    ):
+        raise ModelRefreshStagingError("expected previous workflow identity is invalid")
+    expected_names, before = _observe_previous_history_directory(history_dir)
+    status = load_model_refresh_workflow_status(history_dir / WORKFLOW_STATUS_FILENAME)
+    if (
+        status.workflow_run_id != expected_workflow_run_id
+        or status.workflow_run_attempt != expected_workflow_run_attempt
+        or status.source_commit != expected_source_commit
+    ):
+        raise ModelRefreshStagingError(
+            "downloaded refresh history belongs to another workflow run or source commit"
+        )
+    if status.disposition not in {
+        ModelRefreshWorkflowDisposition.COMPLETED,
+        ModelRefreshWorkflowDisposition.PRODUCTION_BLOCKED,
+    }:
+        raise ModelRefreshStagingError("downloaded refresh history is not a successful bundle")
+    expected_artifacts = expected_names - {WORKFLOW_STATUS_FILENAME}
+    if {binding.filename for binding in status.artifacts} != expected_artifacts:
+        raise ModelRefreshStagingError(
+            "downloaded refresh history differs from its workflow inventory"
+        )
+
+    try:
+        registry = _load_staged_candidate_registry(history_dir / CANDIDATE_REGISTRY_FILENAME)
+        source = load_model_refresh_source_evidence(history_dir / SOURCE_EVIDENCE_FILENAME)
+        snapshot = load_model_refresh_snapshot(history_dir / SNAPSHOT_FILENAME)
+        diff = load_model_refresh_diff(history_dir / DIFF_FILENAME)
+        attempt = load_model_refresh_attempt(history_dir / ATTEMPT_FILENAME)
+        freshness = load_model_refresh_freshness(history_dir / FRESHNESS_FILENAME)
+    except ValueError as exc:
+        raise ModelRefreshStagingError(
+            "downloaded refresh history contains an invalid staged artifact"
+        ) from exc
+    artifacts: dict[str, BaseModel] = {
+        CANDIDATE_REGISTRY_FILENAME: registry,
+        SOURCE_EVIDENCE_FILENAME: source,
+        SNAPSHOT_FILENAME: snapshot,
+        DIFF_FILENAME: diff,
+        ATTEMPT_FILENAME: attempt,
+        FRESHNESS_FILENAME: freshness,
+    }
+    predecessor_present = status.previous_workflow_run_id is not None
+    predecessor_files_present = _IMMEDIATE_PREDECESSOR_FILENAMES.issubset(expected_names)
+    if predecessor_files_present is not predecessor_present:
+        raise ModelRefreshStagingError(
+            "downloaded refresh history predecessor inventory is inconsistent"
+        )
+    previous_status: ModelRefreshWorkflowStatus | None = None
+    previous_registry: CandidateRegistry | None = None
+    previous_source: ModelRefreshSourceEvidence | None = None
+    previous_snapshot: ModelRefreshSnapshot | None = None
+    if predecessor_present:
+        try:
+            previous_status = _load_staged_workflow_status(
+                history_dir / PREVIOUS_WORKFLOW_STATUS_FILENAME,
+                expected_filename=PREVIOUS_WORKFLOW_STATUS_FILENAME,
+            )
+            previous_registry = _load_staged_candidate_registry(
+                history_dir / PREVIOUS_CANDIDATE_REGISTRY_FILENAME,
+                expected_filename=PREVIOUS_CANDIDATE_REGISTRY_FILENAME,
+            )
+            previous_source = load_model_refresh_source_evidence(
+                history_dir / PREVIOUS_SOURCE_EVIDENCE_FILENAME
+            )
+            previous_snapshot = load_model_refresh_snapshot(
+                history_dir / PREVIOUS_SNAPSHOT_FILENAME
+            )
+        except ValueError as exc:
+            raise ModelRefreshStagingError(
+                "downloaded refresh history contains invalid predecessor evidence"
+            ) from exc
+        artifacts.update(
+            {
+                PREVIOUS_WORKFLOW_STATUS_FILENAME: previous_status,
+                PREVIOUS_CANDIDATE_REGISTRY_FILENAME: previous_registry,
+                PREVIOUS_SOURCE_EVIDENCE_FILENAME: previous_source,
+                PREVIOUS_SNAPSHOT_FILENAME: previous_snapshot,
+            }
+        )
+    policy_refresh = None
+    if status.policy_projection_expected:
+        try:
+            policy_refresh = load_model_policy_eligibility_refresh_artifact(
+                history_dir / POLICY_ELIGIBILITY_REFRESH_FILENAME
+            )
+        except ValueError as exc:
+            raise ModelRefreshStagingError(
+                "downloaded refresh history contains an invalid policy artifact"
+            ) from exc
+        artifacts[POLICY_ELIGIBILITY_REFRESH_FILENAME] = policy_refresh
+    for filename, artifact in artifacts.items():
+        _validate_status_artifact_binding(
+            status=status,
+            filename=filename,
+            artifact=artifact,
+        )
+    if registry.created_at > source.retrieved_at or registry.created_at > snapshot.retrieved_at:
+        raise ModelRefreshStagingError(
+            "downloaded refresh history candidate registry postdates its observation"
+        )
+
+    try:
+        replayed_snapshot = build_model_refresh_snapshot_from_source(
+            source_evidence=source,
+            candidate_registry=registry,
+        )
+        replayed_freshness = evaluate_model_refresh_freshness(
+            observed_at=freshness.observed_at,
+            snapshot=snapshot,
+            soft_max_age_hours=status.soft_max_age_hours,
+            hard_max_age_hours=status.hard_max_age_hours,
+            production_selection_present=freshness.production_selection_present,
+        )
+        staged_time_freshness = evaluate_model_refresh_freshness(
+            observed_at=max(status.validated_at, snapshot.retrieved_at),
+            snapshot=snapshot,
+            soft_max_age_hours=status.soft_max_age_hours,
+            hard_max_age_hours=status.hard_max_age_hours,
+            production_selection_present=freshness.production_selection_present,
+        )
+    except ValueError as exc:
+        raise ModelRefreshStagingError(
+            "downloaded refresh history cannot reproduce its current snapshot"
+        ) from exc
+    if (
+        replayed_snapshot != snapshot
+        or replayed_freshness != freshness
+        or status.candidate_registry_sha256 != registry.registry_sha256
+        or source.candidate_registry_sha256 != registry.registry_sha256
+        or snapshot.candidate_registry_sha256 != registry.registry_sha256
+        or diff.current_candidate_registry_sha256 != registry.registry_sha256
+        or diff.current_snapshot_sha256 != snapshot.snapshot_sha256
+        or attempt.candidate_registry_sha256 != registry.registry_sha256
+        or attempt.snapshot_sha256 != snapshot.snapshot_sha256
+        or attempt.diff_sha256 != diff.diff_sha256
+        or attempt.status is not diff.status
+        or diff.pricing_tolerance_fraction != status.pricing_tolerance_fraction
+        or freshness.snapshot_sha256 != snapshot.snapshot_sha256
+        or freshness.soft_max_age_hours != status.soft_max_age_hours
+        or freshness.hard_max_age_hours != status.hard_max_age_hours
+        or freshness.production_selection_present != bool(diff.selected_routes)
+        or freshness.state is not ModelRefreshFreshnessState.CURRENT
+        or staged_time_freshness.state is not ModelRefreshFreshnessState.CURRENT
+        or abs(status.validated_at - snapshot.retrieved_at) > _MAX_CLOCK_SKEW
+        or not (
+            attempt.attempted_at
+            <= snapshot.retrieved_at
+            == diff.compared_at
+            == freshness.observed_at
+            <= status.validated_at + _MAX_CLOCK_SKEW
+        )
+    ):
+        raise ModelRefreshStagingError("downloaded refresh history hash bindings are inconsistent")
+    approved_routes = {
+        (candidate.exact_model_id, candidate.approved_provider_endpoint)
+        for candidate in registry.candidates
+    }
+    if any(
+        (route.exact_model_id, route.provider_endpoint) not in approved_routes
+        for route in diff.selected_routes
+    ):
+        raise ModelRefreshStagingError(
+            "downloaded refresh history selected routes differ from its candidate registry"
+        )
+    if (diff.baseline_kind is RefreshBaselineKind.PREVIOUS_SNAPSHOT) is not predecessor_present:
+        raise ModelRefreshStagingError(
+            "downloaded refresh history baseline differs from its predecessor identity"
+        )
+    if diff.baseline_kind is RefreshBaselineKind.CANDIDATE_REGISTRY_HASH_ONLY:
+        try:
+            replayed_diff = diff_model_refresh(
+                current=snapshot,
+                candidate_registry=registry,
+                pricing_tolerance_fraction=status.pricing_tolerance_fraction,
+                compared_at=diff.compared_at,
+                selected_routes=diff.selected_routes,
+            )
+        except ValueError as exc:
+            raise ModelRefreshStagingError(
+                "downloaded bootstrap history cannot reproduce its semantic diff"
+            ) from exc
+        if replayed_diff != diff:
+            raise ModelRefreshStagingError(
+                "downloaded bootstrap history differs from its reproduced semantic diff"
+            )
+    else:
+        assert status.previous_workflow_run_id is not None
+        assert status.previous_workflow_run_attempt is not None
+        assert status.previous_workflow_status_sha256 is not None
+        assert previous_status is not None
+        assert previous_registry is not None
+        assert previous_source is not None
+        assert previous_snapshot is not None
+        if (
+            previous_status.workflow_run_id != status.previous_workflow_run_id
+            or previous_status.workflow_run_attempt != status.previous_workflow_run_attempt
+            or previous_status.workflow_status_sha256 != status.previous_workflow_status_sha256
+            or previous_status.disposition
+            not in {
+                ModelRefreshWorkflowDisposition.COMPLETED,
+                ModelRefreshWorkflowDisposition.PRODUCTION_BLOCKED,
+            }
+            or previous_status.candidate_registry_sha256 != previous_registry.registry_sha256
+        ):
+            raise ModelRefreshStagingError(
+                "downloaded refresh history predecessor identity is inconsistent"
+            )
+        for predecessor_filename, predecessor_artifact in (
+            (CANDIDATE_REGISTRY_FILENAME, previous_registry),
+            (SOURCE_EVIDENCE_FILENAME, previous_source),
+            (SNAPSHOT_FILENAME, previous_snapshot),
+        ):
+            _validate_status_artifact_binding(
+                status=previous_status,
+                filename=predecessor_filename,
+                artifact=predecessor_artifact,
+            )
+        try:
+            replayed_previous_snapshot = build_model_refresh_snapshot_from_source(
+                source_evidence=previous_source,
+                candidate_registry=previous_registry,
+            )
+            replayed_diff = diff_model_refresh(
+                current=snapshot,
+                previous=previous_snapshot,
+                previous_source_evidence=previous_source,
+                previous_candidate_registry=previous_registry,
+                candidate_registry=registry,
+                pricing_tolerance_fraction=status.pricing_tolerance_fraction,
+                compared_at=diff.compared_at,
+                selected_routes=diff.selected_routes,
+            )
+        except ValueError as exc:
+            raise ModelRefreshStagingError(
+                "downloaded chained history cannot reproduce its predecessor or semantic diff"
+            ) from exc
+        if (
+            replayed_previous_snapshot != previous_snapshot
+            or replayed_diff != diff
+            or previous_registry.created_at > previous_source.retrieved_at
+            or previous_registry.created_at > previous_snapshot.retrieved_at
+            or previous_registry.created_at > registry.created_at
+            or previous_snapshot.retrieved_at > snapshot.retrieved_at
+            or previous_status.validated_at > status.validated_at + _MAX_CLOCK_SKEW
+            or abs(previous_status.validated_at - previous_snapshot.retrieved_at) > _MAX_CLOCK_SKEW
+        ):
+            raise ModelRefreshStagingError(
+                "downloaded chained history differs from its reproduced semantic diff"
+            )
+    if status.disposition is ModelRefreshWorkflowDisposition.COMPLETED:
+        if attempt.status not in {
+            ModelRefreshAttemptStatus.UNCHANGED,
+            ModelRefreshAttemptStatus.CHANGED,
+        }:
+            raise ModelRefreshStagingError(
+                "downloaded completed history has a blocking attempt status"
+            )
+    elif attempt.status is not ModelRefreshAttemptStatus.PRODUCTION_BLOCKED:
+        raise ModelRefreshStagingError(
+            "downloaded blocked history lacks a production-blocked attempt status"
+        )
+    if policy_refresh is not None and (
+        policy_refresh.refresh_candidate_registry_sha256 != registry.registry_sha256
+        or policy_refresh.refresh_source_evidence_sha256 != source.source_evidence_sha256
+        or policy_refresh.refresh_snapshot_sha256 != snapshot.snapshot_sha256
+        or policy_refresh.refresh_semantic_sha256 != snapshot.semantic_sha256
+        or policy_refresh.refresh_catalog_snapshot_sha256 != snapshot.catalog_snapshot_sha256
+        or policy_refresh.refresh_zdr_snapshot_sha256 != snapshot.zdr_snapshot_sha256
+    ):
+        raise ModelRefreshStagingError(
+            "downloaded policy projection differs from its refresh history"
+        )
+    after = _observe_exact_private_directory(history_dir, expected_names=expected_names)
+    if before != after:
+        raise ModelRefreshStagingError("downloaded refresh history changed during validation")
+    return ValidatedModelRefreshHistory(
+        workflow_status=status,
+        candidate_registry=registry,
+        source_evidence=source,
+        snapshot=snapshot,
+        diff=diff,
+        attempt=attempt,
+        freshness=freshness,
+        previous_workflow_status=previous_status,
+        previous_candidate_registry=previous_registry,
+        previous_source_evidence=previous_source,
+        previous_snapshot=previous_snapshot,
+    )
+
+
 def _load_and_validate_bundle(
     *,
     output_dir: Path,
@@ -381,6 +927,7 @@ def _load_and_validate_bundle(
     registry: CandidateRegistry,
     previous_snapshot: ModelRefreshSnapshot | None,
     previous_source_evidence: ModelRefreshSourceEvidence | None,
+    previous_candidate_registry: CandidateRegistry | None,
     expected_selected_routes: Sequence[SelectedModelRoute],
     pricing_tolerance_fraction: str,
     soft_max_age_hours: int,
@@ -409,6 +956,13 @@ def _load_and_validate_bundle(
         if policy_eligibility_artifact is not None
         else None
     )
+    if (
+        registry.created_at > source_evidence.retrieved_at
+        or registry.created_at > snapshot.retrieved_at
+    ):
+        raise ModelRefreshStagingError(
+            "refresh candidate registry was created after its metadata observation"
+        )
     try:
         reproduced_snapshot = build_model_refresh_snapshot_from_source(
             source_evidence=source_evidence,
@@ -439,7 +993,7 @@ def _load_and_validate_bundle(
         raise ModelRefreshStagingError("refresh snapshot lacks authenticated metadata evidence")
     if snapshot.candidate_registry_sha256 != registry.registry_sha256:
         raise ModelRefreshStagingError("refresh snapshot binds a different candidate registry")
-    if diff.candidate_registry_sha256 != registry.registry_sha256:
+    if diff.current_candidate_registry_sha256 != registry.registry_sha256:
         raise ModelRefreshStagingError("refresh diff binds a different candidate registry")
     if (
         attempt.snapshot_sha256 != snapshot.snapshot_sha256
@@ -460,9 +1014,10 @@ def _load_and_validate_bundle(
         attempt.attempted_at <= snapshot.retrieved_at == diff.compared_at == freshness.observed_at
     ):
         raise ModelRefreshStagingError("refresh success bundle time ordering is inconsistent")
-    if snapshot.retrieved_at - validated_at > _MAX_CLOCK_SKEW:
+    if abs(validated_at - snapshot.retrieved_at) > _MAX_CLOCK_SKEW:
         raise ModelRefreshStagingError(
-            "refresh success bundle is future-dated beyond the clock-skew allowance"
+            "refresh success bundle validation time differs from its observation beyond "
+            "the clock-skew allowance"
         )
     trusted_observed_at = max(validated_at, snapshot.retrieved_at)
     try:
@@ -509,23 +1064,33 @@ def _load_and_validate_bundle(
     if diff.baseline_kind is RefreshBaselineKind.CANDIDATE_REGISTRY_HASH_ONLY:
         if (
             diff.baseline_sha256 != registry.registry_sha256
+            or diff.baseline_candidate_registry_sha256 != registry.registry_sha256
             or previous_snapshot is not None
             or previous_source_evidence is not None
+            or previous_candidate_registry is not None
         ):
             raise ModelRefreshStagingError("refresh bootstrap baseline binding is inconsistent")
     else:
-        if previous_snapshot is None or previous_source_evidence is None:
+        if (
+            previous_snapshot is None
+            or previous_source_evidence is None
+            or previous_candidate_registry is None
+        ):
             raise ModelRefreshStagingError(
-                "refresh previous-snapshot baseline or source is unavailable for validation"
+                "refresh previous-snapshot baseline, source, or registry is unavailable "
+                "for validation"
             )
         previous = ModelRefreshSnapshot.model_validate(previous_snapshot.model_dump(mode="json"))
         previous_source = ModelRefreshSourceEvidence.model_validate(
             previous_source_evidence.model_dump(mode="json")
         )
+        previous_registry = CandidateRegistry.model_validate(
+            previous_candidate_registry.model_dump(mode="json")
+        )
         try:
             reproduced_previous = build_model_refresh_snapshot_from_source(
                 source_evidence=previous_source,
-                candidate_registry=registry,
+                candidate_registry=previous_registry,
             )
         except ValueError as exc:
             raise ModelRefreshStagingError(
@@ -534,7 +1099,11 @@ def _load_and_validate_bundle(
         if (
             previous != reproduced_previous
             or previous.snapshot_sha256 != diff.baseline_sha256
-            or previous.candidate_registry_sha256 != registry.registry_sha256
+            or previous.candidate_registry_sha256 != previous_registry.registry_sha256
+            or diff.baseline_candidate_registry_sha256 != previous_registry.registry_sha256
+            or previous_registry.created_at > previous_source.retrieved_at
+            or previous_registry.created_at > previous.retrieved_at
+            or previous_registry.created_at > registry.created_at
             or previous.retrieved_at > snapshot.retrieved_at
         ):
             raise ModelRefreshStagingError("refresh previous-snapshot baseline binding is invalid")
@@ -542,6 +1111,8 @@ def _load_and_validate_bundle(
         expected_diff = diff_model_refresh(
             current=snapshot,
             previous=previous_snapshot,
+            previous_source_evidence=previous_source_evidence,
+            previous_candidate_registry=previous_candidate_registry,
             candidate_registry=registry,
             pricing_tolerance_fraction=pricing_tolerance_fraction,
             compared_at=diff.compared_at,
@@ -566,6 +1137,7 @@ def _load_and_validate_bundle(
             "incomplete refresh exit lacks a production-blocked attempt status"
         )
     result: dict[str, BaseModel] = {
+        CANDIDATE_REGISTRY_FILENAME: registry,
         SOURCE_EVIDENCE_FILENAME: source_evidence,
         SNAPSHOT_FILENAME: snapshot,
         DIFF_FILENAME: diff,
@@ -586,7 +1158,28 @@ def _expected_output_names(
         ModelRefreshWorkflowDisposition.COMPLETED,
         ModelRefreshWorkflowDisposition.PRODUCTION_BLOCKED,
     }:
-        return _POLICY_SUCCESS_FILENAMES if policy_projection_expected else _SUCCESS_FILENAMES
+        return (
+            _REFRESH_POLICY_SUCCESS_FILENAMES
+            if policy_projection_expected
+            else _REFRESH_SUCCESS_FILENAMES
+        )
+    if disposition is ModelRefreshWorkflowDisposition.FAILED:
+        return _FAILURE_FILENAMES
+    return frozenset()
+
+
+def _expected_staged_names(
+    disposition: ModelRefreshWorkflowDisposition,
+    *,
+    policy_projection_expected: bool,
+    predecessor_present: bool,
+) -> frozenset[str]:
+    if disposition in {
+        ModelRefreshWorkflowDisposition.COMPLETED,
+        ModelRefreshWorkflowDisposition.PRODUCTION_BLOCKED,
+    }:
+        expected = _POLICY_SUCCESS_FILENAMES if policy_projection_expected else _SUCCESS_FILENAMES
+        return expected | _IMMEDIATE_PREDECESSOR_FILENAMES if predecessor_present else expected
     if disposition is ModelRefreshWorkflowDisposition.FAILED:
         return _FAILURE_FILENAMES
     return frozenset()
@@ -606,17 +1199,90 @@ def _disposition_for_exit(exit_status: int) -> ModelRefreshWorkflowDisposition:
 
 def _artifact_self_hash(filename: str, artifact: BaseModel) -> str:
     field = {
+        CANDIDATE_REGISTRY_FILENAME: "registry_sha256",
         SOURCE_EVIDENCE_FILENAME: "source_evidence_sha256",
         SNAPSHOT_FILENAME: "snapshot_sha256",
         DIFF_FILENAME: "diff_sha256",
         ATTEMPT_FILENAME: "attempt_sha256",
         FRESHNESS_FILENAME: "freshness_sha256",
         POLICY_ELIGIBILITY_REFRESH_FILENAME: "artifact_sha256",
+        PREVIOUS_WORKFLOW_STATUS_FILENAME: "workflow_status_sha256",
+        PREVIOUS_CANDIDATE_REGISTRY_FILENAME: "registry_sha256",
+        PREVIOUS_SOURCE_EVIDENCE_FILENAME: "source_evidence_sha256",
+        PREVIOUS_SNAPSHOT_FILENAME: "snapshot_sha256",
     }.get(filename)
     value = getattr(artifact, field, None) if field is not None else None
     if isinstance(value, str) and re.fullmatch(_SHA256_PATTERN, value):
         return value
     raise ModelRefreshStagingError("refresh artifact lacks a recognized self-hash")
+
+
+def _validate_status_artifact_binding(
+    *,
+    status: ModelRefreshWorkflowStatus,
+    filename: str,
+    artifact: BaseModel,
+) -> None:
+    matching = tuple(binding for binding in status.artifacts if binding.filename == filename)
+    if len(matching) != 1:
+        raise ModelRefreshStagingError(
+            "refresh workflow status does not bind the exact previous artifact set"
+        )
+    raw = stable_json(artifact).encode("utf-8")
+    binding = matching[0]
+    if (
+        binding.byte_count != len(raw)
+        or binding.content_sha256 != hashlib.sha256(raw).hexdigest()
+        or binding.artifact_sha256 != _artifact_self_hash(filename, artifact)
+    ):
+        raise ModelRefreshStagingError(
+            "refresh workflow status artifact content binding is inconsistent"
+        )
+
+
+def _load_staged_candidate_registry(
+    path: Path,
+    *,
+    expected_filename: str = CANDIDATE_REGISTRY_FILENAME,
+) -> CandidateRegistry:
+    if path.name != expected_filename:
+        raise ModelRefreshStagingError("staged candidate registry filename is invalid")
+    try:
+        observation = read_json_evidence(
+            evidence_root=path.parent,
+            relative_path=path.name,
+            max_bytes=_MAX_ARTIFACT_BYTES,
+        )
+        registry = CandidateRegistry.model_validate_json(observation.content, strict=True)
+    except ValueError as exc:
+        raise ModelRefreshStagingError(
+            "staged candidate registry failed strict validation"
+        ) from exc
+    if observation.content != stable_json(registry).encode("utf-8"):
+        raise ModelRefreshStagingError("staged candidate registry is not canonical")
+    return registry
+
+
+def _observe_previous_history_directory(
+    path: Path,
+) -> tuple[frozenset[str], tuple[tuple[str, tuple[int, ...]], ...]]:
+    inventories = (
+        _POLICY_SUCCESS_FILENAMES | _IMMEDIATE_PREDECESSOR_FILENAMES | {WORKFLOW_STATUS_FILENAME},
+        _SUCCESS_FILENAMES | _IMMEDIATE_PREDECESSOR_FILENAMES | {WORKFLOW_STATUS_FILENAME},
+        _POLICY_SUCCESS_FILENAMES | {WORKFLOW_STATUS_FILENAME},
+        _SUCCESS_FILENAMES | {WORKFLOW_STATUS_FILENAME},
+    )
+    for expected_names in inventories:
+        try:
+            return expected_names, _observe_exact_private_directory(
+                path,
+                expected_names=expected_names,
+            )
+        except ModelRefreshStagingError:
+            continue
+    raise ModelRefreshStagingError(
+        "downloaded refresh history must contain one exact successful artifact inventory"
+    )
 
 
 def _whole_second_utc(value: datetime, *, label: str) -> datetime:
@@ -626,19 +1292,10 @@ def _whole_second_utc(value: datetime, *, label: str) -> datetime:
 
 
 def _canonical_fraction(value: str) -> Decimal:
-    if not isinstance(value, str):
-        raise ModelRefreshStagingError("refresh staging fraction must be decimal text")
     try:
-        parsed = Decimal(value)
-    except InvalidOperation as exc:
-        raise ModelRefreshStagingError("refresh staging fraction is invalid") from exc
-    rendered = format(parsed, "f")
-    if "." in rendered:
-        rendered = rendered.rstrip("0").rstrip(".")
-    normalized = "0" if rendered in {"", "-0"} else rendered
-    if not parsed.is_finite() or parsed < 0 or normalized != value:
-        raise ModelRefreshStagingError("refresh staging fraction is not canonical")
-    return parsed
+        return parse_model_refresh_fraction(value)
+    except ValueError as exc:
+        raise ModelRefreshStagingError("refresh staging fraction is not canonical") from exc
 
 
 def _observe_exact_private_directory(
@@ -754,7 +1411,11 @@ def _remove_fresh_staging_directory(path: Path) -> None:
         path = quarantine
     except OSError:
         pass
-    for name in (*_POLICY_SUCCESS_FILENAMES, WORKFLOW_STATUS_FILENAME):
+    for name in (
+        *_POLICY_SUCCESS_FILENAMES,
+        *_IMMEDIATE_PREDECESSOR_FILENAMES,
+        WORKFLOW_STATUS_FILENAME,
+    ):
         candidate = path / name
         try:
             if candidate.is_file() and not candidate.is_symlink():

@@ -25,14 +25,29 @@ from mmaudit.models.identity import (
     OpenRouterIdentityBindingResult,
     OpenRouterIdentityDiagnosticCode,
 )
+from mmaudit.models.provider_smoke import (
+    REAL_PROVIDER_SMOKE_REPOSITORY_SOURCE_PATH as _SMOKE_FIXTURE_PATH,
+)
+from mmaudit.models.provider_smoke import (
+    SyntheticProviderSmokeResponse as _SyntheticProviderSmokeResponse,
+)
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     ModelIdentityStrength,
     ModelRequestValidationStatus,
     UsageRecord,
 )
-from mmaudit.orchestration.cost_ledger import CostEntryStatus
+from mmaudit.orchestration.budgets import (
+    BudgetManager,
+    _issue_trusted_budget_recovery_scope,
+)
+from mmaudit.orchestration.cost_ledger import (
+    AtomicCostLedger,
+    CostEntryStatus,
+    CostLedgerSnapshot,
+)
 from mmaudit.orchestration.manifest import ManifestFileBinding, canonical_sha256
+from mmaudit.orchestration.scheduler_runtime import build_scheduler_cost_ledger_baseline
 from mmaudit.release_io import read_file_evidence, write_json_evidence
 from mmaudit.reporting.json_report import stable_json
 
@@ -45,16 +60,27 @@ REAL_PROVIDER_MODEL_ALLOWLIST = "MMAUDIT_REAL_PROVIDER_MODEL_ALLOWLIST"
 REAL_PROVIDER_ENDPOINT_ALLOWLIST = "MMAUDIT_REAL_PROVIDER_ENDPOINT_ALLOWLIST"
 REAL_PROVIDER_PRIVACY_PROFILE = "MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE"
 REAL_PROVIDER_EVIDENCE_OUTPUT = "MMAUDIT_REAL_PROVIDER_EVIDENCE_OUTPUT"
+SMOKE_FIXTURE_PATH = _SMOKE_FIXTURE_PATH
+SyntheticProviderSmokeResponse = _SyntheticProviderSmokeResponse
 
-_MAX_REMEDIATION_BUDGET_USD = Decimal("250.00")
+REAL_PROVIDER_LEDGER_CAP_USD = Decimal("250.00")
+SMOKE_STAGE_CAP_USD = Decimal("5.00")
 _MONEY_PATTERN = re.compile(r"(?:0|[1-9][0-9]*)(?:\.[0-9]{1,6})?\Z")
 _MODEL_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\Z")
 _PROVIDER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z")
 _NON_EXACT_MODEL_NAMES = frozenset({"auto", "free", "latest", "random"})
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
+_ROOT_LINEAGE_PATTERN = r"^sha256:[0-9a-f]{64}$"
+_PUBLIC_LINEAGE_FIELDS = frozenset(
+    {
+        "public_lineage_exact_model_id",
+        "public_lineage_root",
+        "public_lineage_bundle_sha256",
+        "public_lineage_manifest_file_sha256",
+    }
+)
 _SAFE_REQUEST_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
 _SAFE_GENERATION_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,255}$"
-SMOKE_FIXTURE_PATH = "tests/fixtures/solidity/provider_smoke/src/ProviderSmoke.sol"
 SMOKE_FIXTURE_SHA256 = "bbb0127919f734caedffb6f9143a634b6925ff4451985d1410a47e1637f1517b"
 SMOKE_MAX_OUTPUT_TOKENS: Literal[1024] = 1_024
 SMOKE_REASONING_EFFORT: Literal["none"] = "none"
@@ -67,6 +93,19 @@ class RealProviderTestConfigurationError(ValueError):
     """Raised before secret loading or network access when opt-in is incomplete."""
 
 
+def canonical_provider_attempt_request_id(logical_request_id: str, *, attempt: int) -> str:
+    """Return the exact request ID used by the provider cost ledger for one attempt."""
+
+    if re.fullmatch(_SAFE_REQUEST_ID_PATTERN, logical_request_id) is None:
+        raise ValueError("provider attempt logical request ID is invalid")
+    if type(attempt) is not int or attempt < 1:
+        raise ValueError("provider attempt number must be a positive integer")
+    request_id = logical_request_id if attempt == 1 else f"{logical_request_id}:attempt:{attempt}"
+    if re.fullmatch(_SAFE_REQUEST_ID_PATTERN, request_id) is None:
+        raise ValueError("provider attempt request ID is invalid")
+    return request_id
+
+
 @dataclass(frozen=True)
 class RealProviderTestSettings:
     """Validated, non-secret settings for one exact paid provider smoke request."""
@@ -77,7 +116,7 @@ class RealProviderTestSettings:
     model_id: str
     model_allowlist: tuple[str, ...]
     provider_endpoint_allowlist: tuple[str, ...]
-    privacy_profile: Literal["STRICT_ZDR"]
+    privacy_profile: Literal["SYNTHETIC_BENCHMARK"]
     evidence_output: Path
 
 
@@ -86,17 +125,73 @@ class RealProviderSmokeReasoningCapabilities:
     """Validated catalog controls required to disable optional smoke reasoning."""
 
     mandatory: Literal[False]
-    default_enabled: bool
-    supports_max_tokens: bool
+    default_enabled: bool | None
+    supports_max_tokens: bool | None
 
 
-class SyntheticProviderSmokeResponse(BaseModel):
-    """Strict minimal response used only for synthetic provider transport validation."""
+async def recover_real_provider_smoke_budget_baseline(
+    *,
+    budget: BudgetManager,
+    atomic_ledger: AtomicCostLedger,
+    ledger_before: CostLedgerSnapshot,
+) -> None:
+    """Adopt one exact terminally accounted ledger head as the smoke campaign baseline."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    current = atomic_ledger.snapshot()
+    if budget.atomic_ledger is not atomic_ledger:
+        raise RealProviderTestConfigurationError(
+            "smoke budget is not bound to the exact persistent cost ledger"
+        )
+    if current != ledger_before:
+        raise RealProviderTestConfigurationError(
+            "persistent cost ledger changed before smoke budget recovery"
+        )
+    if (
+        ledger_before.cap_usd != REAL_PROVIDER_LEDGER_CAP_USD
+        or ledger_before.over_cap
+        or ledger_before.has_reservation_overrun
+        or ledger_before.active_reserved_usd != 0
+        or any(
+            entry.status
+            not in {
+                CostEntryStatus.RECONCILED,
+                CostEntryStatus.UNCERTAIN_ACCOUNTED,
+            }
+            for entry in ledger_before.entries
+        )
+    ):
+        raise RealProviderTestConfigurationError(
+            "smoke budget recovery requires an in-cap, terminally accounted cost ledger"
+        )
+    if not ledger_before.entries:
+        if budget.recovery_required:
+            raise RealProviderTestConfigurationError(
+                "empty smoke cost ledger unexpectedly requires budget recovery"
+            )
+        return
+    if not budget.recovery_required:
+        raise RealProviderTestConfigurationError(
+            "nonempty smoke cost ledger unexpectedly lacks budget recovery custody"
+        )
 
-    status: Literal["OK"]
-    marker: Literal["mmaudit-synthetic-provider-smoke-v1"]
+    baseline = build_scheduler_cost_ledger_baseline(atomic_ledger)
+    if atomic_ledger.snapshot() != ledger_before:
+        raise RealProviderTestConfigurationError(
+            "persistent cost ledger changed while freezing the smoke baseline"
+        )
+    recovery_scope = _issue_trusted_budget_recovery_scope(
+        (),
+        cost_ledger_baseline=baseline,
+    )
+    await budget.restore_recovered_usage((), recovery_scope=recovery_scope)
+    if (
+        budget.recovery_required
+        or budget.spent_usd_exact != ledger_before.spent_usd
+        or atomic_ledger.snapshot() != ledger_before
+    ):
+        raise RealProviderTestConfigurationError(
+            "smoke budget recovery changed or failed to adopt the exact cost-ledger baseline"
+        )
 
 
 def real_provider_smoke_verification_subject_sha256(
@@ -151,6 +246,33 @@ def real_provider_smoke_verification_subject_sha256(
     )
 
 
+def _require_smoke_public_lineage_fields(
+    *,
+    privacy_profile: str,
+    requested_model_id: str,
+    public_lineage_exact_model_id: str | None,
+    public_lineage_root: str | None,
+    public_lineage_bundle_sha256: str | None,
+    public_lineage_manifest_file_sha256: str | None,
+) -> None:
+    """Require fresh public identity bindings only on prospective synthetic evidence."""
+
+    lineage_values = (
+        public_lineage_exact_model_id,
+        public_lineage_root,
+        public_lineage_bundle_sha256,
+        public_lineage_manifest_file_sha256,
+    )
+    if privacy_profile == "STRICT_ZDR":
+        if any(value is not None for value in lineage_values):
+            raise ValueError("historical STRICT_ZDR evidence cannot claim public lineage")
+        return
+    if any(value is None for value in lineage_values):
+        raise ValueError("synthetic smoke evidence requires a complete public lineage binding")
+    if public_lineage_exact_model_id != requested_model_id:
+        raise ValueError("synthetic smoke public lineage identity does not match its request")
+
+
 class _RealProviderSmokeEvidenceBody(BaseModel):
     """Bounded non-secret facts required to credit the real synthetic smoke."""
 
@@ -167,6 +289,13 @@ class _RealProviderSmokeEvidenceBody(BaseModel):
     openrouter_generation_id: str = Field(pattern=_SAFE_GENERATION_ID_PATTERN)
     requested_model_id: str
     canonical_model_id: str
+    public_lineage_exact_model_id: str | None = None
+    public_lineage_root: str | None = Field(default=None, pattern=_ROOT_LINEAGE_PATTERN)
+    public_lineage_bundle_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
+    public_lineage_manifest_file_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+    )
     returned_model_id: str
     generation_model_id: str
     approved_provider_endpoint: str
@@ -199,8 +328,8 @@ class _RealProviderSmokeEvidenceBody(BaseModel):
     requested_reasoning_effort: Literal["none"]
     requested_reasoning_excluded: Literal[True]
     model_reasoning_mandatory: Literal[False]
-    model_reasoning_default_enabled: bool
-    model_reasoning_supports_max_tokens: bool
+    model_reasoning_default_enabled: bool | None
+    model_reasoning_supports_max_tokens: bool | None
     actual_cost_usd: str
     accounted_cost_usd: str
     ledger_cap_usd: str
@@ -211,7 +340,7 @@ class _RealProviderSmokeEvidenceBody(BaseModel):
     ledger_remaining_usd: str
     validation_status: Literal["valid"]
     identity_strength: ModelIdentityStrength
-    privacy_profile: Literal["STRICT_ZDR"]
+    privacy_profile: Literal["STRICT_ZDR", "SYNTHETIC_BENCHMARK"]
     require_zdr: Literal[True]
     data_collection: Literal["deny"]
     allow_fallbacks: Literal[False]
@@ -267,6 +396,14 @@ class _RealProviderSmokeEvidenceBody(BaseModel):
     def evidence_is_coherent(self) -> Self:
         if self.fixture_sha256 != SMOKE_FIXTURE_SHA256:
             raise ValueError("smoke fixture hash differs from the committed pinned fixture")
+        _require_smoke_public_lineage_fields(
+            privacy_profile=self.privacy_profile,
+            requested_model_id=self.requested_model_id,
+            public_lineage_exact_model_id=self.public_lineage_exact_model_id,
+            public_lineage_root=self.public_lineage_root,
+            public_lineage_bundle_sha256=self.public_lineage_bundle_sha256,
+            public_lineage_manifest_file_sha256=self.public_lineage_manifest_file_sha256,
+        )
         aliases = {self.requested_model_id, self.canonical_model_id}
         if self.requested_model_id.split("/", 1)[0] != self.canonical_model_id.split("/", 1)[0]:
             raise ValueError("requested and canonical smoke models have different authors")
@@ -320,7 +457,7 @@ class _RealProviderSmokeEvidenceBody(BaseModel):
             raise ValueError("ledger spent total is below the smoke accounted cost")
         if spent_before + spend_delta != spent or spend_delta != accounted:
             raise ValueError("smoke ledger spend delta does not reconcile")
-        if spend_delta > Decimal("5"):
+        if spend_delta > SMOKE_STAGE_CAP_USD:
             raise ValueError("smoke spend exceeded its stage cap")
         if spent + remaining != cap:
             raise ValueError("smoke ledger totals do not reconcile")
@@ -334,7 +471,13 @@ class RealProviderSmokeEvidence(_RealProviderSmokeEvidenceBody):
 
     @model_validator(mode="after")
     def evidence_is_self_hashed(self) -> Self:
-        expected = canonical_sha256(self.model_dump(mode="json", exclude={"evidence_sha256"}))
+        expected = canonical_sha256(
+            self.model_dump(
+                mode="json",
+                exclude={"evidence_sha256"}
+                | (_PUBLIC_LINEAGE_FIELDS if self.privacy_profile == "STRICT_ZDR" else frozenset()),
+            )
+        )
         if self.evidence_sha256 != expected:
             raise ValueError("smoke evidence self-hash is inconsistent")
         return self
@@ -357,6 +500,13 @@ class _RealProviderSmokeRejectionEvidenceBody(BaseModel):
     openrouter_generation_id: str = Field(pattern=_SAFE_GENERATION_ID_PATTERN)
     requested_model_id: str
     canonical_model_id: str
+    public_lineage_exact_model_id: str | None = None
+    public_lineage_root: str | None = Field(default=None, pattern=_ROOT_LINEAGE_PATTERN)
+    public_lineage_bundle_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
+    public_lineage_manifest_file_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+    )
     returned_model_id: str
     selected_model_id: str
     approved_provider_endpoint: str
@@ -422,7 +572,7 @@ class _RealProviderSmokeRejectionEvidenceBody(BaseModel):
     stage_cost_control_satisfied: bool
     validation_status: Literal["valid"]
     identity_strength: Literal[ModelIdentityStrength.UNBOUND]
-    privacy_profile: Literal["STRICT_ZDR"]
+    privacy_profile: Literal["STRICT_ZDR", "SYNTHETIC_BENCHMARK"]
     require_zdr: Literal[True]
     data_collection: Literal["deny"]
     allow_fallbacks: Literal[False]
@@ -502,6 +652,14 @@ class _RealProviderSmokeRejectionEvidenceBody(BaseModel):
     def rejection_evidence_is_coherent(self) -> Self:
         if self.fixture_sha256 != SMOKE_FIXTURE_SHA256:
             raise ValueError("smoke rejection fixture differs from the committed pinned fixture")
+        _require_smoke_public_lineage_fields(
+            privacy_profile=self.privacy_profile,
+            requested_model_id=self.requested_model_id,
+            public_lineage_exact_model_id=self.public_lineage_exact_model_id,
+            public_lineage_root=self.public_lineage_root,
+            public_lineage_bundle_sha256=self.public_lineage_bundle_sha256,
+            public_lineage_manifest_file_sha256=self.public_lineage_manifest_file_sha256,
+        )
         aliases = {self.requested_model_id, self.canonical_model_id}
         if self.requested_model_id.split("/", 1)[0] != self.canonical_model_id.split("/", 1)[0]:
             raise ValueError("requested and canonical smoke rejection models differ by author")
@@ -539,8 +697,12 @@ class _RealProviderSmokeRejectionEvidenceBody(BaseModel):
             or self.generation_observation.generation_id != self.openrouter_generation_id
         ):
             raise ValueError("smoke rejection generation observation is not request-bound REAL")
-        if self.ledger_entry_request_id != f"{self.internal_request_id}:attempt:1":
-            raise ValueError("smoke rejection ledger request ID is not attempt-bound")
+        expected_ledger_request_id = canonical_provider_attempt_request_id(
+            self.internal_request_id,
+            attempt=1,
+        )
+        if self.ledger_entry_request_id != expected_ledger_request_id:
+            raise ValueError("smoke rejection ledger request ID is not first-attempt-bound")
         reserved = Decimal(self.reserved_cost_usd)
         provider_reported = (
             None
@@ -599,7 +761,7 @@ class _RealProviderSmokeRejectionEvidenceBody(BaseModel):
             self.ledger_entry_status is CostEntryStatus.RESERVATION_OVERRUN
         ):
             raise ValueError("smoke rejection overrun status is inconsistent")
-        if self.stage_cost_control_satisfied is not (accounted <= Decimal("5")):
+        if self.stage_cost_control_satisfied is not (accounted <= SMOKE_STAGE_CAP_USD):
             raise ValueError("smoke rejection stage-cost status is inconsistent")
         if remaining != max(
             Decimal(0),
@@ -616,7 +778,13 @@ class RealProviderSmokeRejectionEvidence(_RealProviderSmokeRejectionEvidenceBody
 
     @model_validator(mode="after")
     def rejection_evidence_is_self_hashed(self) -> Self:
-        expected = canonical_sha256(self.model_dump(mode="json", exclude={"evidence_sha256"}))
+        expected = canonical_sha256(
+            self.model_dump(
+                mode="json",
+                exclude={"evidence_sha256"}
+                | (_PUBLIC_LINEAGE_FIELDS if self.privacy_profile == "STRICT_ZDR" else frozenset()),
+            )
+        )
         if self.evidence_sha256 != expected:
             raise ValueError("smoke rejection evidence self-hash is inconsistent")
         return self
@@ -635,6 +803,13 @@ class _RealProviderSmokeVerificationRejectionEvidenceBody(BaseModel):
     fixture_path: Literal["tests/fixtures/solidity/provider_smoke/src/ProviderSmoke.sol"]
     fixture_sha256: str = Field(pattern=_SHA256_PATTERN)
     canonical_model_id: str
+    public_lineage_exact_model_id: str | None = None
+    public_lineage_root: str | None = Field(default=None, pattern=_ROOT_LINEAGE_PATTERN)
+    public_lineage_bundle_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
+    public_lineage_manifest_file_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+    )
     approved_provider_endpoint: str
     verification_subject_sha256: str = Field(pattern=_SHA256_PATTERN)
     identity_binding_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -667,7 +842,7 @@ class _RealProviderSmokeVerificationRejectionEvidenceBody(BaseModel):
     ledger_has_reservation_overrun: bool
     ledger_remaining_usd: str
     stage_cost_control_satisfied: bool
-    privacy_profile: Literal["STRICT_ZDR"]
+    privacy_profile: Literal["STRICT_ZDR", "SYNTHETIC_BENCHMARK"]
     require_zdr: Literal[True]
     data_collection: Literal["deny"]
     allow_fallbacks: Literal[False]
@@ -720,6 +895,14 @@ class _RealProviderSmokeVerificationRejectionEvidenceBody(BaseModel):
         if self.fixture_sha256 != SMOKE_FIXTURE_SHA256:
             raise ValueError("verification rejection fixture differs from the pinned fixture")
         record = self.usage_record
+        _require_smoke_public_lineage_fields(
+            privacy_profile=self.privacy_profile,
+            requested_model_id=record.requested_model,
+            public_lineage_exact_model_id=self.public_lineage_exact_model_id,
+            public_lineage_root=self.public_lineage_root,
+            public_lineage_bundle_sha256=self.public_lineage_bundle_sha256,
+            public_lineage_manifest_file_sha256=self.public_lineage_manifest_file_sha256,
+        )
         aliases = {record.requested_model, self.canonical_model_id}
         if (
             record.requested_model.split("/", 1)[0] != self.canonical_model_id.split("/", 1)[0]
@@ -788,8 +971,12 @@ class _RealProviderSmokeVerificationRejectionEvidenceBody(BaseModel):
             self.mismatch_code in EVENTUAL_GENERATION_USAGE_MISMATCH_CODES
         ):
             raise ValueError("verification rejection exhaustion status is inconsistent")
-        if self.ledger_entry_request_id != f"{record.request_id}:attempt:1":
-            raise ValueError("verification rejection ledger request ID is not attempt-bound")
+        expected_ledger_request_id = canonical_provider_attempt_request_id(
+            record.request_id,
+            attempt=1,
+        )
+        if self.ledger_entry_request_id != expected_ledger_request_id:
+            raise ValueError("verification rejection ledger request ID is not first-attempt-bound")
         if record.reasoning_tokens != 0 or record.completion_tokens > SMOKE_MAX_OUTPUT_TOKENS:
             raise ValueError("verification rejection request controls are inconsistent")
         if record.cached_tokens > record.prompt_tokens:
@@ -836,7 +1023,7 @@ class _RealProviderSmokeVerificationRejectionEvidenceBody(BaseModel):
             or self.ledger_over_cap is not (cap - spent - active_reserved < 0)
             or self.ledger_has_reservation_overrun
             is not (self.ledger_entry_status is CostEntryStatus.RESERVATION_OVERRUN)
-            or self.stage_cost_control_satisfied is not (accounted <= Decimal("5"))
+            or self.stage_cost_control_satisfied is not (accounted <= SMOKE_STAGE_CAP_USD)
             or remaining != max(Decimal(0), cap - spent - active_reserved)
         ):
             raise ValueError("verification rejection ledger evidence is inconsistent")
@@ -852,7 +1039,13 @@ class RealProviderSmokeVerificationRejectionEvidence(
 
     @model_validator(mode="after")
     def verification_rejection_is_self_hashed(self) -> Self:
-        expected = canonical_sha256(self.model_dump(mode="json", exclude={"evidence_sha256"}))
+        expected = canonical_sha256(
+            self.model_dump(
+                mode="json",
+                exclude={"evidence_sha256"}
+                | (_PUBLIC_LINEAGE_FIELDS if self.privacy_profile == "STRICT_ZDR" else frozenset()),
+            )
+        )
         if self.evidence_sha256 != expected:
             raise ValueError("verification rejection self-hash is inconsistent")
         return self
@@ -920,11 +1113,11 @@ def validate_smoke_reasoning_off_preflight(
         )
     mandatory = reasoning.get("mandatory")
     default_enabled = reasoning.get("default_enabled")
-    supports_max_tokens = reasoning.get("supports_max_tokens", False)
+    supports_max_tokens = reasoning.get("supports_max_tokens")
     if (
         mandatory is not False
-        or not isinstance(default_enabled, bool)
-        or not isinstance(supports_max_tokens, bool)
+        or (default_enabled is not None and not isinstance(default_enabled, bool))
+        or (supports_max_tokens is not None and not isinstance(supports_max_tokens, bool))
     ):
         raise RealProviderTestConfigurationError(
             "smoke model cannot prove optional bounded reasoning controls"
@@ -964,9 +1157,9 @@ def load_real_provider_test_settings(
         raise RealProviderTestConfigurationError(
             f"{REAL_PROVIDER_COST_CAP} must be a plain positive decimal"
         ) from None
-    if cost_cap <= 0 or cost_cap > _MAX_REMEDIATION_BUDGET_USD:
+    if cost_cap != REAL_PROVIDER_LEDGER_CAP_USD:
         raise RealProviderTestConfigurationError(
-            f"{REAL_PROVIDER_COST_CAP} must be greater than zero and at most 250.00"
+            f"{REAL_PROVIDER_COST_CAP} must be exactly 250.00 for the existing cost ledger"
         )
     cost_ledger = Path(_required_value(environ, REAL_PROVIDER_COST_LEDGER))
     if not cost_ledger.is_absolute():
@@ -1001,9 +1194,9 @@ def load_real_provider_test_settings(
             f"{REAL_PROVIDER_ENDPOINT_ALLOWLIST} must select exactly one provider endpoint"
         )
     privacy_profile = _required_value(environ, REAL_PROVIDER_PRIVACY_PROFILE)
-    if privacy_profile != "STRICT_ZDR":
+    if privacy_profile != "SYNTHETIC_BENCHMARK":
         raise RealProviderTestConfigurationError(
-            f"{REAL_PROVIDER_PRIVACY_PROFILE} must be exactly STRICT_ZDR"
+            f"{REAL_PROVIDER_PRIVACY_PROFILE} must be exactly SYNTHETIC_BENCHMARK"
         )
     evidence_output = Path(_required_value(environ, REAL_PROVIDER_EVIDENCE_OUTPUT))
     if not evidence_output.is_absolute():
@@ -1017,7 +1210,7 @@ def load_real_provider_test_settings(
         model_id=model_id,
         model_allowlist=model_allowlist,
         provider_endpoint_allowlist=provider_allowlist,
-        privacy_profile="STRICT_ZDR",
+        privacy_profile="SYNTHETIC_BENCHMARK",
         evidence_output=evidence_output,
     )
 
@@ -1030,6 +1223,8 @@ def seal_real_provider_smoke_evidence(
     if "evidence_sha256" in value:
         raise ValueError("smoke evidence must be sealed exactly once")
     body = _RealProviderSmokeEvidenceBody.model_validate(dict(value))
+    if body.privacy_profile != "SYNTHETIC_BENCHMARK":
+        raise ValueError("historical STRICT_ZDR smoke evidence is read-only")
     payload = body.model_dump(mode="json")
     return RealProviderSmokeEvidence.model_validate(
         {
@@ -1047,6 +1242,8 @@ def seal_real_provider_smoke_rejection_evidence(
     if "evidence_sha256" in value:
         raise ValueError("smoke rejection evidence must be sealed exactly once")
     body = _RealProviderSmokeRejectionEvidenceBody.model_validate(dict(value))
+    if body.privacy_profile != "SYNTHETIC_BENCHMARK":
+        raise ValueError("historical STRICT_ZDR smoke rejection evidence is read-only")
     payload = body.model_dump(mode="json")
     return RealProviderSmokeRejectionEvidence.model_validate(
         {
@@ -1064,6 +1261,8 @@ def seal_real_provider_smoke_verification_rejection_evidence(
     if "evidence_sha256" in value:
         raise ValueError("verification rejection evidence must be sealed exactly once")
     body = _RealProviderSmokeVerificationRejectionEvidenceBody.model_validate(dict(value))
+    if body.privacy_profile != "SYNTHETIC_BENCHMARK":
+        raise ValueError("historical STRICT_ZDR verification rejection is read-only")
     payload = body.model_dump(mode="json")
     return RealProviderSmokeVerificationRejectionEvidence.model_validate(
         {
@@ -1190,6 +1389,8 @@ def write_real_provider_smoke_evidence(
 ) -> ManifestFileBinding:
     """Write one fresh private artifact after a final secret-content scan."""
 
+    if evidence.privacy_profile != "SYNTHETIC_BENCHMARK":
+        raise ValueError("historical STRICT_ZDR smoke evidence is read-only")
     preflight_real_provider_smoke_output(
         output_path=output_path,
         forbidden_paths=(),
@@ -1215,6 +1416,8 @@ def write_real_provider_smoke_rejection_evidence(
 ) -> ManifestFileBinding:
     """Write one fresh private rejection artifact while leaving success absent."""
 
+    if evidence.privacy_profile != "SYNTHETIC_BENCHMARK":
+        raise ValueError("historical STRICT_ZDR smoke rejection evidence is read-only")
     rejection_output = real_provider_smoke_rejection_output_path(
         success_output=success_output,
         internal_request_id=evidence.internal_request_id,
@@ -1240,6 +1443,8 @@ def write_real_provider_smoke_verification_rejection_evidence(
 ) -> ManifestFileBinding:
     """Write one fresh private post-bind rejection after a final canary scan."""
 
+    if evidence.privacy_profile != "SYNTHETIC_BENCHMARK":
+        raise ValueError("historical STRICT_ZDR verification rejection is read-only")
     rejection_output = real_provider_smoke_verification_rejection_output_path(
         success_output=success_output,
         internal_request_id=evidence.usage_record.request_id,

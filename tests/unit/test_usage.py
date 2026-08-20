@@ -32,15 +32,26 @@ from mmaudit.models.token_planning import (
     build_request_token_plan,
 )
 from mmaudit.models.usage import (
+    _has_authrunner_owned_real_usage_origin,
+    _issue_trusted_usage_recovery_scope,
+    _recover_trusted_usage_records,
+    atomic_request_limit_reservations_from_usage,
     is_creditable_usage_record,
+    is_recovery_creditable_usage_record,
+    is_structurally_recovery_creditable_usage_record,
+    recovery_atomic_request_limit_reservations_from_usage,
+    recovery_request_token_plan_from_usage,
     request_token_plan_from_usage,
     usage_requires_audit_policy_evidence,
 )
-from mmaudit.orchestration.budgets import AtomicTokenReservationEvidence
+from mmaudit.orchestration.budgets import (
+    AtomicRequestLimitReservationEvidence,
+    AtomicTokenReservationEvidence,
+)
 from mmaudit.orchestration.context_manifest import ContextManifestError, build_context_manifest
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.privacy import EndpointPolicyClass, PrivacyProfile, PrivacySourceClassification
-from tests.identity_fixtures import bind_synthetic_usage_identity
+from tests.identity_fixtures import bind_synthetic_usage_identity, reattest_synthetic_real_usage
 from tests.output_evidence_fixtures import (
     SYNTHETIC_OUTPUT_CAPABILITY_SHA256,
     synthetic_structured_output_routing,
@@ -343,6 +354,347 @@ def _retry_token_bound_creditable_record() -> UsageRecord:
             },
         }
     )
+
+
+def _with_request_limit_inventory(
+    record: UsageRecord,
+    *,
+    request_limit_scope: str,
+    request_limit_count_before: int,
+    request_limit_maximum: int = 10,
+) -> UsageRecord:
+    plan = request_token_plan_from_usage(record)
+    assert plan is not None
+    inventory = tuple(
+        AtomicRequestLimitReservationEvidence.build(
+            request_id=(
+                record.request_id if attempt == 1 else f"{record.request_id}:attempt:{attempt}"
+            ),
+            exact_model_id=record.requested_model,
+            role=record.role,
+            request_token_plan_sha256=plan.plan_sha256,
+            request_limit_scope=request_limit_scope,
+            request_limit_count_before=request_limit_count_before + attempt - 1,
+            request_limit_maximum=request_limit_maximum,
+        )
+        for attempt in range(1, record.attempts + 1)
+    )
+    final = inventory[-1]
+    return record.model_copy(
+        update={
+            "routing": {
+                **record.routing,
+                "atomic_request_limit_reservations": [
+                    item.model_dump(mode="json") for item in inventory
+                ],
+                "atomic_request_limit_reservation_sha256s": [
+                    item.evidence_sha256 for item in inventory
+                ],
+                "atomic_request_limit_reservation": final.model_dump(mode="json"),
+                "atomic_request_limit_reservation_sha256": final.evidence_sha256,
+            }
+        }
+    )
+
+
+def _owned_request_limit_record(
+    request_id: str,
+    *,
+    request_limit_scope: str,
+    request_limit_count_before: int,
+) -> UsageRecord:
+    provisional = _creditable_record(execution_evidence=ExecutionEvidenceKind.REAL).model_copy(
+        update={"request_id": request_id}
+    )
+    plan, atomic = _token_plan_for_record(provisional, request_id=request_id)
+    planned = provisional.model_copy(
+        update={
+            "routing": {
+                **provisional.routing,
+                "selected_provider_name": provisional.provider,
+                "request_token_plan": plan.model_dump(mode="json"),
+                "request_token_plan_sha256": plan.plan_sha256,
+                "atomic_token_reservations": [atomic.model_dump(mode="json")],
+                "atomic_token_reservation_sha256s": [atomic.evidence_sha256],
+                "atomic_token_reservation": atomic.model_dump(mode="json"),
+                "atomic_token_reservation_sha256": atomic.evidence_sha256,
+            }
+        }
+    )
+    bound = bind_synthetic_usage_identity(planned)
+    return reattest_synthetic_real_usage(
+        _with_request_limit_inventory(
+            bound,
+            request_limit_scope=request_limit_scope,
+            request_limit_count_before=request_limit_count_before,
+        )
+    )
+
+
+def test_ordinary_request_limit_inventory_remains_task_local_and_zero_based() -> None:
+    record = _with_request_limit_inventory(
+        _retry_token_bound_creditable_record(),
+        request_limit_scope="request-test",
+        request_limit_count_before=0,
+    )
+
+    plan = request_token_plan_from_usage(record)
+    assert plan is not None
+    inventory = atomic_request_limit_reservations_from_usage(record, plan)
+    assert tuple(item.request_limit_scope for item in inventory) == (
+        record.request_id,
+        record.request_id,
+    )
+    assert tuple(item.request_limit_count_before for item in inventory) == (0, 1)
+    assert tuple(item.request_limit_count_after for item in inventory) == (1, 2)
+
+
+def test_recovery_request_limit_inventory_requires_external_root_and_exact_start() -> None:
+    record = _with_request_limit_inventory(
+        _retry_token_bound_creditable_record(),
+        request_limit_scope="campaign-root-request",
+        request_limit_count_before=7,
+    )
+
+    with pytest.raises(ValueError, match="scheduled usage request-limit attempts"):
+        request_token_plan_from_usage(record)
+    assert not is_creditable_usage_record(record)
+
+    plan = recovery_request_token_plan_from_usage(
+        record,
+        request_limit_scope="campaign-root-request",
+        request_limit_count_before=7,
+    )
+    assert plan is not None
+    inventory = recovery_atomic_request_limit_reservations_from_usage(
+        record,
+        plan,
+        request_limit_scope="campaign-root-request",
+        request_limit_count_before=7,
+    )
+    assert tuple(item.request_limit_count_before for item in inventory) == (7, 8)
+    assert tuple(item.request_limit_count_after for item in inventory) == (8, 9)
+
+    with pytest.raises(ValueError, match="incomplete or unordered"):
+        recovery_atomic_request_limit_reservations_from_usage(
+            record,
+            plan,
+            request_limit_scope="different-root-request",
+            request_limit_count_before=7,
+        )
+    with pytest.raises(ValueError, match="incomplete or unordered"):
+        recovery_atomic_request_limit_reservations_from_usage(
+            record,
+            plan,
+            request_limit_scope="campaign-root-request",
+            request_limit_count_before=8,
+        )
+
+
+def test_recovery_request_limit_inventory_rejects_per_record_maximum_drift() -> None:
+    record = _with_request_limit_inventory(
+        _retry_token_bound_creditable_record(),
+        request_limit_scope="campaign-root-request",
+        request_limit_count_before=3,
+    )
+    plan = recovery_request_token_plan_from_usage(
+        record,
+        request_limit_scope="campaign-root-request",
+        request_limit_count_before=3,
+    )
+    assert plan is not None
+    first = AtomicRequestLimitReservationEvidence.model_validate(
+        record.routing["atomic_request_limit_reservations"][0]
+    )
+    second = AtomicRequestLimitReservationEvidence.build(
+        request_id=f"{record.request_id}:attempt:2",
+        exact_model_id=record.requested_model,
+        role=record.role,
+        request_token_plan_sha256=plan.plan_sha256,
+        request_limit_scope="campaign-root-request",
+        request_limit_count_before=4,
+        request_limit_maximum=11,
+    )
+    drifted = record.model_copy(
+        update={
+            "routing": {
+                **record.routing,
+                "atomic_request_limit_reservations": [
+                    first.model_dump(mode="json"),
+                    second.model_dump(mode="json"),
+                ],
+                "atomic_request_limit_reservation_sha256s": [
+                    first.evidence_sha256,
+                    second.evidence_sha256,
+                ],
+                "atomic_request_limit_reservation": second.model_dump(mode="json"),
+                "atomic_request_limit_reservation_sha256": second.evidence_sha256,
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="incomplete or unordered"):
+        recovery_atomic_request_limit_reservations_from_usage(
+            drifted,
+            plan,
+            request_limit_scope="campaign-root-request",
+            request_limit_count_before=3,
+        )
+
+
+def test_recovery_credit_requires_owned_real_usage_and_exact_coordinates() -> None:
+    root_scope = "family-root-request"
+    record = _owned_request_limit_record(
+        "family-root-request.child-a",
+        request_limit_scope=root_scope,
+        request_limit_count_before=1,
+    )
+
+    assert is_recovery_creditable_usage_record(
+        record,
+        request_limit_scope=root_scope,
+        request_limit_count_before=1,
+        require_real=True,
+    )
+    assert not is_creditable_usage_record(record, require_real=True)
+    assert not is_recovery_creditable_usage_record(
+        record,
+        request_limit_scope="different-root-request",
+        request_limit_count_before=1,
+        require_real=True,
+    )
+    assert not is_recovery_creditable_usage_record(
+        record,
+        request_limit_scope=root_scope,
+        request_limit_count_before=2,
+        require_real=True,
+    )
+
+    serialized = UsageRecord.model_validate(record.model_dump(mode="json"))
+    assert not is_recovery_creditable_usage_record(
+        serialized,
+        request_limit_scope=root_scope,
+        request_limit_count_before=1,
+        require_real=True,
+    )
+    assert is_structurally_recovery_creditable_usage_record(
+        serialized,
+        request_limit_scope=root_scope,
+        request_limit_count_before=1,
+        require_real=True,
+    )
+
+
+def test_usage_recovery_scope_rebinds_mixed_ordinary_and_recovery_real_usage() -> None:
+    root_scope = "family-root-request"
+    root = _owned_request_limit_record(
+        root_scope,
+        request_limit_scope=root_scope,
+        request_limit_count_before=0,
+    )
+    child = _owned_request_limit_record(
+        "family-root-request.child-a",
+        request_limit_scope=root_scope,
+        request_limit_count_before=1,
+    )
+    serialized = tuple(
+        UsageRecord.model_validate(record.model_dump(mode="json")) for record in (root, child)
+    )
+    assert is_structurally_recovery_creditable_usage_record(
+        serialized[1],
+        request_limit_scope=root_scope,
+        request_limit_count_before=1,
+        require_real=True,
+    )
+    scope = _issue_trusted_usage_recovery_scope(
+        serialized,
+        recovery_request_limit_coordinates=((child.request_id, root_scope, 1),),
+    )
+
+    recovered = _recover_trusted_usage_records(serialized, scope)
+
+    assert is_creditable_usage_record(recovered[0], require_real=True)
+    assert not _has_authrunner_owned_real_usage_origin(recovered[0])
+    assert is_recovery_creditable_usage_record(
+        recovered[1],
+        request_limit_scope=root_scope,
+        request_limit_count_before=1,
+        require_real=True,
+    )
+    assert not _has_authrunner_owned_real_usage_origin(recovered[1])
+    with pytest.raises(ValueError, match="invalid or consumed"):
+        _recover_trusted_usage_records(serialized, scope)
+
+
+def test_usage_recovery_scope_rejects_gap_root_swap_and_coordinate_drift() -> None:
+    root_scope = "family-root-request"
+    records = (
+        _owned_request_limit_record(
+            root_scope,
+            request_limit_scope=root_scope,
+            request_limit_count_before=0,
+        ),
+        _owned_request_limit_record(
+            "family-root-request.child-a",
+            request_limit_scope=root_scope,
+            request_limit_count_before=1,
+        ),
+        _owned_request_limit_record(
+            "family-root-request.child-b",
+            request_limit_scope=root_scope,
+            request_limit_count_before=3,
+        ),
+    )
+    serialized = tuple(
+        UsageRecord.model_validate(record.model_dump(mode="json")) for record in records
+    )
+
+    with pytest.raises(ValueError, match="coordinate chain is inconsistent"):
+        _issue_trusted_usage_recovery_scope(
+            serialized,
+            recovery_request_limit_coordinates=(
+                (records[1].request_id, root_scope, 1),
+                (records[2].request_id, root_scope, 3),
+            ),
+        )
+    with pytest.raises(ValueError, match="invalid recovery-scoped usage"):
+        _issue_trusted_usage_recovery_scope(
+            serialized,
+            recovery_request_limit_coordinates=(
+                (records[1].request_id, "different-root-request", 1),
+            ),
+        )
+    with pytest.raises(ValueError, match="invalid recovery-scoped usage"):
+        _issue_trusted_usage_recovery_scope(
+            serialized,
+            recovery_request_limit_coordinates=(
+                (records[1].request_id, root_scope, 3),
+                (records[2].request_id, root_scope, 1),
+            ),
+        )
+    with pytest.raises(ValueError, match="not exact and sorted"):
+        _issue_trusted_usage_recovery_scope(
+            serialized,
+            recovery_request_limit_coordinates=(
+                (records[2].request_id, root_scope, 3),
+                (records[1].request_id, root_scope, 1),
+            ),
+        )
+
+
+def test_recovery_plan_rejects_oversized_attempt_count_before_nested_materialization() -> None:
+    record = _with_request_limit_inventory(
+        _token_bound_creditable_record(),
+        request_limit_scope="family-root-request",
+        request_limit_count_before=1,
+    ).model_copy(update={"attempts": 34, "retry_count": 33})
+
+    with pytest.raises(ValueError, match="compiled bound"):
+        recovery_request_token_plan_from_usage(
+            record,
+            request_limit_scope="family-root-request",
+            request_limit_count_before=1,
+        )
 
 
 def test_creditable_usage_accepts_strict_mock_only_when_real_is_not_required() -> None:

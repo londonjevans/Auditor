@@ -2,10 +2,17 @@ name: mmaudit model metadata refresh
 
 on:
   workflow_dispatch:
+    inputs:
+      bootstrap_without_history:
+        description: Allow the first run only when no durable refresh history exists
+        required: true
+        default: false
+        type: boolean
   schedule:
     - cron: "17 3 * * *"
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -58,15 +65,25 @@ jobs:
           umask 077
           refresh_root="$(mktemp -d "$RUNNER_TEMP/mmaudit-model-refresh-root.XXXXXX")"
           output_dir="$refresh_root/output"
+          history_root="$(mktemp -d "$RUNNER_TEMP/mmaudit-model-refresh-history.XXXXXX")"
+          history_dir="$history_root/evidence"
+          history_archive="$history_root/history.zip"
           staging_root="$(mktemp -d "$RUNNER_TEMP/mmaudit-model-refresh-staging.XXXXXX")"
           staging_dir="$staging_root/evidence"
-          chmod 700 "$refresh_root" "$staging_root"
+          chmod 700 "$refresh_root" "$history_root" "$staging_root"
           test ! -e "$output_dir"
+          test ! -e "$history_dir"
+          test ! -e "$history_archive"
           test ! -e "$staging_dir"
           printf 'REFRESH_OUTPUT_DIR=%s\n' "$output_dir" >> "$GITHUB_ENV"
+          printf 'REFRESH_HISTORY_DIR=%s\n' "$history_dir" >> "$GITHUB_ENV"
+          printf 'REFRESH_HISTORY_ARCHIVE=%s\n' "$history_archive" >> "$GITHUB_ENV"
           printf 'REFRESH_STAGING_DIR=%s\n' "$staging_dir" >> "$GITHUB_ENV"
           printf 'MMAUDIT_REFRESH_EXIT=70\n' >> "$GITHUB_ENV"
           printf 'MMAUDIT_REFRESH_STAGE_EXIT=70\n' >> "$GITHUB_ENV"
+          printf 'MMAUDIT_REFRESH_HISTORY_MODE=unresolved\n' >> "$GITHUB_ENV"
+          printf 'MMAUDIT_REFRESH_HISTORY_READY=false\n' >> "$GITHUB_ENV"
+          printf 'MMAUDIT_REFRESH_ARTIFACT_CLASS=terminal\n' >> "$GITHUB_ENV"
       - name: Record protected provider prerequisite
         if: env.HAS_PROVIDER_KEY != 'true'
         run: |
@@ -82,8 +99,429 @@ jobs:
           cache: pip
       - name: Install mmaudit
         run: python -m pip install .
+      - name: Resolve and validate prior durable refresh history
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_BOOTSTRAP_REQUESTED: ${{ inputs.bootstrap_without_history }}
+          WORKFLOW_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          WORKFLOW_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          bootstrap_requested="${WORKFLOW_BOOTSTRAP_REQUESTED:-false}"
+          max_history_runs=100
+          max_attempts_per_run=10
+          max_total_history_attempts=100
+          max_repository_artifacts=1000
+          max_history_archive_bytes=32000000
+          if [[ ! "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ||
+                ! "$GITHUB_RUN_ID" =~ ^[1-9][0-9]{0,17}$ ||
+                ! "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]{0,2}$ ||
+                "$GITHUB_RUN_ATTEMPT" -gt $((max_attempts_per_run + 1)) ]]; then
+            echo "Current refresh workflow identity is malformed."
+            exit 74
+          fi
+          history_precedes_current() {
+            local candidate_run_id="$1"
+            local candidate_run_attempt="$2"
+            [[ "$candidate_run_id" -lt "$GITHUB_RUN_ID" ||
+               ( "$candidate_run_id" -eq "$GITHUB_RUN_ID" &&
+                 "$candidate_run_attempt" -lt "$GITHUB_RUN_ATTEMPT" ) ]]
+          }
+          eligible_run_ids=("$GITHUB_RUN_ID")
+          eligible_run_attempts=("$((GITHUB_RUN_ATTEMPT - 1))")
+          eligible_attempt_limit=""
+          lookup_eligible_run() {
+            local candidate_run_id="$1"
+            local run_index
+            for ((run_index = 0; run_index < ${#eligible_run_ids[@]}; run_index++)); do
+              if [[ "${eligible_run_ids[$run_index]}" == "$candidate_run_id" ]]; then
+                eligible_attempt_limit="${eligible_run_attempts[$run_index]}"
+                return 0
+              fi
+            done
+            eligible_attempt_limit=""
+            return 1
+          }
+          total_history_attempts=$((GITHUB_RUN_ATTEMPT - 1))
+          if ! eligible_runs_tsv="$(
+            gh api --method GET \
+              "/repos/$GITHUB_REPOSITORY/actions/workflows/mmaudit-model.yml/runs" \
+              -f branch="$WORKFLOW_DEFAULT_BRANCH" \
+              -f status=completed \
+              -f per_page="$max_history_runs" \
+              -f page=1 \
+              --jq '(["META", (.total_count | tostring), (.workflow_runs | length | tostring)] | @tsv), (.workflow_runs | sort_by(.id) | reverse[] | ["RUN", (.id | tostring), (.run_attempt | tostring)] | @tsv)'
+          )"; then
+            echo "Prior refresh workflow history lookup failed."
+            exit 74
+          fi
+          runs_metadata_seen=false
+          workflow_runs_total=""
+          workflow_runs_on_page=""
+          observed_run_rows=0
+          if [[ -n "$eligible_runs_tsv" ]]; then
+            while IFS=$'\t' read -r record_type first second extra; do
+              if [[ "$record_type" == "META" ]]; then
+                if [[ "$runs_metadata_seen" == "true" || -n "$extra" ||
+                      ! "$first" =~ ^[0-9]{1,6}$ || ! "$second" =~ ^[0-9]{1,3}$ ||
+                      "$first" -gt "$max_history_runs" ||
+                      "$second" -gt "$max_history_runs" || "$first" -lt "$second" ]]; then
+                  echo "Prior refresh workflow history metadata is malformed."
+                  exit 74
+                fi
+                runs_metadata_seen=true
+                workflow_runs_total="$first"
+                workflow_runs_on_page="$second"
+                continue
+              fi
+              run_id="$first"
+              run_attempt="$second"
+              if [[ "$record_type" != "RUN" || -n "$extra" ||
+                    ! "$run_id" =~ ^[1-9][0-9]{0,17}$ ||
+                    ! "$run_attempt" =~ ^[1-9][0-9]{0,2}$ ||
+                    "$run_attempt" -gt "$max_attempts_per_run" ]]; then
+                echo "Prior refresh workflow identity is malformed."
+                exit 74
+              fi
+              observed_run_rows=$((observed_run_rows + 1))
+              if [[ "$run_id" -lt "$GITHUB_RUN_ID" ]]; then
+                if lookup_eligible_run "$run_id"; then
+                  echo "Prior refresh workflow identity is duplicated."
+                  exit 74
+                fi
+                eligible_run_ids[${#eligible_run_ids[@]}]="$run_id"
+                eligible_run_attempts[${#eligible_run_attempts[@]}]="$run_attempt"
+                total_history_attempts=$((total_history_attempts + run_attempt))
+              fi
+            done <<< "$eligible_runs_tsv"
+          fi
+          if [[ "$runs_metadata_seen" != "true" ||
+                "$observed_run_rows" -ne "$workflow_runs_on_page" ||
+                "$total_history_attempts" -gt "$max_total_history_attempts" ]]; then
+            echo "Prior refresh workflow history exceeds its bounded identity inventory."
+            exit 74
+          fi
+
+          selected_run_id=""
+          selected_run_attempt=""
+          selected_artifact_id=""
+          selected_artifact_size=""
+          selected_source_commit=""
+          selected_matches=0
+          repository_artifact_total=""
+          artifact_pages=1
+          artifact_page=1
+          while [[ "$artifact_page" -le "$artifact_pages" ]]; do
+            if ! artifact_page_tsv="$(
+              gh api --method GET \
+                "/repos/$GITHUB_REPOSITORY/actions/artifacts" \
+                -f per_page=100 \
+                -f page="$artifact_page" \
+                --jq '(["META", (.total_count | tostring), (.artifacts | length | tostring)] | @tsv), (.artifacts[] | ["ARTIFACT", (.id | tostring), (.workflow_run.id | tostring), .name, (.expired | tostring), (.size_in_bytes | tostring)] | @tsv)'
+            )"; then
+              echo "Prior refresh artifact history lookup failed."
+              exit 74
+            fi
+            artifact_header="${artifact_page_tsv%%$'\n'*}"
+            artifact_records=""
+            if [[ "$artifact_page_tsv" == *$'\n'* ]]; then
+              artifact_records="${artifact_page_tsv#*$'\n'}"
+            fi
+            IFS=$'\t' read -r metadata_type artifact_total artifact_rows metadata_extra \
+              <<< "$artifact_header"
+            if [[ "$metadata_type" != "META" || -n "$metadata_extra" ||
+                  ! "$artifact_total" =~ ^[0-9]{1,7}$ ||
+                  ! "$artifact_rows" =~ ^[0-9]{1,3}$ || "$artifact_rows" -gt 100 ||
+                  "$artifact_total" -gt "$max_repository_artifacts" ]]; then
+              echo "Prior refresh artifact history exceeds its bounded inventory."
+              exit 74
+            fi
+            if [[ -z "$repository_artifact_total" ]]; then
+              repository_artifact_total="$artifact_total"
+              artifact_pages=$(((artifact_total + 99) / 100))
+            elif [[ "$artifact_total" != "$repository_artifact_total" ]]; then
+              echo "Prior refresh artifact history changed during pagination."
+              exit 74
+            fi
+            observed_artifact_rows=0
+            if [[ -n "$artifact_records" ]]; then
+              while IFS=$'\t' read -r record_type artifact_id artifact_run_id artifact_name \
+                artifact_expired artifact_size artifact_extra; do
+                if [[ "$record_type" != "ARTIFACT" || -n "$artifact_extra" ]]; then
+                  echo "Prior refresh artifact history metadata is malformed."
+                  exit 74
+                fi
+                observed_artifact_rows=$((observed_artifact_rows + 1))
+              if [[ "$artifact_expired" != "false" ||
+                    ! "$artifact_name" =~ ^mmaudit-model-refresh-history-([1-9][0-9]*)-([1-9][0-9]*)$ ]]; then
+                continue
+              fi
+              named_run_id="${BASH_REMATCH[1]}"
+              named_run_attempt="${BASH_REMATCH[2]}"
+              if ! lookup_eligible_run "$named_run_id"; then
+                echo "Prior refresh history artifact identity is malformed or out of scope."
+                exit 74
+              fi
+              if [[ ! "$artifact_id" =~ ^[1-9][0-9]{0,17}$ ||
+                    ! "$artifact_run_id" =~ ^[1-9][0-9]{0,17}$ ||
+                    ! "$named_run_id" =~ ^[1-9][0-9]{0,17}$ ||
+                    ! "$named_run_attempt" =~ ^[1-9][0-9]{0,2}$ ||
+                    ! "$artifact_size" =~ ^[1-9][0-9]{0,8}$ ||
+                    "$artifact_size" -gt "$max_history_archive_bytes" ||
+                    "$artifact_run_id" != "$named_run_id" ||
+                    "$named_run_attempt" -gt "$eligible_attempt_limit" ]]; then
+                echo "Prior refresh history artifact identity is malformed or out of scope."
+                exit 74
+              fi
+              if ! history_precedes_current "$named_run_id" "$named_run_attempt"; then
+                echo "Prior refresh history artifact is not earlier than this attempt."
+                exit 74
+              fi
+              if [[ -z "$selected_run_id" ||
+                    "$named_run_id" -gt "$selected_run_id" ||
+                    ( "$named_run_id" -eq "$selected_run_id" &&
+                      "$named_run_attempt" -gt "$selected_run_attempt" ) ]]; then
+                selected_run_id="$named_run_id"
+                selected_run_attempt="$named_run_attempt"
+                selected_artifact_id="$artifact_id"
+                selected_artifact_size="$artifact_size"
+                selected_matches=1
+              elif [[ "$named_run_id" -eq "$selected_run_id" &&
+                      "$named_run_attempt" -eq "$selected_run_attempt" ]]; then
+                selected_matches=$((selected_matches + 1))
+              fi
+              done <<< "$artifact_records"
+            fi
+            if [[ "$observed_artifact_rows" -ne "$artifact_rows" ]]; then
+              echo "Prior refresh artifact page inventory is inconsistent."
+              exit 74
+            fi
+            artifact_page=$((artifact_page + 1))
+          done
+          if [[ "$selected_matches" -gt 1 ]]; then
+            echo "Prior refresh workflow has an ambiguous history artifact."
+            exit 74
+          fi
+
+          for ((run_index = 0; run_index < ${#eligible_run_ids[@]}; run_index++)); do
+            guarded_run_id="${eligible_run_ids[$run_index]}"
+            guarded_attempt_limit="${eligible_run_attempts[$run_index]}"
+            if [[ -z "$selected_run_id" && "$guarded_run_id" != "$GITHUB_RUN_ID" ]]; then
+              continue
+            fi
+            for ((guarded_attempt = 1; guarded_attempt <= guarded_attempt_limit; guarded_attempt++)); do
+              if [[ -n "$selected_run_id" ]] &&
+                 { [[ "$guarded_run_id" -lt "$selected_run_id" ]] ||
+                   [[ "$guarded_run_id" -eq "$selected_run_id" &&
+                      "$guarded_attempt" -le "$selected_run_attempt" ]]; }; then
+                continue
+              fi
+              if ! history_precedes_current "$guarded_run_id" "$guarded_attempt"; then
+                continue
+              fi
+              if ! guarded_attempt_tsv="$(
+                gh api --method GET \
+                  "/repos/$GITHUB_REPOSITORY/actions/runs/$guarded_run_id/attempts/$guarded_attempt" \
+                  --jq '[.id, .run_attempt, .head_sha, .head_branch, .status, .conclusion] | @tsv'
+              )"; then
+                echo "Prior refresh workflow attempt guard lookup failed."
+                exit 74
+              fi
+              if [[ "$guarded_attempt_tsv" == *$'\n'* ]]; then
+                echo "Prior refresh workflow attempt guard identity is malformed."
+                exit 74
+              fi
+              IFS=$'\t' read -r observed_guarded_run observed_guarded_attempt \
+                observed_guarded_commit observed_guarded_branch observed_guarded_status \
+                observed_guarded_conclusion guarded_extra <<< "$guarded_attempt_tsv"
+              if [[ -n "$guarded_extra" ||
+                    "$observed_guarded_run" != "$guarded_run_id" ||
+                    "$observed_guarded_attempt" != "$guarded_attempt" ||
+                    ! "$observed_guarded_commit" =~ ^[0-9a-f]{40}$ ||
+                    "$observed_guarded_branch" != "$WORKFLOW_DEFAULT_BRANCH" ||
+                    "$observed_guarded_status" != "completed" ||
+                    ! "$observed_guarded_conclusion" =~ ^[a-z_]{1,32}$ ]]; then
+                echo "Prior refresh workflow attempt guard identity is malformed."
+                exit 74
+              fi
+              if [[ "$observed_guarded_conclusion" == "success" ]]; then
+                echo "A newer successful refresh workflow attempt is missing its history artifact."
+                exit 74
+              fi
+              if ! guarded_jobs_tsv="$(
+                gh api --method GET \
+                  "/repos/$GITHUB_REPOSITORY/actions/runs/$guarded_run_id/attempts/$guarded_attempt/jobs" \
+                  -f per_page=100 \
+                  -f page=1 \
+                  --jq '(["META", (.total_count | tostring), (.jobs | length | tostring)] | @tsv), (.jobs[] | select(.name == "Trusted default-branch model metadata refresh") | ["PROVIDER", .status, .conclusion, ([.steps[]? | select(.name == "Declare durable refresh history publication requirement")] | length | tostring), ([.steps[]? | select(.name == "Declare durable refresh history publication requirement")][0].status // ""), ([.steps[]? | select(.name == "Declare durable refresh history publication requirement")][0].conclusion // "")] | @tsv)'
+              )"; then
+                echo "Prior refresh workflow attempt job lookup failed."
+                exit 74
+              fi
+              jobs_header="${guarded_jobs_tsv%%$'\n'*}"
+              jobs_records=""
+              if [[ "$guarded_jobs_tsv" == *$'\n'* ]]; then
+                jobs_records="${guarded_jobs_tsv#*$'\n'}"
+              fi
+              IFS=$'\t' read -r jobs_type jobs_total jobs_on_page jobs_extra <<< "$jobs_header"
+              if [[ "$jobs_type" != "META" || -n "$jobs_extra" ||
+                    ! "$jobs_total" =~ ^[1-9][0-9]{0,1}$ ||
+                    ! "$jobs_on_page" =~ ^[1-9][0-9]{0,1}$ ||
+                    "$jobs_total" -gt 20 || "$jobs_on_page" != "$jobs_total" ]]; then
+                echo "Prior refresh workflow attempt job inventory is malformed."
+                exit 74
+              fi
+              provider_job_matches=0
+              marker_requires_history=false
+              if [[ -n "$jobs_records" ]]; then
+                while IFS=$'\t' read -r jobs_record provider_status provider_conclusion \
+                  marker_count marker_status marker_conclusion provider_extra; do
+                  if [[ "$jobs_record" != "PROVIDER" || -n "$provider_extra" ||
+                        "$provider_status" != "completed" ||
+                        ! "$provider_conclusion" =~ ^[a-z_]{1,32}$ ||
+                        ! "$marker_count" =~ ^[0-1]$ ]]; then
+                    echo "Prior refresh workflow provider job evidence is malformed."
+                    exit 74
+                  fi
+                  provider_job_matches=$((provider_job_matches + 1))
+                  if [[ "$marker_count" -eq 1 ]]; then
+                    if [[ "$marker_status" != "completed" ||
+                          ! "$marker_conclusion" =~ ^[a-z_]{1,32}$ ]]; then
+                      echo "Prior refresh workflow publication marker is malformed."
+                      exit 74
+                    fi
+                    if [[ "$marker_conclusion" == "success" ]]; then
+                      marker_requires_history=true
+                    fi
+                  elif [[ -n "$marker_status" || -n "$marker_conclusion" ]]; then
+                    echo "Prior refresh workflow publication marker is malformed."
+                    exit 74
+                  fi
+                done <<< "$jobs_records"
+              fi
+              if [[ "$provider_job_matches" -gt 1 ]]; then
+                echo "Prior refresh workflow provider job evidence is ambiguous."
+                exit 74
+              fi
+              if [[ "$marker_requires_history" == "true" ]]; then
+                echo "A newer history-publishing refresh attempt is missing its history artifact."
+                exit 74
+              fi
+            done
+          done
+
+          if [[ -z "$selected_run_id" ]]; then
+            if [[ "$WORKFLOW_EVENT_NAME" == "workflow_dispatch" &&
+                  "$bootstrap_requested" == "true" ]]; then
+              echo "No durable refresh history exists; explicit manual bootstrap accepted."
+              printf 'MMAUDIT_REFRESH_HISTORY_MODE=bootstrap\n' >> "$GITHUB_ENV"
+              printf 'MMAUDIT_REFRESH_HISTORY_READY=true\n' >> "$GITHUB_ENV"
+            else
+              echo "No durable refresh history exists and bootstrap was not explicitly approved."
+              printf 'MMAUDIT_REFRESH_HISTORY_MODE=missing\n' >> "$GITHUB_ENV"
+              printf 'MMAUDIT_REFRESH_EXIT=78\n' >> "$GITHUB_ENV"
+            fi
+            exit 0
+          fi
+          if [[ "$bootstrap_requested" == "true" ]]; then
+            echo "Durable refresh history exists; the bootstrap permission is ignored."
+          fi
+
+          artifact_name="mmaudit-model-refresh-history-${selected_run_id}-${selected_run_attempt}"
+          if ! attempt_tsv="$(
+            gh api --method GET \
+              "/repos/$GITHUB_REPOSITORY/actions/runs/$selected_run_id/attempts/$selected_run_attempt" \
+              --jq '[.id, .run_attempt, .head_sha, .head_branch] | @tsv'
+          )"; then
+            echo "Prior refresh workflow attempt lookup failed."
+            exit 74
+          fi
+          IFS=$'\t' read -r attempt_run_id attempt_number attempt_source_commit attempt_branch \
+            <<< "$attempt_tsv"
+          if [[ "$attempt_run_id" != "$selected_run_id" ||
+                "$attempt_number" != "$selected_run_attempt" ||
+                ! "$attempt_source_commit" =~ ^[0-9a-f]{40}$ ||
+                "$attempt_branch" != "$WORKFLOW_DEFAULT_BRANCH" ]]; then
+            echo "Prior refresh workflow attempt identity is inconsistent."
+            exit 74
+          fi
+          selected_source_commit="$attempt_source_commit"
+          if [[ "$selected_source_commit" != "$GITHUB_SHA" ]]; then
+            if ! comparison_tsv="$(
+              gh api --method GET \
+                "/repos/$GITHUB_REPOSITORY/compare/$selected_source_commit...$GITHUB_SHA" \
+                --jq '[.status, .merge_base_commit.sha, .base_commit.sha] | @tsv'
+            )"; then
+              echo "Prior refresh source ancestry lookup failed."
+              exit 74
+            fi
+            if [[ "$comparison_tsv" == *$'\n'* ]]; then
+              echo "Prior refresh source is not an ancestor of the current workflow source."
+              exit 74
+            fi
+            IFS=$'\t' read -r comparison_status comparison_merge_base comparison_base \
+              comparison_extra <<< "$comparison_tsv"
+            if [[ -n "$comparison_extra" || "$comparison_status" != "ahead" ||
+                  "$comparison_merge_base" != "$selected_source_commit" ||
+                  "$comparison_base" != "$selected_source_commit" ]]; then
+              echo "Prior refresh source is not an ancestor of the current workflow source."
+              exit 74
+            fi
+          fi
+          if ! observed_artifact_tsv="$(
+            gh api --method GET \
+              "/repos/$GITHUB_REPOSITORY/actions/artifacts/$selected_artifact_id" \
+              --jq '[.id, .workflow_run.id, .workflow_run.head_sha, .name, .expired, .size_in_bytes] | @tsv'
+          )"; then
+            echo "Prior refresh history artifact identity lookup failed."
+            exit 74
+          fi
+          IFS=$'\t' read -r observed_artifact_id observed_run_id observed_source_commit \
+            observed_name observed_expired observed_size observed_extra <<< "$observed_artifact_tsv"
+          if [[ "$observed_artifact_tsv" == *$'\n'* || -n "$observed_extra" ||
+                "$observed_artifact_id" != "$selected_artifact_id" ||
+                "$observed_run_id" != "$selected_run_id" ||
+                "$observed_source_commit" != "$selected_source_commit" ||
+                "$observed_name" != "$artifact_name" ||
+                "$observed_expired" != "false" ||
+                "$observed_size" != "$selected_artifact_size" ||
+                ! "$observed_size" =~ ^[1-9][0-9]{0,8}$ ||
+                "$observed_size" -gt "$max_history_archive_bytes" ]]; then
+            echo "Prior refresh history artifact changed after selection."
+            exit 74
+          fi
+          umask 077
+          if ! (
+            ulimit -f 31250
+            timeout --signal=KILL 120s gh api --method GET \
+              "/repos/$GITHUB_REPOSITORY/actions/artifacts/$selected_artifact_id/zip"
+          ) > "$REFRESH_HISTORY_ARCHIVE"; then
+            rm -f -- "$REFRESH_HISTORY_ARCHIVE"
+            echo "Prior refresh history artifact download failed or exceeded its bound."
+            exit 74
+          fi
+          chmod 600 "$REFRESH_HISTORY_ARCHIVE"
+          if ! python scripts/stage_model_refresh_artifacts.py extract-history \
+            --archive "$REFRESH_HISTORY_ARCHIVE" \
+            --expected-archive-bytes "$observed_size" \
+            --history-dir "$REFRESH_HISTORY_DIR"; then
+            rm -f -- "$REFRESH_HISTORY_ARCHIVE"
+            echo "Prior refresh history artifact extraction failed."
+            exit 74
+          fi
+          rm -f -- "$REFRESH_HISTORY_ARCHIVE"
+          python scripts/stage_model_refresh_artifacts.py validate-history \
+            --history-dir "$REFRESH_HISTORY_DIR" \
+            --expected-workflow-run-id "$selected_run_id" \
+            --expected-workflow-run-attempt "$selected_run_attempt" \
+            --expected-source-commit "$selected_source_commit"
+          printf 'PREVIOUS_WORKFLOW_RUN_ID=%s\n' "$selected_run_id" >> "$GITHUB_ENV"
+          printf 'PREVIOUS_WORKFLOW_RUN_ATTEMPT=%s\n' "$selected_run_attempt" >> "$GITHUB_ENV"
+          printf 'PREVIOUS_WORKFLOW_SOURCE_COMMIT=%s\n' "$selected_source_commit" >> "$GITHUB_ENV"
+          printf 'MMAUDIT_REFRESH_HISTORY_MODE=prior\n' >> "$GITHUB_ENV"
+          printf 'MMAUDIT_REFRESH_HISTORY_READY=true\n' >> "$GITHUB_ENV"
       - name: Prepare explicit operator secret file
-        if: env.HAS_PROVIDER_KEY == 'true'
+        if: env.HAS_PROVIDER_KEY == 'true' && env.MMAUDIT_REFRESH_HISTORY_READY == 'true'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
@@ -95,11 +533,22 @@ jobs:
           test -f "$secret_file"
           test ! -L "$secret_file"
       - name: Refresh exact provider metadata and capture its gate
-        if: env.HAS_PROVIDER_KEY == 'true'
+        if: env.HAS_PROVIDER_KEY == 'true' && env.MMAUDIT_REFRESH_HISTORY_READY == 'true'
         run: |
           set +e
+          history_args=()
+          if [[ "$MMAUDIT_REFRESH_HISTORY_MODE" == "prior" ]]; then
+            history_args=(
+              --previous-candidate-registry \
+                "$REFRESH_HISTORY_DIR/model-refresh-candidate-registry.json"
+              --previous-snapshot "$REFRESH_HISTORY_DIR/model-refresh-snapshot.json"
+              --previous-source-evidence \
+                "$REFRESH_HISTORY_DIR/model-refresh-source-evidence.json"
+            )
+          fi
           mmaudit models refresh \
             --candidate-registry config/models.candidates.toml \
+            "${history_args[@]}" \
             --secrets-env-file "$MMAUDIT_SECRETS_ENV_FILE" \
             --output-dir "$REFRESH_OUTPUT_DIR" \
             --soft-max-age-hours 30 \
@@ -128,10 +577,20 @@ jobs:
         run: |
           set +e
           refresh_exit="${MMAUDIT_REFRESH_EXIT:-70}"
+          history_args=()
+          if [[ "$MMAUDIT_REFRESH_HISTORY_MODE" == "prior" ]]; then
+            history_args=(
+              --previous-history-dir "$REFRESH_HISTORY_DIR"
+              --expected-previous-workflow-run-id "$PREVIOUS_WORKFLOW_RUN_ID"
+              --expected-previous-workflow-run-attempt "$PREVIOUS_WORKFLOW_RUN_ATTEMPT"
+              --expected-previous-source-commit "$PREVIOUS_WORKFLOW_SOURCE_COMMIT"
+            )
+          fi
           python scripts/stage_model_refresh_artifacts.py \
             --output-dir "$REFRESH_OUTPUT_DIR" \
             --staging-dir "$REFRESH_STAGING_DIR" \
             --candidate-registry config/models.candidates.toml \
+            "${history_args[@]}" \
             --refresh-exit-status "$refresh_exit" \
             --source-commit "$WORKFLOW_SOURCE_COMMIT" \
             --workflow-run-id "$WORKFLOW_RUN_ID" \
@@ -141,17 +600,35 @@ jobs:
             --hard-max-age-hours 72
           stage_exit=$?
           printf 'MMAUDIT_REFRESH_STAGE_EXIT=%s\n' "$stage_exit" >> "$GITHUB_ENV"
+          artifact_class=terminal
+          if [[ "$stage_exit" -eq 0 &&
+                ( "$refresh_exit" -eq 0 || "$refresh_exit" -eq 6 ) ]]; then
+            artifact_class=history
+          fi
+          printf 'MMAUDIT_REFRESH_ARTIFACT_CLASS=%s\n' "$artifact_class" >> "$GITHUB_ENV"
           set -e
           exit 0
+      - name: Declare durable refresh history publication requirement
+        if: >-
+          always() &&
+          env.MMAUDIT_REFRESH_ARTIFACT_CLASS == 'history'
+        run: echo "This refresh attempt must retain a durable history artifact."
       - name: Upload exact non-secret refresh evidence
+        id: history-upload
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: mmaudit-model-refresh-${{ github.run_id }}-${{ github.run_attempt }}
+          name: mmaudit-model-refresh-${{ env.MMAUDIT_REFRESH_ARTIFACT_CLASS }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.REFRESH_STAGING_DIR }}
           include-hidden-files: false
           if-no-files-found: error
           retention-days: 14
+      - name: Confirm durable refresh history publication
+        if: >-
+          always() &&
+          env.MMAUDIT_REFRESH_ARTIFACT_CLASS == 'history' &&
+          steps.history-upload.outcome == 'success'
+        run: echo "Durable model-refresh history publication completed."
       - name: Propagate refresh and artifact gates
         if: always()
         run: |

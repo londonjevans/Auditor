@@ -5,7 +5,7 @@ import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from pathlib import Path
 
 import pytest
@@ -193,6 +193,51 @@ def test_new_uncertain_attempt_preserves_all_terminal_prior_entries(tmp_path: Pa
     assert {
         entry.request_id: entry for entry in after.entries if entry.request_id != current.request_id
     } == {entry.request_id: entry for entry in before.entries}
+
+
+def test_uncertain_transport_commit_can_reconcile_to_known_provider_cost(tmp_path: Path) -> None:
+    ledger = AtomicCostLedger.initialize(tmp_path / "costs.json", cap_usd=Decimal("1.00"))
+    reservation = ledger.reserve("transport-attempt", Decimal("0.60"))
+
+    uncertain = ledger.reconcile(reservation, None)
+    reconciled = ledger.reconcile(reservation, Decimal("0.123456789012345678"))
+
+    assert uncertain.status is CostEntryStatus.UNCERTAIN_ACCOUNTED
+    assert reconciled.status is CostEntryStatus.RECONCILED
+    assert reconciled.actual_cost_usd == Decimal("0.123456789012345678")
+    assert reconciled.accounted_cost_usd == Decimal("0.123456789012345678")
+    assert ledger.snapshot().spent_usd == Decimal("0.123456789012345678")
+
+
+def test_money_validation_ignores_hostile_ambient_precision_and_rejects_subclasses(
+    tmp_path: Path,
+) -> None:
+    exact_cap = Decimal("999999999999.123456789012345678")
+    exact_cost = Decimal("0.123456789012345678")
+    with localcontext() as context:
+        context.prec = 6
+        ledger = AtomicCostLedger.initialize(tmp_path / "exact-costs.json", cap_usd=exact_cap)
+        reservation = ledger.reserve("exact-request", exact_cost)
+        entry = ledger.reconcile(reservation, exact_cost)
+        with pytest.raises(CostLedgerConfigurationError, match="supported exact decimal bounds"):
+            AtomicCostLedger.initialize(
+                tmp_path / "overprecision-costs.json",
+                cap_usd=Decimal("0.1234567890123456789"),
+            )
+
+        class DecimalSubclass(Decimal):
+            pass
+
+        with pytest.raises(CostLedgerConfigurationError, match="provided as Decimal"):
+            AtomicCostLedger.initialize(
+                tmp_path / "subclass-costs.json",
+                cap_usd=DecimalSubclass("1"),
+            )
+
+    snapshot = ledger.snapshot()
+    assert snapshot.cap_usd == exact_cap
+    assert entry.actual_cost_usd == exact_cost
+    assert snapshot.spent_usd == exact_cost
 
 
 def test_proven_pre_send_failure_releases_capacity_and_records_closed_reason(

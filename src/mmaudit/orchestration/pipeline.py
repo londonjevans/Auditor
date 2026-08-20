@@ -16,7 +16,14 @@ import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import (
+    ROUND_HALF_EVEN,
+    Context,
+    Decimal,
+    DivisionByZero,
+    InvalidOperation,
+    Overflow,
+)
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, cast
 
@@ -86,6 +93,16 @@ from mmaudit.language_plugins import (
     language_capability_quality_gate,
 )
 from mmaudit.logging import JsonLineHandler, RedactingFilter
+from mmaudit.models import openrouter as openrouter_models
+from mmaudit.models.coverage_planning import (
+    ModelSurfaceCoveragePlan,
+    ModelSurfaceGapTask,
+    ModelSurfaceResourcePreflight,
+    ModelSurfaceReviewerBinding,
+    ModelSurfaceTaskResourcePreview,
+    build_model_surface_coverage_plan,
+    build_model_surface_resource_preflight,
+)
 from mmaudit.models.discovery import (
     DiscoveryCandidateRoute,
     openrouter_catalog_canonical_slug,
@@ -97,13 +114,16 @@ from mmaudit.models.endpoint_snapshots import (
 )
 from mmaudit.models.openrouter import (
     OpenRouterAuthenticationError,
+    OpenRouterCandidateReviewBoundaryError,
     OpenRouterClient,
     OpenRouterError,
     OpenRouterPrivacyError,
     OpenRouterQualificationRoutingEvidence,
     OpenRouterQualifiedReasoningRoutingBinding,
     OpenRouterSchemaError,
+    OpenRouterTruncatedResponseError,
     trusted_openrouter_execution_evidence,
+    trusted_preview_candidate_review_task_resources,
 )
 from mmaudit.models.policy_eligibility import PolicyUsePurpose
 from mmaudit.models.policy_selection import (
@@ -112,6 +132,14 @@ from mmaudit.models.policy_selection import (
     VerifiedAuditModelSelection,
 )
 from mmaudit.models.qualification import VerifiedProductionQualification
+from mmaudit.models.refresh_runtime import (
+    AUDIT_MODEL_REFRESH_EVIDENCE_FILENAME,
+    AUDIT_MODEL_REFRESH_PRICING_EVIDENCE_FILENAME,
+    AuditModelRefreshEvidence,
+    AuditModelRefreshPricingEvidence,
+    VerifiedAuditModelRefreshGuard,
+    VerifiedAuditModelRefreshPricingAuthority,
+)
 from mmaudit.models.registry import (
     ModelRegistry,
     ProductionQualificationValidation,
@@ -129,20 +157,24 @@ from mmaudit.models.scheduler import (
     SchedulerCostLedgerBaseline,
     SchedulerEvidencePayloadBinding,
     SchedulerPassKind,
+    SchedulerPassPlan,
     SchedulerPassResult,
     SchedulerPassStatus,
     SchedulerPrivacyEvidenceCustody,
+    SchedulerProviderAttemptEvidence,
     SchedulerRetainedJournalReference,
     SchedulerScope,
     SchedulerShardDescriptor,
     SchedulerShardInventory,
     SchedulerShardKind,
+    SchedulerTaskActivation,
     SchedulerTaskKind,
     SchedulerTaskPlan,
     SchedulerTaskResult,
     SchedulerTerminalStatus,
     scheduler_canonical_sha256,
     scheduler_response_schema_sha256,
+    scheduler_role_requires_specialist_accepted_outcome,
 )
 from mmaudit.models.schemas import (
     AnalysisState,
@@ -187,6 +219,7 @@ from mmaudit.models.schemas import (
     LocationValidation,
     MaximumAssuranceAssessment,
     MinimumAnalysisFloor,
+    MinimumFloorRecoveryModelUsageBinding,
     ModelReviewCoverage,
     ModelReviewSurfaceKind,
     ModelSurfaceReviewArtifact,
@@ -233,10 +266,40 @@ from mmaudit.models.sharding import (
     SolidityShardReportBinding,
     SolidityShardsArtifact,
 )
+from mmaudit.models.truncation import (
+    CandidateReviewChannelState,
+    CandidateReviewFramePhase,
+    CandidateReviewTruncationProjection,
+)
+from mmaudit.models.truncation_recovery import (
+    TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS,
+    TRUNCATION_RECOVERY_MAX_USD_EXACT,
+    TruncationRecoveryChannel,
+    TruncationRecoveryChannelBinding,
+    TruncationRecoveryChannelState,
+    TruncationRecoveryDisposition,
+    TruncationRecoveryParentBinding,
+    TruncationRecoveryPlan,
+    TruncationRecoveryResourceBudget,
+    plan_truncation_recovery,
+)
+from mmaudit.models.truncation_recovery_journal import (
+    SchedulerTruncationRecoveryChildPreflightResult,
+    SchedulerTruncationRecoveryChildResult,
+    SchedulerTruncationRecoveryClosureStatus,
+    SchedulerTruncationRecoveryFamilyClosure,
+    SchedulerTruncationRecoveryFamilyPromotion,
+    SchedulerTruncationRecoveryRequestedSurfaceManifest,
+    SchedulerTruncationRecoveryTerminalStatus,
+    rebuild_truncation_recovery_parent_from_projection,
+)
 from mmaudit.models.usage import (
     UsageLedger,
+    atomic_request_limit_reservations_from_usage,
     candidate_falsifier_role,
     is_creditable_usage_record,
+    is_recovery_creditable_usage_record,
+    request_token_plan_from_usage,
 )
 from mmaudit.orchestration.assurance import (
     CERTIFIED_ENSEMBLE_MIN_WHOLE_PROTOCOL_LINEAGES,
@@ -309,6 +372,7 @@ from mmaudit.orchestration.model_coverage import (
     build_semantic_shard_source_review_request,
     model_review_critical_surface_gate,
     model_review_edge_subject_id,
+    model_review_tiered_completion_gate,
     model_surface_assignment_feasibility_gate,
     plan_model_surface_review_assignments,
 )
@@ -342,6 +406,11 @@ from mmaudit.orchestration.scope import (
     assess_audit_scope,
     filter_discovery_for_scope,
     scope_quality_gate,
+)
+from mmaudit.orchestration.truncation_recovery_evidence import (
+    TruncationRecoveryEvidenceError,
+    build_truncation_recovery_child_context,
+    verify_truncation_recovery_closure,
 )
 from mmaudit.privacy import (
     EffectivePrivacyPolicyEvidence,
@@ -443,6 +512,9 @@ from mmaudit.traceability import (
     validate_traceability_evidence,
     write_traceability_artifact,
 )
+
+_TRUNCATION_RECOVERY_COST_COMPONENT_LIMIT = 700_000 + TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS + 1
+_TRUSTED_PREVIEW_CANDIDATE_REVIEW_TASK_RESOURCES = trusted_preview_candidate_review_task_resources
 
 
 def _exact_completed_usage(
@@ -590,6 +662,239 @@ def _validated_finding_result(
                 "candidate review artifact differed from its exact provider evidence"
             )
     return context, usage_record
+
+
+def _truncation_recovery_channel_state(
+    state: CandidateReviewChannelState,
+) -> TruncationRecoveryChannelState:
+    """Map parser state without treating an incomplete channel as invalid."""
+
+    if state is CandidateReviewChannelState.COMPLETE:
+        return TruncationRecoveryChannelState.COMPLETE
+    if state is CandidateReviewChannelState.INVALID:
+        return TruncationRecoveryChannelState.INVALID
+    return TruncationRecoveryChannelState.INCOMPLETE
+
+
+def _truncation_recovery_channel_bindings(
+    projection: CandidateReviewTruncationProjection,
+) -> tuple[TruncationRecoveryChannelBinding, ...]:
+    """Rebuild the planner's three exact parser-channel commitments."""
+
+    finding_inventory = tuple(item.model_dump(mode="json") for item in projection.findings)
+    surface_inventory = tuple(item.model_dump(mode="json") for item in projection.surface_reviews)
+    summary_inventory = {
+        "frames": tuple(
+            frame.model_dump(mode="json")
+            for frame in projection.accepted_frames
+            if frame.phase is CandidateReviewFramePhase.SUMMARY
+        ),
+        "declared_finding_count": projection.summary_declared_finding_count,
+        "declared_surface_review_count": projection.summary_declared_surface_review_count,
+        "state": projection.summary_state,
+    }
+    return (
+        TruncationRecoveryChannelBinding.build(
+            channel=TruncationRecoveryChannel.COVERAGE,
+            state=_truncation_recovery_channel_state(projection.surface_reviews_state),
+            retained_record_count=len(projection.surface_reviews),
+            retained_inventory_sha256=scheduler_canonical_sha256(surface_inventory),
+        ),
+        TruncationRecoveryChannelBinding.build(
+            channel=TruncationRecoveryChannel.FINDINGS,
+            state=_truncation_recovery_channel_state(projection.findings_state),
+            retained_record_count=len(projection.findings),
+            retained_inventory_sha256=scheduler_canonical_sha256(finding_inventory),
+        ),
+        TruncationRecoveryChannelBinding.build(
+            channel=TruncationRecoveryChannel.SUMMARY,
+            state=_truncation_recovery_channel_state(projection.summary_state),
+            retained_record_count=(
+                1 if projection.summary_state is CandidateReviewChannelState.COMPLETE else 0
+            ),
+            retained_inventory_sha256=scheduler_canonical_sha256(summary_inventory),
+        ),
+    )
+
+
+def _canonical_recovery_usd_total(values: Iterable[str]) -> str:
+    """Sum exact bounded USD text for deterministic recovery planning."""
+
+    context = Context(
+        prec=160,
+        rounding=ROUND_HALF_EVEN,
+        Emin=-999_999,
+        Emax=999_999,
+        capitals=1,
+        clamp=0,
+        flags=[],
+        traps=[InvalidOperation, DivisionByZero, Overflow],
+    )
+    total = context.create_decimal(0)
+    try:
+        for index, value in enumerate(values):
+            if index >= _TRUNCATION_RECOVERY_COST_COMPONENT_LIMIT:
+                raise ValueError("truncation recovery cost evidence exceeds its compiled bound")
+            if type(value) is not str:
+                raise ValueError("truncation recovery cost evidence is not exact text")
+            amount = context.create_decimal(value)
+            if not amount.is_finite() or amount < 0:
+                raise ValueError("truncation recovery cost evidence is invalid")
+            total = context.add(total, amount)
+    except InvalidOperation:
+        raise ValueError("truncation recovery cost evidence is invalid") from None
+    rendered = format(total, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return "0" if rendered in {"", "-0"} else rendered
+
+
+def _build_direct_truncation_recovery_plan(
+    *,
+    journal: SchedulerJournal,
+    pass_plan: SchedulerPassPlan,
+    task: SchedulerTaskPlan,
+    activation: SchedulerTaskActivation,
+    attempt: SchedulerProviderAttemptEvidence,
+    projection: CandidateReviewTruncationProjection,
+    parent_context: ContextPackage,
+    atomic_ledger: AtomicCostLedger,
+) -> tuple[
+    SchedulerTruncationRecoveryRequestedSurfaceManifest,
+    TruncationRecoveryPlan,
+]:
+    """Build one direct two-child plan solely from durable scheduler accounting."""
+
+    requests = tuple(parent_context.requested_model_surfaces)
+    manifest = SchedulerTruncationRecoveryRequestedSurfaceManifest.build(requests)
+    claimed_parent = TruncationRecoveryParentBinding.build(
+        campaign_id=journal.manifest.campaign_id,
+        pass_plan_id=pass_plan.pass_plan_id,
+        parent_task_id=task.task_id,
+        parent_logical_request_id=task.logical_request_id,
+        parent_task_plan_sha256=task.task_plan_sha256,
+        parent_activation_sha256=activation.activation_sha256,
+        provider_attempt_evidence_sha256=attempt.attempt_evidence_sha256,
+        truncation_projection_sha256=projection.evidence_sha256,
+        requested_surface_manifest_sha256=manifest.requested_surface_manifest_sha256,
+        requested_surface_ids=manifest.requested_surface_ids,
+        retained_surface_ids=tuple(item.surface_id for item in projection.surface_reviews),
+        channel_bindings=_truncation_recovery_channel_bindings(projection),
+    )
+    parent = rebuild_truncation_recovery_parent_from_projection(
+        claimed_parent=claimed_parent,
+        projection=projection,
+    )
+    parent_usage = attempt.usage_record
+    token_plan = request_token_plan_from_usage(parent_usage)
+    if token_plan is None:
+        raise ValueError("truncation recovery parent lacks exact token-plan evidence")
+    snapshot = atomic_ledger.snapshot()
+    expected_attempt_request_ids = tuple(
+        parent_usage.request_id
+        if attempt_index == 1
+        else f"{parent_usage.request_id}:attempt:{attempt_index}"
+        for attempt_index in range(1, parent_usage.attempts + 1)
+    )
+    ledger_entries = tuple(
+        entry for entry in snapshot.entries if entry.request_id in expected_attempt_request_ids
+    )
+    reserved_costs = {entry.reserved_usd for entry in ledger_entries}
+    if (
+        tuple(entry.request_id for entry in ledger_entries) != expected_attempt_request_ids
+        or len(reserved_costs) != 1
+    ):
+        raise ValueError("truncation recovery parent lacks one uniform exact reservation")
+    baseline = journal.manifest.cost_ledger_baseline
+    campaign_cap = _canonical_recovery_usd_total(
+        (baseline.cap_usd_exact if baseline is not None else TRUNCATION_RECOVERY_MAX_USD_EXACT,)
+    )
+    baseline_spent = _canonical_recovery_usd_total(
+        (baseline.spent_usd_exact if baseline is not None else "0",)
+    )
+    existing_families = journal.truncation_recovery_families
+    recovery_request_ids = {
+        child.child_logical_request_id
+        for family in existing_families
+        for child in family.recovery_plan.children
+    }
+    retained_usage = tuple(
+        record
+        for record in journal.retained_provider_usage_records
+        if record.request_id not in recovery_request_ids
+    )
+    matching_parent_usage = tuple(
+        record for record in retained_usage if record.request_id == parent_usage.request_id
+    )
+    if matching_parent_usage != (parent_usage,):
+        raise ValueError("truncation recovery parent usage is absent or ambiguous")
+    prior_usage = tuple(
+        record for record in retained_usage if record.request_id != parent_usage.request_id
+    )
+    recovery_results: dict[
+        str,
+        SchedulerTruncationRecoveryChildResult | SchedulerTruncationRecoveryChildPreflightResult,
+    ] = {}
+    for entry in journal.truncation_recovery_entries:
+        if isinstance(
+            entry,
+            (
+                SchedulerTruncationRecoveryChildResult,
+                SchedulerTruncationRecoveryChildPreflightResult,
+            ),
+        ):
+            if entry.child_task_id in recovery_results:
+                raise ValueError("truncation recovery child has ambiguous terminal accounting")
+            recovery_results[entry.child_task_id] = entry
+    recovery_costs: list[str] = []
+    recovery_attempts = 0
+    recovery_completion_tokens = 0
+    for family in existing_families:
+        for child in family.recovery_plan.children:
+            child_result = recovery_results.get(child.child_task_id)
+            if child_result is None:
+                recovery_costs.append(child.reserved_usd_exact)
+                recovery_attempts += child.reserved_provider_attempts
+                recovery_completion_tokens += child.reserved_completion_tokens
+            else:
+                recovery_costs.append(child_result.accounted_cost_usd_exact)
+                recovery_attempts += child_result.accounted_provider_attempts
+                recovery_completion_tokens += child_result.accounted_completion_tokens
+    prior_costs = tuple(record.accounted_cost_usd_exact for record in prior_usage)
+    if any(value is None for value in prior_costs):
+        raise ValueError("truncation recovery prior usage lacks exact cost evidence")
+    parent_cost = parent_usage.accounted_cost_usd_exact
+    if parent_cost is None:
+        raise ValueError("truncation recovery parent lacks exact accounted cost")
+    child_reserved = format(next(iter(reserved_costs)), "f")
+    if "." in child_reserved:
+        child_reserved = child_reserved.rstrip("0").rstrip(".")
+    resources = TruncationRecoveryResourceBudget.build(
+        campaign_cap_usd_exact=campaign_cap,
+        accounted_usd_before_parent_exact=_canonical_recovery_usd_total(
+            (
+                baseline_spent,
+                *(cast(str, value) for value in prior_costs),
+                *recovery_costs,
+            )
+        ),
+        parent_accounted_cost_usd_exact=_canonical_recovery_usd_total((parent_cost,)),
+        child_reserved_usd_exact=child_reserved,
+        recovery_requests_consumed=sum(
+            len(family.recovery_plan.children) for family in existing_families
+        ),
+        provider_attempts_before_parent=(
+            sum(record.attempts for record in prior_usage) + recovery_attempts
+        ),
+        parent_provider_attempts=parent_usage.attempts,
+        child_provider_attempts=1,
+        completion_tokens_before_parent=(
+            sum(record.completion_tokens for record in prior_usage) + recovery_completion_tokens
+        ),
+        parent_completion_tokens=parent_usage.completion_tokens,
+        child_completion_tokens=token_plan.requested_completion_tokens,
+    )
+    return manifest, plan_truncation_recovery(parent=parent, resources=resources)
 
 
 def _register_candidate_origin_packages(
@@ -1030,6 +1335,172 @@ def _semantic_shard_context_paths(
     return set(primary_paths) | {
         shards[related_id].source_path for related_id in sorted(related_ids) if related_id in shards
     }
+
+
+def _model_surface_scheduler_scopes(
+    requests: Sequence[ModelSurfaceReviewRequest],
+    *,
+    scheduler_inventory: SchedulerShardInventory,
+    semantic_inventory: SolidityShardInventory | None,
+    index: SoliditySymbolIndex | None,
+) -> dict[str, str]:
+    """Map every Solidity review surface to one exact compatible scheduler shard."""
+
+    symbol_paths: dict[str, set[str]] = {}
+    if index is not None:
+        for entity in index.entities:
+            symbol_paths.setdefault(entity.id, set()).add(entity.path)
+            symbol_paths.setdefault(entity.name, set()).add(entity.path)
+    shard_by_source_path = {
+        source.path: shard.shard_id
+        for shard in scheduler_inventory.shards
+        if shard.kind is SchedulerShardKind.SOLIDITY_SEMANTIC
+        for source in shard.sources
+    }
+    scope_by_surface: dict[str, str] = {}
+    for request in sorted(requests, key=lambda item: item.surface_id):
+        required_paths = {location.path for location in request.allowed_locations}
+        if not required_paths:
+            required_paths = {
+                path for symbol in request.allowed_symbols for path in symbol_paths.get(symbol, ())
+            }
+        if not required_paths:
+            raise ValueError(
+                f"model surface {request.surface_id} has no scheduler-resolvable source path"
+            )
+        unknown_paths = required_paths - set(shard_by_source_path)
+        if unknown_paths:
+            raise ValueError(
+                f"model surface {request.surface_id} refers to source outside scheduler shards"
+            )
+        # Cross-shard semantic surfaces retain every exact cited source in the
+        # rendered context below. Their scheduler scope is the owner of the
+        # lexicographically first cited path, which makes the single-shard
+        # identity deterministic without discarding relationship evidence.
+        scope_by_surface[request.surface_id] = shard_by_source_path[min(required_paths)]
+    if set(scope_by_surface) != {request.surface_id for request in requests}:
+        raise ValueError("model surface scheduler-scope mapping is incomplete")
+    return scope_by_surface
+
+
+def _model_surface_reviewer_bindings(
+    config: AuditConfig,
+    *,
+    specialist_roles: Sequence[str],
+    selected_model_ids: frozenset[str] | None,
+) -> tuple[tuple[ModelSurfaceReviewerBinding, ...], tuple[str, ...]]:
+    """Build exact primary-only reviewer bindings for every enabled investigator."""
+
+    configured_roles = ("business_logic", "configuration", *sorted(specialist_roles))
+    bindings: list[ModelSurfaceReviewerBinding] = []
+    mandatory_roles: list[str] = []
+    for configured_role in configured_roles:
+        request_role = (
+            f"specialist:{configured_role}"
+            if configured_role not in {"business_logic", "configuration"}
+            else configured_role
+        )
+        model_id = config.models.role(configured_role).primary
+        _require_policy_selected_scheduled_model(
+            selected_model_ids=selected_model_ids,
+            request_role=request_role,
+            model_id=model_id,
+        )
+        bindings.append(
+            ModelSurfaceReviewerBinding.build(
+                review_role=request_role,
+                requested_model=model_id,
+                root_lineage=_scheduler_root_lineage(config, model_id),
+            )
+        )
+        mandatory_roles.append(request_role)
+    return tuple(bindings), tuple(sorted(mandatory_roles))
+
+
+def _persist_private_coverage_evidence(
+    path: Path,
+    evidence: ModelSurfaceCoveragePlan | ModelSurfaceResourcePreflight,
+) -> None:
+    """Create immutable private planning evidence or compare exact prior bytes."""
+
+    expected = stable_json(evidence).encode("utf-8")
+    if len(expected) > MAX_JSON_ARTIFACT_BYTES:
+        raise ValueError("private model-surface planning evidence exceeds its byte ceiling")
+    if path.exists() or path.is_symlink():
+        metadata = path.lstat()
+        if path.is_symlink() or not path.is_file() or metadata.st_nlink != 1:
+            raise ValueError("private model-surface planning evidence path is unsafe")
+        if metadata.st_size > MAX_JSON_ARTIFACT_BYTES or path.read_bytes() != expected:
+            raise ValueError("private model-surface planning evidence differs on resume")
+        return
+    write_json_bounded(path, evidence, max_bytes=MAX_JSON_ARTIFACT_BYTES)
+    path.chmod(0o600)
+
+
+def _load_private_coverage_preflight(path: Path) -> ModelSurfaceResourcePreflight:
+    """Load only canonical, bounded, private preflight evidence on scheduler resume."""
+
+    if not path.exists() or path.is_symlink():
+        raise ValueError("private model-surface resource preflight is missing or unsafe")
+    metadata = path.lstat()
+    if not path.is_file() or metadata.st_nlink != 1 or metadata.st_size > MAX_JSON_ARTIFACT_BYTES:
+        raise ValueError("private model-surface resource preflight path is unsafe")
+    raw = path.read_bytes()
+    try:
+        parsed = ModelSurfaceResourcePreflight.model_validate_json(raw)
+    except ValueError as exc:
+        raise ValueError("private model-surface resource preflight failed validation") from exc
+    if raw != stable_json(parsed).encode("utf-8"):
+        raise ValueError("private model-surface resource preflight is not canonical")
+    return parsed
+
+
+def _load_private_coverage_plan(path: Path) -> ModelSurfaceCoveragePlan:
+    """Load only canonical, bounded, private plan evidence on scheduler resume."""
+
+    if not path.exists() or path.is_symlink():
+        raise ValueError("private model-surface coverage plan is missing or unsafe")
+    metadata = path.lstat()
+    if not path.is_file() or metadata.st_nlink != 1 or metadata.st_size > MAX_JSON_ARTIFACT_BYTES:
+        raise ValueError("private model-surface coverage plan path is unsafe")
+    raw = path.read_bytes()
+    try:
+        parsed = ModelSurfaceCoveragePlan.model_validate_json(raw)
+    except ValueError as exc:
+        raise ValueError("private model-surface coverage plan failed validation") from exc
+    if raw != stable_json(parsed).encode("utf-8"):
+        raise ValueError("private model-surface coverage plan is not canonical")
+    return parsed
+
+
+def _canonical_decimal_text(value: Decimal) -> str:
+    """Render one finite non-negative amount for the exact coverage preflight."""
+
+    if not value.is_finite() or value < 0:
+        raise ValueError("coverage preflight remaining USD must be finite and non-negative")
+    rendered = format(value, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return rendered or "0"
+
+
+def _subtract_coverage_usd(minuend: Decimal, *subtrahends: Decimal) -> Decimal:
+    """Subtract exact USD values without inheriting caller-global Decimal state."""
+
+    context = Context(
+        prec=160,
+        rounding=ROUND_HALF_EVEN,
+        Emin=-999_999,
+        Emax=999_999,
+        capitals=1,
+        clamp=0,
+        flags=[],
+        traps=[InvalidOperation, DivisionByZero, Overflow],
+    )
+    result = context.create_decimal(minuend)
+    for value in subtrahends:
+        result = context.subtract(result, context.create_decimal(value))
+    return result
 
 
 def _source_audit_shard_surface_requests(
@@ -1735,6 +2206,12 @@ class AuditPipeline:
         production_qualification: VerifiedProductionQualification | None = None,
         audit_model_selection_evidence: AuditModelSelectionEvidenceBundle | None = None,
         verified_audit_model_selection: VerifiedAuditModelSelection | None = None,
+        audit_model_refresh_evidence: AuditModelRefreshEvidence | None = None,
+        audit_model_refresh_guard: VerifiedAuditModelRefreshGuard | None = None,
+        audit_model_refresh_pricing_evidence: AuditModelRefreshPricingEvidence | None = None,
+        audit_model_refresh_pricing_authority: (
+            VerifiedAuditModelRefreshPricingAuthority | None
+        ) = None,
         privacy_consent_observation: PrivacyRetentionConsentObservation | None = None,
         privacy_source_classification: PrivacySourceClassification = (
             PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE
@@ -1786,6 +2263,61 @@ class AuditPipeline:
             else None
         )
         self.verified_audit_model_selection = verified_audit_model_selection
+        if (audit_model_refresh_evidence is None) != (audit_model_refresh_guard is None):
+            raise ValueError(
+                "audit model refresh evidence and live guard must be supplied together"
+            )
+        if (
+            audit_model_refresh_evidence is not None
+            and type(audit_model_refresh_evidence) is not AuditModelRefreshEvidence
+        ):
+            raise ValueError("audit model refresh evidence has an invalid exact type")
+        if (
+            audit_model_refresh_guard is not None
+            and type(audit_model_refresh_guard) is not VerifiedAuditModelRefreshGuard
+        ):
+            raise ValueError("audit model refresh guard has an invalid opaque type")
+        self.audit_model_refresh_evidence = (
+            AuditModelRefreshEvidence.model_validate_json(
+                audit_model_refresh_evidence.model_dump_json(),
+                strict=True,
+            )
+            if audit_model_refresh_evidence is not None
+            else None
+        )
+        self.audit_model_refresh_guard = audit_model_refresh_guard
+        if (audit_model_refresh_pricing_evidence is None) != (
+            audit_model_refresh_pricing_authority is None
+        ):
+            raise ValueError(
+                "audit model refresh pricing evidence and live authority must be supplied together"
+            )
+        if (
+            audit_model_refresh_pricing_evidence is not None
+            and type(audit_model_refresh_pricing_evidence) is not AuditModelRefreshPricingEvidence
+        ):
+            raise ValueError("audit model refresh pricing evidence has an invalid exact type")
+        if (
+            audit_model_refresh_pricing_authority is not None
+            and type(audit_model_refresh_pricing_authority)
+            is not VerifiedAuditModelRefreshPricingAuthority
+        ):
+            raise ValueError("audit model refresh pricing authority has an invalid opaque type")
+        if audit_model_refresh_pricing_evidence is not None and (
+            self.audit_model_refresh_evidence is None or self.audit_model_refresh_guard is None
+        ):
+            raise ValueError(
+                "audit model refresh pricing custody requires exact refresh evidence and live guard"
+            )
+        self.audit_model_refresh_pricing_evidence = (
+            AuditModelRefreshPricingEvidence.model_validate_json(
+                audit_model_refresh_pricing_evidence.model_dump_json(),
+                strict=True,
+            )
+            if audit_model_refresh_pricing_evidence is not None
+            else None
+        )
+        self.audit_model_refresh_pricing_authority = audit_model_refresh_pricing_authority
         self.privacy_consent_observation = privacy_consent_observation
         self.privacy_source_classification = privacy_source_classification
         self.privacy_source_provenance_observation: PrivacySourceProvenanceObservation | None = None
@@ -1993,6 +2525,261 @@ class AuditPipeline:
         write_json(run_dir / AUDIT_MODEL_SELECTION_EVIDENCE_FILENAME, evidence)
         return selected
 
+    def _require_current_audit_model_refresh(
+        self,
+        *,
+        now: datetime,
+        expected_source_sha256: str | None = None,
+    ) -> AuditModelRefreshEvidence:
+        """Recheck the exact veto-only refresh join without treating evidence as authority."""
+
+        evidence = self.audit_model_refresh_evidence
+        guard = self.audit_model_refresh_guard
+        qualification = self.production_qualification
+        audit_selection = self.verified_audit_model_selection
+        selection_evidence = self.audit_model_selection_evidence
+        if (
+            type(evidence) is not AuditModelRefreshEvidence
+            or type(guard) is not VerifiedAuditModelRefreshGuard
+            or type(qualification) is not VerifiedProductionQualification
+            or type(audit_selection) is not VerifiedAuditModelSelection
+            or type(selection_evidence) is not AuditModelSelectionEvidenceBundle
+        ):
+            raise ValueError("real paid audit requires exact model-refresh evidence and live guard")
+        canonical = AuditModelRefreshEvidence.model_validate_json(
+            evidence.model_dump_json(),
+            strict=True,
+        )
+        if canonical != evidence:
+            raise ValueError("audit model refresh evidence is not exact canonical evidence")
+        self._require_current_audit_model_selection(
+            now=now,
+            expected_source_sha256=expected_source_sha256,
+        )
+        selection = selection_evidence.selection
+        guard.require_current(
+            now=now,
+            expected_workflow_status_sha256=canonical.expected_workflow_status_sha256,
+            technical_qualification=qualification,
+            audit_selection=audit_selection,
+            expected_audit_scope_sha256=selection.audit_scope_sha256,
+            expected_source_sha256=selection.source_sha256,
+            expected_audit_context_sha256=selection.audit_context_sha256,
+            expected_client_constraints_sha256=selection.client_constraints_sha256,
+        )
+        technical_model_ids = tuple(model.exact_model_id for model in qualification.models)
+        audit_model_ids = tuple(model.exact_model_id for model in audit_selection.models)
+        if (
+            canonical.expected_workflow_status_sha256 != guard.workflow_status_sha256
+            or canonical.workflow_status_sha256 != guard.workflow_status_sha256
+            or canonical.evidence_sha256 != guard.evidence_sha256
+            or canonical.snapshot_sha256 != guard.snapshot_sha256
+            or canonical.refresh_current_through != guard.refresh_current_through
+            or canonical.expires_at != guard.expires_at
+            or canonical.technical_qualification_capability_sha256
+            != qualification.capability_sha256
+            or canonical.technical_qualification_capability_sha256
+            != guard.technical_qualification_capability_sha256
+            or canonical.technical_production_selection_sha256
+            != qualification.production_selection_sha256
+            or canonical.technical_production_selection_sha256
+            != guard.technical_production_selection_sha256
+            or canonical.audit_selection_capability_sha256 != audit_selection.capability_sha256
+            or canonical.audit_selection_capability_sha256
+            != guard.audit_selection_capability_sha256
+            or canonical.audit_selection_sha256 != audit_selection.audit_selection_sha256
+            or canonical.audit_selection_sha256 != guard.audit_selection_sha256
+            or canonical.audit_scope_sha256 != selection.audit_scope_sha256
+            or canonical.source_sha256 != selection.source_sha256
+            or canonical.audit_context_sha256 != selection.audit_context_sha256
+            or canonical.client_constraints_sha256 != selection.client_constraints_sha256
+            or canonical.technical_model_ids != technical_model_ids
+            or canonical.audit_model_ids != audit_model_ids
+            or (
+                expected_source_sha256 is not None
+                and canonical.source_sha256 != expected_source_sha256
+            )
+        ):
+            raise ValueError("audit model refresh differs from exact audit runtime joins")
+        routes_by_id = {
+            route.exact_model_id: route for route in canonical.routes if route.audit_selected
+        }
+        if tuple(sorted(routes_by_id)) != canonical.audit_model_ids:
+            raise ValueError("audit model refresh has an incomplete selected-route inventory")
+        for model_id in canonical.audit_model_ids:
+            live_route = guard.route_for(
+                model_id,
+                now=now,
+                expected_workflow_status_sha256=canonical.expected_workflow_status_sha256,
+                technical_qualification=qualification,
+                audit_selection=audit_selection,
+                expected_audit_scope_sha256=selection.audit_scope_sha256,
+                expected_source_sha256=selection.source_sha256,
+                expected_audit_context_sha256=selection.audit_context_sha256,
+                expected_client_constraints_sha256=selection.client_constraints_sha256,
+            )
+            if live_route != routes_by_id[model_id]:
+                raise ValueError("audit model refresh route differs from its live guard")
+        return canonical
+
+    def _persist_current_audit_model_refresh_evidence(
+        self,
+        *,
+        run_dir: Path,
+        now: datetime,
+        expected_source_sha256: str,
+    ) -> None:
+        """Persist only canonical non-authorizing refresh comparison evidence."""
+
+        evidence = self._require_current_audit_model_refresh(
+            now=now,
+            expected_source_sha256=expected_source_sha256,
+        )
+        write_json(run_dir / AUDIT_MODEL_REFRESH_EVIDENCE_FILENAME, evidence)
+
+    def _require_current_audit_model_refresh_pricing(
+        self,
+        *,
+        now: datetime,
+        expected_source_sha256: str | None = None,
+    ) -> AuditModelRefreshPricingEvidence:
+        """Recheck the separate bounded-price authority and all refresh joins."""
+
+        refresh_evidence = self._require_current_audit_model_refresh(
+            now=now,
+            expected_source_sha256=expected_source_sha256,
+        )
+        evidence = self.audit_model_refresh_pricing_evidence
+        authority = self.audit_model_refresh_pricing_authority
+        refresh_guard = self.audit_model_refresh_guard
+        qualification = self.production_qualification
+        audit_selection = self.verified_audit_model_selection
+        selection_evidence = self.audit_model_selection_evidence
+        if (
+            type(evidence) is not AuditModelRefreshPricingEvidence
+            or type(authority) is not VerifiedAuditModelRefreshPricingAuthority
+            or type(refresh_guard) is not VerifiedAuditModelRefreshGuard
+            or type(qualification) is not VerifiedProductionQualification
+            or type(audit_selection) is not VerifiedAuditModelSelection
+            or type(selection_evidence) is not AuditModelSelectionEvidenceBundle
+        ):
+            raise ValueError(
+                "real paid audit requires exact refreshed-pricing evidence and live authority"
+            )
+        canonical = AuditModelRefreshPricingEvidence.model_validate_json(
+            evidence.model_dump_json(),
+            strict=True,
+        )
+        if canonical != evidence:
+            raise ValueError("audit model refresh pricing evidence is not exact canonical evidence")
+        selection = selection_evidence.selection
+        authority.require_current(
+            now=now,
+            expected_workflow_status_sha256=(canonical.expected_workflow_status_sha256),
+            refresh_evidence=refresh_evidence,
+            refresh_guard=refresh_guard,
+            technical_qualification=qualification,
+            audit_selection=audit_selection,
+            expected_audit_scope_sha256=selection.audit_scope_sha256,
+            expected_source_sha256=selection.source_sha256,
+            expected_audit_context_sha256=selection.audit_context_sha256,
+            expected_client_constraints_sha256=selection.client_constraints_sha256,
+        )
+        technical_model_ids = tuple(model.exact_model_id for model in qualification.models)
+        audit_model_ids = tuple(model.exact_model_id for model in audit_selection.models)
+        if (
+            canonical.expected_workflow_status_sha256
+            != refresh_evidence.expected_workflow_status_sha256
+            or canonical.workflow_status_sha256 != refresh_evidence.workflow_status_sha256
+            or canonical.workflow_status_sha256 != authority.workflow_status_sha256
+            or canonical.refresh_evidence_sha256 != refresh_evidence.evidence_sha256
+            or canonical.refresh_evidence_sha256 != authority.refresh_evidence_sha256
+            or canonical.refresh_guard_capability_sha256 != refresh_guard.capability_sha256
+            or canonical.refresh_guard_capability_sha256
+            != authority.refresh_guard_capability_sha256
+            or canonical.technical_qualification_capability_sha256
+            != qualification.capability_sha256
+            or canonical.technical_qualification_capability_sha256
+            != authority.technical_qualification_capability_sha256
+            or canonical.technical_production_selection_sha256
+            != qualification.production_selection_sha256
+            or canonical.technical_production_selection_sha256
+            != authority.technical_production_selection_sha256
+            or canonical.audit_selection_capability_sha256 != audit_selection.capability_sha256
+            or canonical.audit_selection_capability_sha256
+            != authority.audit_selection_capability_sha256
+            or canonical.audit_selection_sha256 != audit_selection.audit_selection_sha256
+            or canonical.audit_selection_sha256 != authority.audit_selection_sha256
+            or canonical.audit_scope_sha256 != selection.audit_scope_sha256
+            or canonical.source_sha256 != selection.source_sha256
+            or canonical.audit_context_sha256 != selection.audit_context_sha256
+            or canonical.client_constraints_sha256 != selection.client_constraints_sha256
+            or canonical.technical_model_ids != technical_model_ids
+            or canonical.audit_model_ids != audit_model_ids
+            or canonical.refresh_expires_at != refresh_evidence.expires_at
+            or canonical.expires_at != authority.expires_at
+            or canonical.verified_at != authority.verified_at
+            or canonical.evidence_sha256 != authority.pricing_evidence_sha256
+            or (
+                expected_source_sha256 is not None
+                and canonical.source_sha256 != expected_source_sha256
+            )
+        ):
+            raise ValueError("audit model refresh pricing differs from exact audit runtime joins")
+        refresh_routes = {route.exact_model_id: route for route in refresh_evidence.routes}
+        pricing_routes = {route.exact_model_id: route for route in canonical.routes}
+        if (
+            tuple(sorted(refresh_routes)) != canonical.technical_model_ids
+            or tuple(sorted(pricing_routes)) != canonical.technical_model_ids
+        ):
+            raise ValueError("audit model refresh pricing has an incomplete route inventory")
+        for model_id in canonical.technical_model_ids:
+            refresh_route = refresh_routes[model_id]
+            pricing_route = pricing_routes[model_id]
+            if (
+                pricing_route.approved_provider_endpoint != refresh_route.approved_provider_endpoint
+                or pricing_route.audit_selected is not refresh_route.audit_selected
+                or pricing_route.refresh_route_evidence_sha256
+                != refresh_route.route_evidence_sha256
+                or pricing_route.qualified_pricing_snapshot_sha256
+                != refresh_route.qualified_pricing_snapshot_sha256
+            ):
+                raise ValueError("audit model refresh pricing route differs from refresh evidence")
+            if pricing_route.audit_selected:
+                live_route = authority.route_for(
+                    model_id,
+                    now=now,
+                    expected_workflow_status_sha256=(canonical.expected_workflow_status_sha256),
+                    refresh_evidence=refresh_evidence,
+                    refresh_guard=refresh_guard,
+                    technical_qualification=qualification,
+                    audit_selection=audit_selection,
+                    expected_audit_scope_sha256=selection.audit_scope_sha256,
+                    expected_source_sha256=selection.source_sha256,
+                    expected_audit_context_sha256=selection.audit_context_sha256,
+                    expected_client_constraints_sha256=(selection.client_constraints_sha256),
+                )
+                if live_route != pricing_route:
+                    raise ValueError(
+                        "audit model refresh pricing route differs from its live authority"
+                    )
+        return canonical
+
+    def _persist_current_audit_model_refresh_pricing_evidence(
+        self,
+        *,
+        run_dir: Path,
+        now: datetime,
+        expected_source_sha256: str,
+    ) -> None:
+        """Persist canonical pricing comparison evidence after its live recheck."""
+
+        evidence = self._require_current_audit_model_refresh_pricing(
+            now=now,
+            expected_source_sha256=expected_source_sha256,
+        )
+        write_json(run_dir / AUDIT_MODEL_REFRESH_PRICING_EVIDENCE_FILENAME, evidence)
+
     async def run(
         self,
         *,
@@ -2141,11 +2928,45 @@ class AuditPipeline:
             and (self.client is not None or bool(self.api_key))
         )
         if not paid_audit_policy_required and (
+            self.audit_model_refresh_pricing_evidence is not None
+            or self.audit_model_refresh_pricing_authority is not None
+        ):
+            raise ValueError(
+                "audit model refresh pricing custody is accepted only for paid REAL provider audits"
+            )
+        if not paid_audit_policy_required and (
             self.audit_model_selection_evidence is not None
             or self.verified_audit_model_selection is not None
         ):
             raise ValueError(
                 "audit model-selection evidence is accepted only for paid REAL provider audits"
+            )
+        if paid_audit_policy_required and (
+            self.audit_model_selection_evidence is None
+            or self.verified_audit_model_selection is None
+        ):
+            raise ValueError(
+                "real paid audit requires exact model-selection evidence and live authority"
+            )
+        if paid_audit_policy_required and (
+            self.audit_model_refresh_evidence is None or self.audit_model_refresh_guard is None
+        ):
+            raise ValueError(
+                "paid REAL provider audits require model-refresh evidence and a live guard"
+            )
+        if not paid_audit_policy_required and (
+            self.audit_model_refresh_evidence is not None
+            or self.audit_model_refresh_guard is not None
+        ):
+            raise ValueError(
+                "audit model-refresh custody is accepted only for paid REAL provider audits"
+            )
+        if paid_audit_policy_required and (
+            self.audit_model_refresh_pricing_evidence is None
+            or self.audit_model_refresh_pricing_authority is None
+        ):
+            raise ValueError(
+                "paid REAL provider audits require refreshed-pricing evidence and live authority"
             )
         policy_selected_model_ids: frozenset[str] | None = None
         effective_cost_ledger = self._effective_cost_ledger()
@@ -2166,6 +2987,7 @@ class AuditPipeline:
                 policy_selected_model_ids = self._require_current_audit_model_selection(
                     now=policy_now
                 )
+                self._require_current_audit_model_refresh_pricing(now=policy_now)
         benchmark_required = (
             self.config.maximum_assurance.benchmark_gate or self.config.maximum_assurance.ci_mode
         )
@@ -2298,6 +3120,8 @@ class AuditPipeline:
         solidity_coverage: SolidityCoverage | None = None
         repository_suite_differential: RepositorySuiteDifferentialRun | None = None
         model_review_coverage: ModelReviewCoverage | None = None
+        model_surface_coverage_plan: ModelSurfaceCoveragePlan | None = None
+        model_surface_resource_preflight: ModelSurfaceResourcePreflight | None = None
         provider_session: ProviderSessionProvenance | None = None
         model_surface_review_artifacts: list[ModelSurfaceReviewArtifact] = []
         model_surface_review_contexts: dict[str, list[ContextPackage]] = {}
@@ -2524,13 +3348,24 @@ class AuditPipeline:
             try:
                 if self.privacy_source_sha256 is None:
                     raise ValueError("frozen repository-map source SHA-256 is unavailable")
+                policy_binding_now = datetime.now(UTC).replace(microsecond=0)
                 policy_selected_model_ids = self._persist_current_audit_model_selection_evidence(
                     run_dir=run_dir,
-                    now=datetime.now(UTC).replace(microsecond=0),
+                    now=policy_binding_now,
+                    expected_source_sha256=self.privacy_source_sha256,
+                )
+                self._persist_current_audit_model_refresh_evidence(
+                    run_dir=run_dir,
+                    now=policy_binding_now,
+                    expected_source_sha256=self.privacy_source_sha256,
+                )
+                self._persist_current_audit_model_refresh_pricing_evidence(
+                    run_dir=run_dir,
+                    now=policy_binding_now,
                     expected_source_sha256=self.privacy_source_sha256,
                 )
             except ValueError as exc:
-                incomplete.append(f"audit model policy selection failed: {exc}")
+                incomplete.append(f"audit model policy or refresh selection failed: {exc}")
                 if terminal_code is ExitCode.SUCCESS:
                     terminal_code = ExitCode.PRIVACY_REFUSAL
         if not scanner_only:
@@ -3327,8 +4162,13 @@ class AuditPipeline:
             and not model_spend_preflight_blocked
         ):
             try:
+                policy_binding_now = datetime.now(UTC).replace(microsecond=0)
                 policy_selected_model_ids = self._require_current_audit_model_selection(
-                    now=datetime.now(UTC).replace(microsecond=0),
+                    now=policy_binding_now,
+                    expected_source_sha256=self.privacy_source_sha256,
+                )
+                self._require_current_audit_model_refresh_pricing(
+                    now=policy_binding_now,
                     expected_source_sha256=self.privacy_source_sha256,
                 )
                 if self.client is not None:
@@ -3344,10 +4184,32 @@ class AuditPipeline:
                         ),
                         policy_audit_context=policy_evidence.audit_context,
                         client_policy_constraints=policy_evidence.client_constraints,
-                        checked_at=datetime.now(UTC).replace(microsecond=0),
+                        checked_at=policy_binding_now,
+                    )
+                    self.client.require_audit_model_refresh_binding(
+                        audit_model_refresh_evidence=cast(
+                            AuditModelRefreshEvidence,
+                            self.audit_model_refresh_evidence,
+                        ),
+                        audit_model_refresh_guard=cast(
+                            VerifiedAuditModelRefreshGuard,
+                            self.audit_model_refresh_guard,
+                        ),
+                        checked_at=policy_binding_now,
+                    )
+                    self.client.require_audit_model_refresh_pricing_binding(
+                        audit_model_refresh_pricing_evidence=cast(
+                            AuditModelRefreshPricingEvidence,
+                            self.audit_model_refresh_pricing_evidence,
+                        ),
+                        audit_model_refresh_pricing_authority=cast(
+                            VerifiedAuditModelRefreshPricingAuthority,
+                            self.audit_model_refresh_pricing_authority,
+                        ),
+                        checked_at=policy_binding_now,
                     )
             except (ValueError, OpenRouterError) as exc:
-                incomplete.append(f"audit model policy selection failed: {exc}")
+                incomplete.append(f"audit model policy or refresh selection failed: {exc}")
                 terminal_code = ExitCode.MODEL_FAILURE
 
         context_builder: ContextBuilder | None = None
@@ -3380,6 +4242,14 @@ class AuditPipeline:
                     ),
                     production_qualification=self.production_qualification,
                     audit_model_selection=self.verified_audit_model_selection,
+                    audit_model_refresh_evidence=self.audit_model_refresh_evidence,
+                    audit_model_refresh_guard=self.audit_model_refresh_guard,
+                    audit_model_refresh_pricing_evidence=(
+                        self.audit_model_refresh_pricing_evidence
+                    ),
+                    audit_model_refresh_pricing_authority=(
+                        self.audit_model_refresh_pricing_authority
+                    ),
                     policy_audit_context=(
                         client_policy_evidence.audit_context
                         if client_policy_evidence is not None
@@ -3435,6 +4305,48 @@ class AuditPipeline:
                     repository_map,
                     solidity_shards,
                 )
+                if model_surface_requests:
+                    coverage_specialist_roles = (
+                        tuple(
+                            role
+                            for role in SPECIALIST_INVESTIGATOR_ROLES
+                            if role in self.config.models.specialists
+                        )
+                        if self.config.profile
+                        in {AuditProfile.DEEP, AuditProfile.MAXIMUM_ASSURANCE}
+                        else ()
+                    )
+                    reviewer_bindings, mandatory_reviewer_roles = _model_surface_reviewer_bindings(
+                        self.config,
+                        specialist_roles=coverage_specialist_roles,
+                        selected_model_ids=(
+                            policy_selected_model_ids if paid_audit_policy_required else None
+                        ),
+                    )
+                    model_surface_coverage_plan = build_model_surface_coverage_plan(
+                        model_surface_requests,
+                        reviewer_bindings,
+                        surface_scope_by_id=_model_surface_scheduler_scopes(
+                            model_surface_requests,
+                            scheduler_inventory=scheduler_inventory,
+                            semantic_inventory=solidity_shards,
+                            index=solidity_index,
+                        ),
+                        mandatory_reviewer_roles=mandatory_reviewer_roles,
+                        minimum_t0_root_lineages=minimum_critical_surface_lineages,
+                    )
+                    if resume_scheduler_journal is not None:
+                        retained_plan = _load_private_coverage_plan(
+                            resume_scheduler_journal.parent / "model-surface-coverage-plan.json"
+                        )
+                        if retained_plan != model_surface_coverage_plan:
+                            raise ValueError(
+                                "resumed model-surface coverage plan differs from current inputs"
+                            )
+                    _persist_private_coverage_evidence(
+                        run_dir / "private" / "model-surface-coverage-plan.json",
+                        model_surface_coverage_plan,
+                    )
                 scheduler_analysis_input = build_scheduler_analysis_input_inventory(
                     run_options=run_options,
                     discovery=discovery,
@@ -3474,6 +4386,13 @@ class AuditPipeline:
                     scheduler_cost_ledger_baseline = build_scheduler_cost_ledger_baseline(
                         atomic_ledger
                     )
+                scheduler_refresh_checked_at: datetime | None = None
+                if paid_audit_policy_required:
+                    scheduler_refresh_checked_at = datetime.now(UTC).replace(microsecond=0)
+                    self._require_current_audit_model_refresh_pricing(
+                        now=scheduler_refresh_checked_at,
+                        expected_source_sha256=self.privacy_source_sha256,
+                    )
                 scheduler_bindings = build_scheduler_bindings(
                     config=self.config,
                     shard_inventory=scheduler_inventory,
@@ -3483,6 +4402,14 @@ class AuditPipeline:
                     privacy_evidence_custody=scheduler_privacy_evidence_custody,
                     audit_model_selection_evidence=(
                         self.audit_model_selection_evidence if paid_audit_policy_required else None
+                    ),
+                    audit_model_refresh_evidence=(
+                        self.audit_model_refresh_evidence if paid_audit_policy_required else None
+                    ),
+                    audit_model_refresh_pricing_evidence=(
+                        self.audit_model_refresh_pricing_evidence
+                        if paid_audit_policy_required
+                        else None
                     ),
                 )
                 if resume_scheduler_journal is None:
@@ -3497,6 +4424,16 @@ class AuditPipeline:
                         shard_inventory=scheduler_inventory,
                         cost_ledger_baseline=scheduler_cost_ledger_baseline,
                         privacy_evidence_custody=scheduler_privacy_evidence_custody,
+                        audit_model_refresh_evidence=self.audit_model_refresh_evidence,
+                        audit_model_refresh_guard=self.audit_model_refresh_guard,
+                        audit_model_refresh_pricing_evidence=(
+                            self.audit_model_refresh_pricing_evidence
+                        ),
+                        audit_model_refresh_pricing_authority=(
+                            self.audit_model_refresh_pricing_authority
+                        ),
+                        production_qualification=self.production_qualification,
+                        audit_model_selection=self.verified_audit_model_selection,
                     )
                     self._active_scheduler = scheduler
                 else:
@@ -3511,6 +4448,16 @@ class AuditPipeline:
                         shard_inventory=scheduler_inventory,
                         cost_ledger_baseline=None,
                         atomic_ledger=atomic_ledger,
+                        audit_model_refresh_evidence=self.audit_model_refresh_evidence,
+                        audit_model_refresh_guard=self.audit_model_refresh_guard,
+                        audit_model_refresh_pricing_evidence=(
+                            self.audit_model_refresh_pricing_evidence
+                        ),
+                        audit_model_refresh_pricing_authority=(
+                            self.audit_model_refresh_pricing_authority
+                        ),
+                        production_qualification=self.production_qualification,
+                        audit_model_selection=self.verified_audit_model_selection,
                     )
                     self._active_scheduler = scheduler
                     await self._validate_models(
@@ -3878,37 +4825,57 @@ class AuditPipeline:
                     expected_role=task.role,
                 )
 
-            def completed_finding_review(
-                pass_result: SchedulerPassResult,
+            def retained_finding_review(
+                pass_result: SchedulerPassResult | None,
                 task: SchedulerTaskPlan,
                 agent: Any,
                 context: ContextPackage,
             ) -> FindingReviewResult:
-                result = scheduler.completed_result_for_task(pass_result, task)
+                result = (
+                    scheduler.completed_result_for_task(pass_result, task)
+                    if pass_result is not None
+                    else scheduler.result_for_task(task)
+                )
+                if result is None:
+                    raise OpenRouterSchemaError(
+                        "retained candidate review lacks a scheduler terminal result"
+                    )
                 if result.terminal_status is not SchedulerTerminalStatus.SUCCEEDED:
                     raise OpenRouterSchemaError(
                         "completed candidate review lacks a successful scheduler result"
                     )
-                raw_response = scheduler.completed_output_for_task(
-                    pass_result,
-                    task,
-                    CandidateReviewBatch,
+                raw_response = (
+                    scheduler.completed_output_for_task(
+                        pass_result,
+                        task,
+                        CandidateReviewBatch,
+                    )
+                    if pass_result is not None
+                    else scheduler.output_for_task(task, CandidateReviewBatch)
                 )
+                retained_outputs = tuple(
+                    output for output in scheduler.journal.outputs if output.task_id == task.task_id
+                )
+                if len(retained_outputs) != 1:
+                    raise OpenRouterSchemaError(
+                        "resumed candidate review lacks one exact retained scheduler output"
+                    )
+                completion = retained_outputs[0].model_completion_evidence
+                if completion is None:
+                    raise OpenRouterSchemaError(
+                        "resumed candidate review lacks exact model completion custody"
+                    )
                 completed_review = cast(
                     FindingReviewResult,
                     agent.bind_completed_review(
                         context,
                         raw_response=raw_response,
                         completion_usage=completed_usage_for_task(task),
+                        normalization_evidence=completion.normalization_evidence,
                     ),
                 )
-                retained_outputs = tuple(
-                    output for output in scheduler.journal.outputs if output.task_id == task.task_id
-                )
-                if len(retained_outputs) != 1 or retained_outputs[
-                    0
-                ].accepted_candidate_payload_sha256s != _candidate_payload_sha256s(
-                    completed_review.findings
+                if retained_outputs[0].accepted_candidate_payload_sha256s != (
+                    _candidate_payload_sha256s(completed_review.findings)
                 ):
                     raise OpenRouterSchemaError(
                         "resumed candidate review differs from its host-accepted projection"
@@ -3916,15 +4883,21 @@ class AuditPipeline:
                 return completed_review
 
             def completed_finding_review_or_terminal(
-                pass_result: SchedulerPassResult,
+                pass_result: SchedulerPassResult | None,
                 task: SchedulerTaskPlan,
                 agent: Any,
                 context: ContextPackage,
-            ) -> FindingReviewResult | SchedulerTaskResult:
-                result = scheduler.completed_result_for_task(pass_result, task)
+            ) -> FindingReviewResult | SchedulerTaskResult | None:
+                result = (
+                    scheduler.completed_result_for_task(pass_result, task)
+                    if pass_result is not None
+                    else scheduler.result_for_task(task)
+                )
+                if result is None:
+                    return None
                 if result.terminal_status is not SchedulerTerminalStatus.SUCCEEDED:
                     return result
-                return completed_finding_review(pass_result, task, agent, context)
+                return retained_finding_review(pass_result, task, agent, context)
 
             def require_completed_specialist_outcome(
                 task: SchedulerTaskPlan,
@@ -4052,6 +5025,7 @@ class AuditPipeline:
                     SchedulerTaskPlan,
                 ]
             ] = []
+            coverage_task_by_scheduler_id: dict[str, ModelSurfaceGapTask] = {}
             whole_protocol_specs: list[
                 tuple[
                     str,
@@ -4063,50 +5037,129 @@ class AuditPipeline:
             if not scheduler_halted:
                 for shard in scheduler.manifest.shard_inventory.shards:
                     scope = SchedulerScope.single_shard(shard.shard_id)
-                    for role, agent_class in (
-                        ("source_audit", SourceAuditAgent),
-                        ("business_logic", BusinessLogicAgent),
-                        ("configuration", ConfigurationAgent),
-                    ):
+                    blind_specs.append(
+                        (
+                            "source_audit",
+                            "source_audit",
+                            SourceAuditAgent,
+                            shard,
+                            scheduled_model_task(
+                                pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+                                scope=scope,
+                                task_key=f"source_audit-{shard.shard_id}",
+                                request_role="source_audit",
+                                configured_role="source_audit",
+                                request_protocol=SourceAuditAgent(
+                                    scheduler_agent_config,
+                                    self.client,
+                                ).request_protocol,
+                            ),
+                        )
+                    )
+                    if model_surface_coverage_plan is None:
+                        # Generic reviews have no compact task inventory to carry the
+                        # two remaining base roles. Preserve the established per-shard
+                        # reviewer set only on that path; a compact plan supplies these
+                        # roles below and must not be duplicated.
+                        for role, base_agent_class in (
+                            ("business_logic", BusinessLogicAgent),
+                            ("configuration", ConfigurationAgent),
+                        ):
+                            blind_specs.append(
+                                (
+                                    role,
+                                    role,
+                                    base_agent_class,
+                                    shard,
+                                    scheduled_model_task(
+                                        pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+                                        scope=scope,
+                                        task_key=f"{role}-{shard.shard_id}",
+                                        request_role=role,
+                                        configured_role=role,
+                                        request_protocol=base_agent_class(
+                                            scheduler_agent_config,
+                                            self.client,
+                                        ).request_protocol,
+                                    ),
+                                )
+                            )
+                        for role in specialist_roles:
+                            blind_specs.append(
+                                (
+                                    f"specialist:{role}",
+                                    role,
+                                    None,
+                                    shard,
+                                    scheduled_model_task(
+                                        pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+                                        scope=scope,
+                                        task_key=f"specialist-{role}-{shard.shard_id}",
+                                        request_role=f"specialist:{role}",
+                                        configured_role=role,
+                                        request_protocol=SpecialistFindingAgent(
+                                            scheduler_agent_config,
+                                            self.client,
+                                            role,
+                                        ).request_protocol,
+                                    ),
+                                )
+                            )
+                shards_by_id = {
+                    shard.shard_id: shard for shard in scheduler.manifest.shard_inventory.shards
+                }
+                if model_surface_coverage_plan is not None:
+                    for planned_coverage_task in model_surface_coverage_plan.tasks:
+                        shard = shards_by_id.get(planned_coverage_task.scope_id)
+                        if shard is None:
+                            raise ValueError("coverage task refers to an unknown scheduler shard")
+                        request_role = planned_coverage_task.review_role
+                        if request_role in {"business_logic", "configuration"}:
+                            configured_role = request_role
+                            concrete_agent_class = (
+                                BusinessLogicAgent
+                                if request_role == "business_logic"
+                                else ConfigurationAgent
+                            )
+                            agent_class: type[Any] | None = concrete_agent_class
+                            request_protocol = concrete_agent_class(
+                                scheduler_agent_config,
+                                self.client,
+                            ).request_protocol
+                        elif request_role.startswith("specialist:"):
+                            configured_role = request_role.split(":", 1)[1]
+                            if configured_role not in specialist_roles:
+                                raise ValueError(
+                                    "coverage plan refers to a disabled specialist reviewer"
+                                )
+                            agent_class = None
+                            request_protocol = SpecialistFindingAgent(
+                                scheduler_agent_config,
+                                self.client,
+                                configured_role,
+                            ).request_protocol
+                        else:
+                            raise ValueError("coverage plan contains an unsupported review role")
+                        scheduler_task = scheduled_model_task(
+                            pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+                            scope=SchedulerScope.single_shard(shard.shard_id),
+                            task_key=planned_coverage_task.task_id,
+                            request_role=request_role,
+                            request_protocol=request_protocol,
+                            model_id=planned_coverage_task.requested_model,
+                            root_lineage=planned_coverage_task.root_lineage,
+                        )
                         blind_specs.append(
                             (
-                                role,
-                                role,
+                                request_role,
+                                configured_role,
                                 agent_class,
                                 shard,
-                                scheduled_model_task(
-                                    pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
-                                    scope=scope,
-                                    task_key=f"{role}-{shard.shard_id}",
-                                    request_role=role,
-                                    configured_role=role,
-                                    request_protocol=agent_class(
-                                        scheduler_agent_config,
-                                        self.client,
-                                    ).request_protocol,
-                                ),
+                                scheduler_task,
                             )
                         )
-                    for role in specialist_roles:
-                        blind_specs.append(
-                            (
-                                f"specialist:{role}",
-                                role,
-                                None,
-                                shard,
-                                scheduled_model_task(
-                                    pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
-                                    scope=scope,
-                                    task_key=f"specialist-{role}-{shard.shard_id}",
-                                    request_role=f"specialist:{role}",
-                                    configured_role=role,
-                                    request_protocol=SpecialistFindingAgent(
-                                        scheduler_agent_config,
-                                        self.client,
-                                        role,
-                                    ).request_protocol,
-                                ),
-                            )
+                        coverage_task_by_scheduler_id[scheduler_task.task_id] = (
+                            planned_coverage_task
                         )
                 for review_index, (model_id, root_lineage) in enumerate(
                     _whole_protocol_review_models(
@@ -4171,6 +5224,11 @@ class AuditPipeline:
                         ContextPackage,
                     ]
                 ] = []
+                model_surface_requests_by_id = {
+                    surface.surface_id: surface for surface in model_surface_requests
+                }
+                if len(model_surface_requests_by_id) != len(model_surface_requests):
+                    raise ValueError("authoritative model-surface inventory repeats an identity")
                 for (
                     request_role,
                     configured_role,
@@ -4188,13 +5246,43 @@ class AuditPipeline:
                             primary_paths=scoped_source_paths,
                         )
                     )
-                    assigned_surfaces = [
-                        surface
-                        for surface in model_surface_review_assignments.get(request_role, [])
-                        if not surface.allowed_locations
-                        or {location.path for location in surface.allowed_locations}
-                        <= allowed_paths
-                    ]
+                    context_coverage_task = coverage_task_by_scheduler_id.get(
+                        scheduler_task.task_id
+                    )
+                    if context_coverage_task is None:
+                        assigned_surfaces = [
+                            surface
+                            for surface in model_surface_review_assignments.get(request_role, [])
+                            if not surface.allowed_locations
+                            or {location.path for location in surface.allowed_locations}
+                            <= allowed_paths
+                        ]
+                    else:
+                        try:
+                            assigned_surfaces = [
+                                model_surface_requests_by_id[surface_id]
+                                for surface_id in context_coverage_task.surface_ids
+                            ]
+                        except KeyError as exc:
+                            raise ValueError(
+                                "coverage task surface differs from the authoritative inventory"
+                            ) from exc
+                        allowed_paths |= {
+                            location.path
+                            for surface in assigned_surfaces
+                            for location in surface.allowed_locations
+                        }
+                        if tuple(surface.surface_id for surface in assigned_surfaces) != (
+                            context_coverage_task.surface_ids
+                        ) or any(
+                            surface.allowed_locations
+                            and not {location.path for location in surface.allowed_locations}
+                            <= allowed_paths
+                            for surface in assigned_surfaces
+                        ):
+                            raise ValueError(
+                                "coverage task cannot be rendered in its exact scheduler scope"
+                            )
                     if request_role == "source_audit":
                         try:
                             assigned_surfaces = _source_audit_shard_surface_requests(
@@ -4209,7 +5297,11 @@ class AuditPipeline:
                             terminal_code = ExitCode.INCOMPLETE
                             budget_halted = True
                             break
-                    else:
+                    elif context_coverage_task is None:
+                        if model_surface_coverage_plan is not None:
+                            raise ValueError(
+                                "non-source blind review lacks a compact coverage task"
+                            )
                         try:
                             assigned_surfaces = _blind_shard_surface_requests(
                                 shard=shard,
@@ -4276,6 +5368,273 @@ class AuditPipeline:
                             (request_role, whole_protocol_agent, scheduler_task, package)
                         )
 
+                coverage_resource_failure: str | None = None
+                coverage_preview_by_scheduler_id: dict[
+                    str,
+                    ModelSurfaceTaskResourcePreview,
+                ] = {}
+                coverage_preview_checked_at: datetime | None = None
+                if (
+                    len(blind_contexts) == len(blind_specs)
+                    and len(whole_protocol_contexts) == len(whole_protocol_specs)
+                    and model_surface_coverage_plan is not None
+                ):
+                    try:
+                        coverage_contexts = {}
+                        for (
+                            _request_role,
+                            configured_role,
+                            blind_agent_type,
+                            scheduler_task,
+                            package,
+                        ) in blind_contexts:
+                            coverage_task_for_scheduler = coverage_task_by_scheduler_id.get(
+                                scheduler_task.task_id
+                            )
+                            if coverage_task_for_scheduler is None:
+                                continue
+                            if coverage_task_for_scheduler.task_id in coverage_contexts:
+                                raise ValueError(
+                                    "compact coverage task has duplicate scheduler/context custody"
+                                )
+                            coverage_contexts[coverage_task_for_scheduler.task_id] = (
+                                configured_role,
+                                blind_agent_type,
+                                scheduler_task,
+                                package,
+                            )
+                        if len(coverage_contexts) != len(model_surface_coverage_plan.tasks):
+                            raise ValueError(
+                                "compact coverage contexts do not exactly join the frozen plan"
+                            )
+                        preflight_path = (
+                            run_dir / "private" / "model-surface-resource-preflight.json"
+                        )
+                        retained_preflight_path = (
+                            resume_scheduler_journal.parent
+                            / "model-surface-resource-preflight.json"
+                            if resume_scheduler_journal is not None
+                            else preflight_path
+                        )
+                        task_previews: list[ModelSurfaceTaskResourcePreview]
+                        if completed_blind_review is not None:
+                            # A sealed completed pass cannot dispatch. Preserve its original
+                            # private pricing/request evidence instead of manufacturing a
+                            # current provider preview for work that will not be transported.
+                            retained_preflight = _load_private_coverage_preflight(
+                                retained_preflight_path
+                            )
+                            if retained_preflight.plan != model_surface_coverage_plan:
+                                raise ValueError(
+                                    "completed compact preflight differs from the frozen plan"
+                                )
+                            task_previews = list(retained_preflight.task_previews)
+                            coverage_plan_task_by_id = {
+                                task.task_id: task for task in model_surface_coverage_plan.tasks
+                            }
+                            if len(coverage_plan_task_by_id) != len(
+                                model_surface_coverage_plan.tasks
+                            ):
+                                raise ValueError(
+                                    "completed compact plan repeats a coverage task identity"
+                                )
+                            for preview in task_previews:
+                                matching = coverage_contexts.get(preview.coverage_task_id)
+                                coverage_task = coverage_plan_task_by_id.get(
+                                    preview.coverage_task_id
+                                )
+                                if (
+                                    matching is None
+                                    or coverage_task is None
+                                    or preview.coverage_task_sha256 != coverage_task.task_sha256
+                                    or preview.scheduler_task_id != matching[2].task_id
+                                    or preview.scheduler_task_plan_sha256
+                                    != matching[2].task_plan_sha256
+                                    or preview.campaign_manifest_sha256
+                                    != scheduler.manifest.manifest_sha256
+                                ):
+                                    raise ValueError(
+                                        "completed compact preflight lacks exact scheduler custody"
+                                    )
+                        else:
+                            checked_at = datetime.now(UTC).replace(microsecond=0)
+                            coverage_preview_checked_at = checked_at
+                            task_previews = []
+                            for coverage_task in model_surface_coverage_plan.tasks:
+                                matching = coverage_contexts.get(coverage_task.task_id)
+                                if matching is None:
+                                    raise ValueError(
+                                        "compact coverage task lacks scheduler/context custody"
+                                    )
+                                configured_role, blind_agent_type, scheduler_task, package = (
+                                    matching
+                                )
+                                preview_agent = (
+                                    SpecialistFindingAgent(
+                                        scheduler_agent_config,
+                                        self.client,
+                                        configured_role,
+                                    )
+                                    if blind_agent_type is None
+                                    else blind_agent_type(scheduler_agent_config, self.client)
+                                )
+                                if (
+                                    trusted_preview_candidate_review_task_resources
+                                    is not _TRUSTED_PREVIEW_CANDIDATE_REVIEW_TASK_RESOURCES
+                                    or openrouter_models.trusted_preview_candidate_review_task_resources
+                                    is not _TRUSTED_PREVIEW_CANDIDATE_REVIEW_TASK_RESOURCES
+                                ):
+                                    raise OpenRouterCandidateReviewBoundaryError(
+                                        "pipeline candidate-review resource preview dispatch "
+                                        "boundary changed"
+                                    )
+                                task_previews.append(
+                                    _TRUSTED_PREVIEW_CANDIDATE_REVIEW_TASK_RESOURCES(
+                                        client,
+                                        coverage_task=coverage_task,
+                                        scheduler_task=scheduler_task,
+                                        campaign_manifest=scheduler.manifest,
+                                        context_package=package,
+                                        system_prompt=preview_agent.request_protocol.system_prompt,
+                                        schema_name=preview_agent.request_protocol.schema_name,
+                                        checked_at=checked_at,
+                                    )
+                                )
+                        coverage_preview_by_scheduler_id = {
+                            preview.scheduler_task_id: preview for preview in task_previews
+                        }
+                        if len(coverage_preview_by_scheduler_id) != len(task_previews):
+                            raise ValueError(
+                                "compact coverage previews repeat a scheduler task identity"
+                            )
+                        if resume_scheduler_journal is not None:
+                            resumed_preflight = _load_private_coverage_preflight(
+                                retained_preflight_path
+                            )
+                            if (
+                                resumed_preflight.plan != model_surface_coverage_plan
+                                or resumed_preflight.task_previews
+                                != tuple(
+                                    sorted(
+                                        task_previews,
+                                        key=lambda item: item.coverage_task_id,
+                                    )
+                                )
+                            ):
+                                raise ValueError(
+                                    "resumed compact coverage preflight differs from current "
+                                    "plan or exact request previews"
+                                )
+                            model_surface_resource_preflight = resumed_preflight
+                            _persist_private_coverage_evidence(
+                                preflight_path,
+                                resumed_preflight,
+                            )
+                        else:
+                            if budget.reserved_usd != 0:
+                                raise ValueError(
+                                    "compact coverage preflight requires no outstanding reservation"
+                                )
+                            remaining_input = budget.remaining_input_tokens
+                            remaining_output = budget.remaining_output_tokens
+                            if remaining_input is None or remaining_output is None:
+                                raise ValueError(
+                                    "compact coverage preflight requires exact global token caps"
+                                )
+                            remaining_global = _subtract_coverage_usd(
+                                Decimal(str(budget.total_usd)),
+                                budget.spent_usd_exact,
+                            )
+                            if remaining_global < 0:
+                                raise ValueError(
+                                    "compact coverage preflight observed negative remaining USD"
+                                )
+                            planned_roles = {
+                                task.review_role for task in model_surface_coverage_plan.tasks
+                            }
+                            planned_models = {
+                                task.requested_model for task in model_surface_coverage_plan.tasks
+                            }
+                            remaining_by_role = {}
+                            scoped_role_keys = (
+                                set(budget.per_role_usd_caps)
+                                if budget.per_role_usd_caps
+                                else planned_roles
+                            )
+                            for role in sorted(scoped_role_keys):
+                                configured_cap = budget.per_role_usd_caps.get(role)
+                                scoped_remaining = remaining_global
+                                if configured_cap is not None:
+                                    scoped_remaining = min(
+                                        scoped_remaining,
+                                        max(
+                                            Decimal(0),
+                                            _subtract_coverage_usd(
+                                                configured_cap,
+                                                budget.spent_role_usd(role),
+                                                budget.reserved_role_usd(role),
+                                            ),
+                                        ),
+                                    )
+                                remaining_by_role[role] = _canonical_decimal_text(scoped_remaining)
+                            remaining_by_model = {}
+                            scoped_model_keys = (
+                                set(budget.per_model_usd_caps)
+                                if budget.per_model_usd_caps
+                                else planned_models
+                            )
+                            for model_id in sorted(scoped_model_keys):
+                                configured_cap = budget.per_model_usd_caps.get(model_id)
+                                scoped_remaining = remaining_global
+                                if configured_cap is not None:
+                                    scoped_remaining = min(
+                                        scoped_remaining,
+                                        max(
+                                            Decimal(0),
+                                            _subtract_coverage_usd(
+                                                configured_cap,
+                                                budget.spent_model_usd(model_id),
+                                                budget.reserved_model_usd(model_id),
+                                            ),
+                                        ),
+                                    )
+                                remaining_by_model[model_id] = _canonical_decimal_text(
+                                    scoped_remaining
+                                )
+                            model_surface_resource_preflight = (
+                                build_model_surface_resource_preflight(
+                                    model_surface_coverage_plan,
+                                    task_previews,
+                                    maximum_requests=sum(
+                                        preview.maximum_request_count for preview in task_previews
+                                    ),
+                                    maximum_input_tokens=remaining_input,
+                                    maximum_output_tokens=remaining_output,
+                                    maximum_cost_usd_exact=_canonical_decimal_text(
+                                        remaining_global
+                                    ),
+                                    remaining_cost_usd_by_role=remaining_by_role,
+                                    remaining_cost_usd_by_model=remaining_by_model,
+                                )
+                            )
+                            _persist_private_coverage_evidence(
+                                preflight_path,
+                                model_surface_resource_preflight,
+                            )
+                        if not model_surface_resource_preflight.feasible:
+                            coverage_resource_failure = (
+                                "compact model-surface resource preflight failed: "
+                                + ", ".join(
+                                    code.value
+                                    for code in model_surface_resource_preflight.failure_codes
+                                )
+                            )
+                    except (OpenRouterError, ValueError) as exc:
+                        coverage_resource_failure = (
+                            "compact model-surface resource preflight failed: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
+
                 if len(blind_contexts) != len(blind_specs) or len(whole_protocol_contexts) != len(
                     whole_protocol_specs
                 ):
@@ -4293,6 +5652,26 @@ class AuditPipeline:
                     for _request_role, _model_id, _agent, task_plan in whole_protocol_specs:
                         scheduler.record_failure(task_plan, blind_failure)
                 else:
+                    if coverage_resource_failure is not None:
+                        resource_failure_exception = BudgetExhaustedError(coverage_resource_failure)
+                        for task_plan in blind_plan_tasks:
+                            retained_result = (
+                                scheduler.completed_result_for_task(
+                                    completed_blind_review,
+                                    task_plan,
+                                )
+                                if completed_blind_review is not None
+                                else scheduler.result_for_task(task_plan)
+                            )
+                            if retained_result is None and completed_blind_review is None:
+                                scheduler.record_failure(task_plan, resource_failure_exception)
+                        incomplete.append(coverage_resource_failure)
+                        terminal_code = ExitCode.INCOMPLETE
+                        budget_halted = True
+                        blind_contexts.clear()
+                        whole_protocol_contexts.clear()
+                        blind_specs.clear()
+                        whole_protocol_specs.clear()
                     # The complete pass plan and every shard-scoped context are
                     # frozen before any investigator task is allowed to run.
                     blind_tasks: list[
@@ -4301,9 +5680,103 @@ class AuditPipeline:
                             str,
                             SchedulerTaskPlan,
                             ContextPackage,
+                            Any,
                             asyncio.Task[Any],
                         ]
                     ] = []
+                    supplemental_blind_work: list[
+                        tuple[
+                            str,
+                            str,
+                            SchedulerTaskPlan,
+                            ContextPackage,
+                            Any,
+                            Any,
+                        ]
+                    ] = []
+                    recovery_roots: list[
+                        tuple[str, str, SchedulerTaskPlan, ContextPackage, Any]
+                    ] = []
+
+                    async def run_blind_agent(
+                        *,
+                        agent: Any,
+                        scheduler_task: SchedulerTaskPlan,
+                        package: ContextPackage,
+                    ) -> Any:
+                        expected_preview = coverage_preview_by_scheduler_id.get(
+                            scheduler_task.task_id
+                        )
+                        if expected_preview is None:
+                            return await bounded_call(
+                                agent.run(
+                                    package,
+                                    logical_request_id=scheduler_task.logical_request_id,
+                                )
+                            )
+                        coverage_task = coverage_task_by_scheduler_id.get(scheduler_task.task_id)
+                        if coverage_task is None:
+                            raise OpenRouterSchemaError(
+                                "resource-bound coverage dispatch lacks its exact plan task"
+                            )
+                        if coverage_preview_checked_at is None:
+                            raise OpenRouterSchemaError(
+                                "resource-bound coverage dispatch lacks its preview timestamp"
+                            )
+                        return await bounded_call(
+                            agent.run(
+                                package,
+                                logical_request_id=scheduler_task.logical_request_id,
+                                expected_resource_preview=expected_preview,
+                                coverage_task=coverage_task,
+                                scheduler_task=scheduler_task,
+                                campaign_manifest=scheduler.manifest,
+                                resource_preview_checked_at=coverage_preview_checked_at,
+                            )
+                        )
+
+                    def queue_exact_recovery_root(
+                        *,
+                        request_role: str,
+                        configured_role: str,
+                        scheduler_task: SchedulerTaskPlan,
+                        context: ContextPackage,
+                        agent: Any,
+                        result: SchedulerTaskResult,
+                    ) -> bool:
+                        """Queue only a fully typed parent; no provisional record is consumed."""
+
+                        if scheduler_role_requires_specialist_accepted_outcome(scheduler_task.role):
+                            return False
+                        attempts = tuple(
+                            attempt
+                            for attempt in scheduler.journal.provider_attempts
+                            if attempt.task_id == scheduler_task.task_id
+                        )
+                        if len(attempts) != 1:
+                            return False
+                        attempt = attempts[0]
+                        projection = attempt.truncation_projection
+                        envelope = attempt.truncated_envelope_evidence
+                        if (
+                            result.terminal_status is not SchedulerTerminalStatus.TRUNCATED
+                            or attempt.schema_version != "1.1"
+                            or projection is None
+                            or envelope is None
+                            or result.terminal_evidence_sha256 != projection.evidence_sha256
+                        ):
+                            return False
+                        recovery_roots.append(
+                            (
+                                request_role,
+                                configured_role,
+                                scheduler_task,
+                                context,
+                                agent,
+                            )
+                        )
+                        return True
+
                     for (
                         request_role,
                         configured_role,
@@ -4321,33 +5794,39 @@ class AuditPipeline:
                             if blind_agent_type is None
                             else blind_agent_type(scheduler_agent_config, self.client)
                         )
-                        recovered_review = (
-                            completed_finding_review_or_terminal(
-                                completed_blind_review,
-                                scheduler_task,
-                                blind_agent,
-                                blind_package,
-                            )
-                            if completed_blind_review is not None
-                            else None
+                        recovered_review = completed_finding_review_or_terminal(
+                            completed_blind_review,
+                            scheduler_task,
+                            blind_agent,
+                            blind_package,
                         )
+                        if scheduler_task.task_id not in coverage_preview_by_scheduler_id:
+                            supplemental_blind_work.append(
+                                (
+                                    request_role,
+                                    configured_role,
+                                    scheduler_task,
+                                    blind_package,
+                                    blind_agent,
+                                    recovered_review,
+                                )
+                            )
+                            continue
                         blind_tasks.append(
                             (
                                 request_role,
                                 configured_role,
                                 scheduler_task,
                                 blind_package,
+                                blind_agent,
                                 asyncio.create_task(
                                     (
                                         completed_value(recovered_review)
                                         if recovered_review is not None
-                                        else bounded_call(
-                                            blind_agent.run(
-                                                blind_package,
-                                                logical_request_id=(
-                                                    scheduler_task.logical_request_id
-                                                ),
-                                            )
+                                        else run_blind_agent(
+                                            agent=blind_agent,
+                                            scheduler_task=scheduler_task,
+                                            package=blind_package,
                                         )
                                     ),
                                     name=f"model:{request_role}:{scheduler_task.task_key}",
@@ -4361,33 +5840,54 @@ class AuditPipeline:
                         whole_protocol_package,
                     ) in whole_protocol_contexts:
                         packages.append(whole_protocol_package)
-                        recovered_review = (
-                            completed_finding_review_or_terminal(
-                                completed_blind_review,
-                                scheduler_task,
-                                whole_protocol_agent,
-                                whole_protocol_package,
-                            )
-                            if completed_blind_review is not None
-                            else None
+                        recovered_review = completed_finding_review_or_terminal(
+                            completed_blind_review,
+                            scheduler_task,
+                            whole_protocol_agent,
+                            whole_protocol_package,
                         )
-                        blind_tasks.append(
+                        supplemental_blind_work.append(
                             (
                                 request_role,
                                 "whole_protocol_review",
                                 scheduler_task,
                                 whole_protocol_package,
+                                whole_protocol_agent,
+                                recovered_review,
+                            )
+                        )
+                    blind_tasks.sort(key=lambda item: item[2].task_key)
+                    if blind_tasks:
+                        # Compact-plan feasibility is intentionally scoped. Finish every
+                        # resource-bound compact request before supplemental source/whole
+                        # work can consume any of the remaining live budget.
+                        await asyncio.gather(
+                            *(item[-1] for item in blind_tasks),
+                            return_exceptions=True,
+                        )
+                    for (
+                        request_role,
+                        configured_role,
+                        scheduler_task,
+                        package,
+                        blind_agent,
+                        recovered_review,
+                    ) in supplemental_blind_work:
+                        blind_tasks.append(
+                            (
+                                request_role,
+                                configured_role,
+                                scheduler_task,
+                                package,
+                                blind_agent,
                                 asyncio.create_task(
                                     (
                                         completed_value(recovered_review)
                                         if recovered_review is not None
-                                        else bounded_call(
-                                            whole_protocol_agent.run(
-                                                whole_protocol_package,
-                                                logical_request_id=(
-                                                    scheduler_task.logical_request_id
-                                                ),
-                                            )
+                                        else run_blind_agent(
+                                            agent=blind_agent,
+                                            scheduler_task=scheduler_task,
+                                            package=package,
                                         )
                                     ),
                                     name=f"model:{request_role}:{scheduler_task.task_key}",
@@ -4398,18 +5898,33 @@ class AuditPipeline:
                         request_role,
                         configured_role,
                         scheduler_task,
-                        _package,
+                        package,
+                        blind_agent,
                         task,
                     ) in blind_tasks:
                         try:
                             batch = await task
                             if isinstance(batch, SchedulerTaskResult):
+                                if queue_exact_recovery_root(
+                                    request_role=request_role,
+                                    configured_role=configured_role,
+                                    scheduler_task=scheduler_task,
+                                    context=package,
+                                    agent=blind_agent,
+                                    result=batch,
+                                ):
+                                    continue
                                 incomplete.append(
                                     f"{request_role}: retained scheduler terminal "
                                     f"{batch.terminal_status.value}"
                                 )
                                 if terminal_code is ExitCode.SUCCESS:
-                                    terminal_code = ExitCode.MODEL_FAILURE
+                                    terminal_code = (
+                                        ExitCode.INCOMPLETE
+                                        if batch.terminal_status
+                                        is SchedulerTerminalStatus.TRUNCATED
+                                        else ExitCode.MODEL_FAILURE
+                                    )
                                 budget_halted = True
                                 continue
                             sealed_context, completion_usage = register_finding_result(
@@ -4437,7 +5952,10 @@ class AuditPipeline:
                                     artifact.request_id,
                                     [],
                                 ).append(sealed_context)
-                            if completed_blind_review is None:
+                            if (
+                                completed_blind_review is None
+                                and scheduler.result_for_task(scheduler_task) is None
+                            ):
                                 scheduler.record_model_success(
                                     scheduler_task,
                                     output_value=batch.raw_response,
@@ -4448,6 +5966,7 @@ class AuditPipeline:
                                         sealed_context.requested_model_surfaces
                                     ),
                                     model_surface_review_artifact=(batch.surface_review_artifact),
+                                    normalization_evidence=batch.normalization_evidence,
                                 )
                             else:
                                 require_completed_specialist_outcome(
@@ -4460,6 +5979,33 @@ class AuditPipeline:
                                 time_to_first_candidate_seconds = (
                                     time.monotonic() - run_started_monotonic
                                 )
+                        except OpenRouterTruncatedResponseError as exc:
+                            result = scheduler.record_failure(
+                                scheduler_task,
+                                exc,
+                                usage_records=usage.records,
+                            )
+                            if queue_exact_recovery_root(
+                                request_role=request_role,
+                                configured_role=configured_role,
+                                scheduler_task=scheduler_task,
+                                context=package,
+                                agent=blind_agent,
+                                result=result,
+                            ):
+                                continue
+                            incomplete.append(
+                                f"{request_role}: truncated response lacked exact recovery custody"
+                            )
+                            if terminal_code is ExitCode.SUCCESS:
+                                terminal_code = (
+                                    ExitCode.INCOMPLETE
+                                    if scheduler_role_requires_specialist_accepted_outcome(
+                                        scheduler_task.role
+                                    )
+                                    else ExitCode.MODEL_FAILURE
+                                )
+                            budget_halted = True
                         except BudgetExhaustedError as exc:
                             scheduler.record_failure(
                                 scheduler_task,
@@ -4478,10 +6024,466 @@ class AuditPipeline:
                             incomplete.append(f"{request_role}: {exc}")
                             if terminal_code is ExitCode.SUCCESS:
                                 terminal_code = ExitCode.MODEL_FAILURE
-                if completed_blind_review is None:
-                    conclude_scheduler_pass()
-                else:
-                    conclude_scheduler_result(completed_blind_review)
+                    if recovery_roots:
+                        result_by_task_id = {
+                            result.task_id: result for result in scheduler.journal.task_results
+                        }
+                        if len(result_by_task_id) < len(blind_plan_tasks) or any(
+                            task.task_id not in result_by_task_id for task in blind_plan_tasks
+                        ):
+                            raise OpenRouterSchemaError(
+                                "truncation recovery cannot begin before blind-task quiescence"
+                            )
+                    for (
+                        request_role,
+                        _configured_role,
+                        scheduler_task,
+                        parent_context,
+                        blind_agent,
+                    ) in recovery_roots:
+                        parent_attempts = tuple(
+                            attempt
+                            for attempt in scheduler.journal.provider_attempts
+                            if attempt.task_id == scheduler_task.task_id
+                        )
+                        parent_activations = tuple(
+                            activation
+                            for activation in scheduler.journal.activations
+                            if activation.task_id == scheduler_task.task_id
+                        )
+                        parent_plans = tuple(
+                            plan for plan in scheduler.journal.plans if scheduler_task in plan.tasks
+                        )
+                        if (
+                            len(parent_attempts) != 1
+                            or len(parent_activations) != 1
+                            or len(parent_plans) != 1
+                            or parent_attempts[0].truncation_projection is None
+                        ):
+                            raise OpenRouterSchemaError(
+                                "truncation recovery parent custody became ambiguous"
+                            )
+                        parent_attempt = parent_attempts[0]
+                        parent_activation = parent_activations[0]
+                        parent_pass_plan = parent_plans[0]
+                        projection = parent_attempt.truncation_projection
+                        assert projection is not None
+                        if projection.surface_reviews:
+                            reason = (
+                                f"{request_role}: truncation retained parent coverage that "
+                                "cannot yet be consumed without fabricating a successful parent "
+                                "artifact; recovery was not opened and no credit was granted"
+                            )
+                            if reason not in incomplete:
+                                incomplete.append(reason)
+                            terminal_code = ExitCode.INCOMPLETE
+                            continue
+                        matching_families = tuple(
+                            family
+                            for family in scheduler.journal.truncation_recovery_families
+                            if family.recovery_plan.parent.parent_task_id == scheduler_task.task_id
+                        )
+                        if len(matching_families) > 1:
+                            raise OpenRouterSchemaError(
+                                "truncation recovery parent has ambiguous family custody"
+                            )
+                        if matching_families:
+                            family = matching_families[0]
+                        else:
+                            if atomic_ledger is None:
+                                raise OpenRouterSchemaError(
+                                    "truncation recovery requires the exact persistent cost ledger"
+                                )
+                            surface_manifest, recovery_plan = (
+                                _build_direct_truncation_recovery_plan(
+                                    journal=scheduler.journal,
+                                    pass_plan=parent_pass_plan,
+                                    task=scheduler_task,
+                                    activation=parent_activation,
+                                    attempt=parent_attempt,
+                                    projection=projection,
+                                    parent_context=parent_context,
+                                    atomic_ledger=atomic_ledger,
+                                )
+                            )
+                            if (
+                                recovery_plan.disposition
+                                is not TruncationRecoveryDisposition.PLANNED
+                                or len(recovery_plan.children) != 2
+                            ):
+                                reason = (
+                                    f"{request_role}: truncation recovery was not dispatchable "
+                                    f"({recovery_plan.disposition.value})"
+                                )
+                                if reason not in incomplete:
+                                    incomplete.append(reason)
+                                terminal_code = ExitCode.INCOMPLETE
+                                continue
+                            request_limit_reservations = (
+                                atomic_request_limit_reservations_from_usage(
+                                    parent_attempt.usage_record
+                                )
+                            )
+                            if (
+                                not request_limit_reservations
+                                or request_limit_reservations[-1].request_limit_count_after
+                                + sum(
+                                    child.reserved_provider_attempts
+                                    for child in recovery_plan.children
+                                )
+                                > request_limit_reservations[-1].request_limit_maximum
+                            ):
+                                reason = (
+                                    f"{request_role}: truncation recovery was blocked by the "
+                                    "unchanged parent request limit"
+                                )
+                                if reason not in incomplete:
+                                    incomplete.append(reason)
+                                terminal_code = ExitCode.INCOMPLETE
+                                continue
+                            family = scheduler.journal.open_truncation_recovery_family(
+                                recovery_plan=recovery_plan,
+                                truncation_projection=projection,
+                                requested_surface_manifest=surface_manifest,
+                            )
+
+                        child_contexts = tuple(
+                            build_truncation_recovery_child_context(
+                                parent_context=parent_context,
+                                child=child,
+                            )
+                            for child in family.recovery_plan.children
+                        )
+                        for child_context in child_contexts:
+                            if child_context not in packages:
+                                packages.append(child_context)
+                        terminal_entries: dict[
+                            str,
+                            SchedulerTruncationRecoveryChildResult
+                            | SchedulerTruncationRecoveryChildPreflightResult,
+                        ] = {
+                            entry.child_task_id: entry
+                            for entry in scheduler.journal.truncation_recovery_entries
+                            if isinstance(
+                                entry,
+                                (
+                                    SchedulerTruncationRecoveryChildResult,
+                                    SchedulerTruncationRecoveryChildPreflightResult,
+                                ),
+                            )
+                            and entry.family_id == family.family_id
+                        }
+                        for child, child_context in zip(
+                            family.recovery_plan.children,
+                            child_contexts,
+                            strict=True,
+                        ):
+                            if child.child_task_id in terminal_entries:
+                                continue
+                            prepared = scheduler.prepare_truncation_recovery_child(
+                                child.child_task_id,
+                                parent_context=parent_context,
+                            )
+                            if prepared.child_context != child_context:
+                                raise OpenRouterSchemaError(
+                                    "prepared recovery child differs from deterministic context"
+                                )
+                            try:
+                                child_review = await bounded_call(
+                                    blind_agent.run(
+                                        prepared.child_context,
+                                        logical_request_id=prepared.logical_request_id,
+                                        single_route_single_attempt=True,
+                                        recovery_request_limit_scope=(prepared.request_limit_scope),
+                                        recovery_request_limit_count_before=(
+                                            prepared.request_limit_count_before
+                                        ),
+                                    )
+                                )
+                                exact_usage = tuple(
+                                    record
+                                    for record in usage.records
+                                    if record.request_id == prepared.logical_request_id
+                                )
+                                if (
+                                    len(exact_usage) != 1
+                                    or exact_usage[0] != child_review.completion_usage
+                                    or child_review.surface_review_context != prepared.child_context
+                                    or child_review.raw_response is None
+                                    or child_review.normalization_evidence is None
+                                    or child_review.surface_review_artifact is None
+                                ):
+                                    raise OpenRouterSchemaError(
+                                        "recovery child completion lacks exact typed custody"
+                                    )
+                                terminal_entries[child.child_task_id] = (
+                                    scheduler.journal.record_truncation_recovery_child_success(
+                                        child.child_task_id,
+                                        usage_record=exact_usage[0],
+                                        normalization_evidence=(
+                                            child_review.normalization_evidence
+                                        ),
+                                        normalized_batch=child_review.raw_response,
+                                        requested_surface_requests=(
+                                            prepared.child_context.requested_model_surfaces
+                                        ),
+                                        output_artifact=child_review.surface_review_artifact,
+                                    )
+                                )
+                            except OpenRouterTruncatedResponseError as exc:
+                                envelope = exc.envelope_evidence
+                                child_projection = exc.projection
+                                failed_usage = exc.failed_usage_record
+                                exact_failed = tuple(
+                                    record
+                                    for record in usage.records
+                                    if record.request_id == prepared.logical_request_id
+                                )
+                                if (
+                                    envelope is None
+                                    or child_projection is None
+                                    or failed_usage is None
+                                    or exact_failed != (failed_usage,)
+                                ):
+                                    raise OpenRouterSchemaError(
+                                        "truncated recovery child lacks exact typed custody"
+                                    ) from None
+                                terminal_entries[child.child_task_id] = (
+                                    scheduler.journal.record_truncation_recovery_child_truncated(
+                                        child.child_task_id,
+                                        failed_usage_record=failed_usage,
+                                        truncated_envelope_evidence=envelope,
+                                        truncation_projection=child_projection,
+                                    )
+                                )
+                            except (BudgetExhaustedError, OpenRouterError) as exc:
+                                if (
+                                    child.child_task_id
+                                    in scheduler.journal.dispatchable_truncation_recovery_child_ids
+                                ):
+                                    terminal_status = (
+                                        SchedulerTruncationRecoveryTerminalStatus.INCONCLUSIVE
+                                        if isinstance(exc, BudgetExhaustedError)
+                                        else SchedulerTruncationRecoveryTerminalStatus.INVALID
+                                        if isinstance(
+                                            exc,
+                                            (
+                                                OpenRouterSchemaError,
+                                                OpenRouterCandidateReviewBoundaryError,
+                                            ),
+                                        )
+                                        else SchedulerTruncationRecoveryTerminalStatus.FAILED
+                                    )
+                                    terminal_entries[child.child_task_id] = (
+                                        scheduler.record_truncation_recovery_child_preflight_result(
+                                            logical_request_id=prepared.logical_request_id,
+                                            terminal_status=terminal_status,
+                                            terminal_evidence_sha256=scheduler_canonical_sha256(
+                                                {
+                                                    "classification": (
+                                                        "truncation_recovery_preflight_failure"
+                                                    ),
+                                                    "exception_type": (
+                                                        f"{type(exc).__module__}."
+                                                        f"{type(exc).__qualname__}"
+                                                    ),
+                                                }
+                                            ),
+                                        )
+                                    )
+                                else:
+                                    reason = (
+                                        f"{request_role}: dispatched recovery child lacks "
+                                        "typed terminal custody"
+                                    )
+                                    if reason not in incomplete:
+                                        incomplete.append(reason)
+                                    scheduler_halted = True
+                                    budget_halted = True
+                                    terminal_code = ExitCode.INCOMPLETE
+                                    break
+                        if scheduler_halted:
+                            break
+
+                        closures = tuple(
+                            entry
+                            for entry in scheduler.journal.truncation_recovery_entries
+                            if isinstance(entry, SchedulerTruncationRecoveryFamilyClosure)
+                            and entry.family_id == family.family_id
+                        )
+                        if len(closures) > 1:
+                            raise OpenRouterSchemaError(
+                                "truncation recovery family has ambiguous closure custody"
+                            )
+                        if closures:
+                            closure = closures[0]
+                        elif len(terminal_entries) == len(family.recovery_plan.children):
+                            closure = scheduler.journal.seal_truncation_recovery_family(
+                                family.family_id
+                            )
+                        else:
+                            reason = f"{request_role}: truncation recovery remained unfinished"
+                            if reason not in incomplete:
+                                incomplete.append(reason)
+                            scheduler_halted = True
+                            budget_halted = True
+                            terminal_code = ExitCode.INCOMPLETE
+                            break
+
+                        promotions = tuple(
+                            entry
+                            for entry in scheduler.journal.truncation_recovery_entries
+                            if isinstance(entry, SchedulerTruncationRecoveryFamilyPromotion)
+                            and entry.family_id == family.family_id
+                        )
+                        if len(promotions) > 1:
+                            raise OpenRouterSchemaError(
+                                "truncation recovery family has ambiguous promotion custody"
+                            )
+                        promotion = promotions[0] if promotions else None
+                        if (
+                            promotion is None
+                            and closure.closure_status
+                            is SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
+                        ):
+                            child_results = tuple(
+                                terminal_entries[child.child_task_id]
+                                for child in family.recovery_plan.children
+                            )
+                            if not all(
+                                isinstance(result, SchedulerTruncationRecoveryChildResult)
+                                for result in child_results
+                            ):
+                                raise OpenRouterSchemaError(
+                                    "coverage-closed recovery lacks typed child results"
+                                )
+                            typed_results = cast(
+                                tuple[SchedulerTruncationRecoveryChildResult, ...],
+                                child_results,
+                            )
+                            child_usage = tuple(
+                                result.runtime_usage_record for result in typed_results
+                            )
+                            if any(record is None for record in child_usage):
+                                raise OpenRouterSchemaError(
+                                    "coverage-closed recovery lacks typed child usage"
+                                )
+                            try:
+                                capability, _artifact = verify_truncation_recovery_closure(
+                                    family=family,
+                                    closure=closure,
+                                    child_results=typed_results,
+                                    parent_usage_record=parent_attempt.usage_record,
+                                    child_usage_records=cast(
+                                        tuple[UsageRecord, ...],
+                                        child_usage,
+                                    ),
+                                    parent_context=parent_context,
+                                    child_contexts=child_contexts,
+                                    requests=family.requested_surface_manifest.requests,
+                                )
+                                promotion = scheduler.journal.promote_truncation_recovery_family(
+                                    family.family_id,
+                                    capability,
+                                )
+                            except TruncationRecoveryEvidenceError:
+                                reason = (
+                                    f"{request_role}: recovery closure lacked genuine REAL "
+                                    "runtime custody; no review or coverage credit was granted"
+                                )
+                                if reason not in incomplete:
+                                    incomplete.append(reason)
+                                scheduler_halted = True
+                                budget_halted = True
+                                terminal_code = ExitCode.INCOMPLETE
+                                break
+                        if promotion is None:
+                            reason = f"{request_role}: truncation recovery closed without promotion"
+                            if reason not in incomplete:
+                                incomplete.append(reason)
+                            terminal_code = ExitCode.INCOMPLETE
+                            continue
+
+                        recovered_output = promotion.recovered_output
+                        context_by_request_id = {
+                            scheduler_task.logical_request_id: parent_context,
+                            **{
+                                child.child_logical_request_id: child_context
+                                for child, child_context in zip(
+                                    family.recovery_plan.children,
+                                    child_contexts,
+                                    strict=True,
+                                )
+                            },
+                        }
+                        for origin in recovered_output.candidate_origins:
+                            origin_context = context_by_request_id.get(origin.request_id)
+                            if origin_context is None:
+                                raise OpenRouterSchemaError(
+                                    "promoted candidate lacks its exact origin context"
+                                )
+                            _register_candidate_origin_packages(
+                                candidate_origin_packages,
+                                candidate_ids=[origin.accepted_candidate_id],
+                                context=origin_context,
+                            )
+                        candidates.extend(recovered_output.recovered_batch.findings)
+                        promoted_results = tuple(
+                            terminal_entries[child.child_task_id]
+                            for child in family.recovery_plan.children
+                        )
+                        for child_result, child_context in zip(
+                            promoted_results,
+                            child_contexts,
+                            strict=True,
+                        ):
+                            if (
+                                not isinstance(
+                                    child_result,
+                                    SchedulerTruncationRecoveryChildResult,
+                                )
+                                or child_result.runtime_output_artifact is None
+                            ):
+                                raise OpenRouterSchemaError(
+                                    "promoted recovery lacks typed child surface evidence"
+                                )
+                            artifact = child_result.runtime_output_artifact
+                            model_surface_review_artifacts.append(artifact)
+                            model_surface_review_contexts.setdefault(
+                                artifact.request_id,
+                                [],
+                            ).append(child_context)
+                        if (
+                            recovered_output.recovered_batch.findings
+                            and time_to_first_candidate_seconds is None
+                        ):
+                            time_to_first_candidate_seconds = (
+                                time.monotonic() - run_started_monotonic
+                            )
+                    recovery_closures = {
+                        entry.family_id: entry
+                        for entry in scheduler.journal.truncation_recovery_entries
+                        if isinstance(entry, SchedulerTruncationRecoveryFamilyClosure)
+                    }
+                    recovery_promotions = {
+                        entry.family_id
+                        for entry in scheduler.journal.truncation_recovery_entries
+                        if isinstance(entry, SchedulerTruncationRecoveryFamilyPromotion)
+                    }
+                    blind_pass_can_seal = all(
+                        family.family_id in recovery_closures
+                        and (
+                            recovery_closures[family.family_id].closure_status
+                            is not SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
+                            or family.family_id in recovery_promotions
+                        )
+                        for family in scheduler.journal.truncation_recovery_families
+                    )
+                    if blind_pass_can_seal:
+                        if completed_blind_review is None:
+                            conclude_scheduler_pass()
+                        else:
+                            conclude_scheduler_result(completed_blind_review)
                 check_accounted_budget()
 
             blind_candidate_ids = {candidate.candidate_id for candidate in candidates}
@@ -4742,7 +6744,7 @@ class AuditPipeline:
                             self.client,
                         )
                         batch = (
-                            completed_finding_review(
+                            retained_finding_review(
                                 completed_integration,
                                 scheduler_task,
                                 relationship_agent,
@@ -4812,6 +6814,7 @@ class AuditPipeline:
                                     sealed_context.requested_model_surfaces
                                 ),
                                 model_surface_review_artifact=batch.surface_review_artifact,
+                                normalization_evidence=batch.normalization_evidence,
                             )
                         )
                         if completed_integration is not None:
@@ -7107,6 +9110,15 @@ class AuditPipeline:
             if provider_session is None or provider_session.usage_evidence_consistent
             else []
         )
+        promoted_recovery_requests_for_coverage = (
+            tuple(
+                request
+                for request in self._active_scheduler.journal.recovery_model_requests
+                if request.promotion_entry_sha256 is not None
+            )
+            if self._active_scheduler is not None
+            else ()
+        )
         model_review_coverage = build_model_review_coverage(
             self.config,
             usage_records=model_credit_usage,
@@ -7118,6 +9130,14 @@ class AuditPipeline:
             economic_simulations=economic_simulations,
             audited_suite_coverage=solidity_coverage.audited_suite_coverage,
             source_contents_by_path=solidity_source_contents_by_path,
+            recovery_usage_coordinates=tuple(
+                (
+                    request.logical_request_id,
+                    request.request_limit_scope,
+                    request.request_limit_count_before,
+                )
+                for request in promoted_recovery_requests_for_coverage
+            ),
         )
         if solidity_coverage is not None and language_capability.evm_portfolio_applicable:
             solidity_coverage = with_model_review_coverage(
@@ -7133,6 +9153,8 @@ class AuditPipeline:
             scanner_runs=scanner_runs,
             coverage=solidity_coverage,
             model_review_coverage=model_review_coverage,
+            model_surface_coverage_plan=model_surface_coverage_plan,
+            authoritative_model_surface_requests=model_surface_requests,
             language_capability=language_capability,
             scope_assessment=scope_assessment,
             prior_audit_comparison=prior_audit_comparison,
@@ -7157,6 +9179,7 @@ class AuditPipeline:
             not scanner_only
             and context_builder is not None
             and self.client is not None
+            and self._active_scheduler is not None
             and "report_quality" in self.config.models.specialists
             and not budget_halted
             and not scheduler_halted
@@ -7409,18 +9432,51 @@ class AuditPipeline:
             pipeline_owned=self._owns_client,
             usage_records=usage.records,
         )
+        promoted_recovery_requests = (
+            tuple(
+                request
+                for request in scheduler_artifact.recovery_model_requests
+                if request.promotion_entry_sha256 is not None
+            )
+            if scheduler_artifact is not None
+            else ()
+        )
+        promoted_recovery_request_by_id = {
+            request.logical_request_id: request for request in promoted_recovery_requests
+        }
         model_credit_usage = (
             [
                 record
                 for record in usage.records
                 if record.request_id in successful_scheduler_review_ids
-                and is_creditable_usage_record(record, require_real=True)
+                and (
+                    is_recovery_creditable_usage_record(
+                        record,
+                        request_limit_scope=recovery_request.request_limit_scope,
+                        request_limit_count_before=(recovery_request.request_limit_count_before),
+                        require_real=True,
+                    )
+                    if (recovery_request := promoted_recovery_request_by_id.get(record.request_id))
+                    is not None
+                    else is_creditable_usage_record(record, require_real=True)
+                )
             ]
             if (
                 scheduler_usage_accounting_consistent
                 and (provider_session is None or provider_session.usage_evidence_consistent)
             )
             else []
+        )
+        model_credit_usage_by_request = {record.request_id: record for record in model_credit_usage}
+        recovery_model_usage_bindings = tuple(
+            MinimumFloorRecoveryModelUsageBinding.build(
+                usage_record=model_credit_usage_by_request[request.logical_request_id],
+                request_limit_scope=request.request_limit_scope,
+                request_limit_count_before=request.request_limit_count_before,
+                scheduler_request_evidence_sha256=request.request_evidence_sha256,
+            )
+            for request in promoted_recovery_requests
+            if request.logical_request_id in model_credit_usage_by_request
         )
         model_review_accounting_usage = (
             [
@@ -7452,6 +9508,14 @@ class AuditPipeline:
             economic_simulations=economic_simulations,
             audited_suite_coverage=solidity_coverage.audited_suite_coverage,
             source_contents_by_path=solidity_source_contents_by_path,
+            recovery_usage_coordinates=tuple(
+                (
+                    request.logical_request_id,
+                    request.request_limit_scope,
+                    request.request_limit_count_before,
+                )
+                for request in promoted_recovery_requests
+            ),
         )
         if solidity_coverage is not None and language_capability.evm_portfolio_applicable:
             solidity_coverage = with_model_review_coverage(
@@ -7491,7 +9555,19 @@ class AuditPipeline:
             },
         )
         raw_successful_usage_roles = {
-            record.role for record in model_credit_usage if is_creditable_usage_record(record)
+            record.role
+            for record in model_credit_usage
+            if (
+                is_recovery_creditable_usage_record(
+                    record,
+                    request_limit_scope=recovery_request.request_limit_scope,
+                    request_limit_count_before=recovery_request.request_limit_count_before,
+                    require_real=True,
+                )
+                if (recovery_request := promoted_recovery_request_by_id.get(record.request_id))
+                is not None
+                else is_creditable_usage_record(record, require_real=True)
+            )
         }
         successful_specialist_roles = completed_specialist_roles(specialist_execution_records)
         successful_usage_roles = {
@@ -7583,6 +9659,8 @@ class AuditPipeline:
             scanner_runs=scanner_runs,
             coverage=solidity_coverage,
             model_review_coverage=model_review_coverage,
+            model_surface_coverage_plan=model_surface_coverage_plan,
+            authoritative_model_surface_requests=model_surface_requests,
             language_capability=language_capability,
             scope_assessment=scope_assessment,
             prior_audit_comparison=prior_audit_comparison,
@@ -7695,6 +9773,8 @@ class AuditPipeline:
                 production_qualification=self.production_qualification,
                 audit_model_selection_evidence=self.audit_model_selection_evidence,
                 verified_audit_model_selection=self.verified_audit_model_selection,
+                audit_model_refresh_evidence=self.audit_model_refresh_evidence,
+                audit_model_refresh_guard=self.audit_model_refresh_guard,
                 language_capability=language_capability,
                 scope_assessment=scope_assessment,
                 benchmark_verification=benchmark_verification,
@@ -7825,6 +9905,7 @@ class AuditPipeline:
                 if not condition
             ),
             orchestration_failures=(() if terminal_code is ExitCode.SUCCESS else tuple(incomplete)),
+            recovery_model_usage_bindings=recovery_model_usage_bindings,
         )
         minimum_floor_gate = minimum_analysis_floor_quality_gate(minimum_analysis_floor)
         quality_gates = [*quality_gates, minimum_floor_gate]
@@ -7852,6 +9933,18 @@ class AuditPipeline:
             preflight_records=(
                 self.client.context_preflight.records
                 if self.client is not None and not scanner_only
+                else ()
+            ),
+            recovery_request_limit_coordinates=(
+                tuple(
+                    (
+                        request.logical_request_id,
+                        request.request_limit_scope,
+                        request.request_limit_count_before,
+                    )
+                    for request in scheduler_artifact.recovery_model_requests
+                )
+                if scheduler_artifact is not None
                 else ()
             ),
         )
@@ -7883,6 +9976,9 @@ class AuditPipeline:
                 final_snapshot=effective_cost_ledger.snapshot(),
                 campaign_logical_request_ids=tuple(
                     item.logical_request_id for item in scheduler_artifact.model_requests
+                )
+                + tuple(
+                    item.logical_request_id for item in scheduler_artifact.recovery_model_requests
                 ),
                 usage_records=usage.records,
             )
@@ -8055,6 +10151,8 @@ class AuditPipeline:
             formal_runs=report.formal_runs,
             solidity_coverage=report.solidity_coverage,
             model_review_coverage=model_review_coverage,
+            model_surface_coverage_plan=model_surface_coverage_plan,
+            model_surface_resource_preflight=model_surface_resource_preflight,
             scope_assessment=scope_assessment,
             prior_audit_comparison=prior_audit_comparison,
             generated_tests=generated_tests,
@@ -8575,6 +10673,7 @@ class AuditPipeline:
                 if type(self.audit_model_selection_evidence) is AuditModelSelectionEvidenceBundle
                 else None
             ),
+            audit_model_refresh_evidence=self.audit_model_refresh_evidence,
             maximum_assurance=maximum_assurance,
             verification_decisions=verifications.decisions,
             cross_examination_decisions=cross_examinations,
@@ -8888,6 +10987,8 @@ class AuditPipeline:
         formal_runs: list[FormalToolRun],
         solidity_coverage: SolidityCoverage | None,
         model_review_coverage: ModelReviewCoverage,
+        model_surface_coverage_plan: ModelSurfaceCoveragePlan | None,
+        model_surface_resource_preflight: ModelSurfaceResourcePreflight | None,
         scope_assessment: AuditScopeAssessment,
         prior_audit_comparison: PriorAuditComparison,
         generated_tests: list[GeneratedFoundryTestSpec],
@@ -9010,6 +11111,27 @@ class AuditPipeline:
             {
                 "schema_version": REPORT_SCHEMA_VERSION,
                 "coverage": model_review_coverage.model_dump(mode="json"),
+                "coverage_plan_sha256": (
+                    model_surface_coverage_plan.plan_sha256
+                    if model_surface_coverage_plan is not None
+                    else None
+                ),
+                "resource_preflight_sha256": (
+                    model_surface_resource_preflight.preflight_sha256
+                    if model_surface_resource_preflight is not None
+                    else None
+                ),
+                "resource_preflight_scope": (
+                    "compact_surface_gap_tasks_only"
+                    if model_surface_resource_preflight is not None
+                    else None
+                ),
+                "resource_preflight_position": (
+                    "after_paid_orientation_before_blind_transport"
+                    if model_surface_resource_preflight is not None
+                    else None
+                ),
+                "supplemental_blind_spend_included": False,
             },
         )
         write_json(
@@ -9192,6 +11314,7 @@ class AuditPipeline:
             "privacy-source-provenance.json",
             "privacy-policy.json",
             AUDIT_MODEL_SELECTION_EVIDENCE_FILENAME,
+            AUDIT_MODEL_REFRESH_EVIDENCE_FILENAME,
             "privacy-fork-rpc-egress.json",
             "scanner-results.json",
             "repository-suite-differential.json",
@@ -10125,6 +12248,8 @@ def _evaluate_quality_gates(
     scanner_runs: list[ScannerRun],
     coverage: SolidityCoverage | None,
     model_review_coverage: ModelReviewCoverage | None,
+    model_surface_coverage_plan: ModelSurfaceCoveragePlan | None,
+    authoritative_model_surface_requests: Sequence[ModelSurfaceReviewRequest],
     language_capability: LanguageCapabilityAssessment | None,
     scope_assessment: AuditScopeAssessment | None,
     prior_audit_comparison: PriorAuditComparison | None,
@@ -10370,6 +12495,12 @@ def _evaluate_quality_gates(
         ),
         model_review_critical_surface_gate(
             model_review_coverage,
+            required=maximum,
+        ),
+        model_review_tiered_completion_gate(
+            model_surface_coverage_plan,
+            model_review_coverage,
+            authoritative_model_surface_requests,
             required=maximum,
         ),
         *metric_gates,

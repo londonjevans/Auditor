@@ -1,0 +1,506 @@
+{
+  "$comment": "Runtime validation additionally replays exact case/report/generation joins, independent public roots, unique request identities, closed ledger arithmetic, and the evidence self-hash using retained PID-local custody.",
+  "$defs": {
+    "AuthenticatedCrossLineageCaseExecutionEvidence": {
+      "additionalProperties": false,
+      "description": "Exact non-secret identity and cost joins for one authenticated model response.",
+      "properties": {
+        "accounted_cost_usd": {
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+          "title": "Accounted Cost Usd",
+          "type": "string"
+        },
+        "attempt_count": {
+          "maximum": 32,
+          "minimum": 1,
+          "title": "Attempt Count",
+          "type": "integer"
+        },
+        "attempt_request_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Attempt Request Ids",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "case_id": {
+          "pattern": "^case-[0-9a-f]{16}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "generation_attestation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Generation Attestation Sha256",
+          "type": "string"
+        },
+        "generation_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Generation Id",
+          "type": "string"
+        },
+        "request_body_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Body Sha256",
+          "type": "string"
+        },
+        "request_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "validated_response_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Validated Response Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_id",
+        "request_id",
+        "attempt_count",
+        "attempt_request_ids",
+        "generation_id",
+        "request_body_sha256",
+        "validated_response_sha256",
+        "generation_attestation_sha256",
+        "accounted_cost_usd"
+      ],
+      "title": "AuthenticatedCrossLineageCaseExecutionEvidence",
+      "type": "object"
+    },
+    "AuthenticatedCrossLineageLedgerEntryEvidence": {
+      "additionalProperties": false,
+      "description": "Durable, non-authorizing binding for one known-cost interval entry.",
+      "properties": {
+        "actual_cost_usd": {
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+          "title": "Actual Cost Usd",
+          "type": "string"
+        },
+        "entry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Entry Sha256",
+          "type": "string"
+        },
+        "request_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "Request Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "entry_sha256",
+        "actual_cost_usd"
+      ],
+      "title": "AuthenticatedCrossLineageLedgerEntryEvidence",
+      "type": "object"
+    },
+    "AuthenticatedCrossLineageLedgerIntervalEvidence": {
+      "additionalProperties": false,
+      "description": "Durable evidence for a closed interval; it cannot recreate live custody.",
+      "properties": {
+        "cap_usd": {
+          "const": "250",
+          "default": "250",
+          "title": "Cap Usd",
+          "type": "string"
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/AuthenticatedCrossLineageLedgerEntryEvidence"
+          },
+          "maxItems": 3072,
+          "minItems": 96,
+          "title": "Entries",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "final_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Final Snapshot Sha256",
+          "type": "string"
+        },
+        "final_spent_usd": {
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+          "title": "Final Spent Usd",
+          "type": "string"
+        },
+        "initial_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Initial Snapshot Sha256",
+          "type": "string"
+        },
+        "initial_spent_usd": {
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+          "title": "Initial Spent Usd",
+          "type": "string"
+        },
+        "interval_spent_usd": {
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+          "title": "Interval Spent Usd",
+          "type": "string"
+        },
+        "ledger_identity_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ledger Identity Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ledger_identity_sha256",
+        "initial_snapshot_sha256",
+        "final_snapshot_sha256",
+        "initial_spent_usd",
+        "interval_spent_usd",
+        "final_spent_usd",
+        "entries"
+      ],
+      "title": "AuthenticatedCrossLineageLedgerIntervalEvidence",
+      "type": "object"
+    },
+    "AuthenticatedCrossLineageRunnerRunEvidence": {
+      "additionalProperties": false,
+      "description": "Durable non-authorizing joins for one candidate/judge execution pair.",
+      "properties": {
+        "adjudication_report_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Adjudication Report Sha256",
+          "type": "string"
+        },
+        "candidate_campaign_report_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "title": "Candidate Campaign Report Sha256S",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "candidate_cases": {
+          "items": {
+            "$ref": "#/$defs/AuthenticatedCrossLineageCaseExecutionEvidence"
+          },
+          "maxItems": 24,
+          "minItems": 24,
+          "title": "Candidate Cases",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "candidate_model_id": {
+          "maxLength": 300,
+          "minLength": 3,
+          "title": "Candidate Model Id",
+          "type": "string"
+        },
+        "candidate_portfolio_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Portfolio Sha256",
+          "type": "string"
+        },
+        "candidate_report_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Report Sha256",
+          "type": "string"
+        },
+        "candidate_root_lineage": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Candidate Root Lineage",
+          "type": "string"
+        },
+        "judge_cases": {
+          "items": {
+            "$ref": "#/$defs/AuthenticatedCrossLineageCaseExecutionEvidence"
+          },
+          "maxItems": 24,
+          "minItems": 24,
+          "title": "Judge Cases",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "judge_model_id": {
+          "maxLength": 300,
+          "minLength": 3,
+          "title": "Judge Model Id",
+          "type": "string"
+        },
+        "judge_root_lineage": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Judge Root Lineage",
+          "type": "string"
+        },
+        "prepared_run_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prepared Run Sha256",
+          "type": "string"
+        },
+        "run_kind": {
+          "$ref": "#/$defs/CrossLineageAdjudicationRunKind"
+        }
+      },
+      "required": [
+        "run_kind",
+        "candidate_model_id",
+        "candidate_root_lineage",
+        "judge_model_id",
+        "judge_root_lineage",
+        "candidate_report_sha256",
+        "candidate_portfolio_sha256",
+        "candidate_campaign_report_sha256s",
+        "prepared_run_sha256",
+        "adjudication_report_sha256",
+        "candidate_cases",
+        "judge_cases"
+      ],
+      "title": "AuthenticatedCrossLineageRunnerRunEvidence",
+      "type": "object"
+    },
+    "CrossLineageAdjudicationRunKind": {
+      "description": "Closed campaign identity used for distinct primary and replay evidence.",
+      "enum": [
+        "PRIMARY",
+        "REPLAY"
+      ],
+      "title": "CrossLineageAdjudicationRunKind",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/authenticated_cross_lineage_runner_evidence.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Serializable runner evidence that deliberately grants no runtime authority.",
+  "properties": {
+    "adjudication_credit_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Adjudication Credit Authorized",
+      "type": "boolean"
+    },
+    "benchmark_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Benchmark Authorized",
+      "type": "boolean"
+    },
+    "benchmark_corpus_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Benchmark Corpus Sha256",
+      "type": "string"
+    },
+    "benchmark_ground_truth_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Benchmark Ground Truth Sha256",
+      "type": "string"
+    },
+    "case_ids": {
+      "items": {
+        "pattern": "^case-[0-9a-f]{16}$",
+        "type": "string"
+      },
+      "maxItems": 24,
+      "minItems": 24,
+      "title": "Case Ids",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "evidence_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Evidence Sha256",
+      "type": "string"
+    },
+    "frozen_ground_truth_provenance_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Frozen Ground Truth Provenance Sha256",
+      "type": "string"
+    },
+    "frozen_source_revision": {
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+      "title": "Frozen Source Revision",
+      "type": "string"
+    },
+    "generation_verification_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Generation Verification Authorized",
+      "type": "boolean"
+    },
+    "ground_truth_case_binding_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Ground Truth Case Binding Set Sha256",
+      "type": "string"
+    },
+    "ledger_interval": {
+      "$ref": "#/$defs/AuthenticatedCrossLineageLedgerIntervalEvidence"
+    },
+    "lineage_identity_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Lineage Identity Authorized",
+      "type": "boolean"
+    },
+    "model_qualification_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Model Qualification Authorized",
+      "type": "boolean"
+    },
+    "objective_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Objective Sha256",
+      "type": "string"
+    },
+    "production_selection_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Production Selection Authorized",
+      "type": "boolean"
+    },
+    "provider_call_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Provider Call Authorized",
+      "type": "boolean"
+    },
+    "public_lineage_bundle_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Public Lineage Bundle Sha256",
+      "type": "string"
+    },
+    "public_lineage_manifest_file_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Public Lineage Manifest File Sha256",
+      "type": "string"
+    },
+    "release_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Release Authorized",
+      "type": "boolean"
+    },
+    "runner_custody_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Runner Custody Authorized",
+      "type": "boolean"
+    },
+    "runs": {
+      "allOf": [
+        {
+          "contains": {
+            "properties": {
+              "run_kind": {
+                "const": "PRIMARY"
+              }
+            },
+            "required": [
+              "run_kind"
+            ]
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "run_kind": {
+                "const": "REPLAY"
+              }
+            },
+            "required": [
+              "run_kind"
+            ]
+          },
+          "maxContains": 1,
+          "minContains": 1
+        }
+      ],
+      "items": false,
+      "maxItems": 2,
+      "minItems": 2,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/AuthenticatedCrossLineageRunnerRunEvidence"
+            },
+            {
+              "properties": {
+                "run_kind": {
+                  "const": "PRIMARY"
+                }
+              },
+              "required": [
+                "run_kind"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/AuthenticatedCrossLineageRunnerRunEvidence"
+            },
+            {
+              "properties": {
+                "run_kind": {
+                  "const": "REPLAY"
+                }
+              },
+              "required": [
+                "run_kind"
+              ]
+            }
+          ]
+        }
+      ],
+      "title": "Runs",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "seal_publication_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Seal Publication Authorized",
+      "type": "boolean"
+    },
+    "serialized_authority": {
+      "const": false,
+      "default": false,
+      "title": "Serialized Authority",
+      "type": "boolean"
+    },
+    "source_egress_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Source Egress Authorized",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "objective_sha256",
+    "frozen_ground_truth_provenance_sha256",
+    "frozen_source_revision",
+    "benchmark_corpus_sha256",
+    "benchmark_ground_truth_sha256",
+    "ground_truth_case_binding_set_sha256",
+    "public_lineage_bundle_sha256",
+    "public_lineage_manifest_file_sha256",
+    "case_ids",
+    "runs",
+    "ledger_interval",
+    "evidence_sha256"
+  ],
+  "title": "mmaudit non-authorizing authenticated cross-lineage runner evidence",
+  "type": "object"
+}

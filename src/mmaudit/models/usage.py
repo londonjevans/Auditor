@@ -6,11 +6,13 @@ import hashlib
 import json
 import math
 import re
+import sys
 import threading
 import weakref
 from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from itertools import pairwise
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
@@ -36,6 +38,9 @@ from mmaudit.privacy import EndpointPolicyClass, PrivacyProfile, PrivacySourceCl
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _WHOLE_PROTOCOL_INDEXED_ROLE = re.compile(r"^whole_protocol_review:(?:0|[1-9][0-9]{0,3})$")
+_REQUEST_LIMIT_SCOPE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_MAX_RECOVERY_REQUEST_LIMIT_RESERVATIONS = 33
+_MAX_METERED_UNITS = 2**63 - 1
 
 
 def candidate_falsifier_role_prefix(candidate_id: str) -> str:
@@ -114,6 +119,26 @@ def is_creditable_usage_record(
     )
 
 
+def is_recovery_creditable_usage_record(
+    record: UsageRecord,
+    *,
+    request_limit_scope: str,
+    request_limit_count_before: int,
+    require_real: bool = False,
+    require_certification: bool = False,
+) -> bool:
+    """Return whether owned valid usage is strict at one external recovery position."""
+
+    return _is_strict_usage_record(
+        record,
+        require_real=require_real,
+        require_certification=require_certification,
+        allow_unbound_real=False,
+        recovery_request_limit_scope=request_limit_scope,
+        recovery_request_limit_count_before=request_limit_count_before,
+    )
+
+
 def is_accountable_usage_record(
     record: UsageRecord,
     *,
@@ -142,12 +167,53 @@ def is_structurally_accountable_usage_record(
     )
 
 
+def is_recovery_accountable_usage_record(
+    record: UsageRecord,
+    *,
+    request_limit_scope: str,
+    request_limit_count_before: int,
+    require_real: bool = False,
+) -> bool:
+    """Return whether owned usage is accountable at one externally supplied chain position."""
+
+    return _is_accountable_usage_record(
+        record,
+        require_real=require_real,
+        require_runtime_attestation=True,
+        recovery_request_limit_scope=request_limit_scope,
+        recovery_request_limit_count_before=request_limit_count_before,
+    )
+
+
+def is_structurally_recovery_accountable_usage_record(
+    record: UsageRecord,
+    *,
+    request_limit_scope: str,
+    request_limit_count_before: int,
+    require_real: bool = False,
+) -> bool:
+    """Validate serialized recovery accounting shape without granting runtime authority."""
+
+    return _is_accountable_usage_record(
+        record,
+        require_real=require_real,
+        require_runtime_attestation=False,
+        recovery_request_limit_scope=request_limit_scope,
+        recovery_request_limit_count_before=request_limit_count_before,
+    )
+
+
 def _is_accountable_usage_record(
     record: UsageRecord,
     *,
     require_real: bool,
     require_runtime_attestation: bool,
+    recovery_request_limit_scope: str | None = None,
+    recovery_request_limit_count_before: int | None = None,
 ) -> bool:
+    recovery_mode = recovery_request_limit_scope is not None
+    if recovery_mode != (recovery_request_limit_count_before is not None):
+        return False
     if record.execution_evidence not in {
         ExecutionEvidenceKind.REAL,
         ExecutionEvidenceKind.MOCK,
@@ -198,11 +264,32 @@ def _is_accountable_usage_record(
     raw_context = record.routing.get("context_request_evidence")
     try:
         context = ContextRequestEvidence.model_validate(raw_context)
-        plan = request_token_plan_from_usage(record)
+        plan = (
+            recovery_request_token_plan_from_usage(
+                record,
+                request_limit_scope=recovery_request_limit_scope,
+                request_limit_count_before=recovery_request_limit_count_before,
+            )
+            if recovery_mode
+            and recovery_request_limit_scope is not None
+            and recovery_request_limit_count_before is not None
+            else request_token_plan_from_usage(record)
+        )
         if plan is None:
             return False
         token_evidence = atomic_token_reservations_from_usage(record, plan)
-        request_evidence = atomic_request_limit_reservations_from_usage(record, plan)
+        request_evidence = (
+            recovery_atomic_request_limit_reservations_from_usage(
+                record,
+                plan,
+                request_limit_scope=recovery_request_limit_scope,
+                request_limit_count_before=recovery_request_limit_count_before,
+            )
+            if recovery_mode
+            and recovery_request_limit_scope is not None
+            and recovery_request_limit_count_before is not None
+            else atomic_request_limit_reservations_from_usage(record, plan)
+        )
     except (TypeError, ValueError):
         return False
     return (
@@ -249,7 +336,23 @@ def _is_strict_usage_record(
     require_certification: bool,
     allow_unbound_real: bool,
     require_runtime_attestation: bool = True,
+    recovery_request_limit_scope: str | None = None,
+    recovery_request_limit_count_before: int | None = None,
 ) -> bool:
+    recovery_mode = recovery_request_limit_scope is not None
+    if recovery_mode != (recovery_request_limit_count_before is not None):
+        return False
+    if recovery_mode:
+        assert recovery_request_limit_scope is not None
+        assert recovery_request_limit_count_before is not None
+        try:
+            _validate_recovery_request_limit_coordinates(
+                record,
+                request_limit_scope=recovery_request_limit_scope,
+                request_limit_count_before=recovery_request_limit_count_before,
+            )
+        except ValueError:
+            return False
     if record.execution_evidence not in {
         ExecutionEvidenceKind.REAL,
         ExecutionEvidenceKind.MOCK,
@@ -352,7 +455,11 @@ def _is_strict_usage_record(
         and routing.get("validation_status") == "valid"
         and _has_valid_privacy_routing(record)
         and _has_valid_structured_output_routing(record)
-        and _has_valid_token_plan_routing(record)
+        and _has_valid_token_plan_routing(
+            record,
+            recovery_request_limit_scope=recovery_request_limit_scope,
+            recovery_request_limit_count_before=recovery_request_limit_count_before,
+        )
         and routing.get("repair_used") is False
         and routing.get("repair_request") is False
         and routing.get("request_started_at") == record.started_at.isoformat()
@@ -423,6 +530,43 @@ def _is_sha256(value: Any) -> bool:
 def request_token_plan_from_usage(record: UsageRecord) -> RequestTokenPlan | None:
     """Return strict plan evidence, rejecting any present but incoherent projection."""
 
+    plan = _request_token_plan_evidence_from_usage(record)
+    if plan is not None:
+        atomic_request_limit_reservations_from_usage(record, plan)
+    return plan
+
+
+def recovery_request_token_plan_from_usage(
+    record: UsageRecord,
+    *,
+    request_limit_scope: str,
+    request_limit_count_before: int,
+) -> RequestTokenPlan | None:
+    """Return strict plan evidence for one externally anchored recovery-count position.
+
+    The supplied scope and starting count are comparison inputs only. Serialized usage cannot
+    select them, and this parser does not grant scheduler, dispatch, recovery, or review authority.
+    """
+
+    _validate_recovery_request_limit_coordinates(
+        record,
+        request_limit_scope=request_limit_scope,
+        request_limit_count_before=request_limit_count_before,
+    )
+    plan = _request_token_plan_evidence_from_usage(record)
+    if plan is not None:
+        recovery_atomic_request_limit_reservations_from_usage(
+            record,
+            plan,
+            request_limit_scope=request_limit_scope,
+            request_limit_count_before=request_limit_count_before,
+        )
+    return plan
+
+
+def _request_token_plan_evidence_from_usage(record: UsageRecord) -> RequestTokenPlan | None:
+    """Parse request/token evidence without choosing request-count recovery authority."""
+
     raw_plan = record.routing.get("request_token_plan")
     raw_hash = record.routing.get("request_token_plan_sha256")
     if raw_plan is None:
@@ -453,7 +597,6 @@ def request_token_plan_from_usage(record: UsageRecord) -> RequestTokenPlan | Non
     if configured_endpoints and not local_mock_route and configured_endpoints != planned_endpoints:
         raise ValueError("usage routing token plan differs from configured endpoints")
     atomic_token_reservations_from_usage(record, plan)
-    atomic_request_limit_reservations_from_usage(record, plan)
     return plan
 
 
@@ -553,6 +696,96 @@ def atomic_request_limit_reservations_from_usage(
 ) -> tuple[AtomicRequestLimitReservationEvidence, ...]:
     """Return scheduled request-count evidence, or an empty tuple for legacy requests."""
 
+    inventory = _atomic_request_limit_reservation_inventory_from_usage(record, plan)
+    if not inventory:
+        return ()
+    if (
+        tuple(item.request_limit_scope for item in inventory)
+        != (record.request_id,) * record.attempts
+        or tuple(item.request_limit_count_before for item in inventory)
+        != tuple(range(record.attempts))
+        or tuple(item.request_limit_count_after for item in inventory)
+        != tuple(range(1, record.attempts + 1))
+        or len({item.request_limit_maximum for item in inventory}) != 1
+    ):
+        raise ValueError("scheduled usage request-limit attempts are incomplete or unordered")
+    return inventory
+
+
+def recovery_atomic_request_limit_reservations_from_usage(
+    record: UsageRecord,
+    plan: RequestTokenPlan | None = None,
+    *,
+    request_limit_scope: str,
+    request_limit_count_before: int,
+) -> tuple[AtomicRequestLimitReservationEvidence, ...]:
+    """Validate one bounded recovery inventory against caller-supplied chain coordinates.
+
+    This comparison-only API deliberately requires the root scope and exact starting count from
+    a separate trusted custody boundary. It never derives either authority input from serialized
+    usage and does not make the record creditable by itself.
+    """
+
+    _validate_recovery_request_limit_coordinates(
+        record,
+        request_limit_scope=request_limit_scope,
+        request_limit_count_before=request_limit_count_before,
+    )
+    inventory = _atomic_request_limit_reservation_inventory_from_usage(
+        record,
+        plan,
+        maximum_inventory_size=_MAX_RECOVERY_REQUEST_LIMIT_RESERVATIONS,
+    )
+    if not inventory:
+        raise ValueError("recovery usage lacks request-limit reservation evidence")
+    count_after = request_limit_count_before + record.attempts
+    if (
+        tuple(item.request_limit_scope for item in inventory)
+        != (request_limit_scope,) * record.attempts
+        or tuple(item.request_limit_count_before for item in inventory)
+        != tuple(range(request_limit_count_before, count_after))
+        or tuple(item.request_limit_count_after for item in inventory)
+        != tuple(range(request_limit_count_before + 1, count_after + 1))
+        or len({item.request_limit_maximum for item in inventory}) != 1
+    ):
+        raise ValueError("recovery usage request-limit attempts are incomplete or unordered")
+    return inventory
+
+
+def _validate_recovery_request_limit_coordinates(
+    record: UsageRecord,
+    *,
+    request_limit_scope: str,
+    request_limit_count_before: int,
+) -> None:
+    """Reject unbounded recovery material before parsing nested reservation inventories."""
+
+    if (
+        type(request_limit_scope) is not str
+        or _REQUEST_LIMIT_SCOPE.fullmatch(request_limit_scope) is None
+    ):
+        raise ValueError("recovery request-limit scope is invalid")
+    if (
+        type(request_limit_count_before) is not int
+        or not 0 <= request_limit_count_before <= _MAX_METERED_UNITS
+    ):
+        raise ValueError("recovery request-limit starting count is invalid")
+    if (
+        type(record.attempts) is not int
+        or not 1 <= record.attempts <= _MAX_RECOVERY_REQUEST_LIMIT_RESERVATIONS
+        or request_limit_count_before > _MAX_METERED_UNITS - record.attempts
+    ):
+        raise ValueError("recovery request-limit inventory exceeds its compiled bound")
+
+
+def _atomic_request_limit_reservation_inventory_from_usage(
+    record: UsageRecord,
+    plan: RequestTokenPlan | None,
+    *,
+    maximum_inventory_size: int | None = None,
+) -> tuple[AtomicRequestLimitReservationEvidence, ...]:
+    """Parse exact request-limit evidence without selecting ordinary or recovery semantics."""
+
     evidence_keys = (
         "atomic_request_limit_reservations",
         "atomic_request_limit_reservation_sha256s",
@@ -570,6 +803,13 @@ def atomic_request_limit_reservations_from_usage(
         or not isinstance(raw_inventory_hashes, list)
         or not isinstance(raw_final, dict)
         or not _is_sha256(raw_final_hash)
+        or (
+            maximum_inventory_size is not None
+            and (
+                len(raw_inventory) > maximum_inventory_size
+                or len(raw_inventory_hashes) > maximum_inventory_size
+            )
+        )
         or len(raw_inventory) != record.attempts
         or len(raw_inventory_hashes) != record.attempts
         or any(not isinstance(item, dict) for item in raw_inventory)
@@ -578,22 +818,9 @@ def atomic_request_limit_reservations_from_usage(
         raise ValueError("usage routing request-limit reservation evidence is malformed")
     resolved_plan = plan
     if resolved_plan is None:
-        raw_plan = record.routing.get("request_token_plan")
-        raw_plan_hash = record.routing.get("request_token_plan_sha256")
-        if not isinstance(raw_plan, dict) or not _is_sha256(raw_plan_hash):
+        resolved_plan = _request_token_plan_evidence_from_usage(record)
+        if resolved_plan is None:
             raise ValueError("request-limit reservations require a request token plan")
-        resolved_plan = _strict_json_evidence(
-            RequestTokenPlan,
-            raw_plan,
-            label="request token plan",
-        )
-        if (
-            raw_plan_hash != resolved_plan.plan_sha256
-            or resolved_plan.request_id != record.request_id
-            or resolved_plan.role != record.role
-            or resolved_plan.route_intersection.exact_model_ids != (record.requested_model,)
-        ):
-            raise ValueError("request-limit reservation token plan differs from its request")
     inventory = tuple(
         _strict_json_evidence(
             AtomicRequestLimitReservationEvidence,
@@ -612,17 +839,8 @@ def atomic_request_limit_reservations_from_usage(
         record.request_id if attempt == 1 else f"{record.request_id}:attempt:{attempt}"
         for attempt in range(1, record.attempts + 1)
     )
-    if (
-        tuple(item.request_id for item in inventory) != expected_request_ids
-        or tuple(item.request_limit_scope for item in inventory)
-        != (record.request_id,) * record.attempts
-        or tuple(item.request_limit_count_before for item in inventory)
-        != tuple(range(record.attempts))
-        or tuple(item.request_limit_count_after for item in inventory)
-        != tuple(range(1, record.attempts + 1))
-        or len({item.request_limit_maximum for item in inventory}) != 1
-    ):
-        raise ValueError("scheduled usage request-limit attempts are incomplete or unordered")
+    if tuple(item.request_id for item in inventory) != expected_request_ids:
+        raise ValueError("usage routing request-limit attempts are incomplete or unordered")
     for evidence, evidence_hash in zip(inventory, inventory_hashes, strict=True):
         if (
             evidence.evidence_sha256 != evidence_hash
@@ -675,11 +893,29 @@ def _strict_json_evidence[EvidenceT: BaseModel](
         raise ValueError(f"{label} is invalid") from None
 
 
-def _has_valid_token_plan_routing(record: UsageRecord) -> bool:
+def _has_valid_token_plan_routing(
+    record: UsageRecord,
+    *,
+    recovery_request_limit_scope: str | None = None,
+    recovery_request_limit_count_before: int | None = None,
+) -> bool:
     if "request_token_plan" not in record.routing:
         return False
+    recovery_mode = recovery_request_limit_scope is not None
+    if recovery_mode != (recovery_request_limit_count_before is not None):
+        return False
     try:
-        plan = request_token_plan_from_usage(record)
+        plan = (
+            recovery_request_token_plan_from_usage(
+                record,
+                request_limit_scope=recovery_request_limit_scope,
+                request_limit_count_before=recovery_request_limit_count_before,
+            )
+            if recovery_mode
+            and recovery_request_limit_scope is not None
+            and recovery_request_limit_count_before is not None
+            else request_token_plan_from_usage(record)
+        )
     except ValueError:
         return False
     if plan is None:
@@ -939,6 +1175,289 @@ _attest_owned_real_usage_record, _has_owned_real_usage_attestation = (
 )
 
 
+def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
+    Callable[..., None],
+    Callable[[UsageRecord], UsageRecord],
+    Callable[[UsageRecord, UsageRecord], UsageRecord],
+    Callable[..., bool],
+]:
+    """Keep AUTHRUNNER transport origin separate from generic REAL test custody."""
+
+    type Issuer = tuple[
+        object,
+        type[object],
+        Callable[..., object],
+        Callable[..., object],
+        Callable[..., object],
+        Callable[..., object],
+        object,
+        Callable[[], bool],
+        Callable[[object], ExecutionEvidenceKind],
+    ]
+
+    registry: dict[int, tuple[weakref.ReferenceType[UsageRecord], str, object]] = {}
+    issuer: Issuer | None = None
+    lock = threading.RLock()
+    trusted_sys = sys
+    trusted_self_module = trusted_sys.modules[__name__]
+    trusted_usage_sha256 = _usage_record_sha256
+    trusted_generic_origin = _has_owned_real_usage_attestation
+    trusted_bound_identity = _has_valid_bound_identity
+
+    def register_issuer(
+        *,
+        module: object,
+        client_type: type[object],
+        completion_method: Callable[..., object],
+        bound_origin_method: Callable[..., object],
+        bound_wrapper_method: Callable[..., object],
+        bound_result_method: Callable[..., object],
+        trusted_identity_issuer: object,
+        pristine_predicate: Callable[[], bool],
+        execution_evidence_resolver: Callable[[object], ExecutionEvidenceKind],
+    ) -> None:
+        """Register the exact OpenRouter bound-success call chain once at import time."""
+
+        nonlocal issuer
+        frame = trusted_sys._getframe(1)
+        module_name = getattr(module, "__name__", None)
+        module_values = getattr(module, "__dict__", None)
+        expected_methods = (
+            ("complete_with_evidence", completion_method),
+            ("_bind_real_completion_identity", bound_origin_method),
+            ("_usage_with_bound_identity", bound_wrapper_method),
+            ("_usage_with_identity_result", bound_result_method),
+        )
+        if (
+            module_name != "mmaudit.models.openrouter"
+            or type(module_values) is not dict
+            or frame.f_globals is not module_values
+            or frame.f_code.co_name != "<module>"
+            or trusted_sys.modules.get(module_name) is not module
+            or getattr(module, "OpenRouterClient", None) is not client_type
+            or client_type.__module__ != module_name
+            or any(
+                vars(client_type).get(name) is not method
+                or getattr(method, "__module__", None) != module_name
+                or getattr(method, "__qualname__", None) != f"OpenRouterClient.{name}"
+                for name, method in expected_methods
+            )
+            or getattr(module, "_openrouter_client_callables_are_pristine", None)
+            is not pristine_predicate
+            or getattr(module, "trusted_openrouter_execution_evidence", None)
+            is not execution_evidence_resolver
+        ):
+            raise RuntimeError("AUTHRUNNER usage-origin issuer registration is invalid")
+        with lock:
+            if issuer is not None:
+                raise RuntimeError("AUTHRUNNER usage-origin issuer is already registered")
+            issuer = (
+                module,
+                client_type,
+                completion_method,
+                bound_origin_method,
+                bound_wrapper_method,
+                bound_result_method,
+                trusted_identity_issuer,
+                pristine_predicate,
+                execution_evidence_resolver,
+            )
+
+    def mark(record: UsageRecord) -> UsageRecord:
+        """Strong-mark only the registered pristine OpenRouter bound-success stack."""
+
+        with lock:
+            registered_issuer = issuer
+        if registered_issuer is None:
+            raise ValueError("AUTHRUNNER usage-origin issuer is not registered")
+        (
+            module,
+            client_type,
+            completion_method,
+            bound_origin_method,
+            bound_wrapper_method,
+            bound_result_method,
+            trusted_identity_issuer,
+            pristine_predicate,
+            execution_evidence_resolver,
+        ) = registered_issuer
+        result_frame = trusted_sys._getframe(1)
+        wrapper_frame = result_frame.f_back
+        origin_frame = wrapper_frame.f_back if wrapper_frame is not None else None
+        completion_frame = origin_frame.f_back if origin_frame is not None else None
+        module_name = getattr(module, "__name__", "")
+        module_values = getattr(module, "__dict__", None)
+        client = result_frame.f_locals.get("self")
+        if (
+            type(module_values) is not dict
+            or globals().get("sys") is not trusted_sys
+            or trusted_sys.modules.get(__name__) is not trusted_self_module
+            or getattr(trusted_self_module, "_usage_record_sha256", None)
+            is not trusted_usage_sha256
+            or getattr(trusted_self_module, "_has_owned_real_usage_attestation", None)
+            is not trusted_generic_origin
+            or getattr(trusted_self_module, "_has_valid_bound_identity", None)
+            is not trusted_bound_identity
+            or trusted_sys.modules.get(module_name) is not module
+            or getattr(module, "OpenRouterClient", None) is not client_type
+            or vars(client_type).get("complete_with_evidence") is not completion_method
+            or vars(client_type).get("_bind_real_completion_identity") is not bound_origin_method
+            or vars(client_type).get("_usage_with_bound_identity") is not bound_wrapper_method
+            or vars(client_type).get("_usage_with_identity_result") is not bound_result_method
+            or getattr(module, "_openrouter_client_callables_are_pristine", None)
+            is not pristine_predicate
+            or getattr(module, "trusted_openrouter_execution_evidence", None)
+            is not execution_evidence_resolver
+            or result_frame.f_globals is not module_values
+            or result_frame.f_code is not bound_result_method.__code__
+            or wrapper_frame is None
+            or wrapper_frame.f_globals is not module_values
+            or wrapper_frame.f_code is not bound_wrapper_method.__code__
+            or origin_frame is None
+            or origin_frame.f_globals is not module_values
+            or origin_frame.f_code is not bound_origin_method.__code__
+            or completion_frame is None
+            or completion_frame.f_globals is not module_values
+            or completion_frame.f_code is not completion_method.__code__
+            or wrapper_frame.f_locals.get("self") is not client
+            or origin_frame.f_locals.get("self") is not client
+            or completion_frame.f_locals.get("self") is not client
+            or type(client) is not client_type
+            or result_frame.f_locals.get("trusted_issuer") is not trusted_identity_issuer
+            or wrapper_frame.f_locals.get("trusted_issuer") is not trusted_identity_issuer
+            or result_frame.f_locals.get("require_bound") is not True
+        ):
+            raise ValueError("AUTHRUNNER usage origin requires the pristine bound-success path")
+        try:
+            budget = object.__getattribute__(client, "budget")
+            atomic_ledger = object.__getattribute__(budget, "atomic_ledger")
+        except (AttributeError, TypeError):
+            atomic_ledger = None
+        if (
+            not pristine_predicate()
+            or execution_evidence_resolver(client) is not ExecutionEvidenceKind.REAL
+            or object.__getattribute__(client, "_owns_client") is not True
+            or object.__getattribute__(client, "_authentication_validated") is not True
+            or atomic_ledger is None
+            or type(record) is not UsageRecord
+            or record.execution_evidence is not ExecutionEvidenceKind.REAL
+            or record.role != "model_benchmark"
+            or record.routing.get("privacy_profile") != PrivacyProfile.SYNTHETIC_BENCHMARK.value
+            or record.routing.get("privacy_source_classification")
+            not in {
+                PrivacySourceClassification.SYNTHETIC_COMMITTED.value,
+                PrivacySourceClassification.PUBLIC_BENCHMARK.value,
+            }
+            or record.routing.get("privacy_source_proof_kind")
+            not in {
+                "RELEASE_PINNED_MODEL_BENCHMARK",
+                "RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION",
+            }
+            or not trusted_generic_origin(record)
+            or not trusted_bound_identity(record)
+        ):
+            raise ValueError("AUTHRUNNER usage origin requires owned REAL bound-success evidence")
+        key = id(record)
+        digest = trusted_usage_sha256(record)
+
+        def discard(reference: weakref.ReferenceType[UsageRecord]) -> None:
+            with lock:
+                current = registry.get(key)
+                if current is not None and current[0] is reference:
+                    registry.pop(key, None)
+
+        reference = weakref.ref(record, discard)
+        with lock:
+            if key in registry:
+                raise ValueError("AUTHRUNNER usage origin is already registered")
+            registry[key] = (reference, digest, atomic_ledger)
+        return record
+
+    def contains(
+        record: UsageRecord,
+        *,
+        atomic_ledger: object | None = None,
+    ) -> bool:
+        if type(record) is not UsageRecord:
+            return False
+        with lock:
+            registered_issuer = issuer
+        if registered_issuer is None:
+            return False
+        (
+            module,
+            client_type,
+            completion_method,
+            bound_origin_method,
+            bound_wrapper_method,
+            bound_result_method,
+            _trusted_identity_issuer,
+            pristine_predicate,
+            execution_evidence_resolver,
+        ) = registered_issuer
+        module_name = getattr(module, "__name__", "")
+        if (
+            globals().get("sys") is not trusted_sys
+            or trusted_sys.modules.get(__name__) is not trusted_self_module
+            or getattr(trusted_self_module, "_usage_record_sha256", None)
+            is not trusted_usage_sha256
+            or getattr(trusted_self_module, "_has_owned_real_usage_attestation", None)
+            is not trusted_generic_origin
+            or getattr(trusted_self_module, "_has_valid_bound_identity", None)
+            is not trusted_bound_identity
+            or trusted_sys.modules.get(module_name) is not module
+            or getattr(module, "OpenRouterClient", None) is not client_type
+            or vars(client_type).get("complete_with_evidence") is not completion_method
+            or vars(client_type).get("_bind_real_completion_identity") is not bound_origin_method
+            or vars(client_type).get("_usage_with_bound_identity") is not bound_wrapper_method
+            or vars(client_type).get("_usage_with_identity_result") is not bound_result_method
+            or getattr(module, "_openrouter_client_callables_are_pristine", None)
+            is not pristine_predicate
+            or getattr(module, "trusted_openrouter_execution_evidence", None)
+            is not execution_evidence_resolver
+            or not pristine_predicate()
+        ):
+            return False
+        with lock:
+            registered = registry.get(id(record))
+        return bool(
+            registered is not None
+            and registered[0]() is record
+            and registered[1] == trusted_usage_sha256(record)
+            and (atomic_ledger is None or registered[2] is atomic_ledger)
+        )
+
+    def propagate(source: UsageRecord, normalized: UsageRecord) -> UsageRecord:
+        """Propagate origin only across one exact schema-normalized trusted copy."""
+
+        if (
+            type(source) is not UsageRecord
+            or type(normalized) is not UsageRecord
+            or not contains(source)
+            or source is normalized
+            or trusted_usage_sha256(source) != trusted_usage_sha256(normalized)
+            or not trusted_generic_origin(normalized)
+        ):
+            raise ValueError("AUTHRUNNER usage origin cannot propagate from this source")
+        key = id(normalized)
+        digest = trusted_usage_sha256(normalized)
+
+        def discard(reference: weakref.ReferenceType[UsageRecord]) -> None:
+            with lock:
+                current = registry.get(key)
+                if current is not None and current[0] is reference:
+                    registry.pop(key, None)
+
+        reference = weakref.ref(normalized, discard)
+        with lock:
+            if key in registry:
+                raise ValueError("AUTHRUNNER usage origin is already registered")
+            registry[key] = (reference, digest, registry[id(source)][2])
+        return normalized
+
+    return register_issuer, mark, propagate, contains
+
+
 def _validated_usage_copy_preserving_owned_attestation(
     record: UsageRecord,
 ) -> UsageRecord:
@@ -948,9 +1467,12 @@ def _validated_usage_copy_preserving_owned_attestation(
         record.execution_evidence is ExecutionEvidenceKind.REAL
         and _has_owned_real_usage_attestation(record)
     )
+    trusted_authrunner_origin = trusted_real and _has_authrunner_owned_real_usage_origin(record)
     normalized = UsageRecord.model_validate(record.model_dump(mode="json"))
     if trusted_real:
         normalized = _attest_owned_real_usage_record(normalized)
+    if trusted_authrunner_origin:
+        normalized = _propagate_authrunner_owned_real_usage_origin(record, normalized)
     return normalized
 
 
@@ -998,6 +1520,27 @@ def is_structurally_creditable_usage_record(
     )
 
 
+def is_structurally_recovery_creditable_usage_record(
+    record: UsageRecord,
+    *,
+    request_limit_scope: str,
+    request_limit_count_before: int,
+    require_real: bool = False,
+    require_certification: bool = False,
+) -> bool:
+    """Validate serialized strict recovery usage without granting runtime authority."""
+
+    return _is_strict_usage_record(
+        record,
+        require_real=require_real,
+        require_certification=require_certification,
+        allow_unbound_real=False,
+        require_runtime_attestation=False,
+        recovery_request_limit_scope=request_limit_scope,
+        recovery_request_limit_count_before=request_limit_count_before,
+    )
+
+
 # Retain the existing internal import surface while callers migrate to the
 # explicitly named serialized-evidence predicate.
 _is_structurally_creditable_usage_record = is_structurally_creditable_usage_record
@@ -1020,8 +1563,11 @@ class _TrustedUsageRecoveryScope:
     __slots__ = ("__weakref__",)
 
 
+type UsageRecoveryRequestLimitCoordinate = tuple[str, str, int]
+
+
 def _build_trusted_usage_recovery_authority() -> tuple[
-    Callable[[tuple[UsageRecord, ...]], _TrustedUsageRecoveryScope],
+    Callable[..., _TrustedUsageRecoveryScope],
     Callable[[tuple[UsageRecord, ...], _TrustedUsageRecoveryScope], tuple[UsageRecord, ...]],
 ]:
     """Keep recovery authority process-local and outside serialized evidence."""
@@ -1031,31 +1577,160 @@ def _build_trusted_usage_recovery_authority() -> tuple[
         tuple[
             weakref.ReferenceType[_TrustedUsageRecoveryScope],
             tuple[str, ...],
+            tuple[UsageRecoveryRequestLimitCoordinate, ...],
             bool,
         ],
     ] = {}
     lock = threading.RLock()
 
-    def normalize_structural(records: tuple[UsageRecord, ...]) -> tuple[UsageRecord, ...]:
+    def normalize_shape(records: tuple[UsageRecord, ...]) -> tuple[UsageRecord, ...]:
         normalized = tuple(
             UsageRecord.model_validate(record.model_dump(mode="json")) for record in records
         )
-        if any(
-            record.execution_evidence is ExecutionEvidenceKind.REAL
-            and not (
-                is_structurally_creditable_usage_record(record, require_real=True)
-                or is_structurally_accountable_usage_record(record, require_real=True)
-            )
-            for record in normalized
-        ):
-            raise ValueError("journal recovery contains structurally invalid REAL usage")
         request_ids = tuple(record.request_id for record in normalized)
         if request_ids != tuple(sorted(set(request_ids))):
             raise ValueError("journal recovery usage identities must be unique and sorted")
         return normalized
 
-    def issue(records: tuple[UsageRecord, ...]) -> _TrustedUsageRecoveryScope:
-        normalized = normalize_structural(records)
+    def normalize_coordinates(
+        normalized: tuple[UsageRecord, ...],
+        coordinates: tuple[UsageRecoveryRequestLimitCoordinate, ...],
+    ) -> tuple[UsageRecoveryRequestLimitCoordinate, ...]:
+        if (
+            type(coordinates) is not tuple
+            or len(coordinates) > _MAX_RECOVERY_REQUEST_LIMIT_RESERVATIONS
+        ):
+            raise ValueError("journal usage recovery coordinates exceed their compiled bound")
+        exact: list[UsageRecoveryRequestLimitCoordinate] = []
+        for item in coordinates:
+            if type(item) is not tuple or len(item) != 3:
+                raise ValueError("journal usage recovery coordinate is invalid")
+            request_id, root_scope, count_before = item
+            if (
+                type(request_id) is not str
+                or type(root_scope) is not str
+                or _REQUEST_LIMIT_SCOPE.fullmatch(request_id) is None
+                or _REQUEST_LIMIT_SCOPE.fullmatch(root_scope) is None
+                or type(count_before) is not int
+                or not 0 <= count_before <= _MAX_METERED_UNITS
+            ):
+                raise ValueError("journal usage recovery coordinate is invalid")
+            exact.append((request_id, root_scope, count_before))
+        frozen = tuple(exact)
+        coordinate_ids = tuple(item[0] for item in frozen)
+        record_ids = {record.request_id for record in normalized}
+        if (
+            frozen != tuple(sorted(frozen, key=lambda item: item[0]))
+            or coordinate_ids != tuple(sorted(set(coordinate_ids)))
+            or not set(coordinate_ids).issubset(record_ids)
+        ):
+            raise ValueError("journal usage recovery coordinates are not exact and sorted")
+        return frozen
+
+    def normalize_structural(
+        records: tuple[UsageRecord, ...],
+        coordinates: tuple[UsageRecoveryRequestLimitCoordinate, ...],
+    ) -> tuple[UsageRecord, ...]:
+        normalized = normalize_shape(records)
+        frozen_coordinates = normalize_coordinates(normalized, coordinates)
+        coordinate_by_request = {item[0]: item for item in frozen_coordinates}
+        request_ids = {record.request_id for record in normalized}
+        record_by_request = {record.request_id: record for record in normalized}
+        chains: dict[str, list[tuple[int, int, int, str]]] = {}
+        for record in normalized:
+            coordinate = coordinate_by_request.get(record.request_id)
+            require_real = record.execution_evidence is ExecutionEvidenceKind.REAL
+            if coordinate is None:
+                if require_real and not (
+                    is_structurally_creditable_usage_record(record, require_real=True)
+                    or is_structurally_accountable_usage_record(record, require_real=True)
+                ):
+                    raise ValueError("journal recovery contains structurally invalid REAL usage")
+                continue
+            _request_id, root_scope, count_before = coordinate
+            if not (
+                is_structurally_recovery_creditable_usage_record(
+                    record,
+                    request_limit_scope=root_scope,
+                    request_limit_count_before=count_before,
+                    require_real=require_real,
+                )
+                or is_structurally_recovery_accountable_usage_record(
+                    record,
+                    request_limit_scope=root_scope,
+                    request_limit_count_before=count_before,
+                    require_real=require_real,
+                )
+            ):
+                raise ValueError("journal recovery contains invalid recovery-scoped usage")
+            plan = recovery_request_token_plan_from_usage(
+                record,
+                request_limit_scope=root_scope,
+                request_limit_count_before=count_before,
+            )
+            if plan is None:
+                raise ValueError("journal recovery-scoped usage lacks its token plan")
+            inventory = recovery_atomic_request_limit_reservations_from_usage(
+                record,
+                plan,
+                request_limit_scope=root_scope,
+                request_limit_count_before=count_before,
+            )
+            chains.setdefault(root_scope, []).append(
+                (
+                    count_before,
+                    inventory[-1].request_limit_count_after,
+                    inventory[0].request_limit_maximum,
+                    record.request_id,
+                )
+            )
+        for root_scope, chain in chains.items():
+            if root_scope not in request_ids:
+                raise ValueError("journal usage recovery coordinate has an unknown root scope")
+            ordered = tuple(sorted(chain, key=lambda item: (item[0], item[3])))
+            root_maximum: int | None = None
+            root_count_after: int | None = None
+            if root_scope not in coordinate_by_request:
+                root_record = record_by_request[root_scope]
+                try:
+                    root_plan = request_token_plan_from_usage(root_record)
+                    root_inventory = (
+                        atomic_request_limit_reservations_from_usage(root_record, root_plan)
+                        if root_plan is not None
+                        else ()
+                    )
+                except (TypeError, ValueError):
+                    root_inventory = ()
+                if not root_inventory:
+                    raise ValueError(
+                        "journal usage recovery coordinate lacks exact root request evidence"
+                    )
+                root_maximum = root_inventory[0].request_limit_maximum
+                root_count_after = root_inventory[-1].request_limit_count_after
+            if (
+                sum(item[1] - item[0] for item in ordered)
+                > _MAX_RECOVERY_REQUEST_LIMIT_RESERVATIONS
+                or len({item[2] for item in ordered}) != 1
+                or (root_maximum is not None and ordered[0][2] != root_maximum)
+                or (root_count_after is not None and ordered[0][0] != root_count_after)
+                or any(current[1] != following[0] for current, following in pairwise(ordered))
+            ):
+                raise ValueError("journal usage recovery coordinate chain is inconsistent")
+        return normalized
+
+    def issue(
+        records: tuple[UsageRecord, ...],
+        *,
+        recovery_request_limit_coordinates: tuple[
+            UsageRecoveryRequestLimitCoordinate,
+            ...,
+        ] = (),
+    ) -> _TrustedUsageRecoveryScope:
+        normalized = normalize_structural(records, recovery_request_limit_coordinates)
+        frozen_coordinates = normalize_coordinates(
+            normalized,
+            recovery_request_limit_coordinates,
+        )
         hashes = tuple(_usage_record_sha256(record) for record in normalized)
         scope = object.__new__(_TrustedUsageRecoveryScope)
         key = id(scope)
@@ -1068,15 +1743,15 @@ def _build_trusted_usage_recovery_authority() -> tuple[
 
         reference = weakref.ref(scope, discard)
         with lock:
-            registry[key] = (reference, hashes, False)
+            registry[key] = (reference, hashes, frozen_coordinates, False)
         return scope
 
     def recover(
         records: tuple[UsageRecord, ...],
         scope: _TrustedUsageRecoveryScope,
     ) -> tuple[UsageRecord, ...]:
-        normalized = normalize_structural(records)
-        hashes = tuple(_usage_record_sha256(record) for record in normalized)
+        normalized_shape = normalize_shape(records)
+        hashes = tuple(_usage_record_sha256(record) for record in normalized_shape)
         with lock:
             registered = registry.get(id(scope))
             if (
@@ -1084,10 +1759,29 @@ def _build_trusted_usage_recovery_authority() -> tuple[
                 or registered is None
                 or registered[0]() is not scope
                 or registered[1] != hashes
-                or registered[2]
+                or registered[3]
             ):
                 raise ValueError("journal usage recovery capability is invalid or consumed")
-            registry[id(scope)] = (registered[0], registered[1], True)
+            frozen_coordinates = registered[2]
+        normalized = normalize_structural(records, frozen_coordinates)
+        if tuple(_usage_record_sha256(record) for record in normalized) != hashes:
+            raise ValueError("journal usage recovery changed during validation")
+        with lock:
+            registered = registry.get(id(scope))
+            if (
+                registered is None
+                or registered[0]() is not scope
+                or registered[1] != hashes
+                or registered[2] != frozen_coordinates
+                or registered[3]
+            ):
+                raise ValueError("journal usage recovery capability is invalid or consumed")
+            registry[id(scope)] = (
+                registered[0],
+                registered[1],
+                registered[2],
+                True,
+            )
         return tuple(
             _attest_owned_real_usage_record(record)
             if record.execution_evidence is ExecutionEvidenceKind.REAL
@@ -1116,6 +1810,15 @@ def _has_valid_bound_identity(record: UsageRecord) -> bool:
         and binding.generation.generation_id == record.openrouter_generation_id
         and binding.generation.execution_evidence == record.execution_evidence.value
     )
+
+
+(
+    _register_authrunner_owned_real_usage_origin_issuer,
+    _attest_authrunner_owned_real_usage_origin,
+    _propagate_authrunner_owned_real_usage_origin,
+    _has_authrunner_owned_real_usage_origin,
+) = _build_authrunner_owned_real_usage_origin_authority()
+del _build_authrunner_owned_real_usage_origin_authority
 
 
 def _has_valid_unbound_identity_conclusion(record: UsageRecord) -> bool:

@@ -1,0 +1,33 @@
+{
+  "construction_sha256": "83e3001667782029981fc0ac1ae0f8e5acfe75bde892877e2f1300cd6cce6b63",
+  "deployable": false,
+  "groups": [
+    {
+      "canonical_model_id": "synthetic-lineage:alpha/model-core",
+      "group_id": "constructed-root-alpha",
+      "group_sha256": "3a4ed23aa9908195c99f91227cce3b824adee840936e881e688c6be3d79f32ce",
+      "model_ids": [
+        "synthetic-lineage:alpha/model-core",
+        "synthetic-lineage:alpha/model-core-v1"
+      ]
+    },
+    {
+      "canonical_model_id": "synthetic-lineage:beta/model-core",
+      "group_id": "constructed-root-beta",
+      "group_sha256": "440aa0b85594e28973fda02aafdadfa650e9312ecf128c709caaae2a1a09b89e",
+      "model_ids": [
+        "synthetic-lineage:beta/model-core"
+      ]
+    },
+    {
+      "canonical_model_id": "synthetic-lineage:gamma/model-core",
+      "group_id": "constructed-root-gamma",
+      "group_sha256": "fa5b3d093bf78b43fce48dc4c1f6d3b6fc74cf1b3dda69502301dfb4667c9814",
+      "model_ids": [
+        "synthetic-lineage:gamma/model-core"
+      ]
+    }
+  ],
+  "model_identity_domain": "MMAUDIT_NON_DEPLOYABLE_SYNTHETIC_MODEL_LINEAGE_V1",
+  "schema_version": "1.0"
+}

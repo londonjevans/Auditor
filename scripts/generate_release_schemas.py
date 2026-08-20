@@ -9,10 +9,31 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from mmaudit.benchmark.cross_lineage_adjudication import CrossLineageAdjudicationReport
 from mmaudit.benchmark.engine import BenchmarkReport
 from mmaudit.config import ModelsConfig
 from mmaudit.forensic_export import ForensicDeliveryDescriptor
+from mmaudit.models.authenticated_runner import AuthenticatedCrossLineageRunnerEvidence
+from mmaudit.models.authenticated_runner_durable_bundle import (
+    AUTHENTICATED_RUNNER_DURABLE_CASE_COUNT,
+    AUTHENTICATED_RUNNER_DURABLE_MAX_ATTEMPTS,
+    AUTHENTICATED_RUNNER_DURABLE_ROUTING_KEYS,
+    AUTHENTICATED_RUNNER_DURABLE_RUN_COUNT,
+    AuthenticatedRunnerDurableEvidenceBundle,
+)
+from mmaudit.models.autonomous_benchmark_verdict import (
+    EvidenceSealVerdictPolicy,
+    EvidenceSealVerdictProjection,
+)
 from mmaudit.models.calibration import ModelCalibrationArtifact
+from mmaudit.models.coverage_planning import (
+    ModelSurfaceCoveragePlan,
+    ModelSurfaceResourcePreflight,
+)
+from mmaudit.models.evidence_seal_authority import EvidenceSealedAuthorityEvidence
+from mmaudit.models.frozen_lineage_authority import FrozenModelLineageProvenance
+from mmaudit.models.ground_truth_authority import FrozenGroundTruthProvenance
+from mmaudit.models.identifiers import EXACT_MODEL_ID_PATTERN
 from mmaudit.models.lineage_authority import (
     ModelLineageAuthorityEnvelope,
     ModelLineageTrustAnchor,
@@ -35,6 +56,10 @@ from mmaudit.models.policy_selection import (
     AuditModelSelection,
     AuditModelSelectionEvidenceBundle,
 )
+from mmaudit.models.public_lineage_authority import (
+    PUBLIC_MODEL_LINEAGE_CAPTURE_OBSERVATIONS_FILENAME,
+    PublicModelLineageEvidenceBundle,
+)
 from mmaudit.models.qualification import ModelQualificationArtifact, QualificationPolicy
 from mmaudit.models.refresh import (
     ModelRefreshAttempt,
@@ -43,9 +68,14 @@ from mmaudit.models.refresh import (
     ModelRefreshSnapshot,
     ModelRefreshSourceEvidence,
 )
+from mmaudit.models.refresh_runtime import (
+    AuditModelRefreshEvidence,
+    AuditModelRefreshPricingEvidence,
+)
 from mmaudit.models.refresh_staging import ModelRefreshWorkflowStatus
 from mmaudit.models.scheduler import SchedulerArtifact, SchedulerRetainedJournalReference
 from mmaudit.models.schemas import (
+    AuditModelRefreshPricingAttemptEvidence,
     HardhatInventoryPhaseRequest,
     HardhatReporterExecution,
     HardhatReporterInventory,
@@ -62,6 +92,10 @@ from mmaudit.models.sharding import (
 )
 from mmaudit.orchestration.context_manifest import ContextManifest
 from mmaudit.orchestration.manifest import (
+    AUDIT_MODEL_REFRESH_BINDING_IDS,
+    AUDIT_MODEL_REFRESH_EVIDENCE_PATH,
+    AUDIT_MODEL_REFRESH_PRICING_BINDING_IDS,
+    AUDIT_MODEL_REFRESH_PRICING_EVIDENCE_PATH,
     AUDIT_MODEL_SELECTION_BINDING_IDS,
     AUDIT_MODEL_SELECTION_EVIDENCE_PATH,
     LANGUAGE_CAPABILITY_ARTIFACT_PATH,
@@ -91,19 +125,38 @@ ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_ROOT = ROOT / "schemas"
 SCHEMA_BASE = "https://mmaudit.local/schemas"
 MODELS: dict[str, type[BaseModel]] = {
+    "authenticated_cross_lineage_runner_evidence.schema.json": (
+        AuthenticatedCrossLineageRunnerEvidence
+    ),
+    "authenticated_runner_durable_evidence_bundle.schema.json": (
+        AuthenticatedRunnerDurableEvidenceBundle
+    ),
+    "audit_model_refresh_evidence.schema.json": AuditModelRefreshEvidence,
+    "audit_model_refresh_pricing_attempt_evidence.schema.json": (
+        AuditModelRefreshPricingAttemptEvidence
+    ),
+    "audit_model_refresh_pricing_evidence.schema.json": AuditModelRefreshPricingEvidence,
     "benchmark_report.schema.json": BenchmarkReport,
     "audit_model_selection.schema.json": AuditModelSelection,
     "audit_model_selection_evidence.schema.json": AuditModelSelectionEvidenceBundle,
     "context_manifest.schema.json": ContextManifest,
     "coverage_artifact.schema.json": CoverageArtifact,
+    "cross_lineage_adjudication_report.schema.json": CrossLineageAdjudicationReport,
     "findings_artifact.schema.json": FindingsArtifact,
+    "frozen_model_lineage_provenance.schema.json": FrozenModelLineageProvenance,
+    "frozen_ground_truth_provenance.schema.json": FrozenGroundTruthProvenance,
     "forensic_delivery_descriptor.schema.json": ForensicDeliveryDescriptor,
     "hardhat_reporter_inventory.schema.json": HardhatReporterInventory,
     "hardhat_reporter_test.schema.json": HardhatReporterExecution,
     "hardhat_request_inventory.schema.json": HardhatInventoryPhaseRequest,
     "hardhat_request_test.schema.json": HardhatTestPhaseRequest,
     "language_capability.schema.json": LanguageCapabilityArtifact,
+    "evidence_sealed_authority.schema.json": EvidenceSealedAuthorityEvidence,
+    "evidence_seal_verdict.schema.json": EvidenceSealVerdictProjection,
+    "evidence_seal_verdict_policy.schema.json": EvidenceSealVerdictPolicy,
     "model_calibration.schema.json": ModelCalibrationArtifact,
+    "model_surface_coverage_plan.schema.json": ModelSurfaceCoveragePlan,
+    "model_surface_resource_preflight.schema.json": ModelSurfaceResourcePreflight,
     "model_lineage_authority.schema.json": ModelLineageAuthorityEnvelope,
     "model_execution_artifact.schema.json": ModelExecutionArtifact,
     "model_lineage_review.schema.json": ModelLineageReviewArtifact,
@@ -129,6 +182,7 @@ MODELS: dict[str, type[BaseModel]] = {
     "policy_eligibility_evaluation.schema.json": PolicyEligibilityEvaluation,
     "policy_eligibility_source_observation.schema.json": PolicyEligibilitySourceObservation,
     "policy_review_signal.schema.json": PolicyReviewSignal,
+    "public_model_lineage_provenance.schema.json": PublicModelLineageEvidenceBundle,
     "release_candidate_observation.schema.json": ReleaseCandidateObservation,
     "release_bound_gate_result.schema.json": BoundReleaseGateResult,
     "release_gate_evidence.schema.json": ReleaseGateEvidenceBundle,
@@ -146,17 +200,46 @@ MODELS: dict[str, type[BaseModel]] = {
     "solidity_coverage.schema.json": SolidityCoverageArtifact,
 }
 TITLE_OVERRIDES = {
+    "authenticated_cross_lineage_runner_evidence.schema.json": (
+        "mmaudit non-authorizing authenticated cross-lineage runner evidence"
+    ),
+    "authenticated_runner_durable_evidence_bundle.schema.json": (
+        "mmaudit non-authorizing durable authenticated runner evidence bundle"
+    ),
+    "audit_model_refresh_evidence.schema.json": "mmaudit audit-scoped model refresh evidence",
+    "audit_model_refresh_pricing_attempt_evidence.schema.json": (
+        "mmaudit audit-scoped model refresh pricing attempt evidence"
+    ),
+    "audit_model_refresh_pricing_evidence.schema.json": (
+        "mmaudit audit-scoped model refresh pricing evidence"
+    ),
     "audit_model_selection.schema.json": "mmaudit audit-scoped model selection",
     "audit_model_selection_evidence.schema.json": ("mmaudit audit-scoped model selection evidence"),
     "benchmark_report.schema.json": "mmaudit benchmark report",
     "coverage_artifact.schema.json": "mmaudit forensic coverage artifact",
+    "cross_lineage_adjudication_report.schema.json": (
+        "mmaudit non-authorizing cross-lineage adjudication report"
+    ),
     "findings_artifact.schema.json": "mmaudit forensic findings artifact",
+    "frozen_model_lineage_provenance.schema.json": (
+        "mmaudit mechanism-only frozen model lineage provenance"
+    ),
+    "frozen_ground_truth_provenance.schema.json": ("mmaudit frozen ground-truth provenance"),
     "forensic_delivery_descriptor.schema.json": "mmaudit complete forensic delivery descriptor",
     "hardhat_reporter_inventory.schema.json": "mmaudit Hardhat inventory observation",
     "hardhat_reporter_test.schema.json": "mmaudit Hardhat test observation",
     "hardhat_request_inventory.schema.json": "mmaudit Hardhat inventory phase request",
     "hardhat_request_test.schema.json": "mmaudit Hardhat test phase request",
     "language_capability.schema.json": "mmaudit language capability artifact",
+    "evidence_sealed_authority.schema.json": (
+        "mmaudit non-authorizing evidence-seal comparison artifact"
+    ),
+    "evidence_seal_verdict.schema.json": (
+        "mmaudit non-authorizing evidence-seal verdict projection"
+    ),
+    "evidence_seal_verdict_policy.schema.json": (
+        "mmaudit frozen autonomous evidence-seal verdict policy"
+    ),
     "model_calibration.schema.json": "mmaudit model calibration artifact",
     "model_lineage_authority.schema.json": "mmaudit signed model lineage authority",
     "model_execution_artifact.schema.json": "mmaudit model execution artifact",
@@ -190,6 +273,9 @@ TITLE_OVERRIDES = {
         "mmaudit current policy eligibility source observation"
     ),
     "policy_review_signal.schema.json": "mmaudit model policy review signal",
+    "public_model_lineage_provenance.schema.json": (
+        "mmaudit documentary public model lineage provenance"
+    ),
     "run_terminal_report_authority.schema.json": "mmaudit private terminal report authority",
     "scanner_source_evidence.schema.json": "mmaudit private scanner source evidence",
     "scheduler_state.schema.json": "mmaudit seven-pass scheduler state",
@@ -300,6 +386,161 @@ def run_evidence_manifest_audit_model_selection_rules() -> list[dict[str, Any]]:
     ]
 
 
+def run_evidence_manifest_audit_model_refresh_rules() -> list[dict[str, Any]]:
+    """Return bidirectional veto-only refresh artifact/binding custody rules."""
+
+    artifact_match = {
+        "properties": {"path": {"const": AUDIT_MODEL_REFRESH_EVIDENCE_PATH}},
+        "required": ["path"],
+    }
+    selection_artifact_match = {
+        "properties": {"path": {"const": AUDIT_MODEL_SELECTION_EVIDENCE_PATH}},
+        "required": ["path"],
+    }
+    binding_matches = [
+        {
+            "contains": {
+                "properties": {"identifier": {"const": identifier}},
+                "required": ["identifier"],
+            },
+            "maxContains": 1,
+            "minContains": 1,
+        }
+        for identifier in sorted(AUDIT_MODEL_REFRESH_BINDING_IDS)
+    ]
+    any_binding_match = {
+        "properties": {"identifier": {"enum": sorted(AUDIT_MODEL_REFRESH_BINDING_IDS)}},
+        "required": ["identifier"],
+    }
+    return [
+        {
+            "if": {
+                "properties": {"artifacts": {"contains": artifact_match}},
+                "required": ["artifacts"],
+            },
+            "then": {
+                "properties": {
+                    "artifacts": {
+                        "contains": selection_artifact_match,
+                        "maxContains": 1,
+                        "minContains": 1,
+                    },
+                    "bindings": {
+                        "properties": {"models": {"allOf": binding_matches}},
+                        "required": ["models"],
+                    },
+                }
+            },
+        },
+        {
+            "if": {
+                "properties": {
+                    "bindings": {
+                        "properties": {
+                            "models": {"contains": any_binding_match},
+                        },
+                        "required": ["models"],
+                    }
+                },
+                "required": ["bindings"],
+            },
+            "then": {
+                "properties": {
+                    "artifacts": {
+                        "contains": artifact_match,
+                        "maxContains": 1,
+                        "minContains": 1,
+                    }
+                }
+            },
+        },
+    ]
+
+
+def run_evidence_manifest_audit_model_refresh_pricing_rules() -> list[dict[str, Any]]:
+    """Return bidirectional pricing artifact/binding custody rules."""
+
+    artifact_match = {
+        "properties": {"path": {"const": AUDIT_MODEL_REFRESH_PRICING_EVIDENCE_PATH}},
+        "required": ["path"],
+    }
+    refresh_artifact_match = {
+        "properties": {"path": {"const": AUDIT_MODEL_REFRESH_EVIDENCE_PATH}},
+        "required": ["path"],
+    }
+    selection_artifact_match = {
+        "properties": {"path": {"const": AUDIT_MODEL_SELECTION_EVIDENCE_PATH}},
+        "required": ["path"],
+    }
+    binding_matches = [
+        {
+            "contains": {
+                "properties": {"identifier": {"const": identifier}},
+                "required": ["identifier"],
+            },
+            "maxContains": 1,
+            "minContains": 1,
+        }
+        for identifier in sorted(AUDIT_MODEL_REFRESH_PRICING_BINDING_IDS)
+    ]
+    any_binding_match = {
+        "properties": {"identifier": {"enum": sorted(AUDIT_MODEL_REFRESH_PRICING_BINDING_IDS)}},
+        "required": ["identifier"],
+    }
+    return [
+        {
+            "if": {
+                "properties": {"artifacts": {"contains": artifact_match}},
+                "required": ["artifacts"],
+            },
+            "then": {
+                "properties": {
+                    "artifacts": {
+                        "allOf": [
+                            {
+                                "contains": selection_artifact_match,
+                                "maxContains": 1,
+                                "minContains": 1,
+                            },
+                            {
+                                "contains": refresh_artifact_match,
+                                "maxContains": 1,
+                                "minContains": 1,
+                            },
+                        ]
+                    },
+                    "bindings": {
+                        "properties": {"models": {"allOf": binding_matches}},
+                        "required": ["models"],
+                    },
+                }
+            },
+        },
+        {
+            "if": {
+                "properties": {
+                    "bindings": {
+                        "properties": {
+                            "models": {"contains": any_binding_match},
+                        },
+                        "required": ["models"],
+                    }
+                },
+                "required": ["bindings"],
+            },
+            "then": {
+                "properties": {
+                    "artifacts": {
+                        "contains": artifact_match,
+                        "maxContains": 1,
+                        "minContains": 1,
+                    }
+                }
+            },
+        },
+    ]
+
+
 def _run_evidence_manifest_contract_is_current() -> bool:
     """Verify the hand-authored manifest schema retains the generated 1.2 leaf contract."""
 
@@ -311,6 +552,8 @@ def _run_evidence_manifest_contract_is_current() -> bool:
     expected = [
         run_evidence_manifest_report_bundle_rule(),
         *run_evidence_manifest_audit_model_selection_rules(),
+        *run_evidence_manifest_audit_model_refresh_rules(),
+        *run_evidence_manifest_audit_model_refresh_pricing_rules(),
     ]
     return all(rule in schema.get("allOf", []) for rule in expected)
 
@@ -343,6 +586,129 @@ _SOLIDITY_COVERAGE_GRAPH_LISTS = (
     "graph_fact_omission_evidence_sha256s",
     "graph_warnings",
 )
+_SCHEDULER_RECOVERY_COMPLETION_FIELDS = (
+    "runtime_completion_evidence_sha256",
+    "validated_response_sha256",
+    "normalization_evidence_sha256",
+    "output_artifact_sha256",
+)
+_PUBLIC_LINEAGE_ROOT_PATTERN = r"^sha256:[0-9a-f]{64}$"
+_PUBLIC_LINEAGE_REQUESTED_SOURCE_PATTERN = (
+    r"^https://(?:huggingface\.co/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/resolve/"
+    r"[0-9a-f]{40}/[^\s?#]+|raw\.githubusercontent\.com/[A-Za-z0-9._-]+/"
+    r"[A-Za-z0-9._-]+/[0-9a-f]{40}/[^\s?#]+)$"
+)
+_PUBLIC_LINEAGE_FINAL_SOURCE_PATTERN = (
+    r"^https://(?:huggingface\.co|raw\.githubusercontent\.com)/[^\s#]+$"
+)
+
+
+def _strengthen_public_model_lineage_contract(schema: dict[str, Any]) -> None:
+    """Expose bounded documentary custody at the standalone schema boundary."""
+
+    properties = schema["properties"]
+    definitions = schema["$defs"]
+
+    for field_name in (
+        "confirmed_exact_model_ids",
+        "unconfirmed_exact_model_ids",
+        "excluded_exact_model_ids",
+    ):
+        properties[field_name]["items"]["pattern"] = EXACT_MODEL_ID_PATTERN
+        properties[field_name]["uniqueItems"] = True
+    properties["approved_root_lineages"]["items"]["pattern"] = _PUBLIC_LINEAGE_ROOT_PATTERN
+    properties["approved_root_lineages"]["uniqueItems"] = True
+    for field_name in (
+        "sources",
+        "aliases",
+        "claims",
+        "decisions",
+        "conservative_non_independence_constraints",
+    ):
+        properties[field_name]["uniqueItems"] = True
+
+    properties["capture_observations_file_binding"] = {
+        "allOf": [
+            {"$ref": "#/$defs/ManifestFileBinding"},
+            {
+                "properties": {
+                    "path": {"const": PUBLIC_MODEL_LINEAGE_CAPTURE_OBSERVATIONS_FILENAME},
+                    "size": {"maximum": 500_000, "minimum": 1},
+                }
+            },
+        ]
+    }
+
+    source = definitions["PublicModelLineageSourceEvidence"]
+    source_properties = source["properties"]
+    source_properties["requested_url"]["pattern"] = _PUBLIC_LINEAGE_REQUESTED_SOURCE_PATTERN
+    source_properties["final_url"]["pattern"] = _PUBLIC_LINEAGE_FINAL_SOURCE_PATTERN
+    source_properties["redirect_chain"]["items"]["pattern"] = _PUBLIC_LINEAGE_FINAL_SOURCE_PATTERN
+    source_properties["redirect_chain"]["uniqueItems"] = True
+    source_properties["file_binding"] = {
+        "allOf": [
+            {"$ref": "#/$defs/ManifestFileBinding"},
+            {
+                "properties": {
+                    "path": {"pattern": r"^sources/[a-z][a-z0-9-]{0,99}\.md$"},
+                    "size": {"maximum": 100_000, "minimum": 1},
+                }
+            },
+        ]
+    }
+
+    alias = definitions["PublicModelLineageAliasBinding"]["properties"]
+    alias["exact_model_id"]["pattern"] = EXACT_MODEL_ID_PATTERN
+    alias["source_ids"]["items"]["pattern"] = r"^[a-z][a-z0-9-]{0,99}$"
+    alias["source_ids"]["uniqueItems"] = True
+
+    claim_definition = definitions["PublicModelLineageClaim"]
+    claim = claim_definition["properties"]
+    claim["subject_exact_model_id"]["pattern"] = EXACT_MODEL_ID_PATTERN
+    for option in claim["target_exact_model_id"]["anyOf"]:
+        if option.get("type") == "string":
+            option["pattern"] = EXACT_MODEL_ID_PATTERN
+    claim_definition["allOf"] = [
+        {
+            "if": {
+                "properties": {"claim_kind": {"const": "ROOTS_WITH"}},
+                "required": ["claim_kind"],
+            },
+            "then": {
+                "properties": {"target_exact_model_id": {"type": "string"}},
+                "required": ["target_exact_model_id"],
+            },
+            "else": {"properties": {"target_exact_model_id": {"type": "null"}}},
+        },
+        {
+            "if": {
+                "properties": {"claim_kind": {"const": "VAGUE"}},
+                "required": ["claim_kind"],
+            },
+            "then": {"properties": {"decisive_primary_publisher": {"const": False}}},
+        },
+    ]
+    claim_definition["$comment"] = (
+        "Runtime validation additionally binds the UTF-8 marker length and SHA-256 to its exact "
+        "non-overlapping source byte span."
+    )
+
+    decision = definitions["PublicModelLineageDecision"]["properties"]
+    decision["exact_model_id"]["pattern"] = EXACT_MODEL_ID_PATTERN
+    decision["supporting_claim_ids"]["items"]["pattern"] = r"^claim-[a-z][a-z0-9-]{0,95}$"
+    decision["supporting_claim_ids"]["uniqueItems"] = True
+    decision["unconfirmed_reasons"]["uniqueItems"] = True
+
+    constraint = definitions["PublicModelLineageNonIndependenceConstraint"]["properties"]
+    constraint["member_exact_model_ids"]["items"]["pattern"] = EXACT_MODEL_ID_PATTERN
+    constraint["member_exact_model_ids"]["uniqueItems"] = True
+    constraint["supporting_claim_ids"]["items"]["pattern"] = r"^claim-[a-z][a-z0-9-]{0,95}$"
+    constraint["supporting_claim_ids"]["uniqueItems"] = True
+
+    schema["$comment"] = (
+        "Runtime validation additionally enforces sorted keyed inventories, exact source and claim "
+        "joins, aggregate source-byte bounds, derived decisions, and canonical inventory hashes."
+    )
 
 
 def _strengthen_solidity_coverage_contract(schema: dict[str, Any]) -> None:
@@ -460,10 +826,457 @@ def _strengthen_solidity_coverage_contract(schema: dict[str, Any]) -> None:
     )
 
 
+def _strengthen_scheduler_recovery_contract(schema: dict[str, Any]) -> None:
+    """Expose recovery version and terminal-custody invariants in the public schema."""
+
+    pass_result = schema["$defs"]["SchedulerPassResult"]
+    pass_result["allOf"] = [
+        {
+            "if": {
+                "properties": {"schema_version": {"const": "1.1"}},
+                "required": ["schema_version"],
+            },
+            "then": {
+                "properties": {"recovery_promotion_bindings": {"minItems": 1}},
+                "required": ["recovery_promotion_bindings"],
+            },
+            "else": {"not": {"required": ["recovery_promotion_bindings"]}},
+        }
+    ]
+
+    promotion = schema["$defs"]["SchedulerTruncationRecoveryPromotionBinding"]
+    child_results = promotion["properties"]["direct_child_result_sha256s"]
+    child_results["uniqueItems"] = True
+    for child_result in child_results["prefixItems"]:
+        child_result["pattern"] = r"^[0-9a-f]{64}$"
+
+    request = schema["$defs"]["SchedulerTruncationRecoveryModelRequestEvidence"]
+    request["allOf"] = [
+        {
+            "if": {
+                "properties": {"terminal_status": {"const": "SUCCEEDED"}},
+                "required": ["terminal_status"],
+            },
+            "then": {
+                "properties": {
+                    field_name: {"not": {"type": "null"}}
+                    for field_name in _SCHEDULER_RECOVERY_COMPLETION_FIELDS
+                },
+                "required": list(_SCHEDULER_RECOVERY_COMPLETION_FIELDS),
+            },
+            "else": {
+                "not": {
+                    "anyOf": [
+                        {"required": [field_name]}
+                        for field_name in (
+                            *_SCHEDULER_RECOVERY_COMPLETION_FIELDS,
+                            "promotion_entry_sha256",
+                        )
+                    ]
+                }
+            },
+        }
+    ]
+
+
+def _strengthen_minimum_floor_recovery_contract(schema: dict[str, Any]) -> None:
+    """Preserve versioned recovery-binding presence if a report publishes the floor."""
+
+    floor = schema.get("$defs", {}).get("MinimumAnalysisFloor")
+    if floor is None:
+        return
+    floor["allOf"] = [
+        {
+            "if": {
+                "properties": {"schema_version": {"const": "1.1"}},
+                "required": ["schema_version"],
+            },
+            "then": {
+                "properties": {"recovery_model_usage_bindings": {"minItems": 1}},
+                "required": ["recovery_model_usage_bindings"],
+            },
+            "else": {"not": {"required": ["recovery_model_usage_bindings"]}},
+        }
+    ]
+
+
+_AUTHENTICATED_RUNNER_RELEASE_CASE_COUNT = AUTHENTICATED_RUNNER_DURABLE_CASE_COUNT
+_AUTHENTICATED_RUNNER_DISALLOWED_ROUTING_FIELDS = (
+    "api_key",
+    "api_token",
+    "authorization",
+    "authorization_header",
+    "bearer_token",
+    "client_secret",
+    "context",
+    "context_package",
+    "context_request_evidence",
+    "credential",
+    "credentials",
+    "mnemonic",
+    "opaque_capability",
+    "password",
+    "private_capability",
+    "private_key",
+    "private_context",
+    "private_source",
+    "private_source_code",
+    "raw_private_source",
+    "raw_source",
+    "registry",
+    "registry_state",
+    "repository_source",
+    "repository_context",
+    "runner_authority",
+    "runner_capability",
+    "runner_custody",
+    "secret",
+    "secrets",
+    "source",
+    "source_code",
+    "source_content",
+    "source_text",
+    "system_prompt",
+    "token",
+    "user_prompt",
+    "verified_capability",
+    "wallet_material",
+    "provider_visible_payload",
+    "provider_visible_prompt",
+    "provider_visible_user_prompt",
+)
+
+
+def _exact_authenticated_runner_case_inventory(property_schema: dict[str, Any]) -> None:
+    """Constrain one release inventory to the frozen 24-case protocol."""
+
+    property_schema["minItems"] = _AUTHENTICATED_RUNNER_RELEASE_CASE_COUNT
+    property_schema["maxItems"] = _AUTHENTICATED_RUNNER_RELEASE_CASE_COUNT
+    property_schema["uniqueItems"] = True
+
+
+def _authenticated_runner_safe_routing_property_names() -> dict[str, Any]:
+    """Return the closed non-secret field-name grammar used at every routing depth."""
+
+    forbidden_pattern = (
+        r"api_?key|api_?token|^(?!privacy_authorization$).*authorization(?:_?header)?|"
+        r"bearer_?token|"
+        r"(?:access|refresh|session|auth|authentication|oauth|id|csrf)_?token|"
+        r"client_?secret|secret|credential|mnemonic|password|private_?key|"
+        r"(?:session|auth|access|secret)_?key|cookie|session_?id|"
+        r"(?:private|raw|repository)_?"
+        r"(?:source|context)|source_?(?:code|content|text)|context_?"
+        r"(?:package|payload|request_?evidence)$|provider_?visible|registry|"
+        r"runner_?(?:authority|capability|custody)"
+    )
+    return {
+        "allOf": [
+            {"pattern": r"^[a-z][a-z0-9_]{0,127}$"},
+            {"not": {"enum": sorted(_AUTHENTICATED_RUNNER_DISALLOWED_ROUTING_FIELDS)}},
+            {"not": {"pattern": forbidden_pattern}},
+            {
+                "anyOf": [
+                    {"not": {"pattern": "capability"}},
+                    {"pattern": r"_capability_sha256$"},
+                ]
+            },
+        ]
+    }
+
+
+def _authenticated_runner_safe_routing_value() -> dict[str, Any]:
+    """Return a bounded recursive schema for non-secret provider routing evidence."""
+
+    value_ref = {"$ref": "#/$defs/AuthenticatedRunnerSafeRoutingValue"}
+    property_names = _authenticated_runner_safe_routing_property_names()
+    return {
+        "description": (
+            "Bounded non-secret provider routing evidence. Runtime custody independently "
+            "replays the exact typed evidence needed for credit."
+        ),
+        "anyOf": [
+            {"type": "null"},
+            {"type": "boolean"},
+            {"maximum": 2**63 - 1, "minimum": -(2**63), "type": "integer"},
+            {"maximum": 1e18, "minimum": -1e18, "type": "number"},
+            {"maxLength": 1_000_000, "type": "string"},
+            {"items": value_ref, "maxItems": 10_000, "type": "array"},
+            {
+                "additionalProperties": value_ref,
+                "maxProperties": 256,
+                "propertyNames": property_names,
+                "type": "object",
+            },
+        ],
+    }
+
+
+def _strengthen_authenticated_runner_contract(
+    schema: dict[str, Any],
+    *,
+    filename: str,
+) -> None:
+    """Publish only the exact bounded, non-authorizing AUTHRUNNER release view."""
+
+    definitions = schema["$defs"]
+    if filename == "authenticated_runner_durable_evidence_bundle.schema.json":
+        _strengthen_authenticated_runner_contract(
+            {
+                "$defs": definitions,
+                "properties": definitions["AuthenticatedCrossLineageRunnerEvidence"]["properties"],
+            },
+            filename="authenticated_cross_lineage_runner_evidence.schema.json",
+        )
+        _strengthen_authenticated_runner_contract(
+            {
+                "$defs": definitions,
+                "properties": definitions["CrossLineageAdjudicationReport"]["properties"],
+            },
+            filename="cross_lineage_adjudication_report.schema.json",
+        )
+        prepared = definitions["CrossLineageAdjudicationPreparedRun"]
+        for field_name in ("case_ids", "requests"):
+            _exact_authenticated_runner_case_inventory(prepared["properties"][field_name])
+            prepared["properties"][field_name]["uniqueItems"] = True
+        prepared["properties"]["case_ids"]["items"] = {
+            "pattern": r"^case-[0-9a-f]{16}$",
+            "type": "string",
+        }
+        candidate_report = definitions["ModelBenchmarkReport"]
+        _exact_authenticated_runner_case_inventory(candidate_report["properties"]["case_ids"])
+        candidate_report["properties"]["case_ids"]["uniqueItems"] = True
+        candidate_report["properties"]["case_ids"]["items"] = {
+            "pattern": r"^case-[0-9a-f]{16}$",
+            "type": "string",
+        }
+        candidate_report["properties"]["results"]["minItems"] = 1
+        candidate_report["properties"]["results"]["maxItems"] = 1
+        candidate_report["properties"]["results"]["uniqueItems"] = True
+        candidate_result = definitions["ModelBenchmarkModelResult"]
+        _exact_authenticated_runner_case_inventory(candidate_result["properties"]["cases"])
+        candidate_result["properties"]["cases"]["uniqueItems"] = True
+        runs = schema["properties"]["runs"]
+        runs["minItems"] = AUTHENTICATED_RUNNER_DURABLE_RUN_COUNT
+        runs["maxItems"] = AUTHENTICATED_RUNNER_DURABLE_RUN_COUNT
+        runs["uniqueItems"] = True
+        runs["prefixItems"] = [
+            {
+                "allOf": [
+                    {"$ref": "#/$defs/AuthenticatedRunnerDurableRunEvidence"},
+                    {
+                        "properties": {"run_kind": {"const": run_kind}},
+                        "required": ["run_kind"],
+                    },
+                ]
+            }
+            for run_kind in ("PRIMARY", "REPLAY")
+        ]
+        runs["items"] = False
+        runs["allOf"] = [
+            {
+                "contains": {
+                    "properties": {"run_kind": {"const": run_kind}},
+                    "required": ["run_kind"],
+                },
+                "maxContains": 1,
+                "minContains": 1,
+            }
+            for run_kind in ("PRIMARY", "REPLAY")
+        ]
+        decisions = definitions["AuthenticatedRunnerAuthsealComplete"]["properties"][
+            "decision_projections"
+        ]
+        decisions["minItems"] = 2
+        decisions["maxItems"] = 2
+        decisions["uniqueItems"] = True
+        decisions["prefixItems"] = [
+            {
+                "allOf": [
+                    {"$ref": "#/$defs/EvidenceSealDecisionProjection"},
+                    {
+                        "properties": {"run_kind": {"const": run_kind}},
+                        "required": ["run_kind"],
+                    },
+                ]
+            }
+            for run_kind in ("PRIMARY", "REPLAY")
+        ]
+        decisions["items"] = False
+        routing = definitions["UsageRecord"]["properties"]["routing"]
+        routing["propertyNames"]["allOf"].append(
+            {"enum": list(AUTHENTICATED_RUNNER_DURABLE_ROUTING_KEYS)}
+        )
+        maximum_attempts = definitions["AuthenticatedCrossLineageCaseExecutionEvidence"][
+            "properties"
+        ]["attempt_request_ids"]["maxItems"]
+        if maximum_attempts != AUTHENTICATED_RUNNER_DURABLE_MAX_ATTEMPTS:
+            raise ValueError("durable AUTHRUNNER attempt bound differs from runtime")
+        schema["$comment"] = (
+            "Offline validation replays the exact PRIMARY/REPLAY prepared requests, reports, "
+            "runner hashes, all closed-ledger attempt costs, optional AUTHSEAL comparison "
+            "inputs, and the bundle self-hash. Serialized evidence grants no runtime authority."
+        )
+        return
+    if filename == "authenticated_cross_lineage_runner_evidence.schema.json":
+        _exact_authenticated_runner_case_inventory(schema["properties"]["case_ids"])
+        schema["properties"]["case_ids"]["items"] = {
+            "pattern": r"^case-[0-9a-f]{16}$",
+            "type": "string",
+        }
+        runs = schema["properties"]["runs"]
+        runs["minItems"] = 2
+        runs["maxItems"] = 2
+        runs["uniqueItems"] = True
+        runs["prefixItems"] = [
+            {
+                "allOf": [
+                    {"$ref": "#/$defs/AuthenticatedCrossLineageRunnerRunEvidence"},
+                    {
+                        "properties": {"run_kind": {"const": run_kind}},
+                        "required": ["run_kind"],
+                    },
+                ]
+            }
+            for run_kind in ("PRIMARY", "REPLAY")
+        ]
+        runs["items"] = False
+        runs["allOf"] = [
+            {
+                "contains": {
+                    "properties": {"run_kind": {"const": run_kind}},
+                    "required": ["run_kind"],
+                },
+                "maxContains": 1,
+                "minContains": 1,
+            }
+            for run_kind in ("PRIMARY", "REPLAY")
+        ]
+        run = definitions["AuthenticatedCrossLineageRunnerRunEvidence"]
+        for field_name in ("candidate_cases", "judge_cases"):
+            _exact_authenticated_runner_case_inventory(run["properties"][field_name])
+        run["properties"]["candidate_campaign_report_sha256s"]["uniqueItems"] = True
+        case = definitions["AuthenticatedCrossLineageCaseExecutionEvidence"]
+        case["properties"]["attempt_request_ids"]["uniqueItems"] = True
+        ledger = definitions["AuthenticatedCrossLineageLedgerIntervalEvidence"]
+        ledger_entries = ledger["properties"]["entries"]
+        logical_request_count = 2 * _AUTHENTICATED_RUNNER_RELEASE_CASE_COUNT * 2
+        maximum_attempts_per_request = case["properties"]["attempt_request_ids"]["maxItems"]
+        ledger_entries["minItems"] = logical_request_count
+        ledger_entries["maxItems"] = logical_request_count * maximum_attempts_per_request
+        ledger_entries["uniqueItems"] = True
+        schema["$comment"] = (
+            "Runtime validation additionally replays exact case/report/generation joins, "
+            "independent public roots, unique request identities, closed ledger arithmetic, "
+            "and the evidence self-hash using retained PID-local custody."
+        )
+        return
+
+    if filename != "cross_lineage_adjudication_report.schema.json":
+        raise ValueError(f"unexpected authenticated runner schema: {filename}")
+    for field_name in ("case_ids", "cases"):
+        _exact_authenticated_runner_case_inventory(schema["properties"][field_name])
+    schema["properties"]["case_ids"]["items"] = {
+        "pattern": r"^case-[0-9a-f]{16}$",
+        "type": "string",
+    }
+    request = definitions["CrossLineageAdjudicationCaseRequest"]
+    for field_name in (
+        "candidate_dimension_result_sha256s",
+        "expected_dimension_outcomes",
+    ):
+        request["properties"][field_name]["uniqueItems"] = True
+    response = definitions["CrossLineageAdjudicationResponse"]
+    response["properties"]["dimension_outcomes"]["uniqueItems"] = True
+    usage = definitions["UsageRecord"]
+    for definition_name in ("UsageRecord", "OpenRouterGenerationEvidence"):
+        execution_evidence = definitions[definition_name]["properties"]["execution_evidence"]
+        definitions[definition_name]["properties"]["execution_evidence"] = {
+            "const": "real",
+            **(
+                {"default": execution_evidence["default"]}
+                if "default" in execution_evidence
+                else {}
+            ),
+            "title": execution_evidence.get("title", "Execution Evidence"),
+            "type": "string",
+        }
+    usage["properties"]["prompt_sha256"]["pattern"] = r"^[0-9a-f]{64}$"
+    response_hash = usage["properties"]["response_sha256"]
+    response_hash_string = next(
+        option for option in response_hash["anyOf"] if option.get("type") == "string"
+    )
+    response_hash_string["pattern"] = r"^[0-9a-f]{64}$"
+    endpoints = usage["properties"]["configured_provider_endpoints"]
+    endpoints["minItems"] = 1
+    endpoints["maxItems"] = 1
+    endpoints["uniqueItems"] = True
+    schema["$defs"]["AuthenticatedRunnerSafeRoutingValue"] = (
+        _authenticated_runner_safe_routing_value()
+    )
+    routing = usage["properties"]["routing"]
+    routing["additionalProperties"] = {"$ref": "#/$defs/AuthenticatedRunnerSafeRoutingValue"}
+    routing["maxProperties"] = 256
+    routing["propertyNames"] = _authenticated_runner_safe_routing_property_names()
+    routing["properties"] = {
+        "canonical_model": {
+            "pattern": r"^[A-Za-z0-9._-]+/[A-Za-z0-9._:/-]+$",
+            "type": "string",
+        },
+        "data_collection": {"const": "deny", "type": "string"},
+        "discovery_evidence_sha256": {"pattern": r"^[0-9a-f]{64}$", "type": "string"},
+        "effective_privacy_policy_sha256": {
+            "pattern": r"^[0-9a-f]{64}$",
+            "type": "string",
+        },
+        "endpoint_pricing_sha256": {"pattern": r"^[0-9a-f]{64}$", "type": "string"},
+        "endpoint_snapshot_sha256": {"pattern": r"^[0-9a-f]{64}$", "type": "string"},
+        "model_metadata_snapshot_sha256": {
+            "pattern": r"^[0-9a-f]{64}$",
+            "type": "string",
+        },
+        "output_capability_sha256": {"pattern": r"^[0-9a-f]{64}$", "type": "string"},
+        "privacy_authorization": {"const": "STRICT_ZDR_ENFORCED", "type": "string"},
+        "privacy_endpoint_policy_class": {"const": "ZDR", "type": "string"},
+        "privacy_profile": {"const": "SYNTHETIC_BENCHMARK", "type": "string"},
+        "privacy_source_classification": {
+            "enum": ["PUBLIC_BENCHMARK", "SYNTHETIC_COMMITTED"],
+            "type": "string",
+        },
+        "privacy_source_proof_kind": {
+            "const": "RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION",
+            "type": "string",
+        },
+        "privacy_source_provenance_sha256": {
+            "pattern": r"^[0-9a-f]{64}$",
+            "type": "string",
+        },
+        "privacy_source_sha256": {"pattern": r"^[0-9a-f]{64}$", "type": "string"},
+        "provider_fallbacks_allowed": {"const": False, "type": "boolean"},
+        "selected_provider_endpoint": {
+            "pattern": r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+            "type": "string",
+        },
+        "selected_provider_name": {"maxLength": 200, "minLength": 1, "type": "string"},
+        "structured_output_capability_sha256": {
+            "pattern": r"^[0-9a-f]{64}$",
+            "type": "string",
+        },
+        "structured_output_mode": {"$ref": "#/$defs/StructuredOutputMode"},
+        "zdr_requested": {"const": True, "type": "boolean"},
+    }
+    routing["required"] = sorted(routing["properties"])
+    schema["$comment"] = (
+        "Runtime validation additionally proves the canonical prompt is derived only from the "
+        "frozen synthetic/public case, joins target/request/wire/host hashes, and replays exact "
+        "REAL usage, generation, route, privacy-provenance, and report custody."
+    )
+
+
 def rendered_schema(filename: str, model: type[BaseModel]) -> str:
     """Return one deterministic draft-2020-12 schema."""
 
     schema = model.model_json_schema()
+    _strengthen_minimum_floor_recovery_contract(schema)
     if filename == "models_config.schema.json":
         lineage = schema["$defs"]["ModelLineageConfig"]
         measured_quality = lineage["properties"]["measured_quality"]
@@ -496,21 +1309,38 @@ def rendered_schema(filename: str, model: type[BaseModel]) -> str:
         ]
     if filename in {"coverage_artifact.schema.json", "solidity_coverage.schema.json"}:
         _strengthen_solidity_coverage_contract(schema)
+    if filename == "scheduler_state.schema.json":
+        _strengthen_scheduler_recovery_contract(schema)
+    if filename == "public_model_lineage_provenance.schema.json":
+        _strengthen_public_model_lineage_contract(schema)
+    if filename in {
+        "authenticated_cross_lineage_runner_evidence.schema.json",
+        "authenticated_runner_durable_evidence_bundle.schema.json",
+        "cross_lineage_adjudication_report.schema.json",
+    }:
+        _strengthen_authenticated_runner_contract(schema, filename=filename)
     if filename == "audit_model_selection_evidence.schema.json":
         schema["required"] = sorted({*schema.get("required", []), "technical_evidence_mode"})
     if filename == "model_execution_artifact.schema.json":
-        schema.setdefault("allOf", []).append(
-            {
-                "if": {
-                    "properties": {
-                        "audit_model_selection": {"not": {"type": "null"}},
+        schema.setdefault("allOf", []).extend(
+            [
+                {
+                    "if": {
+                        "properties": {
+                            field_name: {"not": {"type": "null"}},
+                        },
+                        "required": [field_name],
                     },
-                    "required": ["audit_model_selection"],
-                },
-                "then": {
-                    "properties": {"schema_version": {"const": "1.2"}},
-                },
-            }
+                    "then": {
+                        "properties": {"schema_version": {"const": "1.2"}},
+                    },
+                }
+                for field_name in (
+                    "audit_model_selection",
+                    "audit_model_refresh_evidence",
+                    "audit_model_refresh_pricing_evidence",
+                )
+            ]
         )
     schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
     schema["$id"] = f"{SCHEMA_BASE}/{filename}"

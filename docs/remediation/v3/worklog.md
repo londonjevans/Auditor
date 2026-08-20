@@ -1,25 +1,940 @@
 # mmaudit v3 Product Remediation Worklog
 
 The objective source is `docs/remediation/v3/product_completion_goal.txt`, with SHA-256
-`f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
+`e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_AT_TICKET_BOUNDARY
+AUTORUN_STATUS: BLOCKED_SAFETY
 CURRENT_MILESTONE: M1-DETERMINISTIC-PRODUCT (REACHED)
-CURRENT_TICKET: NONE
-LAST_COMPLETED_TICKET: V3-POLICYELIG-001 (COMPLETE)
-NEXT_ACTION: V3-QUALIFY-001 is next in model-ticket order but is not actionable until blocked lineage and calibration, current independently authenticated policy determinations, and real qualification evidence exist.
-LAST_COMMAND: Run `.venv/bin/pytest -q`; `.venv/bin/ruff format --check .`; `.venv/bin/ruff check .`; `.venv/bin/mypy src`; `.venv/bin/python scripts/generate_release_schemas.py`; JSON parse and diff-integrity checks.
-LAST_RESULT: PASS — 5155 tests passed with 21 explicit non-crediting skips in 1207.75s; 469 files were already formatted; Ruff, strict mypy over 180 source files, release schemas, both V3 JSON ledgers, and diff integrity passed.
-REAL_MODEL_CALLS_ATTEMPTED: 10
+CURRENT_TICKET: V3-AUTHRUNNER-001
+LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001 (COMPLETE)
+NEXT_ACTION: Resume `V3-AUTHRUNNER-001` only in a governing context permitting staged credential use; execute the settled same-process SYNTHETIC_BENCHMARK path, prove REAL issuance, internal AUTHSEAL consumption, exactly-once revocation and post-revoke rejection, or retain the exact rejection verbatim. Do not start external-log or benchmark work first.
+LAST_COMMAND: `.venv/bin/pytest -q tests/unit/test_budgets.py tests/unit/test_authenticated_runner_execution.py tests/unit/test_authenticated_runner_openrouter.py tests/unit/test_authenticated_runner_cli.py tests/unit/test_authenticated_runner_durable_bundle.py tests/unit/test_authenticated_runner.py tests/unit/test_cross_lineage_adjudication.py tests/unit/test_evidence_seal_runner_consumer.py tests/unit/test_release_schemas.py`
+LAST_RESULT: PARTIAL / BLOCKED_SAFETY — the final affected provider-free matrix passed 216 tests and the broader CLI matrix passed 104; an independent 100-test lifecycle/CLI/durable/AUTHSEAL audit found no blocker/HIGH after two reproduced lifecycle defects were fixed. Full Ruff format/check over 533 files, strict mypy over 201 source files, release-schema generation, strict governance JSON parsing, documentation checks, and diff integrity passed. REAL AUTHRUNNER issuance remains absent.
+REAL_MODEL_CALLS_ATTEMPTED: 11
 REAL_MODEL_CALLS_SUCCEEDED: 1
-REAL_MODEL_CALLS_REJECTED: 9
-OPENROUTER_COST_USED_USD: 0.0033415625
+REAL_MODEL_CALLS_REJECTED: 10
+OPENROUTER_COST_USED_USD: 0.0034764325
 OPENROUTER_COST_RESERVED_USD: 0.00
-OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
+
+OPENROUTER_BUDGET_REMAINING_USD: 249.9965235675
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
 LAST_CHECKPOINT_COMMIT: 12c389f6f8fe3a242b4bbc6c3e5aceb3880cb4a8
+
+## 2026-08-18T10:21:08Z — V3-AUTHRUNNER-001 started
+
+- **Status:** `IN_PROGRESS`; this is the sole active ticket after corrected documentary public
+  lineage closed `COMPLETE`.
+- **Observed boundary:** Authenticated generation refetch, live private campaign/report custody,
+  atomic cost-ledger closure, and documentary lineage capabilities already exist independently.
+  No capability currently joins all four to one exact runner identity, so caller-authored runner
+  roots and serialized `REAL` labels remain structurally non-authorizing.
+- **Scope:** Add an opaque, PID-local runner-custody capability that derives identity only from the
+  exact public-lineage capability and replays exact generation, report, usage, campaign, and closed
+  cost evidence. Same-root candidate/judge pairs, stale/revoked lineage, MOCK/structural evidence,
+  detached records, and caller roots must reject.
+- **Ordering:** Provider-free custody and revocation tests precede any authorized synthetic/public
+  REAL egress. External-log publication and every benchmark harness/run remain queued.
+- **Exact next safe action:** Freeze the runner envelope and capability API against the existing
+  generation-verification and live-campaign capabilities, then add hostile local regressions.
+
+### 2026-08-18T10:37:02Z — runner semantics and egress boundary frozen
+
+- A benchmark report's target, usage, and generation evidence authenticate the candidate model.
+  The existing detached runner label therefore cannot prove different-root adjudication.
+- The required flow is now frozen as: sealed REAL candidate report → separate strict judge request
+  over that sealed output and exact frozen truth → judge REAL usage and fresh generation re-fetch →
+  live campaign plus closed append-only ledger custody → opaque PID-local runner capability.
+- Every consumer must replay the retained public-lineage capability and conservative negative
+  constraints. Roots are derived from exact identities at use time; no public root is copied into
+  `CandidateModel`, `CandidateRegistry`, or `AuditConfig`, and durable artifacts remain
+  non-authorizing.
+- The prospective launch contract requires `SYNTHETIC_BENCHMARK`, but existing qualification and
+  smoke wiring still assume `STRICT_ZDR`; the historical discovery evidence is also schema-stale.
+  No provider call is permitted before committed-source privacy, current exact-route discovery, the
+  runner join, and hostile provider-free tests are green.
+- Exact next safe action: land the adjudication models and custody verifier, then integrate the
+  evidence-seal consumer and bounded synthetic smoke preflight.
+
+### 2026-08-18T11:01:28Z — first explicit SYNTHETIC_BENCHMARK launch diagnostics
+
+- The operator explicitly authorized one bounded REAL committed-synthetic launch using the
+  existing `$250.00` cumulative ledger and the explicit operator secret-file loader. No secret
+  contents were read, logged, hashed, or persisted by orchestration.
+- Exact preflight passed for confirmed `google/gemma-4-26b-a4b-it`, singleton
+  `google-vertex/global`, `SYNTHETIC_BENCHMARK`, committed-source provenance, fallback disabled,
+  `$5.00` stage cap, and a fresh private evidence destination.
+- First live metadata attempt stopped before a model request because the local selector rejected
+  an unrelated valid catalog ID outside lowercase candidate form. The bounded selector was fixed
+  without admitting such IDs as candidates; its `65` focused tests, strict mypy, and Ruff pass.
+- Second live metadata/discovery attempt stopped before reserve or completion POST with exact
+  rejection `real post-qualification request shape lacks qualification-bound reasoning`. The
+  synthetic smoke must receive an exact committed-source request commitment, not a role-only
+  exemption.
+- Both attempts left the ledger byte-accounting state unchanged: spent `$0.0033415625`, reserved
+  `$0`, `10` entries, no cap/overrun. They do not increment successful REAL model calls.
+- Exact next safe action: finish and adversarially test the exact smoke request authority, then
+  retry the same one-call launch before any multi-case candidate campaign.
+
+### 2026-08-18T11:24:40Z — first SYNTHETIC_BENCHMARK completion, non-crediting
+
+- The provider-free exact smoke authority, fresh discovery-to-registry bridge, cross-lineage
+  adjudication models, and opaque authenticated runner-custody verifier are focused-green.
+- The smoke adopted the existing immutable terminal ledger prefix through the trusted baseline
+  recovery path before secret loading or transport. No prior entry or spend was rewritten.
+- REAL attempt 11 used exact `deepseek/deepseek-v3.2-exp` on singleton `novita/fp8`, no fallback,
+  one attempt, committed synthetic source, and `SYNTHETIC_BENCHMARK`. A structured completion was
+  returned, but its provider identity was `UNBOUND`; it is non-crediting and rejected.
+- The terminal reconciled entry cost `$0.00013487`. Cumulative ledger state is spent
+  `$0.0034764325`, reserved `$0`, remaining `$249.9965235675`, `11` entries, with no cap or
+  reservation overrun. Counters are attempted `11`, succeeded `1`, rejected `10`.
+- The rejection artifact failed locally because its validator expected the obsolete
+  `<logical-request-id>:attempt:1`; the provider's canonical first attempt is the base logical
+  request ID. No artifact was fabricated from the ledger alone.
+- Exact next safe action: fix and locally prove first-attempt rejection custody, then launch one
+  different confirmed exact route and continue only from identity-bound REAL evidence.
+
+### 2026-08-18T11:30:35Z — further live egress blocked pending fresh approval
+
+- First-attempt ledger identity is corrected to the provider's base logical request ID. The local
+  UNBOUND rejection-artifact regression passes with `77` focused harness tests; Ruff and strict
+  mypy pass.
+- Meta/DeepInfra rejected before reserve/POST with `smoke model does not publish reasoning control
+  metadata`; Qwen/Akash rejected before reserve/POST with `configured endpoint is not operational`.
+  Ledger state remains spent `$0.0034764325`, reserved `$0`, `11` entries.
+- The Cogito/Together launch was blocked before process creation because it would consume a real
+  credential against a live third-party service. No secret, network, ledger, or evidence mutation
+  occurred. Fresh explicit operator approval after this disclosed risk is required before any
+  further credentialed launch; no workaround is permitted.
+- Provider-free implementation continues: executable cross-lineage judge wire/transport,
+  same-process campaign/generation/ledger capability retention, and AUTHSEAL consumption remain
+  necessary before another paid run could issue authority.
+
+### 2026-08-18T11:58:14Z — same-process custody and adversarial origin checkpoint
+
+- Minimal judge wire output is now host-bound to exact request hashes, and provider-free
+  same-process orchestration retains the two candidate campaigns, two adjudications, generation
+  re-fetches, and one closed ledger interval. AUTHSEAL can consume only freshly replayed runner
+  custody and derive roots from the public-lineage capability. No external log or release authority
+  is granted.
+- Historical terminal `UNCERTAIN_ACCOUNTED` entries are allowed only in the immutable ledger
+  prefix. Every new runner interval entry remains exact `RECONCILED` known cost; the focused
+  regression passes without mutating the staged ledger or spend.
+- Adversarial review found that raw provider-free usage and generation issuers can currently mint
+  the same REAL-shaped capability used by nominal tests. It also found that judge route/output
+  metadata must be joined to fresh discovery evidence rather than copied from a caller model.
+  Accordingly, fake orchestration is structural rejection evidence only and cannot issue runtime
+  credit.
+- Exact next action: close the owned-REAL transport-origin and fresh judge-discovery joins, run the
+  hostile/schema matrix, and make no further credentialed call without fresh explicit operator
+  approval after the disclosed third-party risk.
+
+### 2026-08-18T12:29:19Z — owned transport origin and durable schema checkpoint
+
+- AUTHRUNNER usage credit now requires the pristine owned-REAL completion and bound-identity
+  stack, bound to the exact atomic ledger later closed by runner custody. Fresh generation
+  re-fetch custody must use that same ledger. Raw attesters, structural generation issuers, and
+  recovery replay do not receive this mark.
+- Runner replay retains and independently rebuilds the exact judge and prepared adjudication from
+  the frozen suite, candidate report, public-lineage capability, and run kind before any credit.
+- The temporary unconditional executor stop is removed. The full provider-free 96-call fixture
+  reaches the base origin check and rejects as intended; all 11 focused executor tests pass.
+- Generated durable schemas cover the runner evidence and adjudication report while preserving
+  false-only authority flags and excluding credentials, private source/context, and opaque
+  capabilities. The retained bounded prompt is frozen synthetic/public replay material.
+- No credential, network, or ledger mutation occurred. Finish the same-process OpenRouter adapter
+  and settled hostile matrix locally; a live launch remains paused pending fresh explicit operator
+  approval after the disclosed third-party boundary.
+
+### 2026-08-18T13:00:25Z — same-process OpenRouter launch path settled locally
+
+- Added `mmaudit models authenticated-runner` as the one-PID path for two candidate campaigns,
+  two distinct-root adjudicators, fresh generation re-fetch, exact interval closure, AUTHRUNNER
+  issuance, and immediate AUTHSEAL comparison-input derivation.
+- All frozen-suite, lineage, ground-truth, singleton discovery, profile/ZDR, no-fallback, output,
+  and exact-250-USD ledger checks run before secret loading. Judge routes additionally undergo a
+  same-session catalog/model/endpoint/pricing/output/ZDR refresh before any completion.
+- Live usage objects are retained through benchmark report construction. Frozen prepared requests
+  are rejoined exactly during runner replay, and mutable request-builder and case-descriptor
+  surfaces fail closed before invocation.
+- Bounded local pre-dispatch validation text now reaches the operator unchanged; remote provider
+  exceptions remain type-only. Durable output contains only nonauthorizing runner evidence and
+  AUTHSEAL comparison inputs, never opaque capabilities or credentials.
+- A later AUTHSEAL comparison rejection cannot suppress completed runner custody: the CLI first
+  writes the runner evidence with a type-only, nonauthorizing `REJECTED` comparison and only then
+  exits nonzero.
+- Provider-free validation passed `161` combined runner/candidate/transport/schema/CLI tests,
+  `435` usage/generation/OpenRouter tests, `100` legacy CLI tests, and `126` schema/smoke custody
+  tests. Schema generation, global Ruff/format over `531` files, strict mypy over `200` source
+  files, strict governance JSON parsing, and diff checks passed. The `make type` wrapper lacked an
+  unqualified `python`; its documented `.venv/bin/python -m mypy src` equivalent passed. Read-only
+  ledger state remains cap `250`, spent
+  `0.0034764325`, reserved `0`, remaining `249.9965235675`, 11 terminal entries, no overrun.
+- No network, provider, credential, or ledger mutation occurred. REAL issuance remains blocked by
+  the current repository instruction against real credential use; keep the ticket `IN_PROGRESS`
+  until a later explicit operator instruction overrides that boundary.
+
+### 2026-08-18T13:37:19Z — strict durable AUTHRUNNER evidence bundle
+
+- Added a new offline-only, self-hashed bundle retaining exactly ordered PRIMARY and REPLAY
+  candidate reports, prepared adjudication inventories, and completed reports. It replays every
+  target, case, request, generation, run hash, attempt identity, and exact cost against the
+  self-hashed runner evidence and duplicated closed-ledger projection.
+- AUTHSEAL retention is exclusive: either one exact collision map and two ordered decision
+  projections, or one bounded exception type without a message. Every durable authority,
+  provider, egress, qualification, selection, seal, benchmark, and release flag is literal false;
+  opaque capabilities, live execution objects, secret holders, credentials, and private-source
+  routing have no accepted field.
+- Canonical UTF-8 replay uses the shared 100 MB ceiling and rejects alternate serialization,
+  run/hash/ledger reseals, unsafe recursive routing, and nonexact AUTHSEAL joins. Runtime and schema
+  both fix two runs, 24 cases per candidate/prepared/report/runner inventory, and 96 to 3,072
+  ledger attempts. Routing uses a closed top-level protocol allowlist plus recursive
+  credential/private-source name rejection. AUTHSEAL scoring commitments are independently
+  recomputed from the retained REAL candidate report.
+- Read-only adversarial review found and the implementation closed three HIGHs: top-level and
+  nested `access_token` routing aliases, a one-case/four-ledger runtime/schema mismatch, and a
+  coherently resealed AUTHSEAL score projection. Candidate and judge routing are both scanned, and
+  emitted fixed inventories are asserted against the schema bounds.
+- The integrated runner/cross-lineage/AUTHSEAL/CLI/release-schema matrix passed `120`; its
+  five-file bundle/adjudication/custody/AUTHSEAL/release-schema subset passed `92`; and the focused
+  bundle/release-schema matrix passed `31`, including `10` standalone bundle tests. Schema
+  generation/verification, scoped Ruff, and strict mypy over all `201` source files passed after
+  CLI integration. No network, secret, provider, or live-ledger access occurred.
+- Exact next safe action: keep the integrated nonauthorizing bundle at the completed runner result
+  publication boundary without serializing the opaque execution/capability; keep REAL launch
+  blocked under the current repository credential prohibition.
+
+### 2026-08-18T14:16:00Z — AUTHRUNNER egress and callback fail-stop remediation
+
+- The exported execution boundary, provider-free preflight, OpenRouter launch contract, adapter,
+  wrapper, and CLI now carry one exact required egress boolean. False programmatic authorization
+  rejects before callback, usage, ledger, secret, or provider work; the prior hard-coded execution
+  allowance is removed.
+- Each candidate and judge callback runs under the plan's exact active `BudgetManager` per-request
+  ceiling. An endpoint-bound reservation above that ceiling rejects before atomic-ledger mutation
+  or transport dispatch.
+- Before generation re-fetch or any later callback, every candidate and judge return must append
+  exactly its expected attempt IDs as terminal `RECONCILED` entries with known exact costs,
+  unchanged prior entries, zero active reservation, no overrun, and exact usage-cost agreement. A
+  nonterminal PRIMARY judge prevents judge generation and all REPLAY work.
+- Fresh-only output preflight exercises the hard-link and parent-directory fsync path. Final
+  publication rechecks the requested parent inode before and after linking, never replaces an
+  intervening leaf, and never unlinks a final public name during rollback. A namespace-change
+  failure may retain the exact mode-0600 nonauthorizing artifact; a concurrent operator replacement
+  survives unchanged.
+- The combined budget/execution/OpenRouter/CLI matrix passed `114` tests; the settled affected
+  runner/bundle/schema matrix passed `191`; the broader CLI matrix passed `115`. Ruff
+  format/check, strict mypy over the five affected production modules, release-schema generation,
+  and scoped diff integrity passed. Independent fail-stop and publication re-reviews found no
+  blocker/HIGH after closing six reproduced defects. No credential, network, provider, or
+  live-ledger access occurred.
+- The ceiling is enforced at the exact endpoint-bound budget reservation, before ledger mutation
+  and completion POST. The explicitly authorized callback may first perform authentication and
+  model/catalog/endpoint metadata GETs needed to derive current pricing; they carry no benchmark
+  source or prompt, but a low cap is not a zero-network guarantee.
+- Exact next safe action: keep `V3-AUTHRUNNER-001` `IN_PROGRESS` without a REAL launch under the
+  current credential prohibition. External-log publication and every benchmark run remain queued.
+
+### 2026-08-18T14:58:23Z — offline durable-evidence verification
+
+- Added a bounded absolute-path loader for the private nonauthorizing AUTHRUNNER bundle. It requires
+  an owned mode-0700 parent and owned mode-0600 unshared regular file, uses descriptor-safe
+  no-follow double observation, rechecks inode/path/size identity, and rejects duplicate keys,
+  nonfinite JSON, noncanonical bytes, oversized input, symlinks, hardlinks, and path replacement.
+- Added `mmaudit models verify-authenticated-runner --bundle ABSOLUTE_PATH`. It performs only strict
+  offline replay and prints stable bundle/evidence hashes, closed-ledger count/spend, AUTHSEAL
+  comparison status, and explicit `NONAUTHORIZING`; it opens no config, credential, provider, or
+  live-ledger state and cannot issue runtime authority.
+- The loader/CLI matrix passed `38`; the affected budget/runner/adapter/CLI/bundle/custody/
+  adjudication/AUTHSEAL/schema matrix passed `202`; the broader CLI matrix passed `104`.
+  Release-schema generation, full Ruff format/check over `533` files, and strict mypy over `201`
+  source files passed. No network, secret, provider, or ledger mutation occurred.
+- Provider-free fixtures intentionally cannot mint owned-REAL origin, so an exact positive-issued
+  downstream revocation transition remains unproven. Production consumers replay lineage and
+  ledger state, but campaign and generation post-issuance revocation semantics are not separately
+  implemented. Durable historical evidence remains nonauthorizing.
+- Exact next safe action: keep `V3-AUTHRUNNER-001` `IN_PROGRESS`; require a genuine same-process REAL
+  run before runtime issuance, downstream revocation, external-log, or AUTHSEAL authority, and do
+  not add a provider-free capability-minting seam.
+
+### 2026-08-18T15:44:05Z — runner lifecycle closure and blocked partial handoff
+
+- Added one-way exact-PID runner-lease revocation, a post-replay lease recheck, exactly-once adapter
+  disposal in `finally`, and a negative post-revoke self-check.
+- The adapter returns newly JSON-revalidated candidate-report, prepared-run, and
+  adjudication-report snapshots only. It no longer returns the closed interval, runner
+  capability/projection, live custody, campaign/generation capabilities, or owned-REAL object
+  identities. Durable bundles remain historical and every authority flag remains false.
+- Independent review reproduced and closed two HIGH lifecycle defects: a core public binding
+  mutation could prevent revocation, and the first sanitized snapshot still nested live
+  capabilities. The captured lease is now removed before mutation is reported; the detached
+  snapshot closure captures exact types, accessors, and JSON revalidators. Retargets reject before
+  forged invocation, after lease disposal. Final current-byte review was `CLEAN` for blocker/HIGH.
+- The final affected matrix passed `216`; the broader CLI matrix passed `104`; the independent
+  lifecycle/execution/adapter/CLI/durable/AUTHSEAL matrix passed `100`. Full Ruff format/check over
+  `533` files, strict mypy over `201` source files, release-schema generation, strict governance
+  JSON parsing, product-documentation checks, and diff integrity passed. No secret, provider,
+  network, or live-ledger state was opened or changed.
+- Status is `PARTIAL`; autorun is `BLOCKED_SAFETY`. Provider-free fixtures cannot mint owned-REAL
+  origin, so the positive issue → consume → revoke → direct and AUTHSEAL rejection transition is
+  unproved. Campaign/generation revocation beyond the top-level lease is not independently shown.
+- Exact next action: resume only in a governing context permitting staged credential use. Execute
+  the settled same-process `SYNTHETIC_BENCHMARK` path with fallback disabled and the USD 250 cap;
+  require provider-bound REAL usage/generation, terminal closed-cost and generation/report/replay
+  evidence, one internal AUTHSEAL consumption, exactly-once revocation, and post-revoke rejection.
+  Confirm succeeded calls exceed `1` and used cost exceeds `0.0034764325`, or retain the exact
+  rejection verbatim. Do not start external-log publication or benchmark work first.
+
+## 2026-08-18T08:21:59Z — corrected V3-AUTHLINEAGE-PUBLIC-001 started
+
+- Began only the corrected documentary lineage ticket after `V3-COVERAGE-001` closed `PARTIAL`
+  with a clean blocker/HIGH review.
+- Lineage will derive only from bounded exact captured public bytes, canonical model identity,
+  publisher identity, retrieval time, and content SHA-256. One decisive primary-publisher
+  disclosure or two independent agreeing authoritative publishers is required. Route identity and
+  a model-lineage Sigstore/Rekor/TUF receipt are not ancestry requirements.
+- The operator review supplies seed URLs only. Conflicts, cycles, vague ancestry, identity drift,
+  or insufficient corroboration produce `UNCONFIRMED`; those candidates are excluded without
+  blocking confirmed candidates. The four conservative same-root collisions remain mandatory.
+- No provider call, source egress, qualification, selection, seal publication, release, external
+  log mutation, benchmark construction, or benchmark run is authorized by this start.
+- Exact next safe action: freeze the documentary evidence models and bounded source-capture
+  manifest, then fetch only the fixed authoritative public allowlist and add offline replay and
+  adversarial custody tests.
+
+### 2026-08-18T08:49:53Z — bounded first-party corpus captured
+
+- Captured only the 13 verifier-reviewed first-party documents for the 12 configured exact model
+  identities, including separate exact NVIDIA Nemotron 3 base and post-train evidence.
+- `config/public_model_lineage/sources/` contains 358,646 exact bytes. The non-authorizing
+  `capture-observations.json` binds requested/final URLs, bounded redirects, publisher and
+  independence keys, whole-second retrieval times, media types, paths, sizes, and SHA-256
+  digests; its file SHA-256 is
+  `fe76724adbeabde6ee4563c0ea2a7416742a4f036a0151ef0379a2594ef0d76c`.
+- The capture journal grants no lineage, provider-call, source-egress, runner, qualification,
+  selection, seal, release, external-log, or benchmark authority. `manifest.json` is
+  intentionally absent pending the strict verifier's independently replayed root and exclusion
+  derivation.
+- `tests/unit/test_public_lineage_capture.py` passed 19 tests; scoped Ruff, strict mypy,
+  staging-to-config byte comparison, and `git diff --check` passed.
+- Exact next safe action: finish the strict documentary manifest/verifier and opaque
+  identity-only capability, then replay the committed corpus adversarially. Keep all downstream
+  work queued.
+
+### 2026-08-18T09:24:00Z — documentary authority adversarial checkpoint
+
+- Added strict exact-byte manifest models, bounded offline replay, independent confirmation and
+  exclusion derivation, a stable evidence-bound root projection, four negative-only collision
+  constraints, and an opaque PID-local identity-only capability. Synthetic/local capabilities and
+  serialized records cannot issue production authority.
+- Corrected root derivation to commit the terminal exact model identity, claim hashes, immutable
+  publisher/source identity and revision, and exact source-byte SHA-256 without allowing retrieval
+  time or redirect metadata to mint a second root for identical immutable bytes.
+- Capture ingress/path traversal, stale capability, ensemble-dependent roots, source-evidence
+  omission, and arbitrary synthetic issuer defects are fixed. Capture tests pass `23`; synthetic
+  authority tests pass `14`; scoped Ruff and strict mypy are clean.
+- The first generated production manifest is held back after adversarial review found title-only
+  decisive claims. Every affected candidate is being rebound to an exact publisher statement of
+  base, pretraining, build ancestry, or training provenance; unsupported candidates will be marked
+  `UNCONFIRMED` and excluded rather than assigned a root.
+- No provider, egress, runner, qualification, selection, seal, release, external-log, or benchmark
+  authority is granted. Exact next action: regenerate and compile the reviewed manifest, sync the
+  release schema, and run the combined production/adversarial replay matrix.
+
+### 2026-08-18T09:47:02Z — frozen documentary authority validation checkpoint
+
+- Independent strict semantic review rejected GPT-OSS, Hunyuan, Mistral, and Z.AI wording as
+  ancestry anchors. The canonical `46,192`-byte manifest has raw SHA-256
+  `6ca0ec6407d7006ac7b9d6c101a8140c2dfaa21449bdb8219ecb5758db199182` and semantic bundle
+  SHA-256 `92659a13c48223709eaca814c4a182b7ee7662fc8350fbced7b84955cd2ae7a4`.
+  It binds 13 first-party sources, 12 exact configured identities, 14 exact nonoverlapping
+  provenance claims, eight confirmed identities, seven roots, four excluded `UNCONFIRMED`
+  identities, and four conservative negative-only constraints. Cogito/DeepSeek share one root; all
+  four ambiguous candidates retain only non-decisive evidence and are excluded. Exact Nemotron
+  3/Meta evidence derives distinct roots while the conservative pair constraint still forbids
+  independence.
+- Production authority requires the compiled root and manifest pin, complete frozen inventories,
+  a verifier-owned current clock, and fresh exact-byte replay. Synthetic capabilities, serialized
+  records, caller roots, stale evidence, ordinary module reassignment, clock substitution, and
+  returned-projection constructor substitution cannot enter public consumers.
+- The compatibility matrix passed `195` tests. Capture (`23`), manifest (`4`),
+  authority/configuration (`35`), and release schema (`19`) passed as an `81`-test ticket matrix;
+  schema generation, Ruff/format, strict source/script/test mypy, strict governance JSON parsing,
+  and diff integrity passed.
+- No provider call, real egress, external-log mutation, qualification, selection, release,
+  benchmark harness implementation, or benchmark run occurred. Independent final byte-level review
+  is the only open terminal gate.
+
+### 2026-08-18T10:13:56Z — V3-AUTHLINEAGE-PUBLIC-001 completed
+
+- `COMPLETE`: exact first-party bytes and the compiled manifest derive eight confirmed identities
+  across seven roots. Hunyuan, Mistral, GPT-OSS, and Z.AI retain only `VAGUE` non-decisive evidence,
+  null roots, and explicit exclusion. All four conservative constraints remain negative-only.
+- Public identity authority requires the opaque PID-local capability, verifier-owned current time,
+  exact compiled root/manifest pin, complete inventories, and fresh byte replay. The config-ready
+  projection grants no runtime authority and rejects ordinary authority-import, module, clock,
+  output-constructor, and exported-projector retargeting before a forged callable runs.
+- Final validation passed `83` ticket tests, `197` compatibility tests, `37` focused
+  configuration/authority tests and 17 explicit symbol probes, schema generation, full repository
+  Ruff format/check (`516` files), strict mypy over `194` source files plus focused scripts/tests,
+  `60` budget tests after the sole mechanical formatting repair, strict duplicate-key/nonfinite
+  governance JSON parsing, and diff integrity. Independent semantic and authority-boundary reviews
+  were `CLEAN`.
+- Documentary identity/root authority is not provider execution or production selection authority.
+  The projection is not injected into `AuditConfig`; no runner, egress, external-log,
+  qualification, seal, release, benchmark harness, or benchmark run exists. Hostile
+  closure/registry reflection remains outside the trusted-interpreter boundary.
+- Next safe ticket: `V3-AUTHRUNNER-001`; do not preempt it with external-log or benchmark work.
+
+## 2026-08-18T06:13:37Z — V3-COVERAGE-001 started
+
+- Began only `V3-COVERAGE-001` after recording `V3-TRUNCATION-001` as `PARTIAL` with a clean
+  blocker/HIGH review.
+- Current coverage code provides deterministic response-backed surface evidence, a binary
+  critical classification, distinct approved-lineage assignment, and an under-assignment gate.
+  The queued objective still lacks T0–T3 requirements, compact gap-fill planning, exact
+  request/token/USD preflight, and a candidate-independent clean-target path to 24 actually
+  executed responsibilities.
+- Exact next action: freeze the provider-free tier/requirement/responsibility models and hostile
+  boundary tests, then wire pre-dispatch planning without starting another ticket.
+
+### 2026-08-18 operator handoff reconciliation checkpoint
+
+- Read the lineage-evidence correction, egress wiring note, authority transparency-log note, and
+  V3 lineage operator review in full.
+- Future public-lineage work must use exact-byte provenance-pinned documentary sources and
+  corroboration, preserve same-root collisions, and exclude unconfirmed candidates. A
+  provider-issued Sigstore/Rekor/TUF receipt for model ancestry is no longer a requirement.
+- The operator review is seed evidence rather than self-authenticating authority. No lineage
+  configuration, egress campaign, authority-log write, secret file, or live network action was
+  performed during this local-only coverage ticket.
+
+### 2026-08-18 downstream benchmark protocol checkpoint
+
+- Read `BEST-IN-CLASS-PROOF-protocol-2026-08-18.md` in full as the target definition for
+  requirement R, `V3-BENCHMARK-001`, and `V3-HUMANCMP-001`; the supplied file is exactly `7900`
+  bytes with SHA-256 `d4097606321210f6ff432490fe517a1e2c1a727b792852528c59d262061ac4e7`.
+- Froze pre-registration, pre-truth external inclusion, contamination/memorisation controls,
+  one-to-one scoring, at-least-25-target Tier 1, best-firm-plus-independent-find Tier 2, and
+  mutually blind neutral-panel prospective Tier 3 acceptance criteria. Unmet claims remain
+  `NOT_DEMONSTRATED`.
+- No benchmark harness or benchmark run began. The downstream tickets remain queued behind the
+  corrected public-lineage authority, authenticated real egress, and independent external-log
+  inclusion, plus their recorded corpus/engine prerequisites. Human comparison evidence will not
+  be fabricated.
+
+## 2026-08-18 — V3-COVERAGE-001 design freeze checkpoint
+
+- Preserve exact bounded candidate-review response equality; solve surface scale through
+  deterministic task partitioning rather than partial-response acceptance.
+- The clean/no-candidate execution ceiling is 22 real roles: 20 blind investigators plus
+  `invariant_review` and `report_quality`. The implementation will add two distinct source-backed
+  investigators and require the exact compiled 24-role candidate-independent portfolio;
+  candidate-gated auxiliaries, aliases, retries, and repeated shards cannot substitute.
+- Preserve every existing critical surface as highest-risk T0 with the maximum-assurance
+  three-lineage floor. Freeze T1-T3 precedence and deficit calculation in a versioned host policy.
+- Reuse existing endpoint token planning and exact budget controls for a bounded aggregate
+  preflight before any surface-review transport, with exact request/token/USD boundary failures.
+
+### 2026-08-18 checkpoint — exact candidate-independent responsibility portfolio
+
+- Added two distinct source-backed blind investigators: `state_machine_lifecycle` and
+  `randomness_entropy_commit_reveal`. The compiled independent portfolio is exactly 22 blind
+  investigators plus `invariant_review` and `report_quality` (24 unique roles).
+- `test_generation`, `exploit_reproduction_planner`, and `falsifier` remain a separate
+  candidate-dependent inventory. Even all three cannot substitute for one missing independent
+  responsibility; repeated shards, retries, and model aliases add no cardinality.
+- Assurance now requires the full accepted REAL independent set. Qualification observes only the
+  independent intersection while preserving the full canonical inventory for transparency.
+- Focused and broader validation passed: `6`, `99`, `87`, `2`, `26`, and `463` tests across the
+  portfolio, specialist, reasoning, qualification, assurance, configuration, scheduler, context,
+  and CLI matrices; scoped Ruff and diff integrity were clean.
+- Exact next safe action is the provider-free T0-T3 plan/resource artifact and compact scheduler
+  task binding before surface-review transport.
+
+### 2026-08-18 checkpoint — provider-free T0-T3 plan and feasibility evidence
+
+- Added strict nonauthorizing models for T0-T3 policy/requirements, exact reviewer/root bindings,
+  lineage gaps, non-inflating responsibility seeds, deterministic 64-surface scoped tasks, deficits,
+  provider resource previews, and aggregate feasibility.
+- Existing critical surfaces remain T0. T1 entry/call surfaces require up to two roots; T2
+  internal/state and T3 contract/source-file surfaces require one. Unsupported noncritical kinds
+  fail rather than being assigned a weaker tier.
+- Aggregate feasibility exact-checks request, input-token, output-token, global USD, per-role USD,
+  and per-model USD ceilings. Missing scoped caps and one-over values produce typed failure
+  evidence; every durable model has literal-false dispatch/review/completion authority.
+- New plus existing coverage tests passed `109`; an independent rerun of the new suite passed all
+  `52`. Ruff format/check, strict mypy, and diff integrity were clean.
+- Exact next safe action is exact OpenRouter context/price preview and compact scheduler dispatch
+  wiring with resume comparison and a tiered completion gate.
+
+### 2026-08-18 checkpoint — independent tiered completion replay
+
+- Added a bounded gate that revalidates plan and coverage, independently re-derives T0-T3 and
+  root floors, exact-joins their surface/request projections, and requires all precredited and
+  lineage-gap-assigned roots in response-backed final coverage.
+- Missing/extra surfaces, semantic drift, infeasible plans, incomplete classification, and any
+  tier/root deficit fail closed. Responsibility seeds cannot inflate root independence.
+- New plus legacy focused tests passed `69`; an independent gate-only rerun passed `12`. Ruff,
+  strict mypy, and diff integrity passed.
+- Exact next safe action is provider preview, private resume custody, compact pipeline dispatch,
+  and final run-status integration.
+
+### 2026-08-18 checkpoint — coverage release schemas
+
+- Generated strict `model_surface_coverage_plan` and `model_surface_resource_preflight` schemas.
+  They retain T0-T3, four exact requirements, the 64-surface task cap, dual task identities,
+  scoped cap/failure evidence, all self-hashes, and literal-false authority.
+- Schema regressions also exclude raw prompts, responses, source contents, usage records, and
+  private runtime custody from the release contracts.
+- Release-schema tests passed `18`; generator verification, JSON parsing, Ruff, strict mypy, and
+  diff integrity passed.
+- Exact next safe action is final preview/pipeline integration and post-integration verification.
+
+## 2026-08-18T08:20:40Z — V3-COVERAGE-001 closed PARTIAL
+
+- Implemented deterministic T0-T3 surface policy and distinct-root gap planning, compact
+  64-surface tasks, exact context/pricing previews and nonauthorizing request/token/USD preflight,
+  private retained preflight with byte-identical zero-transport resume, an independently replayed
+  completion gate, graph-omission fail-closed classification, and trusted captured-descriptor
+  preview/completion dispatch.
+- The compiled candidate-independent portfolio is exactly 22 source-backed investigators plus
+  `invariant_review` and `report_quality` (24). Candidate-dependent generation,
+  reproduction-planning, and falsification work, aliases, retries, and repeated shards cannot
+  substitute for a missing responsibility.
+- Files changed across the completed slices: coverage planning, model/scheduler/pipeline/
+  OpenRouter/agent/assurance/qualification/context/retrieval contracts, generated coverage-plan and
+  resource-preflight schemas, focused unit/local integration regressions, and the six terminal
+  governance records.
+- Final root matrices passed `129` coverage tests, `42` trusted-dispatch tests, `29`
+  documentation/schema tests, and `5` coverage integrations. Exact post-hardening integrations
+  passed for generic fallback (`1` in `147.48s`), enabled-specialist fallback (`1` in `234.14s`),
+  and compact no-duplication plus byte-identical zero-transport resume (`1` in `123.19s`); its
+  focused unit/shadow slice passed `5` in `4.06s`. Ruff, strict mypy over `11` coverage/pipeline
+  source files, schema generation/verification, and diff integrity passed. One redundant local
+  copy of the generic test was interrupted after `60.04s` before collection completed and receives
+  no credit.
+- Remaining limitations: aggregate preflight occurs after paid orientation and covers only compact
+  gap tasks, excluding supplemental `source_audit`/`whole_protocol` spend; there is no atomic
+  all-task reservation, no clean/no-candidate full-runtime proof that the exact 24 roles execute,
+  and no REAL coverage run. These gaps prevent `COMPLETE`.
+- No provider, secret, public-log, or benchmark action occurred. Exact next safe action is corrected
+  documentary `V3-AUTHLINEAGE-PUBLIC-001` (#1), followed by real egress (#2) and external
+  authority-log publication (#3). The benchmark harness and every benchmark run remain queued
+  until all three prerequisites complete.
+
+## 2026-08-18T05:56:00Z — V3-TRUNCATION-001 closed PARTIAL
+
+- Closed the bounded direct-child truncation-recovery slice as `PARTIAL`. Strict framed parsing,
+  deterministic child planning, typed append-only journal and resume, shared request/cost custody,
+  opaque promotion, and exact public accounting/report/manifest/floor/coverage/qualification/
+  assurance joins are implemented. The original parent remains `TRUNCATED`; incomplete,
+  unpromoted, serialized, or MOCK evidence cannot earn review, coverage, or completion credit.
+- Final independent blocker/HIGH review is `CLEAN` after the reproduced unbounded recovery-root
+  and recovery-usage iterable seams were bounded. Validation passed `170` recovery tests, `678`
+  cross-artifact/accounting/assurance/schema tests, `117` scheduler/status tests after the final
+  bounds, `58` scheduler-model tests, `6` local synthetic pipeline integrations, schema generation
+  and `16` schema tests, Ruff format/check, strict mypy, strict duplicate-key parsing of both JSON
+  ledgers, `11` product documentation/objective tests, and diff integrity.
+- The terminal governance change is limited to `docs/codex_work_queue.md`,
+  `docs/codex_worklog.md`, `docs/remediation/v3/work_queue.md`,
+  `docs/remediation/v3/worklog.md`, `docs/remediation/v3/runtime_status.json`, and
+  `docs/remediation/v3/review_traceability.json`; implementation/test files are itemized in the
+  preceding checkpoints.
+- Remaining limitations are explicit: specialist roles are not recovered; a parent projection
+  with retained surface records remains incomplete; a truncated recovery child is not recursively
+  consumed by the pipeline; and no positive full-pipeline REAL promotion is claimed. The positive
+  promotion mechanism has lower-level synthetic typed-journal coverage only.
+- Exact next safe action is `V3-COVERAGE-001`, which was not started by this closure. Before any
+  future `AUTHLINEAGE` work, reconcile the newly supplied `2026-08-18`
+  lineage-evidence-standard correction with existing lineage history. Lineage, egress, and seal
+  ticket substance is otherwise unchanged.
+
+## 2026-08-18T01:14:12Z — V3-TRUNCATION-001 parser hardening checkpoint
+
+- Closed every reproduced parser reseal and resource-bound gap before any runtime consumer was
+  enabled: control/count/state/END coherence, confirmed length finish reasons, exact sequence/range
+  domain, recursive explicit fields, bounded record identities, exact built-in strings, pre-encode
+  size checks, bounded JSON depth/frame size on complete and prefix paths, and raw-free Unicode
+  error context.
+- Added deterministic normalization evidence that keeps provider wire-document hashes and
+  normalized CandidateReview batch/inventory hashes separate and replayable.
+- Validation: parser 34 passed; planner 23 passed; scoped Ruff, format, strict mypy, and diff
+  integrity passed. Independent planner review reported `CLEAN` for channel independence, strict
+  recursive shrink, exact `$250` boundary behavior, lying iterable bounds, Decimal independence,
+  and detached hash/parent joins.
+- No provider call, credential access, private-source egress, spend, review credit, qualification,
+  selection, authority, or release action occurred. OpenRouter normalization custody and nested
+  scheduler recovery-family integration remain in progress.
+
+## 2026-08-18T00:55:10Z — V3-TRUNCATION-001 parser/planner checkpoint
+
+- Added a strict single-document CandidateReview frame protocol. Complete decoding requires the
+  exact ordered frame inventory; truncation recovery stores only complete schema-valid records,
+  exact hashes and byte ranges, and no raw incomplete suffix. Finding, coverage, and summary
+  channels retain independent state, while all credit and authority flags remain literal false.
+- Added a pure non-dispatching recovery planner. It exact-binds parser channel evidence, partitions
+  only unfinished coverage into two strict smaller deterministic children, marks irreducible or
+  exhausted work explicitly, binds recursive immediate-parent identities, never refunds parent
+  cost, and enforces compiled depth/request/provider-attempt/token/USD ceilings with strict total
+  cost below both the supplied campaign cap and `$250`.
+- Files changed in this slice: `src/mmaudit/models/truncation.py`,
+  `src/mmaudit/models/truncation_recovery.py`, `tests/unit/test_truncation.py`, and
+  `tests/unit/test_truncation_recovery.py`.
+- Validation: parser 21 passed; planner 23 passed; scoped Ruff, strict mypy, py_compile, and diff
+  integrity passed. No provider call, credential access, private-source egress, spend, review
+  credit, qualification, selection, authority, or release action occurred.
+- Remaining: independent final red-team review, explicit wire-to-normalized OpenRouter custody,
+  nested durable recovery-family journal/runtime state, shared request-limit scope, multi-attempt
+  surface-evidence closure, schema generation, and local fake-provider integration.
+
+## 2026-08-18T00:39:35Z — V3-TRUNCATION-001 identity-precedence checkpoint
+
+- Moved normalized/native truncation rejection after the complete model/provider/router envelope
+  checks. This closes the seam where an approved top-level model plus a mismatched routed model or
+  endpoint could terminate as truncation before exact routing identity was evaluated.
+- Preserved an established `OpenRouterResponseIdentityError` when the same payload also carries a
+  truncation marker, and prevented failed-response hash-only decoding whenever either normalized
+  or native finish reason indicates recognized truncation.
+- Files changed in this slice: `src/mmaudit/models/openrouter.py` and
+  `tests/unit/test_openrouter.py`.
+- Four focused regressions passed, including a router-request mismatch plus truncation; scoped
+  Ruff check/format and `git diff --check` passed. No projection, review credit, provider call,
+  credential access, or spend was introduced.
+- Remaining: strict framed prefix projection, bounded child planning, nested recovery journal,
+  shared family request limit, multi-attempt surface custody, and closed-family integration.
+
+## 2026-08-18T00:18:53Z — V3-TRUNCATION-001 started
+
+- Began only `V3-TRUNCATION-001` after the public-lineage feasibility ticket was recorded
+  `BLOCKED_TECHNICAL`. This independent provider-free ticket preserves complete schema-valid
+  records from truncated output, partitions only unfinished requested work into deterministic
+  smaller children, and enforces existing retry, token, and exact-cost ceilings.
+- Truncation remains a terminal non-creditable outcome until an exact child inventory completes;
+  finding, coverage, and summary validity must remain independent, and incomplete or ambiguous
+  record fragments may never be repaired into evidence.
+- No credential access, provider call, private-source egress, spend, qualification, selection,
+  lineage authority, external publication, or release action is authorized by this start.
+- Exact next safe action: inspect the current OpenRouter truncation error, structured decoder,
+  retained provider-attempt evidence, scheduler task/result model, and resume invariants before
+  defining the typed recovery projection.
+
+## 2026-08-18T00:14:25Z — V3-AUTHLINEAGE-PUBLIC-001 feasibility closed
+
+- Reproduced two official publisher genealogy seeds: DeepSeek commit
+  `87e509a2e5a100d221c97df52c6e8be7835f0057` with raw README SHA-256
+  `dffcdf358a42599945d49293a4f210dbe589141085207b76c081c9ace1f8fd74`, and Google Gemma
+  revision `4d7ae4984b7db7de8f8457170b3f1a419ee76d52` with blob
+  `742346e1fe57997c831b9065f4c54a9416021526`. These are useful publisher genealogy bytes,
+  not an independently authenticated route-level authority chain.
+- Exact OpenRouter route joins are mutable/unversioned. The public attestation lookup for the exact
+  local candidates configuration returned `404`; no independently authenticated Sigstore/Rekor
+  inclusion bundle, TUF trust state, signed checkpoint, or witness/consistency proof matches the
+  source-and-route join. An unrelated GitHub attestation proves only the verification mechanism.
+- `V3-AUTHLINEAGE-PUBLIC-001` is `BLOCKED_TECHNICAL`, not complete or partial. No digest, commit,
+  URL, or unrelated receipt was elevated into authority; no resolver extension, candidate binding,
+  provider call, credential access, private-source egress, spend, runner authority, qualification,
+  selection, external publication, or release action occurred.
+- Only the six governance artifacts changed. The next bounded ticket,
+  `V3-AUTHLINEAGE-RECEIPT-001`, is `QUEUED` for a provider-free offline Sigstore/Rekor/TUF verifier
+  whose durable authority flags remain false. `V3-AUTHRUNNER-001` stays queued behind completion of
+  exact public lineage; no successor ticket is marked `IN_PROGRESS` in this handoff.
+
+## 2026-08-18T00:00:01Z — V3-AUTHLINEAGE-PUBLIC-001 started
+
+- Began only `V3-AUTHLINEAGE-PUBLIC-001` after the mechanism ticket was tested, independently
+  reviewed, and recorded `PARTIAL`. Scope is an evidence feasibility inventory and the smallest
+  independently replayable public-lineage contract; the current-run synthetic fixture cannot be
+  promoted into external or non-model-authored evidence.
+- No provider call, credential access, private-source egress, model spend, runner authority,
+  qualification, selection, external-log publication, or release action occurred at ticket start.
+- Exact next safe action: map candidate identities to admissible authoritative source bytes and a
+  real inclusion/checkpoint mechanism, rejecting unknown, ambiguous, rewritten, self-authored, or
+  merely self-hashed ancestry before any opaque issuer is designed.
+
+## 2026-08-17T20:06:41Z — V3-OBJECTIVE-002 explicit target change started
+
+- The operator explicitly superseded objective
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43` and supplied the exact
+  replacement text in this run. This is an authorized target change, not permission for Codex to
+  silently edit a frozen objective.
+- Scope is limited to exact byte/digest custody, precedence and traceability synchronization, and
+  fail-closed drift tests. The objective change itself grants no runtime authority, provider access,
+  credential access, model qualification, benchmark credit, release status, or transparency-log
+  proof.
+- No `.env`, secret, provider, network, wallet, RPC, live target, or external service is accessed by
+  this ticket.
+
+## 2026-08-17T20:34:54Z — V3-OBJECTIVE-002 completed; V3-AUTHSEAL-001 started
+
+- Froze the exact `2,892`-byte, `24`-line replacement at SHA-256
+  `e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15`. Current queue, worklog,
+  runtime, traceability, product-vision precedence, and regression constants agree. The prior
+  objective remains recoverable by exact Git blob and introducing commit, and the machine-readable
+  supersession tuple binds both digests plus the explicit authorization time.
+- Objective/documentation tests passed `11`; Ruff format/check, both V3 JSON parses, and diff
+  integrity passed. No credential, provider, network, external log, model, benchmark, spend,
+  qualification, release, or runtime authority was used or claimed.
+- Began only `V3-AUTHSEAL-001`. The objective's no-signer design is not credited yet: the next slice
+  must prove non-model-authored ground truth, cross-lineage exclusion, deterministic sealing,
+  append-only inclusion, independent replay, and non-reconstructable opaque authority before any
+  old human/signer gate can be removed from a consumer.
+
+## 2026-08-17T21:32:42Z — V3-AUTHSEAL-001 partial boundary; V3-BENCHSCORE-001 started
+
+- Bound all 24 planted synthetic cases to verifier-compiled objective, source revision,
+  construction manifest, answer key, regression contract, canonical case, truth, and source
+  excerpt hashes. The opaque ground-truth capability returns a fresh projection from closure-held
+  canonical values at every use; mutation, coherent reseal, public-origin placeholders, links,
+  duplicate JSON keys, and mismatched pins fail closed.
+- Added exact candidate/judge collision maps, same-root predicates, deterministic report
+  projections, primary/replay equality, bounded append-only prefix reconstruction, and a strict
+  evidence seal. Every durable scoring, egress, qualification, selection, provider, and authority
+  flag is literal false; the new schemas preserve those constants.
+- Independent adversarial review demonstrated that two MOCK reports from one provider can be
+  assigned arbitrary judge roots, and that a locally constructed/compiled Merkle prefix is not an
+  independently published transparency receipt. It also found no frozen pass/superiority verdict.
+  The draft opaque runtime issuer was removed rather than weakening the objective. Existing signed
+  lineage consumers are not bridged or changed.
+- Validation passed: 62 ground-truth/seal/corpus tests, 74 authority/schema tests, and 139 wider
+  benchmark tests; Ruff format/check, strict mypy over 183 source files, release-schema generation,
+  and diff integrity all passed. No secret, provider, network, spend, external log, qualification,
+  or release action occurred.
+- `V3-AUTHSEAL-001` is PARTIAL. Started only `V3-BENCHSCORE-001` to close the provider-free scoring
+  defect where a range-only match can overcredit the wrong frozen truth identity. REAL runner
+  lineage and external-log publication remain technical prerequisites, not human adjudication
+  requests.
+
+## 2026-08-17T21:59:08Z — V3-BENCHSCORE-001 completed; V3-AUTHVERDICT-001 started
+
+- Vulnerable benchmark credit now requires an active positive classification, exact frozen
+  category and canonical CWE inventory, severity floor, hash-valid source location, and one
+  deterministic maximum one-to-one finding/case assignment. The same assignment is the sole
+  source for recall, precision, exact-location, reproduction, and detached report evidence.
+- Safe-control hits remain penalties regardless of a wrong claimed category/CWE; ambiguous and
+  insufficient-context outcomes cannot become positive vulnerable credit. Duplicate IDs,
+  cross-case reuse, multiple assignments to one vulnerable case, active legacy rejected-inventory
+  entries, and detected-without-assignment reseals fail closed.
+- Scoring work is globally bounded across repositories, cases are pre-indexed, location/CWE
+  inventories and augmenting traversal have explicit ceilings, and exact CWE equality avoids
+  attacker-sized repeated regex work. The final broad benchmark/authority/schema matrix passed
+  `297` tests; Ruff, strict mypy, and diff integrity passed. Independent review found no remaining
+  blocker/HIGH and exhaustively matched `1,440` small bipartite graphs against brute force.
+- Began only `V3-AUTHVERDICT-001`. No provider, credential, network, spend, external log,
+  qualification, runtime authority, or release action occurred.
+
+## 2026-08-17T23:04:05Z — V3-AUTHVERDICT-001 completed
+
+- Froze an exact comparison policy from the raw and semantic pins of
+  `config/models.maximum-assurance.toml`, covering all `17` model-benchmark dimensions, exact
+  case denominators, a `1.000000` aggregate and per-dimension floor, deterministic primary/replay
+  equality, cross-lineage structure, and the strict autonomous `< 250 USD` ceiling.
+- Added exact case/dimension outcomes, report identities, execution labels, request/generation
+  inventories, costs, evidence intervals, and closed-ledger custody to a mandatory schema-v2
+  authority subject verdict. The subject independently rebuilds the verdict from the exact suite,
+  reports, collision map, and portfolios rather than trusting a self-hashed projection.
+- Caller-relaxed/resealed policy, detached score or execution promotion, replay identity rewrite,
+  fabricated budget closure, unresolved reservation, lying sequence, hostile Decimal context,
+  mutable default traps, and over-width ledger values fail closed. All durable scoring,
+  qualification, selection, provider, egress, and authority flags remain literal false.
+- Validation passed: final affected benchmark/authority/schema matrix `354`; focused verdict and
+  schema gate `61`; release-schema drift; Ruff format/check; strict mypy over `184` source files;
+  diff integrity. Independent review found no remaining blocker/HIGH.
+- No baseline, trusted evaluation instant, authenticated REAL runner-lineage capability, external
+  transparency receipt, provider call, secret access, network operation, spend, qualification,
+  superiority, or release claim was created. Baseline and freshness remain `UNEVALUABLE`, and
+  structural REAL labels remain non-authorizing.
+- Exact next safe action: `V3-AUTHLINEAGE-001`.
+
+## 2026-08-17T23:11:56Z — V3-AUTHLINEAGE-001 started
+
+- Read the current benchmark-report, owned usage, authenticated generation-refetch, candidate
+  campaign, operator-lineage, structural-lineage, and evidence-seal boundaries before changing
+  code. Exact provider generation custody authenticates a model ID and report content, but the
+  evidence-seal `runner.root_lineage` is currently caller metadata and is absent from every
+  provider report and usage record.
+- Independent dependency review confirmed that `V3-AUTHRUNNER-001` cannot safely precede lineage
+  authority: the only authenticated current root mapping is an operator SSH signature, explicitly
+  replaced by the autonomous objective, while provider metadata does not establish genealogy.
+- Began only `V3-AUTHLINEAGE-001`. Scope is a bounded, provider-free, non-authorizing provenance and
+  opaque-resolution mechanism. Public ancestry remains unavailable until independently verified
+  publication evidence exists; unknown or ambiguous ancestry will fail closed. No provider,
+  credential, network, spend, qualification, runner, external-log, or release action occurred.
+
+## 2026-08-17T23:53:13Z — V3-AUTHLINEAGE-001 mechanism validated as PARTIAL
+
+- Added a reserved, non-deployable synthetic construction plus strict frozen provenance and an
+  opaque noncopyable, nonserializable, PID-bound resolver. Conservative roots derive from the exact
+  complete member inventory under the frozen identity domain. Provider and unknown IDs,
+  ambiguous/conflicting ancestry, same-root alias/candidate pairs, public placeholders, fixture
+  drift, coherent reseals, forged/subclass capabilities, post-fork use, and public dependency
+  monkeypatches fail closed. Existing signed-lineage and evidence-seal consumers remain unchanged
+  and cannot bridge the mechanism.
+- Exact pins are provenance-file SHA-256
+  `44a916b74457b51b486ca98954fc0a1280e45187e4e20c2c048b7f597fa9bf98`, semantic provenance
+  SHA-256 `7b36005d5ee33f31db8edf056b5d2dbe035c901de70eaa7c940153e69d9acbb5`, regression-contract
+  SHA-256 `65ca78292f7465045f58cc7676cee41708ab362dea3595756f640cf127a051e9`, and binding-set
+  SHA-256 `609895321edfcdc1e10dcf663517117321ae2bfb7e9d1f6713bfcb3607e2621a`.
+  The durable provenance fixes `authority_basis=MECHANISM_ONLY` and
+  `projection_scope=LOCAL_SYNTHETIC_MECHANISM_TEST`; all non-model-authorship, external provenance,
+  real-provider applicability, lineage/runner/issuance, qualification, selection, source-egress,
+  provider-access, completion, and release flags are literal false.
+- Validation passed: `118` combined frozen-lineage, legacy-lineage, evidence-seal, and ground-truth
+  tests, including raw-byte tamper coverage for all four compiled fixture files; release-schema
+  generation and verification; Ruff format/check; strict mypy over `185` source files; the `11`-test
+  product documentation/objective gate; duplicate-key parsing of both V3 JSON ledgers; and diff
+  integrity. Final independent adversarial review found no blocker/HIGH within the documented
+  mechanism-only and trusted-interpreter boundary.
+- `V3-AUTHLINEAGE-001` is `PARTIAL`, not complete. The fixture was authored during this Codex run,
+  so it cannot prove non-model authorship or external provenance. No independently anchored
+  public/provider ancestry, authenticated runner integration, or external transparency receipt
+  exists. The capability trusts the current Python interpreter and imported verifier code; hostile
+  same-interpreter reflection is outside this mechanism and needs a stronger process/native
+  boundary.
+- Exact next safe action is queued `V3-AUTHLINEAGE-PUBLIC-001`, which must freeze and independently
+  replay externally published ancestry and inclusion evidence. `V3-AUTHRUNNER-001` remains queued,
+  blocked behind that prerequisite, and non-authorizing. No provider, credential, network, spend,
+  qualification, runner, external-log, or release action occurred.
+
+## 2026-08-17T13:44:00Z — V3-MODELREFRESH-001 runtime-consumption slice started
+
+- Reopened only `V3-MODELREFRESH-001` after the durable-history slice passed its complete suite.
+  Scope is provider-free: audit the exact freshness, production-selection, pricing, pipeline, and
+  budget authority seams; implement one cohesive fail-closed runtime-consumption boundary with
+  deterministic tests.
+- No provider call, credential access, benchmark spend, production promotion, or release action is
+  authorized. Existing runtime and budget behavior remains unchanged until the typed boundary and
+  its ordering regressions are reviewed.
+- The first provider-free core boundary is now implemented: canonical refresh evidence remains
+  explicitly non-authorizing, while an opaque process-local veto guard consumes independently
+  supplied workflow-status/source/run pins, replays the chained refresh history, derives the exact
+  full technical route set, permits only the already policy-selected subset, and expires at the
+  soft freshness boundary. Empty scheduled selections remain unusable rather than becoming a
+  wildcard. Core plus staged-history tests pass `75` cases; the evidence schema/helper gate passes
+  `24` cases; Ruff and strict mypy pass for the new source. Transport, pipeline, scheduler,
+  detached-manifest, and assurance integration remain in progress, and refreshed pricing has not
+  been granted budget authority.
+
+## 2026-08-17T16:45:24Z — V3-MODELREFRESH-001 audit-runtime freshness/selection veto validated
+
+- Completed the provider-free audit-runtime veto slice. Durable refresh evidence remains
+  non-authorizing; only an opaque process-local guard joined to independently pinned workflow
+  identity, exact live technical qualification, and exact live audit selection can attest current
+  route eligibility. The guard covers the full technical route set while allowing use only of the
+  already audit-selected subset and expires immediately after the inclusive soft-current boundary.
+- Paid-audit transport fails before request claim when refresh authority is absent, rechecks before
+  and after atomic reservation, after the lifecycle observer, and inside the acquired transport
+  lock immediately before opening the provider stream. Expiry releases the reservation and makes
+  zero POSTs. Pipeline, production scheduler create/resume, detached usage/report, manifest, and
+  assurance consumers reject absent, expired, swapped, out-of-window, or coherently resealed
+  custody.
+- Pricing remains deliberately closed: every selected live route must retain the exact qualified
+  pricing hash. Even tolerance-bounded drift is rejected, endpoint pricing is not mutated, and no
+  refreshed value affects maximum-price calculation or budget reservation.
+- Validation: the refresh-core matrix passed `230` tests; OpenRouter transport passed `260`;
+  scheduler/pipeline passed `209`; detached report/manifest passed `128`; and full assurance passed
+  `233`. The first complete diagnostic run exposed seven stale synthetic fixtures/status projections;
+  their exact repaired group passed `23` tests. The second run exposed a genuine load-sensitive
+  reproduction deadline-order race; the fail-closed clock-before-poll fix passed the full `60`-test
+  reproduction module. The final permission-corrected suite passed `5297` tests with `21` explicit
+  unavailable/opt-in skips in `1340.69s`. Generated release schemas, Ruff format/check across `474`
+  files, strict mypy over `181` source files, V3 JSON parsing, and diff integrity passed.
+- Homebrew Python `3.13.15` remains pinned and backs `.venv`; `pydantic_core 2.46.4`, a typed Pydantic
+  model, `mmaudit`, and the complete suite execute without the prior Python 3.14 ABI crash.
+- The operator-supplied `AUTONOMY-DIRECTIVE-zero-human-blockers-2026-08-17.md` was read in full as
+  proposed design input. It was not mixed into this work unit: repository policy forbids reading
+  `.env`, the completion objective is hash-bound, and a recomputable self-hash alone is not an
+  independent authority. Those proposals require a later bounded queue decision and may not weaken
+  the current opaque-authority boundary.
+- `V3-MODELREFRESH-001` remains operationally `IN_PROGRESS` and substantively `PARTIAL`. No provider
+  call, credential access, benchmark spend, successful current provider snapshot, live GitHub round
+  trip, production promotion, completed real audit, checkpoint, or release claim occurred. The
+  stock CLI still lacks a production construction path for these live authorities. The next safe
+  action is the separate refreshed-pricing budget-authority slice.
+
+## 2026-08-17T16:47:45Z — V3-MODELREFRESH-001 refreshed-pricing authority slice started
+
+- Continued only `V3-MODELREFRESH-001`. Scope is provider-free: define a separate opaque pricing
+  authority over the already validated refresh, qualification, and audit-selection chain; preserve
+  the qualified pricing snapshot as an immutable baseline; and bind accepted canonical current
+  prices through maximum-price calculation, atomic reservation, transport, usage, scheduler resume,
+  report, manifest, and assurance custody.
+- No provider call, credential or `.env` read, benchmark spend, live metadata retrieval,
+  qualification, production promotion, or release action is authorized. Durable/self-hashed
+  refresh evidence may only contribute after independent pins and live opaque authorities are
+  verified; unsupported price components, stale evidence, route drift, or an over-tolerance increase
+  must fail closed.
+
+## 2026-08-17T20:06:41Z — V3-MODELREFRESH-001 provider-free pricing custody validated
+
+- Completed the separate opaque refreshed-pricing authority without changing the qualified
+  baseline. It accepts only canonical exact-field current price maps within the configured
+  tolerance and only after revalidating the independently pinned refresh, live technical
+  qualification, and live audit selection. Durable pricing evidence remains comparison-only and
+  cannot recreate the opaque authority.
+- Accepted current prices now drive the transmitted provider ceiling, exact per-attempt reservation,
+  retry and reconciliation evidence, durable pre-transport accounting, scheduler create/resume and
+  recovery, detached usage/report/manifest custody, and assurance. Every paid REAL boundary
+  rechecks current refresh, pricing, privacy, qualification, selection, request-body semantics,
+  cost-bound provenance, and mutable budget/ledger state; expiry or mutation fails before POST or
+  retains the full committed bound conservatively.
+- Independent final review found no remaining provider-free blocker or HIGH. The final
+  permission-corrected complete suite passed `5392` tests with `21` explicit unavailable/opt-in
+  skips in `1468.19s`; Ruff format/check, strict mypy over `181` source files, generated schemas,
+  focused schema tests, V3 JSON parsing, and diff integrity passed.
+- `V3-MODELREFRESH-001` returns to `PARTIAL`. No `.env`, credential, provider completion, live
+  metadata refresh, benchmark spend, successful current provider snapshot, live GitHub artifact
+  round trip, production promotion, completed real audit, or release action occurred. Stock
+  `mmaudit run` still cannot construct the exact live technical, policy-selection, refresh, and
+  pricing authority quartet, so there is no remaining provider-free action and no completion claim.
+
+## 2026-08-17T11:29:20Z — V3-MODELREFRESH-001 durable-history slice started
+
+- Rechecked every non-complete ticket after the V3-POLICYELIG boundary. V3-QUALIFY remains
+  non-actionable behind blocked lineage/calibration and absent real evidence; V3-MODELREFRESH is
+  the earliest partial ticket with an independent provider-free engineering slice.
+- Scope is limited to exact prior candidate-registry/source/snapshot custody, deterministic drift
+  across a registry change, and scheduled durable history retrieval. No third authenticated
+  provider attempt, model benchmark, credential use, spend, production promotion, or release claim
+  is authorized.
+- The external handoff pack was read as untrusted operator-supplied design input. Its current-model
+  and web-source claims do not replace authenticated provider evidence or an operator signature.
+- Implemented the core schema-v3 cross-registry diff and CLI preflight: an exact historical
+  registry/source/snapshot triple is atomic, replayed before secret access, and bound separately
+  from the current registry. Positive registry-change and adversarial omission/swap/reseal
+  regressions are present; the combined refresh-core/CLI matrix passed `102` tests. Scheduled
+  retrieval, staged history custody, schema regeneration, and broader gates remain in progress.
+
+## 2026-08-17T13:20:39Z — V3-MODELREFRESH-001 durable-history mechanism validated
+
+- Completed the provider-free durable-baseline slice without a provider call, credential access,
+  model benchmark, spend, production promotion, or release claim. Diff schema v3 binds distinct
+  baseline/current candidate registries and atomically replays the exact prior registry, source,
+  and snapshot before any secret boundary.
+- Scheduled history now selects the newest exact `(run_id, run_attempt)` under explicit API/item
+  caps, checks every newer attempt for missing published history, proves default-branch commit
+  ancestry, re-fetches exact artifact identity/size, and downloads under time/file ceilings. A
+  pre-upload history requirement closes the upload/marker interruption window; explicit manual
+  bootstrap remains a trusted reset only when no usable history exists.
+- Chained inventories retain the immediate predecessor workflow status, registry, source evidence,
+  and snapshot. Loading validates the predecessor's own bindings and chronology, rebuilds its
+  snapshot, and reproduces the current semantic diff, rejecting a fully canonical reseal with a
+  false baseline. Archive extraction accepts only exact 7/8/11/12-file inventories and DEFLATE
+  entries under 32 MB archive, 20 MB/file, and 240 MB expansion bounds.
+- Validation: refresh-focused `209 passed`; broader affected `275 passed`; repository Ruff
+  format/check passed; strict mypy passed over `180` source files and the staging script; generated
+  schemas, YAML parsing, all `14` embedded shell scripts, and diff integrity passed. Independent
+  reviews found no remaining blocker/high. A first sandboxed invocation was deliberately not
+  credited because local socket creation was denied, queue-derived docs observed the temporary
+  `IN_PROGRESS` state, and one timeout assertion was load-sensitive. Those exact cases passed in
+  isolation, and a subsequent single permission-corrected complete suite passed `5241` tests with
+  `21` explicit unavailable/opt-in skips in `1200.64s`.
+- Status returns to `PARTIAL`, as designed for execution-order step 11. No successful current
+  provider snapshot or live GitHub artifact round trip exists, and runtime freshness/pricing,
+  non-crediting external benchmark leads, automatic benchmarking, lineage, qualification, and
+  promotion remain unresolved. The next safe slice stays in `V3-MODELREFRESH-001` and wires
+  provider-free refresh freshness/selection and refreshed pricing into runtime authority.
 
 ## 2026-08-17T11:15:01Z — V3-POLICYELIG-001 COMPLETE at provider-free mechanism boundary
 

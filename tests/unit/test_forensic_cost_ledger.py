@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from pathlib import Path
 
 import pytest
@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from mmaudit.models.scheduler import scheduler_canonical_sha256
 from mmaudit.models.schemas import ExecutionEvidenceKind, UsageRecord
+from mmaudit.orchestration.budgets import EndpointRequestCostBound
 from mmaudit.orchestration.cost_ledger import (
     AtomicCostLedger,
     CostEntryStatus,
@@ -26,8 +27,15 @@ from mmaudit.reporting.bundle import (
     build_run_cost_ledger_evidence,
 )
 from tests.unit.test_client_forensic_reporting import _report
+from tests.unit.test_run_status import (
+    _bind_report_usage_to_policy_selection,
+)
+from tests.unit.test_run_status import (
+    _usage as _report_pricing_usage,
+)
 
 LOGICAL_REQUEST_ID = "scheduler-request-" + "a" * 64
+RECOVERY_REQUEST_ID = "scheduler-recovery-request-" + "b" * 64
 
 
 def _usage(
@@ -102,6 +110,37 @@ def test_run_cost_custody_closes_usage_and_excludes_global_history(tmp_path: Pat
     assert ledger.identity_sha256 not in serialized
     assert "prompt.json" not in serialized
     assert "RAW-RESPONSE-CANARY" not in serialized
+
+
+def test_recovery_request_cost_custody_accepts_only_its_direct_attempt(tmp_path: Path) -> None:
+    ledger = AtomicCostLedger.initialize(tmp_path / "recovery-ledger.json", cap_usd=Decimal("10"))
+    baseline = build_scheduler_cost_ledger_baseline(ledger)
+    reservation = ledger.reserve(RECOVERY_REQUEST_ID, Decimal("0.2"))
+    ledger.reconcile(reservation, Decimal("0.1"))
+    usage = _usage(request_id=RECOVERY_REQUEST_ID)
+
+    evidence = build_run_cost_ledger_evidence(
+        baseline=baseline,
+        final_snapshot=ledger.snapshot(),
+        campaign_logical_request_ids=(RECOVERY_REQUEST_ID,),
+        usage_records=(usage,),
+    )
+
+    assert len(evidence.attempts) == 1
+    assert evidence.attempts[0].logical_request_id == RECOVERY_REQUEST_ID
+    assert evidence.attempts[0].attempt_index == 1
+
+    retry = AtomicCostLedger.initialize(tmp_path / "recovery-retry.json", cap_usd=Decimal("10"))
+    retry_baseline = build_scheduler_cost_ledger_baseline(retry)
+    retried = retry.reserve(f"{RECOVERY_REQUEST_ID}:attempt:2", Decimal("0.2"))
+    retry.reconcile(retried, Decimal("0.1"))
+    with pytest.raises(ValueError, match="attempt identity"):
+        build_run_cost_ledger_evidence(
+            baseline=retry_baseline,
+            final_snapshot=retry.snapshot(),
+            campaign_logical_request_ids=(RECOVERY_REQUEST_ID,),
+            usage_records=(),
+        )
 
 
 def test_cost_custody_rejects_rehashed_usage_join_tamper(tmp_path: Path) -> None:
@@ -353,6 +392,91 @@ def test_exact_cost_custody_normalizes_binary_float_summation(tmp_path: Path) ->
 
     assert artifact.accounted_cost_usd_exact == "0.3"
     assert artifact.accounted_cost_usd == 0.3
+
+
+def test_refreshed_price_cost_closure_ignores_hostile_decimal_context(tmp_path: Path) -> None:
+    second_request_id = "scheduler-request-" + "b" * 64
+    first_cost = "123.123456789012345678"
+    second_cost = "0.000000000000000001"
+    exact_total = "123.123456789012345679"
+
+    with localcontext() as context:
+        context.prec = 9
+        ledger = AtomicCostLedger.initialize(
+            tmp_path / "hostile-precision.json",
+            cap_usd=Decimal("250"),
+        )
+        baseline = build_scheduler_cost_ledger_baseline(ledger)
+        first = ledger.reserve(LOGICAL_REQUEST_ID, Decimal("124"))
+        ledger.reconcile(first, Decimal(first_cost))
+        second = ledger.reserve(second_request_id, Decimal("1"))
+        ledger.reconcile(second, Decimal(second_cost))
+        usage = (
+            _usage(cost=first_cost),
+            _usage(cost=second_cost, request_id=second_request_id),
+        )
+        evidence = build_run_cost_ledger_evidence(
+            baseline=baseline,
+            final_snapshot=ledger.snapshot(),
+            campaign_logical_request_ids=(LOGICAL_REQUEST_ID, second_request_id),
+            usage_records=usage,
+        )
+        report = _report().model_copy(
+            update={
+                "usage": list(usage),
+                "accounted_cost_usd": float(Decimal(exact_total)),
+                "accounted_cost_usd_exact": exact_total,
+            }
+        )
+        artifact = build_model_execution_artifact(
+            report,
+            cost_ledger_evidence=evidence,
+        )
+
+    assert evidence.run_accounted_cost_usd_exact == exact_total
+    assert artifact.accounted_cost_usd_exact == exact_total
+
+
+def test_cost_ledger_reservation_must_equal_typed_refreshed_price_maximum(
+    tmp_path: Path,
+) -> None:
+    usage = _bind_report_usage_to_policy_selection(
+        _report_pricing_usage("source_audit").model_copy(update={"request_id": LOGICAL_REQUEST_ID})
+    )
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "pricing-bound-ledger.json",
+        cap_usd=Decimal("5000"),
+    )
+    baseline = build_scheduler_cost_ledger_baseline(ledger)
+    reservation = ledger.reserve(LOGICAL_REQUEST_ID, Decimal("1"))
+    ledger.reconcile(reservation, Decimal(usage.accounted_cost_usd_exact or "0"))
+
+    with pytest.raises(
+        ValueError,
+        match="reservation differs from typed refreshed-price maximum",
+    ):
+        build_run_cost_ledger_evidence(
+            baseline=baseline,
+            final_snapshot=ledger.snapshot(),
+            campaign_logical_request_ids=(LOGICAL_REQUEST_ID,),
+            usage_records=(usage,),
+        )
+
+
+def test_pricing_attempt_builder_rejects_cost_bound_property_substitution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        EndpointRequestCostBound,
+        "maximum_cost_usd",
+        property(lambda _bound: Decimal("0.000000000000000001")),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="pricing attempt cost-bound callable provenance is invalid",
+    ):
+        _bind_report_usage_to_policy_selection(_report_pricing_usage("source_audit"))
 
 
 def test_baseline_prefix_rejects_changed_or_reordered_final_entries(tmp_path: Path) -> None:

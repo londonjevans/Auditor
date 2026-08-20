@@ -24,7 +24,11 @@ from mmaudit.models.policy_eligibility_refresh import (
     PolicyEligibilityRefreshRouteDisposition,
     load_model_policy_eligibility_refresh_artifact,
 )
-from mmaudit.models.qualification import CandidateRegistry, load_candidate_registry
+from mmaudit.models.qualification import (
+    CandidateRegistry,
+    load_candidate_registry,
+    seal_candidate_registry,
+)
 from mmaudit.models.refresh import (
     ATTEMPT_FILENAME,
     DIFF_FILENAME,
@@ -34,6 +38,7 @@ from mmaudit.models.refresh import (
     ModelRefreshAttemptStatus,
     ModelRefreshFailureCode,
     load_model_refresh_attempt,
+    load_model_refresh_diff,
     load_model_refresh_snapshot,
     load_model_refresh_source_evidence,
 )
@@ -236,6 +241,7 @@ def test_models_refresh_help_exposes_only_metadata_and_evidence_controls() -> No
     assert result.exit_code == ExitCode.SUCCESS
     for option in (
         "--candidate-registry",
+        "--previous-candidate-registry",
         "--previous-snapshot",
         "--previous-source-evidence",
         "--selected-route",
@@ -285,6 +291,88 @@ def test_models_refresh_rejects_reused_output_before_secret_access(
     assert not secret_accessed
 
 
+@pytest.mark.parametrize(
+    "policy_arguments",
+    [
+        ["--pricing-tolerance-fraction", "0.050"],
+        ["--pricing-tolerance-fraction", "1e-1000000000"],
+        ["--pricing-tolerance-fraction", "-0.1"],
+        ["--pricing-tolerance-fraction", "2"],
+        ["--soft-max-age-hours", "72", "--hard-max-age-hours", "72"],
+        ["--soft-max-age-hours", "73", "--hard-max-age-hours", "72"],
+    ],
+)
+def test_models_refresh_rejects_invalid_policy_before_secret_or_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    policy_arguments: list[str],
+) -> None:
+    secret_accessed = False
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_accessed
+        secret_accessed = True
+        raise AssertionError("operator secrets must not be accessed")
+
+    monkeypatch.setattr(cli_module, "load_operator_secrets", forbidden_secret_access)
+    result = runner.invoke(
+        app,
+        [
+            "models",
+            "refresh",
+            "--candidate-registry",
+            str(REGISTRY_PATH),
+            *policy_arguments,
+            "--output-dir",
+            str(tmp_path / "output"),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "refresh policy is invalid" in " ".join(result.stdout.split())
+    assert not secret_accessed
+
+
+def test_models_refresh_rejects_future_registry_before_secret_or_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = load_candidate_registry(REGISTRY_PATH)
+    future_registry = seal_candidate_registry(
+        created_at=datetime.now(UTC).replace(microsecond=0) + timedelta(days=1),
+        discovery_run_sha256=registry.discovery_run_sha256,
+        candidates=registry.candidates,
+    )
+    registry_path = tmp_path / "future-candidate-registry.json"
+    registry_path.write_text(stable_json(future_registry), encoding="utf-8")
+    registry_path.chmod(0o600)
+    secret_accessed = False
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_accessed
+        secret_accessed = True
+        raise AssertionError("operator secrets must not be accessed")
+
+    monkeypatch.setattr(cli_module, "load_operator_secrets", forbidden_secret_access)
+    result = runner.invoke(
+        app,
+        [
+            "models",
+            "refresh",
+            "--candidate-registry",
+            str(registry_path),
+            "--output-dir",
+            str(tmp_path / "output"),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "candidate registry is future-dated" in " ".join(result.stdout.split())
+    assert not secret_accessed
+
+
 def test_models_refresh_rejects_untrusted_client_before_secret_access(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -319,9 +407,36 @@ def test_models_refresh_rejects_untrusted_client_before_secret_access(
     assert not secret_accessed
 
 
-def test_models_refresh_requires_paired_previous_source_before_secret_access(
+@pytest.mark.parametrize(
+    "previous_arguments",
+    [
+        ["--previous-candidate-registry", str(REGISTRY_PATH)],
+        ["--previous-snapshot", "previous-snapshot.json"],
+        ["--previous-source-evidence", "previous-source.json"],
+        [
+            "--previous-candidate-registry",
+            str(REGISTRY_PATH),
+            "--previous-snapshot",
+            "previous-snapshot.json",
+        ],
+        [
+            "--previous-candidate-registry",
+            str(REGISTRY_PATH),
+            "--previous-source-evidence",
+            "previous-source.json",
+        ],
+        [
+            "--previous-snapshot",
+            "previous-snapshot.json",
+            "--previous-source-evidence",
+            "previous-source.json",
+        ],
+    ],
+)
+def test_models_refresh_requires_exact_previous_triple_before_secret_access(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    previous_arguments: list[str],
 ) -> None:
     secret_accessed = False
 
@@ -338,8 +453,7 @@ def test_models_refresh_requires_paired_previous_source_before_secret_access(
             "refresh",
             "--candidate-registry",
             str(REGISTRY_PATH),
-            "--previous-snapshot",
-            str(tmp_path / "previous.json"),
+            *previous_arguments,
             "--output-dir",
             str(tmp_path / "output"),
             "--no-color",
@@ -525,7 +639,7 @@ def test_models_refresh_rejects_unapproved_policy_route_before_provider_access(
     assert not secret_accessed
 
 
-def test_models_refresh_replays_a_paired_previous_source_before_provider_work(
+def test_models_refresh_replays_an_exact_previous_triple_before_provider_work(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -541,6 +655,8 @@ def test_models_refresh_replays_a_paired_previous_source_before_provider_work(
     arguments[arguments.index("--output-dir") + 1] = str(second_output)
     arguments.extend(
         [
+            "--previous-candidate-registry",
+            str(REGISTRY_PATH),
             "--previous-snapshot",
             str(first_output / SNAPSHOT_FILENAME),
             "--previous-source-evidence",
@@ -559,13 +675,60 @@ def test_models_refresh_replays_a_paired_previous_source_before_provider_work(
     }
 
 
+def test_models_refresh_replays_history_across_an_exact_registry_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = _secret_file(tmp_path, "synthetic-refresh-canary")
+    current_registry = load_candidate_registry(REGISTRY_PATH)
+    previous_registry = seal_candidate_registry(
+        created_at=current_registry.created_at - timedelta(days=1),
+        discovery_run_sha256="d" * 64,
+        candidates=current_registry.candidates,
+    )
+    previous_registry_path = tmp_path / "previous-candidate-registry.json"
+    previous_registry_path.write_text(stable_json(previous_registry), encoding="utf-8")
+    previous_registry_path.chmod(0o600)
+
+    _install_fake_client(monkeypatch, previous_registry)
+    previous_output = tmp_path / "previous-output"
+    previous_arguments = _arguments(tmp_path, secret)
+    previous_arguments[previous_arguments.index("--candidate-registry") + 1] = str(
+        previous_registry_path
+    )
+    previous_arguments[previous_arguments.index("--output-dir") + 1] = str(previous_output)
+    first = runner.invoke(app, previous_arguments, env={"COLUMNS": "500"})
+    assert first.exit_code == ExitCode.SUCCESS, first.stdout
+
+    _install_fake_client(monkeypatch, current_registry)
+    current_output = tmp_path / "current-output"
+    current_arguments = _arguments(tmp_path, secret)
+    current_arguments[current_arguments.index("--output-dir") + 1] = str(current_output)
+    current_arguments.extend(
+        [
+            "--previous-candidate-registry",
+            str(previous_registry_path),
+            "--previous-snapshot",
+            str(previous_output / SNAPSHOT_FILENAME),
+            "--previous-source-evidence",
+            str(previous_output / SOURCE_EVIDENCE_FILENAME),
+        ]
+    )
+    second = runner.invoke(app, current_arguments, env={"COLUMNS": "500"})
+
+    assert second.exit_code == ExitCode.SUCCESS, second.stdout
+    diff = load_model_refresh_diff(current_output / DIFF_FILENAME)
+    assert diff.baseline_candidate_registry_sha256 == previous_registry.registry_sha256
+    assert diff.current_candidate_registry_sha256 == current_registry.registry_sha256
+
+
 def test_models_refresh_rejects_a_previous_snapshot_newer_than_current_observation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     secret = _secret_file(tmp_path, "synthetic-refresh-canary")
     registry = load_candidate_registry(REGISTRY_PATH)
-    _install_fake_client(monkeypatch, registry)
+    _client, calls, _usages = _install_fake_client(monkeypatch, registry)
     base_time = datetime(2026, 7, 30, 12, 0, tzinfo=UTC)
 
     class FutureDatetime(datetime):
@@ -580,6 +743,7 @@ def test_models_refresh_rejects_a_previous_snapshot_newer_than_current_observati
     first_arguments[first_arguments.index("--output-dir") + 1] = str(first_output)
     first = runner.invoke(app, first_arguments, env={"COLUMNS": "500"})
     assert first.exit_code == ExitCode.SUCCESS, first.stdout
+    calls.clear()
 
     class CurrentDatetime(datetime):
         @classmethod
@@ -588,11 +752,21 @@ def test_models_refresh_rejects_a_previous_snapshot_newer_than_current_observati
             return base_time
 
     monkeypatch.setattr(cli_module, "datetime", CurrentDatetime)
+    secret_accessed = False
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_accessed
+        secret_accessed = True
+        raise AssertionError("operator secrets must not be accessed")
+
+    monkeypatch.setattr(cli_module, "load_operator_secrets", forbidden_secret_access)
     second_output = tmp_path / "current-output"
     second_arguments = _arguments(tmp_path, secret)
     second_arguments[second_arguments.index("--output-dir") + 1] = str(second_output)
     second_arguments.extend(
         [
+            "--previous-candidate-registry",
+            str(REGISTRY_PATH),
             "--previous-snapshot",
             str(first_output / SNAPSHOT_FILENAME),
             "--previous-source-evidence",
@@ -601,9 +775,11 @@ def test_models_refresh_rejects_a_previous_snapshot_newer_than_current_observati
     )
     second = runner.invoke(app, second_arguments, env={"COLUMNS": "500"})
 
-    assert second.exit_code == ExitCode.MODEL_FAILURE
-    assert "MALFORMED_METADATA" in second.stdout
-    assert [path.name for path in second_output.iterdir()] == [ATTEMPT_FILENAME]
+    assert second.exit_code == ExitCode.CONFIGURATION
+    assert "future-dated" in second.stdout
+    assert not secret_accessed
+    assert calls == []
+    assert not second_output.exists()
 
 
 def test_models_refresh_authentication_failure_emits_only_typed_attempt(

@@ -37,6 +37,7 @@ from mmaudit.models.scheduler import (
 from mmaudit.models.schemas import (
     AuditReport,
     CandidateFinding,
+    CandidateReviewBatch,
     FormalEvidence,
     FormalResultKind,
     FormalToolRun,
@@ -58,6 +59,7 @@ from mmaudit.models.schemas import (
     SourceSink,
     solidity_graph_occurrence_sha256,
 )
+from mmaudit.models.truncation import decode_complete_candidate_review_frames
 from mmaudit.orchestration.assurance import AssuranceRuntime, MaximumAssuranceContract
 from mmaudit.orchestration.context import ContextBudgetError, ContextBuilder
 from mmaudit.orchestration.context_manifest import load_context_manifest
@@ -110,7 +112,7 @@ from mmaudit.solidity.index import build_solidity_index
 from mmaudit.solidity.projects import discover_solidity_projects
 from mmaudit.solidity.sharding import build_solidity_shard_inventory
 from tests.conftest import FIXTURES, model_registry_entry
-from tests.fake_openrouter import FakeOpenRouter, _surface_review_path
+from tests.fake_openrouter import FakeOpenRouter, _candidate_review_wire, _surface_review_path
 from tests.integration.test_pipeline import StaticScannerRunner, _maximum_specialists, _run
 from tests.qualification_support import synthetic_production_qualification
 from tests.unit.test_semantic_sharding import _inventory, _shard_inputs
@@ -147,8 +149,11 @@ class _AllInvalidCandidateLocationsOpenRouter(FakeOpenRouter):
             return response
         payload = response.json()
         try:
-            content = json.loads(payload["choices"][0]["message"]["content"])
-        except (KeyError, TypeError, json.JSONDecodeError):
+            content_text = payload["choices"][0]["message"]["content"]
+            if not isinstance(content_text, str):
+                return response
+            content = decode_complete_candidate_review_frames(content_text).model_dump(mode="json")
+        except (KeyError, TypeError, ValueError):
             return response
         for finding in content.get("findings", []):
             for location in finding.get("locations", []):
@@ -158,7 +163,7 @@ class _AllInvalidCandidateLocationsOpenRouter(FakeOpenRouter):
                 finding["source"]["path"] = "missing.py"
             if finding.get("sink") is not None:
                 finding["sink"]["path"] = "missing.py"
-        payload["choices"][0]["message"]["content"] = json.dumps(content, sort_keys=True)
+        payload["choices"][0]["message"]["content"] = _candidate_review_wire(content)
         return httpx.Response(200, headers=dict(response.headers), json=payload)
 
 
@@ -706,6 +711,42 @@ async def test_pipeline_persists_exact_seven_pass_scheduler_evidence(
         (result.run_dir / "scheduler-state.json").read_text(encoding="utf-8")
     )
     assert artifact.summary.status is SchedulerCampaignStatus.COMPLETE
+    private_outputs = _scheduler_outputs(result.run_dir)
+    candidate_review_tasks = tuple(
+        task
+        for pass_result in artifact.summary.pass_results
+        for task in pass_result.plan.tasks
+        if task.pass_kind is SchedulerPassKind.BLIND_SHARD_REVIEW
+        or (
+            task.pass_kind is SchedulerPassKind.CROSS_SHARD_INTEGRATION
+            and task.role == "business_logic"
+        )
+    )
+    assert candidate_review_tasks
+    for task in candidate_review_tasks:
+        output = private_outputs[task.task_id]
+        completion = output.model_completion_evidence
+        assert completion is not None
+        assert completion.schema_version == "1.1"
+        assert completion.normalization_evidence is not None
+        batch = CandidateReviewBatch.model_validate(output.payload)
+        assert (
+            completion.normalization_evidence.require_exact_batch(
+                batch,
+                request_id=task.logical_request_id,
+            )
+            is completion.normalization_evidence
+        )
+        assert completion.validated_response_sha256 == (
+            completion.normalization_evidence.wire_validated_response_sha256
+        )
+        assert completion.normalized_output_sha256 == (
+            completion.normalization_evidence.normalized_batch_sha256
+        )
+        assert output.model_surface_review_artifact is not None
+        assert output.model_surface_review_artifact.normalization_evidence == (
+            completion.normalization_evidence
+        )
     assert tuple(item.plan.pass_kind for item in artifact.summary.pass_results) == (
         SCHEDULER_PASS_ORDER
     )
@@ -1130,7 +1171,10 @@ async def test_manifest_rejects_incomplete_terminal_finding_coherent_reseal(
     authority_bytes = authority_path.read_bytes()
     authority_path.unlink()
     missing_authority_manifest = _reseal_scheduler_run(result.run_dir, manifest)
-    with pytest.raises(ValueError, match=r"terminal.*authority"):
+    with pytest.raises(
+        ValueError,
+        match="scheduler local journal-head checkpoint does not match durable journal evidence",
+    ):
         validate_manifest_artifacts(missing_authority_manifest, result.run_dir)
     authority_path.write_bytes(authority_bytes)
     authority_path.chmod(0o600)
@@ -1815,7 +1859,9 @@ async def test_pipeline_marks_dispatched_crash_uncertain_and_never_retries(
     reserved = ledger.snapshot()
     assert first_fake.chat_calls == 1
     assert len(reserved.entries) == 1
-    assert reserved.entries[0].status is CostEntryStatus.RESERVED
+    assert reserved.entries[0].status is CostEntryStatus.UNCERTAIN_ACCOUNTED
+    assert reserved.active_reserved_usd == 0
+    assert reserved.spent_usd == reserved.entries[0].reserved_usd
 
     resumed_fake = FakeOpenRouter(extra_model_ids=["golf/gale-secure"])
     resumed = await _run(

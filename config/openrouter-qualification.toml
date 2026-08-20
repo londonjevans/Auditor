@@ -9,6 +9,7 @@ root = ".."
 
 [privacy]
 # Synthetic benchmark source still requires the CLI's explicit egress flag.
+profile = "SYNTHETIC_BENCHMARK"
 allow_code_egress = false
 require_zdr = true
 redact_secrets = true

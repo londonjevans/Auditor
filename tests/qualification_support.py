@@ -19,6 +19,7 @@ from mmaudit.config import (
 from mmaudit.constants import ALL_MODEL_ROLES
 from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.qualification import (
+    CandidateRegistry,
     QualificationBindings,
     QualificationDisposition,
     VerifiedProductionQualification,
@@ -103,6 +104,7 @@ def synthetic_production_qualification(
     *,
     provider_endpoint: str = "approved-provider",
     provider_name: str | None = None,
+    candidate_registry: CandidateRegistry | None = None,
 ) -> VerifiedProductionQualification:
     """Issue bounded synthetic runtime evidence; resolver behavior is tested separately."""
 
@@ -111,6 +113,24 @@ def synthetic_production_qualification(
         *tuple(sorted(config.models.specialists)),
     )
     model_ids = tuple(sorted({config.models.role(role).primary for role in roles}))
+    validated_registry = (
+        None
+        if candidate_registry is None
+        else CandidateRegistry.model_validate(candidate_registry.model_dump(mode="json"))
+    )
+    candidates_by_model = (
+        {}
+        if validated_registry is None
+        else {candidate.exact_model_id: candidate for candidate in validated_registry.candidates}
+    )
+    missing_candidates = tuple(
+        model_id for model_id in model_ids if model_id not in candidates_by_model
+    )
+    if validated_registry is not None and missing_candidates:
+        raise ValueError(
+            "synthetic production candidate registry omits configured primary models: "
+            + ", ".join(missing_candidates)
+        )
     lineage_by_model = model_lineage_index(config)
     approved_roles = tuple(
         sorted(
@@ -125,51 +145,105 @@ def synthetic_production_qualification(
     reasoning_policy = build_reasoning_policy(config)
     models: list[VerifiedTierAModelQualification] = []
     for model_id in model_ids:
+        candidate = candidates_by_model.get(model_id)
+        if candidate is not None and (
+            candidate.root_lineage is None
+            or candidate.output_capability_sha256 is None
+            or candidate.structured_output_mode is None
+        ):
+            raise ValueError(
+                "synthetic production candidate lacks approved lineage or output evidence: "
+                f"{model_id}"
+            )
+        model_expiry = candidate.qualification_expires_at if candidate is not None else expiry
+        if model_expiry is None:
+            raise ValueError(
+                f"synthetic production candidate lacks qualification expiry: {model_id}"
+            )
+        selected_approved_roles = (
+            candidate.approved_roles if candidate is not None else approved_roles
+        )
         configured_lineage = lineage_by_model.get(model_id.lower())
         configured_quality = (
             None if configured_lineage is None else configured_lineage.measured_quality
         )
         root_lineage = (
-            configured_lineage.root_lineage
-            if configured_lineage is not None
-            else f"sha256:{hashlib.sha256(f'lineage:{model_id}'.encode()).hexdigest()}"
+            candidate.root_lineage
+            if candidate is not None
+            else (
+                configured_lineage.root_lineage
+                if configured_lineage is not None
+                else f"sha256:{hashlib.sha256(f'lineage:{model_id}'.encode()).hexdigest()}"
+            )
+        )
+        selected_provider_endpoint = (
+            candidate.approved_provider_endpoint if candidate is not None else provider_endpoint
+        )
+        selected_provider_name = (
+            candidate.approved_provider_name
+            if candidate is not None
+            else provider_name or provider_endpoint
         )
         model = object.__new__(VerifiedTierAModelQualification)
         object.__setattr__(model, "exact_model_id", model_id)
-        object.__setattr__(model, "canonical_model_slug", model_id)
+        object.__setattr__(
+            model,
+            "canonical_model_slug",
+            candidate.canonical_model_slug if candidate is not None else model_id,
+        )
         object.__setattr__(model, "root_lineage", root_lineage)
-        object.__setattr__(model, "approved_provider_endpoint", provider_endpoint)
+        object.__setattr__(model, "approved_provider_endpoint", selected_provider_endpoint)
         object.__setattr__(
             model,
             "approved_provider_name",
-            provider_name or provider_endpoint,
+            selected_provider_name,
         )
         object.__setattr__(
             model,
             "endpoint_snapshot_sha256",
-            hashlib.sha256(f"endpoint:{model_id}".encode()).hexdigest(),
+            (
+                candidate.endpoint_snapshot_sha256
+                if candidate is not None
+                else hashlib.sha256(f"endpoint:{model_id}".encode()).hexdigest()
+            ),
         )
         object.__setattr__(
             model,
             "output_capability_sha256",
-            hashlib.sha256(f"output-capability:{model_id}".encode()).hexdigest(),
+            (
+                candidate.output_capability_sha256
+                if candidate is not None
+                else hashlib.sha256(f"output-capability:{model_id}".encode()).hexdigest()
+            ),
         )
         object.__setattr__(
             model,
             "model_metadata_snapshot_sha256",
-            hashlib.sha256(f"metadata:{model_id}".encode()).hexdigest(),
+            (
+                candidate.model_metadata_snapshot_sha256
+                if candidate is not None
+                else hashlib.sha256(f"metadata:{model_id}".encode()).hexdigest()
+            ),
         )
         object.__setattr__(
             model,
             "pricing_snapshot_sha256",
-            hashlib.sha256(f"pricing:{model_id}".encode()).hexdigest(),
+            (
+                candidate.pricing_snapshot_sha256
+                if candidate is not None
+                else hashlib.sha256(f"pricing:{model_id}".encode()).hexdigest()
+            ),
         )
         object.__setattr__(
             model,
             "structured_output_mode",
-            StructuredOutputMode.JSON_OBJECT,
+            (
+                candidate.structured_output_mode
+                if candidate is not None
+                else StructuredOutputMode.JSON_OBJECT
+            ),
         )
-        object.__setattr__(model, "approved_roles", approved_roles)
+        object.__setattr__(model, "approved_roles", selected_approved_roles)
         object.__setattr__(
             model,
             "qualification_disposition",
@@ -215,8 +289,8 @@ def synthetic_production_qualification(
         reasoning_bindings = tuple(
             seal_qualified_reasoning_role_binding(
                 exact_model_id=model_id,
-                approved_provider_endpoint=provider_endpoint,
-                approved_provider_name=provider_name or provider_endpoint,
+                approved_provider_endpoint=selected_provider_endpoint,
+                approved_provider_name=selected_provider_name,
                 qualified_role=qualified_role,
                 configured_policy_role=configured_policy_role,
                 control_profile=reasoning_policy.role_policy(configured_policy_role).control,
@@ -229,16 +303,19 @@ def synthetic_production_qualification(
                 qualification_result_sha256=model.qualification_result_sha256,
                 qualification_verification_sha256="9" * 64,
             )
-            for qualified_role in approved_roles
+            for qualified_role in selected_approved_roles
             for configured_policy_role in reasoning_policy_roles_for_qualified_role(qualified_role)
         )
         object.__setattr__(model, "reasoning_bindings", reasoning_bindings)
         object.__setattr__(model, "evaluated_at", now)
-        object.__setattr__(model, "expires_at", expiry)
+        object.__setattr__(model, "expires_at", model_expiry)
         object.__setattr__(model, "benchmark_case_count", 1)
         models.append(model)
 
     capability = object.__new__(VerifiedProductionQualification)
+    candidate_registry_sha256 = (
+        validated_registry.registry_sha256 if validated_registry is not None else "c" * 64
+    )
     bindings = QualificationBindings(
         source_commit="1" * 40,
         source_tree_sha256="2" * 64,
@@ -252,11 +329,15 @@ def synthetic_production_qualification(
         benchmark_ground_truth_version=MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_VERSION,
         benchmark_ground_truth_sha256=MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_SHA256,
         benchmark_portfolio_sha256="9" * 64,
-        candidate_registry_sha256="c" * 64,
+        candidate_registry_sha256=candidate_registry_sha256,
         qualification_policy_sha256=MAXIMUM_ASSURANCE_QUALIFICATION_POLICY_SHA256,
     )
     object.__setattr__(capability, "verified_at", now)
-    object.__setattr__(capability, "expires_at", expiry)
+    object.__setattr__(
+        capability,
+        "expires_at",
+        min(model.expires_at for model in models),
+    )
     object.__setattr__(capability, "artifact_sha256", "8" * 64)
     object.__setattr__(capability, "qualification_verification_sha256", "9" * 64)
     object.__setattr__(
@@ -266,7 +347,7 @@ def synthetic_production_qualification(
     )
     object.__setattr__(capability, "production_selection_sha256", "a" * 64)
     object.__setattr__(capability, "selection_verification_sha256", "b" * 64)
-    object.__setattr__(capability, "candidate_registry_sha256", "c" * 64)
+    object.__setattr__(capability, "candidate_registry_sha256", candidate_registry_sha256)
     object.__setattr__(
         capability,
         "policy_sha256",

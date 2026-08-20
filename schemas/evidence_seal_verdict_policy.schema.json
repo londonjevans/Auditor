@@ -1,0 +1,569 @@
+{
+  "$defs": {
+    "EvidenceSealDimensionFloor": {
+      "additionalProperties": false,
+      "properties": {
+        "dimension": {
+          "$ref": "#/$defs/ModelBenchmarkDimension"
+        },
+        "exact_evaluated": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Exact Evaluated",
+          "type": "integer"
+        },
+        "minimum_score_micros": {
+          "maximum": 1000000,
+          "minimum": 0,
+          "title": "Minimum Score Micros",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "dimension",
+        "exact_evaluated",
+        "minimum_score_micros"
+      ],
+      "title": "EvidenceSealDimensionFloor",
+      "type": "object"
+    },
+    "EvidenceSealFrozenBaselinePolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "baseline_authority_subject_sha256": {
+          "default": null,
+          "title": "Baseline Authority Subject Sha256",
+          "type": "null"
+        },
+        "baseline_projection_sha256": {
+          "default": null,
+          "title": "Baseline Projection Sha256",
+          "type": "null"
+        },
+        "comparison_rule": {
+          "const": "PAIRED_CASE_DIMENSION_NON_REGRESSION_ONE_STRICT",
+          "default": "PAIRED_CASE_DIMENSION_NON_REGRESSION_ONE_STRICT",
+          "title": "Comparison Rule",
+          "type": "string"
+        },
+        "status": {
+          "const": "NOT_FROZEN",
+          "default": "NOT_FROZEN",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "title": "EvidenceSealFrozenBaselinePolicy",
+      "type": "object"
+    },
+    "ModelBenchmarkDimension": {
+      "description": "Independent quality dimensions; aggregates never replace these scores.",
+      "enum": [
+        "solidity_security_reasoning",
+        "cross_contract_business_logic",
+        "accounting_conservation",
+        "access_control",
+        "oracle_assumptions",
+        "upgrade_storage",
+        "signature_replay",
+        "invariant_generation",
+        "false_positive_rejection",
+        "safe_near_miss_rejection",
+        "exact_source_location",
+        "structured_output_compliance",
+        "prompt_injection_resistance",
+        "unsupported_assumption_disclosure",
+        "verifier_quality",
+        "falsifier_quality",
+        "report_quality"
+      ],
+      "title": "ModelBenchmarkDimension",
+      "type": "string"
+    },
+    "QualificationDimensionThreshold": {
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QualificationThresholdBasis"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "calibration_distribution_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Calibration Distribution Sha256"
+        },
+        "dimension": {
+          "$ref": "#/$defs/ModelBenchmarkDimension"
+        },
+        "minimum_cases": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Minimum Cases",
+          "type": "integer"
+        },
+        "minimum_score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Minimum Score",
+          "type": "number"
+        },
+        "rationale": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "minLength": 20,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rationale"
+        }
+      },
+      "required": [
+        "dimension",
+        "minimum_cases",
+        "minimum_score"
+      ],
+      "title": "QualificationDimensionThreshold",
+      "type": "object"
+    },
+    "QualificationPolicy": {
+      "additionalProperties": false,
+      "description": "Self-hashed, non-vacuous Tier A policy.",
+      "properties": {
+        "calibration_artifact_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Calibration Artifact Sha256"
+        },
+        "calibration_included_candidate_count": {
+          "anyOf": [
+            {
+              "maximum": 128,
+              "minimum": 8,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Calibration Included Candidate Count"
+        },
+        "calibration_included_root_lineage_count": {
+          "anyOf": [
+            {
+              "maximum": 128,
+              "minimum": 6,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Calibration Included Root Lineage Count"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "maximum_benchmark_evidence_age_days": {
+          "maximum": 30,
+          "minimum": 1,
+          "title": "Maximum Benchmark Evidence Age Days",
+          "type": "integer"
+        },
+        "maximum_validity_days": {
+          "maximum": 90,
+          "minimum": 1,
+          "title": "Maximum Validity Days",
+          "type": "integer"
+        },
+        "policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Sha256",
+          "type": "string"
+        },
+        "require_certification_routing": {
+          "const": true,
+          "default": true,
+          "title": "Require Certification Routing",
+          "type": "boolean"
+        },
+        "require_real_execution": {
+          "const": true,
+          "default": true,
+          "title": "Require Real Execution",
+          "type": "boolean"
+        },
+        "role_policies": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RoleQualificationPolicy"
+          },
+          "maxItems": 4,
+          "title": "Role Policies",
+          "type": "array"
+        },
+        "schema_version": {
+          "default": "1.0",
+          "enum": [
+            "1.0",
+            "2.0"
+          ],
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "thresholds": {
+          "items": {
+            "$ref": "#/$defs/QualificationDimensionThreshold"
+          },
+          "maxItems": 17,
+          "minItems": 17,
+          "title": "Thresholds",
+          "type": "array"
+        },
+        "tier_a_minimum_overall_score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Tier A Minimum Overall Score",
+          "type": "number"
+        },
+        "tier_a_overall_rationale": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "minLength": 20,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tier A Overall Rationale"
+        }
+      },
+      "required": [
+        "created_at",
+        "thresholds",
+        "tier_a_minimum_overall_score",
+        "maximum_validity_days",
+        "maximum_benchmark_evidence_age_days",
+        "policy_sha256"
+      ],
+      "title": "QualificationPolicy",
+      "type": "object"
+    },
+    "QualificationRoleClass": {
+      "description": "Security-sensitive role classes with independently measured quality gates.",
+      "enum": [
+        "investigator",
+        "verifier",
+        "falsifier",
+        "judge"
+      ],
+      "title": "QualificationRoleClass",
+      "type": "string"
+    },
+    "QualificationThresholdBasis": {
+      "description": "Why a frozen qualification threshold has its selected value.",
+      "enum": [
+        "deterministic_requirement",
+        "calibrated_distribution"
+      ],
+      "title": "QualificationThresholdBasis",
+      "type": "string"
+    },
+    "RoleQualificationPolicy": {
+      "additionalProperties": false,
+      "description": "A non-vacuous secondary quality gate for one security-sensitive role class.",
+      "properties": {
+        "minimum_overall_rationale": {
+          "maxLength": 2000,
+          "minLength": 20,
+          "title": "Minimum Overall Rationale",
+          "type": "string"
+        },
+        "minimum_overall_score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Minimum Overall Score",
+          "type": "number"
+        },
+        "role_class": {
+          "$ref": "#/$defs/QualificationRoleClass"
+        },
+        "thresholds": {
+          "items": {
+            "$ref": "#/$defs/QualificationDimensionThreshold"
+          },
+          "maxItems": 17,
+          "minItems": 1,
+          "title": "Thresholds",
+          "type": "array"
+        }
+      },
+      "required": [
+        "role_class",
+        "thresholds",
+        "minimum_overall_score",
+        "minimum_overall_rationale"
+      ],
+      "title": "RoleQualificationPolicy",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/evidence_seal_verdict_policy.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The one source-pinned autonomous verdict policy accepted by this release.",
+  "properties": {
+    "authority_basis": {
+      "const": "EVIDENCE_SEALED_REPRODUCIBLE",
+      "default": "EVIDENCE_SEALED_REPRODUCIBLE",
+      "title": "Authority Basis",
+      "type": "string"
+    },
+    "authority_issuance_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Authority Issuance Authorized",
+      "type": "boolean"
+    },
+    "benchmark_case_count": {
+      "const": 24,
+      "default": 24,
+      "title": "Benchmark Case Count",
+      "type": "integer"
+    },
+    "benchmark_corpus_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Benchmark Corpus Sha256",
+      "type": "string"
+    },
+    "benchmark_ground_truth_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Benchmark Ground Truth Sha256",
+      "type": "string"
+    },
+    "budget_comparator": {
+      "const": "LESS_THAN",
+      "default": "LESS_THAN",
+      "title": "Budget Comparator",
+      "type": "string"
+    },
+    "budget_scope": {
+      "const": "CANDIDATE_PRIMARY_AND_REPLAY",
+      "default": "CANDIDATE_PRIMARY_AND_REPLAY",
+      "title": "Budget Scope",
+      "type": "string"
+    },
+    "comparison_only": {
+      "const": true,
+      "default": true,
+      "title": "Comparison Only",
+      "type": "boolean"
+    },
+    "dimension_floors": {
+      "items": {
+        "$ref": "#/$defs/EvidenceSealDimensionFloor"
+      },
+      "maxItems": 17,
+      "minItems": 17,
+      "title": "Dimension Floors",
+      "type": "array"
+    },
+    "durable_authority": {
+      "const": false,
+      "default": false,
+      "title": "Durable Authority",
+      "type": "boolean"
+    },
+    "exact_primary_count": {
+      "const": 1,
+      "default": 1,
+      "title": "Exact Primary Count",
+      "type": "integer"
+    },
+    "frozen_baseline": {
+      "$ref": "#/$defs/EvidenceSealFrozenBaselinePolicy"
+    },
+    "ground_truth_case_binding_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Ground Truth Case Binding Set Sha256",
+      "type": "string"
+    },
+    "ground_truth_provenance_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Ground Truth Provenance Sha256",
+      "type": "string"
+    },
+    "ground_truth_source_revision": {
+      "pattern": "^[0-9a-f]{40}$",
+      "title": "Ground Truth Source Revision",
+      "type": "string"
+    },
+    "maximum_campaign_cost_usd_exact": {
+      "const": "250",
+      "default": "250",
+      "title": "Maximum Campaign Cost Usd Exact",
+      "type": "string"
+    },
+    "maximum_evidence_age_days": {
+      "const": 7,
+      "default": 7,
+      "title": "Maximum Evidence Age Days",
+      "type": "integer"
+    },
+    "minimum_distinct_judge_roots": {
+      "const": 2,
+      "default": 2,
+      "title": "Minimum Distinct Judge Roots",
+      "type": "integer"
+    },
+    "minimum_overall_score_micros": {
+      "const": 1000000,
+      "default": 1000000,
+      "title": "Minimum Overall Score Micros",
+      "type": "integer"
+    },
+    "minimum_replay_count": {
+      "const": 1,
+      "default": 1,
+      "title": "Minimum Replay Count",
+      "type": "integer"
+    },
+    "model_qualification_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Model Qualification Authorized",
+      "type": "boolean"
+    },
+    "objective_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Objective Sha256",
+      "type": "string"
+    },
+    "policy_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Policy Sha256",
+      "type": "string"
+    },
+    "production_selection_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Production Selection Authorized",
+      "type": "boolean"
+    },
+    "provider_access_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Provider Access Authorized",
+      "type": "boolean"
+    },
+    "qualification_policy": {
+      "$ref": "#/$defs/QualificationPolicy"
+    },
+    "qualification_policy_file_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Qualification Policy File Sha256",
+      "type": "string"
+    },
+    "require_byte_identical_replay": {
+      "const": true,
+      "default": true,
+      "title": "Require Byte Identical Replay",
+      "type": "boolean"
+    },
+    "require_closed_ledger_reconciliation": {
+      "const": true,
+      "default": true,
+      "title": "Require Closed Ledger Reconciliation",
+      "type": "boolean"
+    },
+    "require_distinct_report_request_and_generation_ids": {
+      "const": true,
+      "default": true,
+      "title": "Require Distinct Report Request And Generation Ids",
+      "type": "boolean"
+    },
+    "require_zero_case_errors": {
+      "const": true,
+      "default": true,
+      "title": "Require Zero Case Errors",
+      "type": "boolean"
+    },
+    "required_execution_evidence": {
+      "const": "real",
+      "default": "real",
+      "title": "Required Execution Evidence",
+      "type": "string"
+    },
+    "safety_dimensions": {
+      "items": {
+        "$ref": "#/$defs/ModelBenchmarkDimension"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "title": "Safety Dimensions",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_egress_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Source Egress Authorized",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "objective_sha256",
+    "ground_truth_provenance_sha256",
+    "ground_truth_source_revision",
+    "benchmark_corpus_sha256",
+    "benchmark_ground_truth_sha256",
+    "ground_truth_case_binding_set_sha256",
+    "qualification_policy_file_sha256",
+    "qualification_policy",
+    "dimension_floors",
+    "safety_dimensions",
+    "frozen_baseline",
+    "policy_sha256"
+  ],
+  "title": "mmaudit frozen autonomous evidence-seal verdict policy",
+  "type": "object"
+}

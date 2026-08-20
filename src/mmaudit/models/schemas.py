@@ -8,8 +8,8 @@ import math
 import re
 import unicodedata
 from collections.abc import Mapping, Sequence
-from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation, localcontext
 from enum import StrEnum
 from itertools import pairwise
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Self, cast
@@ -54,6 +54,22 @@ from mmaudit.scanners.diagnostics import validated_public_tool_version
 
 if TYPE_CHECKING:
     from mmaudit.models.policy_selection import AuditModelSelection as AuditModelSelection
+    from mmaudit.models.refresh_runtime import (
+        AuditModelRefreshEvidence as AuditModelRefreshEvidence,
+    )
+    from mmaudit.models.refresh_runtime import (
+        AuditModelRefreshPricingEvidence as AuditModelRefreshPricingEvidence,
+    )
+    from mmaudit.models.refresh_runtime import (
+        AuditModelRefreshPricingRouteEvidence as AuditModelRefreshPricingRouteEvidence,
+    )
+    from mmaudit.models.refresh_runtime import (
+        VerifiedAuditModelRefreshPricingAuthority as VerifiedAuditModelRefreshPricingAuthority,
+    )
+    from mmaudit.models.truncation import (
+        CandidateReviewNormalizationEvidence as CandidateReviewNormalizationEvidence,
+    )
+    from mmaudit.orchestration.budgets import EndpointRequestCostBound
 
 
 def _require_public_tool_version(value: str) -> str:
@@ -88,6 +104,22 @@ class StrictModel(BaseModel):
     """Base model that rejects unknown fields in security-sensitive data."""
 
     model_config = ConfigDict(extra="forbid")
+
+
+def _require_explicit_nested_model_fields(value: object) -> None:
+    """Reject detached artifacts that rely on Pydantic-filled security defaults."""
+
+    if isinstance(value, BaseModel):
+        if set(type(value).model_fields) - value.model_fields_set:
+            raise ValueError("durable evidence requires every nested model field explicitly")
+        for field_name in type(value).model_fields:
+            _require_explicit_nested_model_fields(getattr(value, field_name))
+    elif isinstance(value, Mapping):
+        for child in value.values():
+            _require_explicit_nested_model_fields(child)
+    elif isinstance(value, list | tuple):
+        for child in value:
+            _require_explicit_nested_model_fields(child)
 
 
 def _validate_audit_model_selection(value: object) -> object:
@@ -153,6 +185,201 @@ if not TYPE_CHECKING:
         GetPydanticSchema(
             _audit_model_selection_core_schema,
             _audit_model_selection_json_schema,
+        ),
+    ]
+
+
+def _validate_audit_model_refresh_evidence(value: object) -> object:
+    """Lazily validate exact veto-only refresh evidence without an import cycle."""
+
+    from mmaudit.models.refresh_runtime import AuditModelRefreshEvidence as RefreshModel
+
+    if type(value) is RefreshModel:
+        return RefreshModel.model_validate_json(value.model_dump_json(), strict=True)
+    if not isinstance(value, Mapping):
+        raise ValueError("audit model refresh evidence must be a JSON object")
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    if len(encoded) > MAX_JSON_ARTIFACT_BYTES:
+        raise ValueError("audit model refresh evidence exceeds the JSON artifact byte limit")
+    return RefreshModel.model_validate_json(encoded, strict=True)
+
+
+def _serialize_audit_model_refresh_evidence(value: object) -> object:
+    """Serialize only the exact non-authorizing refresh evidence type."""
+
+    from mmaudit.models.refresh_runtime import AuditModelRefreshEvidence as RefreshModel
+
+    if type(value) is not RefreshModel:
+        raise TypeError("audit model refresh evidence has an invalid exact type")
+    return value.model_dump(mode="json")
+
+
+def _audit_model_refresh_evidence_core_schema(
+    _source_type: Any,
+    _handler: GetCoreSchemaHandler,
+) -> CoreSchema:
+    """Build a cycle-free runtime adapter for veto-only refresh evidence."""
+
+    return core_schema.no_info_plain_validator_function(
+        _validate_audit_model_refresh_evidence,
+        json_schema_input_schema=core_schema.dict_schema(),
+        serialization=core_schema.plain_serializer_function_ser_schema(
+            _serialize_audit_model_refresh_evidence
+        ),
+    )
+
+
+def _audit_model_refresh_evidence_json_schema(
+    _schema: CoreSchema,
+    handler: GetJsonSchemaHandler,
+) -> JsonSchemaValue:
+    """Expose the exact refresh schema in report-derived public artifacts."""
+
+    from mmaudit.models.refresh_runtime import AuditModelRefreshEvidence as RefreshModel
+
+    return handler(RefreshModel.__pydantic_core_schema__)
+
+
+if not TYPE_CHECKING:
+    AuditModelRefreshEvidence = Annotated[
+        Any,
+        GetPydanticSchema(
+            _audit_model_refresh_evidence_core_schema,
+            _audit_model_refresh_evidence_json_schema,
+        ),
+    ]
+
+
+def _validate_audit_model_refresh_pricing_evidence(value: object) -> object:
+    """Lazily validate exact non-authorizing refresh pricing evidence."""
+
+    from mmaudit.models.refresh_runtime import (
+        AuditModelRefreshPricingEvidence as PricingModel,
+    )
+
+    if type(value) is PricingModel:
+        return PricingModel.model_validate_json(value.model_dump_json(), strict=True)
+    if not isinstance(value, Mapping):
+        raise ValueError("audit model refresh pricing evidence must be a JSON object")
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    if len(encoded) > MAX_JSON_ARTIFACT_BYTES:
+        raise ValueError("audit model refresh pricing evidence exceeds the JSON byte limit")
+    return PricingModel.model_validate_json(encoded, strict=True)
+
+
+def _serialize_audit_model_refresh_pricing_evidence(value: object) -> object:
+    from mmaudit.models.refresh_runtime import (
+        AuditModelRefreshPricingEvidence as PricingModel,
+    )
+
+    if type(value) is not PricingModel:
+        raise TypeError("audit model refresh pricing evidence has an invalid exact type")
+    return value.model_dump(mode="json")
+
+
+def _audit_model_refresh_pricing_evidence_core_schema(
+    _source_type: Any,
+    _handler: GetCoreSchemaHandler,
+) -> CoreSchema:
+    return core_schema.no_info_plain_validator_function(
+        _validate_audit_model_refresh_pricing_evidence,
+        json_schema_input_schema=core_schema.dict_schema(),
+        serialization=core_schema.plain_serializer_function_ser_schema(
+            _serialize_audit_model_refresh_pricing_evidence
+        ),
+    )
+
+
+def _audit_model_refresh_pricing_evidence_json_schema(
+    _schema: CoreSchema,
+    handler: GetJsonSchemaHandler,
+) -> JsonSchemaValue:
+    from mmaudit.models.refresh_runtime import (
+        AuditModelRefreshPricingEvidence as PricingModel,
+    )
+
+    return handler(PricingModel.__pydantic_core_schema__)
+
+
+if not TYPE_CHECKING:
+    AuditModelRefreshPricingEvidence = Annotated[
+        Any,
+        GetPydanticSchema(
+            _audit_model_refresh_pricing_evidence_core_schema,
+            _audit_model_refresh_pricing_evidence_json_schema,
+        ),
+    ]
+
+
+def _validate_candidate_review_normalization_evidence(value: object) -> object:
+    """Lazily validate exact framed-review normalization custody without an import cycle."""
+
+    from mmaudit.models.truncation import CandidateReviewNormalizationEvidence as EvidenceModel
+
+    if type(value) is EvidenceModel:
+        return EvidenceModel.model_validate_json(value.model_dump_json(), strict=True)
+    if not isinstance(value, Mapping):
+        raise ValueError("candidate-review normalization evidence must be a JSON object")
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    if len(encoded) > MAX_JSON_ARTIFACT_BYTES:
+        raise ValueError("candidate-review normalization evidence exceeds the JSON byte limit")
+    return EvidenceModel.model_validate_json(encoded, strict=True)
+
+
+def _serialize_candidate_review_normalization_evidence(value: object) -> object:
+    from mmaudit.models.truncation import CandidateReviewNormalizationEvidence as EvidenceModel
+
+    if type(value) is not EvidenceModel:
+        raise TypeError("candidate-review normalization evidence has an invalid exact type")
+    return value.model_dump(mode="json")
+
+
+def _candidate_review_normalization_evidence_core_schema(
+    _source_type: Any,
+    _handler: GetCoreSchemaHandler,
+) -> CoreSchema:
+    return core_schema.no_info_plain_validator_function(
+        _validate_candidate_review_normalization_evidence,
+        json_schema_input_schema=core_schema.dict_schema(),
+        serialization=core_schema.plain_serializer_function_ser_schema(
+            _serialize_candidate_review_normalization_evidence
+        ),
+    )
+
+
+def _candidate_review_normalization_evidence_json_schema(
+    _schema: CoreSchema,
+    handler: GetJsonSchemaHandler,
+) -> JsonSchemaValue:
+    from mmaudit.models.truncation import CandidateReviewNormalizationEvidence as EvidenceModel
+
+    return handler(EvidenceModel.__pydantic_core_schema__)
+
+
+if not TYPE_CHECKING:
+    CandidateReviewNormalizationEvidence = Annotated[
+        Any,
+        GetPydanticSchema(
+            _candidate_review_normalization_evidence_core_schema,
+            _candidate_review_normalization_evidence_json_schema,
         ),
     ]
 
@@ -3130,7 +3357,7 @@ class CandidateReviewBatch(StrictModel):
 class ModelSurfaceReviewArtifact(StrictModel):
     """Hash-linked normalized response for one exact requested surface set."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     request_id: str = Field(min_length=1, max_length=500)
     review_role: str = Field(pattern=r"^[a-z][a-z0-9_:.-]{0,127}$")
     requested_surface_ids: tuple[str, ...] = Field(min_length=1, max_length=10_000)
@@ -3141,6 +3368,19 @@ class ModelSurfaceReviewArtifact(StrictModel):
     response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     validated_response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     response_schema_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    normalized_response_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+        exclude_if=lambda value: value is None,
+    )
+    normalization_evidence: CandidateReviewNormalizationEvidence | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    normalized_response: CandidateReviewBatch | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     records: tuple[ModelSurfaceReviewRecord, ...] = Field(
         min_length=1,
         max_length=10_000,
@@ -3152,6 +3392,13 @@ class ModelSurfaceReviewArtifact(StrictModel):
         """Hash a JSON-compatible artifact payload without its digest field."""
 
         canonical = {key: value for key, value in payload.items() if key != "artifact_sha256"}
+        if canonical.get("schema_version", "1.0") == "1.0":
+            for field_name in (
+                "normalized_response_sha256",
+                "normalization_evidence",
+                "normalized_response",
+            ):
+                canonical.pop(field_name, None)
         return hashlib.sha256(
             json.dumps(
                 canonical,
@@ -3183,11 +3430,13 @@ class ModelSurfaceReviewArtifact(StrictModel):
     @classmethod
     def request_id_is_bounded_plain_text(cls, value: str) -> str:
         normalized = value.strip()
-        if not normalized or any(
-            ord(character) < 32 or ord(character) == 127 for character in normalized
+        if (
+            value != normalized
+            or not normalized
+            or any(ord(character) < 32 or ord(character) == 127 for character in normalized)
         ):
             raise ValueError("model surface review request ID must be bounded plain text")
-        return normalized
+        return value
 
     @field_validator("requested_surface_ids")
     @classmethod
@@ -3223,6 +3472,88 @@ class ModelSurfaceReviewArtifact(StrictModel):
         ).hexdigest()
         if self.requested_surface_ids_sha256 != expected_surface_ids_hash:
             raise ValueError("requested model surface ID hash is inconsistent")
+        framed_custody = (
+            self.normalized_response_sha256,
+            self.normalization_evidence,
+            self.normalized_response,
+        )
+        if self.schema_version == "1.0":
+            if any(item is not None for item in framed_custody):
+                raise ValueError("legacy model surface evidence cannot carry framed custody")
+        elif any(item is None for item in framed_custody):
+            raise ValueError(
+                "framed model surface evidence requires complete normalization custody"
+            )
+        else:
+            from mmaudit.models.truncation import (
+                CandidateReviewNormalizationEvidence as NormalizationEvidence,
+            )
+            from mmaudit.models.truncation import (
+                candidate_review_protocol_implementation_is_pristine,
+            )
+
+            assert self.normalized_response_sha256 is not None
+            assert self.normalization_evidence is not None
+            assert self.normalized_response is not None
+            if (
+                not candidate_review_protocol_implementation_is_pristine()
+                or type(self.normalization_evidence) is not NormalizationEvidence
+            ):
+                raise ValueError("model surface normalization implementation changed")
+            _require_explicit_nested_model_fields(self.normalization_evidence)
+            _require_explicit_nested_model_fields(self.normalized_response)
+            _require_explicit_nested_model_fields(self.records)
+            normalized_payload = self.normalized_response.model_dump(mode="json")
+            normalized_sha256 = hashlib.sha256(
+                json.dumps(
+                    normalized_payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                    allow_nan=False,
+                ).encode()
+            ).hexdigest()
+            findings_payload = [
+                finding.model_dump(mode="json") for finding in self.normalized_response.findings
+            ]
+            surface_payload = [record.model_dump(mode="json") for record in self.records]
+            surface_sha256 = hashlib.sha256(
+                json.dumps(
+                    surface_payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                    allow_nan=False,
+                ).encode()
+            ).hexdigest()
+            findings_sha256 = hashlib.sha256(
+                json.dumps(
+                    findings_payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                    allow_nan=False,
+                ).encode()
+            ).hexdigest()
+            evidence = self.normalization_evidence
+            evidence.require_exact_batch(
+                self.normalized_response,
+                request_id=self.request_id,
+            )
+            if (
+                self.normalized_response_sha256 != normalized_sha256
+                or evidence.request_id != self.request_id
+                or evidence.wire_schema_sha256 != self.response_schema_sha256
+                or evidence.wire_validated_response_sha256 != self.validated_response_sha256
+                or evidence.normalized_batch_sha256 != normalized_sha256
+                or evidence.normalized_batch_sha256 != self.normalized_response_sha256
+                or evidence.findings_sha256 != findings_sha256
+                or evidence.surface_reviews_sha256 != surface_sha256
+                or evidence.finding_count != len(self.normalized_response.findings)
+                or evidence.surface_review_count != len(self.records)
+                or tuple(self.normalized_response.surface_reviews) != self.records
+            ):
+                raise ValueError("model surface normalization custody is inconsistent")
         expected_artifact_hash = self.calculate_artifact_sha256(self.model_dump(mode="json"))
         if self.artifact_sha256 != expected_artifact_hash:
             raise ValueError("model surface review artifact hash is inconsistent")
@@ -11559,6 +11890,510 @@ class SpecialistExecutionRecord(StrictModel):
         return self
 
 
+_REFRESH_PRICING_FIELD_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_REFRESH_PRICING_FIELDS = frozenset(
+    {
+        "completion",
+        "image",
+        "input_cache_read",
+        "input_cache_write",
+        "internal_reasoning",
+        "prompt",
+        "request",
+        "web_search",
+    }
+)
+_ROUTER_MAX_PRICE_FIELDS = frozenset({"completion", "image", "prompt", "request"})
+_PER_MILLION_ROUTER_PRICE_FIELDS = frozenset({"completion", "prompt"})
+_REFRESH_PRICE_PATTERN = re.compile(
+    r"^(?:0|[1-9][0-9]{0,11}|(?:0|[1-9][0-9]{0,11})\.[0-9]{0,35}[1-9])$"
+)
+_ROUTER_PRICE_PATTERN = re.compile(
+    r"^(?:0|[1-9][0-9]{0,17}|(?:0|[1-9][0-9]{0,17})\.[0-9]{0,35}[1-9])$"
+)
+_BOUND_USD_PATTERN = re.compile(r"^(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,18})?$")
+_ATTEMPT_REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
+_RefreshPricingField = Annotated[
+    str,
+    Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]{0,63}$"),
+]
+_RefreshPrice = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=49,
+        pattern=r"^(?:0|[1-9][0-9]{0,11}|(?:0|[1-9][0-9]{0,11})\.[0-9]{0,35}[1-9])$",
+    ),
+]
+_RefreshPricingMap = dict[_RefreshPricingField, _RefreshPrice]
+_RouterPriceField = Annotated[
+    str,
+    Field(min_length=1, max_length=10, pattern=r"^(?:completion|image|prompt|request)$"),
+]
+_RouterPrice = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=55,
+        pattern=r"^(?:0|[1-9][0-9]{0,17}|(?:0|[1-9][0-9]{0,17})\.[0-9]{0,35}[1-9])$",
+    ),
+]
+_RouterPriceMap = dict[_RouterPriceField, _RouterPrice]
+
+
+def _canonical_nonnegative_decimal(value: object, *, router_units: bool = False) -> str:
+    """Return one bounded nonnegative plain decimal without using ambient precision."""
+
+    if isinstance(value, bool) or not isinstance(value, int | float | str | Decimal):
+        raise ValueError("pricing value must be an exact numeric value")
+    try:
+        parsed = Decimal(str(value))
+    except InvalidOperation as exc:
+        raise ValueError("pricing value is not a valid decimal") from exc
+    if not parsed.is_finite() or parsed < 0:
+        raise ValueError("pricing value must be finite and nonnegative")
+    canonical = format(parsed, "f")
+    if "." in canonical:
+        canonical = canonical.rstrip("0").rstrip(".")
+    if parsed == 0:
+        canonical = "0"
+    pattern = _ROUTER_PRICE_PATTERN if router_units else _REFRESH_PRICE_PATTERN
+    if pattern.fullmatch(canonical) is None:
+        raise ValueError("pricing value exceeds its bounded decimal format")
+    return canonical
+
+
+def _pricing_attempt_sha256(value: Any) -> str:
+    """Hash pricing-attempt material using the artifact's JSON representation."""
+
+    def json_default(item: object) -> object:
+        if isinstance(item, datetime):
+            return item.isoformat().replace("+00:00", "Z")
+        if isinstance(item, BaseModel):
+            return item.model_dump(mode="json")
+        raise TypeError(f"unsupported pricing-attempt value: {type(item).__name__}")
+
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+            default=json_default,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+class EndpointRequestCostComponentEvidence(StrictModel):
+    """Durable exact projection of one request cost-bound component."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    pricing_field: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    unit_price_usd_exact: str = Field(
+        pattern=r"^(?:0|[1-9][0-9]{0,11}|(?:0|[1-9][0-9]{0,11})\.[0-9]{0,35}[1-9])$"
+    )
+    maximum_units: int = Field(ge=0, le=2**63 - 1)
+
+    @field_validator("unit_price_usd_exact")
+    @classmethod
+    def unit_price_is_canonical(cls, value: str) -> str:
+        if _canonical_nonnegative_decimal(value) != value:
+            raise ValueError("cost-bound unit price is not canonical")
+        return value
+
+
+class AuditModelRefreshPricingAttemptEvidence(StrictModel):
+    """Non-authorizing price and cost-bound custody for one provider attempt.
+
+    The record is safe to retain in usage and report artifacts. Its hashes prove
+    structural consistency only; they cannot recreate the live refresh or pricing
+    capabilities required at the transport boundary.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    evidence_authority: Literal["comparison_required"] = "comparison_required"
+    authority_mode: Literal["NON_AUTHORIZING_REQUEST_COST_BOUND"] = (
+        "NON_AUTHORIZING_REQUEST_COST_BOUND"
+    )
+    logical_request_id: str = Field(min_length=1, max_length=256)
+    attempt_request_id: str = Field(min_length=1, max_length=256)
+    attempt_index: int = Field(ge=1, le=32)
+    reservation_checked_at: datetime
+    transport_checked_at: datetime | None = None
+    transport_attempted: bool
+    pricing_verified_at: datetime
+    pricing_expires_at: datetime
+    exact_model_id: str = Field(
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
+    )
+    provider_endpoint: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,255}$")
+    current_endpoint_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    request_material_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    request_body_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    pricing_evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    pricing_authority_capability_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    pricing_route_evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    refresh_evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    refresh_guard_capability_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    refresh_route_evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    qualified_pricing_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    baseline_pricing: _RefreshPricingMap = Field(
+        min_length=2,
+        max_length=64,
+        json_schema_extra={
+            "propertyNames": {
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": r"^[a-z][a-z0-9_]{0,63}$",
+            }
+        },
+    )
+    baseline_pricing_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    current_pricing: _RefreshPricingMap = Field(
+        min_length=2,
+        max_length=64,
+        json_schema_extra={
+            "propertyNames": {
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": r"^[a-z][a-z0-9_]{0,63}$",
+            }
+        },
+    )
+    current_pricing_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    cost_bound_pricing_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    components: tuple[EndpointRequestCostComponentEvidence, ...] = Field(
+        min_length=2,
+        max_length=64,
+    )
+    maximum_cost_usd_exact: str = Field(pattern=r"^(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,18})?$")
+    provider_max_price: _RouterPriceMap = Field(
+        min_length=2,
+        max_length=4,
+        json_schema_extra={
+            "propertyNames": {
+                "minLength": 1,
+                "maxLength": 10,
+                "pattern": r"^(?:completion|image|prompt|request)$",
+            }
+        },
+    )
+    provider_max_price_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    pricing_use_authorized: Literal[False] = False
+    provider_access_authorized: Literal[False] = False
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def from_bound(
+        cls,
+        *,
+        logical_request_id: str,
+        attempt_request_id: str,
+        attempt_index: int,
+        reservation_checked_at: datetime,
+        transport_checked_at: datetime | None,
+        current_endpoint_snapshot_sha256: str,
+        request_body_sha256: str,
+        pricing_evidence: AuditModelRefreshPricingEvidence,
+        pricing_authority: VerifiedAuditModelRefreshPricingAuthority,
+        pricing_route: AuditModelRefreshPricingRouteEvidence,
+        endpoint_cost_bound: EndpointRequestCostBound,
+        provider_max_price: Mapping[str, int | float | str | Decimal],
+    ) -> AuditModelRefreshPricingAttemptEvidence:
+        """Project exact live objects into durable, permanently non-authorizing evidence."""
+
+        from mmaudit.models.refresh_runtime import (
+            AuditModelRefreshPricingEvidence as PricingEvidence,
+        )
+        from mmaudit.models.refresh_runtime import (
+            AuditModelRefreshPricingRouteEvidence as PricingRoute,
+        )
+        from mmaudit.models.refresh_runtime import (
+            VerifiedAuditModelRefreshPricingAuthority as PricingAuthority,
+        )
+        from mmaudit.orchestration.budgets import (
+            BudgetReservationStateError,
+            _require_pristine_endpoint_cost_bound_types,
+            _trusted_endpoint_request_maximum_cost_usd,
+        )
+        from mmaudit.orchestration.budgets import (
+            EndpointRequestCostBound as CostBound,
+        )
+
+        if (
+            type(pricing_evidence) is not PricingEvidence
+            or type(pricing_authority) is not PricingAuthority
+            or type(pricing_route) is not PricingRoute
+            or type(endpoint_cost_bound) is not CostBound
+        ):
+            raise ValueError("pricing attempt requires exact live pricing and cost-bound types")
+        try:
+            _require_pristine_endpoint_cost_bound_types()
+            exact_bound_maximum = _trusted_endpoint_request_maximum_cost_usd(endpoint_cost_bound)
+        except BudgetReservationStateError as exc:
+            raise ValueError("pricing attempt cost-bound callable provenance is invalid") from exc
+        try:
+            authority_pricing_evidence_sha256 = pricing_authority.pricing_evidence_sha256
+            authority_capability_sha256 = pricing_authority.capability_sha256
+            authority_refresh_evidence_sha256 = pricing_authority.refresh_evidence_sha256
+            authority_refresh_guard_sha256 = pricing_authority.refresh_guard_capability_sha256
+            authority_verified_at = pricing_authority.verified_at
+            authority_expires_at = pricing_authority.expires_at
+        except AttributeError as exc:
+            raise ValueError("pricing attempt authority is incomplete or forged") from exc
+        canonical_evidence = PricingEvidence.model_validate_json(
+            pricing_evidence.model_dump_json(),
+            strict=True,
+        )
+        canonical_route = PricingRoute.model_validate_json(
+            pricing_route.model_dump_json(),
+            strict=True,
+        )
+        retained = tuple(
+            route
+            for route in canonical_evidence.routes
+            if route.exact_model_id == canonical_route.exact_model_id and route.audit_selected
+        )
+        if retained != (canonical_route,):
+            raise ValueError("pricing attempt route is absent from exact audit pricing evidence")
+        if (
+            authority_pricing_evidence_sha256 != canonical_evidence.evidence_sha256
+            or authority_capability_sha256 == canonical_evidence.evidence_sha256
+            or authority_refresh_evidence_sha256 != canonical_evidence.refresh_evidence_sha256
+            or authority_refresh_guard_sha256 != canonical_evidence.refresh_guard_capability_sha256
+            or authority_verified_at != canonical_evidence.verified_at
+            or authority_expires_at != canonical_evidence.expires_at
+        ):
+            raise ValueError("pricing attempt authority differs from exact pricing evidence")
+        if (
+            endpoint_cost_bound.exact_model_id != canonical_route.exact_model_id
+            or endpoint_cost_bound.provider_endpoint != canonical_route.approved_provider_endpoint
+            or endpoint_cost_bound.request_material_sha256 != request_body_sha256
+        ):
+            raise ValueError("pricing attempt cost bound differs from route or request body")
+        canonical_max_price = {
+            field: _canonical_nonnegative_decimal(value, router_units=True)
+            for field, value in sorted(provider_max_price.items())
+        }
+        values: dict[str, Any] = {
+            "schema_version": "1.0",
+            "evidence_authority": "comparison_required",
+            "authority_mode": "NON_AUTHORIZING_REQUEST_COST_BOUND",
+            "logical_request_id": logical_request_id,
+            "attempt_request_id": attempt_request_id,
+            "attempt_index": attempt_index,
+            "reservation_checked_at": reservation_checked_at,
+            "transport_checked_at": transport_checked_at,
+            "transport_attempted": transport_checked_at is not None,
+            "pricing_verified_at": canonical_evidence.verified_at,
+            "pricing_expires_at": canonical_evidence.expires_at,
+            "exact_model_id": canonical_route.exact_model_id,
+            "provider_endpoint": canonical_route.approved_provider_endpoint,
+            "current_endpoint_snapshot_sha256": current_endpoint_snapshot_sha256,
+            "request_material_sha256": endpoint_cost_bound.request_material_sha256,
+            "request_body_sha256": request_body_sha256,
+            "pricing_evidence_sha256": canonical_evidence.evidence_sha256,
+            "pricing_authority_capability_sha256": authority_capability_sha256,
+            "pricing_route_evidence_sha256": canonical_route.route_evidence_sha256,
+            "refresh_evidence_sha256": canonical_evidence.refresh_evidence_sha256,
+            "refresh_guard_capability_sha256": canonical_evidence.refresh_guard_capability_sha256,
+            "refresh_route_evidence_sha256": canonical_route.refresh_route_evidence_sha256,
+            "qualified_pricing_snapshot_sha256": (
+                canonical_route.qualified_pricing_snapshot_sha256
+            ),
+            "baseline_pricing": dict(canonical_route.baseline_pricing),
+            "baseline_pricing_sha256": canonical_route.baseline_pricing_sha256,
+            "current_pricing": dict(canonical_route.current_pricing),
+            "current_pricing_sha256": canonical_route.current_pricing_sha256,
+            "cost_bound_pricing_snapshot_sha256": (endpoint_cost_bound.pricing_snapshot_sha256),
+            "components": tuple(
+                EndpointRequestCostComponentEvidence(
+                    pricing_field=component.pricing_field,
+                    unit_price_usd_exact=_canonical_nonnegative_decimal(component.unit_price_usd),
+                    maximum_units=component.maximum_units,
+                )
+                for component in endpoint_cost_bound.components
+            ),
+            "maximum_cost_usd_exact": format(exact_bound_maximum, "f"),
+            "provider_max_price": canonical_max_price,
+            "provider_max_price_sha256": _canonical_model_sha256(canonical_max_price),
+            "pricing_use_authorized": False,
+            "provider_access_authorized": False,
+        }
+        return cls(**values, evidence_sha256=_pricing_attempt_sha256(values))
+
+    @field_validator("baseline_pricing", "current_pricing")
+    @classmethod
+    def pricing_map_is_exact_and_canonical(
+        cls,
+        value: _RefreshPricingMap,
+    ) -> _RefreshPricingMap:
+        if (
+            tuple(value) != tuple(sorted(value))
+            or not {"prompt", "completion"}.issubset(value)
+            or not set(value).issubset(_REFRESH_PRICING_FIELDS)
+            or any(
+                _REFRESH_PRICING_FIELD_PATTERN.fullmatch(field) is None
+                or _canonical_nonnegative_decimal(price) != price
+                for field, price in value.items()
+            )
+        ):
+            raise ValueError("pricing attempt map is not exact canonical pricing")
+        return dict(value)
+
+    @field_validator("provider_max_price")
+    @classmethod
+    def provider_max_price_is_canonical(
+        cls,
+        value: _RouterPriceMap,
+    ) -> _RouterPriceMap:
+        if (
+            tuple(value) != tuple(sorted(value))
+            or not {"prompt", "completion"}.issubset(value)
+            or not set(value).issubset(_ROUTER_MAX_PRICE_FIELDS)
+            or any(
+                _canonical_nonnegative_decimal(price, router_units=True) != price
+                for price in value.values()
+            )
+        ):
+            raise ValueError("pricing attempt provider max_price is not canonical")
+        return dict(value)
+
+    @field_validator(
+        "reservation_checked_at",
+        "transport_checked_at",
+        "pricing_verified_at",
+        "pricing_expires_at",
+    )
+    @classmethod
+    def times_are_whole_second_utc(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if (
+            type(value) is not datetime
+            or value.tzinfo is None
+            or value.utcoffset() != timedelta(0)
+            or value.microsecond != 0
+        ):
+            raise ValueError("pricing attempt timestamps must be whole-second UTC")
+        return value
+
+    @field_validator(
+        "transport_attempted",
+        "pricing_use_authorized",
+        "provider_access_authorized",
+        mode="before",
+    )
+    @classmethod
+    def authority_flags_are_literal(cls, value: object) -> object:
+        if type(value) is not bool:
+            raise ValueError("pricing attempt authority flags must be literal booleans")
+        return value
+
+    @model_validator(mode="after")
+    def attempt_is_exact_bounded_and_self_hashed(self) -> Self:
+        from mmaudit.orchestration.budgets import (
+            BudgetReservationStateError,
+            EndpointPriceComponent,
+            EndpointRequestCostBound,
+            _require_pristine_endpoint_cost_bound_types,
+            _trusted_endpoint_request_maximum_cost_usd,
+        )
+
+        if (
+            _ATTEMPT_REQUEST_ID_PATTERN.fullmatch(self.logical_request_id) is None
+            or _ATTEMPT_REQUEST_ID_PATTERN.fullmatch(self.attempt_request_id) is None
+        ):
+            raise ValueError("pricing attempt request IDs are invalid")
+        expected_attempt_id = (
+            self.logical_request_id
+            if self.attempt_index == 1
+            else f"{self.logical_request_id}:attempt:{self.attempt_index}"
+        )
+        if self.attempt_request_id != expected_attempt_id:
+            raise ValueError("pricing attempt request ID is not consecutive")
+        if not (self.pricing_verified_at <= self.reservation_checked_at < self.pricing_expires_at):
+            raise ValueError("pricing attempt is outside its exact validity window")
+        if (self.transport_checked_at is None) != (not self.transport_attempted):
+            raise ValueError("pricing attempt transport timestamp is inconsistent")
+        if self.transport_checked_at is not None and not (
+            self.reservation_checked_at <= self.transport_checked_at < self.pricing_expires_at
+        ):
+            raise ValueError("pricing transport is outside its exact validity window")
+        baseline_fields = tuple(self.baseline_pricing)
+        current_fields = tuple(self.current_pricing)
+        component_fields = tuple(component.pricing_field for component in self.components)
+        expected_max_fields = tuple(
+            field for field in current_fields if field in _ROUTER_MAX_PRICE_FIELDS
+        )
+        if (
+            baseline_fields != current_fields
+            or component_fields != current_fields
+            or component_fields != tuple(sorted(set(component_fields)))
+            or tuple(self.provider_max_price) != expected_max_fields
+            or self.baseline_pricing_sha256 != _canonical_model_sha256(self.baseline_pricing)
+            or self.current_pricing_sha256 != _canonical_model_sha256(self.current_pricing)
+            or self.qualified_pricing_snapshot_sha256 != self.baseline_pricing_sha256
+            or self.provider_max_price_sha256 != _canonical_model_sha256(self.provider_max_price)
+        ):
+            raise ValueError("pricing attempt maps, components, or hashes are inconsistent")
+        component_by_field = {item.pricing_field: item for item in self.components}
+        with localcontext() as context:
+            context.prec = 160
+            for field in current_fields:
+                component_price = Decimal(component_by_field[field].unit_price_usd_exact)
+                current_price = Decimal(self.current_pricing[field])
+                if field in _ROUTER_MAX_PRICE_FIELDS:
+                    projected = Decimal(self.provider_max_price[field])
+                    if field in _PER_MILLION_ROUTER_PRICE_FIELDS:
+                        projected /= Decimal(1_000_000)
+                    if component_price != projected or component_price < current_price:
+                        raise ValueError(
+                            "pricing attempt cost bound is below refreshed provider max_price"
+                        )
+                elif component_price != current_price:
+                    raise ValueError(
+                        "pricing attempt unrouteable component differs from refreshed price"
+                    )
+        try:
+            _require_pristine_endpoint_cost_bound_types()
+            reconstructed = EndpointRequestCostBound(
+                exact_model_id=self.exact_model_id,
+                provider_endpoint=self.provider_endpoint,
+                request_material_sha256=self.request_material_sha256,
+                pricing_snapshot_sha256=self.cost_bound_pricing_snapshot_sha256,
+                components=tuple(
+                    EndpointPriceComponent(
+                        pricing_field=item.pricing_field,
+                        unit_price_usd=Decimal(item.unit_price_usd_exact),
+                        maximum_units=item.maximum_units,
+                    )
+                    for item in self.components
+                ),
+            )
+            expected_maximum = format(
+                _trusted_endpoint_request_maximum_cost_usd(reconstructed),
+                "f",
+            )
+        except BudgetReservationStateError as exc:
+            raise ValueError("pricing attempt cost-bound callable provenance is invalid") from exc
+        if (
+            self.request_material_sha256 != self.request_body_sha256
+            or _BOUND_USD_PATTERN.fullmatch(expected_maximum) is None
+            or self.maximum_cost_usd_exact != expected_maximum
+        ):
+            raise ValueError("pricing attempt maximum cost differs from its exact bound")
+        if self.evidence_sha256 != _pricing_attempt_sha256(
+            self.model_dump(mode="json", exclude={"evidence_sha256"})
+        ):
+            raise ValueError("pricing attempt evidence self-hash is inconsistent")
+        return self
+
+
 class UsageRecord(StrictModel):
     request_id: str
     role: str
@@ -11740,7 +12575,133 @@ class UsageRecord(StrictModel):
             and self.validation_status is not ModelRequestValidationStatus.VALID
         ):
             raise ValueError("bound model identity requires a validated provider response")
+        _validate_refresh_pricing_attempt_inventory(self)
         return self
+
+
+def _validate_refresh_pricing_attempt_inventory(record: UsageRecord) -> None:
+    """Validate the all-or-none ordered refreshed-price attempt inventory."""
+
+    routing = record.routing
+    inventory_keys = {
+        "audit_model_refresh_pricing_attempts",
+        "audit_model_refresh_pricing_attempt_sha256s",
+        "audit_model_refresh_pricing_attempt",
+        "audit_model_refresh_pricing_attempt_sha256",
+    }
+    present = inventory_keys.intersection(routing)
+    if not present:
+        return
+    if present != inventory_keys:
+        raise ValueError("usage refreshed-price attempt inventory is incomplete")
+    raw_attempts = routing["audit_model_refresh_pricing_attempts"]
+    raw_hashes = routing["audit_model_refresh_pricing_attempt_sha256s"]
+    if (
+        not isinstance(raw_attempts, list)
+        or not isinstance(raw_hashes, list)
+        or not 1 <= len(raw_attempts) <= 32
+        or len(raw_hashes) != len(raw_attempts)
+        or len(raw_attempts) != record.attempts
+    ):
+        raise ValueError("usage refreshed-price attempts are unbounded or incomplete")
+    attempts: list[AuditModelRefreshPricingAttemptEvidence] = []
+    for raw_attempt in raw_attempts:
+        if not isinstance(raw_attempt, Mapping):
+            raise ValueError("usage refreshed-price attempt is not a JSON object")
+        try:
+            encoded = json.dumps(
+                raw_attempt,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+            if len(encoded) > MAX_JSON_ARTIFACT_BYTES:
+                raise ValueError("usage refreshed-price attempt exceeds the byte limit")
+            attempt = AuditModelRefreshPricingAttemptEvidence.model_validate_json(
+                encoded,
+                strict=True,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("usage refreshed-price attempt is invalid") from exc
+        if attempt.model_dump(mode="json") != raw_attempt:
+            raise ValueError("usage refreshed-price attempt changed during validation")
+        attempts.append(attempt)
+    expected_hashes = [attempt.evidence_sha256 for attempt in attempts]
+    final = attempts[-1]
+    if (
+        raw_hashes != expected_hashes
+        or routing["audit_model_refresh_pricing_attempt"] != final.model_dump(mode="json")
+        or routing["audit_model_refresh_pricing_attempt_sha256"] != final.evidence_sha256
+        or tuple(attempt.attempt_index for attempt in attempts)
+        != tuple(range(1, len(attempts) + 1))
+        or any(attempt.logical_request_id != record.request_id for attempt in attempts)
+        or any(attempt.request_body_sha256 != record.request_body_sha256 for attempt in attempts)
+        or any(attempt.exact_model_id != record.requested_model for attempt in attempts)
+        or any(
+            attempt.pricing_evidence_sha256 != final.pricing_evidence_sha256 for attempt in attempts
+        )
+        or any(
+            attempt.pricing_authority_capability_sha256 != final.pricing_authority_capability_sha256
+            for attempt in attempts
+        )
+        or any(
+            attempt.pricing_route_evidence_sha256 != final.pricing_route_evidence_sha256
+            for attempt in attempts
+        )
+        or any(attempt.current_pricing != final.current_pricing for attempt in attempts)
+        or any(
+            attempt.current_endpoint_snapshot_sha256 != final.current_endpoint_snapshot_sha256
+            for attempt in attempts
+        )
+        or any(
+            attempt.cost_bound_pricing_snapshot_sha256 != final.cost_bound_pricing_snapshot_sha256
+            for attempt in attempts
+        )
+        or (
+            record.status == "success"
+            and (not final.transport_attempted or final.transport_checked_at is None)
+        )
+    ):
+        raise ValueError("usage refreshed-price attempt inventory is inconsistent")
+    scalar_joins = {
+        "audit_model_refresh_pricing_evidence_sha256": final.pricing_evidence_sha256,
+        "audit_model_refresh_pricing_authority_capability_sha256": (
+            final.pricing_authority_capability_sha256
+        ),
+        "audit_model_refresh_pricing_route_evidence_sha256": (final.pricing_route_evidence_sha256),
+        "audit_model_refresh_pricing_refresh_evidence_sha256": (final.refresh_evidence_sha256),
+        "audit_model_refresh_pricing_refresh_guard_capability_sha256": (
+            final.refresh_guard_capability_sha256
+        ),
+        "audit_model_refresh_pricing_qualified_pricing_snapshot_sha256": (
+            final.qualified_pricing_snapshot_sha256
+        ),
+        "audit_model_refresh_pricing_current_pricing_snapshot_sha256": (
+            final.current_pricing_sha256
+        ),
+        "audit_model_refresh_pricing_expires_at": final.pricing_expires_at.isoformat(),
+        "endpoint_pricing_sha256": final.current_pricing_sha256,
+        "endpoint_snapshot_sha256": final.current_endpoint_snapshot_sha256,
+        "qualified_pricing_snapshot_sha256": final.qualified_pricing_snapshot_sha256,
+    }
+    if any(routing.get(key) != value for key, value in scalar_joins.items()):
+        raise ValueError("usage refreshed-price scalars differ from exact attempt evidence")
+    if record.configured_provider_endpoints != [final.provider_endpoint] or (
+        record.actual_provider_endpoint is not None
+        and record.actual_provider_endpoint != final.provider_endpoint
+    ):
+        raise ValueError("usage refreshed-price endpoint differs from request routing")
+    if record.accounted_cost_usd_exact is None:
+        raise ValueError("usage refreshed-price attempts lack exact accounted cost")
+    with localcontext() as context:
+        context.prec = 160
+        maximum_accounted = sum(
+            (Decimal(attempt.maximum_cost_usd_exact) for attempt in attempts),
+            start=Decimal(0),
+        )
+        if Decimal(record.accounted_cost_usd_exact) > maximum_accounted:
+            raise ValueError("usage accounted cost exceeds refreshed-price attempt bounds")
 
 
 def validate_audit_model_selection_usage_custody(
@@ -11910,9 +12871,18 @@ def validate_audit_model_selection_usage_custody(
             or evidence.route.route_sha256 != selected.policy_route_sha256
             or evidence.expires_at != selection.expires_at
             or record.requested_model != selected.exact_model_id
-            or record.returned_model != selected.canonical_model_slug
-            or record.actual_model != selected.canonical_model_slug
-            or record.provider != selected.approved_provider_name
+            or (
+                record.returned_model != selected.canonical_model_slug
+                and (record.status == "success" or record.returned_model is not None)
+            )
+            or (
+                record.actual_model != selected.canonical_model_slug
+                and (record.status == "success" or record.actual_model is not None)
+            )
+            or (
+                record.provider != selected.approved_provider_name
+                and (record.status == "success" or record.provider is not None)
+            )
             or record.configured_provider_endpoints != [selected.approved_provider_endpoint]
             or (
                 record.actual_provider_endpoint is not None
@@ -11932,6 +12902,484 @@ def validate_audit_model_selection_usage_custody(
             and evidence.audit_model_selection_bundle_sha256 != expected_bundle_sha256
         ):
             raise ValueError("usage audit routing differs from the exact evidence bundle")
+
+
+def validate_audit_model_refresh_usage_custody(
+    *,
+    audit_model_refresh_evidence: AuditModelRefreshEvidence | None,
+    audit_model_selection: AuditModelSelection | None,
+    usage: Sequence[UsageRecord],
+) -> None:
+    """Bind detached REAL usage to exact veto-only model-refresh evidence.
+
+    The live prequalification exemption depends on process-owned request-shape proof that is not
+    serializable. A detached report therefore treats every REAL record conservatively. This
+    function validates comparison custody only and never recreates the opaque refresh guard,
+    selects a model, authorizes provider access, or grants pricing authority.
+    """
+
+    from mmaudit.models.policy_selection import AuditModelSelection as SelectionModel
+    from mmaudit.models.refresh_runtime import (
+        AuditModelRefreshEvidence as RefreshModel,
+    )
+    from mmaudit.models.refresh_runtime import (
+        AuditModelRefreshRouteEvidence,
+    )
+
+    if (
+        audit_model_refresh_evidence is not None
+        and type(audit_model_refresh_evidence) is not RefreshModel
+    ):
+        raise ValueError("audit model refresh evidence has an invalid exact type")
+    if audit_model_selection is not None and type(audit_model_selection) is not SelectionModel:
+        raise ValueError("audit model selection has an invalid exact type")
+    if audit_model_refresh_evidence is not None and audit_model_selection is None:
+        raise ValueError("audit model refresh evidence lacks durable audit model selection")
+
+    scalar_keys = {
+        "audit_model_refresh_evidence_sha256",
+        "audit_model_refresh_workflow_status_sha256",
+        "audit_model_refresh_snapshot_sha256",
+        "audit_model_refresh_route_evidence_sha256",
+        "audit_model_refresh_guard_capability_sha256",
+        "audit_model_refresh_technical_route_set_sha256",
+        "audit_model_refresh_audit_route_set_sha256",
+        "audit_model_refresh_expires_at",
+    }
+    evidence = audit_model_refresh_evidence
+    selection = audit_model_selection
+    if evidence is not None:
+        canonical = RefreshModel.model_validate_json(evidence.model_dump_json(), strict=True)
+        if canonical != evidence:
+            raise ValueError("audit model refresh evidence changed during canonicalization")
+        assert selection is not None
+        if (
+            evidence.technical_qualification_capability_sha256
+            != selection.technical_qualification_capability_sha256
+            or evidence.technical_production_selection_sha256
+            != selection.technical_production_selection_sha256
+            or evidence.technical_candidate_registry_sha256
+            != selection.technical_candidate_registry_sha256
+            or evidence.technical_qualification_expires_at
+            != selection.technical_qualification_expires_at
+            or evidence.audit_selection_sha256 != selection.selection_sha256
+            or evidence.audit_selection_expires_at != selection.expires_at
+            or evidence.audit_scope_sha256 != selection.audit_scope_sha256
+            or evidence.source_sha256 != selection.source_sha256
+            or evidence.audit_context_sha256 != selection.audit_context_sha256
+            or evidence.client_constraints_sha256 != selection.client_constraints_sha256
+            or evidence.technical_model_ids != selection.technical_model_ids
+            or evidence.audit_model_ids != selection.selected_model_ids
+        ):
+            raise ValueError(
+                "audit model refresh evidence differs from durable technical or audit selection"
+            )
+
+    selected_by_id = (
+        {model.exact_model_id: model for model in selection.models} if selection is not None else {}
+    )
+    refresh_routes = (
+        {route.exact_model_id: route for route in evidence.routes if route.audit_selected}
+        if evidence is not None
+        else {}
+    )
+    expected_guard_capability_sha256 = (
+        audit_model_refresh_guard_capability_projection_sha256(evidence)
+        if evidence is not None
+        else None
+    )
+    for record in usage:
+        routing = record.routing
+        raw_route = routing.get("audit_model_refresh_route_evidence")
+        has_fragments = raw_route is not None or any(key in routing for key in scalar_keys)
+        required = record.execution_evidence is ExecutionEvidenceKind.REAL
+        if raw_route is None:
+            if has_fragments:
+                raise ValueError("usage retains incomplete typed model-refresh routing evidence")
+            if required:
+                raise ValueError("detached REAL usage lacks typed model-refresh routing evidence")
+            continue
+        if evidence is None or selection is None:
+            raise ValueError("typed model-refresh route lacks report refresh and selection custody")
+        if not isinstance(raw_route, Mapping):
+            raise ValueError("usage typed model-refresh routing evidence is invalid")
+        try:
+            encoded_route = json.dumps(
+                raw_route,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+            if len(encoded_route) > MAX_JSON_ARTIFACT_BYTES:
+                raise ValueError("usage typed model-refresh route exceeds the byte limit")
+            route = AuditModelRefreshRouteEvidence.model_validate_json(
+                encoded_route,
+                strict=True,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("usage typed model-refresh routing evidence is invalid") from exc
+        if route.model_dump(mode="json") != raw_route:
+            raise ValueError("usage typed model-refresh route changed during validation")
+        selected = selected_by_id.get(route.exact_model_id)
+        retained = refresh_routes.get(route.exact_model_id)
+        observed_guard_sha256 = routing.get("audit_model_refresh_guard_capability_sha256")
+        if (
+            type(observed_guard_sha256) is not str
+            or re.fullmatch(r"[0-9a-f]{64}", observed_guard_sha256) is None
+        ):
+            raise ValueError("usage model-refresh guard comparison hash is invalid")
+        if (
+            selected is None
+            or retained is None
+            or retained != route
+            or observed_guard_sha256 != expected_guard_capability_sha256
+            or routing.get("audit_model_refresh_evidence_sha256") != evidence.evidence_sha256
+            or routing.get("audit_model_refresh_workflow_status_sha256")
+            != evidence.workflow_status_sha256
+            or routing.get("audit_model_refresh_snapshot_sha256") != evidence.snapshot_sha256
+            or routing.get("audit_model_refresh_route_evidence_sha256")
+            != route.route_evidence_sha256
+            or routing.get("audit_model_refresh_technical_route_set_sha256")
+            != evidence.technical_route_set_sha256
+            or routing.get("audit_model_refresh_audit_route_set_sha256")
+            != evidence.audit_route_set_sha256
+            or routing.get("audit_model_refresh_expires_at") != evidence.expires_at.isoformat()
+            or route.exact_model_id != record.requested_model
+            or route.canonical_model_slug != selected.canonical_model_slug
+            or route.root_lineage != selected.root_lineage
+            or route.approved_provider_endpoint != selected.approved_provider_endpoint
+            or route.approved_provider_name != selected.approved_provider_name
+            or route.endpoint_snapshot_sha256 != selected.endpoint_snapshot_sha256
+            or route.output_capability_sha256 != selected.output_capability_sha256
+            or route.model_metadata_snapshot_sha256 != selected.model_metadata_snapshot_sha256
+            or route.qualified_pricing_snapshot_sha256 != selected.pricing_snapshot_sha256
+            or route.structured_output_mode is not selected.structured_output_mode
+            or route.approved_roles != selected.approved_roles
+            or route.benchmark_report_sha256 != selected.benchmark_report_sha256
+            or route.qualification_expires_at != selected.expires_at
+            or not route.audit_selected
+            or route.runtime_authorized
+            or (
+                record.returned_model != selected.canonical_model_slug
+                and (record.status == "success" or record.returned_model is not None)
+            )
+            or (
+                record.actual_model != selected.canonical_model_slug
+                and (record.status == "success" or record.actual_model is not None)
+            )
+            or (
+                record.provider != selected.approved_provider_name
+                and (record.status == "success" or record.provider is not None)
+            )
+            or record.configured_provider_endpoints != [selected.approved_provider_endpoint]
+            or (
+                record.actual_provider_endpoint is not None
+                and record.actual_provider_endpoint != selected.approved_provider_endpoint
+            )
+        ):
+            raise ValueError(
+                "usage typed model-refresh route differs from exact report evidence and selection"
+            )
+        request_started_at = record.started_at or record.timestamp
+        request_ended_at = record.ended_at or request_started_at
+        if (
+            request_started_at < evidence.verified_at
+            or request_started_at >= evidence.expires_at
+            or request_ended_at < request_started_at
+            or request_started_at >= route.qualification_expires_at
+        ):
+            raise ValueError("usage model-refresh route is outside its exact validity window")
+
+
+def audit_model_refresh_guard_capability_projection_sha256(
+    evidence: AuditModelRefreshEvidence,
+) -> str:
+    """Rebuild the guard's public comparison hash without recreating the opaque guard."""
+
+    from mmaudit.models.refresh_runtime import AuditModelRefreshEvidence as RefreshModel
+
+    if type(evidence) is not RefreshModel:
+        raise ValueError("refresh guard comparison requires exact refresh evidence")
+    payload = {
+        "verified_at": evidence.verified_at.isoformat().replace("+00:00", "Z"),
+        "expires_at": evidence.expires_at.isoformat().replace("+00:00", "Z"),
+        "refresh_current_through": evidence.refresh_current_through.isoformat().replace(
+            "+00:00", "Z"
+        ),
+        "workflow_status_sha256": evidence.workflow_status_sha256,
+        "snapshot_sha256": evidence.snapshot_sha256,
+        "technical_qualification_capability_sha256": (
+            evidence.technical_qualification_capability_sha256
+        ),
+        "technical_production_selection_sha256": (evidence.technical_production_selection_sha256),
+        "audit_selection_capability_sha256": evidence.audit_selection_capability_sha256,
+        "audit_selection_sha256": evidence.audit_selection_sha256,
+        "evidence_sha256": evidence.evidence_sha256,
+    }
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def audit_model_refresh_pricing_authority_projection_sha256(
+    evidence: AuditModelRefreshPricingEvidence,
+) -> str:
+    """Rebuild the pricing authority's comparison hash without issuing authority."""
+
+    from mmaudit.models.refresh_runtime import (
+        AuditModelRefreshPricingEvidence as PricingModel,
+    )
+
+    if type(evidence) is not PricingModel:
+        raise ValueError("pricing authority comparison requires exact pricing evidence")
+    payload = {
+        "verified_at": evidence.verified_at.isoformat().replace("+00:00", "Z"),
+        "expires_at": evidence.expires_at.isoformat().replace("+00:00", "Z"),
+        "workflow_status_sha256": evidence.workflow_status_sha256,
+        "refresh_evidence_sha256": evidence.refresh_evidence_sha256,
+        "refresh_guard_capability_sha256": evidence.refresh_guard_capability_sha256,
+        "technical_qualification_capability_sha256": (
+            evidence.technical_qualification_capability_sha256
+        ),
+        "technical_production_selection_sha256": (evidence.technical_production_selection_sha256),
+        "audit_selection_capability_sha256": evidence.audit_selection_capability_sha256,
+        "audit_selection_sha256": evidence.audit_selection_sha256,
+        "pricing_evidence_sha256": evidence.evidence_sha256,
+    }
+    return _canonical_model_sha256(payload)
+
+
+def validate_audit_model_refresh_pricing_usage_custody(
+    *,
+    audit_model_refresh_pricing_evidence: AuditModelRefreshPricingEvidence | None,
+    audit_model_refresh_evidence: AuditModelRefreshEvidence | None,
+    audit_model_selection: AuditModelSelection | None,
+    usage: Sequence[UsageRecord],
+) -> None:
+    """Bind detached REAL usage to exact bounded refreshed-price evidence.
+
+    This validator proves durable comparison and cost-bound custody only. It never
+    recreates the process-local pricing authority or authorizes provider access.
+    """
+
+    from mmaudit.models.policy_selection import AuditModelSelection as SelectionModel
+    from mmaudit.models.refresh_runtime import (
+        AuditModelRefreshEvidence as RefreshModel,
+    )
+    from mmaudit.models.refresh_runtime import (
+        AuditModelRefreshPricingEvidence as PricingModel,
+    )
+    from mmaudit.models.refresh_runtime import (
+        AuditModelRefreshPricingRouteEvidence,
+    )
+
+    if audit_model_refresh_pricing_evidence is not None and (
+        type(audit_model_refresh_pricing_evidence) is not PricingModel
+    ):
+        raise ValueError("audit refresh pricing evidence has an invalid exact type")
+    if (
+        audit_model_refresh_evidence is not None
+        and type(audit_model_refresh_evidence) is not RefreshModel
+    ):
+        raise ValueError("audit refresh evidence has an invalid exact type")
+    if audit_model_selection is not None and type(audit_model_selection) is not SelectionModel:
+        raise ValueError("audit selection has an invalid exact type")
+    pricing = audit_model_refresh_pricing_evidence
+    refresh = audit_model_refresh_evidence
+    selection = audit_model_selection
+    if pricing is not None and (refresh is None or selection is None):
+        raise ValueError("audit refresh pricing lacks refresh and selection custody")
+    if pricing is not None:
+        canonical = PricingModel.model_validate_json(pricing.model_dump_json(), strict=True)
+        if canonical != pricing:
+            raise ValueError("audit refresh pricing changed during canonicalization")
+        assert refresh is not None
+        assert selection is not None
+        if (
+            pricing.refresh_evidence_sha256 != refresh.evidence_sha256
+            or pricing.refresh_guard_capability_sha256
+            != audit_model_refresh_guard_capability_projection_sha256(refresh)
+            or pricing.workflow_status_sha256 != refresh.workflow_status_sha256
+            or pricing.current_snapshot_sha256 != refresh.snapshot_sha256
+            or pricing.technical_qualification_capability_sha256
+            != selection.technical_qualification_capability_sha256
+            or pricing.technical_production_selection_sha256
+            != selection.technical_production_selection_sha256
+            or pricing.audit_selection_sha256 != selection.selection_sha256
+            or pricing.audit_scope_sha256 != selection.audit_scope_sha256
+            or pricing.source_sha256 != selection.source_sha256
+            or pricing.audit_context_sha256 != selection.audit_context_sha256
+            or pricing.client_constraints_sha256 != selection.client_constraints_sha256
+            or pricing.technical_model_ids != selection.technical_model_ids
+            or pricing.audit_model_ids != selection.selected_model_ids
+            or pricing.expires_at != refresh.expires_at
+        ):
+            raise ValueError(
+                "audit refresh pricing differs from exact refresh or selection custody"
+            )
+
+    scalar_keys = {
+        "audit_model_refresh_pricing_evidence_sha256",
+        "audit_model_refresh_pricing_workflow_status_sha256",
+        "audit_model_refresh_pricing_previous_snapshot_sha256",
+        "audit_model_refresh_pricing_current_snapshot_sha256",
+        "audit_model_refresh_pricing_refresh_evidence_sha256",
+        "audit_model_refresh_pricing_refresh_guard_capability_sha256",
+        "audit_model_refresh_pricing_route_evidence_sha256",
+        "audit_model_refresh_pricing_authority_capability_sha256",
+        "audit_model_refresh_pricing_technical_route_set_sha256",
+        "audit_model_refresh_pricing_audit_route_set_sha256",
+        "audit_model_refresh_pricing_qualified_pricing_snapshot_sha256",
+        "audit_model_refresh_pricing_current_pricing_snapshot_sha256",
+        "audit_model_refresh_pricing_tolerance_fraction",
+        "audit_model_refresh_pricing_expires_at",
+        "audit_model_refresh_pricing_attempts",
+        "audit_model_refresh_pricing_attempt_sha256s",
+        "audit_model_refresh_pricing_attempt",
+        "audit_model_refresh_pricing_attempt_sha256",
+    }
+    selected_by_id = (
+        {model.exact_model_id: model for model in selection.models} if selection is not None else {}
+    )
+    refresh_by_id = (
+        {route.exact_model_id: route for route in refresh.routes if route.audit_selected}
+        if refresh is not None
+        else {}
+    )
+    pricing_by_id = (
+        {route.exact_model_id: route for route in pricing.routes if route.audit_selected}
+        if pricing is not None
+        else {}
+    )
+    expected_authority_sha256 = (
+        audit_model_refresh_pricing_authority_projection_sha256(pricing)
+        if pricing is not None
+        else None
+    )
+    for record in usage:
+        routing = record.routing
+        raw_route = routing.get("audit_model_refresh_pricing_route_evidence")
+        has_fragments = raw_route is not None or any(key in routing for key in scalar_keys)
+        required = record.execution_evidence is ExecutionEvidenceKind.REAL
+        if raw_route is None:
+            if has_fragments:
+                raise ValueError("usage retains incomplete refresh pricing evidence")
+            if required:
+                raise ValueError("detached REAL usage lacks refresh pricing evidence")
+            continue
+        if pricing is None or refresh is None or selection is None:
+            raise ValueError("usage refresh pricing lacks report custody")
+        if not isinstance(raw_route, Mapping):
+            raise ValueError("usage refresh pricing route is not a JSON object")
+        try:
+            encoded = json.dumps(
+                raw_route,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+            if len(encoded) > MAX_JSON_ARTIFACT_BYTES:
+                raise ValueError("usage refresh pricing route exceeds the byte limit")
+            route = AuditModelRefreshPricingRouteEvidence.model_validate_json(
+                encoded,
+                strict=True,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("usage refresh pricing route is invalid") from exc
+        retained = pricing_by_id.get(route.exact_model_id)
+        refresh_route = refresh_by_id.get(route.exact_model_id)
+        selected = selected_by_id.get(route.exact_model_id)
+        if (
+            route.model_dump(mode="json") != raw_route
+            or retained != route
+            or refresh_route is None
+            or selected is None
+            or route.refresh_route_evidence_sha256 != refresh_route.route_evidence_sha256
+            or route.qualified_pricing_snapshot_sha256 != selected.pricing_snapshot_sha256
+            or route.baseline_pricing_sha256 != selected.pricing_snapshot_sha256
+            or route.approved_provider_endpoint != selected.approved_provider_endpoint
+            or route.exact_model_id != record.requested_model
+            or not route.audit_selected
+            or route.pricing_use_authorized
+            or route.provider_access_authorized
+            or route.model_selection_authorized
+        ):
+            raise ValueError("usage refresh pricing route differs from exact report custody")
+        expected_scalars = {
+            "audit_model_refresh_pricing_evidence_sha256": pricing.evidence_sha256,
+            "audit_model_refresh_pricing_workflow_status_sha256": (pricing.workflow_status_sha256),
+            "audit_model_refresh_pricing_previous_snapshot_sha256": (
+                pricing.previous_snapshot_sha256
+            ),
+            "audit_model_refresh_pricing_current_snapshot_sha256": (
+                pricing.current_snapshot_sha256
+            ),
+            "audit_model_refresh_pricing_refresh_evidence_sha256": (
+                pricing.refresh_evidence_sha256
+            ),
+            "audit_model_refresh_pricing_refresh_guard_capability_sha256": (
+                pricing.refresh_guard_capability_sha256
+            ),
+            "audit_model_refresh_pricing_route_evidence_sha256": route.route_evidence_sha256,
+            "audit_model_refresh_pricing_authority_capability_sha256": (expected_authority_sha256),
+            "audit_model_refresh_pricing_technical_route_set_sha256": (
+                pricing.technical_pricing_route_set_sha256
+            ),
+            "audit_model_refresh_pricing_audit_route_set_sha256": (
+                pricing.audit_pricing_route_set_sha256
+            ),
+            "audit_model_refresh_pricing_qualified_pricing_snapshot_sha256": (
+                route.qualified_pricing_snapshot_sha256
+            ),
+            "audit_model_refresh_pricing_current_pricing_snapshot_sha256": (
+                route.current_pricing_sha256
+            ),
+            "audit_model_refresh_pricing_tolerance_fraction": (pricing.pricing_tolerance_fraction),
+            "audit_model_refresh_pricing_expires_at": pricing.expires_at.isoformat(),
+        }
+        if any(routing.get(key) != value for key, value in expected_scalars.items()):
+            raise ValueError("usage refresh pricing scalars differ from report evidence")
+        _validate_refresh_pricing_attempt_inventory(record)
+        raw_attempts = routing.get("audit_model_refresh_pricing_attempts")
+        if not isinstance(raw_attempts, list):
+            raise ValueError("usage refresh pricing attempt inventory is absent")
+        attempts = tuple(
+            AuditModelRefreshPricingAttemptEvidence.model_validate_json(
+                json.dumps(
+                    item,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                    allow_nan=False,
+                ),
+                strict=True,
+            )
+            for item in raw_attempts
+        )
+        if any(
+            attempt.pricing_evidence_sha256 != pricing.evidence_sha256
+            or attempt.pricing_authority_capability_sha256 != expected_authority_sha256
+            or attempt.pricing_route_evidence_sha256 != route.route_evidence_sha256
+            or attempt.refresh_evidence_sha256 != refresh.evidence_sha256
+            or attempt.refresh_guard_capability_sha256 != pricing.refresh_guard_capability_sha256
+            or attempt.refresh_route_evidence_sha256 != refresh_route.route_evidence_sha256
+            or attempt.qualified_pricing_snapshot_sha256 != route.qualified_pricing_snapshot_sha256
+            or attempt.baseline_pricing != route.baseline_pricing
+            or attempt.current_pricing != route.current_pricing
+            or attempt.current_pricing_sha256 != route.current_pricing_sha256
+            or attempt.pricing_verified_at != pricing.verified_at
+            or attempt.pricing_expires_at != pricing.expires_at
+            for attempt in attempts
+        ):
+            raise ValueError("usage pricing attempts differ from exact report evidence")
 
 
 class RepositoryFile(StrictModel):
@@ -12277,10 +13725,60 @@ class ContextPackage(StrictModel):
         return type(self).model_validate(payload)
 
 
+class MinimumFloorRecoveryModelUsageBinding(StrictModel):
+    """Hash-only external coordinates for one promoted recovery UsageRecord."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    evidence_authority: Literal["comparison_required"] = "comparison_required"
+    review_credit_authorized: Literal[False] = False
+    completion_authorized: Literal[False] = False
+    release_authorized: Literal[False] = False
+    request_id: str = Field(pattern=r"^scheduler-recovery-request-[0-9a-f]{64}$")
+    role: str = Field(pattern=r"^[a-z][a-z0-9_:.-]{0,127}$")
+    request_limit_scope: str = Field(pattern=r"^scheduler-request-[0-9a-f]{64}$")
+    request_limit_count_before: int = Field(ge=1, le=2**63 - 1)
+    usage_record_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    scheduler_request_evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    binding_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        usage_record: UsageRecord,
+        request_limit_scope: str,
+        request_limit_count_before: int,
+        scheduler_request_evidence_sha256: str,
+    ) -> MinimumFloorRecoveryModelUsageBinding:
+        values: dict[str, Any] = {
+            "schema_version": "1.0",
+            "evidence_authority": "comparison_required",
+            "review_credit_authorized": False,
+            "completion_authorized": False,
+            "release_authorized": False,
+            "request_id": usage_record.request_id,
+            "role": usage_record.role,
+            "request_limit_scope": request_limit_scope,
+            "request_limit_count_before": request_limit_count_before,
+            "usage_record_sha256": _canonical_model_sha256(usage_record.model_dump(mode="json")),
+            "scheduler_request_evidence_sha256": scheduler_request_evidence_sha256,
+        }
+        return cls(**values, binding_sha256=_canonical_model_sha256(values))
+
+    @model_validator(mode="after")
+    def binding_is_self_hashed(self) -> Self:
+        values = self.model_dump(mode="json", exclude={"binding_sha256"})
+        if self.binding_sha256 != _canonical_model_sha256(values):
+            raise ValueError("minimum-floor recovery usage binding hash is inconsistent")
+        return self
+
+
 class MinimumAnalysisFloor(StrictModel):
     """Normalized evidence supporting the audit run's minimum analysis floor."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     run_status: AuditRunStatus
     source_files_ingested: int = Field(ge=0)
     source_ingestion_succeeded: bool
@@ -12296,6 +13794,11 @@ class MinimumAnalysisFloor(StrictModel):
     explicit_downgrade_reason: str | None = Field(default=None, max_length=2_000)
     required_model_roles: list[str] = Field(default_factory=list, max_length=1_000)
     completed_real_model_roles: list[str] = Field(default_factory=list, max_length=1_000)
+    recovery_model_usage_bindings: list[MinimumFloorRecoveryModelUsageBinding] = Field(
+        default_factory=list,
+        max_length=32,
+        exclude_if=lambda value: not value,
+    )
     model_review_satisfied: bool
     coverage_metric_ids: list[str] = Field(default_factory=list, max_length=1_000)
     coverage_denominators_valid: bool
@@ -12306,6 +13809,15 @@ class MinimumAnalysisFloor(StrictModel):
 
     @model_validator(mode="after")
     def evidence_and_status_are_consistent(self) -> MinimumAnalysisFloor:
+        recovery_request_ids = [
+            binding.request_id for binding in self.recovery_model_usage_bindings
+        ]
+        if recovery_request_ids != sorted(set(recovery_request_ids)) or (
+            self.schema_version == "1.1"
+        ) != bool(recovery_request_ids):
+            raise ValueError(
+                "minimum-floor recovery usage bindings must be unique, sorted, and versioned"
+            )
         canonical_lists = (
             ("qualifying real static scanners", self.qualifying_real_static_scanners),
             ("required model roles", self.required_model_roles),
@@ -12466,6 +13978,14 @@ class AuditReport(StrictModel):
         default=None,
         exclude_if=lambda value: value is None,
     )
+    audit_model_refresh_evidence: AuditModelRefreshEvidence | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    audit_model_refresh_pricing_evidence: AuditModelRefreshPricingEvidence | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     maximum_assurance: MaximumAssuranceAssessment | None = None
     verification_decisions: list[VerificationDecision] = Field(default_factory=list)
     cross_examination_decisions: list[CandidateCrossExaminationDecision] = Field(
@@ -12491,9 +14011,26 @@ class AuditReport(StrictModel):
     def audit_model_selection_matches_usage(self) -> AuditReport:
         """Retain exact paid-audit routing custody without granting runtime authority."""
 
-        if self.schema_version != "1.2" and self.audit_model_selection is not None:
-            raise ValueError("typed audit model-selection evidence requires report schema 1.2")
+        if self.schema_version != "1.2" and (
+            self.audit_model_selection is not None
+            or self.audit_model_refresh_evidence is not None
+            or self.audit_model_refresh_pricing_evidence is not None
+        ):
+            raise ValueError(
+                "typed audit selection, refresh, and pricing evidence requires report schema 1.2"
+            )
         validate_audit_model_selection_usage_custody(
+            audit_model_selection=self.audit_model_selection,
+            usage=self.usage,
+        )
+        validate_audit_model_refresh_usage_custody(
+            audit_model_refresh_evidence=self.audit_model_refresh_evidence,
+            audit_model_selection=self.audit_model_selection,
+            usage=self.usage,
+        )
+        validate_audit_model_refresh_pricing_usage_custody(
+            audit_model_refresh_pricing_evidence=(self.audit_model_refresh_pricing_evidence),
+            audit_model_refresh_evidence=self.audit_model_refresh_evidence,
             audit_model_selection=self.audit_model_selection,
             usage=self.usage,
         )
@@ -12940,7 +14477,10 @@ class AuditReport(StrictModel):
     def _validate_minimum_floor_runtime_bindings(self, floor: MinimumAnalysisFloor) -> None:
         """Bind serialized floor claims back to the report's normalized runtime evidence."""
 
-        from mmaudit.models.usage import is_structurally_creditable_usage_record
+        from mmaudit.models.usage import (
+            is_structurally_creditable_usage_record,
+            is_structurally_recovery_creditable_usage_record,
+        )
         from mmaudit.orchestration.assurance import is_qualifying_real_scanner_run
         from mmaudit.orchestration.run_status import DEFAULT_STATIC_SCANNER_NAMES
 
@@ -13004,13 +14544,41 @@ class AuditReport(StrictModel):
         if floor.qualifying_real_static_scanners != qualifying_scanners:
             raise ValueError("minimum-floor scanner claims conflict with report scanner evidence")
 
-        completed_real_roles = sorted(
-            {
-                record.role
-                for record in self.usage
-                if is_structurally_creditable_usage_record(record, require_real=True)
-            }
-        )
+        recovery_bindings = {
+            binding.request_id: binding for binding in floor.recovery_model_usage_bindings
+        }
+        if len(recovery_bindings) != len(floor.recovery_model_usage_bindings):
+            raise ValueError("minimum-floor recovery usage bindings are ambiguous")
+        usage_by_request = {record.request_id: record for record in self.usage}
+        if recovery_bindings and (
+            len(usage_by_request) != len(self.usage)
+            or any(request_id not in usage_by_request for request_id in recovery_bindings)
+        ):
+            raise ValueError("minimum-floor recovery usage differs from report usage")
+        for request_id, binding in recovery_bindings.items():
+            record = usage_by_request[request_id]
+            if (
+                binding.role != record.role
+                or binding.usage_record_sha256
+                != _canonical_model_sha256(record.model_dump(mode="json"))
+            ):
+                raise ValueError("minimum-floor recovery binding differs from report usage")
+        completed_real_role_set: set[str] = set()
+        for record in self.usage:
+            recovery_binding = recovery_bindings.get(record.request_id)
+            creditable = (
+                is_structurally_recovery_creditable_usage_record(
+                    record,
+                    request_limit_scope=recovery_binding.request_limit_scope,
+                    request_limit_count_before=recovery_binding.request_limit_count_before,
+                    require_real=True,
+                )
+                if recovery_binding is not None
+                else is_structurally_creditable_usage_record(record, require_real=True)
+            )
+            if creditable:
+                completed_real_role_set.add(record.role)
+        completed_real_roles = sorted(completed_real_role_set)
         if floor.completed_real_model_roles != completed_real_roles:
             raise ValueError("minimum-floor model claims conflict with report usage evidence")
         expected_model_review_required = not scanner_only

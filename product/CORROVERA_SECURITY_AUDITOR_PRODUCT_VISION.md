@@ -16,14 +16,16 @@ This document defines what Corrovera Security Auditor is intended to become.
 
 It is a target-state specification, not a statement that the current implementation already satisfies every requirement. It should be used to guide product design, system architecture, implementation priorities, testing, release gates, marketing claims, and independent evaluation.
 
-The current remediation phase is governed by the exact committed objective at
+The current remediation phase is governed by the explicitly superseding objective at
 `docs/remediation/v3/product_completion_goal.txt`, SHA-256
-`f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`. That objective governs
-what is built now, remediation sequencing, defensive safety boundaries, and the aggregate USD 250
-engineering budget. This vision governs the destination the product is intended to reach. If the
-two documents conflict, the objective controls the current remediation phase and the divergence
-must be recorded; the vision continues to control the target state. Neither document silently
-overrides the other.
+`e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15`. The operator supplied
+and authorized that exact target change on 2026-08-17; the prior objective digest
+`f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43` remains historical rather
+than being silently rewritten. The current objective governs what is built now, remediation
+sequencing, defensive safety boundaries, and the aggregate USD 250 engineering budget. This vision
+governs the destination the product is intended to reach. If the two documents conflict, the
+objective controls the current remediation phase and the divergence must be recorded; the vision
+continues to control the target state. Neither document silently overrides the other.
 
 In particular, the website, billing, connector, multi-tenant, and service requirements below are
 target-state requirements. They are not claims about the current implementation and do not

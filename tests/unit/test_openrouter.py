@@ -17,6 +17,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError, create_model
 
 import mmaudit.models.openrouter as openrouter_module
+import mmaudit.models.truncation as truncation_module
 from mmaudit.benchmark.models import (
     MODEL_BENCHMARK_SCHEMA_NAME,
     ModelBenchmarkResponse,
@@ -49,7 +50,9 @@ from mmaudit.models.identity import (
     OpenRouterIdentityStrength,
 )
 from mmaudit.models.openrouter import (
+    CandidateReviewCompletion,
     OpenRouterAuthenticationError,
+    OpenRouterCandidateReviewBoundaryError,
     OpenRouterClient,
     OpenRouterCostControlError,
     OpenRouterModelError,
@@ -59,10 +62,13 @@ from mmaudit.models.openrouter import (
     OpenRouterQualificationError,
     OpenRouterQualificationRoutingEvidence,
     OpenRouterQualifiedReasoningRoutingBinding,
+    OpenRouterRateLimitError,
     OpenRouterReasoning,
     OpenRouterRequestLimitError,
+    OpenRouterResponseIdentityError,
     OpenRouterSchemaError,
     OpenRouterStructuredOutputError,
+    OpenRouterTimeoutError,
     OpenRouterTransientError,
     OpenRouterTruncatedResponseError,
     OpenRouterUnboundIdentityError,
@@ -82,6 +88,7 @@ from mmaudit.models.reasoning import (
     ReasoningRequestPlanEvidence,
 )
 from mmaudit.models.schemas import (
+    CandidateReviewBatch,
     ContextExcerpt,
     ContextPackage,
     ExecutionEvidenceKind,
@@ -96,6 +103,12 @@ from mmaudit.models.token_planning import (
     ContextOmissionReason,
     PromptAllocationCategory,
 )
+from mmaudit.models.truncation import (
+    CandidateReviewFramedDocument,
+    candidate_review_batch_schema_sha256,
+    candidate_review_frame_wire_schema_sha256,
+    frame_candidate_review_batch,
+)
 from mmaudit.models.usage import (
     UsageLedger,
     _attest_owned_real_usage_record,
@@ -105,6 +118,7 @@ from mmaudit.orchestration.budgets import (
     BudgetExhaustedError,
     BudgetManager,
     TokenReservationOverrunError,
+    _issue_trusted_request_limit_scope,
 )
 from mmaudit.orchestration.context import (
     context_category_measurements,
@@ -387,6 +401,19 @@ def _completion_response(
             provider=provider,
             reasoning_tokens=reasoning_tokens,
         ),
+    )
+
+
+def _empty_candidate_review_wire(*, pretty: bool = False) -> tuple[CandidateReviewBatch, str]:
+    batch = CandidateReviewBatch(findings=[], surface_reviews=())
+    document = frame_candidate_review_batch(batch)
+    return batch, json.dumps(
+        document.model_dump(mode="json"),
+        sort_keys=True,
+        indent=2 if pretty else None,
+        separators=None if pretty else (",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
     )
 
 
@@ -1002,9 +1029,11 @@ def _client(
     qualification_routing: tuple[OpenRouterQualificationRoutingEvidence, ...] | None = None,
     production_qualification: Any | None = None,
     privacy_models: tuple[str, ...] = ("alpha/atlas-secure",),
+    budget: BudgetManager | None = None,
+    context_package_budget_observer: Callable[..., None] | None = None,
 ) -> tuple[OpenRouterClient, httpx.AsyncClient, UsageLedger]:
     usage = UsageLedger()
-    budget = BudgetManager(
+    selected_budget = budget or BudgetManager(
         total_usd=config.execution.budget_usd,
         max_output_tokens=config.execution.max_output_tokens_per_request,
         conservative_usd_per_million_tokens=(config.execution.conservative_usd_per_million_tokens),
@@ -1028,7 +1057,7 @@ def _client(
         api_key=api_key,
         execution=config.execution,
         privacy=config.privacy,
-        budget=budget,
+        budget=selected_budget,
         usage=usage,
         base_url="https://fake.test/api/v1/",
         run_dir=run_dir,
@@ -1040,6 +1069,7 @@ def _client(
         production_qualification=production_qualification,
         effective_privacy_policy=effective_privacy_policy,
         test_only_mock_handler=handler,
+        test_only_context_package_budget_observer=context_package_budget_observer,
     )
     return client, client._client, usage
 
@@ -1165,7 +1195,7 @@ async def test_injected_network_transport_is_unverified_and_cannot_send(
         with pytest.raises(OpenRouterPrivacyError, match="injected provider clients"):
             await client.complete(
                 role="source_audit",
-                models=["alpha/atlas-secure"],
+                models=["alpha/atlas-secure", "beta/backup-secure"],
                 system_prompt="system",
                 user_prompt="synthetic local input",
                 response_model=Answer,
@@ -1846,7 +1876,6 @@ async def test_paid_request_privacy_binding_mismatch_refuses_before_reservation(
 async def test_paid_privacy_policy_is_revalidated_after_reservation(
     config_factory,
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = 0
 
@@ -1879,17 +1908,19 @@ async def test_paid_privacy_policy_is_revalidated_after_reservation(
         ),
         qualification_routing=(_qualification_routing_for_endpoint_snapshot(snapshot),),
     )
-    original_reserve = budget.reserve
 
-    async def reserve_then_replace_policy(*args: Any, **kwargs: Any) -> Any:
-        reservation = await original_reserve(*args, **kwargs)
-        client.effective_privacy_policy = _strict_privacy_policy(
-            config,
-            requested_budget_usd=Decimal("19"),
-        )
-        return reservation
+    class ReplacePolicyAfterReservation:
+        def request_ready(self, **_values: Any) -> None:
+            return None
 
-    monkeypatch.setattr(budget, "reserve", reserve_then_replace_policy)
+        def request_dispatched(self, *, logical_request_id: str) -> None:
+            del logical_request_id
+            client.effective_privacy_policy = _strict_privacy_policy(
+                config,
+                requested_budget_usd=Decimal("19"),
+            )
+
+    client.bind_request_lifecycle_observer(ReplacePolicyAfterReservation())
     try:
         client.register_certification_endpoint_snapshot(evidence=snapshot)
         with pytest.raises(OpenRouterPrivacyError, match="differs from the active model budget"):
@@ -2557,15 +2588,17 @@ async def test_non_zdr_consent_expiry_after_reservation_prevents_transport_and_r
         effective_privacy_policy=policy,
         privacy_authorization=authorization,
     )
-    original_reserve = budget.reserve
 
-    async def reserve_then_expire(*args: Any, **kwargs: Any) -> Any:
-        reservation = await original_reserve(*args, **kwargs)
-        ControlledDateTime.current = expires_at
-        return reservation
+    class ExpireAfterReservation:
+        def request_ready(self, **_values: Any) -> None:
+            return None
 
+        def request_dispatched(self, *, logical_request_id: str) -> None:
+            del logical_request_id
+            ControlledDateTime.current = expires_at
+
+    client.bind_request_lifecycle_observer(ExpireAfterReservation())
     monkeypatch.setattr(openrouter_module, "datetime", ControlledDateTime)
-    monkeypatch.setattr(budget, "reserve", reserve_then_expire)
     try:
         client.register_endpoint_snapshot(evidence=_endpoint_snapshot(require_zdr=False))
         with pytest.raises(OpenRouterPrivacyError, match="not currently valid"):
@@ -5023,26 +5056,16 @@ async def test_retry_reservation_rejection_records_one_attempt_and_plan_bound_pr
         )
 
     client, http_client, usage = _client(
-        config_factory(execution={"max_model_retries": 1}),
+        config_factory(execution={"max_model_retries": 1, "max_requests_per_agent": 1}),
         handler,
     )
-    original_reserve = client.budget.reserve
-    reserve_calls = 0
-
-    async def reject_second_reservation(*args: Any, **kwargs: Any) -> Any:
-        nonlocal reserve_calls
-        reserve_calls += 1
-        if reserve_calls == 2:
-            raise BudgetExhaustedError("synthetic retry reservation rejection")
-        return await original_reserve(*args, **kwargs)
 
     async def no_wait(attempt: int, retry_after: str | None) -> None:
         del attempt, retry_after
 
-    monkeypatch.setattr(client.budget, "reserve", reject_second_reservation)
     monkeypatch.setattr(client, "_backoff", no_wait)
     try:
-        with pytest.raises(BudgetExhaustedError, match="retry reservation rejection"):
+        with pytest.raises(BudgetExhaustedError, match="request limit reached"):
             await client.complete(
                 role="source_audit",
                 models=["alpha/atlas-secure"],
@@ -5055,7 +5078,7 @@ async def test_retry_reservation_rejection_records_one_attempt_and_plan_bound_pr
         await http_client.aclose()
 
     assert calls == 1
-    assert reserve_calls == 2
+    assert client.budget._request_limit_counts == {("role", "source_audit"): 1}
     assert len(usage.records) == 1
     failed = usage.records[0]
     assert failed.attempts == 1
@@ -5192,6 +5215,234 @@ async def test_context_preview_reserves_provider_visible_workflow_bytes(
     assert raw_only_budget - provider_visible_budget == (
         provider_visible_workflow_bound - raw_workflow_bound
     )
+
+
+@pytest.mark.asyncio
+async def test_context_preview_observer_is_constructor_bound_to_mock_transport(
+    config_factory,
+) -> None:
+    observed: list[
+        tuple[tuple[str, ...], str | None, int | None, str | None, int | None, int, int]
+    ] = []
+
+    def observe(
+        models: tuple[str, ...],
+        *,
+        role: str | None,
+        workflow_byte_upper_bound_tokens: int | None,
+        workflow_prompt_sha256: str | None,
+        workflow_prompt_provider_visible_bytes: int | None,
+        context_json_escape_overhead_tokens: int,
+        computed_package_budget: int,
+    ) -> None:
+        observed.append(
+            (
+                models,
+                role,
+                workflow_byte_upper_bound_tokens,
+                workflow_prompt_sha256,
+                workflow_prompt_provider_visible_bytes,
+                context_json_escape_overhead_tokens,
+                computed_package_budget,
+            )
+        )
+
+    workflow_prompt = "synthetic workflow"
+    client, http_client, _usage = _client(
+        config_factory(),
+        lambda _request: _completion_response('{"answer":"unused"}'),
+        context_package_budget_observer=observe,
+    )
+    try:
+        assert trusted_openrouter_execution_evidence(client) is ExecutionEvidenceKind.MOCK
+        computed_budget = client.context_package_byte_budget(
+            ["alpha/atlas-secure"],
+            role="verifier",
+            workflow_byte_upper_bound_tokens=len(workflow_prompt.encode("utf-8")),
+            workflow_prompt=workflow_prompt,
+            context_json_escape_overhead_tokens=17,
+        )
+        assert trusted_openrouter_execution_evidence(client) is ExecutionEvidenceKind.MOCK
+    finally:
+        await http_client.aclose()
+
+    assert observed == [
+        (
+            ("alpha/atlas-secure",),
+            "verifier",
+            len(workflow_prompt.encode("utf-8")),
+            hashlib.sha256(workflow_prompt.encode("utf-8")).hexdigest(),
+            len(
+                json.dumps(
+                    workflow_prompt,
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ),
+            17,
+            computed_budget,
+        )
+    ]
+
+
+def test_context_preview_observer_is_rejected_without_mock_transport(config_factory) -> None:
+    config = config_factory()
+
+    def observe(
+        models: tuple[str, ...],
+        *,
+        role: str | None,
+        workflow_byte_upper_bound_tokens: int | None,
+        workflow_prompt_sha256: str | None,
+        workflow_prompt_provider_visible_bytes: int | None,
+        context_json_escape_overhead_tokens: int,
+        computed_package_budget: int,
+    ) -> None:
+        del models, role, workflow_byte_upper_bound_tokens, workflow_prompt_sha256
+        del workflow_prompt_provider_visible_bytes, context_json_escape_overhead_tokens
+        del computed_package_budget
+
+    with pytest.raises(OpenRouterPrivacyError, match="requires the test-only mock transport"):
+        OpenRouterClient(
+            api_key="synthetic-key",
+            execution=config.execution,
+            privacy=config.privacy,
+            budget=BudgetManager(
+                total_usd=config.execution.budget_usd,
+                max_output_tokens=config.execution.max_output_tokens_per_request,
+                conservative_usd_per_million_tokens=(
+                    config.execution.conservative_usd_per_million_tokens
+                ),
+                max_requests_per_agent=config.execution.max_requests_per_agent,
+            ),
+            usage=UsageLedger(),
+            test_only_context_package_budget_observer=observe,
+        )
+
+
+def test_context_preview_observer_must_be_callable(config_factory) -> None:
+    config = config_factory()
+
+    with pytest.raises(OpenRouterPrivacyError, match="observer must be callable"):
+        OpenRouterClient(
+            api_key="synthetic-key",
+            execution=config.execution,
+            privacy=config.privacy,
+            budget=BudgetManager(
+                total_usd=config.execution.budget_usd,
+                max_output_tokens=config.execution.max_output_tokens_per_request,
+                conservative_usd_per_million_tokens=(
+                    config.execution.conservative_usd_per_million_tokens
+                ),
+                max_requests_per_agent=config.execution.max_requests_per_agent,
+            ),
+            usage=UsageLedger(),
+            base_url="https://fake.test/api/v1/",
+            test_only_mock_handler=lambda _request: _completion_response('{"answer":"unused"}'),
+            test_only_context_package_budget_observer=object(),  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.asyncio
+async def test_context_preview_observer_must_return_exact_none(config_factory) -> None:
+    def invalid_return(
+        _models: tuple[str, ...],
+        *,
+        role: str | None,
+        workflow_byte_upper_bound_tokens: int | None,
+        workflow_prompt_sha256: str | None,
+        workflow_prompt_provider_visible_bytes: int | None,
+        context_json_escape_overhead_tokens: int,
+        computed_package_budget: int,
+    ) -> Any:
+        del role, workflow_byte_upper_bound_tokens, workflow_prompt_sha256
+        del workflow_prompt_provider_visible_bytes, context_json_escape_overhead_tokens
+        del computed_package_budget
+        return False
+
+    client, http_client, _usage = _client(
+        config_factory(),
+        lambda _request: _completion_response('{"answer":"unused"}'),
+        context_package_budget_observer=invalid_return,
+    )
+    try:
+        with pytest.raises(OpenRouterPrivacyError, match="return exact None"):
+            client.context_package_byte_budget(["alpha/atlas-secure"])
+        assert trusted_openrouter_execution_evidence(client) is ExecutionEvidenceKind.MOCK
+    finally:
+        await http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_context_preview_observer_mutation_revokes_mock_boundary(
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def mutate_boundary(
+        _models: tuple[str, ...],
+        *,
+        role: str | None,
+        workflow_byte_upper_bound_tokens: int | None,
+        workflow_prompt_sha256: str | None,
+        workflow_prompt_provider_visible_bytes: int | None,
+        context_json_escape_overhead_tokens: int,
+        computed_package_budget: int,
+    ) -> None:
+        del role, workflow_byte_upper_bound_tokens, workflow_prompt_sha256
+        del workflow_prompt_provider_visible_bytes, context_json_escape_overhead_tokens
+        del computed_package_budget
+        monkeypatch.setattr(OpenRouterClient, "_required_output_tokens", lambda _client: 1)
+
+    client, http_client, _usage = _client(
+        config_factory(),
+        lambda _request: _completion_response('{"answer":"unused"}'),
+        context_package_budget_observer=mutate_boundary,
+    )
+    try:
+        with pytest.raises(OpenRouterPrivacyError, match="changed the trusted mock boundary"):
+            client.context_package_byte_budget(["alpha/atlas-secure"])
+        assert trusted_openrouter_execution_evidence(client) is ExecutionEvidenceKind.UNVERIFIED
+    finally:
+        await http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_context_preview_instance_attribute_cannot_replace_bound_observer(
+    config_factory,
+) -> None:
+    observed: list[str] = []
+
+    def bound_observer(
+        _models: tuple[str, ...],
+        *,
+        role: str | None,
+        workflow_byte_upper_bound_tokens: int | None,
+        workflow_prompt_sha256: str | None,
+        workflow_prompt_provider_visible_bytes: int | None,
+        context_json_escape_overhead_tokens: int,
+        computed_package_budget: int,
+    ) -> None:
+        del role, workflow_byte_upper_bound_tokens, workflow_prompt_sha256
+        del workflow_prompt_provider_visible_bytes, context_json_escape_overhead_tokens
+        del computed_package_budget
+        observed.append("bound")
+
+    def replacement(*_args: Any, **_kwargs: Any) -> None:
+        observed.append("replacement")
+
+    client, http_client, _usage = _client(
+        config_factory(),
+        lambda _request: _completion_response('{"answer":"unused"}'),
+        context_package_budget_observer=bound_observer,
+    )
+    client.test_only_context_package_budget_observer = replacement  # type: ignore[attr-defined]
+    try:
+        client.context_package_byte_budget(["alpha/atlas-secure"])
+        assert trusted_openrouter_execution_evidence(client) is ExecutionEvidenceKind.MOCK
+    finally:
+        await http_client.aclose()
+
+    assert observed == ["bound"]
 
 
 @pytest.mark.asyncio
@@ -5668,9 +5919,8 @@ async def test_stale_context_package_bytes_fail_before_transport(config_factory)
 
 
 @pytest.mark.asyncio
-async def test_initial_global_token_rejection_is_plan_bound_preflight(
+async def test_initial_global_token_rejection_records_planner_preflight(
     config_factory,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = 0
 
@@ -5685,19 +5935,32 @@ async def test_initial_global_token_rejection_is_plan_bound_preflight(
             "global_output_token_budget": 10_000,
         }
     )
-    client, http_client, usage = _client(config, handler)
-
-    async def reject_after_concurrent_input_reservation(*_args: Any, **_kwargs: Any) -> Any:
-        client.budget._spent_input_tokens = config.token_budgets.global_input_token_budget
-        raise BudgetExhaustedError("synthetic global input token race")
-
-    monkeypatch.setattr(
-        client.budget,
-        "reserve",
-        reject_after_concurrent_input_reservation,
+    budget = BudgetManager(
+        total_usd=config.execution.budget_usd,
+        max_output_tokens=config.execution.max_output_tokens_per_request,
+        conservative_usd_per_million_tokens=(config.execution.conservative_usd_per_million_tokens),
+        max_requests_per_agent=config.execution.max_requests_per_agent,
+        global_input_token_budget=config.token_budgets.global_input_token_budget,
+        global_output_token_budget=config.token_budgets.global_output_token_budget,
     )
+
+    reservation = await budget.reserve(
+        "synthetic-prior-reservation",
+        "prior_review",
+        "x",
+        exact_model_id="alpha/atlas-secure",
+        planned_prompt_tokens=config.token_budgets.global_input_token_budget,
+        planned_completion_tokens=0,
+    )
+    await budget.reconcile(
+        reservation,
+        Decimal("0"),
+        actual_prompt_tokens=config.token_budgets.global_input_token_budget,
+        actual_completion_tokens=0,
+    )
+    client, http_client, usage = _client(config, handler, budget=budget)
     try:
-        with pytest.raises(BudgetExhaustedError, match="global input token race"):
+        with pytest.raises(OpenRouterRequestLimitError, match="configured global token budget"):
             await client.complete(
                 role="source_audit",
                 models=["alpha/atlas-secure"],
@@ -5714,17 +5977,20 @@ async def test_initial_global_token_rejection_is_plan_bound_preflight(
     assert len(client.context_preflight.records) == 1
     preflight = client.context_preflight.records[0]
     assert preflight.request_state is ContextRequestState.PRE_FLIGHT_REJECTED
-    assert preflight.decision_source is ContextPreflightSource.BUDGET_MANAGER
+    assert preflight.decision_source is ContextPreflightSource.TOKEN_PLANNER
     assert preflight.reason is ContextPreflightReason.GLOBAL_TOKEN_BUDGET
-    assert preflight.request_plan is not None
-    assert preflight.request_plan_sha256 == preflight.request_plan.plan_sha256
-    assert preflight.estimated_prompt_tokens == preflight.request_plan.estimated_prompt_tokens
+    assert preflight.request_plan is None
+    assert preflight.request_plan_sha256 is None
+    assert preflight.planning_snapshot is not None
+    assert preflight.estimated_prompt_tokens == (
+        preflight.planning_snapshot.estimated_prompt_tokens
+    )
     manifest = build_context_manifest(
         run_id="global-token-preflight",
         usage_records=[],
         preflight_records=client.context_preflight.records,
     )
-    assert manifest.totals.planned_request_count == 1
+    assert manifest.totals.planned_request_count == 0
     assert manifest.totals.preflight_rejected_request_count == 1
 
 
@@ -8005,6 +8271,408 @@ async def test_truncated_response_is_rejected_and_not_repaired(config_factory) -
 
 
 @pytest.mark.asyncio
+async def test_candidate_review_completion_preserves_wire_and_normalized_custody(
+    config_factory,
+) -> None:
+    batch, content = _empty_candidate_review_wire(pretty=True)
+    observed: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(json.loads(request.content))
+        return _completion_response(content, provider="approved-provider")
+
+    client, http_client, usage = _client(
+        config_factory(),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(only=("approved-provider",)),
+    )
+    client.register_endpoint_snapshot(
+        evidence=_endpoint_snapshot(
+            supported_parameters=[
+                "json_schema",
+                "max_tokens",
+                "response_format",
+                "structured_outputs",
+                "temperature",
+            ]
+        )
+    )
+    try:
+        completion = await client.complete_candidate_review_with_evidence(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="user",
+            schema_name="candidate_review_framed",
+            logical_request_id="candidate-review-normal-1",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert type(completion) is CandidateReviewCompletion
+    assert completion.value == batch
+    assert completion.usage_record is usage.records[0]
+    assert completion.usage_record.schema_sha256 == candidate_review_frame_wire_schema_sha256()
+    assert completion.normalization_evidence.normalized_batch_schema_sha256 == (
+        candidate_review_batch_schema_sha256()
+    )
+    assert completion.usage_record.response_sha256 == hashlib.sha256(content.encode()).hexdigest()
+    assert completion.usage_record.validated_response_sha256 == (
+        completion.normalization_evidence.wire_validated_response_sha256
+    )
+    assert completion.usage_record.validated_response_sha256 != (
+        completion.usage_record.response_sha256
+    )
+    structured = completion.usage_record.routing["structured_output"]
+    assert structured["original_response_sha256"] == completion.usage_record.response_sha256
+    assert structured["decoded_response_sha256"] == completion.usage_record.response_sha256
+    assert structured["validated_response_sha256"] == (
+        completion.usage_record.validated_response_sha256
+    )
+    assert (
+        completion.normalization_evidence.require_exact_batch(
+            completion.value,
+            request_id=completion.usage_record.request_id,
+        )
+        is completion.normalization_evidence
+    )
+    response_schema = observed[0]["response_format"]["json_schema"]["schema"]
+    assert response_schema["title"] == CandidateReviewFramedDocument.__name__
+    assert set(response_schema["properties"]) == {"frames"}
+
+
+@pytest.mark.asyncio
+async def test_candidate_review_transport_retains_consecutive_shared_root_request_count(
+    config_factory,
+) -> None:
+    batch, content = _empty_candidate_review_wire()
+    scope = _issue_trusted_request_limit_scope("scheduler-request-root-recovery")
+    client, http_client, _usage = _client(
+        config_factory(),
+        lambda _request: _completion_response(content),
+    )
+    parent = await client.budget.reserve(
+        "synthetic-parent-attempt",
+        "source_audit",
+        "x",
+        exact_model_id="alpha/atlas-secure",
+        planned_prompt_tokens=1,
+        planned_visible_output_tokens=1,
+        planned_reasoning_tokens=0,
+        planned_completion_tokens=1,
+        request_token_plan_sha256="a" * 64,
+        request_limit_scope=scope,
+    )
+    await client.budget.release(parent)
+
+    class RecoveryObserver:
+        def request_ready(self, **_values: Any) -> Any:
+            return scope
+
+        def request_dispatched(self, *, logical_request_id: str) -> None:
+            del logical_request_id
+
+    observer = RecoveryObserver()
+    client.bind_request_lifecycle_observer(observer)
+    try:
+        completion = await client.complete_candidate_review_with_evidence(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="user",
+            schema_name="candidate_review_framed",
+            logical_request_id="candidate-review-recovery-shared-root",
+            single_route_single_attempt=True,
+        )
+    finally:
+        client.unbind_request_lifecycle_observer(observer)
+        await http_client.aclose()
+
+    assert completion.value == batch
+    raw = completion.usage_record.routing["atomic_request_limit_reservation"]
+    assert isinstance(raw, dict)
+    assert raw["request_limit_scope"] == scope.identifier
+    assert raw["request_limit_count_before"] == 1
+    assert raw["request_limit_count_after"] == 2
+
+
+@pytest.mark.asyncio
+async def test_candidate_review_truncation_is_single_attempt_and_exact_raw_free_custody(
+    config_factory,
+) -> None:
+    batch, _content = _empty_candidate_review_wire()
+    document = frame_candidate_review_batch(batch)
+    raw_frames = [
+        json.dumps(
+            frame.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+        for frame in document.frames
+    ]
+    canary = "SYNTHETIC_TRUNCATED_PRIVATE_TAIL_CANARY_71ae"
+    content = (
+        '{"frames":['
+        + ",".join(raw_frames[:2])
+        + ',{"schema_version":"1.0","sequence":2,'
+        + '"phase":"SURFACE_REVIEWS_END","record_count":0,"tail":"'
+        + canary
+    )
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        payload = _completion(content, cost=0.0125)
+        payload["choices"][0]["finish_reason"] = "length"
+        payload["choices"][0]["native_finish_reason"] = "max_tokens"
+        return httpx.Response(
+            200,
+            headers={"X-Generation-Id": "generation-test"},
+            json=payload,
+        )
+
+    client, http_client, usage = _client(config_factory(), handler)
+    try:
+        with pytest.raises(OpenRouterTruncatedResponseError) as raised:
+            await client.complete_candidate_review_with_evidence(
+                role="source_audit",
+                models=["alpha/atlas-secure", "beta/backup-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                schema_name="candidate_review_framed",
+                logical_request_id="candidate-review-parent-1",
+            )
+    finally:
+        await http_client.aclose()
+
+    error = raised.value
+    envelope = error.envelope_evidence
+    projection = error.projection
+    failed = error.failed_usage_record
+    traceback = error.__traceback__
+    while traceback is not None:
+        frame = traceback.tb_frame
+        if frame.f_globals.get("__name__") == "mmaudit.models.openrouter":
+            assert frame.f_code.co_name != "_complete_one"
+            assert "raw_content" not in frame.f_locals
+            assert all(
+                canary not in value for value in frame.f_locals.values() if type(value) is str
+            )
+        traceback = traceback.tb_next
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert canary not in repr(error.args)
+    assert calls == 1
+    assert envelope is not None
+    assert projection is not None
+    assert failed is usage.records[0]
+    assert failed.validated_response_sha256 is None
+    assert failed.validation_status is ModelRequestValidationStatus.TRUNCATED
+    assert failed.identity_strength.value == "UNBOUND"
+    assert failed.status == "rejected_truncated_response"
+    assert failed.reported_cost_usd_exact == "0.0125"
+    assert failed.actual_model == envelope.selected_model == "alpha/atlas-secure"
+    assert failed.provider == envelope.selected_provider_name == "synthetic-provider"
+    assert failed.actual_provider_endpoint == envelope.selected_provider_endpoint
+    assert failed.response_sha256 == envelope.response_sha256
+    assert failed.schema_sha256 == envelope.wire_schema_sha256
+    assert (
+        projection.evidence_sha256
+        == failed.routing["candidate_review_truncation_projection_sha256"]
+    )
+    assert failed.routing["candidate_review_truncated_envelope_evidence"] == (
+        envelope.model_dump(mode="json")
+    )
+    assert failed.routing["candidate_review_truncated_envelope_sha256"] == (
+        envelope.evidence_sha256
+    )
+    routed_json = json.dumps(failed.routing, sort_keys=True)
+    assert canary not in routed_json
+    assert projection.findings == ()
+    assert projection.surface_reviews == ()
+    assert all(
+        forbidden not in key
+        for key in failed.routing
+        for forbidden in ("original_response_bytes", "accepted_prefix", "discarded_suffix")
+    )
+
+    failed.routing["candidate_review_truncation_observed_frame_count"] += 1
+    with pytest.raises(OpenRouterSchemaError, match="usage custody differs"):
+        _ = error.failed_usage_record
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure_kind", "expected_error"),
+    (
+        ("rate_limit", OpenRouterRateLimitError),
+        ("timeout", OpenRouterTimeoutError),
+    ),
+)
+async def test_recovery_candidate_review_tightens_transport_to_one_attempt(
+    config_factory,
+    failure_kind: str,
+    expected_error: type[OpenRouterTransientError],
+) -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if failure_kind == "timeout":
+            raise httpx.ReadTimeout("synthetic recovery timeout", request=request)
+        return httpx.Response(
+            429,
+            headers={"Retry-After": "0"},
+            json={"error": {"code": 429, "message": "synthetic recovery rate limit"}},
+        )
+
+    client, http_client, usage = _client(
+        config_factory(execution={"max_model_retries": 3}),
+        handler,
+    )
+    try:
+        with pytest.raises(expected_error):
+            await client.complete_candidate_review_with_evidence(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                schema_name="candidate_review_framed",
+                logical_request_id="candidate-review-recovery-child-1",
+                single_route_single_attempt=True,
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 1
+    assert len(usage.records) == 1
+    assert usage.records[0].attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_recovery_candidate_review_rejects_multiple_routes_before_transport(
+    config_factory,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"frames":[]}')
+
+    client, http_client, usage = _client(config_factory(), handler)
+    try:
+        with pytest.raises(OpenRouterRequestLimitError, match="one exact model route"):
+            await client.complete_candidate_review_with_evidence(
+                role="source_audit",
+                models=["alpha/atlas-secure", "beta/backup-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                schema_name="candidate_review_framed",
+                logical_request_id="candidate-review-recovery-child-routes",
+                single_route_single_attempt=True,
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 0
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_candidate_review_boundary_monkeypatches_fail_before_transport(
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"frames":[]}')
+
+    client, http_client, usage = _client(config_factory(), handler)
+    monkeypatch.setattr(truncation_module, "_canonical_sha256", lambda _value: "0" * 64)
+    try:
+        with pytest.raises(OpenRouterCandidateReviewBoundaryError):
+            await client.complete_candidate_review_with_evidence(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                schema_name="candidate_review_framed",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 0
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_candidate_review_instance_override_fails_before_transport(config_factory) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"frames":[]}')
+
+    client, http_client, usage = _client(config_factory(), handler)
+    client.__dict__["_complete_one"] = object()
+    try:
+        with pytest.raises(OpenRouterCandidateReviewBoundaryError):
+            await client.complete_candidate_review_with_evidence(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                schema_name="candidate_review_framed",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 0
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_candidate_review_post_transport_inner_drift_never_returns_custody_or_fallback(
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _batch, content = _empty_candidate_review_wire()
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        monkeypatch.setattr(truncation_module, "_canonical_sha256", lambda _value: "0" * 64)
+        return _completion_response(content)
+
+    client, http_client, usage = _client(config_factory(), handler)
+    try:
+        with pytest.raises(OpenRouterCandidateReviewBoundaryError):
+            await client.complete_candidate_review_with_evidence(
+                role="source_audit",
+                models=["alpha/atlas-secure", "beta/backup-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                schema_name="candidate_review_framed",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 1
+    assert len(usage.records) == 1
+    assert usage.records[0].status != "success"
+
+
+@pytest.mark.asyncio
 async def test_native_truncation_cannot_hide_behind_normalized_stop(config_factory) -> None:
     calls = 0
 
@@ -8057,7 +8725,10 @@ async def test_native_truncation_is_not_retained_behind_an_identity_mismatch(
 
     client, http_client, usage = _client(config_factory(), handler)
     try:
-        with pytest.raises(OpenRouterTruncatedResponseError):
+        with pytest.raises(
+            OpenRouterResponseIdentityError,
+            match="unrelated model",
+        ):
             await client.complete(
                 role="source_audit",
                 models=["alpha/atlas-secure"],
@@ -8070,7 +8741,44 @@ async def test_native_truncation_is_not_retained_behind_an_identity_mismatch(
         await http_client.aclose()
 
     assert len(usage.records) == 1
-    assert usage.records[0].status == "rejected_truncated_response"
+    assert usage.records[0].status == "unbound_identity"
+    assert usage.records[0].validation_status.value == "model_mismatch"
+    assert usage.records[0].validated_response_sha256 is None
+    assert not is_creditable_usage_record(usage.records[0])
+
+
+@pytest.mark.asyncio
+async def test_truncation_cannot_mask_router_request_identity_mismatch(config_factory) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        payload = _completion('{"answer":"parseable but routed elsewhere"}')
+        payload["choices"][0]["finish_reason"] = "length"
+        payload["openrouter_metadata"]["requested"] = "unrelated/vendor-model"
+        return httpx.Response(
+            200,
+            headers={"X-Generation-Id": "generation-test"},
+            json=payload,
+        )
+
+    client, http_client, usage = _client(config_factory(), handler)
+    try:
+        with pytest.raises(
+            OpenRouterResponseIdentityError,
+            match="router metadata does not bind",
+        ):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert len(usage.records) == 1
+    assert usage.records[0].status == "unbound_identity"
+    assert usage.records[0].validation_status.value == "model_mismatch"
     assert usage.records[0].validated_response_sha256 is None
     assert not is_creditable_usage_record(usage.records[0])
 

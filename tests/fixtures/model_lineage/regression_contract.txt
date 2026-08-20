@@ -1,0 +1,6 @@
+MMAUDIT_SYNTHETIC_MODEL_LINEAGE_REGRESSION_V1
+This fixture is mechanism-only and completion-ineligible.
+Every model ID uses the reserved non-provider synthetic-lineage: namespace.
+Canonical membership and alias closure are explicit construction facts.
+Root identities derive from the reserved domain and complete sorted member inventory; labels, canonical preference, and unrelated groups do not alter a root.
+No external provenance, real provider lineage, runner authority, qualification, selection, release, or authority issuance is established.

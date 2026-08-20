@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator
 from datetime import timedelta
 from functools import cache
 from pathlib import Path
@@ -29,6 +30,7 @@ from mmaudit.models.schemas import (
     MaximumAssuranceAssessment,
     MaximumAssuranceRequirement,
     MaximumAssuranceStatus,
+    MinimumFloorRecoveryModelUsageBinding,
     ModelRequestValidationStatus,
     RepositoryDifferentialRunStatus,
     RepositoryFile,
@@ -48,10 +50,17 @@ from mmaudit.orchestration.run_status import (
     audit_quality_status_for_run_status,
     minimum_analysis_floor_quality_gate,
 )
-from tests.identity_fixtures import bind_synthetic_usage_identity
+from tests.identity_fixtures import bind_synthetic_usage_identity, rebind_synthetic_token_plan
 from tests.language_capability_support import (
     language_capability_for_files,
     matched_solidity_language_capability,
+)
+from tests.output_evidence_fixtures import synthetic_structured_output_routing
+from tests.refresh_runtime_support import (
+    SyntheticRefreshRuntime,
+    bind_usage_to_refresh_pricing_runtime,
+    bind_usage_to_refresh_runtime,
+    synthetic_refresh_runtime,
 )
 from tests.unit.test_model_policy_selection import (
     BASE_TIME,
@@ -77,6 +86,14 @@ def _report_policy_selection() -> tuple[AuditModelSelection, VerifiedAuditModelS
         authority = _policy_authority(Path(directory), policy)
     selection, _evidence_bundle, capability = _resolve(technical, policy, authority)
     return selection, capability
+
+
+@cache
+def _report_refresh_runtime() -> SyntheticRefreshRuntime:
+    """Issue detached refresh custody for typed report fixtures."""
+
+    with TemporaryDirectory(prefix="mmaudit-run-status-refresh-") as directory:
+        return synthetic_refresh_runtime(Path(directory))
 
 
 def _repository() -> RepositoryMap:
@@ -244,16 +261,69 @@ def _usage(
 
 
 def _bind_report_usage_to_policy_selection(record: UsageRecord) -> UsageRecord:
-    selection, capability = _report_policy_selection()
+    if record.execution_evidence is not ExecutionEvidenceKind.REAL:
+        return record
+    runtime = _report_refresh_runtime()
+    selection = runtime.audit_selection_evidence.selection
+    capability = runtime.audit_selection
+    routes = tuple(
+        route
+        for route in runtime.evidence.routes
+        if route.exact_model_id == record.requested_model and route.audit_selected
+    )
+    assert len(routes) == 1
+    route = routes[0]
+    assert record.request_body_sha256 is not None
+    assert record.schema_sha256 is not None
+    assert record.response_sha256 is not None
+    assert record.validated_response_sha256 is not None
+    started_at = runtime.evidence.verified_at
+    routing = {
+        **record.routing,
+        "selected_provider_endpoint": route.approved_provider_endpoint,
+        "selected_provider_name": route.approved_provider_name,
+        "endpoint_snapshot_sha256": route.endpoint_snapshot_sha256,
+        "output_capability_sha256": route.output_capability_sha256,
+        "request_started_at": started_at.isoformat(),
+        "request_ended_at": started_at.isoformat(),
+        "structured_output": synthetic_structured_output_routing(
+            configured_provider_endpoints=(route.approved_provider_endpoint,),
+            selected_provider_endpoint=route.approved_provider_endpoint,
+            endpoint_snapshot_sha256=route.endpoint_snapshot_sha256,
+            output_capability_sha256=route.output_capability_sha256,
+            prompt_sha256=record.prompt_sha256,
+            request_body_sha256=record.request_body_sha256,
+            provider_policy_sha256=str(record.routing["provider_policy_sha256"]),
+            schema_sha256=record.schema_sha256,
+            original_response_sha256=record.response_sha256,
+            validated_response_sha256=record.validated_response_sha256,
+            mode=route.structured_output_mode,
+        ),
+    }
+    prepared = record.model_copy(
+        update={
+            "returned_model": route.canonical_model_slug,
+            "actual_model": route.canonical_model_slug,
+            "provider": route.approved_provider_name,
+            "timestamp": started_at,
+            "configured_provider_endpoints": [route.approved_provider_endpoint],
+            "actual_provider_endpoint": route.approved_provider_endpoint,
+            "started_at": started_at,
+            "ended_at": started_at,
+            "routing": routing,
+        }
+    )
+    if record.status == "success":
+        prepared = bind_synthetic_usage_identity(rebind_synthetic_token_plan(prepared))
     evidence = capability.routing_evidence(
-        record.requested_model,
-        now=record.started_at or record.timestamp,
+        prepared.requested_model,
+        now=prepared.started_at or prepared.timestamp,
         expected_audit_scope_sha256=selection.audit_scope_sha256,
         expected_source_sha256=selection.source_sha256,
         expected_audit_context_sha256=selection.audit_context_sha256,
         expected_client_constraints_sha256=selection.client_constraints_sha256,
     )
-    routing = dict(record.routing)
+    routing = dict(prepared.routing)
     metadata = dict(evidence.request_metadata())
     routing_evidence_sha256 = metadata.pop("routing_evidence_sha256")
     routing.update(
@@ -264,7 +334,11 @@ def _bind_report_usage_to_policy_selection(record: UsageRecord) -> UsageRecord:
             "audit_model_routing_evidence": evidence.model_dump(mode="json"),
         }
     )
-    return record.model_copy(update={"routing": routing})
+    refresh_bound = bind_usage_to_refresh_runtime(
+        prepared.model_copy(update={"routing": routing}),
+        runtime,
+    )
+    return bind_usage_to_refresh_pricing_runtime(refresh_bound, runtime)
 
 
 def _assessment(
@@ -279,6 +353,7 @@ def _assessment(
     surface_analysis_feasible: bool = True,
     orchestration_failures: tuple[str, ...] = (),
     required_model_roles: tuple[str, ...] = ("source_audit",),
+    recovery_model_usage_bindings: Iterable[MinimumFloorRecoveryModelUsageBinding] = (),
 ):
     return assess_minimum_analysis_floor(
         repository=_repository(),
@@ -292,6 +367,7 @@ def _assessment(
         explicit_downgrade_reason=explicit_downgrade_reason,
         surface_analysis_feasible=surface_analysis_feasible,
         orchestration_failures=orchestration_failures,
+        recovery_model_usage_bindings=recovery_model_usage_bindings,
     )
 
 
@@ -303,6 +379,86 @@ def test_zero_scanners_and_zero_model_roles_never_complete() -> None:
     assert not floor.qualifying_real_static_scanners
     assert not floor.completed_real_model_roles
     assert not minimum_analysis_floor_quality_gate(floor).passed
+
+
+def test_minimum_floor_credits_recovery_usage_only_with_exact_external_binding() -> None:
+    from mmaudit.models.usage import is_creditable_usage_record
+    from tests.unit.test_usage import _owned_request_limit_record
+
+    request_id = "scheduler-recovery-request-" + "a" * 64
+    request_limit_scope = "scheduler-request-" + "b" * 64
+    usage = _owned_request_limit_record(
+        request_id,
+        request_limit_scope=request_limit_scope,
+        request_limit_count_before=1,
+    )
+    binding = MinimumFloorRecoveryModelUsageBinding.build(
+        usage_record=usage,
+        request_limit_scope=request_limit_scope,
+        request_limit_count_before=1,
+        scheduler_request_evidence_sha256="c" * 64,
+    )
+    assert not is_creditable_usage_record(usage, require_real=True)
+
+    floor = _assessment(
+        usage=[usage],
+        static_analysis_applicable=False,
+        recovery_model_usage_bindings=(binding,),
+    )
+    assert floor.schema_version == "1.1"
+    assert floor.completed_real_model_roles == ["source_audit"]
+    assert floor.run_status is AuditRunStatus.COMPLETE
+    with pytest.raises(ValueError, match="differs from provider usage"):
+        _assessment(
+            usage=[usage],
+            static_analysis_applicable=False,
+            recovery_model_usage_bindings=(binding.model_copy(update={"role": "business_logic"}),),
+        )
+    with pytest.raises(ValueError, match=r"differ.*from provider usage"):
+        _assessment(
+            usage=[usage, usage],
+            static_analysis_applicable=False,
+            recovery_model_usage_bindings=(binding,),
+        )
+
+
+def test_minimum_floor_bounds_a_lying_infinite_recovery_binding_inventory() -> None:
+    from tests.unit.test_usage import _owned_request_limit_record
+
+    request_id = "scheduler-recovery-request-" + "d" * 64
+    request_limit_scope = "scheduler-request-" + "e" * 64
+    usage = _owned_request_limit_record(
+        request_id,
+        request_limit_scope=request_limit_scope,
+        request_limit_count_before=1,
+    )
+    binding = MinimumFloorRecoveryModelUsageBinding.build(
+        usage_record=usage,
+        request_limit_scope=request_limit_scope,
+        request_limit_count_before=1,
+        scheduler_request_evidence_sha256="f" * 64,
+    )
+
+    class LyingBindings:
+        def __init__(self) -> None:
+            self.consumed = 0
+
+        def __len__(self) -> int:
+            return 0
+
+        def __iter__(self) -> Iterator[MinimumFloorRecoveryModelUsageBinding]:
+            while True:
+                self.consumed += 1
+                yield binding
+
+    bindings = LyingBindings()
+    with pytest.raises(ValueError, match="recovery usage bindings exceed their item limit"):
+        _assessment(
+            usage=[usage],
+            static_analysis_applicable=False,
+            recovery_model_usage_bindings=bindings,
+        )
+    assert bindings.consumed == 33
 
 
 def test_mock_near_misses_earn_no_scanner_or_model_credit() -> None:
@@ -505,7 +661,8 @@ def _typed_report_payload(
     coverage: dict[str, CoverageMetric],
 ) -> dict[str, object]:
     compilation = _compilation()
-    selection, _capability = _report_policy_selection()
+    refresh_runtime = _report_refresh_runtime()
+    selection = refresh_runtime.audit_selection_evidence.selection
     policy_bound_usage = [_bind_report_usage_to_policy_selection(record) for record in usage]
     project = SolidityProjectMetadata(
         project_type=SolidityProjectType.FOUNDRY,
@@ -530,6 +687,8 @@ def _typed_report_payload(
         "scanner_runs": scanner_runs,
         "usage": policy_bound_usage,
         "audit_model_selection": selection,
+        "audit_model_refresh_evidence": refresh_runtime.evidence,
+        "audit_model_refresh_pricing_evidence": refresh_runtime.pricing_evidence,
         "solidity_coverage": SolidityCoverage(quality_metrics=coverage),
         "metadata": {
             "scanner_only": floor.scanner_only,

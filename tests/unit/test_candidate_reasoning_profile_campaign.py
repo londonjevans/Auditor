@@ -31,6 +31,7 @@ from mmaudit.models.qualification import (
 from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.models.usage import UsageLedger
 from mmaudit.orchestration.manifest import canonical_sha256
+from mmaudit.privacy import PrivacyProfile
 from tests.unit import test_candidate_benchmark as fixtures
 
 ROOT = Path(__file__).parents[2]
@@ -47,6 +48,7 @@ def _config(config_factory: Callable[..., AuditConfig]) -> AuditConfig:
     base = config_factory()
     return config_factory(
         execution={"budget_usd": 250, "max_requests_per_agent": 512},
+        privacy={"profile": PrivacyProfile.SYNTHETIC_BENCHMARK},
         models={
             "reasoning": {"effort": "high", "reserved_tokens": 4_096},
             "judge": {

@@ -30,6 +30,8 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.orchestration.coverage import generic_source_coverage_metrics
 from mmaudit.orchestration.manifest import (
+    AUDIT_MODEL_REFRESH_BINDING_IDS,
+    AUDIT_MODEL_REFRESH_EVIDENCE_PATH,
     AUDIT_MODEL_SELECTION_BINDING_IDS,
     AUDIT_MODEL_SELECTION_EVIDENCE_PATH,
     ManifestFileBinding,
@@ -56,6 +58,13 @@ from tests.language_capability_support import (
     language_capability_for_files,
 )
 from tests.qualification_support import synthetic_production_qualification
+from tests.refresh_runtime_support import (
+    SyntheticRefreshRuntime,
+    _candidate_registry,
+    bind_usage_to_refresh_pricing_runtime,
+    bind_usage_to_refresh_runtime,
+    synthetic_refresh_runtime_for_authorities,
+)
 from tests.unit.test_manifest import _report, _write_required_artifacts
 from tests.unit.test_model_policy_selection import (
     BASE_TIME,
@@ -74,6 +83,7 @@ class _PolicyManifestFixture:
     evidence: AuditModelSelectionEvidenceBundle
     capability: VerifiedAuditModelSelection
     technical: VerifiedProductionQualification
+    refresh: SyntheticRefreshRuntime
     qualification_runtime: dict[str, object]
     manifest: RunEvidenceManifest
     run_dir: Path
@@ -89,6 +99,8 @@ def _current_report(
     config: AuditConfig,
     *,
     selection: object | None = None,
+    refresh: object | None = None,
+    refresh_pricing: object | None = None,
     usage: list[UsageRecord] | None = None,
 ) -> tuple[AuditReport, LanguageCapabilityArtifact, PropertyCorpus]:
     records = [] if usage is None else usage
@@ -170,6 +182,10 @@ def _current_report(
     )
     if selection is not None:
         payload["audit_model_selection"] = selection
+    if refresh is not None:
+        payload["audit_model_refresh_evidence"] = refresh
+    if refresh_pricing is not None:
+        payload["audit_model_refresh_pricing_evidence"] = refresh_pricing
     payload["metadata"] = {
         **base.metadata,
         "scanner_only": False,
@@ -241,11 +257,18 @@ def policy_manifest_fixture(tmp_path_factory: pytest.TempPathFactory) -> _Policy
             for item in unselected.repository.files
         ]
     )
+    model_ids = tuple(sorted(entry.canonical_model_id for entry in config.models.registry))
+    candidate_registry = _candidate_registry(
+        config=config,
+        model_ids=model_ids,
+        roots=tuple(sorted(config.privacy.approved_model_lineages)),
+        created_at=BASE_TIME,
+        provider_endpoint="openrouter/provider-a",
+    )
     technical = synthetic_production_qualification(
         config,
         BASE_TIME,
-        provider_endpoint="openrouter/provider-a",
-        provider_name="Synthetic Provider",
+        candidate_registry=candidate_registry,
     )
     excluded_id = technical.models[-1].exact_model_id
     policy = _policy_bundle(
@@ -255,12 +278,28 @@ def policy_manifest_fixture(tmp_path_factory: pytest.TempPathFactory) -> _Policy
     )
     authority = _policy_authority(root / "authority", policy)
     selection, evidence, capability = _resolve(technical, policy, authority)
-    report, language, corpus = _current_report(config, selection=selection)
+    refresh = synthetic_refresh_runtime_for_authorities(
+        config=config,
+        candidate_registry=candidate_registry,
+        technical_qualification=technical,
+        audit_selection_evidence=evidence,
+        audit_selection=capability,
+        verified_at=capability.selected_at,
+    )
+    report, language, corpus = _current_report(
+        config,
+        selection=selection,
+        refresh=refresh.evidence,
+    )
     run_dir = root / "run"
     _write_required_artifacts(run_dir, report, language_artifact=language)
     _write_current_artifact_shapes(run_dir, corpus=corpus)
     (run_dir / AUDIT_MODEL_SELECTION_EVIDENCE_PATH).write_text(
         evidence.model_dump_json(indent=2) + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / AUDIT_MODEL_REFRESH_EVIDENCE_PATH).write_text(
+        refresh.evidence.model_dump_json(indent=2) + "\n",
         encoding="utf-8",
     )
     qualification = ModelRegistry.validate_production_qualification(
@@ -288,6 +327,7 @@ def policy_manifest_fixture(tmp_path_factory: pytest.TempPathFactory) -> _Policy
         evidence=evidence,
         capability=capability,
         technical=technical,
+        refresh=refresh,
         qualification_runtime=qualification_runtime,
         manifest=manifest,
         run_dir=run_dir,
@@ -312,7 +352,7 @@ def _paid_usage(
     selection = fixture.evidence.selection
     requested = selection.models[requested_index]
     routed = selection.models[routed_index]
-    now = selection.selected_at + timedelta(minutes=1)
+    now = fixture.refresh.evidence.verified_at + timedelta(minutes=1)
     evidence = fixture.capability.routing_evidence(
         routed.exact_model_id,
         now=now,
@@ -328,9 +368,10 @@ def _paid_usage(
             "audit_policy_routing_evidence_sha256": routing_sha256,
             "audit_selection_capability_sha256": fixture.capability.capability_sha256,
             "audit_model_routing_evidence": evidence.model_dump(mode="json"),
+            "endpoint_snapshot_sha256": routed.endpoint_snapshot_sha256,
         }
     )
-    return UsageRecord(
+    record = UsageRecord(
         request_id=f"paid-audit-{requested_index}-{routed_index}",
         role="source_audit",
         execution_evidence=ExecutionEvidenceKind.REAL,
@@ -349,8 +390,19 @@ def _paid_usage(
         prompt_sha256="a" * 64,
         configured_provider_endpoints=[routed.approved_provider_endpoint],
         actual_provider_endpoint=routed.approved_provider_endpoint,
+        started_at=now,
+        ended_at=now,
+        latency_ms=0,
+        retry_count=0,
+        request_body_sha256="b" * 64,
+        reported_cost_usd_exact="0",
+        accounted_cost_usd_exact="0",
         status="success",
         attempts=1,
+    )
+    return bind_usage_to_refresh_pricing_runtime(
+        bind_usage_to_refresh_runtime(record, fixture.refresh),
+        fixture.refresh,
     )
 
 
@@ -448,10 +500,12 @@ def test_manifest_rejects_coherently_resealed_missing_policy_bundle(
 ) -> None:
     run_dir, manifest = _copied_run(tmp_path, policy_manifest_fixture)
     (run_dir / AUDIT_MODEL_SELECTION_EVIDENCE_PATH).unlink()
+    (run_dir / AUDIT_MODEL_REFRESH_EVIDENCE_PATH).unlink()
     retained_models = [
         binding
         for binding in manifest.bindings.models
-        if binding.identifier not in AUDIT_MODEL_SELECTION_BINDING_IDS
+        if binding.identifier
+        not in AUDIT_MODEL_SELECTION_BINDING_IDS | AUDIT_MODEL_REFRESH_BINDING_IDS
     ]
     bindings = manifest.bindings.model_copy(update={"models": retained_models})
     assert manifest.run_configuration is not None
@@ -684,6 +738,8 @@ def test_report_accepts_exact_paid_routing_and_rejects_swapped_selected_model(
     report, _language, _corpus = _current_report(
         policy_manifest_fixture.config,
         selection=policy_manifest_fixture.evidence.selection,
+        refresh=policy_manifest_fixture.refresh.evidence,
+        refresh_pricing=policy_manifest_fixture.refresh.pricing_evidence,
         usage=[_paid_usage(policy_manifest_fixture)],
     )
 
@@ -697,6 +753,8 @@ def test_report_accepts_exact_paid_routing_and_rejects_swapped_selected_model(
         _current_report(
             policy_manifest_fixture.config,
             selection=policy_manifest_fixture.evidence.selection,
+            refresh=policy_manifest_fixture.refresh.evidence,
+            refresh_pricing=policy_manifest_fixture.refresh.pricing_evidence,
             usage=[
                 _paid_usage(
                     policy_manifest_fixture,

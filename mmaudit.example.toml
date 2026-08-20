@@ -466,6 +466,18 @@ fallbacks = []
 quality_tier = "high"
 capabilities = ["structured_json", "solidity", "formal_reasoning"]
 
+[models.specialists.state_machine_lifecycle]
+primary = "PROVIDER_STATE_MACHINE/MODEL_LIFECYCLE"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "security_reasoning", "solidity"]
+
+[models.specialists.randomness_entropy_commit_reveal]
+primary = "PROVIDER_RANDOMNESS/MODEL_COMMIT_REVEAL"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "security_reasoning", "solidity"]
+
 [models.specialists.false_negative_hunter]
 primary = "PROVIDER_U/MODEL_FALSE_NEGATIVE"
 fallbacks = []

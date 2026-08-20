@@ -283,7 +283,13 @@ class AtomicCostLedger:
                     else CostEntryStatus.RECONCILED
                 )
             )
-            if current.status is not CostEntryStatus.RESERVED:
+            uncertain_to_known = bool(
+                current.status is CostEntryStatus.UNCERTAIN_ACCOUNTED
+                and actual is not None
+                and current.actual_cost_usd is None
+                and current.accounted_cost_usd == reservation.reserved_usd
+            )
+            if current.status is not CostEntryStatus.RESERVED and not uncertain_to_known:
                 if (
                     current.status is expected_status
                     and current.actual_cost_usd == actual
@@ -853,18 +859,20 @@ def _validate_request_id(value: str) -> None:
 
 
 def _validate_money(value: Decimal, *, field: str, positive: bool) -> Decimal:
-    if not isinstance(value, Decimal):
+    if type(value) is not Decimal:
         raise CostLedgerConfigurationError(f"{field} must be provided as Decimal")
     if not value.is_finite() or (value <= 0 if positive else value < 0):
         qualifier = "positive" if positive else "non-negative"
         raise CostLedgerConfigurationError(f"{field} must be a finite {qualifier} Decimal")
     if value == 0:
         value = Decimal(0)
-    normalized = value.normalize()
-    sign, digits, exponent = normalized.as_tuple()
+    sign, digits, exponent = value.as_tuple()
     del sign
     if not isinstance(exponent, int):
         raise CostLedgerConfigurationError(f"{field} must be a finite Decimal")
+    while len(digits) > 1 and digits[-1] == 0:
+        digits = digits[:-1]
+        exponent += 1
     decimal_places = max(0, -exponent)
     integer_digits = max(1, len(digits) + exponent)
     if decimal_places > _MAX_DECIMAL_PLACES or integer_digits > _MAX_INTEGER_DIGITS:

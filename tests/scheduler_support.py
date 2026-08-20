@@ -12,14 +12,24 @@ from decimal import Decimal
 from pydantic import BaseModel
 
 from mmaudit.models.openrouter import strict_json_schema
+from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.policy_eligibility import build_policy_eligibility_route
 from mmaudit.models.policy_selection import AuditModelRoutingEvidence
+from mmaudit.models.refresh import LiveProviderRouteState, PricingObservationKind
+from mmaudit.models.refresh_runtime import (
+    AuditModelRefreshPricingRouteEvidence,
+    AuditModelRefreshRouteEvidence,
+)
 from mmaudit.models.scheduler import (
     SCHEDULER_ANALYSIS_INPUT_LABELS,
     SCHEDULER_PASS_ORDER,
     SchedulerAnalysisInputDescriptor,
     SchedulerAnalysisInputInventory,
     SchedulerArtifact,
+    SchedulerAuditModelRefreshBinding,
+    SchedulerAuditModelRefreshPricingBinding,
+    SchedulerAuditModelRefreshPricingRouteBinding,
+    SchedulerAuditModelRefreshRouteBinding,
     SchedulerAuditModelSelectionBinding,
     SchedulerAuditSelectedRouteBinding,
     SchedulerBindings,
@@ -57,10 +67,12 @@ from mmaudit.models.scheduler import (
     scheduler_role_requires_specialist_accepted_outcome,
 )
 from mmaudit.models.schemas import (
+    AuditModelRefreshPricingAttemptEvidence,
     CandidateCrossExaminationResponse,
     CandidateCrossExaminationResponseDecision,
     CandidateReviewBatch,
     ContextRequestEvidence,
+    EndpointRequestCostComponentEvidence,
     ExecutionEvidenceKind,
     FalsificationBatch,
     FalsificationDecision,
@@ -92,8 +104,13 @@ from mmaudit.models.schemas import (
     VerificationTest,
     VerificationVerdict,
 )
+from mmaudit.models.truncation import CandidateReviewNormalizationEvidence
 from mmaudit.models.usage import request_token_plan_from_usage
-from mmaudit.orchestration.budgets import AtomicRequestLimitReservationEvidence
+from mmaudit.orchestration.budgets import (
+    AtomicRequestLimitReservationEvidence,
+    EndpointPriceComponent,
+    EndpointRequestCostBound,
+)
 from tests.identity_fixtures import (
     bind_synthetic_usage_identity,
     reattest_synthetic_real_usage,
@@ -628,6 +645,459 @@ def build_scheduler_test_audit_model_selection_binding(
     )
 
 
+def build_scheduler_test_audit_model_refresh_binding(
+    audit_model_selection: SchedulerAuditModelSelectionBinding,
+    *,
+    seed: str = "scheduler-test-model-refresh",
+    expires_at: datetime | None = None,
+) -> SchedulerAuditModelRefreshBinding:
+    """Build non-authorizing synthetic refresh hashes joined to audit selection."""
+
+    workflow_sha256 = _sha256(f"{seed}:workflow-status")
+    expiry = expires_at or datetime(2099, 1, 1, tzinfo=UTC)
+    audit_routes = tuple(
+        SchedulerAuditModelRefreshRouteBinding(
+            exact_model_id=exact_model_id,
+            route_evidence_sha256=_scheduler_test_refresh_route_for_model(
+                exact_model_id,
+                audit_model_selection,
+                seed="scheduler-test-model-refresh-route",
+            ).route_evidence_sha256,
+        )
+        for exact_model_id in audit_model_selection.selected_model_ids
+    )
+    return SchedulerAuditModelRefreshBinding.build(
+        audit_model_refresh_evidence_sha256=_sha256(f"{seed}:evidence"),
+        guard_capability_sha256=_sha256(f"{seed}:guard-capability"),
+        expected_workflow_status_sha256=workflow_sha256,
+        workflow_status_sha256=workflow_sha256,
+        snapshot_sha256=_sha256(f"{seed}:snapshot"),
+        freshness_sha256=_sha256(f"{seed}:freshness"),
+        technical_route_set_sha256=_sha256(f"{seed}:technical-route-set"),
+        audit_route_set_sha256=_sha256(f"{seed}:audit-route-set"),
+        audit_routes=audit_routes,
+        technical_qualification_capability_sha256=(
+            audit_model_selection.technical_qualification_capability_sha256
+        ),
+        technical_production_selection_sha256=(
+            audit_model_selection.technical_production_selection_sha256
+        ),
+        audit_selection_capability_sha256=_sha256(f"{seed}:audit-selection-capability"),
+        audit_selection_sha256=audit_model_selection.audit_selection_sha256,
+        audit_scope_sha256=audit_model_selection.audit_scope_sha256,
+        source_sha256=audit_model_selection.source_sha256,
+        audit_context_sha256=audit_model_selection.audit_context_sha256,
+        client_constraints_sha256=audit_model_selection.client_constraints_sha256,
+        verified_at=datetime(2020, 1, 1, tzinfo=UTC),
+        refresh_current_through=expiry,
+        expires_at=expiry,
+    )
+
+
+def _scheduler_test_refresh_route_for_model(
+    exact_model_id: str,
+    audit_model_selection: SchedulerAuditModelSelectionBinding,
+    *,
+    seed: str,
+) -> AuditModelRefreshRouteEvidence:
+    selected = audit_model_selection.route_for(exact_model_id)
+    parameters = ("max_tokens", "response_format", "temperature")
+    output_modes = (
+        StructuredOutputMode.JSON_OBJECT,
+        StructuredOutputMode.VALIDATED_TEXT_JSON,
+    )
+    pricing = {"completion": "0.000002", "prompt": "0.000001"}
+    pricing_sha256 = scheduler_canonical_sha256(pricing)
+    route_values: dict[str, object] = {
+        "schema_version": "2.0",
+        "exact_model_id": selected.exact_model_id,
+        "provider_endpoint": selected.provider_endpoint,
+        "endpoint_tag": selected.provider_endpoint,
+        "endpoint_slug": None,
+        "provider_name": selected.provider_name,
+        "routing_identity_unambiguous": True,
+        "operational": True,
+        "operational_status": "operational",
+        "zdr_eligible": True,
+        "context_limit": 100_000,
+        "max_prompt_tokens": 91_808,
+        "max_prompt_tokens_source": "metadata",
+        "output_limit": 8_192,
+        "output_limit_source": "metadata",
+        "supported_parameters": parameters,
+        "supported_output_modes": output_modes,
+        "structured_output_supported": True,
+        "structured_output_mode": StructuredOutputMode.JSON_OBJECT,
+        "reasoning_supported": False,
+        "pricing_observation": PricingObservationKind.EXACT,
+        "pricing": pricing,
+        "pricing_sha256": pricing_sha256,
+    }
+    refresh_route = LiveProviderRouteState.model_validate(
+        {**route_values, "route_sha256": scheduler_canonical_sha256(route_values)}
+    )
+    evidence_values: dict[str, object] = {
+        "schema_version": "1.0",
+        "exact_model_id": selected.exact_model_id,
+        "canonical_model_slug": selected.exact_model_id,
+        "root_lineage": selected.root_lineage,
+        "approved_provider_endpoint": selected.provider_endpoint,
+        "approved_provider_name": selected.provider_name,
+        "endpoint_snapshot_sha256": _sha256(f"{seed}:endpoint"),
+        "output_capability_sha256": _sha256(f"{seed}:output-capability"),
+        "model_metadata_snapshot_sha256": _sha256(f"{seed}:metadata"),
+        "qualified_pricing_snapshot_sha256": pricing_sha256,
+        "structured_output_mode": StructuredOutputMode.JSON_OBJECT,
+        "approved_roles": ("scheduler_test",),
+        "benchmark_report_sha256": _sha256(f"{seed}:benchmark"),
+        "qualification_expires_at": datetime(2099, 1, 1, tzinfo=UTC),
+        "audit_selected": True,
+        "refresh_model_state_sha256": _sha256(f"{seed}:model-state"),
+        "refresh_route": refresh_route,
+        "runtime_authorized": False,
+    }
+    return AuditModelRefreshRouteEvidence.model_validate(
+        {
+            **evidence_values,
+            "route_evidence_sha256": scheduler_canonical_sha256(evidence_values),
+        }
+    )
+
+
+def _scheduler_test_refresh_route(
+    record: UsageRecord,
+    audit_model_selection: SchedulerAuditModelSelectionBinding,
+    *,
+    seed: str,
+) -> AuditModelRefreshRouteEvidence:
+    return _scheduler_test_refresh_route_for_model(
+        record.requested_model,
+        audit_model_selection,
+        seed=seed,
+    )
+
+
+def _scheduler_test_refresh_pricing_route_for_model(
+    exact_model_id: str,
+    audit_model_selection: SchedulerAuditModelSelectionBinding,
+    audit_model_refresh: SchedulerAuditModelRefreshBinding,
+    *,
+    seed: str,
+) -> AuditModelRefreshPricingRouteEvidence:
+    """Build one exact synthetic baseline/current price comparison."""
+
+    selected = audit_model_selection.route_for(exact_model_id)
+    refresh_route = _scheduler_test_refresh_route_for_model(
+        exact_model_id,
+        audit_model_selection,
+        seed="scheduler-test-model-refresh-route",
+    )
+    pricing = dict(refresh_route.refresh_route.pricing)
+    pricing_sha256 = scheduler_canonical_sha256(pricing)
+    values: dict[str, object] = {
+        "schema_version": "1.0",
+        "exact_model_id": exact_model_id,
+        "approved_provider_endpoint": selected.provider_endpoint,
+        "audit_selected": True,
+        "qualified_pricing_snapshot_sha256": pricing_sha256,
+        "baseline_snapshot_sha256": _sha256(f"{seed}:previous-snapshot"),
+        "baseline_pricing": pricing,
+        "baseline_pricing_sha256": pricing_sha256,
+        "current_snapshot_sha256": audit_model_refresh.snapshot_sha256,
+        "current_pricing": pricing,
+        "current_pricing_sha256": pricing_sha256,
+        "price_components": tuple(pricing),
+        "changed_components": (),
+        "increased_components": (),
+        "pricing_tolerance_fraction": "0",
+        "comparison_state": "EXACT",
+        "refresh_route_evidence_sha256": refresh_route.route_evidence_sha256,
+        "pricing_use_authorized": False,
+        "provider_access_authorized": False,
+        "model_selection_authorized": False,
+    }
+    return AuditModelRefreshPricingRouteEvidence.model_validate(
+        {
+            **values,
+            "route_evidence_sha256": scheduler_canonical_sha256(values),
+        }
+    )
+
+
+def build_scheduler_test_audit_model_refresh_pricing_binding(
+    audit_model_selection: SchedulerAuditModelSelectionBinding,
+    audit_model_refresh: SchedulerAuditModelRefreshBinding,
+    *,
+    seed: str = "scheduler-test-model-refresh-pricing",
+) -> SchedulerAuditModelRefreshPricingBinding:
+    """Build non-authorizing synthetic scheduler pricing comparison hashes."""
+
+    routes = tuple(
+        _scheduler_test_refresh_pricing_route_for_model(
+            exact_model_id,
+            audit_model_selection,
+            audit_model_refresh,
+            seed=seed,
+        )
+        for exact_model_id in audit_model_selection.selected_model_ids
+    )
+    route_bindings = tuple(
+        SchedulerAuditModelRefreshPricingRouteBinding(
+            exact_model_id=route.exact_model_id,
+            approved_provider_endpoint=route.approved_provider_endpoint,
+            pricing_route_evidence_sha256=route.route_evidence_sha256,
+            refresh_route_evidence_sha256=route.refresh_route_evidence_sha256,
+            qualified_pricing_snapshot_sha256=route.qualified_pricing_snapshot_sha256,
+            baseline_pricing_sha256=route.baseline_pricing_sha256,
+            current_pricing_sha256=route.current_pricing_sha256,
+        )
+        for route in routes
+    )
+    values: dict[str, object] = {
+        "schema_version": "1.0",
+        "evidence_authority": "comparison_required",
+        "authority_mode": "VETO_ONLY_EXTERNAL_PRICING_PIN_REQUIRED",
+        "audit_model_refresh_pricing_evidence_sha256": _sha256(f"{seed}:evidence"),
+        "pricing_authority_capability_sha256": _sha256(f"{seed}:authority"),
+        "expected_workflow_status_sha256": audit_model_refresh.workflow_status_sha256,
+        "workflow_status_sha256": audit_model_refresh.workflow_status_sha256,
+        "refresh_evidence_sha256": audit_model_refresh.audit_model_refresh_evidence_sha256,
+        "refresh_guard_capability_sha256": audit_model_refresh.guard_capability_sha256,
+        "previous_snapshot_sha256": routes[0].baseline_snapshot_sha256,
+        "current_snapshot_sha256": audit_model_refresh.snapshot_sha256,
+        "pricing_tolerance_fraction": "0",
+        "technical_pricing_route_set_sha256": _sha256(f"{seed}:technical-routes"),
+        "audit_pricing_route_set_sha256": _sha256(f"{seed}:audit-routes"),
+        "technical_qualification_capability_sha256": (
+            audit_model_refresh.technical_qualification_capability_sha256
+        ),
+        "technical_production_selection_sha256": (
+            audit_model_refresh.technical_production_selection_sha256
+        ),
+        "audit_selection_capability_sha256": (
+            audit_model_refresh.audit_selection_capability_sha256
+        ),
+        "audit_selection_sha256": audit_model_refresh.audit_selection_sha256,
+        "audit_scope_sha256": audit_model_refresh.audit_scope_sha256,
+        "source_sha256": audit_model_refresh.source_sha256,
+        "audit_context_sha256": audit_model_refresh.audit_context_sha256,
+        "client_constraints_sha256": audit_model_refresh.client_constraints_sha256,
+        "verified_at": audit_model_refresh.verified_at,
+        "expires_at": audit_model_refresh.expires_at,
+        "audit_model_ids": audit_model_selection.selected_model_ids,
+        "audit_routes": route_bindings,
+        "runtime_authorized": False,
+    }
+    return SchedulerAuditModelRefreshPricingBinding.model_validate(
+        {
+            **values,
+            "binding_sha256": scheduler_canonical_sha256(values),
+        }
+    )
+
+
+def bind_scheduler_test_usage_to_audit_model_refresh(
+    record: UsageRecord,
+    audit_model_selection: SchedulerAuditModelSelectionBinding,
+    audit_model_refresh: SchedulerAuditModelRefreshBinding,
+) -> UsageRecord:
+    """Attach canonical non-authorizing refresh route evidence to synthetic usage."""
+
+    # The top-level seed varies to exercise binding swaps, while canonical route
+    # membership is stable for the exact synthetic model/provider projection.
+    route = _scheduler_test_refresh_route(
+        record,
+        audit_model_selection,
+        seed="scheduler-test-model-refresh-route",
+    )
+    return record.model_copy(
+        update={
+            "routing": {
+                **record.routing,
+                "audit_model_refresh_route_evidence": route.model_dump(mode="json"),
+                "audit_model_refresh_evidence_sha256": (
+                    audit_model_refresh.audit_model_refresh_evidence_sha256
+                ),
+                "audit_model_refresh_workflow_status_sha256": (
+                    audit_model_refresh.workflow_status_sha256
+                ),
+                "audit_model_refresh_snapshot_sha256": audit_model_refresh.snapshot_sha256,
+                "audit_model_refresh_route_evidence_sha256": route.route_evidence_sha256,
+                "audit_model_refresh_guard_capability_sha256": (
+                    audit_model_refresh.guard_capability_sha256
+                ),
+                "audit_model_refresh_technical_route_set_sha256": (
+                    audit_model_refresh.technical_route_set_sha256
+                ),
+                "audit_model_refresh_audit_route_set_sha256": (
+                    audit_model_refresh.audit_route_set_sha256
+                ),
+                "audit_model_refresh_expires_at": audit_model_refresh.expires_at.isoformat(),
+            }
+        }
+    )
+
+
+def bind_scheduler_test_usage_to_audit_model_refresh_pricing(
+    record: UsageRecord,
+    audit_model_selection: SchedulerAuditModelSelectionBinding,
+    audit_model_refresh: SchedulerAuditModelRefreshBinding,
+    audit_model_refresh_pricing: SchedulerAuditModelRefreshPricingBinding,
+) -> UsageRecord:
+    """Attach exact synthetic route and per-attempt price-bound custody."""
+
+    route = _scheduler_test_refresh_pricing_route_for_model(
+        record.requested_model,
+        audit_model_selection,
+        audit_model_refresh,
+        seed="scheduler-test-model-refresh-pricing",
+    )
+    projected = audit_model_refresh_pricing.route_for(record.requested_model)
+    if route.route_evidence_sha256 != projected.pricing_route_evidence_sha256:
+        raise ValueError("synthetic pricing route differs from scheduler pricing binding")
+    request_body_sha256 = record.request_body_sha256
+    if request_body_sha256 is None:
+        raise ValueError("synthetic pricing attempt requires a request-body hash")
+    components = (
+        EndpointPriceComponent(
+            pricing_field="completion",
+            unit_price_usd=Decimal(route.current_pricing["completion"]),
+            maximum_units=1_000_000_000,
+        ),
+        EndpointPriceComponent(
+            pricing_field="prompt",
+            unit_price_usd=Decimal(route.current_pricing["prompt"]),
+            maximum_units=1_000_000_000,
+        ),
+    )
+    provisional_bound = EndpointRequestCostBound.from_endpoint_pricing(
+        exact_model_id=record.requested_model,
+        provider_endpoint=route.approved_provider_endpoint,
+        request_material="synthetic scheduler request",
+        pricing=route.current_pricing,
+        maximum_units={
+            component.pricing_field: component.maximum_units for component in components
+        },
+    )
+    bound = EndpointRequestCostBound(
+        exact_model_id=record.requested_model,
+        provider_endpoint=route.approved_provider_endpoint,
+        request_material_sha256=request_body_sha256,
+        pricing_snapshot_sha256=provisional_bound.pricing_snapshot_sha256,
+        components=components,
+    )
+    checked_at = record.started_at or record.timestamp
+    endpoint_snapshot_sha256 = record.routing.get("endpoint_snapshot_sha256")
+    if not isinstance(endpoint_snapshot_sha256, str):
+        raise ValueError("synthetic pricing attempt requires an endpoint snapshot")
+    values: dict[str, object] = {
+        "schema_version": "1.0",
+        "evidence_authority": "comparison_required",
+        "authority_mode": "NON_AUTHORIZING_REQUEST_COST_BOUND",
+        "logical_request_id": record.request_id,
+        "attempt_request_id": record.request_id,
+        "attempt_index": 1,
+        "reservation_checked_at": checked_at,
+        "transport_checked_at": checked_at,
+        "transport_attempted": True,
+        "pricing_verified_at": audit_model_refresh_pricing.verified_at,
+        "pricing_expires_at": audit_model_refresh_pricing.expires_at,
+        "exact_model_id": record.requested_model,
+        "provider_endpoint": route.approved_provider_endpoint,
+        "current_endpoint_snapshot_sha256": endpoint_snapshot_sha256,
+        "request_material_sha256": request_body_sha256,
+        "request_body_sha256": request_body_sha256,
+        "pricing_evidence_sha256": (
+            audit_model_refresh_pricing.audit_model_refresh_pricing_evidence_sha256
+        ),
+        "pricing_authority_capability_sha256": (
+            audit_model_refresh_pricing.pricing_authority_capability_sha256
+        ),
+        "pricing_route_evidence_sha256": route.route_evidence_sha256,
+        "refresh_evidence_sha256": audit_model_refresh.audit_model_refresh_evidence_sha256,
+        "refresh_guard_capability_sha256": audit_model_refresh.guard_capability_sha256,
+        "refresh_route_evidence_sha256": route.refresh_route_evidence_sha256,
+        "qualified_pricing_snapshot_sha256": route.qualified_pricing_snapshot_sha256,
+        "baseline_pricing": route.baseline_pricing,
+        "baseline_pricing_sha256": route.baseline_pricing_sha256,
+        "current_pricing": route.current_pricing,
+        "current_pricing_sha256": route.current_pricing_sha256,
+        "cost_bound_pricing_snapshot_sha256": bound.pricing_snapshot_sha256,
+        "components": tuple(
+            EndpointRequestCostComponentEvidence(
+                pricing_field=component.pricing_field,
+                unit_price_usd_exact=format(component.unit_price_usd, "f"),
+                maximum_units=component.maximum_units,
+            )
+            for component in bound.components
+        ),
+        "maximum_cost_usd_exact": format(bound.maximum_cost_usd, "f"),
+        "provider_max_price": {"completion": "2", "prompt": "1"},
+        "provider_max_price_sha256": scheduler_canonical_sha256({"completion": "2", "prompt": "1"}),
+        "pricing_use_authorized": False,
+        "provider_access_authorized": False,
+    }
+    attempt = AuditModelRefreshPricingAttemptEvidence.model_validate(
+        {
+            **values,
+            "evidence_sha256": scheduler_canonical_sha256(values),
+        }
+    )
+    attempt_json = attempt.model_dump(mode="json")
+    routing = {
+        **record.routing,
+        "endpoint_snapshot_sha256": attempt.current_endpoint_snapshot_sha256,
+        "endpoint_pricing_sha256": route.current_pricing_sha256,
+        "qualified_pricing_snapshot_sha256": route.qualified_pricing_snapshot_sha256,
+        "audit_model_refresh_pricing_route_evidence": route.model_dump(mode="json"),
+        "audit_model_refresh_pricing_evidence_sha256": (
+            audit_model_refresh_pricing.audit_model_refresh_pricing_evidence_sha256
+        ),
+        "audit_model_refresh_pricing_workflow_status_sha256": (
+            audit_model_refresh_pricing.workflow_status_sha256
+        ),
+        "audit_model_refresh_pricing_previous_snapshot_sha256": (
+            audit_model_refresh_pricing.previous_snapshot_sha256
+        ),
+        "audit_model_refresh_pricing_current_snapshot_sha256": (
+            audit_model_refresh_pricing.current_snapshot_sha256
+        ),
+        "audit_model_refresh_pricing_refresh_evidence_sha256": (
+            audit_model_refresh_pricing.refresh_evidence_sha256
+        ),
+        "audit_model_refresh_pricing_refresh_guard_capability_sha256": (
+            audit_model_refresh_pricing.refresh_guard_capability_sha256
+        ),
+        "audit_model_refresh_pricing_route_evidence_sha256": route.route_evidence_sha256,
+        "audit_model_refresh_pricing_authority_capability_sha256": (
+            audit_model_refresh_pricing.pricing_authority_capability_sha256
+        ),
+        "audit_model_refresh_pricing_technical_route_set_sha256": (
+            audit_model_refresh_pricing.technical_pricing_route_set_sha256
+        ),
+        "audit_model_refresh_pricing_audit_route_set_sha256": (
+            audit_model_refresh_pricing.audit_pricing_route_set_sha256
+        ),
+        "audit_model_refresh_pricing_qualified_pricing_snapshot_sha256": (
+            route.qualified_pricing_snapshot_sha256
+        ),
+        "audit_model_refresh_pricing_current_pricing_snapshot_sha256": (
+            route.current_pricing_sha256
+        ),
+        "audit_model_refresh_pricing_tolerance_fraction": (
+            audit_model_refresh_pricing.pricing_tolerance_fraction
+        ),
+        "audit_model_refresh_pricing_expires_at": (
+            audit_model_refresh_pricing.expires_at.isoformat()
+        ),
+        "audit_model_refresh_pricing_attempts": [attempt_json],
+        "audit_model_refresh_pricing_attempt_sha256s": [attempt.evidence_sha256],
+        "audit_model_refresh_pricing_attempt": attempt_json,
+        "audit_model_refresh_pricing_attempt_sha256": attempt.evidence_sha256,
+    }
+    return record.model_copy(update={"routing": routing})
+
+
 def bind_scheduler_test_usage_to_audit_selection(
     record: UsageRecord,
     binding: SchedulerAuditModelSelectionBinding,
@@ -703,6 +1173,9 @@ def build_scheduler_test_real_usage(
     cost_usd_exact: str = "0",
     privacy_evidence_custody: SchedulerPrivacyEvidenceCustody | None = None,
     audit_model_selection: SchedulerAuditModelSelectionBinding | None = None,
+    audit_model_refresh: SchedulerAuditModelRefreshBinding | None = None,
+    audit_model_refresh_pricing: SchedulerAuditModelRefreshPricingBinding | None = None,
+    include_audit_model_refresh_pricing: bool = True,
 ) -> UsageRecord:
     """Build runtime-attested but wholly synthetic REAL-shaped scheduler evidence."""
 
@@ -759,6 +1232,36 @@ def build_scheduler_test_real_usage(
             real_shaped,
             audit_model_selection,
         )
+        exact_model_refresh = (
+            audit_model_refresh
+            or build_scheduler_test_audit_model_refresh_binding(
+                audit_model_selection,
+                seed=f"{seed}:refresh",
+            )
+        )
+        real_shaped = bind_scheduler_test_usage_to_audit_model_refresh(
+            real_shaped,
+            audit_model_selection,
+            exact_model_refresh,
+        )
+        if include_audit_model_refresh_pricing:
+            exact_pricing = (
+                audit_model_refresh_pricing
+                or build_scheduler_test_audit_model_refresh_pricing_binding(
+                    audit_model_selection,
+                    exact_model_refresh,
+                )
+            )
+            real_shaped = bind_scheduler_test_usage_to_audit_model_refresh_pricing(
+                real_shaped,
+                audit_model_selection,
+                exact_model_refresh,
+                exact_pricing,
+            )
+    elif audit_model_refresh is not None:
+        raise ValueError("synthetic model refresh requires audit selection")
+    elif audit_model_refresh_pricing is not None:
+        raise ValueError("synthetic refresh pricing requires audit selection and refresh")
     bound = bind_synthetic_usage_identity(real_shaped)
     plan = request_token_plan_from_usage(bound)
     assert plan is not None
@@ -932,6 +1435,8 @@ def build_scheduler_test_model_surface_review_custody(
     activation: SchedulerTaskActivation,
     usage: UsageRecord | None,
     payload: object,
+    *,
+    normalization_evidence: CandidateReviewNormalizationEvidence | None = None,
 ) -> tuple[tuple[ModelSurfaceReviewRequest, ...], ModelSurfaceReviewArtifact | None]:
     """Bind a typed candidate-review response to its exact deterministic request manifest."""
 
@@ -945,6 +1450,11 @@ def build_scheduler_test_model_surface_review_custody(
     batch = CandidateReviewBatch.model_validate(payload).require_exact_surface_set(
         tuple(request.surface_id for request in requests)
     )
+    if normalization_evidence is not None:
+        normalization_evidence.require_exact_batch(
+            batch,
+            request_id=task.logical_request_id,
+        )
     context = ContextRequestEvidence.model_validate(usage.routing["context_request_evidence"])
     requested_ids = tuple(request.surface_id for request in requests)
     requested_ids_sha256 = hashlib.sha256(
@@ -957,7 +1467,7 @@ def build_scheduler_test_model_surface_review_custody(
         ).encode()
     ).hexdigest()
     artifact_payload: dict[str, object] = {
-        "schema_version": "1.0",
+        "schema_version": "1.1" if normalization_evidence is not None else "1.0",
         "request_id": task.logical_request_id,
         "review_role": task.role,
         "requested_surface_ids": requested_ids,
@@ -970,6 +1480,15 @@ def build_scheduler_test_model_surface_review_custody(
         "response_sha256": usage.response_sha256,
         "validated_response_sha256": usage.validated_response_sha256,
         "response_schema_sha256": usage.schema_sha256,
+        **(
+            {
+                "normalized_response_sha256": normalization_evidence.normalized_batch_sha256,
+                "normalization_evidence": normalization_evidence.model_dump(mode="json"),
+                "normalized_response": batch.model_dump(mode="json"),
+            }
+            if normalization_evidence is not None
+            else {}
+        ),
         "records": [record.model_dump(mode="json") for record in batch.surface_reviews],
     }
     artifact_payload["artifact_sha256"] = ModelSurfaceReviewArtifact.calculate_artifact_sha256(
@@ -1365,6 +1884,7 @@ def build_complete_scheduler_fixture(
     model_tasks: Sequence[SchedulerFixtureModelTask] = (),
     model_assignment_resolver: SchedulerFixtureModelAssignmentResolver | None = None,
     usage_transform: SchedulerFixtureUsageTransform | None = None,
+    usage_transform_owns_refresh_pricing: bool = False,
 ) -> CompleteSchedulerFixture:
     """Build one deterministic, local-only COMPLETE scheduler evidence graph."""
 
@@ -1387,6 +1907,8 @@ def build_complete_scheduler_fixture(
             cost_ledger_baseline_sha256=bindings.cost_ledger_baseline_sha256,
             privacy_evidence_custody_sha256=bindings.privacy_evidence_custody_sha256,
             audit_model_selection=bindings.audit_model_selection,
+            audit_model_refresh=bindings.audit_model_refresh,
+            audit_model_refresh_pricing=bindings.audit_model_refresh_pricing,
         )
         exact_manifest = SchedulerCampaignManifest.build(
             bindings=exact_bindings,
@@ -1493,6 +2015,13 @@ def build_complete_scheduler_fixture(
                         validated_output=payload,
                         privacy_evidence_custody=exact_manifest.privacy_evidence_custody,
                         audit_model_selection=(exact_manifest.bindings.audit_model_selection),
+                        audit_model_refresh=exact_manifest.bindings.audit_model_refresh,
+                        audit_model_refresh_pricing=(
+                            exact_manifest.bindings.audit_model_refresh_pricing
+                        ),
+                        include_audit_model_refresh_pricing=(
+                            not usage_transform_owns_refresh_pricing
+                        ),
                     )
                 else:
                     usage = build_scheduler_test_usage(

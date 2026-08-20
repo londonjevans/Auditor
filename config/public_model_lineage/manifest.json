@@ -1,0 +1,850 @@
+{
+  "alias_set_sha256": "af9705756c29d3acb8d78b13ae05b003157ec3c837305f375da38d3fc3f43afd",
+  "aliases": [
+    {
+      "alias_id": "alias-deepcogito-cogito-v2-1-671b",
+      "alias_sha256": "2519ace3cd3faae48ff775ab0cbdc764fbc876e291eaa1ad1585610114d87e7d",
+      "documentary_model_id": "deepcogito/cogito-671b-v2.1",
+      "exact_model_id": "deepcogito/cogito-v2.1-671b",
+      "publisher_id": "deepcogito",
+      "source_ids": [
+        "deepcogito-cogito-v2-1-671b-card"
+      ]
+    },
+    {
+      "alias_id": "alias-deepseek-deepseek-v3-2-exp",
+      "alias_sha256": "7d801a7f967fa9375d7f16b5e615a4e6086078a1771f6001e664ad965eb7a324",
+      "documentary_model_id": "deepseek-ai/DeepSeek-V3.2-Exp",
+      "exact_model_id": "deepseek/deepseek-v3.2-exp",
+      "publisher_id": "deepseek-ai",
+      "source_ids": [
+        "deepseek-deepseek-v3-2-exp-card"
+      ]
+    },
+    {
+      "alias_id": "alias-google-gemma-4-26b-a4b-it",
+      "alias_sha256": "31e9a536ec1bde330097fb0086ce638b84df3bbad902e44433302cfcac5fe95c",
+      "documentary_model_id": "google/gemma-4-26B-A4B-it",
+      "exact_model_id": "google/gemma-4-26b-a4b-it",
+      "publisher_id": "google-deepmind",
+      "source_ids": [
+        "google-gemma-4-26b-a4b-it-card"
+      ]
+    },
+    {
+      "alias_id": "alias-meta-llama-llama-4-maverick",
+      "alias_sha256": "6f63b021e5e40019958f6771d6345847b324ceb9f4d6c3de3d47783545580306",
+      "documentary_model_id": "meta-llama/Llama-4-Maverick-17B-128E-Instruct",
+      "exact_model_id": "meta-llama/llama-4-maverick",
+      "publisher_id": "meta",
+      "source_ids": [
+        "meta-llama-4-maverick-card"
+      ]
+    },
+    {
+      "alias_id": "alias-minimax-minimax-m3",
+      "alias_sha256": "2ef09041514eafd591beba190109df45485281c3145eda2fda4f414df0562f3d",
+      "documentary_model_id": "MiniMaxAI/MiniMax-M3",
+      "exact_model_id": "minimax/minimax-m3",
+      "publisher_id": "minimax",
+      "source_ids": [
+        "minimax-m3-card"
+      ]
+    },
+    {
+      "alias_id": "alias-mistralai-mistral-small-2603",
+      "alias_sha256": "6fdd04c88309f38db7458145388282c2339702d379d594df7663ad93dd5efed2",
+      "documentary_model_id": "mistralai/Mistral-Small-4-119B-2603",
+      "exact_model_id": "mistralai/mistral-small-2603",
+      "publisher_id": "mistral-ai",
+      "source_ids": [
+        "mistral-small-4-119b-2603-card"
+      ]
+    },
+    {
+      "alias_id": "alias-moonshotai-kimi-k2-thinking",
+      "alias_sha256": "a6d9f05ff80b6891df1096b463f22ed8ac3baa2bbc6878563a7abb0bf6ebaadb",
+      "documentary_model_id": "moonshotai/Kimi-K2-Thinking",
+      "exact_model_id": "moonshotai/kimi-k2-thinking",
+      "publisher_id": "moonshot-ai",
+      "source_ids": [
+        "moonshot-kimi-k2-thinking-card"
+      ]
+    },
+    {
+      "alias_id": "alias-nvidia-nemotron-3-super-120b-a12b",
+      "alias_sha256": "147733332aa42b5d70a1208412a2c65bdaeafeed2d014ebb34b8e10e0cdd3656",
+      "documentary_model_id": "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16",
+      "exact_model_id": "nvidia/nemotron-3-super-120b-a12b",
+      "publisher_id": "nvidia",
+      "source_ids": [
+        "nvidia-nemotron-3-super-120b-a12b-base-card",
+        "nvidia-nemotron-3-super-120b-a12b-posttrain-card"
+      ]
+    },
+    {
+      "alias_id": "alias-openai-gpt-oss-120b",
+      "alias_sha256": "1ae940000d4f520c9655f92745b38f8a25b67db7f3b66ab4cb987110ca94863a",
+      "documentary_model_id": "openai/gpt-oss-120b",
+      "exact_model_id": "openai/gpt-oss-120b",
+      "publisher_id": "openai",
+      "source_ids": [
+        "openai-gpt-oss-120b-readme"
+      ]
+    },
+    {
+      "alias_id": "alias-qwen-qwen3-6-35b-a3b",
+      "alias_sha256": "8c4b0cc344285ce321abb6a1387b7a7515d7bf50071824d65b34863e6162409d",
+      "documentary_model_id": "Qwen/Qwen3.6-35B-A3B",
+      "exact_model_id": "qwen/qwen3.6-35b-a3b",
+      "publisher_id": "alibaba-qwen",
+      "source_ids": [
+        "qwen-qwen3-6-35b-a3b-card"
+      ]
+    },
+    {
+      "alias_id": "alias-tencent-hunyuan-a13b-instruct",
+      "alias_sha256": "374f4e8443ce01c1626ac5a661ac426b54a949a25fa1f9400b8c09ab51d24565",
+      "documentary_model_id": "tencent/Hunyuan-A13B-Instruct",
+      "exact_model_id": "tencent/hunyuan-a13b-instruct",
+      "publisher_id": "tencent-hunyuan",
+      "source_ids": [
+        "tencent-hunyuan-a13b-instruct-card"
+      ]
+    },
+    {
+      "alias_id": "alias-z-ai-glm-4-7",
+      "alias_sha256": "7e14303ba09761f15f69fc7222dced9e7b59d0312e18cc9923493ffc6144446d",
+      "documentary_model_id": "zai-org/GLM-4.7",
+      "exact_model_id": "z-ai/glm-4.7",
+      "publisher_id": "z-ai",
+      "source_ids": [
+        "z-ai-glm-4-7-card"
+      ]
+    }
+  ],
+  "approved_root_lineages": [
+    "sha256:1067e91bf658c7080368ef49bd81134e7a10dc0e42108561a5efdeef0a5643e0",
+    "sha256:366bc38f2866df7d09e60b3fe8c32bc0ba88cf504ce17fd65045374da8b6d65c",
+    "sha256:434c90ff511c645580fa8063e912f163daf9285c0553a110b2d815c98eb2e46f",
+    "sha256:a39b66884a35570fd22375af90fb732222aaab823ab14123c0061f7b3c6d0687",
+    "sha256:acc057978b0d0f05378221091c495a48344b8b2d8a3d8c9b2d96cd6913f2b0f5",
+    "sha256:af392aecac8fb109f7c577928242bc27edf0ad8a24142bc8e9c5151445b12b04",
+    "sha256:e251821340d79fe40fba647e729f9dd8feea7b988efad1a61936bf62b3b38161"
+  ],
+  "benchmark_authorized": false,
+  "bundle_sha256": "92659a13c48223709eaca814c4a182b7ee7662fc8350fbced7b84955cd2ae7a4",
+  "capture_observations_file_binding": {
+    "path": "capture-observations.json",
+    "sha256": "fe76724adbeabde6ee4563c0ea2a7416742a4f036a0151ef0379a2594ef0d76c",
+    "size": 19384
+  },
+  "claim_set_sha256": "81d6794db5217d678bcbbdcd8e03daf922bf05ac7b8de3872c787c0cdad4343f",
+  "claims": [
+    {
+      "byte_end": 86,
+      "byte_start": 44,
+      "claim_id": "claim-cogito-deepseek",
+      "claim_kind": "ROOTS_WITH",
+      "claim_sha256": "ab0609f42064ec07d8890529f8ea64af8dad8d233d8d5aaff8ff6cca21a68893",
+      "decisive_primary_publisher": true,
+      "exact_marker": "base_model:\n- deepseek-ai/DeepSeek-V3-Base",
+      "marker_sha256": "0b38fc615c8805b143070e034e49220be87543d4924d6a0f9c1f93c74eacee8e",
+      "source_id": "deepcogito-cogito-v2-1-671b-card",
+      "subject_exact_model_id": "deepcogito/cogito-v2.1-671b",
+      "target_exact_model_id": "deepseek/deepseek-v3.2-exp"
+    },
+    {
+      "byte_end": 2671,
+      "byte_start": 2596,
+      "claim_id": "claim-deepseek-anchor",
+      "claim_kind": "ROOT_ANCHOR",
+      "claim_sha256": "57cd0807b3d8162cfed00016b18dfe8e59343c359ee3f7e51feb5cd007f2559c",
+      "decisive_primary_publisher": true,
+      "exact_marker": "V3.2-Exp builds upon V3.1-Terminus by introducing DeepSeek Sparse Attention",
+      "marker_sha256": "833fb036b210672a03428d4a4480bef95dbf07c1b23da9458d680d6cdb9edd86",
+      "source_id": "deepseek-deepseek-v3-2-exp-card",
+      "subject_exact_model_id": "deepseek/deepseek-v3.2-exp",
+      "target_exact_model_id": null
+    },
+    {
+      "byte_end": 183,
+      "byte_start": 147,
+      "claim_id": "claim-gemma-anchor",
+      "claim_kind": "ROOT_ANCHOR",
+      "claim_sha256": "a0d4a14f40030f4d23f19112bb4d22903a03aec2258daa1b027f701d9aa570a6",
+      "decisive_primary_publisher": true,
+      "exact_marker": "base_model:\n- google/gemma-4-26B-A4B",
+      "marker_sha256": "933d0c7f00598b51e981fa0fe12338548f15dbe7c47016f0f4b037a0c5bf14a2",
+      "source_id": "google-gemma-4-26b-a4b-it-card",
+      "subject_exact_model_id": "google/gemma-4-26b-a4b-it",
+      "target_exact_model_id": null
+    },
+    {
+      "byte_end": 790,
+      "byte_start": 614,
+      "claim_id": "claim-gpt-oss-publisher-identity",
+      "claim_kind": "VAGUE",
+      "claim_sha256": "3a88bd4122edeb3204191a73b748d0fc7494ad08296dec9fc066ff7ba2318105",
+      "decisive_primary_publisher": false,
+      "exact_marker": "Welcome to the gpt-oss series, [OpenAI's open-weight models](https://openai.com/open-models/) designed for powerful reasoning, agentic tasks, and versatile developer use cases.",
+      "marker_sha256": "42cf384662d29fc87b6bd22bd4377037a37e6b0f5b368868c626df5171ae0b77",
+      "source_id": "openai-gpt-oss-120b-readme",
+      "subject_exact_model_id": "openai/gpt-oss-120b",
+      "target_exact_model_id": null
+    },
+    {
+      "byte_end": 1761,
+      "byte_start": 1586,
+      "claim_id": "claim-hunyuan-anchor",
+      "claim_kind": "VAGUE",
+      "claim_sha256": "12b3bebd757fae1ee852b0ce203f78714871ba0c71da026848d0ef159d9a190b",
+      "decisive_primary_publisher": false,
+      "exact_marker": "Welcome to the official repository of **Hunyuan-A13B**, an innovative and open-source large language model (LLM) built on a fine-grained Mixture-of-Experts (MoE) architecture.",
+      "marker_sha256": "c429e1f6452d4907fd310234cc028f44206525e747a84edaa57f4d31c1ccf3c8",
+      "source_id": "tencent-hunyuan-a13b-instruct-card",
+      "subject_exact_model_id": "tencent/hunyuan-a13b-instruct",
+      "target_exact_model_id": null
+    },
+    {
+      "byte_end": 4109,
+      "byte_start": 3947,
+      "claim_id": "claim-hunyuan-pretrain-instruct",
+      "claim_kind": "VAGUE",
+      "claim_sha256": "b585b54c4aee30509cf8d91f8498e48b0aff596060b185e6bf349b3c901a0daa",
+      "decisive_primary_publisher": false,
+      "exact_marker": "We have open-sourced  **Hunyuan-A13B-Pretrain** , **Hunyuan-A13B-Instruct** , **Hunyuan-A13B-Instruct-FP8** , **Hunyuan-A13B-Instruct-GPTQ-Int4** on Hugging Face.",
+      "marker_sha256": "1828f0315b97d498f9500e1a29dcab78dee4059c6a1ad721e6d4eb2053bc6939",
+      "source_id": "tencent-hunyuan-a13b-instruct-card",
+      "subject_exact_model_id": "tencent/hunyuan-a13b-instruct",
+      "target_exact_model_id": null
+    },
+    {
+      "byte_end": 2178,
+      "byte_start": 1602,
+      "claim_id": "claim-kimi-anchor",
+      "claim_kind": "ROOT_ANCHOR",
+      "claim_sha256": "446a5f433fbd9ae05376c99b74b54e77d480b6224c2a72db281d2ff8a80507dd",
+      "decisive_primary_publisher": true,
+      "exact_marker": "Kimi K2 Thinking is the latest, most capable version of open-source thinking model. Starting with Kimi K2, we built it as a thinking agent that reasons step-by-step while dynamically invoking tools. It sets a new state-of-the-art on Humanity's Last Exam (HLE), BrowseComp, and other benchmarks by dramatically scaling multi-step reasoning depth and maintaining stable tool-use across 200–300 sequential calls. At the same time, K2 Thinking is a native INT4 quantization model with 256k context window, achieving lossless reductions in inference latency and GPU memory usage.",
+      "marker_sha256": "802bdad373ec5fdb2c74f8ec20038b2dbb9f8fc8fcd69c1f3384945bca3c26e1",
+      "source_id": "moonshot-kimi-k2-thinking-card",
+      "subject_exact_model_id": "moonshotai/kimi-k2-thinking",
+      "target_exact_model_id": null
+    },
+    {
+      "byte_end": 17331,
+      "byte_start": 17156,
+      "claim_id": "claim-llama-anchor",
+      "claim_kind": "ROOT_ANCHOR",
+      "claim_sha256": "5f0a9fd419e94ee8defb6618ddc2c9edea7d727dfe729e5499f363070f994918",
+      "decisive_primary_publisher": true,
+      "exact_marker": "Llama 4 Maverick was pretrained on \\~22 trillion tokens of multimodal data from a mix of publicly available, licensed data and information from Meta’s products and services.",
+      "marker_sha256": "14fa6c952c50942a9c15683e5749db3efbd1e06c3fab56808238c3766a18b2d3",
+      "source_id": "meta-llama-4-maverick-card",
+      "subject_exact_model_id": "meta-llama/llama-4-maverick",
+      "target_exact_model_id": null
+    },
+    {
+      "byte_end": 2418,
+      "byte_start": 2293,
+      "claim_id": "claim-minimax-anchor",
+      "claim_kind": "ROOT_ANCHOR",
+      "claim_sha256": "bb4303323856bc24b9912a32ad793ab1b8349124f668aba52b20ae473860a539",
+      "decisive_primary_publisher": true,
+      "exact_marker": "M3 undergoes mixed-modality training from the very first step, enabling deeper semantic fusion across text, image, and video.",
+      "marker_sha256": "1611d2a3cda5b9b865136cd46070e02b4bc88b8c57fe85de78e136a5e5aed6f6",
+      "source_id": "minimax-m3-card",
+      "subject_exact_model_id": "minimax/minimax-m3",
+      "target_exact_model_id": null
+    },
+    {
+      "byte_end": 426,
+      "byte_start": 135,
+      "claim_id": "claim-mistral-anchor",
+      "claim_kind": "VAGUE",
+      "claim_sha256": "a2b6d9dcaf7726d97b9c75c0eac2bb0d33c826ac8d6469f4a2a31236e2095247",
+      "decisive_primary_publisher": false,
+      "exact_marker": "Mistral Small 4 is a powerful hybrid model capable of acting as both a general instruction model and a reasoning model. It unifies the capabilities of three different model families—**Instruct**, **Reasoning** (previously called Magistral), and **Devstral**—into a single, unified model.",
+      "marker_sha256": "9e7349293d7076757370127ccb14fba3854e92af51918a900b7e69eefddc4b21",
+      "source_id": "mistral-small-4-119b-2603-card",
+      "subject_exact_model_id": "mistralai/mistral-small-2603",
+      "target_exact_model_id": null
+    },
+    {
+      "byte_end": 2559,
+      "byte_start": 2456,
+      "claim_id": "claim-nemotron-base-anchor",
+      "claim_kind": "ROOT_ANCHOR",
+      "claim_sha256": "f439feee3ac17ceeae701cb3dc0af9bcb2b5d9dd2e3776a9d1692bce3103df7b",
+      "decisive_primary_publisher": true,
+      "exact_marker": "**Nemotron-3-Super-120B-A12B-Base** is a base large language model (LLM) trained from scratch by NVIDIA",
+      "marker_sha256": "7ee28e4c4274938fa705f2767769c1039d903276641ba61d7b221e603efbf38b",
+      "source_id": "nvidia-nemotron-3-super-120b-a12b-base-card",
+      "subject_exact_model_id": "nvidia/nemotron-3-super-120b-a12b",
+      "target_exact_model_id": null
+    },
+    {
+      "byte_end": 4668,
+      "byte_start": 4502,
+      "claim_id": "claim-nemotron-posttrain-anchor",
+      "claim_kind": "ROOT_ANCHOR",
+      "claim_sha256": "33714d70ab18fdf2a9180f66ca24419d377b22e95d7fb3ad28a8df3e70cf5c06",
+      "decisive_primary_publisher": true,
+      "exact_marker": "**Nemotron-3-Super-120B-A12B-BF16** is a large language model (LLM) trained by NVIDIA, designed to deliver strong agentic, reasoning, and conversational capabilities.",
+      "marker_sha256": "187f604f4433c4e05ee6d9fe9adc61f33445caec59b22b8eab7ed046be2dc28f",
+      "source_id": "nvidia-nemotron-3-super-120b-a12b-posttrain-card",
+      "subject_exact_model_id": "nvidia/nemotron-3-super-120b-a12b",
+      "target_exact_model_id": null
+    },
+    {
+      "byte_end": 1674,
+      "byte_start": 165,
+      "claim_id": "claim-qwen-anchor",
+      "claim_kind": "ROOT_ANCHOR",
+      "claim_sha256": "22b8d9e30db8cdef5e6e60870696402b13fb3d5b8a40650bd7bfce513883337a",
+      "decisive_primary_publisher": true,
+      "exact_marker": "# Qwen3.6-35B-A3B\n\n<img width=\"400px\" src=\"https://qianwen-res.oss-accelerate.aliyuncs.com/Qwen3.6/logo.png\">\n\n[![Qwen Chat](https://img.shields.io/badge/%F0%9F%92%9C%EF%B8%8F%20Qwen%20Chat%20-536af5)](https://chat.qwen.ai)\n\n> [!Note]\n> This repository contains model weights and configuration files for the post-trained model in the Hugging Face Transformers format. \n>\n> These artifacts are compatible with Hugging Face Transformers, vLLM, SGLang, KTransformers, etc.\n\nFollowing the February release of the Qwen3.5 series, we're pleased to share the first open-weight variant of Qwen3.6. Built on direct feedback from the community, Qwen3.6 prioritizes stability and real-world utility, offering developers a more intuitive, responsive, and genuinely productive coding experience.\n\n## Qwen3.6 Highlights\n\nThis release delivers substantial upgrades, particularly in\n\n- **Agentic Coding:** the model now handles frontend workflows and repository-level reasoning with greater fluency and precision. \n- **Thinking Preservation:** we've introduced a new option to retain reasoning context from historical messages, streamlining iterative development and reducing overhead. \n\n![Benchmark Results](https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3.6/Figures/qwen3.6_35b_a3b_score.png)\n\nFor more details, please refer to our blog post [Qwen3.6-35B-A3B](https://qwen.ai/blog?id=qwen3.6-35b-a3b).\n\n## Model Overview\n\n- Type: Causal Language Model with Vision Encoder\n- Training Stage: Pre-training & Post-training",
+      "marker_sha256": "48799f8bce3adaae8661a93e51132eacd6d7fc4860772881a58c42a27431b415",
+      "source_id": "qwen-qwen3-6-35b-a3b-card",
+      "subject_exact_model_id": "qwen/qwen3.6-35b-a3b",
+      "target_exact_model_id": null
+    },
+    {
+      "byte_end": 940,
+      "byte_start": 877,
+      "claim_id": "claim-z-ai-anchor",
+      "claim_kind": "VAGUE",
+      "claim_sha256": "18c8b275ad60b4279ab4fa464115350e26634d35b931cb379c59ad814c1645dc",
+      "decisive_primary_publisher": false,
+      "exact_marker": "GLM-4.7 brings clear gains, compared to its predecessor GLM-4.6",
+      "marker_sha256": "46a97a4e5bee782b033f64f86457e8dcc4501be1c5be0a0a82b1d979b00645f4",
+      "source_id": "z-ai-glm-4-7-card",
+      "subject_exact_model_id": "z-ai/glm-4.7",
+      "target_exact_model_id": null
+    }
+  ],
+  "confirmed_exact_model_ids": [
+    "deepcogito/cogito-v2.1-671b",
+    "deepseek/deepseek-v3.2-exp",
+    "google/gemma-4-26b-a4b-it",
+    "meta-llama/llama-4-maverick",
+    "minimax/minimax-m3",
+    "moonshotai/kimi-k2-thinking",
+    "nvidia/nemotron-3-super-120b-a12b",
+    "qwen/qwen3.6-35b-a3b"
+  ],
+  "conservative_non_independence_constraints": [
+    {
+      "constraint_id": "constraint-cogito-deepseek",
+      "constraint_kind": "DOCUMENTED_DIRECT_ANCESTRY",
+      "constraint_sha256": "7dfc4ea9597b0389307b87aaf912e3d2dad69bb315916707f17849dcffa6819c",
+      "member_exact_model_ids": [
+        "deepcogito/cogito-v2.1-671b",
+        "deepseek/deepseek-v3.2-exp"
+      ],
+      "negative_only": true,
+      "positive_root_assignment_authorized": false,
+      "supporting_claim_ids": [
+        "claim-cogito-deepseek",
+        "claim-deepseek-anchor"
+      ]
+    },
+    {
+      "constraint_id": "constraint-gemma-gemini",
+      "constraint_kind": "CONSERVATIVE_ORGANIZATIONAL",
+      "constraint_sha256": "32b26951e4e867adf0bd42ae11a277c99210d8fe98ac7909dd8abf65e385fc3e",
+      "member_exact_model_ids": [
+        "google/gemini-3.7-flash",
+        "google/gemma-4-26b-a4b-it"
+      ],
+      "negative_only": true,
+      "positive_root_assignment_authorized": false,
+      "supporting_claim_ids": [
+        "claim-gemma-anchor"
+      ]
+    },
+    {
+      "constraint_id": "constraint-gpt-oss-gpt-5-6",
+      "constraint_kind": "CONSERVATIVE_ORGANIZATIONAL",
+      "constraint_sha256": "3a5ac5ecb782e6ab985fea4f073402bef26ddc10e8112deb76c7d8727008703b",
+      "member_exact_model_ids": [
+        "openai/gpt-5.6-sol",
+        "openai/gpt-oss-120b"
+      ],
+      "negative_only": true,
+      "positive_root_assignment_authorized": false,
+      "supporting_claim_ids": [
+        "claim-gpt-oss-publisher-identity"
+      ]
+    },
+    {
+      "constraint_id": "constraint-nemotron-meta",
+      "constraint_kind": "SOURCE_CONFLICT_CORRECTION",
+      "constraint_sha256": "5e2e16e7f2ad5270ed8419179a60d66cb8af86fed1ed67827f313238c167b4c0",
+      "member_exact_model_ids": [
+        "meta-llama/llama-4-maverick",
+        "nvidia/nemotron-3-super-120b-a12b"
+      ],
+      "negative_only": true,
+      "positive_root_assignment_authorized": false,
+      "supporting_claim_ids": [
+        "claim-llama-anchor",
+        "claim-nemotron-base-anchor",
+        "claim-nemotron-posttrain-anchor"
+      ]
+    }
+  ],
+  "constraint_set_sha256": "27b9144f7779910306ed4c0e9aa6c075b48393d4652b4aaf3e5032d79f4d24bf",
+  "decision_set_sha256": "4193bfcec91ed56f2a9089dbe915874c06035d1cec8832ae84053b305cd64da0",
+  "decisions": [
+    {
+      "decision_sha256": "5e1eb9dcf687d29799b1f8da299556503a551a58c5013814ffcb1340e91306d9",
+      "documentary_model_id": "deepcogito/cogito-671b-v2.1",
+      "exact_model_id": "deepcogito/cogito-v2.1-671b",
+      "root_lineage": "sha256:acc057978b0d0f05378221091c495a48344b8b2d8a3d8c9b2d96cd6913f2b0f5",
+      "status": "CONFIRMED",
+      "supporting_claim_ids": [
+        "claim-cogito-deepseek",
+        "claim-deepseek-anchor"
+      ],
+      "unconfirmed_reasons": []
+    },
+    {
+      "decision_sha256": "fccdbfce500afd79d22704a024c0ed7898bb37f7d840d8864391f0c289a5b077",
+      "documentary_model_id": "deepseek-ai/DeepSeek-V3.2-Exp",
+      "exact_model_id": "deepseek/deepseek-v3.2-exp",
+      "root_lineage": "sha256:acc057978b0d0f05378221091c495a48344b8b2d8a3d8c9b2d96cd6913f2b0f5",
+      "status": "CONFIRMED",
+      "supporting_claim_ids": [
+        "claim-deepseek-anchor"
+      ],
+      "unconfirmed_reasons": []
+    },
+    {
+      "decision_sha256": "efdb8be8ee59d7a063af9e782cd68259b266cd679aea8c492b8a1fbddf38f819",
+      "documentary_model_id": "google/gemma-4-26B-A4B-it",
+      "exact_model_id": "google/gemma-4-26b-a4b-it",
+      "root_lineage": "sha256:af392aecac8fb109f7c577928242bc27edf0ad8a24142bc8e9c5151445b12b04",
+      "status": "CONFIRMED",
+      "supporting_claim_ids": [
+        "claim-gemma-anchor"
+      ],
+      "unconfirmed_reasons": []
+    },
+    {
+      "decision_sha256": "c871d1a297841fda6b51d3a20f4b27471400c7fb038b937d8a50b7fe71c698f2",
+      "documentary_model_id": "meta-llama/Llama-4-Maverick-17B-128E-Instruct",
+      "exact_model_id": "meta-llama/llama-4-maverick",
+      "root_lineage": "sha256:1067e91bf658c7080368ef49bd81134e7a10dc0e42108561a5efdeef0a5643e0",
+      "status": "CONFIRMED",
+      "supporting_claim_ids": [
+        "claim-llama-anchor"
+      ],
+      "unconfirmed_reasons": []
+    },
+    {
+      "decision_sha256": "2df21db06005bb78a508d083e0cdffd50072de9a5c99101488d75f9b7ac91882",
+      "documentary_model_id": "MiniMaxAI/MiniMax-M3",
+      "exact_model_id": "minimax/minimax-m3",
+      "root_lineage": "sha256:e251821340d79fe40fba647e729f9dd8feea7b988efad1a61936bf62b3b38161",
+      "status": "CONFIRMED",
+      "supporting_claim_ids": [
+        "claim-minimax-anchor"
+      ],
+      "unconfirmed_reasons": []
+    },
+    {
+      "decision_sha256": "b99297d2e9d16bbd2e5caafb06a7209be20aefef84b4067a3380f9a4cbc16821",
+      "documentary_model_id": "mistralai/Mistral-Small-4-119B-2603",
+      "exact_model_id": "mistralai/mistral-small-2603",
+      "root_lineage": null,
+      "status": "UNCONFIRMED",
+      "supporting_claim_ids": [],
+      "unconfirmed_reasons": [
+        "VAGUE_ONLY"
+      ]
+    },
+    {
+      "decision_sha256": "1dbbca0726382df5420c2659c591a097ac136ccd3e5ebd2a61da69e5627b2127",
+      "documentary_model_id": "moonshotai/Kimi-K2-Thinking",
+      "exact_model_id": "moonshotai/kimi-k2-thinking",
+      "root_lineage": "sha256:366bc38f2866df7d09e60b3fe8c32bc0ba88cf504ce17fd65045374da8b6d65c",
+      "status": "CONFIRMED",
+      "supporting_claim_ids": [
+        "claim-kimi-anchor"
+      ],
+      "unconfirmed_reasons": []
+    },
+    {
+      "decision_sha256": "23e00af126dfb3a3855ed611f809ec3bc51a696ce7c1b3b253ef2355802ed02d",
+      "documentary_model_id": "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16",
+      "exact_model_id": "nvidia/nemotron-3-super-120b-a12b",
+      "root_lineage": "sha256:a39b66884a35570fd22375af90fb732222aaab823ab14123c0061f7b3c6d0687",
+      "status": "CONFIRMED",
+      "supporting_claim_ids": [
+        "claim-nemotron-base-anchor",
+        "claim-nemotron-posttrain-anchor"
+      ],
+      "unconfirmed_reasons": []
+    },
+    {
+      "decision_sha256": "38be7a23bb9572709f6e2b437a0c6654e533e4fa872f4eef98da1aca268bb38f",
+      "documentary_model_id": "openai/gpt-oss-120b",
+      "exact_model_id": "openai/gpt-oss-120b",
+      "root_lineage": null,
+      "status": "UNCONFIRMED",
+      "supporting_claim_ids": [],
+      "unconfirmed_reasons": [
+        "VAGUE_ONLY"
+      ]
+    },
+    {
+      "decision_sha256": "77bfcfdd742c36a6f8f039aeb860f17ee84adb388b72d906694b4f532b52a0cc",
+      "documentary_model_id": "Qwen/Qwen3.6-35B-A3B",
+      "exact_model_id": "qwen/qwen3.6-35b-a3b",
+      "root_lineage": "sha256:434c90ff511c645580fa8063e912f163daf9285c0553a110b2d815c98eb2e46f",
+      "status": "CONFIRMED",
+      "supporting_claim_ids": [
+        "claim-qwen-anchor"
+      ],
+      "unconfirmed_reasons": []
+    },
+    {
+      "decision_sha256": "46012c7c5ff674118d7aab5b4a7befcff3731f3483d65344bcc6156273c8868a",
+      "documentary_model_id": "tencent/Hunyuan-A13B-Instruct",
+      "exact_model_id": "tencent/hunyuan-a13b-instruct",
+      "root_lineage": null,
+      "status": "UNCONFIRMED",
+      "supporting_claim_ids": [],
+      "unconfirmed_reasons": [
+        "VAGUE_ONLY"
+      ]
+    },
+    {
+      "decision_sha256": "499bf2ffbea8eb1cff69debe1df39a00922e3b262323747e07c159d2eddbf18f",
+      "documentary_model_id": "zai-org/GLM-4.7",
+      "exact_model_id": "z-ai/glm-4.7",
+      "root_lineage": null,
+      "status": "UNCONFIRMED",
+      "supporting_claim_ids": [],
+      "unconfirmed_reasons": [
+        "VAGUE_ONLY"
+      ]
+    }
+  ],
+  "evidence_standard": "DOCUMENTARY_EXACT_BYTES_V1",
+  "excluded_exact_model_ids": [
+    "mistralai/mistral-small-2603",
+    "openai/gpt-oss-120b",
+    "tencent/hunyuan-a13b-instruct",
+    "z-ai/glm-4.7"
+  ],
+  "model_qualification_authorized": false,
+  "operator_review_authoritative": false,
+  "production_selection_authorized": false,
+  "provider_call_authorized": false,
+  "provider_route_identity_required": false,
+  "release_authorized": false,
+  "runner_authority_authorized": false,
+  "schema_version": "1.0",
+  "seal_publication_authorized": false,
+  "serialized_authority": false,
+  "sigstore_lineage_receipt_required": false,
+  "source_egress_authorized": false,
+  "source_set_sha256": "1279ec546e892cf31fd5a9eae4347df769b78a92bab83d1a9442e061861aebde",
+  "sources": [
+    {
+      "capture_observation_sha256": "451b4851858d18a991b2a08f2c19e4ab173f9ddfc2e80954d94d1435b0965bb4",
+      "file_binding": {
+        "path": "sources/deepcogito-cogito-v2-1-671b-card.md",
+        "sha256": "a3dff9d9f7763a830bae89d7d83b0eb0463afc7247a5e9bf646a344cc8a82037",
+        "size": 10750
+      },
+      "final_url": "https://huggingface.co/api/resolve-cache/models/deepcogito/cogito-671b-v2.1/f5b0199c2c54a284b00f1a2db3942299d4198484/README.md?%2Fdeepcogito%2Fcogito-671b-v2.1%2Fresolve%2Ff5b0199c2c54a284b00f1a2db3942299d4198484%2FREADME.md=&etag=%22abb9c853e039ae0cc77fd02bef234155eb6997de%22",
+      "immutable_revision": "f5b0199c2c54a284b00f1a2db3942299d4198484",
+      "independence_key": "deepcogito",
+      "media_type": "text/plain",
+      "publisher_id": "deepcogito",
+      "redirect_chain": [
+        "https://huggingface.co/deepcogito/cogito-671b-v2.1/resolve/f5b0199c2c54a284b00f1a2db3942299d4198484/README.md",
+        "https://huggingface.co/api/resolve-cache/models/deepcogito/cogito-671b-v2.1/f5b0199c2c54a284b00f1a2db3942299d4198484/README.md?%2Fdeepcogito%2Fcogito-671b-v2.1%2Fresolve%2Ff5b0199c2c54a284b00f1a2db3942299d4198484%2FREADME.md=&etag=%22abb9c853e039ae0cc77fd02bef234155eb6997de%22"
+      ],
+      "requested_url": "https://huggingface.co/deepcogito/cogito-671b-v2.1/resolve/f5b0199c2c54a284b00f1a2db3942299d4198484/README.md",
+      "retrieved_at": "2026-08-18T08:49:37Z",
+      "source_evidence_sha256": "b3071eb1f593ab4fa9ae4e6bd2ff21d2e26b9545cb6e4fb2a616b6c8373ef486",
+      "source_id": "deepcogito-cogito-v2-1-671b-card",
+      "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
+    },
+    {
+      "capture_observation_sha256": "87ad16987987d51ca01706c4380b9121cad052fa3ade330c63c66f45f00fafdd",
+      "file_binding": {
+        "path": "sources/deepseek-deepseek-v3-2-exp-card.md",
+        "sha256": "389d4fbe4d7fc75ecf0130f56a0123256b9100940116769eb01049119523b8ee",
+        "size": 6264
+      },
+      "final_url": "https://huggingface.co/api/resolve-cache/models/deepseek-ai/DeepSeek-V3.2-Exp/a678d82902a8da587f29fd3f3ad22dd35b522ed5/README.md?%2Fdeepseek-ai%2FDeepSeek-V3.2-Exp%2Fresolve%2Fa678d82902a8da587f29fd3f3ad22dd35b522ed5%2FREADME.md=&etag=%223938fc25634c495654417f049d52991836080ff2%22",
+      "immutable_revision": "a678d82902a8da587f29fd3f3ad22dd35b522ed5",
+      "independence_key": "deepseek-ai",
+      "media_type": "text/plain",
+      "publisher_id": "deepseek-ai",
+      "redirect_chain": [
+        "https://huggingface.co/deepseek-ai/DeepSeek-V3.2-Exp/resolve/a678d82902a8da587f29fd3f3ad22dd35b522ed5/README.md",
+        "https://huggingface.co/api/resolve-cache/models/deepseek-ai/DeepSeek-V3.2-Exp/a678d82902a8da587f29fd3f3ad22dd35b522ed5/README.md?%2Fdeepseek-ai%2FDeepSeek-V3.2-Exp%2Fresolve%2Fa678d82902a8da587f29fd3f3ad22dd35b522ed5%2FREADME.md=&etag=%223938fc25634c495654417f049d52991836080ff2%22"
+      ],
+      "requested_url": "https://huggingface.co/deepseek-ai/DeepSeek-V3.2-Exp/resolve/a678d82902a8da587f29fd3f3ad22dd35b522ed5/README.md",
+      "retrieved_at": "2026-08-18T08:49:40Z",
+      "source_evidence_sha256": "cbcb9822ccf3ba7e39ac8e208777883d753408452bb81f893b07b044d84c1a26",
+      "source_id": "deepseek-deepseek-v3-2-exp-card",
+      "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
+    },
+    {
+      "capture_observation_sha256": "ef4709bcb48e170cc1ddd57b24e5a1d972e0b58f4b1907a50930262e8777db54",
+      "file_binding": {
+        "path": "sources/google-gemma-4-26b-a4b-it-card.md",
+        "sha256": "e4c134b9dd81fc5d0e3782bb04fbc7034d27c6b6a2437f9c940a0b64b0a8ab6a",
+        "size": 26731
+      },
+      "final_url": "https://huggingface.co/api/resolve-cache/models/google/gemma-4-26B-A4B-it/b2a81a03d25f927590a91d84ba43f96e8ef7349f/README.md?%2Fgoogle%2Fgemma-4-26B-A4B-it%2Fresolve%2Fb2a81a03d25f927590a91d84ba43f96e8ef7349f%2FREADME.md=&etag=%2295ceefc7798ee1e34bb740ca0c2d66b0f63db597%22",
+      "immutable_revision": "b2a81a03d25f927590a91d84ba43f96e8ef7349f",
+      "independence_key": "google-deepmind",
+      "media_type": "text/plain",
+      "publisher_id": "google-deepmind",
+      "redirect_chain": [
+        "https://huggingface.co/google/gemma-4-26B-A4B-it/resolve/b2a81a03d25f927590a91d84ba43f96e8ef7349f/README.md",
+        "https://huggingface.co/api/resolve-cache/models/google/gemma-4-26B-A4B-it/b2a81a03d25f927590a91d84ba43f96e8ef7349f/README.md?%2Fgoogle%2Fgemma-4-26B-A4B-it%2Fresolve%2Fb2a81a03d25f927590a91d84ba43f96e8ef7349f%2FREADME.md=&etag=%2295ceefc7798ee1e34bb740ca0c2d66b0f63db597%22"
+      ],
+      "requested_url": "https://huggingface.co/google/gemma-4-26B-A4B-it/resolve/b2a81a03d25f927590a91d84ba43f96e8ef7349f/README.md",
+      "retrieved_at": "2026-08-18T08:49:42Z",
+      "source_evidence_sha256": "1cc15dd2af222cb4dc9b4af8ff29f67e879bad6a54aeb4da85124f5a993931f0",
+      "source_id": "google-gemma-4-26b-a4b-it-card",
+      "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
+    },
+    {
+      "capture_observation_sha256": "764ad7535cf93fcb5ea9e84676e4336a84c473b481f30d05c55b5682025010e4",
+      "file_binding": {
+        "path": "sources/meta-llama-4-maverick-card.md",
+        "sha256": "cae8c581b1787780d095f0f827cee3469014f642cb7d054c0cc7aed5d156d5e3",
+        "size": 32594
+      },
+      "final_url": "https://huggingface.co/meta-llama/Llama-4-Maverick-17B-128E-Instruct/resolve/73d14711bcc77c16df3470856949c3764056b617/README.md",
+      "immutable_revision": "73d14711bcc77c16df3470856949c3764056b617",
+      "independence_key": "meta",
+      "media_type": "text/plain",
+      "publisher_id": "meta",
+      "redirect_chain": [
+        "https://huggingface.co/meta-llama/Llama-4-Maverick-17B-128E-Instruct/resolve/73d14711bcc77c16df3470856949c3764056b617/README.md"
+      ],
+      "requested_url": "https://huggingface.co/meta-llama/Llama-4-Maverick-17B-128E-Instruct/resolve/73d14711bcc77c16df3470856949c3764056b617/README.md",
+      "retrieved_at": "2026-08-18T08:49:43Z",
+      "source_evidence_sha256": "7ad5c1bcd4f9bf4b25232c4a466c07885619296ed21d0445677139502553da0f",
+      "source_id": "meta-llama-4-maverick-card",
+      "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
+    },
+    {
+      "capture_observation_sha256": "84832a0ca84f3adc0dec19a5f8bc15a9dbb592496bad033be4f707468368e3ac",
+      "file_binding": {
+        "path": "sources/minimax-m3-card.md",
+        "sha256": "6148856dbf8be26dcf3f9b913be0252c38454e852108fdab01212fe965f3e327",
+        "size": 5122
+      },
+      "final_url": "https://huggingface.co/api/resolve-cache/models/MiniMaxAI/MiniMax-M3/f0e1c1e04d40177e4673a22097036854f536e9c0/README.md?%2FMiniMaxAI%2FMiniMax-M3%2Fresolve%2Ff0e1c1e04d40177e4673a22097036854f536e9c0%2FREADME.md=&etag=%22b1e395c849f3147d0645ee6f8f17b3d5781af0e5%22",
+      "immutable_revision": "f0e1c1e04d40177e4673a22097036854f536e9c0",
+      "independence_key": "minimax",
+      "media_type": "text/plain",
+      "publisher_id": "minimax",
+      "redirect_chain": [
+        "https://huggingface.co/MiniMaxAI/MiniMax-M3/resolve/f0e1c1e04d40177e4673a22097036854f536e9c0/README.md",
+        "https://huggingface.co/api/resolve-cache/models/MiniMaxAI/MiniMax-M3/f0e1c1e04d40177e4673a22097036854f536e9c0/README.md?%2FMiniMaxAI%2FMiniMax-M3%2Fresolve%2Ff0e1c1e04d40177e4673a22097036854f536e9c0%2FREADME.md=&etag=%22b1e395c849f3147d0645ee6f8f17b3d5781af0e5%22"
+      ],
+      "requested_url": "https://huggingface.co/MiniMaxAI/MiniMax-M3/resolve/f0e1c1e04d40177e4673a22097036854f536e9c0/README.md",
+      "retrieved_at": "2026-08-18T08:49:43Z",
+      "source_evidence_sha256": "ba08a9c085a243e7b93972b2fe94f0ba6d9ea245b0eaf3613e365ea65db317f0",
+      "source_id": "minimax-m3-card",
+      "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
+    },
+    {
+      "capture_observation_sha256": "07351dbf800254faab97764981bd3bc032e0f673fe7372c87632e9a8134ad22c",
+      "file_binding": {
+        "path": "sources/mistral-small-4-119b-2603-card.md",
+        "sha256": "7f5ef56105580603ecbcf224c28bb0b147fc0f5ec564bb2e76fdf7abadb342c9",
+        "size": 20333
+      },
+      "final_url": "https://huggingface.co/api/resolve-cache/models/mistralai/Mistral-Small-4-119B-2603/97ee14542b6c053394af45dd2ff89aadecf457a0/README.md?%2Fmistralai%2FMistral-Small-4-119B-2603%2Fresolve%2F97ee14542b6c053394af45dd2ff89aadecf457a0%2FREADME.md=&etag=%227711f4fefd63f4fbbcd3988838b9ba95fe462be9%22",
+      "immutable_revision": "97ee14542b6c053394af45dd2ff89aadecf457a0",
+      "independence_key": "mistral-ai",
+      "media_type": "text/plain",
+      "publisher_id": "mistral-ai",
+      "redirect_chain": [
+        "https://huggingface.co/mistralai/Mistral-Small-4-119B-2603/resolve/97ee14542b6c053394af45dd2ff89aadecf457a0/README.md",
+        "https://huggingface.co/api/resolve-cache/models/mistralai/Mistral-Small-4-119B-2603/97ee14542b6c053394af45dd2ff89aadecf457a0/README.md?%2Fmistralai%2FMistral-Small-4-119B-2603%2Fresolve%2F97ee14542b6c053394af45dd2ff89aadecf457a0%2FREADME.md=&etag=%227711f4fefd63f4fbbcd3988838b9ba95fe462be9%22"
+      ],
+      "requested_url": "https://huggingface.co/mistralai/Mistral-Small-4-119B-2603/resolve/97ee14542b6c053394af45dd2ff89aadecf457a0/README.md",
+      "retrieved_at": "2026-08-18T08:49:45Z",
+      "source_evidence_sha256": "2915684923b75e249b57ee2439efc3cbc04aa4c1f1fa81b4c932b70e6c405f6e",
+      "source_id": "mistral-small-4-119b-2603-card",
+      "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
+    },
+    {
+      "capture_observation_sha256": "e0817a19326520a7abfa75f2c97663d562351c1ef83bca231d51088f66b7adc8",
+      "file_binding": {
+        "path": "sources/moonshot-kimi-k2-thinking-card.md",
+        "sha256": "8343341da86d2a74ee576768ea2f8c0be2d3e9cf1cb51838a794581e7a1466cd",
+        "size": 16176
+      },
+      "final_url": "https://huggingface.co/api/resolve-cache/models/moonshotai/Kimi-K2-Thinking/1b9dbb7b20fe8e92047f956b75f3bc49d69f8f73/README.md?%2Fmoonshotai%2FKimi-K2-Thinking%2Fresolve%2F1b9dbb7b20fe8e92047f956b75f3bc49d69f8f73%2FREADME.md=&etag=%2210260d219a5aeffb22da322ad8d624f49cdae967%22",
+      "immutable_revision": "1b9dbb7b20fe8e92047f956b75f3bc49d69f8f73",
+      "independence_key": "moonshot-ai",
+      "media_type": "text/plain",
+      "publisher_id": "moonshot-ai",
+      "redirect_chain": [
+        "https://huggingface.co/moonshotai/Kimi-K2-Thinking/resolve/1b9dbb7b20fe8e92047f956b75f3bc49d69f8f73/README.md",
+        "https://huggingface.co/api/resolve-cache/models/moonshotai/Kimi-K2-Thinking/1b9dbb7b20fe8e92047f956b75f3bc49d69f8f73/README.md?%2Fmoonshotai%2FKimi-K2-Thinking%2Fresolve%2F1b9dbb7b20fe8e92047f956b75f3bc49d69f8f73%2FREADME.md=&etag=%2210260d219a5aeffb22da322ad8d624f49cdae967%22"
+      ],
+      "requested_url": "https://huggingface.co/moonshotai/Kimi-K2-Thinking/resolve/1b9dbb7b20fe8e92047f956b75f3bc49d69f8f73/README.md",
+      "retrieved_at": "2026-08-18T08:49:46Z",
+      "source_evidence_sha256": "c71f5286c9268a85d6c2219e23d8b3d9165dc70d2472066192688bc9f8ba8b92",
+      "source_id": "moonshot-kimi-k2-thinking-card",
+      "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
+    },
+    {
+      "capture_observation_sha256": "c000f290850889cf8bd1892ad94188a03e98fb9a86a2215f4f371ed2e5ee1dc1",
+      "file_binding": {
+        "path": "sources/nvidia-nemotron-3-super-120b-a12b-base-card.md",
+        "sha256": "233bde2906a5aa7dab280e60137c365ad88bc7c507c884fb6b78978c4fb83dff",
+        "size": 38573
+      },
+      "final_url": "https://huggingface.co/api/resolve-cache/models/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16/46cc6113d364942e7742b0b2afd35b5db5058b29/README.md?%2Fnvidia%2FNVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16%2Fresolve%2F46cc6113d364942e7742b0b2afd35b5db5058b29%2FREADME.md=&etag=%22d91b94084a56eacd79252cef11a93539aad841e0%22",
+      "immutable_revision": "46cc6113d364942e7742b0b2afd35b5db5058b29",
+      "independence_key": "nvidia",
+      "media_type": "text/plain",
+      "publisher_id": "nvidia",
+      "redirect_chain": [
+        "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16/resolve/46cc6113d364942e7742b0b2afd35b5db5058b29/README.md",
+        "https://huggingface.co/api/resolve-cache/models/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16/46cc6113d364942e7742b0b2afd35b5db5058b29/README.md?%2Fnvidia%2FNVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16%2Fresolve%2F46cc6113d364942e7742b0b2afd35b5db5058b29%2FREADME.md=&etag=%22d91b94084a56eacd79252cef11a93539aad841e0%22"
+      ],
+      "requested_url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16/resolve/46cc6113d364942e7742b0b2afd35b5db5058b29/README.md",
+      "retrieved_at": "2026-08-18T08:49:47Z",
+      "source_evidence_sha256": "fed3e358a9e0d954a072017b70031cc14d208cf0d6c8f87e136377805b1a896b",
+      "source_id": "nvidia-nemotron-3-super-120b-a12b-base-card",
+      "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
+    },
+    {
+      "capture_observation_sha256": "4d4e16e55de86eb6d3e3d206ae608068797e2e8dc58551fdc845f57b63fcbaa9",
+      "file_binding": {
+        "path": "sources/nvidia-nemotron-3-super-120b-a12b-posttrain-card.md",
+        "sha256": "258058128b7d82c16f53112d9cbee6cb85679465016df84a179d312de6c5d881",
+        "size": 81944
+      },
+      "final_url": "https://huggingface.co/api/resolve-cache/models/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16/d51eab0d1f979ebc26b546e634a04f450d99158e/README.md?%2Fnvidia%2FNVIDIA-Nemotron-3-Super-120B-A12B-BF16%2Fresolve%2Fd51eab0d1f979ebc26b546e634a04f450d99158e%2FREADME.md=&etag=%226a0a11d4200b020153789ef79eddba3256142c9c%22",
+      "immutable_revision": "d51eab0d1f979ebc26b546e634a04f450d99158e",
+      "independence_key": "nvidia",
+      "media_type": "text/plain",
+      "publisher_id": "nvidia",
+      "redirect_chain": [
+        "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16/resolve/d51eab0d1f979ebc26b546e634a04f450d99158e/README.md",
+        "https://huggingface.co/api/resolve-cache/models/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16/d51eab0d1f979ebc26b546e634a04f450d99158e/README.md?%2Fnvidia%2FNVIDIA-Nemotron-3-Super-120B-A12B-BF16%2Fresolve%2Fd51eab0d1f979ebc26b546e634a04f450d99158e%2FREADME.md=&etag=%226a0a11d4200b020153789ef79eddba3256142c9c%22"
+      ],
+      "requested_url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16/resolve/d51eab0d1f979ebc26b546e634a04f450d99158e/README.md",
+      "retrieved_at": "2026-08-18T08:49:49Z",
+      "source_evidence_sha256": "6984af4c0344d8d7a7a85b251c24564d9dc8a4b8fc96503909fe7e4188b44cab",
+      "source_id": "nvidia-nemotron-3-super-120b-a12b-posttrain-card",
+      "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
+    },
+    {
+      "capture_observation_sha256": "fe9561e85bd382c1ce3b3c55601c0dea9d9c6cce02fcf8f2856d9ef5763c4d8e",
+      "file_binding": {
+        "path": "sources/openai-gpt-oss-120b-readme.md",
+        "sha256": "d4ba8a9cfda709b49e794911278c5a663b8fec1e2bbd86d8f9dc99d8371293e4",
+        "size": 24330
+      },
+      "final_url": "https://raw.githubusercontent.com/openai/gpt-oss/599476783c6f88508dab8577808b5ead5cbee8d2/README.md",
+      "immutable_revision": "599476783c6f88508dab8577808b5ead5cbee8d2",
+      "independence_key": "openai",
+      "media_type": "text/plain",
+      "publisher_id": "openai",
+      "redirect_chain": [
+        "https://raw.githubusercontent.com/openai/gpt-oss/599476783c6f88508dab8577808b5ead5cbee8d2/README.md"
+      ],
+      "requested_url": "https://raw.githubusercontent.com/openai/gpt-oss/599476783c6f88508dab8577808b5ead5cbee8d2/README.md",
+      "retrieved_at": "2026-08-18T08:49:50Z",
+      "source_evidence_sha256": "b508021d8f2e003b067fb4f0c21d0022a6a330378254ff43dc6abe45a9243211",
+      "source_id": "openai-gpt-oss-120b-readme",
+      "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
+    },
+    {
+      "capture_observation_sha256": "5bc61ac573a12f4de7ed3aa6b40cd33137dcfed72b2a9535e959591a038e34cc",
+      "file_binding": {
+        "path": "sources/qwen-qwen3-6-35b-a3b-card.md",
+        "sha256": "c4ddaa065649ff6352648f64747a16eda31726f3e34add94ce04abb461c77b75",
+        "size": 64550
+      },
+      "final_url": "https://huggingface.co/api/resolve-cache/models/Qwen/Qwen3.6-35B-A3B/995ad96eacd98c81ed38be0c5b274b04031597b0/README.md?%2FQwen%2FQwen3.6-35B-A3B%2Fresolve%2F995ad96eacd98c81ed38be0c5b274b04031597b0%2FREADME.md=&etag=%2220a5d849ac33ffa1dae83ea093710328fa1880f4%22",
+      "immutable_revision": "995ad96eacd98c81ed38be0c5b274b04031597b0",
+      "independence_key": "alibaba-qwen",
+      "media_type": "text/plain",
+      "publisher_id": "alibaba-qwen",
+      "redirect_chain": [
+        "https://huggingface.co/Qwen/Qwen3.6-35B-A3B/resolve/995ad96eacd98c81ed38be0c5b274b04031597b0/README.md",
+        "https://huggingface.co/api/resolve-cache/models/Qwen/Qwen3.6-35B-A3B/995ad96eacd98c81ed38be0c5b274b04031597b0/README.md?%2FQwen%2FQwen3.6-35B-A3B%2Fresolve%2F995ad96eacd98c81ed38be0c5b274b04031597b0%2FREADME.md=&etag=%2220a5d849ac33ffa1dae83ea093710328fa1880f4%22"
+      ],
+      "requested_url": "https://huggingface.co/Qwen/Qwen3.6-35B-A3B/resolve/995ad96eacd98c81ed38be0c5b274b04031597b0/README.md",
+      "retrieved_at": "2026-08-18T08:49:51Z",
+      "source_evidence_sha256": "dd7d1b45e013376e0e248d6cba07de382898b3ff4143001136047d5e40665145",
+      "source_id": "qwen-qwen3-6-35b-a3b-card",
+      "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
+    },
+    {
+      "capture_observation_sha256": "bf9f423769059d913fc9dda3aa043bd90079b4ff569fee2484f2fee2e43635c4",
+      "file_binding": {
+        "path": "sources/tencent-hunyuan-a13b-instruct-card.md",
+        "sha256": "f7df4703f678f1baa19e4786be5fd8d55559bb3dc83c84cb6e015fb1aa08a969",
+        "size": 17674
+      },
+      "final_url": "https://huggingface.co/api/resolve-cache/models/tencent/Hunyuan-A13B-Instruct/290ddb9a56ed23c2c83a1c8081533e58925df952/README.md?%2Ftencent%2FHunyuan-A13B-Instruct%2Fresolve%2F290ddb9a56ed23c2c83a1c8081533e58925df952%2FREADME.md=&etag=%2250c823d10bf81573000a96165590f00590067eb3%22",
+      "immutable_revision": "290ddb9a56ed23c2c83a1c8081533e58925df952",
+      "independence_key": "tencent-hunyuan",
+      "media_type": "text/plain",
+      "publisher_id": "tencent-hunyuan",
+      "redirect_chain": [
+        "https://huggingface.co/tencent/Hunyuan-A13B-Instruct/resolve/290ddb9a56ed23c2c83a1c8081533e58925df952/README.md",
+        "https://huggingface.co/api/resolve-cache/models/tencent/Hunyuan-A13B-Instruct/290ddb9a56ed23c2c83a1c8081533e58925df952/README.md?%2Ftencent%2FHunyuan-A13B-Instruct%2Fresolve%2F290ddb9a56ed23c2c83a1c8081533e58925df952%2FREADME.md=&etag=%2250c823d10bf81573000a96165590f00590067eb3%22"
+      ],
+      "requested_url": "https://huggingface.co/tencent/Hunyuan-A13B-Instruct/resolve/290ddb9a56ed23c2c83a1c8081533e58925df952/README.md",
+      "retrieved_at": "2026-08-18T08:49:52Z",
+      "source_evidence_sha256": "0d774e7c756e2cb4e977c0b294fc5072b74c9586a0afd08dff445d16eef3252e",
+      "source_id": "tencent-hunyuan-a13b-instruct-card",
+      "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
+    },
+    {
+      "capture_observation_sha256": "2aa472ed51b35a3ab49db19bd412b9ced2f2ae5d65e3b54cf7f02b1e2eb1067b",
+      "file_binding": {
+        "path": "sources/z-ai-glm-4-7-card.md",
+        "sha256": "ad072cbe81374f18149a107f2e1cbed93f27a6b220409a6bb34ba97a4d36757e",
+        "size": 13605
+      },
+      "final_url": "https://huggingface.co/api/resolve-cache/models/zai-org/GLM-4.7/2765a661c9061116a4bef693c61f5de3f0687f2c/README.md?%2Fzai-org%2FGLM-4.7%2Fresolve%2F2765a661c9061116a4bef693c61f5de3f0687f2c%2FREADME.md=&etag=%2280be377ea15441530aeed36120d345bffcb34e68%22",
+      "immutable_revision": "2765a661c9061116a4bef693c61f5de3f0687f2c",
+      "independence_key": "z-ai",
+      "media_type": "text/plain",
+      "publisher_id": "z-ai",
+      "redirect_chain": [
+        "https://huggingface.co/zai-org/GLM-4.7/resolve/2765a661c9061116a4bef693c61f5de3f0687f2c/README.md",
+        "https://huggingface.co/api/resolve-cache/models/zai-org/GLM-4.7/2765a661c9061116a4bef693c61f5de3f0687f2c/README.md?%2Fzai-org%2FGLM-4.7%2Fresolve%2F2765a661c9061116a4bef693c61f5de3f0687f2c%2FREADME.md=&etag=%2280be377ea15441530aeed36120d345bffcb34e68%22"
+      ],
+      "requested_url": "https://huggingface.co/zai-org/GLM-4.7/resolve/2765a661c9061116a4bef693c61f5de3f0687f2c/README.md",
+      "retrieved_at": "2026-08-18T08:49:53Z",
+      "source_evidence_sha256": "7d3cb223d274580e7d4facdd957afc9260ee0b03cf270504c92b568c25fb201a",
+      "source_id": "z-ai-glm-4-7-card",
+      "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
+    }
+  ],
+  "unconfirmed_exact_model_ids": [
+    "mistralai/mistral-small-2603",
+    "openai/gpt-oss-120b",
+    "tencent/hunyuan-a13b-instruct",
+    "z-ai/glm-4.7"
+  ],
+  "valid_until": "2027-02-14T09:00:00Z",
+  "verified_at": "2026-08-18T09:00:00Z"
+}

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import mmaudit.orchestration.assurance as assurance_module
 import tests.scheduler_support as scheduler_support
 from mmaudit.agents.specialists import SPECIALIST_ROLE_REGISTRY, canonical_specialist_role
 from mmaudit.benchmark.certificate import (
@@ -61,9 +62,11 @@ from mmaudit.models.scheduler import (
     SchedulerTaskKind,
     SchedulerTaskOutput,
     SchedulerTaskPlan,
+    scheduler_canonical_sha256,
 )
 from mmaudit.models.schemas import (
     AnalysisState,
+    AuditModelRefreshPricingAttemptEvidence,
     AuditProfile,
     AuditQualityStatus,
     AuditReport,
@@ -101,6 +104,7 @@ from mmaudit.models.schemas import (
     LanguageCapabilityStatus,
     Location,
     MaximumAssuranceStatus,
+    ModelIdentityStrength,
     ModelRequestValidationStatus,
     ModelReviewCoverage,
     ModelReviewEvidenceReference,
@@ -164,10 +168,14 @@ from mmaudit.models.schemas import (
     SpecialistExecutionStatus,
     TransactionOrderingCapability,
     UsageRecord,
+    validate_audit_model_refresh_pricing_usage_custody,
+    validate_audit_model_refresh_usage_custody,
+    validate_audit_model_selection_usage_custody,
 )
 from mmaudit.models.usage import (
     candidate_falsifier_role,
     is_creditable_usage_record,
+    is_recovery_creditable_usage_record,
     request_token_plan_from_usage,
 )
 from mmaudit.orchestration.assurance import (
@@ -175,6 +183,8 @@ from mmaudit.orchestration.assurance import (
     AssuranceRuntime,
     MaximumAssuranceContract,
     ProviderSessionProvenance,
+    _current_audit_model_refresh,
+    _current_audit_model_refresh_pricing,
     _current_audit_model_selection,
     _is_real_model_usage,
     _issue_provider_session_provenance,
@@ -210,6 +220,13 @@ from tests.qualification_support import (
 )
 from tests.qualification_support import (
     synthetic_production_qualification as _synthetic_production_qualification,
+)
+from tests.refresh_runtime_support import (
+    SyntheticRefreshRuntime,
+    _candidate_registry,
+    bind_usage_to_refresh_pricing_runtime,
+    bind_usage_to_refresh_runtime,
+    synthetic_refresh_runtime_for_authorities,
 )
 from tests.scheduler_support import (
     CompleteSchedulerFixture,
@@ -801,6 +818,7 @@ class _AssurancePolicySelectionFixture:
     qualification: VerifiedProductionQualification
     evidence_bundle: AuditModelSelectionEvidenceBundle
     capability: VerifiedAuditModelSelection
+    refresh_runtime: SyntheticRefreshRuntime
 
 
 _ASSURANCE_POLICY_SELECTION_CACHE: dict[str, _AssurancePolicySelectionFixture] = {}
@@ -826,13 +844,51 @@ def _clone_assurance_runtime(runtime: AssuranceRuntime) -> AssuranceRuntime:
 def _assurance_policy_selection(
     config: AuditConfig,
     now: datetime,
+    *,
+    current_pricing: dict[str, str] | None = None,
 ) -> _AssurancePolicySelectionFixture:
-    cache_key = config.stable_hash()
+    cache_key = ":".join(
+        (
+            config.stable_hash(),
+            scheduler_canonical_sha256(current_pricing or {}),
+        )
+    )
     cached = _ASSURANCE_POLICY_SELECTION_CACHE.get(cache_key)
     if cached is not None:
         return cached
     authority_base = now - timedelta(hours=2)
-    qualification = _synthetic_production_qualification(config, authority_base)
+    model_ids = tuple(
+        sorted(
+            {
+                config.models.role(role).primary
+                for role in (
+                    *ALL_SPECIALIST_ROLES,
+                    "threat_model",
+                    "source_audit",
+                    "business_logic",
+                    "configuration",
+                    "verifier",
+                    "judge",
+                )
+            }
+        )
+    )
+    configured_roots = {
+        entry.root_lineage
+        for entry in config.models.registry
+        if entry.canonical_model_id in model_ids
+    }
+    candidate_registry = _candidate_registry(
+        config=config,
+        model_ids=model_ids,
+        roots=tuple(sorted(configured_roots)),
+        created_at=authority_base,
+    )
+    qualification = _synthetic_production_qualification(
+        config,
+        authority_base,
+        candidate_registry=candidate_registry,
+    )
     policy = _policy_bundle(
         qualification,
         source_sha256_override=_assurance_scheduler_inventory().source_tree_sha256,
@@ -841,10 +897,20 @@ def _assurance_policy_selection(
     with tempfile.TemporaryDirectory(prefix="mmaudit-assurance-policy-") as directory:
         authority = _policy_authority(Path(directory), policy)
     _selection, evidence_bundle, capability = _resolve(qualification, policy, authority)
+    refresh_runtime = synthetic_refresh_runtime_for_authorities(
+        config=config,
+        candidate_registry=candidate_registry,
+        technical_qualification=qualification,
+        audit_selection_evidence=evidence_bundle,
+        audit_selection=capability,
+        verified_at=now,
+        current_pricing=current_pricing,
+    )
     fixture = _AssurancePolicySelectionFixture(
         qualification=qualification,
         evidence_bundle=evidence_bundle,
         capability=capability,
+        refresh_runtime=refresh_runtime,
     )
     _ASSURANCE_POLICY_SELECTION_CACHE[cache_key] = fixture
     return fixture
@@ -854,6 +920,7 @@ def _complete_assurance_scheduler_fixture(
     config: AuditConfig,
     qualification: VerifiedProductionQualification,
     audit_model_selection_evidence: AuditModelSelectionEvidenceBundle,
+    audit_model_refresh: SyntheticRefreshRuntime,
     now: datetime,
 ) -> CompleteSchedulerFixture:
     inventory = _assurance_scheduler_inventory()
@@ -890,6 +957,8 @@ def _complete_assurance_scheduler_fixture(
         cost_ledger_baseline=cost_baseline,
         privacy_evidence_custody=privacy_custody,
         audit_model_selection_evidence=audit_model_selection_evidence,
+        audit_model_refresh_evidence=audit_model_refresh.evidence,
+        audit_model_refresh_pricing_evidence=audit_model_refresh.pricing_evidence,
     )
     manifest = SchedulerCampaignManifest.build(
         bindings=bindings,
@@ -1029,14 +1098,21 @@ def _complete_assurance_scheduler_fixture(
         routing = {
             key: value for key, value in record.routing.items() if key not in request_limit_fields
         }
+        usage_started_at = now
+        usage_ended_at = now + timedelta(milliseconds=record.latency_ms or 0)
         prepared = record.model_copy(
             update={
                 "provider": model.approved_provider_name,
                 "configured_provider_endpoints": [model.approved_provider_endpoint],
                 "actual_provider_endpoint": model.approved_provider_endpoint,
+                "timestamp": usage_started_at,
+                "started_at": usage_started_at,
+                "ended_at": usage_ended_at,
                 "routing": {
                     **routing,
                     "certification_request": True,
+                    "request_started_at": usage_started_at.isoformat(),
+                    "request_ended_at": usage_ended_at.isoformat(),
                     "selected_provider_endpoint": model.approved_provider_endpoint,
                     "selected_provider_name": model.approved_provider_name,
                 },
@@ -1054,7 +1130,7 @@ def _complete_assurance_scheduler_fixture(
             request_limit_count_before=0,
             request_limit_maximum=100,
         )
-        return reattest_synthetic_real_usage(
+        refresh_bound = bind_usage_to_refresh_runtime(
             bound.model_copy(
                 update={
                     "routing": {
@@ -1064,9 +1140,16 @@ def _complete_assurance_scheduler_fixture(
                         ],
                         "atomic_request_limit_reservation_sha256s": [request_limit.evidence_sha256],
                         "atomic_request_limit_reservation": request_limit.model_dump(mode="json"),
-                        "atomic_request_limit_reservation_sha256": request_limit.evidence_sha256,
+                        "atomic_request_limit_reservation_sha256": (request_limit.evidence_sha256),
                     }
                 }
+            ),
+            audit_model_refresh,
+        )
+        return reattest_synthetic_real_usage(
+            bind_usage_to_refresh_pricing_runtime(
+                refresh_bound,
+                audit_model_refresh,
             )
         )
 
@@ -1078,6 +1161,7 @@ def _complete_assurance_scheduler_fixture(
         model_tasks=model_tasks,
         model_assignment_resolver=resolve_model_assignment,
         usage_transform=bind_usage,
+        usage_transform_owns_refresh_pricing=True,
     )
 
 
@@ -1891,11 +1975,16 @@ def _real_slither_scanner(now: datetime) -> ScannerRun:
     )
 
 
-def _complete_runtime(config: AuditConfig | None = None) -> AssuranceRuntime:
+def _complete_runtime(
+    config: AuditConfig | None = None,
+    *,
+    current_pricing: dict[str, str] | None = None,
+) -> AssuranceRuntime:
     cache_key = (
         ":".join(
             (
                 config.stable_hash(),
+                scheduler_canonical_sha256(current_pricing or {}),
                 str(id(scheduler_support.build_scheduler_test_model_payload)),
                 str(id(scheduler_support._scheduler_test_specialist_outcome)),
                 str(id(SchedulerTaskOutput.__dict__["build"])),
@@ -1907,13 +1996,18 @@ def _complete_runtime(config: AuditConfig | None = None) -> AssuranceRuntime:
     if cache_key is not None and cache_key in _COMPLETE_ASSURANCE_RUNTIME_CACHE:
         return _clone_assurance_runtime(_COMPLETE_ASSURANCE_RUNTIME_CACHE[cache_key])
     now = datetime.now(UTC).replace(microsecond=0)
-    policy_selection = _assurance_policy_selection(config, now) if config is not None else None
+    policy_selection = (
+        _assurance_policy_selection(config, now, current_pricing=current_pricing)
+        if config is not None
+        else None
+    )
     qualification = policy_selection.qualification if policy_selection is not None else None
     scheduler_fixture = (
         _complete_assurance_scheduler_fixture(
             config,
             qualification,
             policy_selection.evidence_bundle,
+            policy_selection.refresh_runtime,
             now,
         )
         if config is not None and qualification is not None and policy_selection is not None
@@ -2150,6 +2244,22 @@ def _complete_runtime(config: AuditConfig | None = None) -> AssuranceRuntime:
         audit_model_selection_evidence=(
             policy_selection.evidence_bundle if policy_selection is not None else None
         ),
+        audit_model_refresh_evidence=(
+            policy_selection.refresh_runtime.evidence if policy_selection is not None else None
+        ),
+        audit_model_refresh_guard=(
+            policy_selection.refresh_runtime.guard if policy_selection is not None else None
+        ),
+        audit_model_refresh_pricing_evidence=(
+            policy_selection.refresh_runtime.pricing_evidence
+            if policy_selection is not None
+            else None
+        ),
+        audit_model_refresh_pricing_authority=(
+            policy_selection.refresh_runtime.pricing_authority
+            if policy_selection is not None
+            else None
+        ),
         verified_audit_model_selection=(
             policy_selection.capability if policy_selection is not None else None
         ),
@@ -2183,6 +2293,8 @@ def _complete_runtime(config: AuditConfig | None = None) -> AssuranceRuntime:
             "cross-examination.json",
             "specialist-execution.json",
             "model-review-coverage.json",
+            "audit-model-refresh-evidence.json",
+            "audit-model-refresh-pricing-evidence.json",
             "offline-replay.json",
             "benchmark-certificate-verification.json",
             "scope-assessment.json",
@@ -2358,6 +2470,392 @@ def test_maximum_assurance_complete_requires_all_runtime_clauses(config_factory)
     assert "candidate falsifier lineages=minimum=2/2 across 1 candidate(s)" in (
         certified_ensemble.detail
     )
+
+
+def test_maximum_assurance_accepts_bounded_refreshed_prices_without_mutating_baseline(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    current_pricing = {
+        "completion": "0.00000208",
+        "prompt": "0.00000104",
+    }
+    runtime = _complete_runtime(config, current_pricing=current_pricing)
+
+    assessment = MaximumAssuranceContract(config).evaluate(runtime)
+
+    assert assessment.status is MaximumAssuranceStatus.COMPLETE, [
+        (requirement.engine, requirement.detail)
+        for requirement in assessment.requirements
+        if not requirement.passed
+    ]
+    pricing = runtime.audit_model_refresh_pricing_evidence
+    refresh = runtime.audit_model_refresh_evidence
+    assert pricing is not None
+    assert refresh is not None
+    for route in pricing.routes:
+        assert route.baseline_pricing == {
+            "completion": "0.000002",
+            "prompt": "0.000001",
+        }
+        assert route.current_pricing == current_pricing
+        assert route.qualified_pricing_snapshot_sha256 == route.baseline_pricing_sha256
+        assert route.current_pricing_sha256 != route.baseline_pricing_sha256
+    for record in runtime.model_usage:
+        assert record.routing["qualified_pricing_snapshot_sha256"] == (
+            next(
+                route.qualified_pricing_snapshot_sha256
+                for route in pricing.routes
+                if route.exact_model_id == record.requested_model
+            )
+        )
+        assert record.routing["endpoint_pricing_sha256"] == (
+            next(
+                route.current_pricing_sha256
+                for route in pricing.routes
+                if route.exact_model_id == record.requested_model
+            )
+        )
+
+
+def _assert_refresh_failure_revokes_only_model_credit(
+    assessment: object,
+) -> None:
+    assert hasattr(assessment, "requirements")
+    requirements = {item.engine: item for item in assessment.requirements}
+    assert requirements["production_model_qualification"].passed
+    assert not requirements["qualified_model_selection_execution"].passed
+    assert not requirements["real_model_execution"].passed
+    assert not requirements["critical_model_surface_review"].passed
+    assert not requirements["certified_model_ensemble"].passed
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ["audit_model_refresh_evidence", "audit_model_refresh_guard"],
+)
+def test_maximum_assurance_revokes_model_credit_without_complete_refresh_custody(
+    config_factory,
+    field_name: str,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+
+    assessment = MaximumAssuranceContract(config).evaluate(replace(runtime, **{field_name: None}))
+
+    _assert_refresh_failure_revokes_only_model_credit(assessment)
+    custody = next(
+        item for item in assessment.requirements if item.engine == "audit_model_refresh_custody"
+    )
+    assert not custody.passed
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ["audit_model_refresh_pricing_evidence", "audit_model_refresh_pricing_authority"],
+)
+def test_maximum_assurance_revokes_model_credit_without_complete_pricing_custody(
+    config_factory,
+    field_name: str,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+
+    assessment = MaximumAssuranceContract(config).evaluate(replace(runtime, **{field_name: None}))
+
+    _assert_refresh_failure_revokes_only_model_credit(assessment)
+    pricing = next(
+        item
+        for item in assessment.requirements
+        if item.engine == "audit_model_refresh_pricing_custody"
+    )
+    assert not pricing.passed
+
+
+def test_coherently_resealed_detached_pricing_remains_structural_only(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    evidence = runtime.audit_model_refresh_pricing_evidence
+    refresh = runtime.audit_model_refresh_evidence
+    selection_bundle = runtime.audit_model_selection_evidence
+    assert evidence is not None
+    assert refresh is not None
+    assert selection_bundle is not None
+    original = runtime.model_usage[0]
+    raw_attempts = original.routing["audit_model_refresh_pricing_attempts"]
+    assert isinstance(raw_attempts, list)
+    resealed_attempts: list[AuditModelRefreshPricingAttemptEvidence] = []
+    for raw_attempt in raw_attempts:
+        attempt = AuditModelRefreshPricingAttemptEvidence.model_validate_json(
+            json.dumps(raw_attempt),
+            strict=True,
+        )
+        values = attempt.model_dump(mode="json", exclude={"evidence_sha256"})
+        values["current_endpoint_snapshot_sha256"] = "f" * 64
+        resealed_attempts.append(
+            AuditModelRefreshPricingAttemptEvidence.model_validate_json(
+                json.dumps(
+                    {
+                        **values,
+                        "evidence_sha256": scheduler_canonical_sha256(values),
+                    }
+                ),
+                strict=True,
+            )
+        )
+    final = resealed_attempts[-1]
+    resealed = original.model_copy(
+        update={
+            "routing": {
+                **original.routing,
+                "endpoint_snapshot_sha256": "f" * 64,
+                "audit_model_refresh_pricing_attempts": [
+                    item.model_dump(mode="json") for item in resealed_attempts
+                ],
+                "audit_model_refresh_pricing_attempt_sha256s": [
+                    item.evidence_sha256 for item in resealed_attempts
+                ],
+                "audit_model_refresh_pricing_attempt": final.model_dump(mode="json"),
+                "audit_model_refresh_pricing_attempt_sha256": final.evidence_sha256,
+            }
+        }
+    )
+
+    validate_audit_model_refresh_pricing_usage_custody(
+        audit_model_refresh_pricing_evidence=evidence,
+        audit_model_refresh_evidence=refresh,
+        audit_model_selection=selection_bundle.selection,
+        usage=(resealed,),
+    )
+    assert not is_creditable_usage_record(resealed, require_real=True)
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(runtime, model_usage=[resealed, *runtime.model_usage[1:]])
+    )
+    assert not next(
+        item for item in assessment.requirements if item.engine == "seven_pass_scheduler"
+    ).passed
+
+
+def test_maximum_assurance_rejects_coherently_swapped_refresh_custody(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    fixture = _assurance_policy_selection(config, datetime.now(UTC).replace(microsecond=0))
+    original = fixture.refresh_runtime
+    swapped = synthetic_refresh_runtime_for_authorities(
+        config=config,
+        candidate_registry=original.history.candidate_registry,
+        technical_qualification=original.technical_qualification,
+        audit_selection_evidence=original.audit_selection_evidence,
+        audit_selection=original.audit_selection,
+        verified_at=original.verified_at + timedelta(seconds=1),
+    )
+
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(
+            runtime,
+            audit_model_refresh_evidence=swapped.evidence,
+            audit_model_refresh_guard=swapped.guard,
+        )
+    )
+
+    _assert_refresh_failure_revokes_only_model_credit(assessment)
+    scheduler = next(
+        item for item in assessment.requirements if item.engine == "seven_pass_scheduler"
+    )
+    assert not scheduler.passed
+    assert "model-refresh custody" in scheduler.detail or "bindings differ" in scheduler.detail
+
+
+def test_maximum_assurance_rejects_usage_dispatched_at_refresh_expiry(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    evidence = runtime.audit_model_refresh_evidence
+    assert evidence is not None
+    expired_usage = []
+    for record in runtime.model_usage:
+        ended_at = evidence.expires_at + timedelta(milliseconds=record.latency_ms or 0)
+        expired_usage.append(
+            reattest_synthetic_real_usage(
+                record.model_copy(
+                    update={
+                        "timestamp": evidence.expires_at,
+                        "started_at": evidence.expires_at,
+                        "ended_at": ended_at,
+                        "routing": {
+                            **record.routing,
+                            "request_started_at": evidence.expires_at.isoformat(),
+                            "request_ended_at": ended_at.isoformat(),
+                        },
+                    }
+                )
+            )
+        )
+
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(runtime, model_usage=expired_usage)
+    )
+
+    _assert_refresh_failure_revokes_only_model_credit(assessment)
+
+
+def test_maximum_assurance_rejects_refresh_guard_expired_at_evaluation(
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    evidence = runtime.audit_model_refresh_evidence
+    assert evidence is not None
+
+    class ExpiredEvaluationDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            del cls, tz
+            return evidence.expires_at
+
+    monkeypatch.setattr(assurance_module, "datetime", ExpiredEvaluationDateTime)
+    assessment = MaximumAssuranceContract(config).evaluate(runtime)
+
+    _assert_refresh_failure_revokes_only_model_credit(assessment)
+    custody = next(
+        item for item in assessment.requirements if item.engine == "audit_model_refresh_custody"
+    )
+    assert not custody.passed
+
+
+def test_detached_refresh_custody_accepts_accountable_failed_attempt_without_observed_identity(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    evidence = runtime.audit_model_refresh_evidence
+    bundle = runtime.audit_model_selection_evidence
+    assert evidence is not None
+    assert bundle is not None
+    original = runtime.model_usage[0]
+    failed = UsageRecord.model_validate(
+        {
+            **original.model_dump(mode="python"),
+            "returned_model": None,
+            "actual_model": None,
+            "provider": None,
+            "actual_provider_endpoint": None,
+            "validation_status": ModelRequestValidationStatus.PROVIDER_ERROR,
+            "identity_strength": ModelIdentityStrength.UNBOUND,
+            "provider_error_classification": "timeout",
+            "status": "failed",
+        }
+    )
+
+    validate_audit_model_selection_usage_custody(
+        audit_model_selection=bundle.selection,
+        usage=[failed],
+    )
+    validate_audit_model_refresh_usage_custody(
+        audit_model_refresh_evidence=evidence,
+        audit_model_selection=bundle.selection,
+        usage=[failed],
+    )
+
+    invalid_success = failed.model_copy(
+        update={
+            "status": "success",
+            "validation_status": ModelRequestValidationStatus.VALID,
+        }
+    )
+    with pytest.raises(ValueError, match="typed audit routing evidence differs"):
+        validate_audit_model_selection_usage_custody(
+            audit_model_selection=bundle.selection,
+            usage=[invalid_success],
+        )
+
+
+def test_detached_refresh_custody_requires_exact_complete_route_and_guard(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    evidence = runtime.audit_model_refresh_evidence
+    bundle = runtime.audit_model_selection_evidence
+    assert evidence is not None
+    assert bundle is not None
+    original = runtime.model_usage[0]
+
+    mismatched_guard = original.model_copy(
+        update={
+            "routing": {
+                **original.routing,
+                "audit_model_refresh_guard_capability_sha256": "f" * 64,
+            }
+        }
+    )
+    with pytest.raises(ValueError, match="differs from exact report evidence"):
+        validate_audit_model_refresh_usage_custody(
+            audit_model_refresh_evidence=evidence,
+            audit_model_selection=bundle.selection,
+            usage=[mismatched_guard],
+        )
+
+    incomplete = original.model_copy(
+        update={
+            "routing": {
+                key: value
+                for key, value in original.routing.items()
+                if key != "audit_model_refresh_route_evidence"
+            }
+        }
+    )
+    with pytest.raises(ValueError, match="incomplete typed model-refresh"):
+        validate_audit_model_refresh_usage_custody(
+            audit_model_refresh_evidence=evidence,
+            audit_model_selection=bundle.selection,
+            usage=[incomplete],
+        )
+
+
+def test_detached_refresh_custody_uses_dispatch_time_not_completion_time(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    evidence = runtime.audit_model_refresh_evidence
+    bundle = runtime.audit_model_selection_evidence
+    assert evidence is not None
+    assert bundle is not None
+    original = runtime.model_usage[0]
+    started_at = evidence.expires_at - timedelta(seconds=1)
+    completed_late = original.model_copy(
+        update={
+            "timestamp": started_at,
+            "started_at": started_at,
+            "ended_at": evidence.expires_at + timedelta(seconds=1),
+        }
+    )
+
+    validate_audit_model_refresh_usage_custody(
+        audit_model_refresh_evidence=evidence,
+        audit_model_selection=bundle.selection,
+        usage=[completed_late],
+    )
+
+    dispatched_late = completed_late.model_copy(
+        update={
+            "timestamp": evidence.expires_at,
+            "started_at": evidence.expires_at,
+        }
+    )
+    with pytest.raises(ValueError, match="outside its exact validity window"):
+        validate_audit_model_refresh_usage_custody(
+            audit_model_refresh_evidence=evidence,
+            audit_model_selection=bundle.selection,
+            usage=[dispatched_late],
+        )
 
 
 @pytest.mark.parametrize(
@@ -3307,7 +3805,6 @@ def test_certified_ensemble_requires_twenty_four_specialist_responsibilities(
         if record.role
         not in {
             "specialist:access_control",
-            "specialist:reentrancy_control_flow",
         }
     ]
 
@@ -3322,6 +3819,7 @@ def test_certified_ensemble_requires_twenty_four_specialist_responsibilities(
 
     assert not ensemble.passed
     assert "specialist responsibilities=23/24" in ensemble.detail
+    assert "candidate-dependent specialist extras=3/3" in ensemble.detail
     assert assessment.status is not MaximumAssuranceStatus.COMPLETE
 
 
@@ -3702,6 +4200,103 @@ def test_missing_audit_policy_authority_preserves_technical_status_but_revokes_p
     assert not requirements["seven_pass_scheduler"].passed
 
 
+def test_real_model_usage_requires_exact_external_recovery_request_coordinates(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    original = next(record for record in runtime.model_usage if record.role == "source_audit")
+    token_plan = request_token_plan_from_usage(original)
+    assert token_plan is not None
+    root_scope = "scheduler-request-" + hashlib.sha256(b"assurance-recovery-root").hexdigest()
+    count_before = 1
+    reservation = AtomicRequestLimitReservationEvidence.build(
+        request_id=original.request_id,
+        exact_model_id=original.requested_model,
+        role=original.role,
+        request_token_plan_sha256=token_plan.plan_sha256,
+        request_limit_scope=root_scope,
+        request_limit_count_before=count_before,
+        request_limit_maximum=100,
+    )
+    recovery_usage = reattest_synthetic_real_usage(
+        original.model_copy(
+            update={
+                "routing": {
+                    **original.routing,
+                    "atomic_request_limit_reservations": [reservation.model_dump(mode="json")],
+                    "atomic_request_limit_reservation_sha256s": [reservation.evidence_sha256],
+                    "atomic_request_limit_reservation": reservation.model_dump(mode="json"),
+                    "atomic_request_limit_reservation_sha256": reservation.evidence_sha256,
+                }
+            }
+        )
+    )
+    selection = _current_audit_model_selection(
+        runtime.audit_model_selection_evidence,
+        runtime.verified_audit_model_selection,
+        runtime.production_qualification,
+    )
+    refresh = _current_audit_model_refresh(
+        runtime.audit_model_refresh_evidence,
+        runtime.audit_model_refresh_guard,
+        runtime.production_qualification,
+        selection,
+    )
+    pricing = _current_audit_model_refresh_pricing(
+        runtime.audit_model_refresh_pricing_evidence,
+        runtime.audit_model_refresh_pricing_authority,
+        runtime.production_qualification,
+        selection,
+        refresh,
+        runtime.audit_model_refresh_guard,
+    )
+    assert selection is not None and refresh is not None and pricing is not None
+    assert not is_creditable_usage_record(
+        recovery_usage,
+        require_real=True,
+        require_certification=True,
+    )
+    assert is_recovery_creditable_usage_record(
+        recovery_usage,
+        request_limit_scope=root_scope,
+        request_limit_count_before=count_before,
+        require_real=True,
+        require_certification=True,
+    )
+    assert not _is_real_model_usage(
+        recovery_usage,
+        config,
+        runtime.production_qualification,
+        runtime.provider_session,
+        selection,
+        refresh,
+        pricing,
+    )
+    assert _is_real_model_usage(
+        recovery_usage,
+        config,
+        runtime.production_qualification,
+        runtime.provider_session,
+        selection,
+        refresh,
+        pricing,
+        recovery_request_limit_scope=root_scope,
+        recovery_request_limit_count_before=count_before,
+    )
+    assert not _is_real_model_usage(
+        recovery_usage,
+        config,
+        runtime.production_qualification,
+        runtime.provider_session,
+        selection,
+        refresh,
+        pricing,
+        recovery_request_limit_scope=root_scope,
+        recovery_request_limit_count_before=count_before + 1,
+    )
+
+
 def test_public_qualification_hashes_without_reasoning_evidence_receive_no_credit(
     config_factory,
 ) -> None:
@@ -3934,12 +4529,9 @@ def test_active_reasoning_without_positive_observation_receives_no_runtime_credi
         "qualified_provider_name",
         "qualified_endpoint_snapshot_sha256",
         "qualified_model_metadata_snapshot_sha256",
-        "qualified_pricing_snapshot_sha256",
         "qualified_roles",
         "qualification_verified_at",
         "qualification_expires_at",
-        "endpoint_snapshot_sha256",
-        "endpoint_pricing_sha256",
         "model_metadata_snapshot_sha256",
     ],
 )
@@ -4033,6 +4625,41 @@ def test_mismatched_qualified_usage_projection_revokes_runtime_credit(
     )
     assert not selection_execution.passed
     assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "qualified_pricing_snapshot_sha256",
+        "endpoint_snapshot_sha256",
+        "endpoint_pricing_sha256",
+    ],
+)
+def test_refreshed_price_scalar_tamper_is_rejected_before_runtime_credit(
+    config_factory,
+    fault: str,
+) -> None:
+    runtime = _complete_runtime(_maximum_config(config_factory))
+    original = next(record for record in runtime.model_usage if record.role == "source_audit")
+    routing = {**original.routing, fault: "f" * 64}
+    mutated = original.model_copy(update={"routing": routing})
+    raw_structured_output = original.routing["structured_output"]
+    assert isinstance(raw_structured_output, dict)
+    endpoint_snapshot_sha256 = routing["endpoint_snapshot_sha256"]
+    output_capability_sha256 = routing["output_capability_sha256"]
+    assert isinstance(endpoint_snapshot_sha256, str)
+    assert isinstance(output_capability_sha256, str)
+
+    with pytest.raises(
+        ValueError,
+        match="usage refreshed-price scalars differ from exact attempt evidence",
+    ):
+        _with_output_evidence(
+            mutated,
+            endpoint_snapshot_sha256=endpoint_snapshot_sha256,
+            output_capability_sha256=output_capability_sha256,
+            mode=StructuredOutputMode(raw_structured_output["requested_mode"]),
+        )
 
 
 def test_every_selected_tier_a_model_requires_successful_real_usage(config_factory) -> None:
@@ -6123,64 +6750,25 @@ def test_candidate_falsifier_requests_cannot_be_reused_across_candidates(
 ) -> None:
     config = _maximum_config(config_factory)
     contract = MaximumAssuranceContract(config)
-    lineage_by_model = model_lineage_index(config)
     complete_runtime = _complete_runtime(config)
-    qualification = complete_runtime.production_qualification
-    assert qualification is not None
-    template = complete_runtime.model_usage[0]
-    falsifier_models = [
-        config.models.verifier.primary,
-        config.models.judge.primary,
+    candidate_id = "candidate-critical"
+    falsifier_request_ids = complete_runtime.candidate_falsifier_request_ids[candidate_id]
+    assert len(falsifier_request_ids) == 2
+    falsifier_usage = [
+        record
+        for record in complete_runtime.model_usage
+        if record.request_id in falsifier_request_ids
     ]
-    falsifier_usage: list[UsageRecord] = []
-    for reviewer_index, model_id in enumerate(falsifier_models, start=1):
-        generation_id = f"generation-per-candidate-{reviewer_index}"
-        usage = template.model_copy(
-            update={
-                "request_id": f"request-per-candidate-{reviewer_index}",
-                "role": candidate_falsifier_role(
-                    "critical-1",
-                    reviewer_index,
-                ),
-                "requested_model": model_id,
-                "returned_model": model_id,
-                "actual_model": model_id,
-                "model_family": model_id,
-                "openrouter_generation_id": generation_id,
-                "routing": {
-                    **template.routing,
-                    "generation_id": generation_id,
-                    "selected_model": model_id,
-                    "canonical_model": model_id,
-                    "catalog_identity_binding_sha256": canonical_sha256(
-                        {
-                            "canonical_slug": model_id,
-                            "id": model_id,
-                        }
-                    ),
-                },
-            }
-        )
-        falsifier_usage.append(
-            _bind_usage_to_qualification(
-                usage,
-                qualification,
-                qualification.verified_at,
-            )
-        )
-    assert (
-        len({lineage_by_model[model_id.lower()].root_lineage for model_id in falsifier_models}) == 2
-    )
+    assert len(falsifier_usage) == 2
     assessment = contract.evaluate(
         replace(
             complete_runtime,
-            eligible_high_critical_ids={"critical-1", "critical-2"},
+            eligible_high_critical_ids={candidate_id, "critical-2"},
             falsifier_completed=True,
             candidate_falsifier_request_ids={
                 candidate_id: {record.request_id for record in falsifier_usage}
-                for candidate_id in ("critical-1", "critical-2")
+                for candidate_id in (candidate_id, "critical-2")
             },
-            model_usage=[*complete_runtime.model_usage, *falsifier_usage],
         )
     )
     clauses = {requirement.engine: requirement for requirement in assessment.requirements}

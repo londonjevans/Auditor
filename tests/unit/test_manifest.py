@@ -30,6 +30,10 @@ from mmaudit.models.reasoning import (
     ReasoningRequestPlanEvidence,
     resolve_reasoning_request_role,
 )
+from mmaudit.models.refresh_runtime import (
+    AuditModelRefreshEvidence,
+    AuditModelRefreshRouteEvidence,
+)
 from mmaudit.models.registry import ModelRegistry
 from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.models.scheduler import SchedulerArtifact
@@ -53,7 +57,11 @@ from mmaudit.models.schemas import (
     SolidityCoverage,
     UsageRecord,
 )
+from mmaudit.models.usage import request_token_plan_from_usage
+from mmaudit.orchestration.budgets import AtomicRequestLimitReservationEvidence
 from mmaudit.orchestration.manifest import (
+    AUDIT_MODEL_REFRESH_BINDING_IDS,
+    AUDIT_MODEL_REFRESH_EVIDENCE_PATH,
     AUDIT_MODEL_SELECTION_BINDING_IDS,
     AUDIT_MODEL_SELECTION_EVIDENCE_PATH,
     LANGUAGE_CAPABILITY_ARTIFACT_PATH,
@@ -62,8 +70,10 @@ from mmaudit.orchestration.manifest import (
     ManifestHashBinding,
     RunConfigurationBinding,
     RunEvidenceManifest,
+    _audit_model_refresh_bindings,
     _model_bindings,
     _seed_bindings,
+    _validate_audit_model_refresh_evidence,
     _validate_scanner_stream_artifact_custody,
     build_run_evidence_manifest,
     canonical_sha256,
@@ -107,6 +117,7 @@ from tests.identity_fixtures import (
 )
 from tests.language_capability_support import language_capability_for_files
 from tests.output_evidence_fixtures import synthetic_structured_output_routing
+from tests.refresh_runtime_support import synthetic_refresh_runtime
 from tests.report_authority_fixtures import write_run_terminal_report_authority
 from tests.unit.test_model_registry import _verified_production_config_and_capability
 
@@ -802,6 +813,142 @@ def test_manifest_serialization_and_all_required_bindings_are_stable(
     assert {binding.path for binding in first.artifacts} == {
         binding.path for binding in collect_run_artifacts(first_run)
     }
+
+
+def test_manifest_refresh_bindings_are_exact_non_authorizing_custody(
+    tmp_path: Path,
+) -> None:
+    runtime = synthetic_refresh_runtime(tmp_path / "authority")
+    evidence_path = tmp_path / AUDIT_MODEL_REFRESH_EVIDENCE_PATH
+    evidence_bytes = (
+        json.dumps(runtime.evidence.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
+    ).encode()
+    evidence_path.write_bytes(evidence_bytes)
+
+    bindings = _audit_model_refresh_bindings(root=tmp_path, evidence=runtime.evidence)
+    by_id = {binding.identifier: binding for binding in bindings}
+
+    assert set(by_id) == AUDIT_MODEL_REFRESH_BINDING_IDS
+    assert by_id["audit-model-refresh/evidence"].sha256 == runtime.evidence.evidence_sha256
+    assert (
+        by_id["audit-model-refresh/evidence-file"].sha256
+        == hashlib.sha256(evidence_bytes).hexdigest()
+    )
+    assert all(binding.details["runtime_authorized"] == "false" for binding in bindings)
+    assert all(binding.details["pricing_authority"] == "false" for binding in bindings)
+
+
+@pytest.mark.parametrize(
+    ("include_artifact", "omitted_binding", "error"),
+    [
+        (True, "audit-model-refresh/snapshot", "bindings are incomplete"),
+        (False, None, "artifact and typed bindings must be retained together"),
+        (True, None, "lacks audit model selection"),
+    ],
+)
+def test_manifest_rejects_missing_extra_or_unjoined_refresh_custody(
+    tmp_path: Path,
+    config_factory,
+    include_artifact: bool,
+    omitted_binding: str | None,
+    error: str,
+) -> None:
+    config = config_factory()
+    run_dir = tmp_path / "run"
+    report = _report(config)
+    _write_required_artifacts(run_dir, report)
+    base = build_run_evidence_manifest(run_dir=run_dir, report=report, config=config)
+    runtime = synthetic_refresh_runtime(tmp_path / "authority")
+    evidence_bytes = runtime.evidence.model_dump_json().encode()
+    (run_dir / AUDIT_MODEL_REFRESH_EVIDENCE_PATH).write_bytes(evidence_bytes)
+    refresh_bindings = [
+        binding
+        for binding in _audit_model_refresh_bindings(root=run_dir, evidence=runtime.evidence)
+        if binding.identifier != omitted_binding
+    ]
+    refresh_artifact = ManifestFileBinding(
+        path=AUDIT_MODEL_REFRESH_EVIDENCE_PATH,
+        sha256=hashlib.sha256(evidence_bytes).hexdigest(),
+        size=len(evidence_bytes),
+    )
+    payload = base.model_dump(mode="json")
+    payload["bindings"]["models"] = sorted(
+        [
+            *payload["bindings"]["models"],
+            *(binding.model_dump(mode="json") for binding in refresh_bindings),
+        ],
+        key=lambda item: item["identifier"],
+    )
+    if include_artifact:
+        payload["artifacts"] = sorted(
+            [*payload["artifacts"], refresh_artifact.model_dump(mode="json")],
+            key=lambda item: item["path"],
+        )
+    payload["manifest_sha256"] = canonical_sha256(
+        {key: value for key, value in payload.items() if key != "manifest_sha256"}
+    )
+
+    with pytest.raises(ValueError, match=error):
+        RunEvidenceManifest.model_validate(payload)
+
+
+def test_manifest_rejects_coherently_resealed_refresh_route_tamper(
+    tmp_path: Path,
+) -> None:
+    runtime = synthetic_refresh_runtime(tmp_path / "authority")
+    route_payload = runtime.evidence.routes[0].model_dump(mode="json")
+    route_payload["root_lineage"] = "sha256:" + ("f" * 64)
+    route_payload["route_evidence_sha256"] = canonical_sha256(
+        {key: value for key, value in route_payload.items() if key != "route_evidence_sha256"}
+    )
+    tampered_route = AuditModelRefreshRouteEvidence.model_validate_json(
+        json.dumps(route_payload),
+        strict=True,
+    )
+    evidence_payload = runtime.evidence.model_dump(mode="json")
+    evidence_payload["routes"][0] = tampered_route.model_dump(mode="json")
+    evidence_payload["technical_route_set_sha256"] = canonical_sha256(evidence_payload["routes"])
+    evidence_payload["audit_route_set_sha256"] = canonical_sha256(
+        [route for route in evidence_payload["routes"] if route["audit_selected"]]
+    )
+    evidence_payload["evidence_sha256"] = canonical_sha256(
+        {key: value for key, value in evidence_payload.items() if key != "evidence_sha256"}
+    )
+    tampered = AuditModelRefreshEvidence.model_validate_json(
+        json.dumps(evidence_payload),
+        strict=True,
+    )
+    (tmp_path / AUDIT_MODEL_REFRESH_EVIDENCE_PATH).write_text(
+        tampered.model_dump_json(),
+        encoding="utf-8",
+    )
+    report = _report(runtime.config).model_copy(
+        update={
+            "schema_version": "1.2",
+            "audit_model_selection": runtime.audit_selection_evidence.selection,
+            "audit_model_refresh_evidence": tampered,
+        }
+    )
+    qualification = ModelRegistry.validate_production_qualification(
+        runtime.config,
+        runtime.technical_qualification,
+        required=True,
+        now=runtime.verified_at,
+    )
+    qualification_payload = qualification.model_dump(mode="json")
+    qualification_payload["valid"] = True
+    qualification_payload["errors"] = []
+    qualification_payload["validation_sha256"] = canonical_sha256(
+        {key: value for key, value in qualification_payload.items() if key != "validation_sha256"}
+    )
+
+    with pytest.raises(ValueError, match="route differs from independent technical"):
+        _validate_audit_model_refresh_evidence(
+            root=tmp_path,
+            report=report,
+            qualification_runtime=qualification_payload,
+            audit_model_selection_evidence=runtime.audit_selection_evidence,
+        )
 
 
 def test_legacy_completed_report_new_issuance_uses_fail_closed_status_projection(
@@ -1863,6 +2010,83 @@ def test_manifest_requires_opaque_authority_before_granting_reasoning_credit() -
         qualified_route.reasoning_benchmark_fresh_evidence_sha256
     )
     assert bindings["qualification/opaque-authority"].sha256 == qualification.capability_sha256
+
+
+def test_manifest_reasoning_credit_requires_exact_recovery_request_coordinates() -> None:
+    config, qualification, observed_at = _verified_production_config_and_capability()
+    validation = ModelRegistry.validate_production_qualification(
+        config,
+        qualification,
+        required=True,
+        now=observed_at,
+    )
+    usage = _qualified_reasoning_usage(
+        config,
+        qualification,
+        observed_at=observed_at,
+    )
+    token_plan = request_token_plan_from_usage(usage)
+    assert token_plan is not None
+    root_scope = "scheduler-request-" + hashlib.sha256(b"manifest-recovery-root").hexdigest()
+    count_before = 1
+    reservation = AtomicRequestLimitReservationEvidence.build(
+        request_id=usage.request_id,
+        exact_model_id=usage.requested_model,
+        role=usage.role,
+        request_token_plan_sha256=token_plan.plan_sha256,
+        request_limit_scope=root_scope,
+        request_limit_count_before=count_before,
+        request_limit_maximum=100,
+    )
+    recovery_usage = reattest_synthetic_real_usage(
+        usage.model_copy(
+            update={
+                "routing": {
+                    **usage.routing,
+                    "atomic_request_limit_reservations": [reservation.model_dump(mode="json")],
+                    "atomic_request_limit_reservation_sha256s": [reservation.evidence_sha256],
+                    "atomic_request_limit_reservation": reservation.model_dump(mode="json"),
+                    "atomic_request_limit_reservation_sha256": reservation.evidence_sha256,
+                }
+            }
+        )
+    )
+    report = _report(config).model_copy(update={"usage": [recovery_usage]})
+
+    with pytest.raises(ValueError, match="creditable real opaque-authority evidence"):
+        _model_bindings(
+            config,
+            report,
+            qualification_runtime=validation.as_dict(),
+            production_qualification=qualification,
+        )
+    with pytest.raises(ValueError, match="creditable real opaque-authority evidence"):
+        _model_bindings(
+            config,
+            report,
+            qualification_runtime=validation.as_dict(),
+            production_qualification=qualification,
+            recovery_request_limit_coordinates={
+                recovery_usage.request_id: (root_scope, count_before + 1)
+            },
+        )
+
+    bindings = {
+        binding.identifier: binding
+        for binding in _model_bindings(
+            config,
+            report,
+            qualification_runtime=validation.as_dict(),
+            production_qualification=qualification,
+            recovery_request_limit_coordinates={
+                recovery_usage.request_id: (root_scope, count_before)
+            },
+        )
+    }
+    assert (
+        bindings[f"reasoning/qualification/{recovery_usage.request_id}"].details["authority"]
+        == "opaque_production_qualification"
+    )
 
 
 def test_current_manifest_bindings_reject_resealed_qualified_usage_routing_tamper() -> None:

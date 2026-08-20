@@ -9,7 +9,7 @@ import threading
 import time
 import types
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -168,6 +168,9 @@ from mmaudit.reporting.client import (
 from mmaudit.reporting.json_report import write_json
 from mmaudit.reporting.markdown import render_forensic_markdown, render_markdown
 from mmaudit.reporting.sarif import generate_report_sarif
+from mmaudit.repository.discovery import discover_repository
+from mmaudit.repository.ignore import IgnoreMatcher, safe_ignore_file
+from mmaudit.repository.mapping import build_repository_map
 from mmaudit.scanners.base import (
     ScannerSourceIntegrityError,
     copy_scanner_workspace,
@@ -188,6 +191,7 @@ from mmaudit.traceability import (
 from tests.conftest import FIXTURES, model_registry_entry
 from tests.fake_openrouter import FakeOpenRouter, _extract_json, _request_schema_name
 from tests.qualification_support import synthetic_production_qualification
+from tests.refresh_runtime_support import synthetic_refresh_runtime
 from tests.unit.test_execution_candidates import _inputs as _execution_origin_inputs
 
 
@@ -646,22 +650,30 @@ async def test_solidity_profile_rejects_python_before_compiler_scanner_or_model_
 
 @pytest.mark.asyncio
 async def test_provider_pipeline_requires_existing_cumulative_ledger_before_output(
-    config_factory,
     vulnerable_repo: Path,
     tmp_path: Path,
 ) -> None:
+    refresh = synthetic_refresh_runtime(tmp_path / "provider-refresh-runtime")
     output = tmp_path / "provider-output"
     pipeline = AuditPipeline(
-        config_factory(),
+        refresh.config,
         repo=vulnerable_repo,
         output=output,
         api_key="synthetic-provider-canary",
+        production_qualification=refresh.technical_qualification,
+        audit_model_selection_evidence=refresh.audit_selection_evidence,
+        verified_audit_model_selection=refresh.audit_selection,
+        audit_model_refresh_evidence=refresh.evidence,
+        audit_model_refresh_guard=refresh.guard,
+        audit_model_refresh_pricing_evidence=refresh.pricing_evidence,
+        audit_model_refresh_pricing_authority=refresh.pricing_authority,
         scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
     )
 
     with pytest.raises(ValueError, match="existing cumulative cost ledger"):
         await pipeline.run(allow_code_egress=True)
 
+    assert pipeline.client is None
     assert not (output / "runs").exists()
 
 
@@ -702,11 +714,42 @@ async def test_maximum_assurance_missing_qualification_fails_before_model_transp
 
 @pytest.mark.asyncio
 async def test_standard_real_provider_path_requires_current_opaque_qualification(
-    config_factory,
     vulnerable_repo: Path,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = config_factory(privacy={"fail_on_detected_secret": False})
+    refresh = synthetic_refresh_runtime(tmp_path / "qualification-refresh-config")
+    matcher = IgnoreMatcher.from_file(
+        safe_ignore_file(vulnerable_repo, refresh.config.repository.ignore_file)
+    )
+    repository_map = build_repository_map(
+        discover_repository(vulnerable_repo, refresh.config.repository, matcher)
+    )
+    source_sha256 = canonical_sha256(
+        [
+            {"path": item.path, "sha256": item.sha256, "size": item.size}
+            for item in sorted(repository_map.files, key=lambda candidate: candidate.path)
+        ]
+    )
+    refresh = synthetic_refresh_runtime(
+        tmp_path / "qualification-refresh-runtime",
+        source_sha256_override=source_sha256,
+    )
+
+    class RefreshValidationDateTime(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> datetime:  # type: ignore[override]
+            if tz is None:
+                return refresh.verified_at.replace(tzinfo=None)
+            return refresh.verified_at.astimezone(tz)
+
+    # The issued capability remains live, but this post-issuance config change must make it
+    # unusable for the pending paid run before any provider transport or spend.
+    config = refresh.config.model_copy(
+        update={
+            "privacy": refresh.config.privacy.model_copy(update={"fail_on_detected_secret": False})
+        }
+    )
     ledger = AtomicCostLedger.initialize(
         tmp_path / "standard-real-ledger.json",
         cap_usd=Decimal(str(config.execution.budget_usd)),
@@ -717,21 +760,32 @@ async def test_standard_real_provider_path_requires_current_opaque_qualification
         output=tmp_path / "standard-real-output",
         api_key="synthetic-provider-canary",
         cost_ledger=ledger,
+        production_qualification=refresh.technical_qualification,
+        audit_model_selection_evidence=refresh.audit_selection_evidence,
+        verified_audit_model_selection=refresh.audit_selection,
+        audit_model_refresh_evidence=refresh.evidence,
+        audit_model_refresh_guard=refresh.guard,
+        audit_model_refresh_pricing_evidence=refresh.pricing_evidence,
+        audit_model_refresh_pricing_authority=refresh.pricing_authority,
         scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
     )
+    monkeypatch.setattr("mmaudit.orchestration.pipeline.datetime", RefreshValidationDateTime)
 
-    result = await pipeline.run(allow_code_egress=True)
+    with pytest.raises(
+        ValueError,
+        match="audit model selection lacks valid technical qualification runtime evidence",
+    ):
+        await pipeline.run(allow_code_egress=True)
 
     assert pipeline.client is None
+    run_dirs = tuple((pipeline.output / "runs").iterdir())
+    assert len(run_dirs) == 1
     payload = json.loads(
-        (result.run_dir / "model-qualification-runtime.json").read_text(encoding="utf-8")
+        (run_dirs[0] / "model-qualification-runtime.json").read_text(encoding="utf-8")
     )
     assert payload["required"]
     assert not payload["valid"]
-    assert any(
-        "configured quality hashes are not authorization" in error for error in payload["errors"]
-    )
-    assert result.exit_code is ExitCode.MODEL_FAILURE
+    assert any("different effective configuration" in error for error in payload["errors"])
     assert ledger.snapshot().spent_usd == Decimal("0")
 
 
@@ -1289,6 +1343,7 @@ def _provider(
     api_key: str = "synthetic-test-key",
     usage: UsageLedger | None = None,
     atomic_ledger: AtomicCostLedger | None = None,
+    context_package_budget_observer: Callable[..., None] | None = None,
 ) -> tuple[OpenRouterClient, httpx.AsyncClient]:
     usage = usage or UsageLedger()
     budget = BudgetManager(
@@ -1319,6 +1374,7 @@ def _provider(
         reasoning_policy=(controls.reasoning_policy if atomic_ledger is None else None),
         token_budgets=config.token_budgets,
         test_only_mock_handler=fake.handler,
+        test_only_context_package_budget_observer=context_package_budget_observer,
     )
     return client, client._client
 
@@ -1339,6 +1395,7 @@ async def _run(
     resume_run_dir: Path | None = None,
     output: Path | None = None,
     severity_threshold: Severity = Severity.INFORMATIONAL,
+    context_package_budget_observer: Callable[..., None] | None = None,
 ):
     if cost_ledger is None:
         tmp_path.mkdir(parents=True, exist_ok=True)
@@ -1348,7 +1405,12 @@ async def _run(
             tmp_path / f"test-cost-ledger-{ledger_index}.json",
             cap_usd=Decimal(str(config.execution.budget_usd)),
         )
-    client, http_client = _provider(config, fake, atomic_ledger=cost_ledger)
+    client, http_client = _provider(
+        config,
+        fake,
+        atomic_ledger=cost_ledger,
+        context_package_budget_observer=context_package_budget_observer,
+    )
     pipeline = AuditPipeline(
         config,
         repo=vulnerable_repo,
@@ -2114,7 +2176,6 @@ async def test_candidate_falsifier_context_preview_uses_exact_selected_models(
     config_factory,
     vulnerable_repo: Path,
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     secondary_role: str,
 ) -> None:
     base = config_factory()
@@ -2150,40 +2211,42 @@ async def test_candidate_falsifier_context_preview_uses_exact_selected_models(
         config.models.role(secondary_role).primary,
     )
     observed_previews: list[tuple[str, ...]] = []
-    observed_workflow_previews: list[tuple[tuple[str, ...], int | None, str | None, int]] = []
-    original_preview = OpenRouterClient.context_package_byte_budget
+    observed_workflow_previews: list[
+        tuple[tuple[str, ...], int | None, str | None, int | None, int, int]
+    ] = []
 
     def record_preview(
-        client: OpenRouterClient,
-        models: list[str] | tuple[str, ...],
+        models: tuple[str, ...],
         *,
         role: str | None = None,
         workflow_byte_upper_bound_tokens: int | None = None,
-        workflow_prompt: str | None = None,
+        workflow_prompt_sha256: str | None = None,
+        workflow_prompt_provider_visible_bytes: int | None = None,
         context_json_escape_overhead_tokens: int = 0,
-    ) -> int:
-        observed_previews.append(tuple(models))
+        computed_package_budget: int = 0,
+    ) -> None:
+        del role
+        observed_previews.append(models)
         observed_workflow_previews.append(
             (
-                tuple(models),
+                models,
                 workflow_byte_upper_bound_tokens,
-                workflow_prompt,
+                workflow_prompt_sha256,
+                workflow_prompt_provider_visible_bytes,
                 context_json_escape_overhead_tokens,
+                computed_package_budget,
             )
         )
-        return original_preview(
-            client,
-            models,
-            role=role,
-            workflow_byte_upper_bound_tokens=workflow_byte_upper_bound_tokens,
-            workflow_prompt=workflow_prompt,
-            context_json_escape_overhead_tokens=context_json_escape_overhead_tokens,
-        )
 
-    monkeypatch.setattr(OpenRouterClient, "context_package_byte_budget", record_preview)
     fake = FakeOpenRouter(extra_model_ids=[falsifier_model])
 
-    result = await _run(config, vulnerable_repo, tmp_path, fake)
+    result = await _run(
+        config,
+        vulnerable_repo,
+        tmp_path,
+        fake,
+        context_package_budget_observer=record_preview,
+    )
 
     actual_cross_exam_models = {
         str(request["model"])
@@ -2195,10 +2258,21 @@ async def test_candidate_falsifier_context_preview_uses_exact_selected_models(
     assert expected_models in observed_previews
     assert any(
         models == expected_models
-        and prompt is not None
-        and bound == len(prompt.encode("utf-8"))
+        and bound is not None
+        and workflow_sha256 is not None
+        and len(workflow_sha256) == 64
+        and provider_visible_bytes is not None
+        and provider_visible_bytes >= bound
         and context_escape_overhead > 0
-        for models, bound, prompt, context_escape_overhead in observed_workflow_previews
+        and computed_budget > 0
+        for (
+            models,
+            bound,
+            workflow_sha256,
+            provider_visible_bytes,
+            context_escape_overhead,
+            computed_budget,
+        ) in observed_workflow_previews
     )
 
 
@@ -2208,7 +2282,6 @@ async def test_context_preview_failure_preserves_fail_closed_pipeline_artifacts(
     config_factory,
     vulnerable_repo: Path,
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     failed_role: str,
 ) -> None:
     config = config_factory(privacy={"fail_on_detected_secret": False}).effective()
@@ -2217,32 +2290,32 @@ async def test_context_preview_failure_preserves_fail_closed_pipeline_artifacts(
         failed_role_config.primary,
         *failed_role_config.fallbacks,
     )
-    original_preview = OpenRouterClient.context_package_byte_budget
 
     def fail_selected_preview(
-        client: OpenRouterClient,
-        models: list[str] | tuple[str, ...],
+        models: tuple[str, ...],
         *,
         role: str | None = None,
         workflow_byte_upper_bound_tokens: int | None = None,
-        workflow_prompt: str | None = None,
+        workflow_prompt_sha256: str | None = None,
+        workflow_prompt_provider_visible_bytes: int | None = None,
         context_json_escape_overhead_tokens: int = 0,
-    ) -> int:
-        if tuple(models) == failed_models:
+        computed_package_budget: int = 0,
+    ) -> None:
+        del role, workflow_byte_upper_bound_tokens, workflow_prompt_sha256
+        del workflow_prompt_provider_visible_bytes, context_json_escape_overhead_tokens
+        del computed_package_budget
+        if models == failed_models:
             raise OpenRouterRequestLimitError(f"synthetic {failed_role} context preview refusal")
-        return original_preview(
-            client,
-            models,
-            role=role,
-            workflow_byte_upper_bound_tokens=workflow_byte_upper_bound_tokens,
-            workflow_prompt=workflow_prompt,
-            context_json_escape_overhead_tokens=context_json_escape_overhead_tokens,
-        )
 
-    monkeypatch.setattr(OpenRouterClient, "context_package_byte_budget", fail_selected_preview)
     fake = FakeOpenRouter()
 
-    result = await _run(config, vulnerable_repo, tmp_path, fake)
+    result = await _run(
+        config,
+        vulnerable_repo,
+        tmp_path,
+        fake,
+        context_package_budget_observer=fail_selected_preview,
+    )
 
     assert result.exit_code is ExitCode.MODEL_FAILURE
     assert not result.report.completed
@@ -3148,6 +3221,21 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
     assert result.exit_code is ExitCode.INCOMPLETE
     assert not result.report.completed
     assert result.report.run_status is AuditRunStatus.INCOMPLETE
+    resource_preflight = json.loads(
+        (result.run_dir / "private" / "model-surface-resource-preflight.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert resource_preflight["feasible"] is True
+    assert resource_preflight["failure_codes"] == []
+    assert (
+        resource_preflight["planned_maximum_input_tokens"]
+        <= resource_preflight["maximum_input_tokens"]
+    )
+    assert (
+        resource_preflight["planned_maximum_output_tokens"]
+        <= resource_preflight["maximum_output_tokens"]
+    )
     assert result.report.maximum_assurance is not None
     assert result.report.maximum_assurance.status.value == "DOWNGRADED"
     assert result.report.maximum_assurance.status.value != "COMPLETE"

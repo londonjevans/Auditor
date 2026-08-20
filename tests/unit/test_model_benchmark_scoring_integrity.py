@@ -183,6 +183,50 @@ def test_extra_source_location_fails_even_with_correct_security_reasoning() -> N
     assert detail == "classification or exact expected source locations differed"
 
 
+def test_safe_and_insufficient_context_classifications_are_not_interchangeable() -> None:
+    suite = load_model_benchmark_corpus(CORPUS_PATH)
+    cases_by_classification = {
+        classification: next(
+            case
+            for case in suite.ground_truth.cases
+            if case.expectation.classification is classification
+            and any(
+                dimension is not ModelBenchmarkDimension.STRUCTURED_OUTPUT_COMPLIANCE
+                for dimension in case.dimensions
+            )
+        )
+        for classification in (
+            ModelBenchmarkClassification.SAFE,
+            ModelBenchmarkClassification.INSUFFICIENT_CONTEXT,
+        )
+    }
+    for classification, wrong_classification in (
+        (
+            ModelBenchmarkClassification.SAFE,
+            ModelBenchmarkClassification.INSUFFICIENT_CONTEXT,
+        ),
+        (
+            ModelBenchmarkClassification.INSUFFICIENT_CONTEXT,
+            ModelBenchmarkClassification.SAFE,
+        ),
+    ):
+        case = cases_by_classification[classification]
+        dimension = next(
+            item
+            for item in case.dimensions
+            if item is not ModelBenchmarkDimension.STRUCTURED_OUTPUT_COMPLIANCE
+        )
+        response = _replace(
+            _response_for(case),
+            classification=wrong_classification.value,
+        )
+
+        passed, detail = _score_semantic_dimension(dimension, case, response)
+
+        assert not passed
+        assert detail == "classification or exact expected source locations differed"
+
+
 def test_analysis_keywords_in_wrong_fields_do_not_satisfy_reasoning() -> None:
     dimension = ModelBenchmarkDimension.CROSS_CONTRACT_BUSINESS_LOGIC
     case = _case_for(dimension)

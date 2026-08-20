@@ -21,6 +21,7 @@ from mmaudit.benchmark.engine import (
     evaluate_benchmark,
     load_manifest,
     load_reports,
+    seal_benchmark_manifest,
     validate_benchmark_ground_truth,
     write_benchmark_report,
 )
@@ -454,6 +455,344 @@ def test_overlapping_but_inexact_location_fails_location_gate() -> None:
     assert result.location_accuracy < 1
     assert result.status is BenchmarkStatus.FAILED
     assert not {gate.name: gate.passed for gate in result.gates}["exact_ground_truth_locations"]
+
+
+@pytest.mark.parametrize(
+    ("finding_update", "expected_precision"),
+    [
+        ({"title": "wrong_category"}, 12 / 13),
+        ({"cwe": ["CWE-999"]}, 12 / 13),
+        ({"cwe": ["CWE-862", "CWE-999"]}, 12 / 13),
+        ({"status": FindingStatus.INFORMATIONAL}, 1.0),
+        ({"status": FindingStatus.INSUFFICIENT_CONTEXT}, 1.0),
+    ],
+)
+def test_wrong_truth_identity_receives_no_vulnerable_credit(
+    finding_update: dict[str, object],
+    expected_precision: float,
+) -> None:
+    manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
+    vulnerable = [case for case in manifest.cases if case.variant == "vulnerable"]
+    selected = vulnerable[0]
+    reports = _reports_by_repository(vulnerable)
+    selected_report = reports[selected.repository_id]
+    reports[selected.repository_id] = selected_report.model_copy(
+        update={
+            "findings": [
+                finding.model_copy(update=finding_update)
+                if finding.id == f"MMA-BENCH-{selected.id}"
+                else finding
+                for finding in selected_report.findings
+            ]
+        }
+    )
+
+    result = evaluate_benchmark(manifest, reports, profile=AuditProfile.STANDARD)
+    selected_result = next(item for item in result.case_results if item.case_id == selected.id)
+
+    assert not selected_result.detected
+    assert selected_result.matched_finding_ids == []
+    assert result.vulnerable_cases_detected == 12
+    assert result.active_findings_matching_vulnerable_cases == 12
+    assert result.recall == round(12 / 13, 6)
+    assert result.precision == round(expected_precision, 6)
+    if finding_update.get("status") is FindingStatus.INFORMATIONAL:
+        assert result.metrics.all_finding_precision.value == round(12 / 13, 6)
+
+
+def test_one_finding_cannot_satisfy_overlapping_vulnerable_truth_cases() -> None:
+    manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
+    vulnerable = [case for case in manifest.cases if case.variant == "vulnerable"]
+    selected = vulnerable[0]
+    overlapping = selected.model_copy(update={"id": "zz-overlapping-truth"})
+    payload = BenchmarkManifestPayload(
+        schema_version=manifest.schema_version,
+        name=manifest.name,
+        description=manifest.description,
+        blinding=manifest.blinding,
+        repositories=manifest.repositories,
+        cases=sorted([*manifest.cases, overlapping], key=lambda case: case.id),
+    )
+    overlapping_manifest = seal_benchmark_manifest(payload)
+
+    result = evaluate_benchmark(
+        overlapping_manifest,
+        _reports_by_repository(vulnerable),
+        profile=AuditProfile.STANDARD,
+    )
+    overlapping_results = [
+        item for item in result.case_results if item.case_id in {selected.id, overlapping.id}
+    ]
+
+    assert sum(item.detected for item in overlapping_results) == 1
+    assert sum(len(item.matched_finding_ids) for item in overlapping_results) == 1
+    assert result.vulnerable_cases == 14
+    assert result.vulnerable_cases_detected == 13
+    assert result.recall == round(13 / 14, 6)
+    assert result.precision == 1
+
+
+def test_assignment_finds_the_deterministic_maximum_under_overlap() -> None:
+    manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
+    vulnerable = [case for case in manifest.cases if case.variant == "vulnerable"]
+    selected = vulnerable[0]
+    wide = selected.model_copy(update={"id": "aa-wide-overlap", "end_line": selected.end_line + 2})
+    payload = BenchmarkManifestPayload(
+        schema_version=manifest.schema_version,
+        name=manifest.name,
+        description=manifest.description,
+        blinding=manifest.blinding,
+        repositories=manifest.repositories,
+        cases=sorted([*manifest.cases, wide], key=lambda case: case.id),
+    )
+    overlapping_manifest = seal_benchmark_manifest(payload)
+    reports = _reports_by_repository(vulnerable)
+    selected_report = reports[selected.repository_id]
+    wide_only_finding = _finding(selected).model_copy(
+        update={
+            "id": "MMA-BENCH-wide-only",
+            "locations": [
+                _finding(selected)
+                .locations[0]
+                .model_copy(
+                    update={
+                        "start_line": selected.end_line + 1,
+                        "end_line": selected.end_line + 2,
+                    }
+                )
+            ],
+        }
+    )
+    reports[selected.repository_id] = selected_report.model_copy(
+        update={"findings": [*selected_report.findings, wide_only_finding]}
+    )
+
+    result = evaluate_benchmark(
+        overlapping_manifest,
+        reports,
+        profile=AuditProfile.STANDARD,
+    )
+    overlapping_results = [
+        item for item in result.case_results if item.case_id in {selected.id, wide.id}
+    ]
+
+    assert all(item.detected for item in overlapping_results)
+    assert {
+        finding_id for item in overlapping_results for finding_id in item.matched_finding_ids
+    } == {f"MMA-BENCH-{selected.id}", wide_only_finding.id}
+    assert result.recall == result.precision == 1
+
+
+def test_duplicate_findings_cannot_both_claim_one_truth_case() -> None:
+    manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
+    vulnerable = [case for case in manifest.cases if case.variant == "vulnerable"]
+    selected = vulnerable[0]
+    reports = _reports_by_repository(vulnerable)
+    selected_report = reports[selected.repository_id]
+    duplicate = _finding(selected).model_copy(update={"id": "MMA-BENCH-duplicate-claim"})
+    reports[selected.repository_id] = selected_report.model_copy(
+        update={"findings": [*selected_report.findings, duplicate]}
+    )
+
+    result = evaluate_benchmark(manifest, reports, profile=AuditProfile.STANDARD)
+    selected_result = next(item for item in result.case_results if item.case_id == selected.id)
+
+    assert len(selected_result.matched_finding_ids) == 1
+    assert result.active_findings == 14
+    assert result.active_findings_matching_vulnerable_cases == 13
+    assert result.precision == round(13 / 14, 6)
+
+    reversed_reports = dict(reports)
+    reversed_reports[selected.repository_id] = selected_report.model_copy(
+        update={"findings": list(reversed(reports[selected.repository_id].findings))}
+    )
+    replay = evaluate_benchmark(manifest, reversed_reports, profile=AuditProfile.STANDARD)
+    assert replay.case_results == result.case_results
+    assert replay.metrics == result.metrics
+    assert replay.model_dump(mode="json") == result.model_dump(mode="json")
+
+
+def test_duplicate_active_finding_ids_fail_closed_before_assignment() -> None:
+    manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
+    vulnerable = [case for case in manifest.cases if case.variant == "vulnerable"]
+    selected = vulnerable[0]
+    reports = _reports_by_repository(vulnerable)
+    selected_report = reports[selected.repository_id]
+    reports[selected.repository_id] = selected_report.model_copy(
+        update={"findings": [*selected_report.findings, _finding(selected)]}
+    )
+
+    with pytest.raises(ValueError, match="active benchmark finding IDs"):
+        evaluate_benchmark(manifest, reports, profile=AuditProfile.STANDARD)
+
+
+@pytest.mark.parametrize("inventory", ("locations", "cwe"))
+def test_scoring_rejects_unbounded_finding_identity_inventory(inventory: str) -> None:
+    manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
+    vulnerable = [case for case in manifest.cases if case.variant == "vulnerable"]
+    selected = vulnerable[0]
+    reports = _reports_by_repository(vulnerable)
+    selected_report = reports[selected.repository_id]
+    finding = next(
+        item for item in selected_report.findings if item.id == f"MMA-BENCH-{selected.id}"
+    )
+    update: dict[str, object]
+    if inventory == "locations":
+        update = {"locations": [finding.locations[0]] * 101}
+    else:
+        update = {"cwe": [f"CWE-{index}" for index in range(100, 201)]}
+    oversized = finding.model_copy(update=update)
+    reports[selected.repository_id] = selected_report.model_copy(
+        update={
+            "findings": [
+                oversized if item.id == oversized.id else item for item in selected_report.findings
+            ]
+        }
+    )
+
+    error_pattern = "location inventory" if inventory == "locations" else "CWE inventory"
+    with pytest.raises(ValueError, match=error_pattern):
+        evaluate_benchmark(manifest, reports, profile=AuditProfile.STANDARD)
+
+
+def test_oversized_nonmatching_cwe_token_receives_no_credit() -> None:
+    manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
+    vulnerable = [case for case in manifest.cases if case.variant == "vulnerable"]
+    selected = vulnerable[0]
+    reports = _reports_by_repository(vulnerable)
+    selected_report = reports[selected.repository_id]
+    finding = next(
+        item for item in selected_report.findings if item.id == f"MMA-BENCH-{selected.id}"
+    )
+    oversized = finding.model_copy(update={"cwe": ["CWE-" + ("1" * 100_000)]})
+    reports[selected.repository_id] = selected_report.model_copy(
+        update={
+            "findings": [
+                oversized if item.id == oversized.id else item for item in selected_report.findings
+            ]
+        }
+    )
+
+    result = evaluate_benchmark(manifest, reports, profile=AuditProfile.STANDARD)
+    selected_result = next(item for item in result.case_results if item.case_id == selected.id)
+
+    assert not selected_result.detected
+    assert result.active_findings_matching_vulnerable_cases == 12
+
+
+def test_active_legacy_rejected_finding_cannot_escape_precision_inventory() -> None:
+    manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
+    vulnerable = [case for case in manifest.cases if case.variant == "vulnerable"]
+    selected = vulnerable[0]
+    reports = _reports_by_repository(vulnerable)
+    selected_report = reports[selected.repository_id]
+    payload = selected_report.model_dump(mode="json")
+    exact_finding = next(
+        finding for finding in payload["findings"] if finding["id"] == f"MMA-BENCH-{selected.id}"
+    )
+    payload["findings"] = [
+        finding for finding in payload["findings"] if finding["id"] != exact_finding["id"]
+    ]
+    wrong_location = dict(exact_finding)
+    wrong_location["id"] = "MMA-BENCH-wrong-location"
+    wrong_location["locations"] = [
+        {
+            **location,
+            "start_line": selected.end_line + 100,
+            "end_line": selected.end_line + 100,
+        }
+        for location in exact_finding["locations"]
+    ]
+    payload["findings"].append(wrong_location)
+    payload["rejected_findings"] = [exact_finding]
+    reports[selected.repository_id] = AuditReport.model_validate_json(json.dumps(payload))
+
+    result = evaluate_benchmark(manifest, reports, profile=AuditProfile.STANDARD)
+    selected_result = next(item for item in result.case_results if item.case_id == selected.id)
+
+    assert not selected_result.detected
+    assert result.vulnerable_cases_detected == 12
+    assert result.active_findings == 13
+    assert result.active_findings_matching_vulnerable_cases == 12
+    assert result.precision == result.recall == round(12 / 13, 6)
+
+
+def test_safe_control_hit_remains_a_penalty_when_claim_identity_is_wrong() -> None:
+    manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
+    vulnerable = [case for case in manifest.cases if case.variant == "vulnerable"]
+    safe = next(case for case in manifest.cases if case.variant == "safe")
+    reports = _reports_by_repository(vulnerable)
+    selected_report = reports[safe.repository_id]
+    wrong_claim = _finding(safe).model_copy(update={"title": "wrong_category", "cwe": ["CWE-999"]})
+    reports[safe.repository_id] = selected_report.model_copy(
+        update={"findings": [*selected_report.findings, wrong_claim]}
+    )
+
+    result = evaluate_benchmark(manifest, reports, profile=AuditProfile.STANDARD)
+    safe_result = next(item for item in result.case_results if item.case_id == safe.id)
+
+    assert safe_result.detected
+    assert safe_result.confirmed
+    assert safe_result.matched_finding_ids == [wrong_claim.id]
+    assert result.metrics.safe_near_miss_rejection_rate.value < 1
+
+
+def test_detached_report_rejects_one_finding_assigned_to_two_vulnerable_cases() -> None:
+    manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
+    vulnerable = [case for case in manifest.cases if case.variant == "vulnerable"]
+    report = evaluate_benchmark(
+        manifest,
+        _reports_by_repository(vulnerable),
+        profile=AuditProfile.STANDARD,
+    )
+    payload = report.model_dump(mode="json")
+    vulnerable_results = [
+        item for item in payload["case_results"] if item["variant"] == "vulnerable"
+    ]
+    duplicated_id = vulnerable_results[0]["matched_finding_ids"][0]
+    vulnerable_results[1]["matched_finding_ids"] = [duplicated_id]
+    vulnerable_results[1]["confirmed_finding_ids"] = [duplicated_id]
+
+    with pytest.raises(ValueError, match="one benchmark finding"):
+        BenchmarkReport.model_validate(payload)
+
+
+def test_detached_report_cannot_claim_detection_without_an_assigned_finding() -> None:
+    manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
+    vulnerable = [case for case in manifest.cases if case.variant == "vulnerable"]
+    report = evaluate_benchmark(
+        manifest,
+        _reports_by_repository(vulnerable),
+        profile=AuditProfile.STANDARD,
+    )
+    payload = report.model_dump(mode="json")
+    result = next(item for item in payload["case_results"] if item["variant"] == "vulnerable")
+    result["confirmed"] = False
+    result["confirmed_finding_ids"] = []
+    result["matched_finding_ids"] = []
+
+    with pytest.raises(ValueError, match="detected flag"):
+        BenchmarkReport.model_validate(payload)
+
+
+def test_detached_report_cannot_assign_two_findings_to_one_vulnerable_case() -> None:
+    manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
+    vulnerable = [case for case in manifest.cases if case.variant == "vulnerable"]
+    report = evaluate_benchmark(
+        manifest,
+        _reports_by_repository(vulnerable),
+        profile=AuditProfile.STANDARD,
+    )
+    payload = report.model_dump(mode="json")
+    result = next(item for item in payload["case_results"] if item["variant"] == "vulnerable")
+    extra_id = "MMA-BENCH-extra-assignment"
+    result["matched_finding_ids"].append(extra_id)
+    result["matched_finding_ids"].sort()
+    result["confirmed_finding_ids"].append(extra_id)
+    result["confirmed_finding_ids"].sort()
+
+    with pytest.raises(ValueError, match="at most one finding"):
+        BenchmarkReport.model_validate(payload)
 
 
 def test_location_hash_and_range_must_validate_on_the_same_location() -> None:

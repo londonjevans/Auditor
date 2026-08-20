@@ -470,6 +470,42 @@ async def test_fake_provider_scores_all_dimensions_deterministically() -> None:
 
 
 @pytest.mark.asyncio
+async def test_benchmark_report_preserves_live_usage_instances_for_runtime_custody() -> None:
+    delegate = DeterministicModelBenchmarkProvider()
+    observed_usage: list[UsageRecord] = []
+
+    class RecordingProvider:
+        async def evaluate(
+            self,
+            *,
+            target: ModelBenchmarkTarget,
+            system_prompt: str,
+            user_prompt: str,
+        ) -> ModelBenchmarkProviderResult:
+            result = await delegate.evaluate(
+                target=target,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
+            observed_usage.append(result.usage_record)
+            return result
+
+    report = await run_model_benchmark(
+        corpus=load_model_benchmark_corpus(CORPUS_PATH),
+        targets=[TARGET],
+        provider=RecordingProvider(),
+    )
+
+    report_usage = tuple(
+        case.usage_record for case in report.results[0].cases if case.usage_record is not None
+    )
+    assert len(report_usage) == len(observed_usage)
+    assert all(
+        retained is live for retained, live in zip(report_usage, observed_usage, strict=True)
+    )
+
+
+@pytest.mark.asyncio
 async def test_benchmark_can_measure_one_exact_production_reasoning_route() -> None:
     target = ModelBenchmarkTarget(
         model_id=TARGET.model_id,
