@@ -1450,7 +1450,7 @@ class SchedulerJournal:
         self._outputs = [_detach_canonical_model(item) for item in outputs]
         self._provider_attempts = [_detach_canonical_model(item) for item in provider_attempts]
         self._result_observations = list(result_observations)
-        self._pass_results = list(pass_results)
+        self._pass_results = [_detach_canonical_model(item) for item in pass_results]
         self._truncation_recovery_entries = [
             _detach_canonical_model(item) for item in truncation_recovery_entries
         ]
@@ -1532,7 +1532,7 @@ class SchedulerJournal:
 
     @property
     def pass_results(self) -> tuple[SchedulerPassResult, ...]:
-        return tuple(self._pass_results)
+        return tuple(_detach_canonical_model(item) for item in self._retained_pass_results())
 
     @property
     def truncation_recovery_entries(self) -> tuple[SchedulerTruncationRecoveryEntry, ...]:
@@ -1558,6 +1558,11 @@ class SchedulerJournal:
         """Return the process-private recovery chain for internal projection only."""
 
         return tuple(self._truncation_recovery_entries)
+
+    def _retained_pass_results(self) -> tuple[SchedulerPassResult, ...]:
+        """Return process-private pass results for trusted internal projection only."""
+
+        return tuple(self._pass_results)
 
     @property
     def truncation_recovery_families(self) -> tuple[SchedulerTruncationRecoveryFamilyRoot, ...]:
@@ -3775,7 +3780,7 @@ class SchedulerJournal:
             self._plans[ordinal],
         ):
             raise ValueError("scheduler pass result differs from its exact plan order")
-        self._pass_results.append(pass_result)
+        self._pass_results.append(_detach_canonical_model(pass_result))
 
     def _assert_live_custody(self) -> None:
         if self._closed:
@@ -3936,7 +3941,7 @@ class SchedulerJournal:
             outputs=self._retained_outputs(),
             provider_attempts=self._retained_provider_attempts(),
             result_observations=self.result_observations,
-            pass_results=self.pass_results,
+            pass_results=self._retained_pass_results(),
             truncation_recovery_entries=self._retained_truncation_recovery_entries(),
         )
         return _observe_durable_artifacts(
@@ -3999,7 +4004,7 @@ class SchedulerJournal:
             self._retained_outputs(),
             self._retained_provider_attempts(),
             self.result_observations,
-            self.pass_results,
+            self._retained_pass_results(),
             self._retained_truncation_recovery_entries(),
             self._terminal_report_authority,
         )

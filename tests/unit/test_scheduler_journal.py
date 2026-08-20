@@ -1038,6 +1038,29 @@ def test_returned_output_payload_cannot_mutate_retained_checkpoint_state(
     journal.close()
 
 
+def test_returned_pass_result_indexes_cannot_mutate_retained_checkpoint_state(
+    tmp_path: Path,
+) -> None:
+    journal = create_scheduler_journal(
+        tmp_path / "detached-pass-result",
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+    )
+    returned = _seal_failed_preflight_pass(
+        journal,
+        _plan(journal, SchedulerPassKind.ORIENTATION),
+    )
+    returned.plan._tasks_by_id.clear()
+
+    exposed = journal.pass_results[0]
+    exposed.plan._tasks_by_id.clear()
+
+    retained = journal.pass_results[0]
+    assert retained.plan.has_exact_task(retained.plan.tasks[0])
+    assert journal.local_journal_head_checkpoint == journal.journal_evidence
+    journal.close()
+
+
 def test_task_transition_checkpoint_does_not_reload_full_journal(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

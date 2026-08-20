@@ -9,12 +9,14 @@ import os
 import stat
 import unicodedata
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from importlib.resources import files
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import Field, field_validator, model_validator
@@ -3611,12 +3613,13 @@ def _validate_scheduler_privacy_custody_and_reconstruct(
     expected_custody = public_artifact.summary.manifest.privacy_evidence_custody
     if expected_custody is None:
         reconstructed = journal.artifact()
-        _validate_scheduler_report_authority(root=root, report=report, journal=journal)
+        snapshot = _scheduler_report_authority_snapshot(journal)
+        _validate_scheduler_report_authority(root=root, report=report, snapshot=snapshot)
         if require_retained_usage_custody:
             _validate_scheduler_retained_usage_custody(
                 report=report,
                 public_artifact=public_artifact,
-                journal=journal,
+                snapshot=snapshot,
             )
         return reconstructed
     with journal.open_privacy_evidence_custody() as observed_custody:
@@ -3628,12 +3631,13 @@ def _validate_scheduler_privacy_custody_and_reconstruct(
             custody=observed_custody,
         )
         reconstructed = journal.artifact()
-        _validate_scheduler_report_authority(root=root, report=report, journal=journal)
+        snapshot = _scheduler_report_authority_snapshot(journal)
+        _validate_scheduler_report_authority(root=root, report=report, snapshot=snapshot)
         if require_retained_usage_custody:
             _validate_scheduler_retained_usage_custody(
                 report=report,
                 public_artifact=public_artifact,
-                journal=journal,
+                snapshot=snapshot,
             )
         return reconstructed
 
@@ -3642,7 +3646,7 @@ def _validate_scheduler_retained_usage_custody(
     *,
     report: AuditReport,
     public_artifact: SchedulerArtifact,
-    journal: SchedulerJournal,
+    snapshot: _SchedulerReportAuthoritySnapshot,
 ) -> None:
     """Close report usage against one exact private scheduler evidence class."""
 
@@ -3650,16 +3654,16 @@ def _validate_scheduler_retained_usage_custody(
         output.model_completion_evidence.usage_record.request_id: (
             output.model_completion_evidence.usage_record
         )
-        for output in journal.outputs
+        for output in snapshot.outputs_by_task_id.values()
         if output.model_completion_evidence is not None
     }
     provider_attempt_records = {
         attempt.usage_record.request_id: attempt.usage_record
-        for attempt in journal.provider_attempts
+        for attempt in snapshot.journal.provider_attempts
     }
     if set(output_records).intersection(provider_attempt_records):
         raise ValueError("scheduler usage has contradictory retained evidence classes")
-    retained_items = journal.retained_provider_usage_records
+    retained_items = snapshot.journal.retained_provider_usage_records
     retained_records = {record.request_id: record for record in retained_items}
     if len(retained_records) != len(retained_items):
         raise ValueError("scheduler retained usage inventory repeats a request identity")
@@ -3695,36 +3699,65 @@ def _validate_scheduler_retained_usage_custody(
             raise ValueError("promoted scheduler recovery usage lacks exact retained child custody")
 
 
-def _scheduler_pass_result(
+@dataclass(frozen=True)
+class _SchedulerReportAuthoritySnapshot:
+    """One detached, immutable-indexed view used for a report reconstruction."""
+
+    journal: SchedulerJournal
+    outputs_by_task_id: Mapping[str, SchedulerTaskOutput]
+    pass_results_by_kind: Mapping[SchedulerPassKind, SchedulerPassResult]
+
+
+def _scheduler_report_authority_snapshot(
     journal: SchedulerJournal,
+) -> _SchedulerReportAuthoritySnapshot:
+    """Detach outward journal collections once and reject ambiguous lookup keys."""
+
+    outputs = journal.outputs
+    output_ids = tuple(output.task_id for output in outputs)
+    if len(output_ids) != len(set(output_ids)):
+        raise ValueError("scheduler private journal repeats a retained output task")
+
+    pass_results = journal.pass_results
+    pass_kinds = tuple(result.plan.pass_kind for result in pass_results)
+    if len(pass_kinds) != len(set(pass_kinds)):
+        raise ValueError("scheduler private journal repeats a sealed pass result")
+
+    return _SchedulerReportAuthoritySnapshot(
+        journal=journal,
+        outputs_by_task_id=MappingProxyType({output.task_id: output for output in outputs}),
+        pass_results_by_kind=MappingProxyType(
+            {result.plan.pass_kind: result for result in pass_results}
+        ),
+    )
+
+
+def _scheduler_pass_result(
+    snapshot: _SchedulerReportAuthoritySnapshot,
     pass_kind: SchedulerPassKind,
 ) -> SchedulerPassResult | None:
-    """Return one exact sealed pass result, rejecting ambiguous private authority."""
+    """Return one exact sealed pass result from the immutable reconstruction view."""
 
-    matches = tuple(result for result in journal.pass_results if result.plan.pass_kind is pass_kind)
-    if len(matches) > 1:
-        raise ValueError("scheduler private journal repeats a sealed pass result")
-    return matches[0] if matches else None
+    return snapshot.pass_results_by_kind.get(pass_kind)
 
 
 def _successful_scheduler_task_output(
     *,
-    journal: SchedulerJournal,
+    snapshot: _SchedulerReportAuthoritySnapshot,
     pass_result: SchedulerPassResult,
     task_id: str,
 ) -> SchedulerTaskOutput:
     """Return one exact successful private output from a complete or failed pass."""
 
     results = tuple(result for result in pass_result.task_results if result.task_id == task_id)
-    outputs = tuple(output for output in journal.outputs if output.task_id == task_id)
+    output = snapshot.outputs_by_task_id.get(task_id)
     if (
         len(results) != 1
         or results[0].terminal_status is not SchedulerTerminalStatus.SUCCEEDED
-        or len(outputs) != 1
+        or output is None
     ):
         raise ValueError("scheduler authority task lacks one successful retained output")
     result = results[0]
-    output = outputs[0]
     if (
         result.output_sha256 != output.output_sha256
         or result.output_artifact_sha256 != output.output_artifact_sha256
@@ -3734,7 +3767,7 @@ def _successful_scheduler_task_output(
 
 
 def _scheduler_accepted_candidate_authority(
-    journal: SchedulerJournal,
+    snapshot: _SchedulerReportAuthoritySnapshot,
 ) -> tuple[
     dict[SchedulerPassKind, dict[str, str]],
     dict[SchedulerPassKind, dict[str, CandidateFinding]],
@@ -3750,7 +3783,7 @@ def _scheduler_accepted_candidate_authority(
         SchedulerPassKind.CROSS_SHARD_INTEGRATION: {},
     }
     for pass_kind in tuple(hash_authority):
-        pass_result = _scheduler_pass_result(journal, pass_kind)
+        pass_result = _scheduler_pass_result(snapshot, pass_kind)
         if pass_result is None:
             continue
         accepted_hashes = hash_authority[pass_kind]
@@ -3759,7 +3792,7 @@ def _scheduler_accepted_candidate_authority(
             if result.terminal_status is not SchedulerTerminalStatus.SUCCEEDED:
                 continue
             output = _successful_scheduler_task_output(
-                journal=journal,
+                snapshot=snapshot,
                 pass_result=pass_result,
                 task_id=result.task_id,
             )
@@ -3783,7 +3816,7 @@ def _scheduler_accepted_candidate_authority(
 
 def _reconstruct_successful_scheduler_output[OutputT: StrictModel](
     *,
-    journal: SchedulerJournal,
+    snapshot: _SchedulerReportAuthoritySnapshot,
     pass_result: SchedulerPassResult,
     task_id: str,
     output_type: type[OutputT],
@@ -3791,11 +3824,11 @@ def _reconstruct_successful_scheduler_output[OutputT: StrictModel](
     """Join a typed private payload to its one credited task result and output record."""
 
     output = _successful_scheduler_task_output(
-        journal=journal,
+        snapshot=snapshot,
         pass_result=pass_result,
         task_id=task_id,
     )
-    reconstructed = journal.reconstruct_output(task_id, output_type)
+    reconstructed = snapshot.journal.reconstruct_output(task_id, output_type)
     serialized = reconstructed.model_dump(mode="json")
     if (
         serialized != output.payload
@@ -3807,21 +3840,21 @@ def _reconstruct_successful_scheduler_output[OutputT: StrictModel](
 
 def _successful_scheduler_host_output[OutputT: StrictModel](
     *,
-    journal: SchedulerJournal,
+    snapshot: _SchedulerReportAuthoritySnapshot,
     pass_kind: SchedulerPassKind,
     role: str,
     output_type: type[OutputT],
 ) -> OutputT | None:
     """Return a typed host authority only from a fully completed sealed pass."""
 
-    pass_result = _scheduler_pass_result(journal, pass_kind)
+    pass_result = _scheduler_pass_result(snapshot, pass_kind)
     if pass_result is None or pass_result.status is not SchedulerPassStatus.COMPLETE:
         return None
     tasks = tuple(task for task in pass_result.plan.tasks if task.role == role)
     if len(tasks) != 1 or tasks[0].task_kind is not SchedulerTaskKind.HOST_COMPUTATION:
         raise ValueError("scheduler completed pass lacks one exact host authority task")
     return _reconstruct_successful_scheduler_output(
-        journal=journal,
+        snapshot=snapshot,
         pass_result=pass_result,
         task_id=tasks[0].task_id,
         output_type=output_type,
@@ -3875,12 +3908,12 @@ def _scheduler_candidate_payload_sha256s(
 def _validate_scheduler_report_quality_authority(
     *,
     report: AuditReport,
-    journal: SchedulerJournal,
+    snapshot: _SchedulerReportAuthoritySnapshot,
 ) -> None:
     """Bind the public report-quality review to its exact retained model output."""
 
     pass_result = _scheduler_pass_result(
-        journal,
+        snapshot,
         SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT,
     )
     if pass_result is None:
@@ -3905,7 +3938,7 @@ def _validate_scheduler_report_quality_authority(
             raise ValueError("failed scheduler report quality was published")
         return
     retained = _reconstruct_successful_scheduler_output(
-        journal=journal,
+        snapshot=snapshot,
         pass_result=pass_result,
         task_id=task.task_id,
         output_type=ReportQualityReview,
@@ -4033,7 +4066,7 @@ def _validate_scheduler_terminal_authority_against_judgment(
     *,
     authority: SchedulerTerminalReportAuthority,
     judgment: SchedulerEvidenceCapJudgmentOutput,
-    journal: SchedulerJournal,
+    snapshot: _SchedulerReportAuthoritySnapshot,
 ) -> None:
     """Require a successful pass-seven host result to equal terminal report authority."""
 
@@ -4043,7 +4076,7 @@ def _validate_scheduler_terminal_authority_against_judgment(
         raise ValueError("scheduler terminal authority differs from pass-seven judgment") from exc
     _validate_scheduler_retained_judge_decisions(
         judgment=judgment,
-        journal=journal,
+        snapshot=snapshot,
         require_complete_pass=False,
     )
 
@@ -4051,13 +4084,13 @@ def _validate_scheduler_terminal_authority_against_judgment(
 def _validate_scheduler_retained_judge_decisions(
     *,
     judgment: SchedulerEvidenceCapJudgmentOutput,
-    journal: SchedulerJournal,
+    snapshot: _SchedulerReportAuthoritySnapshot,
     require_complete_pass: bool,
 ) -> None:
     """Join judgment bindings to exact retained judge outputs, including partial pass seven."""
 
     pass_result = _scheduler_pass_result(
-        journal,
+        snapshot,
         SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT,
     )
     if pass_result is None or (
@@ -4076,7 +4109,7 @@ def _validate_scheduler_retained_judge_decisions(
         if results[0].terminal_status is not SchedulerTerminalStatus.SUCCEEDED:
             continue
         batch = _reconstruct_successful_scheduler_output(
-            journal=journal,
+            snapshot=snapshot,
             pass_result=pass_result,
             task_id=task.task_id,
             output_type=JudgeDecisionBatch,
@@ -4096,7 +4129,7 @@ def _validate_scheduler_prejudgment_evidence_authority(
     report: AuditReport,
     candidates: tuple[CandidateFinding, ...],
     reproduction_artifact: _ManifestReproductionArtifact,
-    journal: SchedulerJournal,
+    snapshot: _SchedulerReportAuthoritySnapshot,
 ) -> None:
     """Join current terminal evidence to exact successful pass-five/six outputs."""
 
@@ -4110,7 +4143,7 @@ def _validate_scheduler_prejudgment_evidence_authority(
 
     retained_cross_examinations = []
     cross_pass = _scheduler_pass_result(
-        journal,
+        snapshot,
         SchedulerPassKind.ADVERSARIAL_CROSS_EXAMINATION,
     )
     if cross_pass is not None:
@@ -4143,7 +4176,7 @@ def _validate_scheduler_prejudgment_evidence_authority(
             if task.role != expected_role:
                 raise ValueError("scheduler pass-five task role differs from its candidate")
             output = _successful_scheduler_task_output(
-                journal=journal,
+                snapshot=snapshot,
                 pass_result=cross_pass,
                 task_id=task.task_id,
             )
@@ -4151,7 +4184,7 @@ def _validate_scheduler_prejudgment_evidence_authority(
             if completion is None:
                 raise ValueError("scheduler pass-five output lacks completion evidence")
             response = _reconstruct_successful_scheduler_output(
-                journal=journal,
+                snapshot=snapshot,
                 pass_result=cross_pass,
                 task_id=task.task_id,
                 output_type=CandidateCrossExaminationResponse,
@@ -4176,7 +4209,7 @@ def _validate_scheduler_prejudgment_evidence_authority(
         raise ValueError("scheduler terminal cross-examination differs from retained pass five")
 
     validation_pass = _scheduler_pass_result(
-        journal,
+        snapshot,
         SchedulerPassKind.MULTI_LINEAGE_VALIDATION_FALSIFICATION,
     )
     candidate_by_id = {candidate.candidate_id: candidate for candidate in candidates}
@@ -4205,7 +4238,7 @@ def _validate_scheduler_prejudgment_evidence_authority(
                         normalize_verification_response(
                             task_candidates,
                             _reconstruct_successful_scheduler_output(
-                                journal=journal,
+                                snapshot=snapshot,
                                 pass_result=validation_pass,
                                 task_id=task.task_id,
                                 output_type=VerificationBatch,
@@ -4221,7 +4254,7 @@ def _validate_scheduler_prejudgment_evidence_authority(
                     continue
                 retained_falsifications.extend(
                     _reconstruct_successful_scheduler_output(
-                        journal=journal,
+                        snapshot=snapshot,
                         pass_result=validation_pass,
                         task_id=task.task_id,
                         output_type=FalsificationBatch,
@@ -4276,7 +4309,7 @@ def _validate_scheduler_prejudgment_evidence_authority(
                 raise ValueError("scheduler reproduction host lacks one terminal result")
             if host_results[0].terminal_status is SchedulerTerminalStatus.SUCCEEDED:
                 host_output = _successful_scheduler_task_output(
-                    journal=journal,
+                    snapshot=snapshot,
                     pass_result=validation_pass,
                     task_id=host_tasks[0].task_id,
                 )
@@ -4380,14 +4413,14 @@ def _validate_scheduler_prejudgment_evidence_authority(
 
 def _successful_scheduler_partial_host_output[OutputT: StrictModel](
     *,
-    journal: SchedulerJournal,
+    snapshot: _SchedulerReportAuthoritySnapshot,
     pass_kind: SchedulerPassKind,
     role: str,
     output_type: type[OutputT],
 ) -> OutputT | None:
     """Return a successful host output even when a later task failed the sealed pass."""
 
-    pass_result = _scheduler_pass_result(journal, pass_kind)
+    pass_result = _scheduler_pass_result(snapshot, pass_kind)
     if pass_result is None:
         return None
     tasks = tuple(task for task in pass_result.plan.tasks if task.role == role)
@@ -4401,7 +4434,7 @@ def _successful_scheduler_partial_host_output[OutputT: StrictModel](
     if task_results[0].terminal_status is not SchedulerTerminalStatus.SUCCEEDED:
         return None
     return _reconstruct_successful_scheduler_output(
-        journal=journal,
+        snapshot=snapshot,
         pass_result=pass_result,
         task_id=tasks[0].task_id,
         output_type=output_type,
@@ -4413,7 +4446,7 @@ def _validate_scheduler_terminal_report_authority(
     report: AuditReport,
     reproduction_artifact: _ManifestReproductionArtifact,
     judgment: SchedulerEvidenceCapJudgmentOutput,
-    journal: SchedulerJournal,
+    snapshot: _SchedulerReportAuthoritySnapshot,
 ) -> None:
     """Compare every terminal public decision to the exact private pass-seven authority."""
 
@@ -4519,7 +4552,7 @@ def _validate_scheduler_terminal_report_authority(
 
     _validate_scheduler_retained_judge_decisions(
         judgment=judgment,
-        journal=journal,
+        snapshot=snapshot,
         require_complete_pass=True,
     )
 
@@ -4528,9 +4561,11 @@ def _validate_scheduler_report_authority(
     *,
     root: Path,
     report: AuditReport,
-    journal: SchedulerJournal,
+    snapshot: _SchedulerReportAuthoritySnapshot,
 ) -> None:
     """Join public candidate and finding semantics to successful private host outputs."""
+
+    journal = snapshot.journal
 
     candidate_artifact = CandidateFindingArtifact.model_validate(
         _read_json_artifact(root, "candidate-findings.json")
@@ -4540,7 +4575,7 @@ def _validate_scheduler_report_authority(
     )
     candidate_hashes = _scheduler_candidate_payload_sha256s(candidate_artifact.findings)
     accepted_hash_authority, accepted_candidate_authority = _scheduler_accepted_candidate_authority(
-        journal
+        snapshot
     )
     blind_candidates = accepted_candidate_authority[SchedulerPassKind.BLIND_SHARD_REVIEW]
     blind_authority = _scheduler_candidate_payload_sha256s(
@@ -4552,25 +4587,25 @@ def _validate_scheduler_report_authority(
     cross_shard_authority = accepted_hash_authority[SchedulerPassKind.CROSS_SHARD_INTEGRATION]
 
     reduction = _successful_scheduler_host_output(
-        journal=journal,
+        snapshot=snapshot,
         pass_kind=SchedulerPassKind.FINDING_REDUCTION,
         role="host:finding_reducer",
         output_type=SchedulerFindingReductionOutput,
     )
     integration = _successful_scheduler_host_output(
-        journal=journal,
+        snapshot=snapshot,
         pass_kind=SchedulerPassKind.CROSS_SHARD_INTEGRATION,
         role="host:cross_shard_integrator",
         output_type=SchedulerCrossShardIntegrationOutput,
     )
     judgment = _successful_scheduler_host_output(
-        journal=journal,
+        snapshot=snapshot,
         pass_kind=SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT,
         role="host:evidence_cap_judgment",
         output_type=SchedulerEvidenceCapJudgmentOutput,
     )
     retained_judgment = _successful_scheduler_partial_host_output(
-        journal=journal,
+        snapshot=snapshot,
         pass_kind=SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT,
         role="host:evidence_cap_judgment",
         output_type=SchedulerEvidenceCapJudgmentOutput,
@@ -4636,17 +4671,17 @@ def _validate_scheduler_report_authority(
             report=report,
             candidates=tuple(candidate_artifact.findings),
             reproduction_artifact=reproduction_artifact,
-            journal=journal,
+            snapshot=snapshot,
         )
         if retained_judgment is not None:
             _validate_scheduler_terminal_authority_against_judgment(
                 authority=terminal_authority,
                 judgment=retained_judgment,
-                journal=journal,
+                snapshot=snapshot,
             )
 
     campaign_complete = journal.summary.status is SchedulerCampaignStatus.COMPLETE
-    _validate_scheduler_report_quality_authority(report=report, journal=journal)
+    _validate_scheduler_report_quality_authority(report=report, snapshot=snapshot)
     if campaign_complete and judgment is None:
         raise ValueError("complete scheduler report lacks successful pass-seven authority")
     if judgment is None:
@@ -4663,7 +4698,7 @@ def _validate_scheduler_report_authority(
         report=report,
         reproduction_artifact=reproduction_artifact,
         judgment=judgment,
-        journal=journal,
+        snapshot=snapshot,
     )
 
 

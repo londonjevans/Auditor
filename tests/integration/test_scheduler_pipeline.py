@@ -87,6 +87,7 @@ from mmaudit.orchestration.pipeline import (
     _validate_cross_shard_integration,
     _validate_deterministic_finding_reduction,
 )
+from mmaudit.orchestration.scheduler import SchedulerJournal
 from mmaudit.orchestration.scheduler_runtime import PipelineScheduler
 from mmaudit.privacy import EffectivePrivacyPolicyEvidence
 from mmaudit.reporting.bundle import (
@@ -807,7 +808,30 @@ async def test_pipeline_persists_exact_seven_pass_scheduler_evidence(
     manifest = RunEvidenceManifest.model_validate_json(
         (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
     )
+    output_snapshot_reads = 0
+    pass_result_snapshot_reads = 0
+    original_outputs_getter = SchedulerJournal.outputs.fget
+    original_pass_results_getter = SchedulerJournal.pass_results.fget
+    assert original_outputs_getter is not None
+    assert original_pass_results_getter is not None
+
+    def counted_outputs(journal: SchedulerJournal) -> tuple[SchedulerTaskOutput, ...]:
+        nonlocal output_snapshot_reads
+        output_snapshot_reads += 1
+        return original_outputs_getter(journal)
+
+    def counted_pass_results(journal: SchedulerJournal) -> tuple[SchedulerPassResult, ...]:
+        nonlocal pass_result_snapshot_reads
+        pass_result_snapshot_reads += 1
+        return original_pass_results_getter(journal)
+
+    monkeypatch.setattr(SchedulerJournal, "outputs", property(counted_outputs))
+    monkeypatch.setattr(SchedulerJournal, "pass_results", property(counted_pass_results))
+    reads_before_validation = output_snapshot_reads
+    pass_reads_before_validation = pass_result_snapshot_reads
     validate_manifest_artifacts(manifest, result.run_dir)
+    assert output_snapshot_reads == reads_before_validation + 1
+    assert pass_result_snapshot_reads == pass_reads_before_validation + 1
     assert "scheduler-state.json" in {binding.path for binding in manifest.artifacts}
     assert len(observed_runtime) == 1
     runtime = observed_runtime[0]
@@ -896,8 +920,12 @@ async def test_pipeline_persists_exact_seven_pass_scheduler_evidence(
         bindings=manifest.bindings,
         artifacts=collect_run_artifacts(result.run_dir),
     )
+    reads_before_tamper = output_snapshot_reads
+    pass_reads_before_tamper = pass_result_snapshot_reads
     with pytest.raises(ValueError, match="candidate artifact differs from scheduler"):
         validate_manifest_artifacts(candidate_tampered_manifest, result.run_dir)
+    assert output_snapshot_reads == reads_before_tamper + 1
+    assert pass_result_snapshot_reads == pass_reads_before_tamper + 1
     for name, payload in original_public_bytes.items():
         (result.run_dir / name).write_bytes(payload)
 
@@ -918,8 +946,12 @@ async def test_pipeline_persists_exact_seven_pass_scheduler_evidence(
         bindings=manifest.bindings,
         artifacts=collect_run_artifacts(result.run_dir),
     )
+    reads_before_cost_tamper = output_snapshot_reads
+    pass_reads_before_cost_tamper = pass_result_snapshot_reads
     with pytest.raises(ValueError, match="scheduler baseline"):
         validate_manifest_artifacts(tampered_manifest, result.run_dir)
+    assert output_snapshot_reads == reads_before_cost_tamper + 1
+    assert pass_result_snapshot_reads == pass_reads_before_cost_tamper + 1
 
 
 @pytest.mark.asyncio
