@@ -111,6 +111,14 @@ from mmaudit.models.candidate_registry_bridge import (
     validate_candidate_registry_template_selection,
     write_candidate_registry_json,
 )
+from mmaudit.models.candidate_selection import (
+    CandidateSelectionPlan,
+    derive_pending_candidate_registry_from_selection_plan,
+    load_candidate_selection_plan,
+    read_candidate_selection_source,
+    validate_candidate_selection_plan_sources,
+    validate_candidate_selection_routes,
+)
 from mmaudit.models.discovery import (
     DiscoveryCandidateRoute,
     load_model_discovery_run,
@@ -838,6 +846,27 @@ def models_discover(
             help="Existing registry supplying only selected lineage-review and role policy.",
         ),
     ] = None,
+    candidate_selection_plan: Annotated[
+        Path | None,
+        typer.Option(
+            "--candidate-selection-plan",
+            help="Nonauthorizing exact-ID/endpoint allowlist for fresh registry bootstrap.",
+        ),
+    ] = None,
+    candidate_selection_ranking_source: Annotated[
+        Path | None,
+        typer.Option(
+            "--candidate-selection-ranking-source",
+            help="Exact operator-staged ranking implementation bytes bound by the plan.",
+        ),
+    ] = None,
+    candidate_selection_lineage_review_source: Annotated[
+        Path | None,
+        typer.Option(
+            "--candidate-selection-lineage-review-source",
+            help="Exact operator-staged lineage-review bytes bound by the plan.",
+        ),
+    ] = None,
     candidate_registry_output: Annotated[
         Path | None,
         typer.Option(
@@ -850,20 +879,63 @@ def models_discover(
     """Freeze exact public model and endpoint metadata without making a completion call."""
 
     async def execute() -> None:
-        if (candidate_registry_template is None) != (candidate_registry_output is None):
+        plan_inputs = (
+            candidate_selection_plan,
+            candidate_selection_ranking_source,
+            candidate_selection_lineage_review_source,
+        )
+        plan_mode = any(value is not None for value in plan_inputs)
+        if plan_mode and not all(value is not None for value in plan_inputs):
+            raise ConfigError(
+                "--candidate-selection-plan, --candidate-selection-ranking-source, and "
+                "--candidate-selection-lineage-review-source must be supplied together"
+            )
+        if candidate_registry_template is not None and plan_mode:
+            raise ConfigError(
+                "candidate registry template and candidate selection plan are mutually exclusive"
+            )
+        if candidate_registry_template is not None and candidate_registry_output is None:
             raise ConfigError(
                 "--candidate-registry-template and --candidate-registry-output "
                 "must be supplied together"
             )
+        if plan_mode and candidate_registry_output is None:
+            raise ConfigError("candidate selection plan requires --candidate-registry-output")
+        if (
+            candidate_registry_output is not None
+            and candidate_registry_template is None
+            and not plan_mode
+        ):
+            raise ConfigError(
+                "--candidate-registry-output must be supplied together with a registry "
+                "template or selection plan"
+            )
         candidates = _parse_model_discovery_candidates(candidate)
+        candidate_routes = tuple(
+            DiscoveryCandidateRoute(
+                exact_model_id=model_id,
+                approved_provider_endpoint=provider_endpoint,
+            )
+            for model_id, provider_endpoint in candidates
+        )
         template_registry: CandidateRegistry | None = None
+        selection_plan: CandidateSelectionPlan | None = None
         registry_output_path: Path | None = None
-        if candidate_registry_template is not None and candidate_registry_output is not None:
+        if candidate_registry_output is not None:
             discovery_path = Path(os.path.abspath(output_dir))
-            template_path = Path(os.path.abspath(candidate_registry_template))
             requested_registry_output = Path(os.path.abspath(candidate_registry_output))
-            if requested_registry_output == template_path:
-                raise ConfigError("candidate registry output must differ from its template")
+            bridge_inputs = tuple(
+                Path(os.path.abspath(value))
+                for value in (
+                    candidate_registry_template,
+                    candidate_selection_plan,
+                    candidate_selection_ranking_source,
+                    candidate_selection_lineage_review_source,
+                )
+                if value is not None
+            )
+            if requested_registry_output in bridge_inputs:
+                raise ConfigError("candidate registry output must differ from every bridge input")
             if (
                 requested_registry_output == discovery_path
                 or requested_registry_output.is_relative_to(discovery_path)
@@ -872,23 +944,61 @@ def models_discover(
                 raise ConfigError(
                     "candidate registry output must remain outside the discovery directory"
                 )
+        if candidate_registry_template is not None and candidate_registry_output is not None:
             try:
                 template_registry = load_candidate_registry(candidate_registry_template)
                 validate_candidate_registry_template_selection(
                     template=template_registry,
-                    routes=tuple(
-                        DiscoveryCandidateRoute(
-                            exact_model_id=model_id,
-                            approved_provider_endpoint=provider_endpoint,
-                        )
-                        for model_id, provider_endpoint in candidates
-                    ),
+                    routes=candidate_routes,
                 )
                 registry_output_path = preflight_candidate_registry_output(
                     candidate_registry_output
                 )
             except ValueError as exc:
                 raise ConfigError(f"candidate registry bridge is invalid: {exc}") from exc
+        elif plan_mode and candidate_registry_output is not None:
+            if (
+                candidate_selection_plan is None
+                or candidate_selection_ranking_source is None
+                or candidate_selection_lineage_review_source is None
+            ):
+                raise ConfigError("candidate selection plan inputs are incomplete")
+            try:
+                selection_plan = load_candidate_selection_plan(candidate_selection_plan)
+                source_names = {
+                    binding.kind: binding.filename for binding in selection_plan.source_bindings
+                }
+                if (
+                    candidate_selection_ranking_source.name
+                    != source_names["MODEL_RANKING_IMPLEMENTATION"]
+                    or candidate_selection_lineage_review_source.name
+                    != source_names["OPERATOR_LINEAGE_REVIEW"]
+                ):
+                    raise ValueError("candidate selection source filename differs from its binding")
+                input_paths = {
+                    Path(os.path.abspath(candidate_selection_plan)),
+                    Path(os.path.abspath(candidate_selection_ranking_source)),
+                    Path(os.path.abspath(candidate_selection_lineage_review_source)),
+                }
+                if len(input_paths) != 3:
+                    raise ValueError("candidate selection inputs must be distinct paths")
+                ranking_source_bytes = read_candidate_selection_source(
+                    candidate_selection_ranking_source
+                )
+                lineage_review_source_bytes = read_candidate_selection_source(
+                    candidate_selection_lineage_review_source
+                )
+                validate_candidate_selection_plan_sources(
+                    selection_plan,
+                    ranking_source_bytes=ranking_source_bytes,
+                    lineage_review_source_bytes=lineage_review_source_bytes,
+                )
+                validate_candidate_selection_routes(selection_plan, routes=candidate_routes)
+                registry_output_path = preflight_candidate_registry_output(
+                    candidate_registry_output
+                )
+            except ValueError as exc:
+                raise ConfigError(f"candidate selection bridge is invalid: {exc}") from exc
         _preflight_model_discovery_output_dir(output_dir)
         config = load_config(config_path)
         budget, usage = _budget_and_usage(config)
@@ -945,13 +1055,7 @@ def models_discover(
                     zdr_payload=zdr_payload,
                     single_model_payloads=single_model_payloads,
                     endpoint_payloads=endpoint_payloads,
-                    candidate_routes=tuple(
-                        DiscoveryCandidateRoute(
-                            exact_model_id=model_id,
-                            approved_provider_endpoint=provider_endpoint,
-                        )
-                        for model_id, provider_endpoint in candidates
-                    ),
+                    candidate_routes=candidate_routes,
                     payloads=tuple(structural_payloads),
                 )
             finally:
@@ -970,6 +1074,18 @@ def models_discover(
             except ValueError as exc:
                 raise ConfigError(
                     f"fresh candidate registry could not be published: {exc}"
+                ) from exc
+        elif selection_plan is not None and registry_output_path is not None:
+            try:
+                registry = derive_pending_candidate_registry_from_selection_plan(
+                    plan=selection_plan,
+                    run_manifest=manifest,
+                    evidence=evidence,
+                )
+                write_candidate_registry_json(registry_output_path, registry)
+            except ValueError as exc:
+                raise ConfigError(
+                    f"fresh pending candidate registry could not be published: {exc}"
                 ) from exc
         local_console = Console(no_color=no_color)
         for item in evidence:

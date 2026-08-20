@@ -396,19 +396,24 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `c90a1531cad6f09866bc1309a3130b5e4673214b` on
   `origin/agent/v3-wip-checkpoint`. This is durability evidence only: it changes no model-call,
   cost, audit, runner-authority, AUTHSEAL, benchmark, or release state.
+- **Provider-free registry bootstrap 2026-08-20:** Added canonical nonauthorizing selection plan
+  `b365a0ce5056ec1328f3f54722a97104dd25308a1cfab663d4185476165b06a7`, binding the exact staged
+  ranking and lineage-review source bytes while keeping every availability, lineage, qualification,
+  runner, benchmark, seal, and release claim false. `models discover` can now use that plan to
+  publish a rootless, role-empty, pending registry whose runtime fields come only from one fresh
+  exact discovery bundle. The stale registry remains historical and was not rewritten.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
   and non-crediting. Genuine production-issued lifecycle proof is absent; provider-free fixtures
   cannot mint owned-REAL origin, and the current repository rules prohibit reading real credentials
   or accessing the provider. Campaign/generation revocation beyond the top-level runner lease is
   not independently demonstrated. External-log publication and every benchmark run remain queued.
-- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Execute one
-  provider-free prerequisite slice: rebuild `config/models.candidates.toml` from the
-  operator-staged `model-ranking.py` and `V3-LINEAGE-001-operator-review.md`, remove obsolete IDs,
-  preserve the evidence as nonauthorizing, and validate distinct candidate, primary, and
-  replay-judge roots without provider access. Then freeze the fallback-disabled
-  `SYNTHETIC_BENCHMARK` policy, synthetic/public corpus, exact ledger/call caps, and emit the exact
-  operator command. Do not consume secrets or make provider calls in this slice; AUTHSEAL
-  publication, real audits, benchmarks, and release remain queued.
+- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. The operator may
+  run the three exact metadata-only discovery commands in `docs/models/model_selection.md`; any
+  unavailable, non-ZDR, identity-drifted, or capability-incomplete route must reject without
+  substitution. After the three singleton registries and discovery bundles exist, compile fresh
+  documentary public-lineage evidence for those exact IDs, derive request-bound cost caps from the
+  observed pricing/capacity, and emit the final AUTHRUNNER command. AUTHSEAL publication, real
+  audits, benchmarks, and release remain queued.
 
 ### V3-MODELREFRESH-001 — Provider-free model-refresh runtime and pricing custody
 
@@ -433,12 +438,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Result:** The provider-free refresh/runtime/pricing custody slice is green. The
   final full suite passed `5392` tests with `21` explicit unavailable/opt-in skips;
   independent review found no remaining provider-free blocker or HIGH.
-- **Next action:** Rebuild the local candidate registry from the operator-staged ranking and
-  lineage-review inputs as a bounded provider-free AUTHRUNNER prerequisite. Treat that rebuilt set
-  as nonauthorizing operator-staged evidence only: it does not authenticate current provider
-  freshness, complete model refresh, or grant selection, pricing, qualification, or promotion
-  authority. Full completion still requires the stock live authority quartet and authorized
-  provider evidence.
+- **Next action:** Use the canonical nonauthorizing selection plan with an operator-run authenticated
+  metadata discovery. The resulting rootless pending registries still do not complete refresh or
+  grant selection, pricing, qualification, or promotion authority. Full completion requires fresh
+  exact provider evidence and the stock live authority quartet.
 
 ### QUEUE-BOOTSTRAP-001
 

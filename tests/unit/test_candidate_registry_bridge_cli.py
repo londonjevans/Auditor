@@ -12,6 +12,12 @@ import mmaudit.cli as cli_module
 from mmaudit.config import AuditConfig
 from mmaudit.constants import ExitCode
 from mmaudit.models.candidate_registry_bridge import write_candidate_registry_json
+from mmaudit.models.candidate_selection import (
+    seal_authenticated_runner_selection,
+    seal_candidate_selection_entry,
+    seal_candidate_selection_plan,
+    seal_candidate_selection_source_binding,
+)
 from mmaudit.models.discovery import (
     OpenRouterDiscoveryRunProvenance,
     OpenRouterModelDiscoveryEvidence,
@@ -19,10 +25,12 @@ from mmaudit.models.discovery import (
 )
 from mmaudit.models.qualification import (
     CandidateBenchmarkStatus,
+    LineageReviewStatus,
     load_candidate_registry,
     validate_candidate_registry_discovery,
 )
 from mmaudit.privacy import PrivacyProfile
+from mmaudit.reporting.json_report import stable_json
 from tests.unit import test_candidate_benchmark as fixtures
 
 ROOT = Path(__file__).parents[2]
@@ -30,10 +38,69 @@ RUNNER = CliRunner()
 MODEL_ID = "alpha/atlas-secure"
 PROVIDER_ENDPOINT = "provider-alpha"
 CANARY = "synthetic-registry-bridge-canary"
+RANKING_SOURCE = b"synthetic operator-staged ranking implementation\n"
+LINEAGE_SOURCE = b"synthetic operator-staged lineage review\n"
 
 
 def _config(config_factory: Callable[..., AuditConfig]) -> AuditConfig:
     return config_factory(privacy={"profile": PrivacyProfile.SYNTHETIC_BENCHMARK})
+
+
+def _selection_plan_paths(
+    tmp_path: Path,
+    *,
+    model_id: str = MODEL_ID,
+    provider_endpoint: str = PROVIDER_ENDPOINT,
+) -> tuple[Path, Path, Path]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    ranking_path = tmp_path / "model-ranking.py"
+    lineage_path = tmp_path / "V3-LINEAGE-001-operator-review.md"
+    ranking_path.write_bytes(RANKING_SOURCE)
+    lineage_path.write_bytes(LINEAGE_SOURCE)
+    sources = (
+        seal_candidate_selection_source_binding(
+            kind="MODEL_RANKING_IMPLEMENTATION",
+            filename=ranking_path.name,
+            content=RANKING_SOURCE,
+        ),
+        seal_candidate_selection_source_binding(
+            kind="OPERATOR_LINEAGE_REVIEW",
+            filename=lineage_path.name,
+            content=LINEAGE_SOURCE,
+        ),
+    )
+    entries = (
+        seal_candidate_selection_entry(
+            exact_model_id=model_id,
+            priority_rank=1,
+            advisory_lineage_group="Synthetic advisory group",
+            allowed_provider_endpoints=(provider_endpoint,),
+        ),
+        seal_candidate_selection_entry(
+            exact_model_id="beta/beacon-secure",
+            priority_rank=2,
+            advisory_lineage_group="Synthetic beta group",
+            allowed_provider_endpoints=("provider-beta",),
+        ),
+        seal_candidate_selection_entry(
+            exact_model_id="gamma/compass-secure",
+            priority_rank=3,
+            advisory_lineage_group="Synthetic gamma group",
+            allowed_provider_endpoints=("provider-gamma",),
+        ),
+    )
+    plan = seal_candidate_selection_plan(
+        source_bindings=sources,
+        entries=entries,
+        authenticated_runner_selection=seal_authenticated_runner_selection(
+            candidate_model_id=model_id,
+            primary_judge_model_id="beta/beacon-secure",
+            replay_judge_model_id="gamma/compass-secure",
+        ),
+    )
+    plan_path = tmp_path / "candidate-selection-plan.json"
+    plan_path.write_text(stable_json(plan), encoding="utf-8")
+    return plan_path, ranking_path, lineage_path
 
 
 @pytest.mark.parametrize(
@@ -144,6 +211,293 @@ def test_discover_registry_bridge_rejects_output_inside_discovery_before_secret_
     assert not discovery.exists()
 
 
+def test_discover_selection_plan_requires_complete_inputs_before_secret_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret_accessed = False
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_accessed
+        secret_accessed = True
+        raise AssertionError("operator secrets must not be accessed")
+
+    plan_path, _ranking_path, _lineage_path = _selection_plan_paths(tmp_path)
+    monkeypatch.setattr(cli_module, "load_operator_secrets", forbidden_secret_access)
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "discover",
+            "--candidate",
+            f"{MODEL_ID}={PROVIDER_ENDPOINT}",
+            "--candidate-selection-plan",
+            str(plan_path),
+            "--output-dir",
+            str(tmp_path / "discovery"),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "must be supplied together" in result.output
+    assert not secret_accessed
+    assert not (tmp_path / "discovery").exists()
+
+
+def test_discover_selection_plan_requires_registry_output_before_secret_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret_accessed = False
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_accessed
+        secret_accessed = True
+        raise AssertionError("operator secrets must not be accessed")
+
+    plan_path, ranking_path, lineage_path = _selection_plan_paths(tmp_path)
+    monkeypatch.setattr(cli_module, "load_operator_secrets", forbidden_secret_access)
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "discover",
+            "--candidate",
+            f"{MODEL_ID}={PROVIDER_ENDPOINT}",
+            "--candidate-selection-plan",
+            str(plan_path),
+            "--candidate-selection-ranking-source",
+            str(ranking_path),
+            "--candidate-selection-lineage-review-source",
+            str(lineage_path),
+            "--output-dir",
+            str(tmp_path / "discovery"),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "requires --candidate-registry-output" in " ".join(result.output.split())
+    assert not secret_accessed
+    assert not (tmp_path / "discovery").exists()
+
+
+def test_discover_selection_plan_rejects_output_aliasing_source_before_secret_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret_accessed = False
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_accessed
+        secret_accessed = True
+        raise AssertionError("operator secrets must not be accessed")
+
+    plan_path, ranking_path, lineage_path = _selection_plan_paths(tmp_path)
+    monkeypatch.setattr(cli_module, "load_operator_secrets", forbidden_secret_access)
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "discover",
+            "--candidate",
+            f"{MODEL_ID}={PROVIDER_ENDPOINT}",
+            "--candidate-selection-plan",
+            str(plan_path),
+            "--candidate-selection-ranking-source",
+            str(ranking_path),
+            "--candidate-selection-lineage-review-source",
+            str(lineage_path),
+            "--candidate-registry-output",
+            str(ranking_path),
+            "--output-dir",
+            str(tmp_path / "discovery"),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "differ from every bridge input" in " ".join(result.output.split())
+    assert not secret_accessed
+    assert not (tmp_path / "discovery").exists()
+
+
+def test_discover_selection_plan_rejects_unlisted_route_before_secret_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret_accessed = False
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_accessed
+        secret_accessed = True
+        raise AssertionError("operator secrets must not be accessed")
+
+    plan_path, ranking_path, lineage_path = _selection_plan_paths(tmp_path)
+    monkeypatch.setattr(cli_module, "load_operator_secrets", forbidden_secret_access)
+    registry_output = tmp_path / "fresh-registry.json"
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "discover",
+            "--candidate",
+            f"{MODEL_ID}=provider-drift",
+            "--candidate-selection-plan",
+            str(plan_path),
+            "--candidate-selection-ranking-source",
+            str(ranking_path),
+            "--candidate-selection-lineage-review-source",
+            str(lineage_path),
+            "--candidate-registry-output",
+            str(registry_output),
+            "--output-dir",
+            str(tmp_path / "discovery"),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "unlisted endpoint" in result.output
+    assert not secret_accessed
+    assert not registry_output.exists()
+    assert not (tmp_path / "discovery").exists()
+
+
+def test_discover_selection_plan_rejects_source_drift_before_secret_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret_accessed = False
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_accessed
+        secret_accessed = True
+        raise AssertionError("operator secrets must not be accessed")
+
+    plan_path, ranking_path, lineage_path = _selection_plan_paths(tmp_path)
+    ranking_path.write_bytes(RANKING_SOURCE + b"tamper")
+    monkeypatch.setattr(cli_module, "load_operator_secrets", forbidden_secret_access)
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "discover",
+            "--candidate",
+            f"{MODEL_ID}={PROVIDER_ENDPOINT}",
+            "--candidate-selection-plan",
+            str(plan_path),
+            "--candidate-selection-ranking-source",
+            str(ranking_path),
+            "--candidate-selection-lineage-review-source",
+            str(lineage_path),
+            "--candidate-registry-output",
+            str(tmp_path / "fresh-registry.json"),
+            "--output-dir",
+            str(tmp_path / "discovery"),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "differs from its binding" in result.output
+    assert not secret_accessed
+    assert not (tmp_path / "discovery").exists()
+
+
+def test_discover_selection_plan_rejects_source_filename_before_reading_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_read = False
+    secret_accessed = False
+
+    def forbidden_source_read(_path: Path) -> bytes:
+        nonlocal source_read
+        source_read = True
+        raise AssertionError("mismatched source filename must reject before reading")
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_accessed
+        secret_accessed = True
+        raise AssertionError("operator secrets must not be accessed")
+
+    plan_path, ranking_path, lineage_path = _selection_plan_paths(tmp_path)
+    renamed_ranking = ranking_path.with_name("renamed-ranking.py")
+    ranking_path.rename(renamed_ranking)
+    monkeypatch.setattr(cli_module, "read_candidate_selection_source", forbidden_source_read)
+    monkeypatch.setattr(cli_module, "load_operator_secrets", forbidden_secret_access)
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "discover",
+            "--candidate",
+            f"{MODEL_ID}={PROVIDER_ENDPOINT}",
+            "--candidate-selection-plan",
+            str(plan_path),
+            "--candidate-selection-ranking-source",
+            str(renamed_ranking),
+            "--candidate-selection-lineage-review-source",
+            str(lineage_path),
+            "--candidate-registry-output",
+            str(tmp_path / "fresh-registry.json"),
+            "--output-dir",
+            str(tmp_path / "discovery"),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "source filename differs" in " ".join(result.output.split())
+    assert not source_read
+    assert not secret_accessed
+    assert not (tmp_path / "discovery").exists()
+
+
+def test_discover_selection_plan_is_exclusive_with_legacy_template(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret_accessed = False
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_accessed
+        secret_accessed = True
+        raise AssertionError("operator secrets must not be accessed")
+
+    plan_path, ranking_path, lineage_path = _selection_plan_paths(tmp_path)
+    monkeypatch.setattr(cli_module, "load_operator_secrets", forbidden_secret_access)
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "discover",
+            "--candidate",
+            f"{MODEL_ID}={PROVIDER_ENDPOINT}",
+            "--candidate-registry-template",
+            str(ROOT / "config" / "models.candidates.toml"),
+            "--candidate-selection-plan",
+            str(plan_path),
+            "--candidate-selection-ranking-source",
+            str(ranking_path),
+            "--candidate-selection-lineage-review-source",
+            str(lineage_path),
+            "--candidate-registry-output",
+            str(tmp_path / "fresh-registry.json"),
+            "--output-dir",
+            str(tmp_path / "discovery"),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "mutually exclusive" in result.output
+    assert not secret_accessed
+    assert not (tmp_path / "discovery").exists()
+
+
 def test_discover_registry_bridge_publishes_exact_selected_registry_without_network(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -249,5 +603,121 @@ def test_discover_registry_bridge_publishes_exact_selected_registry_without_netw
     )
     assert tuple(candidate.exact_model_id for candidate in registry.candidates) == (MODEL_ID,)
     assert registry.candidates[0].benchmark_status is CandidateBenchmarkStatus.PENDING
+    assert stat.S_IMODE(registry_output.stat().st_mode) == 0o600
+    assert CANARY not in result.output
+
+
+def test_discover_selection_plan_publishes_rootless_registry_from_fresh_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = _config(config_factory)
+    spec = fixtures._CandidateSpec(
+        model_id=MODEL_ID,
+        provider_endpoint=PROVIDER_ENDPOINT,
+        provider_name="Provider Alpha",
+        canonical_model_id="alpha/atlas-secure-20260820",
+    )
+    _fixture_manifest, sealed_evidence, _template = fixtures._discovery_and_registry(
+        tmp_path=tmp_path / "fixture-discovery",
+        config=config,
+        specs=(spec,),
+    )
+    plan_path, ranking_path, lineage_path = _selection_plan_paths(tmp_path / "selection")
+    secret_file = tmp_path / "synthetic-secrets.env"
+    secret_file.write_text(f"OPENROUTER_API_KEY={CANARY}\n", encoding="utf-8")
+    secret_file.chmod(0o600)
+    endpoint = fixtures._endpoint(spec)
+    catalog_payload = {"data": [fixtures._catalog_model(spec)]}
+    endpoint_payload = {
+        "data": {
+            "id": MODEL_ID,
+            "endpoints": [{key: value for key, value in endpoint.items() if key != "model_id"}],
+        }
+    }
+
+    class ProviderFreeSelectionClient:
+        def __init__(self, *, api_key: str, **_kwargs: object) -> None:
+            assert api_key == CANARY
+
+        async def validate_authentication(self) -> None:
+            return None
+
+        async def get_certification_model_metadata(self) -> dict[str, Any]:
+            return catalog_payload
+
+        async def list_zdr_endpoints(self) -> dict[str, Any]:
+            return {"data": [endpoint]}
+
+        async def get_model_metadata(self, model_id: str) -> dict[str, Any]:
+            assert model_id == MODEL_ID
+            return {"data": fixtures._catalog_model(spec)}
+
+        async def get_model_endpoint_metadata(self, model_id: str) -> dict[str, Any]:
+            assert model_id == MODEL_ID
+            return endpoint_payload
+
+        def seal_real_model_discovery_run(
+            self,
+            **kwargs: Any,
+        ) -> tuple[
+            OpenRouterDiscoveryRunProvenance,
+            tuple[OpenRouterModelDiscoveryEvidence, ...],
+        ]:
+            assert tuple(item.exact_model_id for item in kwargs["payloads"]) == (MODEL_ID,)
+            return sealed_evidence[0].provenance, sealed_evidence
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(cli_module, "load_config", lambda _path: config)
+    monkeypatch.setattr(cli_module, "OpenRouterClient", ProviderFreeSelectionClient)
+    monkeypatch.setattr(
+        cli_module,
+        "_TRUSTED_OPENROUTER_CLIENT_TYPE",
+        ProviderFreeSelectionClient,
+    )
+    discovery_output = tmp_path / "private" / "fresh-selection-discovery"
+    registry_output = tmp_path / "private" / "fresh-selection-registry.json"
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "discover",
+            "--candidate",
+            f"{MODEL_ID}={PROVIDER_ENDPOINT}",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--secrets-env-file",
+            str(secret_file),
+            "--output-dir",
+            str(discovery_output),
+            "--candidate-selection-plan",
+            str(plan_path),
+            "--candidate-selection-ranking-source",
+            str(ranking_path),
+            "--candidate-selection-lineage-review-source",
+            str(lineage_path),
+            "--candidate-registry-output",
+            str(registry_output),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    manifest, evidence = load_model_discovery_run(discovery_output)
+    registry = load_candidate_registry(registry_output)
+    validate_candidate_registry_discovery(
+        registry=registry,
+        run_manifest=manifest,
+        evidence=evidence,
+    )
+    candidate = registry.candidates[0]
+    assert candidate.exact_model_id == MODEL_ID
+    assert candidate.root_lineage is None
+    assert candidate.lineage_review.status is LineageReviewStatus.PENDING
+    assert candidate.approved_roles == ()
+    assert candidate.output_capability_sha256 == evidence[0].output_capability_sha256
     assert stat.S_IMODE(registry_output.stat().st_mode) == 0o600
     assert CANARY not in result.output

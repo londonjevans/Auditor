@@ -15,6 +15,45 @@ Availability, pricing, capabilities, privacy policy, endpoint identity, and rout
 behavior can change. A later qualification or release-certification run must use its
 own frozen metadata snapshots.
 
+## Provider-free current-selection bootstrap
+
+`config/models.selection-plan.json` is a canonical, self-hashed, explicitly
+`NONAUTHORIZING` replacement seed for the obsolete roster. Its plan SHA-256 is
+`b365a0ce5056ec1328f3f54722a97104dd25308a1cfab663d4185476165b06a7`. It binds the exact bytes of the
+operator-staged `model-ranking.py` and `V3-LINEAGE-001-operator-review.md`, but it does not
+claim that the ranker ran, that any proposed ID or route currently exists, that an advisory
+lineage label is correct, or that any model is qualified. Its endpoint lists are policy
+constraints only. Every discovery, lineage, qualification, runner, benchmark, seal, and
+release authority field is literally false.
+
+The proposed AUTHRUNNER roles are also only planning data: DeepSeek V4 candidate, Qwen 3.8
+primary judge, and Kimi K3 replay judge. Their distinct roots are not verified. The current
+public-lineage manifest covers none of those exact IDs, so AUTHRUNNER must continue to reject
+them until new documentary source captures are compiled and independently replayed.
+
+The operator may produce three separate singleton discovery/registry pairs with the commands
+below. They perform authenticated metadata discovery but request no model completion. The exact
+route choices are proposals constrained by the staged endpoint-family policy; any unavailable,
+non-ZDR, identity-drifted, or capability-incomplete route must fail closed and must not be
+silently substituted.
+
+If the cumulative ledger does not already exist, initialize it exactly once. Never replace an
+existing ledger; its historical prefix is part of later AUTHRUNNER custody.
+
+```shell
+MMAUDIT_BUDGET_USD=250 .venv/bin/mmaudit models init-cost-ledger --config config/openrouter-qualification.toml --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --no-color
+```
+
+```shell
+MMAUDIT_SECRETS_ENV_FILE="$HOME/.mmaudit/secrets.env" MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models discover --candidate deepseek/deepseek-v4-pro-0813=novita --config config/openrouter-qualification.toml --secrets-env-file "$HOME/.mmaudit/secrets.env" --output-dir "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260820" --candidate-selection-plan config/models.selection-plan.json --candidate-selection-ranking-source /Users/generalcuster/Documents/dev/CODEX_HANDOFF_v3-unblock-2026-08-17/model-ranking.py --candidate-selection-lineage-review-source /Users/generalcuster/Documents/dev/CODEX_HANDOFF_v3-unblock-2026-08-17/V3-LINEAGE-001-operator-review.md --candidate-registry-output "$HOME/.mmaudit/private/authrunner/candidate-registry.json" --no-color
+MMAUDIT_SECRETS_ENV_FILE="$HOME/.mmaudit/secrets.env" MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models discover --candidate qwen/qwen3.8-max=together --config config/openrouter-qualification.toml --secrets-env-file "$HOME/.mmaudit/secrets.env" --output-dir "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260820" --candidate-selection-plan config/models.selection-plan.json --candidate-selection-ranking-source /Users/generalcuster/Documents/dev/CODEX_HANDOFF_v3-unblock-2026-08-17/model-ranking.py --candidate-selection-lineage-review-source /Users/generalcuster/Documents/dev/CODEX_HANDOFF_v3-unblock-2026-08-17/V3-LINEAGE-001-operator-review.md --candidate-registry-output "$HOME/.mmaudit/private/authrunner/primary-judge-registry.json" --no-color
+MMAUDIT_SECRETS_ENV_FILE="$HOME/.mmaudit/secrets.env" MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models discover --candidate moonshotai/kimi-k3=google-vertex --config config/openrouter-qualification.toml --secrets-env-file "$HOME/.mmaudit/secrets.env" --output-dir "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820" --candidate-selection-plan config/models.selection-plan.json --candidate-selection-ranking-source /Users/generalcuster/Documents/dev/CODEX_HANDOFF_v3-unblock-2026-08-17/model-ranking.py --candidate-selection-lineage-review-source /Users/generalcuster/Documents/dev/CODEX_HANDOFF_v3-unblock-2026-08-17/V3-LINEAGE-001-operator-review.md --candidate-registry-output "$HOME/.mmaudit/private/authrunner/replay-judge-registry.json" --no-color
+```
+
+Each output registry is deliberately rootless, role-empty, and `PENDING`, with every runtime
+field copied from that exact fresh discovery bundle. Do not run AUTHRUNNER after metadata
+discovery alone: fresh exact-ID documentary lineage and request-bound cost caps remain required.
+
 ## Queue-derived model-work status
 
 The ticket identifier and raw status in each row are checked against the authoritative

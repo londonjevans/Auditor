@@ -1100,6 +1100,9 @@ def test_models_discover_help_lists_exact_route_and_private_output_controls() ->
     assert "--candidate" in result.stdout
     assert "--output-dir" in result.stdout
     assert "--candidate-registry-template" in result.stdout
+    assert "--candidate-selection-plan" in result.stdout
+    assert "--candidate-selection-ranking-source" in result.stdout
+    assert "--candidate-selection-lineage-review-source" in result.stdout
     assert "--candidate-registry-output" in result.stdout
     assert "--secrets-env-file" in result.stdout
 

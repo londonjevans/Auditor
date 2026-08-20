@@ -26,6 +26,7 @@ from mmaudit.models.autonomous_benchmark_verdict import (
     EvidenceSealVerdictProjection,
 )
 from mmaudit.models.calibration import ModelCalibrationArtifact
+from mmaudit.models.candidate_selection import CandidateSelectionPlan
 from mmaudit.models.coverage_planning import (
     ModelSurfaceCoveragePlan,
     ModelSurfaceResourcePreflight,
@@ -137,6 +138,7 @@ MODELS: dict[str, type[BaseModel]] = {
     ),
     "audit_model_refresh_pricing_evidence.schema.json": AuditModelRefreshPricingEvidence,
     "benchmark_report.schema.json": BenchmarkReport,
+    "candidate_selection_plan.schema.json": CandidateSelectionPlan,
     "audit_model_selection.schema.json": AuditModelSelection,
     "audit_model_selection_evidence.schema.json": AuditModelSelectionEvidenceBundle,
     "context_manifest.schema.json": ContextManifest,
@@ -216,6 +218,9 @@ TITLE_OVERRIDES = {
     "audit_model_selection.schema.json": "mmaudit audit-scoped model selection",
     "audit_model_selection_evidence.schema.json": ("mmaudit audit-scoped model selection evidence"),
     "benchmark_report.schema.json": "mmaudit benchmark report",
+    "candidate_selection_plan.schema.json": (
+        "mmaudit non-authorizing operator-staged model selection plan"
+    ),
     "coverage_artifact.schema.json": "mmaudit forensic coverage artifact",
     "cross_lineage_adjudication_report.schema.json": (
         "mmaudit non-authorizing cross-lineage adjudication report"

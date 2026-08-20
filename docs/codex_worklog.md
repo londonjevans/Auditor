@@ -7,9 +7,9 @@ credentials, RPC URLs, or operational attack instructions.
 AUTORUN_STATUS: BLOCKED_SAFETY
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001
-NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Rebuild `config/models.candidates.toml` provider-free from the operator-staged `model-ranking.py` and `V3-LINEAGE-001-operator-review.md`, remove obsolete IDs, preserve nonauthorizing evidence, and validate distinct candidate, primary, and replay-judge roots. Then freeze the fallback-disabled `SYNTHETIC_BENCHMARK` policy, synthetic/public corpus, exact ledger/call caps, and emit the exact operator command. Do not consume secrets or make provider calls; AUTHSEAL publication, real audits, benchmarks, and release remain queued.
-LAST_VALIDATION_COMMAND: Segmented full `.venv/bin/pytest -q --stepwise --tb=short` over all 6,152 collected tests, followed by `.venv/bin/python scripts/generate_release_schemas.py`, `make PYTHON=.venv/bin/python lint`, `make PYTHON=.venv/bin/python type`, and the 32-test product documentation/objective/release-schema matrix.
-LAST_VALIDATION_RESULT: PASS / BLOCKED_SAFETY — all 6,152 collected tests completed as 6,128 passed and 24 expected skips; the first segment reached 2,110 passed and 24 skipped before a sandbox-denied local-loopback bind, and the unchanged-byte resumed tail passed 4,018 with 2,134 deselected. Schemas were current; Ruff passed over 533 files; strict mypy passed over 201 source files; 32 documentation/objective/schema tests, strict governance JSON parsing, and diff integrity passed. REAL AUTHRUNNER issuance remains absent.
+NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator run the three exact metadata-only discovery commands in `docs/models/model_selection.md`; reject any unavailable, non-ZDR, identity-drifted, or capability-incomplete route without substitution. Then compile fresh documentary public-lineage evidence for the exact selected IDs, derive request-bound cost caps from observed pricing/capacity, and emit the final AUTHRUNNER command. AUTHSEAL publication, real audits, benchmarks, and release remain queued.
+LAST_VALIDATION_COMMAND: Provider-free 219-test candidate-selection/discovery/registry/CLI/schema/objective/documentation matrix, repeated 32-test governance/schema gate, `.venv/bin/python scripts/generate_release_schemas.py`, `make PYTHON=.venv/bin/python lint`, `make PYTHON=.venv/bin/python type`, strict governance JSON parsing, and diff integrity.
+LAST_VALIDATION_RESULT: PASS / BLOCKED_SAFETY — 219 broader tests and the repeated 32-test governance/schema gate passed; generated schemas were current; Ruff passed over 535 files; strict mypy passed over 202 source files; both governance JSON documents parsed strictly; diff integrity passed; independent adversarial review found no blocker/HIGH. No new complete-suite claim, provider metadata, candidate registry, REAL AUTHRUNNER issuance, or release authority exists.
 LAST_CHECKPOINT_COMMIT: c90a1531cad6f09866bc1309a3130b5e4673214b — `Degrade incomplete graph coverage safely` on `origin/agent/v3-wip-checkpoint`.
 REMAINING_ACTIONABLE_TICKETS: The provider-free stale candidate-registry rebuild and exact AUTHRUNNER campaign preparation are actionable. Credentialed execution remains `BLOCKED_SAFETY`; external authority-log publication and all benchmark/release work remain queued behind genuine REAL runner evidence.
 
@@ -30,6 +30,45 @@ REMAINING_ACTIONABLE_TICKETS: The provider-free stale candidate-registry rebuild
   10 rejected, USD 0.0034764325 used, and 0 completed real audits.
 - **Exact next safe action:** Rebuild the stale candidate registry and prepare the three-root
   AUTHRUNNER campaign entirely provider-free, then emit the exact operator command.
+
+## 2026-08-20T15:29:29Z — Provider-free candidate-registry bootstrap started
+
+- **Status:** `V3-AUTHRUNNER-001` remains `PARTIAL` / `BLOCKED_SAFETY`; only its safe registry
+  prerequisite is active.
+- **Reproduced blocker:** The staged ranker and operator-review prose contain no cached catalogue,
+  exact endpoint route, ZDR, output-mode, pricing, or metadata evidence. A `CandidateRegistry`
+  requires all of those exact hashes and cannot be hand-authored without fabrication. The existing
+  discovery bridge also requires every new exact ID to exist in its stale registry template.
+- **Bounded implementation:** Add a strict self-hashed selection plan whose every authority flag is
+  false, validate the exact staged source bytes and explicit route allowlists before secret access,
+  and let `models discover` derive a rootless pending registry only from fresh operator-run metadata.
+  New exact IDs remain unusable by AUTHRUNNER until documentary public-lineage evidence is rebuilt.
+- **No external action:** Do not execute the staged network ranker, read credentials, query a
+  provider, or write a discovered registry in this slice.
+
+## 2026-08-20T15:57:48Z — Provider-free candidate-selection bridge completed
+
+- **Status:** `V3-AUTHRUNNER-001` remains `PARTIAL` / `BLOCKED_SAFETY`; no runtime authority or
+  registry freshness is claimed.
+- **Result:** Added canonical plan
+  `b365a0ce5056ec1328f3f54722a97104dd25308a1cfab663d4185476165b06a7` over 11 staged exact-ID
+  proposals. Every authority flag is false, availability and documentary lineage are unconfirmed,
+  and the DeepSeek/Qwen/Kimi role proposal explicitly lacks verified root independence.
+- **Implementation:** `models discover` now accepts an exact plan plus its two bound staged source
+  files, validates plan/source/filename/route/output custody before config or secrets, and can derive
+  only a rootless, role-empty, pending registry from fresh exact ZDR/output/pricing discovery. The
+  legacy template bridge remains separate. A strict generated schema and descriptor-safe source
+  loader reject noncanonical, symlinked, multiply linked, FIFO, oversized, changed, or mismatched
+  inputs.
+- **Validation:** The focused selection/CLI/schema matrix passed 125 tests; the broader discovery,
+  registry, CLI, schema, objective, and documentation matrix passed 219. Schema generation and
+  verification, scoped Ruff, strict mypy, and diff integrity passed. Independent review found no
+  blocker or HIGH after hardening filename-before-read, source distinctness, schema constants, and
+  route bounds.
+- **Boundary and next action:** `config/models.candidates.toml` remains untouched because no fresh
+  provider metadata was supplied. Exact metadata-only operator commands are frozen in
+  `docs/models/model_selection.md`. No staged ranker, secret, provider, completion, ledger mutation,
+  AUTHSEAL publication, audit, benchmark, or release action occurred.
 
 ## 2026-08-18T10:21:08Z — V3-AUTHRUNNER-001 started
 

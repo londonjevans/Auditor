@@ -1,0 +1,336 @@
+{
+  "$defs": {
+    "AuthenticatedRunnerSelection": {
+      "additionalProperties": false,
+      "description": "Planning-only three-model role assignment; independence is not asserted.",
+      "properties": {
+        "candidate_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Candidate Model Id",
+          "type": "string"
+        },
+        "distinct_root_lineages_verified": {
+          "const": false,
+          "title": "Distinct Root Lineages Verified",
+          "type": "boolean"
+        },
+        "primary_judge_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Primary Judge Model Id",
+          "type": "string"
+        },
+        "replay_judge_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Replay Judge Model Id",
+          "type": "string"
+        },
+        "role_assignment_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Role Assignment Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_model_id",
+        "primary_judge_model_id",
+        "replay_judge_model_id",
+        "distinct_root_lineages_verified",
+        "role_assignment_sha256"
+      ],
+      "title": "AuthenticatedRunnerSelection",
+      "type": "object"
+    },
+    "CandidateSelectionEntry": {
+      "additionalProperties": false,
+      "description": "One exact candidate proposal with no discovery or lineage authority.",
+      "properties": {
+        "advisory_lineage_group": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:/+-]{0,199}$",
+          "title": "Advisory Lineage Group",
+          "type": "string"
+        },
+        "allowed_provider_endpoints": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Allowed Provider Endpoints",
+          "type": "array"
+        },
+        "approved_roles": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 0,
+          "title": "Approved Roles",
+          "type": "array"
+        },
+        "availability": {
+          "const": "UNVERIFIED",
+          "title": "Availability",
+          "type": "string"
+        },
+        "documentary_lineage": {
+          "const": "UNCONFIRMED",
+          "title": "Documentary Lineage",
+          "type": "string"
+        },
+        "entry_authority": {
+          "const": false,
+          "title": "Entry Authority",
+          "type": "boolean"
+        },
+        "entry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Entry Sha256",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "lineage_group_seed_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Lineage Group Seed Sha256",
+          "type": "string"
+        },
+        "priority_rank": {
+          "maximum": 128,
+          "minimum": 1,
+          "title": "Priority Rank",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "priority_rank",
+        "advisory_lineage_group",
+        "lineage_group_seed_sha256",
+        "allowed_provider_endpoints",
+        "approved_roles",
+        "availability",
+        "documentary_lineage",
+        "entry_authority",
+        "entry_sha256"
+      ],
+      "title": "CandidateSelectionEntry",
+      "type": "object"
+    },
+    "CandidateSelectionSourceBinding": {
+      "additionalProperties": false,
+      "description": "Exact bytes for one operator-staged, explicitly unverified input.",
+      "properties": {
+        "authenticity": {
+          "const": "OPERATOR_STAGED_UNVERIFIED",
+          "title": "Authenticity",
+          "type": "string"
+        },
+        "byte_count": {
+          "maximum": 2000000,
+          "minimum": 1,
+          "title": "Byte Count",
+          "type": "integer"
+        },
+        "content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "filename": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$",
+          "title": "Filename",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "MODEL_RANKING_IMPLEMENTATION",
+            "OPERATOR_LINEAGE_REVIEW"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "source_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Binding Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "filename",
+        "byte_count",
+        "content_sha256",
+        "authenticity",
+        "source_binding_sha256"
+      ],
+      "title": "CandidateSelectionSourceBinding",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/candidate_selection_plan.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Self-hashed operator-staged seed with only literal-false authority flags.",
+  "properties": {
+    "artifact_kind": {
+      "const": "OPERATOR_STAGED_MODEL_SELECTION",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "authenticated_runner_selection": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AuthenticatedRunnerSelection"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "benchmark_authorized": {
+      "const": false,
+      "title": "Benchmark Authorized",
+      "type": "boolean"
+    },
+    "cached_ranking_payload_present": {
+      "const": false,
+      "title": "Cached Ranking Payload Present",
+      "type": "boolean"
+    },
+    "discovery_evidence_present": {
+      "const": false,
+      "title": "Discovery Evidence Present",
+      "type": "boolean"
+    },
+    "documentary_lineage_identity_authorized": {
+      "const": false,
+      "title": "Documentary Lineage Identity Authorized",
+      "type": "boolean"
+    },
+    "entries": {
+      "items": {
+        "$ref": "#/$defs/CandidateSelectionEntry"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "title": "Entries",
+      "type": "array"
+    },
+    "objective_sha256": {
+      "const": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
+      "title": "Objective Sha256",
+      "type": "string"
+    },
+    "plan_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Plan Sha256",
+      "type": "string"
+    },
+    "production_selection_authorized": {
+      "const": false,
+      "title": "Production Selection Authorized",
+      "type": "boolean"
+    },
+    "provider_call_authorized": {
+      "const": false,
+      "title": "Provider Call Authorized",
+      "type": "boolean"
+    },
+    "provider_metadata_present": {
+      "const": false,
+      "title": "Provider Metadata Present",
+      "type": "boolean"
+    },
+    "qualification_authorized": {
+      "const": false,
+      "title": "Qualification Authorized",
+      "type": "boolean"
+    },
+    "ranking_executed": {
+      "const": false,
+      "title": "Ranking Executed",
+      "type": "boolean"
+    },
+    "release_authorized": {
+      "const": false,
+      "title": "Release Authorized",
+      "type": "boolean"
+    },
+    "runner_authority_authorized": {
+      "const": false,
+      "title": "Runner Authority Authorized",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "seal_publication_authorized": {
+      "const": false,
+      "title": "Seal Publication Authorized",
+      "type": "boolean"
+    },
+    "serialized_authority": {
+      "const": false,
+      "title": "Serialized Authority",
+      "type": "boolean"
+    },
+    "source_bindings": {
+      "items": {
+        "$ref": "#/$defs/CandidateSelectionSourceBinding"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "title": "Source Bindings",
+      "type": "array"
+    },
+    "source_egress_authorized": {
+      "const": false,
+      "title": "Source Egress Authorized",
+      "type": "boolean"
+    },
+    "status": {
+      "const": "NONAUTHORIZING",
+      "title": "Status",
+      "type": "string"
+    },
+    "unresolved_requirements": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 64,
+      "title": "Unresolved Requirements",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "status",
+    "objective_sha256",
+    "source_bindings",
+    "entries",
+    "unresolved_requirements",
+    "ranking_executed",
+    "cached_ranking_payload_present",
+    "provider_metadata_present",
+    "discovery_evidence_present",
+    "documentary_lineage_identity_authorized",
+    "provider_call_authorized",
+    "source_egress_authorized",
+    "qualification_authorized",
+    "production_selection_authorized",
+    "runner_authority_authorized",
+    "benchmark_authorized",
+    "seal_publication_authorized",
+    "release_authorized",
+    "serialized_authority",
+    "plan_sha256"
+  ],
+  "title": "mmaudit non-authorizing operator-staged model selection plan",
+  "type": "object"
+}
