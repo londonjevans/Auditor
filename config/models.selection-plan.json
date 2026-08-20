@@ -32,16 +32,14 @@
     {
       "advisory_lineage_group": "DeepSeek",
       "allowed_provider_endpoints": [
-        "deepinfra",
-        "google-vertex",
-        "novita",
+        "novita/fp8",
         "together"
       ],
       "approved_roles": [],
       "availability": "UNVERIFIED",
       "documentary_lineage": "UNCONFIRMED",
       "entry_authority": false,
-      "entry_sha256": "3b43c03c8a053ce345a9d16f033d1c152e99c0efb27bd055530d108f32dff329",
+      "entry_sha256": "905fbfdaa8bed653ca0d86003610b0e9a4724ac164385e45f0b1d81bdd9db6ce",
       "exact_model_id": "deepseek/deepseek-v4-pro-0813",
       "lineage_group_seed_sha256": "0a736ab443477cef4d0ee92b36ef4a18aadb36e8c54bab3b5654d03cc0fc2483",
       "priority_rank": 5
@@ -100,16 +98,14 @@
     {
       "advisory_lineage_group": "Moonshot-Kimi",
       "allowed_provider_endpoints": [
-        "deepinfra",
-        "google-vertex",
-        "novita",
+        "deepinfra/bf16",
         "together"
       ],
       "approved_roles": [],
       "availability": "UNVERIFIED",
       "documentary_lineage": "UNCONFIRMED",
       "entry_authority": false,
-      "entry_sha256": "15441537add1aa013966c433ea303a54d43d83842ba66b2655ee085a19b1fd7c",
+      "entry_sha256": "dc6ca23e954b7a5043f57715fbc0c21a700f05cdf47817d450dd328215c64528",
       "exact_model_id": "moonshotai/kimi-k3",
       "lineage_group_seed_sha256": "f46cb1c7d55406b73aebebce2386b927039759f3d24aa6930422f0d125551c34",
       "priority_rank": 7
@@ -134,16 +130,13 @@
     {
       "advisory_lineage_group": "Alibaba-Qwen",
       "allowed_provider_endpoints": [
-        "deepinfra",
-        "google-vertex",
-        "novita",
-        "together"
+        "alibaba"
       ],
       "approved_roles": [],
       "availability": "UNVERIFIED",
       "documentary_lineage": "UNCONFIRMED",
       "entry_authority": false,
-      "entry_sha256": "0c44f7a8ef6899de9325f3864b6c6892de470d7cd4a4eab2c35998e8d77b345f",
+      "entry_sha256": "27c973b590ba4d17660a9afdc39888394941e215bc4cf2d70362705a318165f7",
       "exact_model_id": "qwen/qwen3.8-max",
       "lineage_group_seed_sha256": "b71edf4b2ea76b2e948f80a6d04200d32b6d10e9d6571bfc13b75aae40ca897b",
       "priority_rank": 6
@@ -201,7 +194,7 @@
     }
   ],
   "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
-  "plan_sha256": "b365a0ce5056ec1328f3f54722a97104dd25308a1cfab663d4185476165b06a7",
+  "plan_sha256": "e1fcfa451f7d4b352663c4c870d65fe03fbaff1745efc0350277b84194288a05",
   "production_selection_authorized": false,
   "provider_call_authorized": false,
   "provider_metadata_present": false,

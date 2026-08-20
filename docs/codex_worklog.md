@@ -7,11 +7,41 @@ credentials, RPC URLs, or operational attack instructions.
 AUTORUN_STATUS: BLOCKED_SAFETY
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001
-NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator run the three exact metadata-only discovery commands in `docs/models/model_selection.md`; reject any unavailable, non-ZDR, identity-drifted, or capability-incomplete route without substitution. Then compile fresh documentary public-lineage evidence for the exact selected IDs, derive request-bound cost caps from observed pricing/capacity, and emit the final AUTHRUNNER command. AUTHSEAL publication, real audits, benchmarks, and release remain queued.
-LAST_VALIDATION_COMMAND: Provider-free 219-test candidate-selection/discovery/registry/CLI/schema/objective/documentation matrix, repeated 32-test governance/schema gate, `.venv/bin/python scripts/generate_release_schemas.py`, `make PYTHON=.venv/bin/python lint`, `make PYTHON=.venv/bin/python type`, strict governance JSON parsing, and diff integrity.
-LAST_VALIDATION_RESULT: PASS / BLOCKED_SAFETY — 219 broader tests and the repeated 32-test governance/schema gate passed; generated schemas were current; Ruff passed over 535 files; strict mypy passed over 202 source files; both governance JSON documents parsed strictly; diff integrity passed; independent adversarial review found no blocker/HIGH. No new complete-suite claim, provider metadata, candidate registry, REAL AUTHRUNNER issuance, or release authority exists.
+NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator run the three fresh `-r2` metadata-only discovery commands in `docs/models/model_selection.md`; reject any unavailable, non-ZDR, identity-drifted, or capability-incomplete route without substitution. Then compile fresh documentary public-lineage evidence for those three exact IDs and run the frozen provider-free `--preflight-only` command. Derive final request-bound caps from retained pricing/capacity evidence before any one-shot REAL launch. AUTHSEAL publication, real audits, benchmarks, and release remain queued.
+LAST_VALIDATION_COMMAND: Provider-free 514-test reasoning/discovery/OpenRouter/candidate-selection/AUTHRUNNER-CLI/schema/objective/documentation matrix; `.venv/bin/python scripts/generate_release_schemas.py`; `make PYTHON=.venv/bin/python lint`; `make PYTHON=.venv/bin/python type`; strict governance JSON parsing; diff integrity.
+LAST_VALIDATION_RESULT: PASS / BLOCKED_SAFETY — 514 relevant tests passed; generated schemas were current; Ruff passed over 535 files; strict mypy passed over 202 source files; governance JSON and diff gates passed; independent exact-byte review found no blocker/HIGH. The corrected plan remains nonauthorizing, no corrected registry or fresh exact-ID public-lineage authority exists, and no secret, provider call, ledger access/mutation, REAL AUTHRUNNER issuance, or release action occurred.
 LAST_CHECKPOINT_COMMIT: f894c3ff6c117d543a796d586b3e9650972dafe0 — `Add nonauthorizing candidate discovery bootstrap`, verified on `origin/agent/v3-wip-checkpoint`.
 REMAINING_ACTIONABLE_TICKETS: The provider-free stale candidate-registry rebuild and exact AUTHRUNNER campaign preparation are actionable. Credentialed execution remains `BLOCKED_SAFETY`; external authority-log publication and all benchmark/release work remain queued behind genuine REAL runner evidence.
+
+## 2026-08-20T16:22:15Z — AUTHRUNNER provider-contract drift corrected provider-free
+
+- **Status:** `V3-AUTHRUNNER-001` remains `PARTIAL` / `BLOCKED_SAFETY`; no provider or runner
+  authority is claimed.
+- **Reproduced metadata defects:** Operator-run discovery reported the current OpenRouter
+  `supported_efforts` inventory includes `max`, including a `max` default for Kimi K3, and showed
+  that the first three generic endpoint pins did not match the exact provider tags. The failed
+  discovery outputs are not promoted as evidence.
+- **Implementation:** Centralized the canonical seven-tier reasoning-effort order through `max`
+  across discovery, endpoint snapshots, config, request serialization, and generated schemas.
+  Resealed the explicitly nonauthorizing selection plan as
+  `e1fcfa451f7d4b352663c4c870d65fe03fbaff1745efc0350277b84194288a05`, restricted DeepSeek to
+  `novita/fp8` or `together`, Qwen to `alibaba`, and Kimi to `deepinfra/bf16` or `together`, and
+  replaced the failed command paths with fresh `-r2` destinations.
+- **Provider-free launch proof:** Added `models authenticated-runner --preflight-only`. It runs the
+  complete config/corpus/provenance/lineage/registry/discovery/policy/ledger/path/launch checks,
+  emits a fixed nonauthorizing inventory, and returns before secret selection, provider access,
+  ledger mutation, campaign creation, or output publication. At the documented `$1.00` tripwires,
+  the declared maximum is 96 logical completions, 192 attempts, and `$192.00`; live request-bound
+  pricing is still required and can reject before reservation/POST.
+- **Validation:** The relevant 514-test matrix, release-schema verification, Ruff, strict mypy over
+  202 source files, governance JSON parsing, and diff integrity passed. Independent exact-byte
+  review found no blocker/HIGH or authority escalation.
+- **Remaining limitation and next action:** Corrected metadata-only discovery has not been executed
+  by Codex. The current compiled public-lineage manifest covers none of the three selected exact
+  IDs, so AUTHRUNNER must still reject them. Have the operator run the three exact `-r2` commands,
+  compile fresh exact-ID documentary lineage, then run the provider-free preflight. No secret,
+  provider call, ledger read/write, AUTHSEAL publication, audit, benchmark, or release action was
+  performed in this slice.
 
 ## 2026-08-20T15:14:32Z — Priority-1 durability recovery validated and pushed
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -17,6 +18,7 @@ from mmaudit.models.authenticated_runner_durable_bundle import (
     AuthenticatedRunnerDurableEvidenceBundle,
     authenticated_runner_durable_bundle_bytes,
 )
+from mmaudit.models.authenticated_runner_execution import AuthenticatedRunnerExecutionInventory
 from mmaudit.models.evidence_seal_authority import (
     EvidenceSealCollisionMap,
     EvidenceSealDecisionProjection,
@@ -49,6 +51,7 @@ def _required_arguments(
     *,
     allow_egress: bool = True,
     include_secret_file: bool = True,
+    preflight_only: bool = False,
 ) -> list[str]:
     arguments = [
         "models",
@@ -97,6 +100,8 @@ def _required_arguments(
     arguments.append("--no-color")
     if allow_egress:
         arguments.append("--allow-code-egress")
+    if preflight_only:
+        arguments.append("--preflight-only")
     return arguments
 
 
@@ -294,6 +299,7 @@ def test_authenticated_runner_help_exposes_explicit_operator_inputs() -> None:
         "--ground-truth-provenance",
         "--cost-ledger",
         "--allow-code-egress",
+        "--preflight-only",
     ):
         assert option in result.stdout
 
@@ -322,6 +328,111 @@ def test_authenticated_runner_requires_opt_in_before_loading_or_secret_access(
 
     assert result.exit_code == ExitCode.CONFIGURATION
     assert "requires explicit --allow-code-egress" in " ".join(result.stdout.split())
+
+
+def test_authenticated_runner_preflight_only_never_selects_secrets_or_mutates_outputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = SimpleNamespace(execution=SimpleNamespace(cost_ledger_path=None))
+    ledger = SimpleNamespace(
+        path=tmp_path / "cost-ledger.json",
+        lock_path=tmp_path / "cost-ledger.json.lock",
+    )
+    budget = SimpleNamespace(atomic_ledger=ledger)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(cli_module, "load_config", lambda _path: config)
+    monkeypatch.setattr(cli_module, "load_model_benchmark_corpus", lambda _path: object())
+    monkeypatch.setattr(
+        cli_module,
+        "load_frozen_ground_truth_provenance",
+        lambda _path: object(),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "resolve_verified_frozen_ground_truth",
+        lambda **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "resolve_verified_public_model_lineage",
+        lambda: object(),
+    )
+    monkeypatch.setattr(cli_module, "load_candidate_registry", lambda _path: object())
+    monkeypatch.setattr(
+        cli_module,
+        "load_model_discovery_run",
+        lambda _path: (object(), (object(),)),
+    )
+    monkeypatch.setattr(cli_module, "load_qualification_policy", lambda _path: object())
+    monkeypatch.setattr(cli_module, "_require_qualification_release_pins", lambda **_kw: None)
+    monkeypatch.setattr(
+        cli_module,
+        "_budget_and_usage",
+        lambda *_args, **_kwargs: (budget, object()),
+    )
+
+    def paths(**kwargs: object) -> None:
+        captured["source_paths"] = kwargs["source_paths"]
+
+    monkeypatch.setattr(cli_module, "_preflight_authenticated_runner_cli_paths", paths)
+    monkeypatch.setattr(cli_module, "_preflight_authenticated_runner_output", lambda _path: None)
+    inventory = AuthenticatedRunnerExecutionInventory(
+        run_count=2,
+        case_count=24,
+        candidate_logical_request_count=48,
+        judge_logical_request_count=48,
+        logical_request_count=96,
+        maximum_attempts_per_logical_request=2,
+        maximum_provider_attempt_count=192,
+        generation_refetch_count=96,
+        effective_config_sha256="a" * 64,
+        initial_spent_usd=Decimal("0.0034764325"),
+        declared_interval_cost_cap_usd=Decimal("192.00"),
+        declared_final_spent_cap_usd=Decimal("192.0034764325"),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "preflight_authenticated_openrouter_launch",
+        lambda _launch: inventory,
+    )
+
+    def forbidden(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("preflight-only must not select secrets, execute, or publish")
+
+    for name in (
+        "select_operator_secret_file",
+        "load_operator_secrets",
+        "execute_authenticated_openrouter_runner",
+        "build_authenticated_runner_durable_bundle",
+        "_write_authenticated_runner_output_fresh",
+    ):
+        monkeypatch.setattr(cli_module, name, forbidden)
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        _required_arguments(tmp_path, preflight_only=True),
+        env={"MMAUDIT_SECRETS_ENV_FILE": str(tmp_path / "different-secret.env")},
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "VALID / NONAUTHORIZING / NO PROVIDER EGRESS" in result.stdout
+    assert "logical_requests=96" in result.stdout
+    assert "maximum_provider_attempts=192" in result.stdout
+    assert "declared_interval_cap_usd=192.00" in result.stdout
+    assert "declared_final_spent_cap_usd=192.0034764325" in result.stdout
+    source_paths = cast(tuple[Path, ...], captured["source_paths"])
+    assert tmp_path / "operator-secrets.env" not in source_paths
+    assert tmp_path / "different-secret.env" not in source_paths
+    for name in (
+        "primary-campaign",
+        "primary-portfolio",
+        "replay-campaign",
+        "replay-portfolio",
+        "runner-evidence.json",
+    ):
+        assert not (tmp_path / name).exists()
 
 
 @pytest.mark.parametrize("explicit_secret", (True, False))

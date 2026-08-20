@@ -25,7 +25,11 @@ from mmaudit.models.output_modes import (
     structured_output_parameters,
     supported_output_modes,
 )
-from mmaudit.models.reasoning import ReasoningControlProfile, ReasoningEffort
+from mmaudit.models.reasoning import (
+    REASONING_EFFORT_ORDER,
+    ReasoningControlProfile,
+    ReasoningEffort,
+)
 
 _MODEL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
 _ENDPOINT_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
@@ -54,14 +58,6 @@ _SNAPSHOT_SCHEMA_VERSION = "1.0"
 _NON_BILLABLE_PRICING_METADATA = frozenset({"discount"})
 
 ReasoningParameterSupport = Literal["supported", "unsupported", "unknown"]
-REASONING_EFFORT_ORDER: tuple[ReasoningEffort, ...] = (
-    "none",
-    "minimal",
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-)
 
 
 class EndpointSnapshotValidationError(ValueError):

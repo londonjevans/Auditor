@@ -15,6 +15,7 @@ from mmaudit.constants import (
 from mmaudit.models.reasoning import (
     CANONICAL_REASONING_POLICY_ROLES,
     MAX_REASONING_TOKEN_RESERVE,
+    REASONING_EFFORT_ORDER,
     ReasoningControlProfile,
     ReasoningExecutionEvidence,
     ReasoningPolicyArtifact,
@@ -26,6 +27,18 @@ from mmaudit.models.reasoning import (
     reasoning_qualification_benchmark_role,
     resolve_reasoning_request_role,
 )
+
+
+def test_reasoning_effort_order_includes_max_as_the_highest_tier() -> None:
+    assert REASONING_EFFORT_ORDER == (
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    )
 
 
 def _sha(value: Any) -> str:
@@ -91,6 +104,7 @@ def _controls() -> dict[str, ReasoningControlProfile]:
         ("effort", "none", None, True, 0),
         ("effort", "minimal", None, False, 128),
         ("effort", "xhigh", None, True, 4_096),
+        ("effort", "max", None, True, 4_096),
         ("max_tokens", None, 2_048, True, 2_048),
     ],
 )

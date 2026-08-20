@@ -23,6 +23,7 @@ from mmaudit.constants import (
     DEFAULT_CONFIG_NAME,
     DEFAULT_IGNORE_NAME,
 )
+from mmaudit.models.reasoning import ReasoningEffort
 from mmaudit.models.schemas import (
     AuditProfile,
     AuditScope,
@@ -1195,7 +1196,7 @@ class ModelLineageConfig(ConfigModel):
 class ModelReasoningConfig(ConfigModel):
     """Bounded provider reasoning controls with an explicit completion reserve."""
 
-    effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = None
+    effort: ReasoningEffort | None = None
     max_tokens: int | None = Field(default=None, ge=1, le=65_536)
     reserved_tokens: int | None = Field(default=None, ge=0, le=65_536)
     exclude: bool = False

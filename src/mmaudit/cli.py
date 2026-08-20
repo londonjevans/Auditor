@@ -2004,6 +2004,16 @@ def models_authenticated_runner(
             help="Explicitly permit only the frozen synthetic/public corpus to reach providers.",
         ),
     ] = False,
+    preflight_only: Annotated[
+        bool,
+        typer.Option(
+            "--preflight-only",
+            help=(
+                "Validate the complete launch without selecting secrets, provider access, "
+                "ledger mutation, or output publication."
+            ),
+        ),
+    ] = False,
     no_color: Annotated[bool, typer.Option("--no-color")] = False,
 ) -> None:
     """Run one exact two-pass authenticated synthetic benchmark in a single process."""
@@ -2048,13 +2058,6 @@ def models_authenticated_runner(
             policy=policy,
             benchmark_suite=benchmark_suite,
         )
-        selected_secret_file = select_operator_secret_file(secrets_env_file)
-        if selected_secret_file is None:
-            raise ConfigError(
-                "models authenticated-runner requires --secrets-env-file or "
-                "MMAUDIT_SECRETS_ENV_FILE"
-            )
-
         ledger_path = _selected_cost_ledger_path(config, cost_ledger)
         if ledger_path is None:
             raise ConfigError(
@@ -2113,7 +2116,7 @@ def models_authenticated_runner(
             replay_portfolio,
             output,
         )
-        source_paths = (
+        source_paths: tuple[Path, ...] = (
             config_path,
             corpus,
             ground_truth_provenance,
@@ -2126,14 +2129,57 @@ def models_authenticated_runner(
             qualification_policy,
             ledger.path,
             ledger.lock_path,
-            selected_secret_file,
         )
+        selected_secret_file: Path | None = None
+        if not preflight_only:
+            selected_secret_file = select_operator_secret_file(secrets_env_file)
+            if selected_secret_file is None:
+                raise ConfigError(
+                    "models authenticated-runner requires --secrets-env-file or "
+                    "MMAUDIT_SECRETS_ENV_FILE"
+                )
+            source_paths = (*source_paths, selected_secret_file)
         _preflight_authenticated_runner_cli_paths(
             mutable_outputs=mutable_outputs,
             source_paths=source_paths,
         )
         _preflight_authenticated_runner_output(output)
-        preflight_authenticated_openrouter_launch(launch)
+        inventory = preflight_authenticated_openrouter_launch(launch)
+
+        if preflight_only:
+            local_console = Console(no_color=no_color)
+            local_console.print(
+                "AUTHRUNNER preflight: VALID / NONAUTHORIZING / NO PROVIDER EGRESS",
+                markup=False,
+            )
+            local_console.print(
+                f"Inventory: runs={inventory.run_count}; cases={inventory.case_count}; "
+                f"candidate_logical_requests={inventory.candidate_logical_request_count}; "
+                f"judge_logical_requests={inventory.judge_logical_request_count}; "
+                f"logical_requests={inventory.logical_request_count}",
+                markup=False,
+            )
+            local_console.print(
+                "Attempts: "
+                f"maximum_per_logical_request={inventory.maximum_attempts_per_logical_request}; "
+                f"maximum_provider_attempts={inventory.maximum_provider_attempt_count}; "
+                f"generation_refetches={inventory.generation_refetch_count}",
+                markup=False,
+            )
+            local_console.print(
+                f"Cost tripwire: initial_spent_usd={inventory.initial_spent_usd}; "
+                f"declared_interval_cap_usd={inventory.declared_interval_cost_cap_usd}; "
+                f"declared_final_spent_cap_usd={inventory.declared_final_spent_cap_usd}",
+                markup=False,
+            )
+            local_console.print(
+                f"Effective config SHA-256: {inventory.effective_config_sha256}",
+                markup=False,
+            )
+            return
+
+        if selected_secret_file is None:
+            raise ConfigError("authenticated runner secret selection was not retained")
 
         with load_operator_secrets(selected_secret_file, required=True) as operator_secrets:
             if not operator_secrets.openrouter_api_key_present:

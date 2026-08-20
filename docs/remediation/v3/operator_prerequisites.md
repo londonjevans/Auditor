@@ -13,7 +13,7 @@ Real provider tests require all of the following:
 - explicit `MMAUDIT_RUN_REAL_PROVIDER_TESTS=1`;
 - explicit operator-controlled `--secrets-env-file PATH`;
 - an exact model allowlist and exact approved endpoint;
-- an explicit `MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE=STRICT_ZDR` profile;
+- an explicit `MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE=SYNTHETIC_BENCHMARK` profile;
 - a numeric per-command cost cap within the aggregate remaining budget;
 - a fresh absolute private JSON evidence destination beneath an existing
   operator-controlled directory;
@@ -22,6 +22,12 @@ Real provider tests require all of the following:
 
 The secret file is never target input and its contents must not be displayed,
 logged, hashed, copied, or persisted.
+
+The dedicated `models authenticated-runner` command does not use the test-harness
+`MMAUDIT_RUN_REAL_PROVIDER_TESTS` switch. It requires the same
+`SYNTHETIC_BENCHMARK`/ZDR/no-fallback policy, the explicit `--allow-code-egress` CLI opt-in,
+three fresh singleton discovery registries, and same-process runner custody. Its
+`--preflight-only` mode deliberately stops before secret selection or provider access.
 
 ## Endpoint-aware token planning
 

@@ -133,6 +133,17 @@ def test_named_reasoning_effort_requires_an_explicit_positive_reserve() -> None:
         ModelReasoningConfig(max_tokens=4_096, reserved_tokens=2_048)
 
 
+def test_max_reasoning_effort_is_a_bounded_named_config_control() -> None:
+    controls = ModelReasoningConfig(effort="max", reserved_tokens=4_096)
+
+    assert controls.model_dump(mode="json") == {
+        "effort": "max",
+        "max_tokens": None,
+        "reserved_tokens": 4_096,
+        "exclude": False,
+    }
+
+
 def test_reasoning_can_be_explicitly_disabled_for_optional_reasoning_models() -> None:
     controls = ModelReasoningConfig(effort="none", exclude=True)
 

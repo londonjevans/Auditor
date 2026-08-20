@@ -63,6 +63,7 @@ def _endpoint(
         "medium",
         "high",
         "xhigh",
+        "max",
     ),
 ) -> dict[str, Any]:
     endpoint: dict[str, Any] = {
@@ -105,6 +106,7 @@ def _endpoint_snapshot(
         "medium",
         "high",
         "xhigh",
+        "max",
     ),
 ) -> OpenRouterEndpointSnapshotEvidence:
     exact_endpoint = _endpoint(
@@ -159,7 +161,15 @@ def _model(
         "reasoning": {
             "mandatory": False,
             "default_enabled": True,
-            "supported_efforts": ["none", "minimal", "low", "medium", "high", "xhigh"],
+            "supported_efforts": [
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+            ],
         },
         "description": "provider-controlled prose excluded from evidence",
         "benchmarks": {"untrusted": [1, 2, 3]},
@@ -470,13 +480,33 @@ def test_explicit_reasoning_max_token_ceiling_is_frozen_when_published() -> None
     assert len(payload.reasoning_capability.capability_sha256) == 64
 
 
+def test_catalog_accepts_max_default_effort_and_canonicalizes_inventory() -> None:
+    model = _model()
+    model["reasoning"]["default_effort"] = "max"
+    model["reasoning"]["supported_efforts"] = ["max", "xhigh", "none"]
+
+    payload = _discover(
+        models=[model],
+        endpoint_snapshot=_endpoint_snapshot(
+            supported_reasoning_efforts=("none", "xhigh", "max"),
+        ),
+    )
+
+    assert payload.model_supported_reasoning_efforts == ("none", "xhigh", "max")
+    assert payload.reasoning_capability.supported_reasoning_efforts == (
+        "none",
+        "xhigh",
+        "max",
+    )
+
+
 def test_discovery_freezes_only_exact_endpoint_reasoning_effort_inventory() -> None:
     model = _model()
 
     payload = _discover(
         models=[model],
         endpoint_snapshot=_endpoint_snapshot(
-            supported_reasoning_efforts=("xhigh", "none", "medium"),
+            supported_reasoning_efforts=("max", "xhigh", "none", "medium"),
         ),
     )
 
@@ -484,6 +514,7 @@ def test_discovery_freezes_only_exact_endpoint_reasoning_effort_inventory() -> N
         "none",
         "medium",
         "xhigh",
+        "max",
     )
 
     unknown_payload = _discover(

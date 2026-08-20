@@ -98,7 +98,9 @@ from mmaudit.models.output_modes import (
 )
 from mmaudit.models.reasoning import (
     CANONICAL_REASONING_POLICY_ROLES,
+    REASONING_EFFORT_ORDER,
     ReasoningControlProfile,
+    ReasoningEffort,
     ReasoningExecutionEvidence,
     ReasoningPolicyArtifact,
     ReasoningPolicyError,
@@ -1320,11 +1322,13 @@ def _canonical_audit_policy_binding(
 class OpenRouterReasoning:
     """Bounded reasoning controls supported by OpenRouter."""
 
-    effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = None
+    effort: ReasoningEffort | None = None
     max_tokens: int | None = None
     exclude: bool = False
 
     def __post_init__(self) -> None:
+        if self.effort is not None and self.effort not in REASONING_EFFORT_ORDER:
+            raise ValueError("reasoning effort is not supported")
         if self.effort is not None and self.max_tokens is not None:
             raise ValueError("reasoning effort and max_tokens are mutually exclusive")
         if self.max_tokens is not None and not 1 <= self.max_tokens <= 65_536:

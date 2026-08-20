@@ -7101,6 +7101,18 @@ def test_reasoning_payload_can_explicitly_disable_optional_reasoning() -> None:
     }
 
 
+def test_reasoning_payload_emits_max_effort_verbatim() -> None:
+    reasoning = OpenRouterReasoning(effort="max")
+
+    assert reasoning.as_request_payload() == {
+        "exclude": False,
+        "effort": "max",
+    }
+
+    with pytest.raises(ValueError, match="not supported"):
+        OpenRouterReasoning(effort="unknown")  # type: ignore[arg-type]
+
+
 def _per_role_reasoning_policy() -> ReasoningPolicyArtifact:
     disabled = ReasoningControlProfile.build(
         mode="disabled",

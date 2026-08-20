@@ -32,7 +32,6 @@ from pydantic import (
 )
 
 from mmaudit.models.endpoint_snapshots import (
-    REASONING_EFFORT_ORDER,
     OpenRouterEndpointSnapshotEvidence,
     OpenRouterReasoningCapabilityEvidence,
     ReasoningParameterSupport,
@@ -53,7 +52,7 @@ from mmaudit.models.output_modes import (
 from mmaudit.models.output_modes import (
     structured_output_parameters as derive_structured_output_parameters,
 )
-from mmaudit.models.reasoning import ReasoningEffort
+from mmaudit.models.reasoning import REASONING_EFFORT_ORDER, ReasoningEffort
 from mmaudit.models.schemas import ExecutionEvidenceKind
 from mmaudit.privacy import (
     EffectivePrivacyPolicyEvidence,

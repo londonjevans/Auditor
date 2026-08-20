@@ -2075,18 +2075,27 @@ are invisible to source review by construction.
   runner, benchmark, seal, and release claim false. `models discover` can now use that plan to
   publish a rootless, role-empty, pending registry whose runtime fields come only from one fresh
   exact discovery bundle. The stale registry remains historical and was not rewritten.
+- **Provider-contract correction 2026-08-20:** OpenRouter metadata reproduced a seventh
+  reasoning-effort tier, `max`, and exact endpoint tags that invalidated the first discovery
+  commands. The canonical effort order now ends in `max`; the nonauthorizing selection plan is
+  resealed as `e1fcfa451f7d4b352663c4c870d65fe03fbaff1745efc0350277b84194288a05` with DeepSeek
+  restricted to `novita/fp8` or `together`, Qwen to `alibaba`, and Kimi to `deepinfra/bf16` or
+  `together`. Fresh `-r2` metadata-only discovery commands and a secret-free
+  `models authenticated-runner --preflight-only` command are frozen in
+  `docs/models/model_selection.md`; no corrected registry or REAL runner evidence is claimed.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
   and non-crediting. Genuine production-issued lifecycle proof is absent; provider-free fixtures
   cannot mint owned-REAL origin, and the current repository rules prohibit reading real credentials
   or accessing the provider. Campaign/generation revocation beyond the top-level runner lease is
   not independently demonstrated. External-log publication and every benchmark run remain queued.
-- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. The operator may
-  run the three exact metadata-only discovery commands in `docs/models/model_selection.md`; any
-  unavailable, non-ZDR, identity-drifted, or capability-incomplete route must reject without
-  substitution. After the three singleton registries and discovery bundles exist, compile fresh
-  documentary public-lineage evidence for those exact IDs, derive request-bound cost caps from the
-  observed pricing/capacity, and emit the final AUTHRUNNER command. AUTHSEAL publication, real
-  audits, benchmarks, and release remain queued.
+- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator
+  run the three fresh `-r2` metadata-only discovery commands in
+  `docs/models/model_selection.md`; any unavailable, non-ZDR, identity-drifted, or
+  capability-incomplete route must reject without substitution. Then compile fresh documentary
+  public-lineage evidence for those three exact IDs and run the frozen provider-free
+  `--preflight-only` command. Derive final request-bound caps from the retained pricing/capacity
+  evidence before any one-shot REAL launch. AUTHSEAL publication, real audits, benchmarks, and
+  release remain queued.
 
 ## V3-TARGETSPEC-001 — Reconcile the product vision with the objective and correct the README
 

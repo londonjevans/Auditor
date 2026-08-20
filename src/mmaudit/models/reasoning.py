@@ -21,7 +21,16 @@ from mmaudit.constants import (
 )
 
 ReasoningControlMode = Literal["disabled", "default", "effort", "max_tokens"]
-ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+REASONING_EFFORT_ORDER: tuple[ReasoningEffort, ...] = (
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+)
 ReasoningRequestRoleMappingKind = Literal[
     "base_exact",
     "specialist_investigator",
@@ -727,6 +736,7 @@ def _canonical_json_default(value: Any) -> Any:
 __all__ = [
     "CANONICAL_REASONING_POLICY_ROLES",
     "MAX_REASONING_TOKEN_RESERVE",
+    "REASONING_EFFORT_ORDER",
     "ReasoningControlMode",
     "ReasoningControlProfile",
     "ReasoningEffort",

@@ -136,11 +136,21 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
     plan = load_candidate_selection_plan(ROOT / "config" / "models.selection-plan.json")
     guide = (ROOT / "docs" / "models" / "model_selection.md").read_text(encoding="utf-8")
 
-    assert plan.plan_sha256 == "b365a0ce5056ec1328f3f54722a97104dd25308a1cfab663d4185476165b06a7"
+    assert plan.plan_sha256 == "e1fcfa451f7d4b352663c4c870d65fe03fbaff1745efc0350277b84194288a05"
     assert plan.plan_sha256 in guide
     assert len(plan.entries) == 11
     assert plan.authenticated_runner_selection is not None
     assert plan.authenticated_runner_selection.distinct_root_lineages_verified is False
+    entries = {entry.exact_model_id: entry for entry in plan.entries}
+    assert entries["deepseek/deepseek-v4-pro-0813"].allowed_provider_endpoints == (
+        "novita/fp8",
+        "together",
+    )
+    assert entries["qwen/qwen3.8-max"].allowed_provider_endpoints == ("alibaba",)
+    assert entries["moonshotai/kimi-k3"].allowed_provider_endpoints == (
+        "deepinfra/bf16",
+        "together",
+    )
     assert all(entry.availability == "UNVERIFIED" for entry in plan.entries)
     assert all(entry.documentary_lineage == "UNCONFIRMED" for entry in plan.entries)
 
@@ -162,6 +172,41 @@ def test_selection_plan_replays_exact_staged_source_bytes() -> None:
             ranking_source_bytes=RANKING_BYTES + b"tamper",
             lineage_review_source_bytes=REVIEW_BYTES,
         )
+
+
+def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> None:
+    plan = load_candidate_selection_plan(ROOT / "config" / "models.selection-plan.json")
+    corrected = (
+        DiscoveryCandidateRoute(
+            exact_model_id="deepseek/deepseek-v4-pro-0813",
+            approved_provider_endpoint="novita/fp8",
+        ),
+        DiscoveryCandidateRoute(
+            exact_model_id="moonshotai/kimi-k3",
+            approved_provider_endpoint="deepinfra/bf16",
+        ),
+        DiscoveryCandidateRoute(
+            exact_model_id="qwen/qwen3.8-max",
+            approved_provider_endpoint="alibaba",
+        ),
+    )
+
+    assert validate_candidate_selection_routes(plan, routes=corrected) == plan
+    for model_id, stale_endpoint in (
+        ("deepseek/deepseek-v4-pro-0813", "novita"),
+        ("moonshotai/kimi-k3", "google-vertex"),
+        ("qwen/qwen3.8-max", "together"),
+    ):
+        with pytest.raises(CandidateSelectionError, match="unlisted endpoint"):
+            validate_candidate_selection_routes(
+                plan,
+                routes=(
+                    DiscoveryCandidateRoute(
+                        exact_model_id=model_id,
+                        approved_provider_endpoint=stale_endpoint,
+                    ),
+                ),
+            )
 
 
 def test_selection_plan_rejects_one_source_relabelled_as_two() -> None:

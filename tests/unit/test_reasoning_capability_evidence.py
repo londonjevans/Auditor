@@ -24,6 +24,7 @@ _ALL_REASONING_EFFORTS: tuple[ReasoningEffort, ...] = (
     "medium",
     "high",
     "xhigh",
+    "max",
 )
 
 
