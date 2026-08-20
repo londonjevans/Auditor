@@ -67,6 +67,7 @@ from mmaudit.models.schemas import (
     SolidityGraphEdge,
     SolidityGraphKind,
     SolidityGraphOccurrenceKind,
+    SolidityGraphOmission,
     SolidityGraphRetainedOccurrence,
     SolidityGraphSet,
     SolidityProvenance,
@@ -710,6 +711,70 @@ def test_auxiliary_graph_nodes_do_not_invalidate_critical_source_classification(
     assert audited.source_classification_complete
     assert audited.critical_classification_complete
     assert audited.critical_function_assertion_coverage.denominator > 0
+
+
+def test_graph_omissions_make_critical_classification_incomplete(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    root = tmp_path / "foundry"
+    shutil.copytree(FIXTURE, root)
+    config = config_factory(language_profile="solidity-evm")
+    discovery = discover_repository(root, config.repository, IgnoreMatcher())
+    projects = discover_solidity_projects(discovery, config.smart_contracts)
+    build = build_solidity_index(discovery, projects, [root / "out"])
+    graphs = build_solidity_graphs(discovery, build)
+    omitted_edges = [edge for edge in graphs.edges if edge.graph is SolidityGraphKind.STATE_WRITE]
+    assert omitted_edges
+    retained_edges = [
+        edge for edge in graphs.edges if edge.graph is not SolidityGraphKind.STATE_WRITE
+    ]
+    omission = SolidityGraphOmission.build(
+        graph=SolidityGraphKind.STATE_WRITE,
+        candidate_count=len(omitted_edges),
+        retained_count=0,
+        omitted_count=len(omitted_edges),
+        omitted_canonical_bytes=320,
+        omitted_stream_sha256="a" * 64,
+        omitted_sample_sha256s=("b" * 64,),
+    )
+    partial_graphs = SolidityGraphSet.model_validate(
+        _replace_graph_edges(
+            graphs,
+            retained_edges,
+            analyzed_graphs=[
+                kind for kind in graphs.analyzed_graphs if kind is not SolidityGraphKind.STATE_WRITE
+            ],
+            generation_complete=False,
+            edge_omissions=(omission,),
+        ).model_dump(mode="python")
+    )
+
+    coverage = build_solidity_coverage(
+        discovery=discovery,
+        projects=projects,
+        compilations=[],
+        index=build.index,
+        graphs=partial_graphs,
+        scanner_runs=[],
+        invariants=InvariantSuite(),
+    )
+
+    audited = coverage.audited_suite_coverage
+    assert audited is not None
+    assert audited.source_classification_complete
+    assert not audited.critical_classification_complete
+    assert any(
+        "semantic graph generation omitted bounded edge or fact evidence" in limitation
+        for limitation in audited.limitations
+    )
+    partition = partition_audited_source_entities(index=build.index, projects=projects)
+    assert {
+        surface.entity_id
+        for surface in audited.surfaces
+        if surface.critical
+        and surface.entity_kind in {SolidityEntityKind.FUNCTION, SolidityEntityKind.CONSTRUCTOR}
+    } == set(partition.function_entity_ids)
 
 
 def test_symbolic_invariant_and_applicable_economic_plan_require_exact_audited_binding(

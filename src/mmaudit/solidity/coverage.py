@@ -1616,11 +1616,20 @@ def _build_audited_suite_coverage(
     critical_classification_limitations: list[str] = []
     if graphs is None:
         critical_classification_limitations.append("Solidity semantic graph was not produced")
-    elif missing_critical_graphs:
-        critical_classification_limitations.append(
-            "required graph kinds were not analyzed: "
-            + ", ".join(sorted(kind.value for kind in missing_critical_graphs))
-        )
+    else:
+        if (
+            not graphs.generation_complete
+            or bool(graphs.edge_omissions)
+            or bool(graphs.fact_omissions)
+        ):
+            critical_classification_limitations.append(
+                "Solidity semantic graph generation omitted bounded edge or fact evidence"
+            )
+        if missing_critical_graphs:
+            critical_classification_limitations.append(
+                "required graph kinds were not analyzed: "
+                + ", ".join(sorted(kind.value for kind in missing_critical_graphs))
+            )
     if invariants is None:
         critical_classification_limitations.append("invariant inventory was not produced")
     if invariant_binding_incomplete:
@@ -1639,6 +1648,9 @@ def _build_audited_suite_coverage(
     critical_classification_complete = (
         partition.classification_complete
         and graphs is not None
+        and graphs.generation_complete
+        and not graphs.edge_omissions
+        and not graphs.fact_omissions
         and invariants is not None
         and not missing_critical_graphs
         and not graph_binding_incomplete
