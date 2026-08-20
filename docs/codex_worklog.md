@@ -10,7 +10,7 @@ LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001
 NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator run only the fresh PRIMARY r3 metadata discovery command in `docs/models/model_selection.md` for `anthropic/claude-opus-5=amazon-bedrock`; reject any unavailable, non-ZDR, identity-drifted, or capability-incomplete result without substitution. Then compile exact-ID documentary public lineage for DeepSeek V4, Claude Opus 5, and Kimi K3 and run the frozen provider-free r2/r3/r2 `--preflight-only` command. Derive final request-bound caps from retained pricing/capacity evidence before any one-shot REAL launch. AUTHSEAL publication, real audits, benchmarks, and release remain queued.
 LAST_VALIDATION_COMMAND: Provider-free 82-test candidate-selection/registry-bridge/AUTHRUNNER-CLI/schema/objective/documentation matrix; `.venv/bin/python scripts/generate_release_schemas.py`; `make PYTHON=.venv/bin/python lint`; `make PYTHON=.venv/bin/python type`; strict governance JSON parsing; diff integrity.
 LAST_VALIDATION_RESULT: PASS / BLOCKED_SAFETY — 82 relevant tests passed; generated schemas were current; Ruff passed over 535 files; strict mypy passed over 202 source files; governance JSON and diff gates passed. Independent contract audits confirmed the two successful r2 pairs remain exact-bound and reusable, chose the rank-1 exact-ID Anthropic/Amazon Bedrock replacement, and found no authority promotion. PRIMARY r3 and exact-ID public lineage remain absent; Codex made no secret, provider, or ledger access.
-LAST_CHECKPOINT_COMMIT: ca4e2ddd4c85e38b808f7794f2a93ebef791109f — `Accept max reasoning and correct runner routes`, verified on `origin/agent/v3-wip-checkpoint`.
+LAST_CHECKPOINT_COMMIT: 09a6288fe39d76b6bd7d58c1e92a9989e3ea575e — `Replace unusable AUTHRUNNER primary judge`, verified on `origin/agent/v3-wip-checkpoint`.
 REMAINING_ACTIONABLE_TICKETS: The provider-free stale candidate-registry rebuild and exact AUTHRUNNER campaign preparation are actionable. Credentialed execution remains `BLOCKED_SAFETY`; external authority-log publication and all benchmark/release work remain queued behind genuine REAL runner evidence.
 
 ## 2026-08-20T19:50:26Z — AUTHRUNNER singleton discovery outcomes bound to replacement plan
@@ -46,6 +46,8 @@ REMAINING_ACTIONABLE_TICKETS: The provider-free stale candidate-registry rebuild
   documentary source bytes and compile three exact pairwise-independent roots before provider-free
   AUTHRUNNER preflight. No REAL completion, AUTHSEAL publication, audit, benchmark, or release
   action occurred in this slice.
+- **Checkpoint:** Commit `09a6288fe39d76b6bd7d58c1e92a9989e3ea575e` was pushed and independently
+  resolved at `origin/agent/v3-wip-checkpoint`.
 
 ## 2026-08-20T16:22:15Z — AUTHRUNNER provider-contract drift corrected provider-free
 

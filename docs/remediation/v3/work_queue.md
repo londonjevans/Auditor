@@ -2093,7 +2093,9 @@ are invisible to source review by construction.
   `47cd417c3aa73369da16981bbef3a3c450040e95ecf55f9af837f6a0b3edf459` with singleton selected
   routes DeepSeek/`novita/fp8`, Anthropic Claude Opus 5/`amazon-bedrock`, and Kimi/`together`.
   Existing successful r2 pairs remain bound to their original discovery evidence; only the fresh
-  PRIMARY r3 pair is outstanding. Exact-ID public lineage for all three remains absent.
+  PRIMARY r3 pair is outstanding. Green checkpoint
+  `09a6288fe39d76b6bd7d58c1e92a9989e3ea575e` is verified on
+  `origin/agent/v3-wip-checkpoint`. Exact-ID public lineage for all three remains absent.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
   and non-crediting. Genuine production-issued lifecycle proof is absent; provider-free fixtures
   cannot mint owned-REAL origin, and the current repository rules prohibit reading real credentials

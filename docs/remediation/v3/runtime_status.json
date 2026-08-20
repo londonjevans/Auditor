@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-20T16:28:23Z",
+  "updated_at": "2026-08-20T19:55:26Z",
   "objective_path": "docs/remediation/v3/product_completion_goal.txt",
   "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
   "objective_supersession": {
@@ -13,11 +13,11 @@
     "authorized_at": "2026-08-17T20:06:41Z",
     "decision": "EXPLICIT_OPERATOR_TARGET_CHANGE"
   },
-  "candidate_commit": "ca4e2ddd4c85e38b808f7794f2a93ebef791109f",
+  "candidate_commit": "09a6288fe39d76b6bd7d58c1e92a9989e3ea575e",
   "autorun_status": "BLOCKED_SAFETY",
   "current_milestone": "M1-DETERMINISTIC-PRODUCT (REACHED)",
   "current_ticket": "V3-AUTHRUNNER-001",
-  "last_checkpoint_commit": "ca4e2ddd4c85e38b808f7794f2a93ebef791109f",
+  "last_checkpoint_commit": "09a6288fe39d76b6bd7d58c1e92a9989e3ea575e",
   "real_model_calls": {
     "attempted": 11,
     "succeeded": 1,
@@ -35,11 +35,11 @@
     "V3-LINEAGE-001": "The calibration-only signed authority contract is implemented, but ticket completion requires a successful current exact provider refresh and an actual authorized operator-signed decision over that exact candidate set. Runtime approvals remain empty.",
     "V3-CALIBRATE-001": "Provider-free empirical derivation and the exact two-campaign authority bridge are implemented, but statistically meaningful thresholds require a representative randomized independently adjudicated holdout plus current refreshed, signed, and real calibration evidence.",
     "V3-AUTHSEAL-001": "The provider-free frozen-ground-truth, exact scoring, frozen comparison verdict, and structural seal layers are implemented, but runtime authority remains unavailable until independently anchored public lineage, authenticated REAL cross-lineage runner evidence, and an independently verified external transparency-log inclusion receipt exist. The baseline and trusted evaluation clock remain explicitly unevaluable; no human signature or adjudication is requested.",
-    "V3-AUTHRUNNER-001": "Corrected documentary public lineage and the provider-free same-process runner path are implemented, including exact candidate/judge/generation/ledger custody, strict durable replay, egress and cost fail-stops, a one-way PID-local runner lease, post-replay recheck, exactly-once post-AUTHSEAL disposal, post-revoke self-check, and a detached capability-free return snapshot. The canonical nonauthorizing selection plan now accepts the operator-observed exact endpoint tags, and discovery/config/request schemas accept the current max reasoning tier. A secret-free full launch preflight is available. The first SYNTHETIC_BENCHMARK completion returned UNBOUND provider identity and remains non-crediting. Corrected singleton discoveries, new exact-ID documentary lineage, genuine REAL issuance, and the positive issue-consume-revoke-reject lifecycle assay remain unperformed; downstream external-log and benchmark work stay queued."
+    "V3-AUTHRUNNER-001": "Corrected documentary public lineage and the provider-free same-process runner path are implemented, including exact candidate/judge/generation/ledger custody, strict durable replay, egress and cost fail-stops, a one-way PID-local runner lease, post-replay recheck, exactly-once post-AUTHSEAL disposal, post-revoke self-check, and a detached capability-free return snapshot. Operator-reported metadata discovery produced exact rootless pending DeepSeek/novita-fp8 and Kimi/together pairs without a completion or spend; Qwen and Meta lacked ZDR eligibility, and Kimi/deepinfra-bf16 was non-operational. The nonauthorizing replacement plan now selects Claude Opus 5/Amazon Bedrock for the outstanding PRIMARY r3 pair and keeps all three selected routes singleton. Exact-ID documentary lineage, PRIMARY r3, genuine REAL issuance, and the positive issue-consume-revoke-reject lifecycle assay remain unperformed; downstream external-log and benchmark work stay queued."
   },
   "last_validation": {
-    "command": "Provider-free 514-test reasoning/discovery/OpenRouter/candidate-selection/AUTHRUNNER-CLI/schema/objective/documentation matrix; release-schema verification; full Ruff over 535 files; strict mypy over 202 source files; strict governance JSON parsing; diff integrity",
-    "result": "PASS / BLOCKED_SAFETY: 514 relevant tests passed. Generated schemas were current; Ruff, strict mypy, JSON, and diff gates passed; independent exact-byte review found no blocker/HIGH. No corrected registry, fresh exact-ID public-lineage authority, REAL AUTHRUNNER issuance, or release authority exists."
+    "command": "Provider-free 82-test candidate-selection/registry-bridge/AUTHRUNNER-CLI/schema/objective/documentation matrix; release-schema verification; full Ruff over 535 files; strict mypy over 202 source files; strict governance JSON parsing; diff integrity",
+    "result": "PASS / BLOCKED_SAFETY: 82 relevant tests passed. Generated schemas were current; Ruff, strict mypy, JSON, and diff gates passed; independent exact-byte and contract reviews found no blocker/HIGH. Operator-reported successful metadata pairs remain nonauthorizing; PRIMARY r3, exact-ID public lineage, REAL AUTHRUNNER issuance, and release authority remain absent."
   },
   "pause_state": {
     "requested_at": "2026-08-03T20:08:17Z",
@@ -199,7 +199,10 @@
     "next_action_after_v3_priority1_durability": "Keep V3-AUTHRUNNER-001 PARTIAL and autorun BLOCKED_SAFETY. Rebuild config/models.candidates.toml provider-free from the operator-staged model-ranking.py and V3-LINEAGE-001-operator-review.md, remove obsolete IDs, preserve nonauthorizing evidence, and validate distinct candidate, primary, and replay-judge roots. Then freeze the fallback-disabled SYNTHETIC_BENCHMARK policy, synthetic/public corpus, exact ledger/call caps, and emit the exact operator command. Do not consume secrets or make provider calls; AUTHSEAL publication, real audits, benchmarks, and release remain queued.",
     "checkpointed_at_v3_authrunner_provider_contract": "2026-08-20T16:28:23Z",
     "result_v3_authrunner_provider_contract": "Green checkpoint ca4e2ddd4c85e38b808f7794f2a93ebef791109f is verified on origin/agent/v3-wip-checkpoint. The parser and schemas accept the current max reasoning tier; the nonauthorizing plan is resealed for novita/fp8 or together, alibaba, and deepinfra/bf16 or together; and a secret-free AUTHRUNNER launch preflight is present. The 514-test relevant matrix and static/governance gates passed. No corrected discovery registry, new exact-ID lineage authority, provider call, ledger mutation, or release authority is claimed.",
-    "next_action_after_v3_authrunner_provider_contract": "Have the operator run the three fresh -r2 metadata-only discovery commands in docs/models/model_selection.md. Reject any unavailable, non-ZDR, identity-drifted, or capability-incomplete route without substitution. Then compile exact-ID documentary lineage and run the provider-free authenticated-runner preflight before deriving final live request-bound caps."
+    "next_action_after_v3_authrunner_provider_contract": "Have the operator run the three fresh -r2 metadata-only discovery commands in docs/models/model_selection.md. Reject any unavailable, non-ZDR, identity-drifted, or capability-incomplete route without substitution. Then compile exact-ID documentary lineage and run the provider-free authenticated-runner preflight before deriving final live request-bound caps.",
+    "checkpointed_at_v3_authrunner_primary_replacement": "2026-08-20T19:55:26Z",
+    "result_v3_authrunner_primary_replacement": "Green checkpoint 09a6288fe39d76b6bd7d58c1e92a9989e3ea575e is verified on origin/agent/v3-wip-checkpoint. Operator-reported metadata discovery retained exact DeepSeek/novita-fp8 and Kimi/together rootless pending pairs, rejected Qwen and Meta for absent ZDR eligibility, and rejected Kimi/deepinfra-bf16 as non-operational. The nonauthorizing plan is resealed over singleton DeepSeek/novita-fp8, Claude Opus 5/Amazon Bedrock, and Kimi/together routes. The 82-test relevant matrix and static/governance gates passed; no completion, ledger spend, lineage, qualification, runner, or release authority is claimed.",
+    "next_action_after_v3_authrunner_primary_replacement": "Run only the fresh PRIMARY r3 metadata command for anthropic/claude-opus-5=amazon-bedrock. Then compile admissible immutable documentary sources for all three exact IDs, prove pairwise-independent roots, and run the provider-free candidate-r2/primary-r3/replay-r2 AUTHRUNNER preflight before deriving final live request-bound caps."
   },
   "scheduler_assurance_validation": {
     "status": "PASS_COMPONENT_FULL_ASSURANCE",
@@ -285,15 +288,29 @@
   },
   "authrunner_candidate_selection_validation": {
     "status": "PASS_NONAUTHORIZING_PROVIDER_FREE",
-    "commit": "ca4e2ddd4c85e38b808f7794f2a93ebef791109f",
+    "commit": "09a6288fe39d76b6bd7d58c1e92a9989e3ea575e",
     "remote_ref": "origin/agent/v3-wip-checkpoint",
-    "remote_verified_at": "2026-08-20T16:28:23Z",
-    "supersedes_plan_sha256": "b365a0ce5056ec1328f3f54722a97104dd25308a1cfab663d4185476165b06a7",
-    "plan_sha256": "e1fcfa451f7d4b352663c4c870d65fe03fbaff1745efc0350277b84194288a05",
-    "command": "514-test reasoning/discovery/OpenRouter/candidate-selection/AUTHRUNNER-CLI/schema/objective/documentation matrix; release-schema verification; repository Ruff and strict mypy; strict governance JSON; diff integrity",
-    "result": "PASS: max reasoning metadata, exact corrected endpoint allowlists, pre-secret full launch preflight, rootless pending fresh-registry derivation, schema synchronization, and nonauthorizing boundaries validated; independent review found no blocker/HIGH",
+    "remote_verified_at": "2026-08-20T19:55:26Z",
+    "initial_plan_sha256": "b365a0ce5056ec1328f3f54722a97104dd25308a1cfab663d4185476165b06a7",
+    "supersedes_plan_sha256": "e1fcfa451f7d4b352663c4c870d65fe03fbaff1745efc0350277b84194288a05",
+    "plan_sha256": "47cd417c3aa73369da16981bbef3a3c450040e95ecf55f9af837f6a0b3edf459",
+    "command": "82-test candidate-selection/registry-bridge/AUTHRUNNER-CLI/schema/objective/documentation matrix; release-schema verification; repository Ruff and strict mypy; strict governance JSON; diff integrity",
+    "result": "PASS: singleton selected route allowlists, rank-1 exact-ID PRIMARY replacement, r2 pair reuse, fresh r3 path custody, pre-secret full launch preflight, and nonauthorizing boundaries validated; independent review found no blocker/HIGH",
     "provider_calls": 0,
-    "candidate_registries_created": 0,
+    "candidate_registries_created": 2,
+    "authority": false
+  },
+  "authrunner_singleton_discovery_status": {
+    "status": "PARTIAL_OPERATOR_REPORTED_NONAUTHORIZING",
+    "provider_completion_calls": 0,
+    "operator_metadata_discovery_attempts": 4,
+    "operator_metadata_discovery_succeeded": 2,
+    "operator_metadata_discovery_rejected": 2,
+    "candidate_registry_sha256": "59dfdaf498cc2a8201351a7c6aacdfc2a3fd7f6daec09aa927202071ee7a0619",
+    "replay_judge_registry_sha256": "14937842d2a544540efa39199b2b0ed4c0f25e1f145f1385f32d43b728edbdea",
+    "primary_judge_registry_sha256": null,
+    "ledger_spend_usd": "0",
+    "codex_independently_opened_private_artifacts": false,
     "authority": false
   },
   "release_status": "INCOMPLETE",
