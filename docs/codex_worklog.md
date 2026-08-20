@@ -10,7 +10,7 @@ LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001
 NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator run the three exact metadata-only discovery commands in `docs/models/model_selection.md`; reject any unavailable, non-ZDR, identity-drifted, or capability-incomplete route without substitution. Then compile fresh documentary public-lineage evidence for the exact selected IDs, derive request-bound cost caps from observed pricing/capacity, and emit the final AUTHRUNNER command. AUTHSEAL publication, real audits, benchmarks, and release remain queued.
 LAST_VALIDATION_COMMAND: Provider-free 219-test candidate-selection/discovery/registry/CLI/schema/objective/documentation matrix, repeated 32-test governance/schema gate, `.venv/bin/python scripts/generate_release_schemas.py`, `make PYTHON=.venv/bin/python lint`, `make PYTHON=.venv/bin/python type`, strict governance JSON parsing, and diff integrity.
 LAST_VALIDATION_RESULT: PASS / BLOCKED_SAFETY — 219 broader tests and the repeated 32-test governance/schema gate passed; generated schemas were current; Ruff passed over 535 files; strict mypy passed over 202 source files; both governance JSON documents parsed strictly; diff integrity passed; independent adversarial review found no blocker/HIGH. No new complete-suite claim, provider metadata, candidate registry, REAL AUTHRUNNER issuance, or release authority exists.
-LAST_CHECKPOINT_COMMIT: c90a1531cad6f09866bc1309a3130b5e4673214b — `Degrade incomplete graph coverage safely` on `origin/agent/v3-wip-checkpoint`.
+LAST_CHECKPOINT_COMMIT: f894c3ff6c117d543a796d586b3e9650972dafe0 — `Add nonauthorizing candidate discovery bootstrap`, verified on `origin/agent/v3-wip-checkpoint`.
 REMAINING_ACTIONABLE_TICKETS: The provider-free stale candidate-registry rebuild and exact AUTHRUNNER campaign preparation are actionable. Credentialed execution remains `BLOCKED_SAFETY`; external authority-log publication and all benchmark/release work remain queued behind genuine REAL runner evidence.
 
 ## 2026-08-20T15:14:32Z — Priority-1 durability recovery validated and pushed
@@ -69,6 +69,8 @@ REMAINING_ACTIONABLE_TICKETS: The provider-free stale candidate-registry rebuild
   provider metadata was supplied. Exact metadata-only operator commands are frozen in
   `docs/models/model_selection.md`. No staged ranker, secret, provider, completion, ledger mutation,
   AUTHSEAL publication, audit, benchmark, or release action occurred.
+- **Checkpoint:** Commit `f894c3ff6c117d543a796d586b3e9650972dafe0` was pushed and independently
+  resolved at `origin/agent/v3-wip-checkpoint`.
 
 ## 2026-08-18T10:21:08Z — V3-AUTHRUNNER-001 started
 

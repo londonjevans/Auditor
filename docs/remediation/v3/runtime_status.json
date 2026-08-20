@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-20T15:14:32Z",
+  "updated_at": "2026-08-20T16:03:52Z",
   "objective_path": "docs/remediation/v3/product_completion_goal.txt",
   "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
   "objective_supersession": {
@@ -13,11 +13,11 @@
     "authorized_at": "2026-08-17T20:06:41Z",
     "decision": "EXPLICIT_OPERATOR_TARGET_CHANGE"
   },
-  "candidate_commit": "c90a1531cad6f09866bc1309a3130b5e4673214b",
+  "candidate_commit": "f894c3ff6c117d543a796d586b3e9650972dafe0",
   "autorun_status": "BLOCKED_SAFETY",
   "current_milestone": "M1-DETERMINISTIC-PRODUCT (REACHED)",
   "current_ticket": "V3-AUTHRUNNER-001",
-  "last_checkpoint_commit": "c90a1531cad6f09866bc1309a3130b5e4673214b",
+  "last_checkpoint_commit": "f894c3ff6c117d543a796d586b3e9650972dafe0",
   "real_model_calls": {
     "attempted": 11,
     "succeeded": 1,
@@ -35,11 +35,11 @@
     "V3-LINEAGE-001": "The calibration-only signed authority contract is implemented, but ticket completion requires a successful current exact provider refresh and an actual authorized operator-signed decision over that exact candidate set. Runtime approvals remain empty.",
     "V3-CALIBRATE-001": "Provider-free empirical derivation and the exact two-campaign authority bridge are implemented, but statistically meaningful thresholds require a representative randomized independently adjudicated holdout plus current refreshed, signed, and real calibration evidence.",
     "V3-AUTHSEAL-001": "The provider-free frozen-ground-truth, exact scoring, frozen comparison verdict, and structural seal layers are implemented, but runtime authority remains unavailable until independently anchored public lineage, authenticated REAL cross-lineage runner evidence, and an independently verified external transparency-log inclusion receipt exist. The baseline and trusted evaluation clock remain explicitly unevaluable; no human signature or adjudication is requested.",
-    "V3-AUTHRUNNER-001": "Corrected documentary public lineage and the provider-free same-process runner path are implemented, including exact candidate/judge/generation/ledger custody, strict durable replay, egress and cost fail-stops, a one-way PID-local runner lease, post-replay recheck, exactly-once post-AUTHSEAL disposal, post-revoke self-check, and a detached capability-free return snapshot. The first SYNTHETIC_BENCHMARK completion returned UNBOUND provider identity and remains non-crediting. Current repository rules prohibit real credential and public-provider access, so genuine REAL issuance and the positive issue-consume-revoke-reject lifecycle assay remain unperformed; downstream external-log and benchmark work stay queued."
+    "V3-AUTHRUNNER-001": "Corrected documentary public lineage and the provider-free same-process runner path are implemented, including exact candidate/judge/generation/ledger custody, strict durable replay, egress and cost fail-stops, a one-way PID-local runner lease, post-replay recheck, exactly-once post-AUTHSEAL disposal, post-revoke self-check, and a detached capability-free return snapshot. A canonical nonauthorizing selection plan now permits fresh rootless pending registry derivation from exact operator-run metadata without copying stale fields. The first SYNTHETIC_BENCHMARK completion returned UNBOUND provider identity and remains non-crediting. Current repository rules prohibit real credential and public-provider access, so the three fresh singleton discoveries, new exact-ID documentary lineage, genuine REAL issuance, and the positive issue-consume-revoke-reject lifecycle assay remain unperformed; downstream external-log and benchmark work stay queued."
   },
   "last_validation": {
-    "command": "Segmented full .venv/bin/pytest -q --stepwise --tb=short over all 6152 collected tests; release-schema generator verification; full Ruff over 533 files; strict mypy over 201 source files; 32 product-documentation/objective/release-schema tests; strict governance JSON parsing; diff integrity",
-    "result": "PASS / BLOCKED_SAFETY: all 6152 collected tests completed on unchanged code bytes as 6128 passed and 24 expected skips. The first segment reached 2110 passed and 24 skipped before a sandbox-denied local-loopback bind; the resumed tail passed 4018 with 2134 deselected. Static, schema, documentation, JSON, and diff gates passed. No network, credential, provider, ledger, AUTHSEAL publication, benchmark, release, or real-audit action occurred; genuine REAL AUTHRUNNER issuance remains absent."
+    "command": "Provider-free 219-test candidate-selection/discovery/registry/CLI/schema/objective/documentation matrix; repeated 32-test governance/schema gate; release-schema verification; full Ruff over 535 files; strict mypy over 202 source files; strict governance JSON parsing; diff integrity",
+    "result": "PASS / BLOCKED_SAFETY: 219 broader tests and the repeated 32-test governance/schema gate passed. Generated schemas were current; Ruff, strict mypy, JSON, and diff gates passed; independent adversarial review found no blocker/HIGH. No new complete-suite claim, provider metadata, registry, REAL AUTHRUNNER issuance, or release authority exists."
   },
   "pause_state": {
     "requested_at": "2026-08-03T20:08:17Z",
@@ -279,6 +279,18 @@
     "command": ".venv/bin/pytest -q; .venv/bin/ruff format --check .; .venv/bin/ruff check .; .venv/bin/mypy src; .venv/bin/python scripts/generate_release_schemas.py; parse both V3 JSON ledgers; git diff --check",
     "result": "PASS: 5155 tests passed with 21 explicit non-crediting skips in 1207.75s; full policy authority, source drift, audit selection, transport, pipeline, scheduler, assurance, report, manifest, refresh, and schema custody validated. No legal determination or production authority was issued.",
     "provider_calls": 0
+  },
+  "authrunner_candidate_selection_validation": {
+    "status": "PASS_NONAUTHORIZING_PROVIDER_FREE",
+    "commit": "f894c3ff6c117d543a796d586b3e9650972dafe0",
+    "remote_ref": "origin/agent/v3-wip-checkpoint",
+    "remote_verified_at": "2026-08-20T16:03:52Z",
+    "plan_sha256": "b365a0ce5056ec1328f3f54722a97104dd25308a1cfab663d4185476165b06a7",
+    "command": "219-test candidate-selection/discovery/registry/CLI/schema/objective/documentation matrix; release-schema verification; repository Ruff and strict mypy; strict governance JSON; diff integrity",
+    "result": "PASS: exact staged source bindings, explicit route narrowing, pre-secret fail closure, rootless pending fresh-registry derivation, legacy compatibility, schema synchronization, and adversarial path custody validated",
+    "provider_calls": 0,
+    "candidate_registries_created": 0,
+    "authority": false
   },
   "release_status": "INCOMPLETE",
   "superiority_status": "NOT_DEMONSTRATED"
