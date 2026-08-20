@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-18T15:44:05Z",
+  "updated_at": "2026-08-20T15:14:32Z",
   "objective_path": "docs/remediation/v3/product_completion_goal.txt",
   "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
   "objective_supersession": {
@@ -13,11 +13,11 @@
     "authorized_at": "2026-08-17T20:06:41Z",
     "decision": "EXPLICIT_OPERATOR_TARGET_CHANGE"
   },
-  "candidate_commit": "f794db0ba0e16e8cd1f028ac623b0486ce86c879",
+  "candidate_commit": "c90a1531cad6f09866bc1309a3130b5e4673214b",
   "autorun_status": "BLOCKED_SAFETY",
   "current_milestone": "M1-DETERMINISTIC-PRODUCT (REACHED)",
   "current_ticket": "V3-AUTHRUNNER-001",
-  "last_checkpoint_commit": "12c389f6f8fe3a242b4bbc6c3e5aceb3880cb4a8",
+  "last_checkpoint_commit": "c90a1531cad6f09866bc1309a3130b5e4673214b",
   "real_model_calls": {
     "attempted": 11,
     "succeeded": 1,
@@ -38,8 +38,8 @@
     "V3-AUTHRUNNER-001": "Corrected documentary public lineage and the provider-free same-process runner path are implemented, including exact candidate/judge/generation/ledger custody, strict durable replay, egress and cost fail-stops, a one-way PID-local runner lease, post-replay recheck, exactly-once post-AUTHSEAL disposal, post-revoke self-check, and a detached capability-free return snapshot. The first SYNTHETIC_BENCHMARK completion returned UNBOUND provider identity and remains non-crediting. Current repository rules prohibit real credential and public-provider access, so genuine REAL issuance and the positive issue-consume-revoke-reject lifecycle assay remain unperformed; downstream external-log and benchmark work stay queued."
   },
   "last_validation": {
-    "command": "216-test affected budget/AUTHRUNNER/adapter/CLI/durable-bundle/AUTHSEAL/schema matrix; 104-test broader CLI matrix; independent 100-test lifecycle/CLI/durable/AUTHSEAL audit; release-schema generation; full Ruff format/check; strict mypy over 201 source files; strict governance JSON parsing; product-documentation checks; diff integrity",
-    "result": "PARTIAL / BLOCKED_SAFETY: one-way runner-lease revocation, concurrent replay recheck, exactly-once post-AUTHSEAL disposal, negative post-revoke verification, and detached capability-free returned report snapshots are locally settled. Independent review reproduced and closed mutation-before-disposal and nested-capability-leak HIGHs, then found no remaining blocker/HIGH. No config, network, credential, provider, or ledger mutation occurred. Genuine REAL issuance and a positive issue-consume-revoke-reject lifecycle assay remain absent; all durable runtime-authority flags remain false."
+    "command": "Segmented full .venv/bin/pytest -q --stepwise --tb=short over all 6152 collected tests; release-schema generator verification; full Ruff over 533 files; strict mypy over 201 source files; 32 product-documentation/objective/release-schema tests; strict governance JSON parsing; diff integrity",
+    "result": "PASS / BLOCKED_SAFETY: all 6152 collected tests completed on unchanged code bytes as 6128 passed and 24 expected skips. The first segment reached 2110 passed and 24 skipped before a sandbox-denied local-loopback bind; the resumed tail passed 4018 with 2134 deselected. Static, schema, documentation, JSON, and diff gates passed. No network, credential, provider, ledger, AUTHSEAL publication, benchmark, release, or real-audit action occurred; genuine REAL AUTHRUNNER issuance remains absent."
   },
   "pause_state": {
     "requested_at": "2026-08-03T20:08:17Z",
@@ -193,7 +193,10 @@
     "next_action_after_v3_authrunner_provider_free": "Keep V3-AUTHRUNNER-001 IN_PROGRESS and make no live call under the current repository credential prohibition. External authority-log publication and benchmark execution remain queued.",
     "blocked_at_v3_authrunner": "2026-08-18T15:44:05Z",
     "result_v3_authrunner_blocked": "V3-AUTHRUNNER-001 is PARTIAL at the complete provider-free lifecycle boundary. The one-PID implementation now removes the exact runner lease after its sole AUTHSEAL attempt, rechecks negative custody, returns only detached durable reports, and preserves nonauthorizing historical evidence. The final affected matrix passed 216 tests, the broader CLI matrix passed 104, an independent 100-test audit found no blocker/HIGH, and static/schema/governance gates passed. Genuine REAL issuance cannot be executed under the governing prohibition on real credentials and public-provider access; model-call and cost counters are unchanged.",
-    "resume_action_v3_authrunner": "Resume only in a governing context permitting staged credential use. Execute the settled same-process SYNTHETIC_BENCHMARK path with fallback disabled and the USD 250 cap; require provider-bound REAL usage/generation, terminal closed-cost and generation/report/replay evidence, one internal AUTHSEAL consumption, exactly-once runner revocation, and post-revoke rejection. Confirm succeeded calls exceed 1 and used cost exceeds 0.0034764325, or retain the exact rejection verbatim. Do not begin external-log publication or benchmark work first."
+    "resume_action_v3_authrunner": "Resume only in a governing context permitting staged credential use. Execute the settled same-process SYNTHETIC_BENCHMARK path with fallback disabled and the USD 250 cap; require provider-bound REAL usage/generation, terminal closed-cost and generation/report/replay evidence, one internal AUTHSEAL consumption, exactly-once runner revocation, and post-revoke rejection. Confirm succeeded calls exceed 1 and used cost exceeds 0.0034764325, or retain the exact rejection verbatim. Do not begin external-log publication or benchmark work first.",
+    "checkpointed_at_v3_priority1_durability": "2026-08-20T15:14:32Z",
+    "result_v3_priority1_durability": "The audited 207-path WIP recovery checkpoint and bounded scheduler follow-ups are remotely preserved through c90a1531cad6f09866bc1309a3130b5e4673214b on origin/agent/v3-wip-checkpoint. All 6152 collected tests completed as 6128 passed and 24 expected skips; schema generation, Ruff over 533 files, strict mypy over 201 source files, 32 documentation/objective/schema tests, strict governance JSON parsing, and diff integrity passed. Model-call, cost, real-audit, AUTHSEAL, benchmark, and release state did not change.",
+    "next_action_after_v3_priority1_durability": "Keep V3-AUTHRUNNER-001 PARTIAL and autorun BLOCKED_SAFETY. Rebuild config/models.candidates.toml provider-free from the operator-staged model-ranking.py and V3-LINEAGE-001-operator-review.md, remove obsolete IDs, preserve nonauthorizing evidence, and validate distinct candidate, primary, and replay-judge roots. Then freeze the fallback-disabled SYNTHETIC_BENCHMARK policy, synthetic/public corpus, exact ledger/call caps, and emit the exact operator command. Do not consume secrets or make provider calls; AUTHSEAL publication, real audits, benchmarks, and release remain queued."
   },
   "scheduler_assurance_validation": {
     "status": "PASS_COMPONENT_FULL_ASSURANCE",

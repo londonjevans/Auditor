@@ -7,11 +7,29 @@ credentials, RPC URLs, or operational attack instructions.
 AUTORUN_STATUS: BLOCKED_SAFETY
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001
-NEXT_ACTION: Resume `V3-AUTHRUNNER-001` only in a governing context permitting staged credential use; execute the settled same-process SYNTHETIC_BENCHMARK path, prove REAL issuance, internal AUTHSEAL consumption, exactly-once revocation and post-revoke rejection, or retain the exact rejection verbatim. Do not start external-log or benchmark work first.
-LAST_VALIDATION_COMMAND: `.venv/bin/pytest -q tests/unit/test_budgets.py tests/unit/test_authenticated_runner_execution.py tests/unit/test_authenticated_runner_openrouter.py tests/unit/test_authenticated_runner_cli.py tests/unit/test_authenticated_runner_durable_bundle.py tests/unit/test_authenticated_runner.py tests/unit/test_cross_lineage_adjudication.py tests/unit/test_evidence_seal_runner_consumer.py tests/unit/test_release_schemas.py`
-LAST_VALIDATION_RESULT: PARTIAL / BLOCKED_SAFETY — the final affected provider-free matrix passed 216 tests and the broader CLI matrix passed 104; an independent 100-test lifecycle/CLI/durable/AUTHSEAL audit found no blocker/HIGH after two reproduced lifecycle defects were fixed. Full Ruff format/check over 533 files, strict mypy over 201 source files, release-schema generation, strict governance JSON parsing, documentation checks, and diff integrity passed. REAL AUTHRUNNER issuance remains absent.
-LAST_CHECKPOINT_COMMIT: a3f82b133726796661ce202ba67704415d8c2d09 — `Evaluate maximum-assurance release candidate`.
-REMAINING_ACTIONABLE_TICKETS: None under the repository prohibition on real credentials and public-provider access. `V3-AUTHRUNNER-001` requires a genuine REAL same-process run; external authority-log publication and all benchmark work remain queued behind it.
+NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Rebuild `config/models.candidates.toml` provider-free from the operator-staged `model-ranking.py` and `V3-LINEAGE-001-operator-review.md`, remove obsolete IDs, preserve nonauthorizing evidence, and validate distinct candidate, primary, and replay-judge roots. Then freeze the fallback-disabled `SYNTHETIC_BENCHMARK` policy, synthetic/public corpus, exact ledger/call caps, and emit the exact operator command. Do not consume secrets or make provider calls; AUTHSEAL publication, real audits, benchmarks, and release remain queued.
+LAST_VALIDATION_COMMAND: Segmented full `.venv/bin/pytest -q --stepwise --tb=short` over all 6,152 collected tests, followed by `.venv/bin/python scripts/generate_release_schemas.py`, `make PYTHON=.venv/bin/python lint`, `make PYTHON=.venv/bin/python type`, and the 32-test product documentation/objective/release-schema matrix.
+LAST_VALIDATION_RESULT: PASS / BLOCKED_SAFETY — all 6,152 collected tests completed as 6,128 passed and 24 expected skips; the first segment reached 2,110 passed and 24 skipped before a sandbox-denied local-loopback bind, and the unchanged-byte resumed tail passed 4,018 with 2,134 deselected. Schemas were current; Ruff passed over 533 files; strict mypy passed over 201 source files; 32 documentation/objective/schema tests, strict governance JSON parsing, and diff integrity passed. REAL AUTHRUNNER issuance remains absent.
+LAST_CHECKPOINT_COMMIT: c90a1531cad6f09866bc1309a3130b5e4673214b — `Degrade incomplete graph coverage safely` on `origin/agent/v3-wip-checkpoint`.
+REMAINING_ACTIONABLE_TICKETS: The provider-free stale candidate-registry rebuild and exact AUTHRUNNER campaign preparation are actionable. Credentialed execution remains `BLOCKED_SAFETY`; external authority-log publication and all benchmark/release work remain queued behind genuine REAL runner evidence.
+
+## 2026-08-20T15:14:32Z — Priority-1 durability recovery validated and pushed
+
+- **Status:** `V3-AUTHRUNNER-001` remains `PARTIAL`; autorun remains `BLOCKED_SAFETY`.
+- **Durability result:** The audited 207-path recovery checkpoint was committed and pushed, then
+  bounded scheduler/manifest, test-contract, and incomplete-graph follow-ups were committed through
+  `c90a1531cad6f09866bc1309a3130b5e4673214b` on
+  `origin/agent/v3-wip-checkpoint`.
+- **Validation:** All 6,152 collected tests completed on unchanged code bytes as 6,128 passed and
+  24 expected skips. The terminal gate also passed release-schema verification, Ruff over 533
+  files, strict mypy over 201 source files, 32 product documentation/objective/schema tests, strict
+  governance JSON parsing, and diff integrity. Independent reviews found no blocker/HIGH in the
+  scheduler snapshot, retained-evidence detachment, context-preview, or incomplete-graph slices.
+- **Authority boundary:** No secret, provider call, additional spend, real audit, AUTHSEAL
+  publication, benchmark, or release action occurred. Counters remain 11 attempted, 1 succeeded,
+  10 rejected, USD 0.0034764325 used, and 0 completed real audits.
+- **Exact next safe action:** Rebuild the stale candidate registry and prepare the three-root
+  AUTHRUNNER campaign entirely provider-free, then emit the exact operator command.
 
 ## 2026-08-18T10:21:08Z — V3-AUTHRUNNER-001 started
 

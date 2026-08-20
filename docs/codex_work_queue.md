@@ -391,18 +391,24 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   durable-only return snapshot prevent live runner, campaign, or generation capabilities from
   escaping the adapter. Replay remains explicitly nonauthorizing and uses no config, secret,
   provider, or ledger state.
+- **Durability checkpoint 2026-08-20:** The 207-path WIP recovery checkpoint and its bounded
+  scheduler follow-ups are preserved through
+  `c90a1531cad6f09866bc1309a3130b5e4673214b` on
+  `origin/agent/v3-wip-checkpoint`. This is durability evidence only: it changes no model-call,
+  cost, audit, runner-authority, AUTHSEAL, benchmark, or release state.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
   and non-crediting. Genuine production-issued lifecycle proof is absent; provider-free fixtures
   cannot mint owned-REAL origin, and the current repository rules prohibit reading real credentials
   or accessing the provider. Campaign/generation revocation beyond the top-level runner lease is
   not independently demonstrated. External-log publication and every benchmark run remain queued.
-- **Next action:** Resume only in a governing context that permits staged credential use. Execute
-  the settled same-process `SYNTHETIC_BENCHMARK` candidate/judge path with fallback disabled and
-  the USD 250 cap; require provider-bound REAL usage/generation, terminal closed-cost and
-  generation/report/replay evidence, one internal AUTHSEAL consumption, exactly-once runner
-  revocation, and post-revoke rejection. Confirm succeeded calls exceed 1 and used cost exceeds
-  `0.0034764325`, or retain the exact rejection verbatim. Do not begin AUTHSEAL publication or
-  benchmark work first.
+- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Execute one
+  provider-free prerequisite slice: rebuild `config/models.candidates.toml` from the
+  operator-staged `model-ranking.py` and `V3-LINEAGE-001-operator-review.md`, remove obsolete IDs,
+  preserve the evidence as nonauthorizing, and validate distinct candidate, primary, and
+  replay-judge roots without provider access. Then freeze the fallback-disabled
+  `SYNTHETIC_BENCHMARK` policy, synthetic/public corpus, exact ledger/call caps, and emit the exact
+  operator command. Do not consume secrets or make provider calls in this slice; AUTHSEAL
+  publication, real audits, benchmarks, and release remain queued.
 
 ### V3-MODELREFRESH-001 — Provider-free model-refresh runtime and pricing custody
 
@@ -427,9 +433,12 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Result:** The provider-free refresh/runtime/pricing custody slice is green. The
   final full suite passed `5392` tests with `21` explicit unavailable/opt-in skips;
   independent review found no remaining provider-free blocker or HIGH.
-- **Next action:** None within provider-free scope. Full completion requires the stock
-  production path to construct the exact live technical, policy-selection, refresh,
-  and pricing authority quartet and retain authorized real-provider evidence.
+- **Next action:** Rebuild the local candidate registry from the operator-staged ranking and
+  lineage-review inputs as a bounded provider-free AUTHRUNNER prerequisite. Treat that rebuilt set
+  as nonauthorizing operator-staged evidence only: it does not authenticate current provider
+  freshness, complete model refresh, or grant selection, pricing, qualification, or promotion
+  authority. Full completion still requires the stock live authority quartet and authorized
+  provider evidence.
 
 ### QUEUE-BOOTSTRAP-001
 
