@@ -20,7 +20,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9965235675
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: f894c3ff6c117d543a796d586b3e9650972dafe0 (verified at `origin/agent/v3-wip-checkpoint`)
+LAST_CHECKPOINT_COMMIT: ca4e2ddd4c85e38b808f7794f2a93ebef791109f (verified at `origin/agent/v3-wip-checkpoint`)
 
 ## 2026-08-20T16:22:15Z — AUTHRUNNER provider-contract drift corrected provider-free
 
@@ -51,6 +51,8 @@ LAST_CHECKPOINT_COMMIT: f894c3ff6c117d543a796d586b3e9650972dafe0 (verified at `o
   compile fresh exact-ID documentary lineage, then run the provider-free preflight. No secret,
   provider call, ledger read/write, AUTHSEAL publication, audit, benchmark, or release action was
   performed in this slice.
+- Checkpoint: commit `ca4e2ddd4c85e38b808f7794f2a93ebef791109f` was pushed and independently
+  resolved at `origin/agent/v3-wip-checkpoint`.
 
 ## 2026-08-20T15:14:32Z — Priority-1 durability recovery validated and pushed
 

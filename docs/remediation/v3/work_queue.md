@@ -2082,7 +2082,9 @@ are invisible to source review by construction.
   restricted to `novita/fp8` or `together`, Qwen to `alibaba`, and Kimi to `deepinfra/bf16` or
   `together`. Fresh `-r2` metadata-only discovery commands and a secret-free
   `models authenticated-runner --preflight-only` command are frozen in
-  `docs/models/model_selection.md`; no corrected registry or REAL runner evidence is claimed.
+  `docs/models/model_selection.md`. Green checkpoint
+  `ca4e2ddd4c85e38b808f7794f2a93ebef791109f` is verified on
+  `origin/agent/v3-wip-checkpoint`; no corrected registry or REAL runner evidence is claimed.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
   and non-crediting. Genuine production-issued lifecycle proof is absent; provider-free fixtures
   cannot mint owned-REAL origin, and the current repository rules prohibit reading real credentials

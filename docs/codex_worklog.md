@@ -10,7 +10,7 @@ LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001
 NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator run the three fresh `-r2` metadata-only discovery commands in `docs/models/model_selection.md`; reject any unavailable, non-ZDR, identity-drifted, or capability-incomplete route without substitution. Then compile fresh documentary public-lineage evidence for those three exact IDs and run the frozen provider-free `--preflight-only` command. Derive final request-bound caps from retained pricing/capacity evidence before any one-shot REAL launch. AUTHSEAL publication, real audits, benchmarks, and release remain queued.
 LAST_VALIDATION_COMMAND: Provider-free 514-test reasoning/discovery/OpenRouter/candidate-selection/AUTHRUNNER-CLI/schema/objective/documentation matrix; `.venv/bin/python scripts/generate_release_schemas.py`; `make PYTHON=.venv/bin/python lint`; `make PYTHON=.venv/bin/python type`; strict governance JSON parsing; diff integrity.
 LAST_VALIDATION_RESULT: PASS / BLOCKED_SAFETY — 514 relevant tests passed; generated schemas were current; Ruff passed over 535 files; strict mypy passed over 202 source files; governance JSON and diff gates passed; independent exact-byte review found no blocker/HIGH. The corrected plan remains nonauthorizing, no corrected registry or fresh exact-ID public-lineage authority exists, and no secret, provider call, ledger access/mutation, REAL AUTHRUNNER issuance, or release action occurred.
-LAST_CHECKPOINT_COMMIT: f894c3ff6c117d543a796d586b3e9650972dafe0 — `Add nonauthorizing candidate discovery bootstrap`, verified on `origin/agent/v3-wip-checkpoint`.
+LAST_CHECKPOINT_COMMIT: ca4e2ddd4c85e38b808f7794f2a93ebef791109f — `Accept max reasoning and correct runner routes`, verified on `origin/agent/v3-wip-checkpoint`.
 REMAINING_ACTIONABLE_TICKETS: The provider-free stale candidate-registry rebuild and exact AUTHRUNNER campaign preparation are actionable. Credentialed execution remains `BLOCKED_SAFETY`; external authority-log publication and all benchmark/release work remain queued behind genuine REAL runner evidence.
 
 ## 2026-08-20T16:22:15Z — AUTHRUNNER provider-contract drift corrected provider-free
@@ -42,6 +42,8 @@ REMAINING_ACTIONABLE_TICKETS: The provider-free stale candidate-registry rebuild
   compile fresh exact-ID documentary lineage, then run the provider-free preflight. No secret,
   provider call, ledger read/write, AUTHSEAL publication, audit, benchmark, or release action was
   performed in this slice.
+- **Checkpoint:** Commit `ca4e2ddd4c85e38b808f7794f2a93ebef791109f` was pushed and independently
+  resolved at `origin/agent/v3-wip-checkpoint`.
 
 ## 2026-08-20T15:14:32Z — Priority-1 durability recovery validated and pushed
 
