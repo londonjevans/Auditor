@@ -3,9 +3,9 @@
   "authenticated_runner_selection": {
     "candidate_model_id": "deepseek/deepseek-v4-pro-0813",
     "distinct_root_lineages_verified": false,
-    "primary_judge_model_id": "qwen/qwen3.8-max",
+    "primary_judge_model_id": "anthropic/claude-opus-5",
     "replay_judge_model_id": "moonshotai/kimi-k3",
-    "role_assignment_sha256": "0522f6f9c9a1aa700e65d1bde34995723ed09ac5753e27fa84707d91af3e2f8d"
+    "role_assignment_sha256": "e75f8cb7a0defa36f113c9662c38f56f4ae39428716f70e41c05201a31fab7ab"
   },
   "benchmark_authorized": false,
   "cached_ranking_payload_present": false,
@@ -15,16 +15,13 @@
     {
       "advisory_lineage_group": "Anthropic",
       "allowed_provider_endpoints": [
-        "deepinfra",
-        "google-vertex",
-        "novita",
-        "together"
+        "amazon-bedrock"
       ],
       "approved_roles": [],
       "availability": "UNVERIFIED",
       "documentary_lineage": "UNCONFIRMED",
       "entry_authority": false,
-      "entry_sha256": "88c14a7de7fe675e86ecc2151489ab113b622b944e9ffaeac24bc7239822d8d8",
+      "entry_sha256": "9deead51ec8df3b692708165eeaa89a781b2a042bd32eac559d1e18ee95135ad",
       "exact_model_id": "anthropic/claude-opus-5",
       "lineage_group_seed_sha256": "aaf0b1db9c08b1da0b637737ceeaf97923a2a22b84551a951599adb48fa17706",
       "priority_rank": 1
@@ -32,14 +29,13 @@
     {
       "advisory_lineage_group": "DeepSeek",
       "allowed_provider_endpoints": [
-        "novita/fp8",
-        "together"
+        "novita/fp8"
       ],
       "approved_roles": [],
       "availability": "UNVERIFIED",
       "documentary_lineage": "UNCONFIRMED",
       "entry_authority": false,
-      "entry_sha256": "905fbfdaa8bed653ca0d86003610b0e9a4724ac164385e45f0b1d81bdd9db6ce",
+      "entry_sha256": "f9960e10651e500ddd716ef5b74266bfc385c019eb533fff6d3acc3b2620b34c",
       "exact_model_id": "deepseek/deepseek-v4-pro-0813",
       "lineage_group_seed_sha256": "0a736ab443477cef4d0ee92b36ef4a18aadb36e8c54bab3b5654d03cc0fc2483",
       "priority_rank": 5
@@ -98,14 +94,13 @@
     {
       "advisory_lineage_group": "Moonshot-Kimi",
       "allowed_provider_endpoints": [
-        "deepinfra/bf16",
         "together"
       ],
       "approved_roles": [],
       "availability": "UNVERIFIED",
       "documentary_lineage": "UNCONFIRMED",
       "entry_authority": false,
-      "entry_sha256": "dc6ca23e954b7a5043f57715fbc0c21a700f05cdf47817d450dd328215c64528",
+      "entry_sha256": "4fe037c9c3c81829e0386036ae0460905cbcbcc4c7bf27076ac1a520ae0d2609",
       "exact_model_id": "moonshotai/kimi-k3",
       "lineage_group_seed_sha256": "f46cb1c7d55406b73aebebce2386b927039759f3d24aa6930422f0d125551c34",
       "priority_rank": 7
@@ -194,7 +189,7 @@
     }
   ],
   "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
-  "plan_sha256": "e1fcfa451f7d4b352663c4c870d65fe03fbaff1745efc0350277b84194288a05",
+  "plan_sha256": "47cd417c3aa73369da16981bbef3a3c450040e95ecf55f9af837f6a0b3edf459",
   "production_selection_authorized": false,
   "provider_call_authorized": false,
   "provider_metadata_present": false,

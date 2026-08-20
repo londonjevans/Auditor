@@ -19,28 +19,37 @@ own frozen metadata snapshots.
 
 `config/models.selection-plan.json` is a canonical, self-hashed, explicitly
 `NONAUTHORIZING` replacement seed for the obsolete roster. Its plan SHA-256 is
-`e1fcfa451f7d4b352663c4c870d65fe03fbaff1745efc0350277b84194288a05`. It binds the exact bytes of the
+`47cd417c3aa73369da16981bbef3a3c450040e95ecf55f9af837f6a0b3edf459`. It binds the exact bytes of the
 operator-staged `model-ranking.py` and `V3-LINEAGE-001-operator-review.md`, but it does not
 claim that the ranker ran, that any proposed ID or route currently exists, that an advisory
 lineage label is correct, or that any model is qualified. Its endpoint lists are policy
 constraints only. Every discovery, lineage, qualification, runner, benchmark, seal, and
 release authority field is literally false.
 
-The proposed AUTHRUNNER roles are also only planning data: DeepSeek V4 candidate, Qwen 3.8
+The proposed AUTHRUNNER roles are also only planning data: DeepSeek V4 candidate, Claude Opus 5
 primary judge, and Kimi K3 replay judge. Their distinct roots are not verified. The current
 public-lineage manifest covers none of those exact IDs, so AUTHRUNNER must continue to reject
 them until new documentary source captures are compiled and independently replayed.
 
-The operator may produce three separate singleton discovery/registry pairs with the commands
-below. They perform authenticated metadata discovery but request no model completion. A first
-attempt reproduced two provider-contract drifts before publication: the catalogue now includes
-the `max` reasoning-effort tier, and the proposed generic route names did not equal the current
-exact endpoint tags. The corrected policy allowlists only `novita/fp8` or `together` for DeepSeek,
-only `alibaba` for Qwen, and only `deepinfra/bf16` or `together` for Kimi. These are still
-operator-reported route constraints, not retained provider evidence. Any unavailable, non-ZDR,
+The operator ran the three singleton metadata-only commands. DeepSeek succeeded on `novita/fp8`
+with operator-reported frozen-registry SHA-256
+`59dfdaf498cc2a8201351a7c6aacdfc2a3fd7f6daec09aa927202071ee7a0619`. Qwen 3.8 Max failed
+closed because its exact model was absent from the ZDR endpoint snapshot, so it cannot serve as
+the primary judge under `require_zdr = true`; the operator reports the same ZDR absence for Meta
+Muse Spark 1.2. Kimi's `deepinfra/bf16` route was non-operational;
+the explicit `together` retry succeeded with operator-reported frozen-registry SHA-256
+`14937842d2a544540efa39199b2b0ed4c0f25e1f145f1385f32d43b728edbdea`. No completion was
+requested, and the operator reports that the ledger remains untouched at `$0`. These statements
+record operator-reported results only; the private artifacts and ledger were not read or promoted
+by Codex.
+
+The replacement primary proposal is `anthropic/claude-opus-5=amazon-bedrock`, an exact route the
+operator reports as operational and present in the ZDR snapshot. The plan restricts each selected
+role to one route: DeepSeek to successful `novita/fp8`, Anthropic to `amazon-bedrock`, and Kimi to
+successful `together`. Any unavailable, non-ZDR,
 identity-drifted, or capability-incomplete route must fail closed and must not be silently
-substituted. The `-r2` paths below are intentionally fresh; never reuse the failed first-attempt
-paths.
+substituted. The `-r3` primary paths below are intentionally fresh and must not reuse the failed
+Qwen `-r2` paths.
 
 If the cumulative ledger does not already exist, initialize it exactly once. Never replace an
 existing ledger; its historical prefix is part of later AUTHRUNNER custody.
@@ -50,14 +59,12 @@ MMAUDIT_BUDGET_USD=250 .venv/bin/mmaudit models init-cost-ledger --config config
 ```
 
 ```shell
-MMAUDIT_SECRETS_ENV_FILE="$HOME/.mmaudit/secrets.env" MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models discover --candidate deepseek/deepseek-v4-pro-0813=novita/fp8 --config config/openrouter-qualification.toml --secrets-env-file "$HOME/.mmaudit/secrets.env" --output-dir "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260820-r2" --candidate-selection-plan config/models.selection-plan.json --candidate-selection-ranking-source /Users/generalcuster/Documents/dev/CODEX_HANDOFF_v3-unblock-2026-08-17/model-ranking.py --candidate-selection-lineage-review-source /Users/generalcuster/Documents/dev/CODEX_HANDOFF_v3-unblock-2026-08-17/V3-LINEAGE-001-operator-review.md --candidate-registry-output "$HOME/.mmaudit/private/authrunner/candidate-registry-r2.json" --no-color
-MMAUDIT_SECRETS_ENV_FILE="$HOME/.mmaudit/secrets.env" MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models discover --candidate qwen/qwen3.8-max=alibaba --config config/openrouter-qualification.toml --secrets-env-file "$HOME/.mmaudit/secrets.env" --output-dir "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260820-r2" --candidate-selection-plan config/models.selection-plan.json --candidate-selection-ranking-source /Users/generalcuster/Documents/dev/CODEX_HANDOFF_v3-unblock-2026-08-17/model-ranking.py --candidate-selection-lineage-review-source /Users/generalcuster/Documents/dev/CODEX_HANDOFF_v3-unblock-2026-08-17/V3-LINEAGE-001-operator-review.md --candidate-registry-output "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r2.json" --no-color
-MMAUDIT_SECRETS_ENV_FILE="$HOME/.mmaudit/secrets.env" MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models discover --candidate moonshotai/kimi-k3=deepinfra/bf16 --config config/openrouter-qualification.toml --secrets-env-file "$HOME/.mmaudit/secrets.env" --output-dir "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2" --candidate-selection-plan config/models.selection-plan.json --candidate-selection-ranking-source /Users/generalcuster/Documents/dev/CODEX_HANDOFF_v3-unblock-2026-08-17/model-ranking.py --candidate-selection-lineage-review-source /Users/generalcuster/Documents/dev/CODEX_HANDOFF_v3-unblock-2026-08-17/V3-LINEAGE-001-operator-review.md --candidate-registry-output "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" --no-color
+MMAUDIT_SECRETS_ENV_FILE="$HOME/.mmaudit/secrets.env" MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models discover --candidate anthropic/claude-opus-5=amazon-bedrock --config config/openrouter-qualification.toml --secrets-env-file "$HOME/.mmaudit/secrets.env" --output-dir "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260820-r3" --candidate-selection-plan config/models.selection-plan.json --candidate-selection-ranking-source /Users/generalcuster/Documents/dev/CODEX_HANDOFF_v3-unblock-2026-08-17/model-ranking.py --candidate-selection-lineage-review-source /Users/generalcuster/Documents/dev/CODEX_HANDOFF_v3-unblock-2026-08-17/V3-LINEAGE-001-operator-review.md --candidate-registry-output "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r3.json" --no-color
 ```
 
-Each output registry is deliberately rootless, role-empty, and `PENDING`, with every runtime
-field copied from that exact fresh discovery bundle. Do not run AUTHRUNNER after metadata
-discovery alone: fresh exact-ID documentary lineage and request-bound cost caps remain required.
+The output registry must remain rootless, role-empty, and `PENDING`, with every runtime field
+copied from that exact fresh discovery bundle. Do not run AUTHRUNNER after metadata discovery
+alone: fresh exact-ID documentary lineage and request-bound cost caps remain required.
 
 After all three discovery outputs exist **and** the compiled public-lineage bundle has been
 rebuilt to prove the three exact IDs pairwise independent, the following command performs the
@@ -68,14 +75,14 @@ REPLAY-judge slots at `$192.00`; any exact live request cost bound above `$1.00`
 before reservation or completion POST.
 
 ```shell
-env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models authenticated-runner --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r2.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260820-r2" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r2.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260820-r2" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2" --qualification-policy config/models.maximum-assurance.toml --primary-campaign-journal "$HOME/.mmaudit/private/authrunner/primary-campaign-20260820-r2" --primary-portfolio "$HOME/.mmaudit/private/authrunner/primary-portfolio-20260820-r2" --replay-campaign-journal "$HOME/.mmaudit/private/authrunner/replay-campaign-20260820-r2" --replay-portfolio "$HOME/.mmaudit/private/authrunner/replay-portfolio-20260820-r2" --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-evidence-20260820-r2.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --ground-truth-provenance benchmarks/model_corpus/provenance.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --allow-code-egress --preflight-only --no-color
+env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models authenticated-runner --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r2.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260820-r2" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r3.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260820-r3" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2" --qualification-policy config/models.maximum-assurance.toml --primary-campaign-journal "$HOME/.mmaudit/private/authrunner/primary-campaign-20260820-r3" --primary-portfolio "$HOME/.mmaudit/private/authrunner/primary-portfolio-20260820-r3" --replay-campaign-journal "$HOME/.mmaudit/private/authrunner/replay-campaign-20260820-r3" --replay-portfolio "$HOME/.mmaudit/private/authrunner/replay-portfolio-20260820-r3" --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-evidence-20260820-r3.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --ground-truth-provenance benchmarks/model_corpus/provenance.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --allow-code-egress --preflight-only --no-color
 ```
 
 Only after that command reports `VALID / NONAUTHORIZING / NO PROVIDER EGRESS` may the operator run
 the same one-shot command without `--preflight-only`, with both
 `MMAUDIT_SECRETS_ENV_FILE="$HOME/.mmaudit/secrets.env"` and
 `--secrets-env-file "$HOME/.mmaudit/secrets.env"` set explicitly in that subprocess. Never reuse
-any of the five mutable `-r2` output paths after a partial launch; allocate a fresh suffix and
+any of the five mutable `-r3` output paths after a partial launch; allocate a fresh suffix and
 re-run provider-free preflight under a new operator action.
 
 ## Queue-derived model-work status

@@ -8,9 +8,9 @@ AUTORUN_STATUS: BLOCKED_SAFETY
 CURRENT_MILESTONE: M1-DETERMINISTIC-PRODUCT (REACHED)
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001 (COMPLETE)
-NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator run the three fresh `-r2` metadata-only discovery commands in `docs/models/model_selection.md`; reject any unavailable, non-ZDR, identity-drifted, or capability-incomplete route without substitution. Then compile fresh documentary public-lineage evidence for those three exact IDs and run the frozen provider-free `--preflight-only` command. Derive final request-bound caps from retained pricing/capacity evidence before any one-shot REAL launch. AUTHSEAL publication, real audits, benchmarks, and release remain queued.
-LAST_COMMAND: Provider-free 514-test reasoning/discovery/OpenRouter/candidate-selection/AUTHRUNNER-CLI/schema/objective/documentation matrix; `.venv/bin/python scripts/generate_release_schemas.py`; `make PYTHON=.venv/bin/python lint`; `make PYTHON=.venv/bin/python type`; strict governance JSON parsing; diff integrity.
-LAST_RESULT: PASS / BLOCKED_SAFETY — 514 relevant tests passed; generated schemas were current; Ruff passed over 535 files; strict mypy passed over 202 source files; governance JSON and diff gates passed; independent exact-byte review found no blocker/HIGH. The corrected plan remains nonauthorizing, no corrected registry or fresh exact-ID public-lineage authority exists, and no secret, provider call, ledger access/mutation, REAL AUTHRUNNER issuance, or release action occurred.
+NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator run only the fresh PRIMARY r3 metadata discovery command in `docs/models/model_selection.md` for `anthropic/claude-opus-5=amazon-bedrock`; reject any unavailable, non-ZDR, identity-drifted, or capability-incomplete result without substitution. Then compile exact-ID documentary public lineage for DeepSeek V4, Claude Opus 5, and Kimi K3 and run the frozen provider-free r2/r3/r2 `--preflight-only` command. Derive final request-bound caps from retained pricing/capacity evidence before any one-shot REAL launch. AUTHSEAL publication, real audits, benchmarks, and release remain queued.
+LAST_COMMAND: Provider-free 82-test candidate-selection/registry-bridge/AUTHRUNNER-CLI/schema/objective/documentation matrix; `.venv/bin/python scripts/generate_release_schemas.py`; `make PYTHON=.venv/bin/python lint`; `make PYTHON=.venv/bin/python type`; strict governance JSON parsing; diff integrity.
+LAST_RESULT: PASS / BLOCKED_SAFETY — 82 relevant tests passed; generated schemas were current; Ruff passed over 535 files; strict mypy passed over 202 source files; governance JSON and diff gates passed. Independent contract audits confirmed the two successful r2 pairs remain exact-bound and reusable, chose the rank-1 exact-ID Anthropic/Amazon Bedrock replacement, and found no authority promotion. PRIMARY r3 and exact-ID public lineage remain absent; Codex made no secret, provider, or ledger access.
 REAL_MODEL_CALLS_ATTEMPTED: 11
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 10
@@ -21,6 +21,40 @@ OPENROUTER_BUDGET_REMAINING_USD: 249.9965235675
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
 LAST_CHECKPOINT_COMMIT: ca4e2ddd4c85e38b808f7794f2a93ebef791109f (verified at `origin/agent/v3-wip-checkpoint`)
+
+## 2026-08-20T19:50:26Z — AUTHRUNNER singleton discovery outcomes bound to replacement plan
+
+- Status: `V3-AUTHRUNNER-001` remains `PARTIAL` / `BLOCKED_SAFETY`; metadata-only outputs grant no
+  lineage, qualification, runner, seal, benchmark, or release authority.
+- Operator-reported outcomes: DeepSeek V4 on `novita/fp8` succeeded with frozen registry SHA-256
+  `59dfdaf498cc2a8201351a7c6aacdfc2a3fd7f6daec09aa927202071ee7a0619`. Qwen 3.8 Max on
+  `alibaba` failed because the exact model had no ZDR endpoint entry; Meta Muse likewise had no ZDR
+  route. Kimi K3 on `deepinfra/bf16` was non-operational, while the explicit `together` retry
+  succeeded with frozen registry SHA-256
+  `14937842d2a544540efa39199b2b0ed4c0f25e1f145f1385f32d43b728edbdea`. No completion was
+  requested, and the operator reported the selected campaign ledger remained untouched at `$0`.
+  Codex did not open the private outputs, secret file, or ledger.
+- Provider-free plan correction: replaced Qwen PRIMARY with staged rank-1 exact ID
+  `anthropic/claude-opus-5` on operator-reported operational ZDR endpoint `amazon-bedrock`.
+  Resealed the wholly nonauthorizing plan as
+  `47cd417c3aa73369da16981bbef3a3c450040e95ecf55f9af837f6a0b3edf459`; all three selected route
+  allowlists are singleton-only: DeepSeek/`novita/fp8`, Anthropic/`amazon-bedrock`, and
+  Kimi/`together`.
+- Reuse and fresh-path decision: AUTHRUNNER does not ingest the selection plan. The successful
+  candidate and replay r2 registries remain usable only with their original exact r2 discovery
+  bundles; their older plan hash remains provenance in a pending rationale, not launch authority.
+  Only PRIMARY uses fresh discovery directory `authrunner-primary-judge-20260820-r3` and registry
+  `primary-judge-registry-r3.json`. The documented preflight mixes candidate r2, PRIMARY r3, and
+  replay r2 while reserving fresh r3 campaign/output leaves.
+- Validation: the 82-test relevant matrix, schema verification, Ruff, strict mypy over 202 source
+  files, governance JSON parsing, and diff integrity passed. Independent read-only audits found no
+  route/provider collision or plan-reuse authority gap.
+- Remaining limitation and next action: Claude Opus 5, DeepSeek V4, and Kimi K3 are all absent from
+  the current positive public-lineage manifest. Route diversity and vendor labels provide no
+  lineage credit. Run only the frozen PRIMARY r3 metadata command, then obtain admissible immutable
+  documentary source bytes and compile three exact pairwise-independent roots before provider-free
+  AUTHRUNNER preflight. No REAL completion, AUTHSEAL publication, audit, benchmark, or release
+  action occurred in this slice.
 
 ## 2026-08-20T16:22:15Z — AUTHRUNNER provider-contract drift corrected provider-free
 

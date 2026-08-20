@@ -412,19 +412,28 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `docs/models/model_selection.md`. Green checkpoint
   `ca4e2ddd4c85e38b808f7794f2a93ebef791109f` is verified on
   `origin/agent/v3-wip-checkpoint`; no corrected registry or REAL runner evidence is claimed.
+- **Singleton discovery disposition 2026-08-20:** Operator-run metadata discovery produced exact
+  rootless pending DeepSeek/`novita/fp8` and Kimi/`together` registry+discovery pairs without a
+  completion or ledger spend. Qwen/`alibaba` lacked an exact-model ZDR entry, Meta Muse likewise
+  had no ZDR route, and Kimi/`deepinfra/bf16` was non-operational; none is substitutable. The
+  nonauthorizing plan is resealed as
+  `47cd417c3aa73369da16981bbef3a3c450040e95ecf55f9af837f6a0b3edf459` with singleton selected
+  routes DeepSeek/`novita/fp8`, Anthropic Claude Opus 5/`amazon-bedrock`, and Kimi/`together`.
+  Existing successful r2 pairs remain bound to their original discovery evidence; only the fresh
+  PRIMARY r3 pair is outstanding. Exact-ID public lineage for all three remains absent.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
   and non-crediting. Genuine production-issued lifecycle proof is absent; provider-free fixtures
   cannot mint owned-REAL origin, and the current repository rules prohibit reading real credentials
   or accessing the provider. Campaign/generation revocation beyond the top-level runner lease is
   not independently demonstrated. External-log publication and every benchmark run remain queued.
 - **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator
-  run the three fresh `-r2` metadata-only discovery commands in
-  `docs/models/model_selection.md`; any unavailable, non-ZDR, identity-drifted, or
-  capability-incomplete route must reject without substitution. Then compile fresh documentary
-  public-lineage evidence for those three exact IDs and run the frozen provider-free
-  `--preflight-only` command. Derive final request-bound caps from the retained pricing/capacity
-  evidence before any one-shot REAL launch. AUTHSEAL publication, real audits, benchmarks, and
-  release remain queued.
+  run only the fresh PRIMARY r3 metadata discovery command in `docs/models/model_selection.md` for
+  `anthropic/claude-opus-5=amazon-bedrock`; reject any unavailable, non-ZDR, identity-drifted, or
+  capability-incomplete result without substitution. Then compile fresh documentary public-lineage
+  evidence for DeepSeek V4, Claude Opus 5, and Kimi K3 and run the frozen provider-free
+  r2/r3/r2 `--preflight-only` command. Derive final request-bound caps from retained
+  pricing/capacity evidence before any one-shot REAL launch. AUTHSEAL publication, real audits,
+  benchmarks, and release remain queued.
 
 ### V3-MODELREFRESH-001 — Provider-free model-refresh runtime and pricing custody
 

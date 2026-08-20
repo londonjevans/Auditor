@@ -136,21 +136,21 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
     plan = load_candidate_selection_plan(ROOT / "config" / "models.selection-plan.json")
     guide = (ROOT / "docs" / "models" / "model_selection.md").read_text(encoding="utf-8")
 
-    assert plan.plan_sha256 == "e1fcfa451f7d4b352663c4c870d65fe03fbaff1745efc0350277b84194288a05"
+    assert plan.plan_sha256 == "47cd417c3aa73369da16981bbef3a3c450040e95ecf55f9af837f6a0b3edf459"
     assert plan.plan_sha256 in guide
     assert len(plan.entries) == 11
     assert plan.authenticated_runner_selection is not None
     assert plan.authenticated_runner_selection.distinct_root_lineages_verified is False
+    assert plan.authenticated_runner_selection.candidate_model_id == (
+        "deepseek/deepseek-v4-pro-0813"
+    )
+    assert plan.authenticated_runner_selection.primary_judge_model_id == ("anthropic/claude-opus-5")
+    assert plan.authenticated_runner_selection.replay_judge_model_id == "moonshotai/kimi-k3"
     entries = {entry.exact_model_id: entry for entry in plan.entries}
-    assert entries["deepseek/deepseek-v4-pro-0813"].allowed_provider_endpoints == (
-        "novita/fp8",
-        "together",
-    )
+    assert entries["anthropic/claude-opus-5"].allowed_provider_endpoints == ("amazon-bedrock",)
+    assert entries["deepseek/deepseek-v4-pro-0813"].allowed_provider_endpoints == ("novita/fp8",)
     assert entries["qwen/qwen3.8-max"].allowed_provider_endpoints == ("alibaba",)
-    assert entries["moonshotai/kimi-k3"].allowed_provider_endpoints == (
-        "deepinfra/bf16",
-        "together",
-    )
+    assert entries["moonshotai/kimi-k3"].allowed_provider_endpoints == ("together",)
     assert all(entry.availability == "UNVERIFIED" for entry in plan.entries)
     assert all(entry.documentary_lineage == "UNCONFIRMED" for entry in plan.entries)
 
@@ -178,24 +178,25 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
     plan = load_candidate_selection_plan(ROOT / "config" / "models.selection-plan.json")
     corrected = (
         DiscoveryCandidateRoute(
+            exact_model_id="anthropic/claude-opus-5",
+            approved_provider_endpoint="amazon-bedrock",
+        ),
+        DiscoveryCandidateRoute(
             exact_model_id="deepseek/deepseek-v4-pro-0813",
             approved_provider_endpoint="novita/fp8",
         ),
         DiscoveryCandidateRoute(
             exact_model_id="moonshotai/kimi-k3",
-            approved_provider_endpoint="deepinfra/bf16",
-        ),
-        DiscoveryCandidateRoute(
-            exact_model_id="qwen/qwen3.8-max",
-            approved_provider_endpoint="alibaba",
+            approved_provider_endpoint="together",
         ),
     )
 
     assert validate_candidate_selection_routes(plan, routes=corrected) == plan
     for model_id, stale_endpoint in (
+        ("anthropic/claude-opus-5", "google-vertex"),
         ("deepseek/deepseek-v4-pro-0813", "novita"),
-        ("moonshotai/kimi-k3", "google-vertex"),
-        ("qwen/qwen3.8-max", "together"),
+        ("deepseek/deepseek-v4-pro-0813", "together"),
+        ("moonshotai/kimi-k3", "deepinfra/bf16"),
     ):
         with pytest.raises(CandidateSelectionError, match="unlisted endpoint"):
             validate_candidate_selection_routes(
