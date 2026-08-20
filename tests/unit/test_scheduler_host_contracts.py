@@ -43,6 +43,7 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.orchestration.manifest import (
     _ManifestReproductionArtifact,
+    _scheduler_report_authority_snapshot,
     _validate_scheduler_prejudgment_evidence_authority,
 )
 from mmaudit.orchestration.pipeline import _scheduled_reproduction_candidate_ids
@@ -661,14 +662,18 @@ def test_current_manifest_requires_empty_reproduction_evidence_without_successfu
         ),
         task_results=(absence_result,),
     )
-    absent_host_journal = cast(Any, SimpleNamespace(pass_results=(absence_pass,)))
+    absent_host_journal = cast(
+        Any,
+        SimpleNamespace(outputs=(), pass_results=(absence_pass,)),
+    )
+    absent_host_snapshot = _scheduler_report_authority_snapshot(absent_host_journal)
 
     _validate_scheduler_prejudgment_evidence_authority(
         authority=authority,
         report=report,
         candidates=(),
         reproduction_artifact=empty_artifact,
-        journal=absent_host_journal,
+        snapshot=absent_host_snapshot,
     )
 
     result = ReproductionResult(
@@ -706,7 +711,7 @@ def test_current_manifest_requires_empty_reproduction_evidence_without_successfu
                 report=report,
                 candidates=(),
                 reproduction_artifact=nonempty_artifact,
-                journal=absent_host_journal,
+                snapshot=absent_host_snapshot,
             )
 
     authority_presence_cases = (
@@ -743,7 +748,7 @@ def test_current_manifest_requires_empty_reproduction_evidence_without_successfu
                 report=report,
                 candidates=(),
                 reproduction_artifact=empty_artifact,
-                journal=absent_host_journal,
+                snapshot=absent_host_snapshot,
             )
 
     candidate = CandidateFinding.model_construct(
@@ -773,15 +778,16 @@ def test_current_manifest_requires_empty_reproduction_evidence_without_successfu
         report=report,
         candidates=(candidate,),
         reproduction_artifact=exact_artifact,
-        journal=absent_host_journal,
+        snapshot=absent_host_snapshot,
     )
-    no_pass_journal = cast(Any, SimpleNamespace(pass_results=()))
+    no_pass_journal = cast(Any, SimpleNamespace(outputs=(), pass_results=()))
+    no_pass_snapshot = _scheduler_report_authority_snapshot(no_pass_journal)
     _validate_scheduler_prejudgment_evidence_authority(
         authority=exact_authority,
         report=report,
         candidates=(candidate,),
         reproduction_artifact=exact_artifact,
-        journal=no_pass_journal,
+        snapshot=no_pass_snapshot,
     )
     for producer_evidence in (
         exact_artifact.model_copy(
@@ -805,7 +811,7 @@ def test_current_manifest_requires_empty_reproduction_evidence_without_successfu
                 report=report,
                 candidates=(candidate,),
                 reproduction_artifact=producer_evidence,
-                journal=no_pass_journal,
+                snapshot=no_pass_snapshot,
             )
 
     changed_resolution = exact_resolutions[0].model_copy(
@@ -823,7 +829,7 @@ def test_current_manifest_requires_empty_reproduction_evidence_without_successfu
             report=report,
             candidates=(candidate,),
             reproduction_artifact=changed_artifact,
-            journal=absent_host_journal,
+            snapshot=absent_host_snapshot,
         )
     with pytest.raises(
         ValueError,
@@ -834,7 +840,7 @@ def test_current_manifest_requires_empty_reproduction_evidence_without_successfu
             report=report,
             candidates=(candidate,),
             reproduction_artifact=changed_artifact,
-            journal=no_pass_journal,
+            snapshot=no_pass_snapshot,
         )
 
 

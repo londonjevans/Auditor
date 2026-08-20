@@ -125,6 +125,7 @@ from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.manifest import (
     RunEvidenceManifest,
     _ManifestReproductionArtifact,
+    _scheduler_report_authority_snapshot,
     _validate_scheduler_prejudgment_evidence_authority,
     canonical_sha256,
     rebuild_run_evidence_manifest_for_verification,
@@ -3029,6 +3030,7 @@ async def test_generated_foundry_reproduction_caps_solidity_classification(
             ),
         )
         try:
+            authority_snapshot = _scheduler_report_authority_snapshot(journal)
             original_authority = journal.terminal_report_authority
             assert original_authority is not None
 
@@ -3064,7 +3066,7 @@ async def test_generated_foundry_reproduction_caps_solidity_classification(
                         report=result.report,
                         candidates=tuple(candidate_artifact.findings),
                         reproduction_artifact=coherently_resealed_artifact,
-                        journal=journal,
+                        snapshot=authority_snapshot,
                     )
         finally:
             journal.close()
