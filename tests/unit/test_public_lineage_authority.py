@@ -544,7 +544,7 @@ def test_direct_internal_resolver_cannot_upgrade_arbitrary_fixture_to_production
 def test_public_resolver_issues_only_for_compiled_production_manifest() -> None:
     capability = resolve_verified_public_model_lineage()
     inventory = public_model_lineage_inventory(capability)
-    assert len(inventory.confirmed_exact_model_ids) == 11
+    assert len(inventory.confirmed_exact_model_ids) == 12
     assert inventory.unconfirmed_exact_model_ids == (
         "mistralai/mistral-small-2603",
         "openai/gpt-oss-120b",
@@ -552,7 +552,8 @@ def test_public_resolver_issues_only_for_compiled_production_manifest() -> None:
         "z-ai/glm-4.7",
     )
     assert inventory.excluded_exact_model_ids == inventory.unconfirmed_exact_model_ids
-    assert len(inventory.approved_root_lineages) == 10
+    assert len(inventory.approved_root_lineages) == 11
+    assert require_verified_public_model_lineage(capability, "z-ai/glm-5.2").root_lineage
     assert inventory.lineage_identity_authorized is True
 
 

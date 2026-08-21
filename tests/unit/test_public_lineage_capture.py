@@ -199,26 +199,23 @@ def test_committed_capture_journal_replays_exact_source_bytes() -> None:
     corpus_root = REPOSITORY_ROOT / "config" / "public_model_lineage"
     attributes = (REPOSITORY_ROOT / ".gitattributes").read_text(encoding="utf-8").splitlines()
     assert "config/public_model_lineage/sources/*.md -text whitespace=-trailing-space" in attributes
-    journal = PublicLineageCaptureObservations.model_validate_json(
-        (corpus_root / PUBLIC_LINEAGE_CAPTURE_OBSERVATIONS_FILENAME).read_bytes()
+    journal_bytes = (corpus_root / PUBLIC_LINEAGE_CAPTURE_OBSERVATIONS_FILENAME).read_bytes()
+    assert hashlib.sha256(journal_bytes).hexdigest() == (
+        "e2c999f7860f4b5a4753bf872baa71b12edc500fa220c35cdc780292a67d7ef7"
     )
+    journal = PublicLineageCaptureObservations.model_validate_json(journal_bytes)
 
     specs_by_id = {spec.source_id: spec for spec in PUBLIC_LINEAGE_SOURCE_SPECS}
     journal_source_ids = tuple(source.source_id for source in journal.sources)
-    assert journal_source_ids == tuple(
-        spec.source_id
-        for spec in PUBLIC_LINEAGE_SOURCE_SPECS
-        if spec.source_id != "z-ai-glm-5-2-card"
-    )
-    assert "z-ai-glm-5-2-card" not in journal_source_ids
+    assert journal_source_ids == tuple(spec.source_id for spec in PUBLIC_LINEAGE_SOURCE_SPECS)
     assert (
         journal.observation_set_sha256
-        == "6ae6e75a1732c05b85ffe189febbc3ecfa8ae2eeeb83000a8a24d30035b966eb"
+        == "db27957fd9bae451acfb78409936b12d795e89c0ac31f7c53874dcb52adb7c73"
     )
     assert journal.bundle_sha256 == (
-        "7b6ff67506bceaaf05c944edb2c28bf6d8386df3690444b827035ed5c83bc134"
+        "a7ef51f5c75b851c53991414d51f33af80cbfc419934dc9f5be6365829f7b114"
     )
-    assert sum(source.file_binding.size for source in journal.sources) == 421_754
+    assert sum(source.file_binding.size for source in journal.sources) == 432_659
     assert journal.sources[-1].retrieved_at - journal.sources[0].retrieved_at == timedelta(
         seconds=3
     )
@@ -247,11 +244,18 @@ def test_committed_capture_journal_replays_exact_source_bytes() -> None:
         assert all(marker in decoded for marker in spec.required_markers)
 
     tencent = next(source for source in journal.sources if source.source_id == "tencent-hy3-card")
-    assert tencent.retrieved_at == datetime(2026, 8, 21, 11, 42, 34, tzinfo=UTC)
+    assert tencent.retrieved_at == datetime(2026, 8, 21, 22, 18, 49, tzinfo=UTC)
     assert tencent.file_binding.size == 10_325
     assert (
         tencent.file_binding.sha256
         == "dbdfc5920bf548fb484b5ec1837032f6c85e1886f2930aa5bee629c1f9620e8b"
+    )
+    glm_5_2 = next(source for source in journal.sources if source.source_id == "z-ai-glm-5-2-card")
+    assert glm_5_2.retrieved_at == datetime(2026, 8, 21, 22, 18, 50, tzinfo=UTC)
+    assert glm_5_2.file_binding.size == 10_905
+    assert (
+        glm_5_2.file_binding.sha256
+        == "ed5aca8ce3dc5f8de626c87e488444343e43b1dcbdeb0e643dc72fea63ab06e8"
     )
 
 

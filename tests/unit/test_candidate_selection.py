@@ -24,7 +24,7 @@ from mmaudit.models.candidate_selection import (
 )
 from mmaudit.models.discovery import DiscoveryCandidateRoute
 from mmaudit.models.public_lineage_authority import (
-    PublicModelLineageAuthorityError,
+    require_independent_public_model_lineage,
     require_verified_public_model_lineage,
     resolve_verified_public_model_lineage,
 )
@@ -283,16 +283,30 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
     )
 
 
-def test_committed_runner_selection_does_not_claim_unsealed_primary_lineage() -> None:
+def test_committed_runner_selection_has_three_documented_independent_roots() -> None:
     plan = load_candidate_selection_plan(ROOT / "config" / "models.selection-plan.json")
     selection = plan.authenticated_runner_selection
     assert selection is not None
     capability = resolve_verified_public_model_lineage()
-    candidate = require_verified_public_model_lineage(capability, selection.candidate_model_id)
-    replay = require_verified_public_model_lineage(capability, selection.replay_judge_model_id)
-    assert candidate.root_lineage != replay.root_lineage
-    with pytest.raises(PublicModelLineageAuthorityError, match="lacks confirmed"):
-        require_verified_public_model_lineage(capability, selection.primary_judge_model_id)
+    selected_ids = (
+        selection.candidate_model_id,
+        selection.primary_judge_model_id,
+        selection.replay_judge_model_id,
+    )
+    bindings = tuple(
+        require_verified_public_model_lineage(capability, exact_model_id)
+        for exact_model_id in selected_ids
+    )
+    assert len({binding.root_lineage for binding in bindings}) == 3
+    for left, right in (
+        (selected_ids[0], selected_ids[1]),
+        (selected_ids[1], selected_ids[0]),
+        (selected_ids[0], selected_ids[2]),
+        (selected_ids[2], selected_ids[0]),
+        (selected_ids[1], selected_ids[2]),
+        (selected_ids[2], selected_ids[1]),
+    ):
+        assert require_independent_public_model_lineage(capability, left, right).independent is True
     assert selection.distinct_root_lineages_verified is False
 
 

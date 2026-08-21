@@ -65,7 +65,7 @@ PUBLIC_MODEL_LINEAGE_CAPTURE_OBSERVATIONS_FILENAME = "capture-observations.json"
 # Updated only after a strict builder has emitted and replayed the committed
 # manifest.  An all-zero value is intentionally non-authorizing.
 PUBLIC_MODEL_LINEAGE_MANIFEST_FILE_SHA256 = (
-    "90389d27f553d6f167a21aab364cebdb40ca5afbdbcc977d9127338ace4a3008"
+    "b097a65613a07930f5c256c63065202a8998d5212a0021312a0e315ff6557b53"
 )
 
 PUBLIC_MODEL_LINEAGE_EXACT_CANDIDATE_IDS = (
@@ -84,6 +84,7 @@ PUBLIC_MODEL_LINEAGE_EXACT_CANDIDATE_IDS = (
     "tencent/hunyuan-a13b-instruct",
     "tencent/hy3",
     "z-ai/glm-4.7",
+    "z-ai/glm-5.2",
 )
 
 
@@ -1582,6 +1583,14 @@ _COMPILED_SOURCE_PINS = (
         "2765a661c9061116a4bef693c61f5de3f0687f2c",
         "sources/z-ai-glm-4-7-card.md",
     ),
+    (
+        "z-ai-glm-5-2-card",
+        "https://huggingface.co/zai-org/GLM-5.2/resolve/b4734de4facf877f85769a911abafc5283eab3d9/README.md",
+        "z-ai",
+        "z-ai",
+        "b4734de4facf877f85769a911abafc5283eab3d9",
+        "sources/z-ai-glm-5-2-card.md",
+    ),
 )
 _COMPILED_SOURCE_IDS = tuple(item[0] for item in _COMPILED_SOURCE_PINS)
 _COMPILED_CONSERVATIVE_CONSTRAINTS = (
@@ -1607,6 +1616,10 @@ _COMPILED_CONSERVATIVE_CONSTRAINTS = (
     (
         "constraint-tencent-hy3-hunyuan",
         ("tencent/hunyuan-a13b-instruct", "tencent/hy3"),
+    ),
+    (
+        "constraint-z-ai-glm-family",
+        ("z-ai/glm-4.7", "z-ai/glm-5.2"),
     ),
 )
 

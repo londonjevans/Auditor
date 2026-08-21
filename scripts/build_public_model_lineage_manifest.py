@@ -31,7 +31,7 @@ from mmaudit.models.public_lineage_authority import (
 from mmaudit.orchestration.manifest import ManifestFileBinding, canonical_sha256
 from mmaudit.release_io import read_file_evidence, read_json_evidence, write_json_evidence
 
-VERIFIED_AT = datetime(2026, 8, 21, 11, 47, tzinfo=UTC)
+VERIFIED_AT = datetime(2026, 8, 21, 22, 19, tzinfo=UTC)
 VALID_UNTIL = VERIFIED_AT + timedelta(days=180)
 
 
@@ -156,6 +156,12 @@ _ALIASES = (
         "zai-org/GLM-4.7",
         "z-ai",
         ("z-ai-glm-4-7-card",),
+    ),
+    _AliasSpec(
+        "z-ai/glm-5.2",
+        "zai-org/GLM-5.2",
+        "z-ai",
+        ("z-ai-glm-5-2-card",),
     ),
 )
 
@@ -344,6 +350,20 @@ _CLAIMS = (
         "GLM-4.7 brings clear gains, compared to its predecessor GLM-4.6",
         "UNRESOLVED_EXTERNAL_BASE",
         False,
+    ),
+    _ClaimSpec(
+        "claim-z-ai-glm-5-2-anchor",
+        "z-ai/glm-5.2",
+        PublicModelLineageClaimKind.ROOT_ANCHOR,
+        None,
+        "z-ai-glm-5-2-card",
+        "We're introducing GLM-5.2, our latest flagship model for long-horizon tasks.",
+        "BUILD_ANCESTRY",
+        True,
+        exact_marker_end=(
+            "We also improve GLM-5.2\u2019s MTP layer for speculative decoding, increasing the "
+            "acceptance length by up to 20%"
+        ),
     ),
 )
 
@@ -549,6 +569,18 @@ def build_manifest(
             supporting_claim_ids=(
                 "claim-hunyuan-anchor",
                 "claim-tencent-hy3-anchor",
+            ),
+        ),
+        _hashed_constraint(
+            constraint_id="constraint-z-ai-glm-family",
+            constraint_kind=PublicModelLineageConstraintKind.CONSERVATIVE_ORGANIZATIONAL,
+            member_exact_model_ids=(
+                "z-ai/glm-4.7",
+                "z-ai/glm-5.2",
+            ),
+            supporting_claim_ids=(
+                "claim-z-ai-anchor",
+                "claim-z-ai-glm-5-2-anchor",
             ),
         ),
     )

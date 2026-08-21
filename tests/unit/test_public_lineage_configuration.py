@@ -31,11 +31,13 @@ _NEMOTRON = "nvidia/nemotron-3-super-120b-a12b"
 _GPT_OSS = "openai/gpt-oss-120b"
 _HUNYUAN = "tencent/hunyuan-a13b-instruct"
 _TENCENT_HY3 = "tencent/hy3"
+_GLM_4_7 = "z-ai/glm-4.7"
+_GLM_5_2 = "z-ai/glm-5.2"
 _UNCONFIRMED = (
     "mistralai/mistral-small-2603",
     _GPT_OSS,
     _HUNYUAN,
-    "z-ai/glm-4.7",
+    _GLM_4_7,
 )
 _EXPECTED_CONSTRAINT_IDS = (
     "constraint-cogito-deepseek",
@@ -45,6 +47,7 @@ _EXPECTED_CONSTRAINT_IDS = (
     "constraint-kimi-k2-k3",
     "constraint-nemotron-meta",
     "constraint-tencent-hy3-hunyuan",
+    "constraint-z-ai-glm-family",
 )
 _EXPECTED_CONSTRAINT_MEMBERS = {
     "constraint-cogito-deepseek": (_COGITO, _DEEPSEEK_V3),
@@ -60,6 +63,7 @@ _EXPECTED_CONSTRAINT_MEMBERS = {
     "constraint-kimi-k2-k3": (_KIMI_K2, _KIMI_K3),
     "constraint-nemotron-meta": (_META, _NEMOTRON),
     "constraint-tencent-hy3-hunyuan": (_HUNYUAN, _TENCENT_HY3),
+    "constraint-z-ai-glm-family": (_GLM_4_7, _GLM_5_2),
 }
 
 _FALSE_AUTHORITY_FIELDS = (
@@ -122,11 +126,12 @@ def test_projection_preserves_current_inclusion_and_all_negative_constraints() -
         tuple(item.constraint_id for item in projection.conservative_non_independence_constraints)
         == _EXPECTED_CONSTRAINT_IDS
     )
-    assert len(projection.eligible_exact_candidate_ids) == 11
-    assert len(projection.approved_model_lineages) == 10
+    assert len(projection.eligible_exact_candidate_ids) == 12
+    assert len(projection.approved_model_lineages) == 11
     assert projection.excluded_unconfirmed_exact_model_ids == _UNCONFIRMED
     assert not set(_UNCONFIRMED) & set(projection.eligible_exact_candidate_ids)
     assert _NEMOTRON in projection.eligible_exact_candidate_ids
+    assert _GLM_5_2 in projection.eligible_exact_candidate_ids
     assert {
         item.constraint_id: item.member_exact_model_ids
         for item in projection.conservative_non_independence_constraints
@@ -142,6 +147,16 @@ def test_projection_preserves_current_inclusion_and_all_negative_constraints() -
     assert all(
         item.negative_only is True and item.positive_root_assignment_authorized is False
         for item in projection.conservative_non_independence_constraints
+    )
+    glm_constraint = next(
+        item
+        for item in projection.conservative_non_independence_constraints
+        if item.constraint_id == "constraint-z-ai-glm-family"
+    )
+    assert glm_constraint.member_exact_model_ids == (_GLM_4_7, _GLM_5_2)
+    assert glm_constraint.supporting_claim_ids == (
+        "claim-z-ai-anchor",
+        "claim-z-ai-glm-5-2-anchor",
     )
     with pytest.raises(ValueError, match=r"not independent|conservatively non-independent"):
         require_independent_public_model_lineage(capability, _COGITO, _DEEPSEEK_V3)

@@ -1,7 +1,7 @@
 {
-  "bundle_sha256": "7b6ff67506bceaaf05c944edb2c28bf6d8386df3690444b827035ed5c83bc134",
+  "bundle_sha256": "a7ef51f5c75b851c53991414d51f33af80cbfc419934dc9f5be6365829f7b114",
   "lineage_identity_authorized": false,
-  "observation_set_sha256": "6ae6e75a1732c05b85ffe189febbc3ecfa8ae2eeeb83000a8a24d30035b966eb",
+  "observation_set_sha256": "db27957fd9bae451acfb78409936b12d795e89c0ac31f7c53874dcb52adb7c73",
   "provider_call_authorized": false,
   "schema_version": "1.0",
   "source_egress_authorized": false,
@@ -16,14 +16,14 @@
       "immutable_revision": "f5b0199c2c54a284b00f1a2db3942299d4198484",
       "independence_key": "deepcogito",
       "media_type": "text/plain",
-      "observation_sha256": "133247cdeb0bccd4abc8180afa1fb8b994751aefe7c92f76040cab2ba3be5e6c",
+      "observation_sha256": "be377bf33f231290461c247126a3f7c7a82775b1680e70b051ae3768fe976cf3",
       "publisher_id": "deepcogito",
       "redirect_chain": [
         "https://huggingface.co/deepcogito/cogito-671b-v2.1/resolve/f5b0199c2c54a284b00f1a2db3942299d4198484/README.md",
         "https://huggingface.co/api/resolve-cache/models/deepcogito/cogito-671b-v2.1/f5b0199c2c54a284b00f1a2db3942299d4198484/README.md?%2Fdeepcogito%2Fcogito-671b-v2.1%2Fresolve%2Ff5b0199c2c54a284b00f1a2db3942299d4198484%2FREADME.md=&etag=%22abb9c853e039ae0cc77fd02bef234155eb6997de%22"
       ],
       "requested_url": "https://huggingface.co/deepcogito/cogito-671b-v2.1/resolve/f5b0199c2c54a284b00f1a2db3942299d4198484/README.md",
-      "retrieved_at": "2026-08-21T11:42:31Z",
+      "retrieved_at": "2026-08-21T22:18:47Z",
       "source_id": "deepcogito-cogito-v2-1-671b-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
@@ -37,14 +37,14 @@
       "immutable_revision": "a678d82902a8da587f29fd3f3ad22dd35b522ed5",
       "independence_key": "deepseek-ai",
       "media_type": "text/plain",
-      "observation_sha256": "f27a664e3a975da85ea396bd3fa01083831a25cd55d153e4af2f4f9042fd40fb",
+      "observation_sha256": "dcf7e2d26aa8e4cff4af8ad98ab6e7b45a3745773f63285f415eebdb9f28ed83",
       "publisher_id": "deepseek-ai",
       "redirect_chain": [
         "https://huggingface.co/deepseek-ai/DeepSeek-V3.2-Exp/resolve/a678d82902a8da587f29fd3f3ad22dd35b522ed5/README.md",
         "https://huggingface.co/api/resolve-cache/models/deepseek-ai/DeepSeek-V3.2-Exp/a678d82902a8da587f29fd3f3ad22dd35b522ed5/README.md?%2Fdeepseek-ai%2FDeepSeek-V3.2-Exp%2Fresolve%2Fa678d82902a8da587f29fd3f3ad22dd35b522ed5%2FREADME.md=&etag=%223938fc25634c495654417f049d52991836080ff2%22"
       ],
       "requested_url": "https://huggingface.co/deepseek-ai/DeepSeek-V3.2-Exp/resolve/a678d82902a8da587f29fd3f3ad22dd35b522ed5/README.md",
-      "retrieved_at": "2026-08-21T11:42:31Z",
+      "retrieved_at": "2026-08-21T22:18:47Z",
       "source_id": "deepseek-deepseek-v3-2-exp-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
@@ -58,14 +58,14 @@
       "immutable_revision": "72e1d3230f6c080a530b0a1d46f8eb4602340597",
       "independence_key": "deepseek-ai",
       "media_type": "text/plain",
-      "observation_sha256": "1ee266f3fa70d9359584a603a34ef542e9b81b69c48c886b95702a70e2bc79dd",
+      "observation_sha256": "e6b42dbcd35d4dcb80afbb293ef7701b50c4bc052c600c205764697ba5cc59a6",
       "publisher_id": "deepseek-ai",
       "redirect_chain": [
         "https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro-0813/resolve/72e1d3230f6c080a530b0a1d46f8eb4602340597/README.md",
         "https://huggingface.co/api/resolve-cache/models/deepseek-ai/DeepSeek-V4-Pro-0813/72e1d3230f6c080a530b0a1d46f8eb4602340597/README.md?%2Fdeepseek-ai%2FDeepSeek-V4-Pro-0813%2Fresolve%2F72e1d3230f6c080a530b0a1d46f8eb4602340597%2FREADME.md=&etag=%221036a5a34939182f5838147e851ac926ecad9a09%22"
       ],
       "requested_url": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro-0813/resolve/72e1d3230f6c080a530b0a1d46f8eb4602340597/README.md",
-      "retrieved_at": "2026-08-21T11:42:31Z",
+      "retrieved_at": "2026-08-21T22:18:47Z",
       "source_id": "deepseek-deepseek-v4-pro-0813-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
@@ -79,14 +79,14 @@
       "immutable_revision": "b2a81a03d25f927590a91d84ba43f96e8ef7349f",
       "independence_key": "google-deepmind",
       "media_type": "text/plain",
-      "observation_sha256": "821b87e4edf163e6b71f4fb50c4caf3ff7f4b70b2b74a2410bc086f5ad027a3d",
+      "observation_sha256": "afa96e580f7278a19cc76a905b9eaa6df103a5d7b335ea5cb4e2a253b83fa1f4",
       "publisher_id": "google-deepmind",
       "redirect_chain": [
         "https://huggingface.co/google/gemma-4-26B-A4B-it/resolve/b2a81a03d25f927590a91d84ba43f96e8ef7349f/README.md",
         "https://huggingface.co/api/resolve-cache/models/google/gemma-4-26B-A4B-it/b2a81a03d25f927590a91d84ba43f96e8ef7349f/README.md?%2Fgoogle%2Fgemma-4-26B-A4B-it%2Fresolve%2Fb2a81a03d25f927590a91d84ba43f96e8ef7349f%2FREADME.md=&etag=%2295ceefc7798ee1e34bb740ca0c2d66b0f63db597%22"
       ],
       "requested_url": "https://huggingface.co/google/gemma-4-26B-A4B-it/resolve/b2a81a03d25f927590a91d84ba43f96e8ef7349f/README.md",
-      "retrieved_at": "2026-08-21T11:42:32Z",
+      "retrieved_at": "2026-08-21T22:18:47Z",
       "source_id": "google-gemma-4-26b-a4b-it-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
@@ -100,13 +100,13 @@
       "immutable_revision": "73d14711bcc77c16df3470856949c3764056b617",
       "independence_key": "meta",
       "media_type": "text/plain",
-      "observation_sha256": "11b91faef030bbbe4eff6966374d9d69b3e4fd97e3c0762f302b7841413cad13",
+      "observation_sha256": "0bce8c56caf050ba1e43ddbdf9def2917ae6c948de5e6111882634ac12f30c26",
       "publisher_id": "meta",
       "redirect_chain": [
         "https://huggingface.co/meta-llama/Llama-4-Maverick-17B-128E-Instruct/resolve/73d14711bcc77c16df3470856949c3764056b617/README.md"
       ],
       "requested_url": "https://huggingface.co/meta-llama/Llama-4-Maverick-17B-128E-Instruct/resolve/73d14711bcc77c16df3470856949c3764056b617/README.md",
-      "retrieved_at": "2026-08-21T11:42:32Z",
+      "retrieved_at": "2026-08-21T22:18:47Z",
       "source_id": "meta-llama-4-maverick-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
@@ -120,14 +120,14 @@
       "immutable_revision": "f0e1c1e04d40177e4673a22097036854f536e9c0",
       "independence_key": "minimax",
       "media_type": "text/plain",
-      "observation_sha256": "88bb4f9828722621e4baef6bb86292df84f2fe9806e8417d0dbbe2ef72903986",
+      "observation_sha256": "d6a65bbcc02258dc079c19fb2a0596753f199c01cc35daf462cd6139a8d3f768",
       "publisher_id": "minimax",
       "redirect_chain": [
         "https://huggingface.co/MiniMaxAI/MiniMax-M3/resolve/f0e1c1e04d40177e4673a22097036854f536e9c0/README.md",
         "https://huggingface.co/api/resolve-cache/models/MiniMaxAI/MiniMax-M3/f0e1c1e04d40177e4673a22097036854f536e9c0/README.md?%2FMiniMaxAI%2FMiniMax-M3%2Fresolve%2Ff0e1c1e04d40177e4673a22097036854f536e9c0%2FREADME.md=&etag=%22b1e395c849f3147d0645ee6f8f17b3d5781af0e5%22"
       ],
       "requested_url": "https://huggingface.co/MiniMaxAI/MiniMax-M3/resolve/f0e1c1e04d40177e4673a22097036854f536e9c0/README.md",
-      "retrieved_at": "2026-08-21T11:42:32Z",
+      "retrieved_at": "2026-08-21T22:18:48Z",
       "source_id": "minimax-m3-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
@@ -141,14 +141,14 @@
       "immutable_revision": "97ee14542b6c053394af45dd2ff89aadecf457a0",
       "independence_key": "mistral-ai",
       "media_type": "text/plain",
-      "observation_sha256": "dda7cd0124abcea9b86265f2dfb43609d5dc07deb6370de10af1e04acee1ee22",
+      "observation_sha256": "bd760a10981f8e3b7c51e72eaea24f83ca76351cdf4cb25a0b19ea5c1ad48162",
       "publisher_id": "mistral-ai",
       "redirect_chain": [
         "https://huggingface.co/mistralai/Mistral-Small-4-119B-2603/resolve/97ee14542b6c053394af45dd2ff89aadecf457a0/README.md",
         "https://huggingface.co/api/resolve-cache/models/mistralai/Mistral-Small-4-119B-2603/97ee14542b6c053394af45dd2ff89aadecf457a0/README.md?%2Fmistralai%2FMistral-Small-4-119B-2603%2Fresolve%2F97ee14542b6c053394af45dd2ff89aadecf457a0%2FREADME.md=&etag=%227711f4fefd63f4fbbcd3988838b9ba95fe462be9%22"
       ],
       "requested_url": "https://huggingface.co/mistralai/Mistral-Small-4-119B-2603/resolve/97ee14542b6c053394af45dd2ff89aadecf457a0/README.md",
-      "retrieved_at": "2026-08-21T11:42:32Z",
+      "retrieved_at": "2026-08-21T22:18:48Z",
       "source_id": "mistral-small-4-119b-2603-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
@@ -162,14 +162,14 @@
       "immutable_revision": "1b9dbb7b20fe8e92047f956b75f3bc49d69f8f73",
       "independence_key": "moonshot-ai",
       "media_type": "text/plain",
-      "observation_sha256": "d421d8c93765f47506627f7335652b5e41196444a4285349a59392068893b8f9",
+      "observation_sha256": "d7f226e531b3e8a944258e3750f1f3d72bfda49469a4d38fbe5363d961a00eb6",
       "publisher_id": "moonshot-ai",
       "redirect_chain": [
         "https://huggingface.co/moonshotai/Kimi-K2-Thinking/resolve/1b9dbb7b20fe8e92047f956b75f3bc49d69f8f73/README.md",
         "https://huggingface.co/api/resolve-cache/models/moonshotai/Kimi-K2-Thinking/1b9dbb7b20fe8e92047f956b75f3bc49d69f8f73/README.md?%2Fmoonshotai%2FKimi-K2-Thinking%2Fresolve%2F1b9dbb7b20fe8e92047f956b75f3bc49d69f8f73%2FREADME.md=&etag=%2210260d219a5aeffb22da322ad8d624f49cdae967%22"
       ],
       "requested_url": "https://huggingface.co/moonshotai/Kimi-K2-Thinking/resolve/1b9dbb7b20fe8e92047f956b75f3bc49d69f8f73/README.md",
-      "retrieved_at": "2026-08-21T11:42:32Z",
+      "retrieved_at": "2026-08-21T22:18:48Z",
       "source_id": "moonshot-kimi-k2-thinking-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
@@ -183,14 +183,14 @@
       "immutable_revision": "a590ce090cb049c93a33dfe8c208ec652aa20503",
       "independence_key": "moonshot-ai",
       "media_type": "text/plain",
-      "observation_sha256": "667fa366d72a8ff316ebe00a1098488fb7398d987117b04c0210554bbccca387",
+      "observation_sha256": "781051dcf7549d3f2c8c1efa75ef30756478b90b0f60a264cbdb540662757cd7",
       "publisher_id": "moonshot-ai",
       "redirect_chain": [
         "https://huggingface.co/moonshotai/Kimi-K3/resolve/a590ce090cb049c93a33dfe8c208ec652aa20503/README.md",
         "https://huggingface.co/api/resolve-cache/models/moonshotai/Kimi-K3/a590ce090cb049c93a33dfe8c208ec652aa20503/README.md?%2Fmoonshotai%2FKimi-K3%2Fresolve%2Fa590ce090cb049c93a33dfe8c208ec652aa20503%2FREADME.md=&etag=%2210466db3bd36b1eb9b14a099d9d8d77130247712%22"
       ],
       "requested_url": "https://huggingface.co/moonshotai/Kimi-K3/resolve/a590ce090cb049c93a33dfe8c208ec652aa20503/README.md",
-      "retrieved_at": "2026-08-21T11:42:32Z",
+      "retrieved_at": "2026-08-21T22:18:48Z",
       "source_id": "moonshot-kimi-k3-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
@@ -204,14 +204,14 @@
       "immutable_revision": "46cc6113d364942e7742b0b2afd35b5db5058b29",
       "independence_key": "nvidia",
       "media_type": "text/plain",
-      "observation_sha256": "8c82ffcc97f0c50ee0131529eb192024982811a12ae0b0f079330b54ad8764fc",
+      "observation_sha256": "2a8348162575202f3871a4ef1575d635c4a50c9630bf224408216d000b282d1b",
       "publisher_id": "nvidia",
       "redirect_chain": [
         "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16/resolve/46cc6113d364942e7742b0b2afd35b5db5058b29/README.md",
         "https://huggingface.co/api/resolve-cache/models/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16/46cc6113d364942e7742b0b2afd35b5db5058b29/README.md?%2Fnvidia%2FNVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16%2Fresolve%2F46cc6113d364942e7742b0b2afd35b5db5058b29%2FREADME.md=&etag=%22d91b94084a56eacd79252cef11a93539aad841e0%22"
       ],
       "requested_url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16/resolve/46cc6113d364942e7742b0b2afd35b5db5058b29/README.md",
-      "retrieved_at": "2026-08-21T11:42:33Z",
+      "retrieved_at": "2026-08-21T22:18:48Z",
       "source_id": "nvidia-nemotron-3-super-120b-a12b-base-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
@@ -225,14 +225,14 @@
       "immutable_revision": "d51eab0d1f979ebc26b546e634a04f450d99158e",
       "independence_key": "nvidia",
       "media_type": "text/plain",
-      "observation_sha256": "b7d89bc98c9cff27c3fd252aae984a1cee84a5a6fb692f6e039a8509cbd56c61",
+      "observation_sha256": "ea61bc950532d5fea4cbdd6515f75907c2529102d65b604c859f348c58c63065",
       "publisher_id": "nvidia",
       "redirect_chain": [
         "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16/resolve/d51eab0d1f979ebc26b546e634a04f450d99158e/README.md",
         "https://huggingface.co/api/resolve-cache/models/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16/d51eab0d1f979ebc26b546e634a04f450d99158e/README.md?%2Fnvidia%2FNVIDIA-Nemotron-3-Super-120B-A12B-BF16%2Fresolve%2Fd51eab0d1f979ebc26b546e634a04f450d99158e%2FREADME.md=&etag=%226a0a11d4200b020153789ef79eddba3256142c9c%22"
       ],
       "requested_url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16/resolve/d51eab0d1f979ebc26b546e634a04f450d99158e/README.md",
-      "retrieved_at": "2026-08-21T11:42:33Z",
+      "retrieved_at": "2026-08-21T22:18:49Z",
       "source_id": "nvidia-nemotron-3-super-120b-a12b-posttrain-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
@@ -246,13 +246,13 @@
       "immutable_revision": "599476783c6f88508dab8577808b5ead5cbee8d2",
       "independence_key": "openai",
       "media_type": "text/plain",
-      "observation_sha256": "b52b45b53cb9cde2ad3793d1888864336c9da995dda4d435a28f49ff91379c90",
+      "observation_sha256": "805a62540d1036e0e58e97f7108fe2f726a35e8eab93c8fd64590d5d9c3c87b5",
       "publisher_id": "openai",
       "redirect_chain": [
         "https://raw.githubusercontent.com/openai/gpt-oss/599476783c6f88508dab8577808b5ead5cbee8d2/README.md"
       ],
       "requested_url": "https://raw.githubusercontent.com/openai/gpt-oss/599476783c6f88508dab8577808b5ead5cbee8d2/README.md",
-      "retrieved_at": "2026-08-21T11:42:33Z",
+      "retrieved_at": "2026-08-21T22:18:49Z",
       "source_id": "openai-gpt-oss-120b-readme",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
@@ -266,14 +266,14 @@
       "immutable_revision": "995ad96eacd98c81ed38be0c5b274b04031597b0",
       "independence_key": "alibaba-qwen",
       "media_type": "text/plain",
-      "observation_sha256": "14afceff21199dc92ca7cae3be20d5772096d59e8d771c65bbcafc0a32cc04bb",
+      "observation_sha256": "5dea603c17ea2c7e2a56a757baefcf3c497499926ab1bbd66ec75f9ef847a3ec",
       "publisher_id": "alibaba-qwen",
       "redirect_chain": [
         "https://huggingface.co/Qwen/Qwen3.6-35B-A3B/resolve/995ad96eacd98c81ed38be0c5b274b04031597b0/README.md",
         "https://huggingface.co/api/resolve-cache/models/Qwen/Qwen3.6-35B-A3B/995ad96eacd98c81ed38be0c5b274b04031597b0/README.md?%2FQwen%2FQwen3.6-35B-A3B%2Fresolve%2F995ad96eacd98c81ed38be0c5b274b04031597b0%2FREADME.md=&etag=%2220a5d849ac33ffa1dae83ea093710328fa1880f4%22"
       ],
       "requested_url": "https://huggingface.co/Qwen/Qwen3.6-35B-A3B/resolve/995ad96eacd98c81ed38be0c5b274b04031597b0/README.md",
-      "retrieved_at": "2026-08-21T11:42:33Z",
+      "retrieved_at": "2026-08-21T22:18:49Z",
       "source_id": "qwen-qwen3-6-35b-a3b-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
@@ -287,14 +287,14 @@
       "immutable_revision": "290ddb9a56ed23c2c83a1c8081533e58925df952",
       "independence_key": "tencent-hunyuan",
       "media_type": "text/plain",
-      "observation_sha256": "4760786de2df7f7cd2b82f44e736b386bdcb41f39fe7bc4127bcbe06ac0bd642",
+      "observation_sha256": "3038a158e4fe8474bb4dbb85b7e58a64e16aad272d490f8e3848c13651f7c6b2",
       "publisher_id": "tencent-hunyuan",
       "redirect_chain": [
         "https://huggingface.co/tencent/Hunyuan-A13B-Instruct/resolve/290ddb9a56ed23c2c83a1c8081533e58925df952/README.md",
         "https://huggingface.co/api/resolve-cache/models/tencent/Hunyuan-A13B-Instruct/290ddb9a56ed23c2c83a1c8081533e58925df952/README.md?%2Ftencent%2FHunyuan-A13B-Instruct%2Fresolve%2F290ddb9a56ed23c2c83a1c8081533e58925df952%2FREADME.md=&etag=%2250c823d10bf81573000a96165590f00590067eb3%22"
       ],
       "requested_url": "https://huggingface.co/tencent/Hunyuan-A13B-Instruct/resolve/290ddb9a56ed23c2c83a1c8081533e58925df952/README.md",
-      "retrieved_at": "2026-08-21T11:42:34Z",
+      "retrieved_at": "2026-08-21T22:18:49Z",
       "source_id": "tencent-hunyuan-a13b-instruct-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
@@ -308,14 +308,14 @@
       "immutable_revision": "a960ebc3da325ba167f069f76c41eb62c9280d22",
       "independence_key": "tencent",
       "media_type": "text/plain",
-      "observation_sha256": "a1e1abb62454e3eb8c2cd40b4ccaccf35a48cea1878284d64af0e459159a1fce",
+      "observation_sha256": "32e4c110b71b8e5cec8e3aa9ecc0a0344a8def13c993bdf93da3558bd9e88a9b",
       "publisher_id": "tencent",
       "redirect_chain": [
         "https://huggingface.co/tencent/Hy3/resolve/a960ebc3da325ba167f069f76c41eb62c9280d22/README.md",
         "https://huggingface.co/api/resolve-cache/models/tencent/Hy3/a960ebc3da325ba167f069f76c41eb62c9280d22/README.md?%2Ftencent%2FHy3%2Fresolve%2Fa960ebc3da325ba167f069f76c41eb62c9280d22%2FREADME.md=&etag=%22c6b5b63c62644761fa595fb736b879b0af081382%22"
       ],
       "requested_url": "https://huggingface.co/tencent/Hy3/resolve/a960ebc3da325ba167f069f76c41eb62c9280d22/README.md",
-      "retrieved_at": "2026-08-21T11:42:34Z",
+      "retrieved_at": "2026-08-21T22:18:49Z",
       "source_id": "tencent-hy3-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
@@ -329,15 +329,36 @@
       "immutable_revision": "2765a661c9061116a4bef693c61f5de3f0687f2c",
       "independence_key": "z-ai",
       "media_type": "text/plain",
-      "observation_sha256": "2f332e6d220ab6c600cd4dacf126d12ab1634476b46620ebcb540ef759bd345a",
+      "observation_sha256": "6a91c46cc32eb97be519236d810579de8b82ed754fea6cd10e3be5fa85d266da",
       "publisher_id": "z-ai",
       "redirect_chain": [
         "https://huggingface.co/zai-org/GLM-4.7/resolve/2765a661c9061116a4bef693c61f5de3f0687f2c/README.md",
         "https://huggingface.co/api/resolve-cache/models/zai-org/GLM-4.7/2765a661c9061116a4bef693c61f5de3f0687f2c/README.md?%2Fzai-org%2FGLM-4.7%2Fresolve%2F2765a661c9061116a4bef693c61f5de3f0687f2c%2FREADME.md=&etag=%2280be377ea15441530aeed36120d345bffcb34e68%22"
       ],
       "requested_url": "https://huggingface.co/zai-org/GLM-4.7/resolve/2765a661c9061116a4bef693c61f5de3f0687f2c/README.md",
-      "retrieved_at": "2026-08-21T11:42:34Z",
+      "retrieved_at": "2026-08-21T22:18:50Z",
       "source_id": "z-ai-glm-4-7-card",
+      "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
+    },
+    {
+      "file_binding": {
+        "path": "sources/z-ai-glm-5-2-card.md",
+        "sha256": "ed5aca8ce3dc5f8de626c87e488444343e43b1dcbdeb0e643dc72fea63ab06e8",
+        "size": 10905
+      },
+      "final_url": "https://huggingface.co/api/resolve-cache/models/zai-org/GLM-5.2/b4734de4facf877f85769a911abafc5283eab3d9/README.md?%2Fzai-org%2FGLM-5.2%2Fresolve%2Fb4734de4facf877f85769a911abafc5283eab3d9%2FREADME.md=&etag=%224245dd1dded39efdc83b5d38354ffc1b14f1879c%22",
+      "immutable_revision": "b4734de4facf877f85769a911abafc5283eab3d9",
+      "independence_key": "z-ai",
+      "media_type": "text/plain",
+      "observation_sha256": "c8a2f28677e9916b7809646fb6bff42e45a12e6373e98f3d2be006517ecadfdb",
+      "publisher_id": "z-ai",
+      "redirect_chain": [
+        "https://huggingface.co/zai-org/GLM-5.2/resolve/b4734de4facf877f85769a911abafc5283eab3d9/README.md",
+        "https://huggingface.co/api/resolve-cache/models/zai-org/GLM-5.2/b4734de4facf877f85769a911abafc5283eab3d9/README.md?%2Fzai-org%2FGLM-5.2%2Fresolve%2Fb4734de4facf877f85769a911abafc5283eab3d9%2FREADME.md=&etag=%224245dd1dded39efdc83b5d38354ffc1b14f1879c%22"
+      ],
+      "requested_url": "https://huggingface.co/zai-org/GLM-5.2/resolve/b4734de4facf877f85769a911abafc5283eab3d9/README.md",
+      "retrieved_at": "2026-08-21T22:18:50Z",
+      "source_id": "z-ai-glm-5-2-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     }
   ]

@@ -44,6 +44,7 @@ CONFIRMED_EXACT_MODEL_IDS = (
     "nvidia/nemotron-3-super-120b-a12b",
     "qwen/qwen3.6-35b-a3b",
     "tencent/hy3",
+    "z-ai/glm-5.2",
 )
 UNCONFIRMED_EXACT_MODEL_IDS = (
     "mistralai/mistral-small-2603",
@@ -105,6 +106,7 @@ EXPECTED_CLAIM_IDS = (
     "claim-qwen-anchor",
     "claim-tencent-hy3-anchor",
     "claim-z-ai-anchor",
+    "claim-z-ai-glm-5-2-anchor",
 )
 EXPECTED_ALIASES = (
     (
@@ -199,6 +201,12 @@ EXPECTED_ALIASES = (
         "zai-org/GLM-4.7",
         "z-ai",
         ("z-ai-glm-4-7-card",),
+    ),
+    (
+        "z-ai/glm-5.2",
+        "zai-org/GLM-5.2",
+        "z-ai",
+        ("z-ai-glm-5-2-card",),
     ),
 )
 HISTORICAL_SOURCE_FILE_SHA256S = {
@@ -330,8 +338,11 @@ def test_committed_public_lineage_manifest_rebuilds_and_resolves_exactly() -> No
     assert stable_json(bundle).encode("utf-8") == raw_manifest
     assert build_manifest(EVIDENCE_ROOT) == bundle
     assert bundle.bundle_sha256 == (
-        "7c6dd26743733ae46aa94b7171ff2ca42f967ac8323b7f2d0aa95cf66f2dbc68"
+        "815fc0e376682f83f994ac5c21962c5f43556a78f5e736045f93a6ee81e5de0d"
     )
+    assert bundle.verified_at.isoformat() == "2026-08-21T22:19:00+00:00"
+    assert bundle.valid_until.isoformat() == "2027-02-17T22:19:00+00:00"
+    assert max(item.retrieved_at for item in bundle.sources) < bundle.verified_at
     assert (
         tuple(
             (
@@ -388,8 +399,8 @@ def test_committed_public_lineage_manifest_rebuilds_and_resolves_exactly() -> No
     assert inventory.confirmed_exact_model_ids == CONFIRMED_EXACT_MODEL_IDS
     assert inventory.unconfirmed_exact_model_ids == UNCONFIRMED_EXACT_MODEL_IDS
     assert inventory.excluded_exact_model_ids == UNCONFIRMED_EXACT_MODEL_IDS
-    assert len(approved_public_model_lineages(capability)) == 10
-    assert len(inventory.conservative_non_independence_constraints) == 7
+    assert len(approved_public_model_lineages(capability)) == 11
+    assert len(inventory.conservative_non_independence_constraints) == 8
     assert all(
         constraint.negative_only and not constraint.positive_root_assignment_authorized
         for constraint in inventory.conservative_non_independence_constraints
@@ -432,7 +443,7 @@ def test_committed_public_lineage_manifest_rebuilds_and_resolves_exactly() -> No
 
     active_triple = (
         "deepseek/deepseek-v4-pro-0813",
-        "tencent/hy3",
+        "z-ai/glm-5.2",
         "moonshotai/kimi-k3",
     )
     for left, right in permutations(active_triple, 2):
@@ -554,6 +565,36 @@ def test_committed_public_lineage_manifest_rebuilds_and_resolves_exactly() -> No
             "tencent/hunyuan-a13b-instruct",
         )
 
+    glm_5_2 = require_verified_public_model_lineage(capability, "z-ai/glm-5.2")
+    assert glm_5_2.root_lineage == (
+        "sha256:c75238db92f2deb5938759be4c163b22a95f1297a2eb560ab5d90ba69d0764e7"
+    )
+    glm_constraint = next(
+        item
+        for item in inventory.conservative_non_independence_constraints
+        if item.constraint_id == "constraint-z-ai-glm-family"
+    )
+    assert (
+        glm_constraint.constraint_kind
+        is PublicModelLineageConstraintKind.CONSERVATIVE_ORGANIZATIONAL
+    )
+    assert glm_constraint.member_exact_model_ids == (
+        "z-ai/glm-4.7",
+        "z-ai/glm-5.2",
+    )
+    assert glm_constraint.supporting_claim_ids == (
+        "claim-z-ai-anchor",
+        "claim-z-ai-glm-5-2-anchor",
+    )
+    assert glm_constraint.negative_only is True
+    assert glm_constraint.positive_root_assignment_authorized is False
+    with pytest.raises(PublicModelLineageAuthorityError, match="lacks confirmed"):
+        require_independent_public_model_lineage(
+            capability,
+            "z-ai/glm-4.7",
+            "z-ai/glm-5.2",
+        )
+
     meta = require_verified_public_model_lineage(capability, "meta-llama/llama-4-maverick")
     nvidia = require_verified_public_model_lineage(capability, "nvidia/nemotron-3-super-120b-a12b")
     assert meta.root_lineage != nvidia.root_lineage
@@ -619,6 +660,14 @@ def test_committed_public_lineage_manifest_rebuilds_and_resolves_exactly() -> No
             1_857,
             2_148,
             "b9e3eda30b51b800f26955d3f39299389dea8466df5292dd3504557a88b4ab9a",
+        ),
+        (
+            "claim-z-ai-glm-5-2-anchor",
+            "BUILD_ANCESTRY",
+            "z-ai-glm-5-2-card",
+            1_072,
+            1_918,
+            "93d6576eca27ee90d8b712a4594af35e6e3fc56d45ba537c378288ea5b749cb1",
         ),
     ),
 )
