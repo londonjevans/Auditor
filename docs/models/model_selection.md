@@ -44,7 +44,7 @@ requested, and the operator reports that the ledger remains untouched at `$0`. T
 record operator-reported results only; the private artifacts and ledger were not read or promoted
 by Codex. The exact operator-supplied log is retained at
 [`operator_results.md`](../remediation/v3/operator_results.md), raw SHA-256
-`41932dfe7cfa2a0dbc7f0f68d01c2fbf8bec2ad0276ac16a9837b6b9e66f2b69`, and is
+`3c8fc79c24615fae4f80dbbed6c86a9ddbb4b61cd0b1441ac83d2b020a1b60fd`, and is
 `OPERATOR_SUPPLIED_UNVERIFIED`: it grants no repository authority.
 
 The subsequent Claude Opus 5 `amazon-bedrock` PRIMARY r3 attempt also failed closed before registry
@@ -108,20 +108,37 @@ campaign ledger. That run used three placeholder `$1.00` per-attempt tripwires a
 reported a nonauthoritative `$192.00` interval/final ceiling; it did not exercise the current
 exact-cost admission implementation.
 
-After the exact-cost checkpoint is committed, rerun the following unchanged provider-free command.
-The current implementation must emit two distinct, exact 24-request candidate-plan hashes and their
-retry-inclusive derived caps. Judge admission must remain `PENDING_REAL_CANDIDATE_OUTPUTS`, and the
-full campaign cost must remain unavailable, because exact judge prompts require genuine candidate
-outputs. The locally verified preflight contract returns before secret selection, provider access,
-ledger mutation, or durable output publication; transient private write probes are created and
-removed during fail-closed path preflight. The three `$1.00` values remain only additional operator
-tripwires and are not pricing evidence or substitutes for the derived request bounds.
+The first exact-cost implementation is checkpointed at
+`f6acf206f2c55eeb57b1a11fcf58cc4694a41208`, but its committed-byte preflight failed safely on
+the three routes' advertised `input_cache_read` pricing before secret selection, provider egress,
+or ledger mutation. That checkpoint is historical and must not be rerun. The follow-up keeps
+`input_cache_write` and `internal_reasoning` fail-closed, admits cache-read pricing only when each
+exact endpoint's retained cache-read rate is no greater than its prompt rate, and prices both the
+full prompt and full cache-read unit ceilings at the upward-rounded transmitted
+`provider.max_price.prompt` cap. This deliberately conservative double reservation covers additive
+accounting as well as OpenRouter's documented
+[discounted prompt-cache accounting](https://openrouter.ai/docs/guides/best-practices/prompt-caching);
+the provider's documented
+[maximum-price filter](https://openrouter.ai/docs/guides/routing/provider-selection) remains the
+external request-price contract. New or changed pricing components still fail before runtime
+authority, reservation, or POST.
+
+The post-fix checkpoint is pending. Do not execute the following unchanged provider-free command
+until this paragraph binds its exact commit. On those committed bytes, the implementation must emit
+two distinct, exact 24-request candidate-plan hashes and their retry-inclusive derived caps. Judge
+admission must remain
+`PENDING_REAL_CANDIDATE_OUTPUTS`, and the full campaign cost must remain unavailable, because exact
+judge prompts require genuine candidate outputs. The locally verified preflight contract returns
+before secret selection, provider access, ledger mutation, or durable output publication; transient
+private write probes are created and removed during fail-closed path preflight. The three `$1.00`
+values remain only additional operator tripwires and are not pricing evidence or substitutes for the
+derived request bounds.
 
 ```shell
 env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models authenticated-runner --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r2.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260820-r2" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r4.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r4" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2" --qualification-policy config/models.maximum-assurance.toml --primary-campaign-journal "$HOME/.mmaudit/private/authrunner/primary-campaign-20260821-r4" --primary-portfolio "$HOME/.mmaudit/private/authrunner/primary-portfolio-20260821-r4" --replay-campaign-journal "$HOME/.mmaudit/private/authrunner/replay-campaign-20260821-r4" --replay-portfolio "$HOME/.mmaudit/private/authrunner/replay-portfolio-20260821-r4" --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-evidence-20260821-r4.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --ground-truth-provenance benchmarks/model_corpus/provenance.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --allow-code-egress --preflight-only --no-color
 ```
 
-This committed-byte rerun is pending and will validate only the current campaign contract; it grants
+This post-fix committed-byte rerun is pending and will validate only the current campaign contract; it grants
 no runner, qualification, provider-call, AUTHSEAL, benchmark, audit, or release authority. Exact
 candidate caps are derived provider-free. In any separately authorized live process, both candidate
 runs must complete first; then both judge routes must be refreshed, both exact judge plans derived,

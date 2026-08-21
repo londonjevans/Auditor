@@ -352,11 +352,14 @@ _GENERATION_METADATA_IO_BUDGET_FRACTION = 0.25
 _MAX_TRUSTED_GENERATION_VERIFICATION_REQUESTS = 512
 _UNENFORCEABLE_VARIABLE_PRICING_FIELDS = frozenset(
     {
-        "input_cache_read",
         "input_cache_write",
         "internal_reasoning",
     }
 )
+# OpenRouter bills cache reads as a discounted prompt-token input dimension.  A route is
+# admissible only when that snapshot discount is no greater than its fresh prompt price.
+# The transmitted ``provider.max_price.prompt`` then supplies the conservative unit ceiling.
+_PROMPT_DOMINATED_PRICING_FIELDS = frozenset({"input_cache_read"})
 _TRUSTED_ASYNC_CLIENT_SEND = httpx.AsyncClient.send
 _TRUSTED_ASYNC_CLIENT_GETATTRIBUTE = httpx.AsyncClient.__getattribute__
 _TRUSTED_ASYNC_CLIENT_REQUEST = httpx.AsyncClient.request
@@ -2653,6 +2656,22 @@ class OpenRouterStructuredRequestCostPreview(BaseModel):
             component.pricing_field: component.unit_price_usd_exact
             for component in self.cost_components
         }
+        if set(pricing).intersection(_UNENFORCEABLE_VARIABLE_PRICING_FIELDS):
+            raise ValueError(
+                "request-cost preview contains an uncappable variable pricing component"
+            )
+        cache_read_price = pricing.get("input_cache_read")
+        if cache_read_price is not None and Decimal(cache_read_price) != Decimal(pricing["prompt"]):
+            raise ValueError(
+                "request-cost preview input-cache-read bound differs from its prompt-price bound"
+            )
+        if any(
+            field not in _ROUTER_MAX_PRICE_FIELDS
+            and field not in _PROMPT_DOMINATED_PRICING_FIELDS
+            and Decimal(price) != 0
+            for field, price in pricing.items()
+        ):
+            raise ValueError("request-cost preview contains an uncappable nonzero component")
         maximum_units = {
             component.pricing_field: component.maximum_units for component in self.cost_components
         }
@@ -3713,12 +3732,18 @@ def preview_openrouter_structured_request_cost(
         request_material=request_material,
         request_token_plan=request_token_plan,
     )
+    bounded_pricing = dict(
+        _TRUSTED_PROVIDER_CAPPED_COST_BOUND_PRICING(
+            endpoint,
+            dict(endpoint_policy.routing_max_price),
+        )
+    )
     endpoint_cost_bound = _trusted_endpoint_request_cost_bound_from_pricing(
         exact_model_id=sealed_evidence.exact_model_id,
         provider_endpoint=endpoint.provider_endpoint,
         request_material=request_material,
-        pricing=dict(endpoint.pricing),
-        maximum_units={field: ceilings[field] for field, _value in endpoint.pricing},
+        pricing=bounded_pricing,
+        maximum_units={field: ceilings[field] for field in bounded_pricing},
     )
     if endpoint_cost_bound.request_material_sha256 != request_body_sha256:
         raise OpenRouterRequestCostPreviewError(
@@ -6819,32 +6844,15 @@ class OpenRouterClient:
                 "current endpoint pricing changed before request-price sealing"
             )
         routing_max_price = tuple(_routing_max_price((registered_endpoint,)).items())
-        router_caps = dict(routing_max_price)
-        cost_bound_pricing: list[tuple[str, str]] = []
-        with localcontext() as context:
-            context.prec = 160
-            for field, raw_current in registered_endpoint.pricing:
-                current = Decimal(raw_current)
-                if field in _ROUTER_MAX_PRICE_FIELDS:
-                    try:
-                        cap = Decimal(str(router_caps[field]))
-                    except (KeyError, InvalidOperation) as exc:
-                        raise OpenRouterModelRefreshPricingError(
-                            "current endpoint price lacks an exact transmitted provider cap"
-                        ) from exc
-                    if field in _PER_MILLION_ROUTER_PRICE_FIELDS:
-                        cap /= Decimal(1_000_000)
-                    if cap < current:
-                        raise OpenRouterModelRefreshPricingError(
-                            "transmitted provider max_price rounds below the current endpoint price"
-                        )
-                    bounded = max(current, cap)
-                else:
-                    bounded = current
-                canonical_bound = format(bounded, "f")
-                if "." in canonical_bound:
-                    canonical_bound = canonical_bound.rstrip("0").rstrip(".")
-                cost_bound_pricing.append((field, canonical_bound or "0"))
+        try:
+            cost_bound_pricing = _TRUSTED_PROVIDER_CAPPED_COST_BOUND_PRICING(
+                registered_endpoint,
+                dict(routing_max_price),
+            )
+        except OpenRouterCostControlError as exc:
+            raise OpenRouterModelRefreshPricingError(
+                "current endpoint price lacks an exact transmitted provider cap"
+            ) from exc
         values: dict[str, Any] = {
             "exact_model_id": route.exact_model_id,
             "provider_endpoint": route.approved_provider_endpoint,
@@ -11595,7 +11603,12 @@ class OpenRouterClient:
             bounded_pricing = (
                 dict(refresh_pricing_control.cost_bound_pricing)
                 if refresh_pricing_control is not None
-                else dict(registered.pricing)
+                else dict(
+                    _TRUSTED_PROVIDER_CAPPED_COST_BOUND_PRICING(
+                        registered,
+                        dict(registered_policy.routing_max_price),
+                    )
+                )
             )
             bounds.append(
                 _trusted_endpoint_request_cost_bound_from_pricing(
@@ -13203,6 +13216,7 @@ def _openrouter_client_callables_are_pristine() -> bool:
             _endpoint_request_cost_bound_projection_sha256
             is _TRUSTED_ENDPOINT_REQUEST_COST_BOUND_PROJECTION_SHA256
         )
+        and (_provider_capped_cost_bound_pricing is _TRUSTED_PROVIDER_CAPPED_COST_BOUND_PRICING)
         and copy.deepcopy is _TRUSTED_COPY_DEEPCOPY
         and _copy_deepcopy_dispatch_is_pristine()
         and hashlib.sha256 is _TRUSTED_HASHLIB_SHA256
@@ -13667,18 +13681,56 @@ def _routing_max_price(
         context.prec = 160
         maxima: dict[str, Decimal] = {}
         for endpoint in endpoints:
+            fields = tuple(field for field, _raw_price in endpoint.pricing)
+            if any(type(field) is not str for field in fields):
+                raise OpenRouterCostControlError(
+                    "endpoint pricing contains an unknown or duplicate component"
+                )
+            if len(fields) != len(set(fields)) or not set(fields).issubset(
+                _SUPPORTED_TEXT_PRICING_FIELDS
+            ):
+                raise OpenRouterCostControlError(
+                    "endpoint pricing contains an unknown or duplicate component"
+                )
+            if not {"prompt", "completion"}.issubset(fields):
+                raise OpenRouterCostControlError(
+                    "endpoint pricing cannot produce provider-side prompt and completion caps"
+                )
+            prices: dict[str, Decimal] = {}
             for field, raw_price in endpoint.pricing:
+                if type(raw_price) is not str or not raw_price or raw_price != raw_price.strip():
+                    raise OpenRouterCostControlError(
+                        "endpoint price must be an exact finite nonnegative decimal string"
+                    )
+                try:
+                    price = Decimal(raw_price)
+                except (InvalidOperation, ValueError) as exc:
+                    raise OpenRouterCostControlError(
+                        "endpoint price must be an exact finite nonnegative decimal string"
+                    ) from exc
+                if not price.is_finite() or price < 0 or (price == 0 and price.is_signed()):
+                    raise OpenRouterCostControlError(
+                        "endpoint price must be an exact finite nonnegative decimal string"
+                    )
+                prices[field] = price
+            cache_read_price = prices.get("input_cache_read")
+            if cache_read_price is not None and cache_read_price > prices["prompt"]:
+                raise OpenRouterCostControlError(
+                    "input-cache-read endpoint price exceeds its provider-capped prompt price"
+                )
+            for field, price in prices.items():
                 if field in _UNENFORCEABLE_VARIABLE_PRICING_FIELDS:
                     raise OpenRouterCostControlError(
                         "variable endpoint pricing component cannot be provider-capped"
                     )
+                if field in _PROMPT_DOMINATED_PRICING_FIELDS:
+                    continue
                 if field not in _ROUTER_MAX_PRICE_FIELDS:
-                    if Decimal(raw_price) != 0:
+                    if price != 0:
                         raise OpenRouterCostControlError(
                             "nonzero endpoint pricing component cannot be provider-capped"
                         )
                     continue
-                price = Decimal(raw_price)
                 maxima[field] = max(maxima.get(field, Decimal(0)), price)
         if not {"prompt", "completion"}.issubset(maxima):
             raise OpenRouterCostControlError(
@@ -13696,6 +13748,107 @@ def _routing_max_price(
                 candidate = math.nextafter(candidate, math.inf)
             result[field] = candidate
         return result
+
+
+def _provider_capped_cost_bound_pricing(
+    endpoint: _RegisteredEndpointPricing,
+    routing_max_price: Mapping[str, float],
+) -> tuple[tuple[str, str], ...]:
+    """Price every component at an exact transmitted cap or a dominated prompt ceiling.
+
+    Cache-read is preserved as its own full-input component but priced at the transmitted
+    prompt cap, not at its stale discounted snapshot rate.  The request bound therefore adds
+    full prompt and full cache-read unit ceilings at that cap and remains conservative even if
+    provider accounting reports both dimensions.
+    """
+
+    if type(endpoint) is not _RegisteredEndpointPricing or type(routing_max_price) is not dict:
+        raise OpenRouterCostControlError("provider-capped cost-bound inputs are invalid")
+    if not routing_max_price or not set(routing_max_price).issubset(_ROUTER_MAX_PRICE_FIELDS):
+        raise OpenRouterCostControlError("transmitted provider max_price fields are invalid")
+    transmitted_caps: dict[str, Decimal] = {}
+    with localcontext() as context:
+        context.prec = 160
+        for field, raw_cap in routing_max_price.items():
+            if type(field) is not str or type(raw_cap) is not float or not math.isfinite(raw_cap):
+                raise OpenRouterCostControlError(
+                    "transmitted provider max_price is not a finite nonnegative float"
+                )
+            try:
+                cap = Decimal(str(raw_cap))
+            except (InvalidOperation, ValueError) as exc:
+                raise OpenRouterCostControlError(
+                    "transmitted provider max_price is not a finite nonnegative float"
+                ) from exc
+            if not cap.is_finite() or cap < 0 or (cap == 0 and cap.is_signed()):
+                raise OpenRouterCostControlError(
+                    "transmitted provider max_price is not a finite nonnegative float"
+                )
+            if field in _PER_MILLION_ROUTER_PRICE_FIELDS:
+                cap /= Decimal(1_000_000)
+            transmitted_caps[field] = cap
+
+        raw_fields = tuple(field for field, _raw_price in endpoint.pricing)
+        if any(type(field) is not str for field in raw_fields) or len(raw_fields) != len(
+            set(raw_fields)
+        ):
+            raise OpenRouterCostControlError("endpoint pricing components are invalid")
+        if not {"prompt", "completion"}.issubset(raw_fields):
+            raise OpenRouterCostControlError("endpoint pricing is incomplete for cost bounding")
+        raw_pricing: dict[str, Decimal] = {}
+        for field, raw_price in endpoint.pricing:
+            if (
+                field not in _SUPPORTED_TEXT_PRICING_FIELDS
+                or type(raw_price) is not str
+                or not raw_price
+                or raw_price != raw_price.strip()
+            ):
+                raise OpenRouterCostControlError("endpoint pricing is invalid for cost bounding")
+            try:
+                price = Decimal(raw_price)
+            except (InvalidOperation, ValueError) as exc:
+                raise OpenRouterCostControlError(
+                    "endpoint pricing is invalid for cost bounding"
+                ) from exc
+            if not price.is_finite() or price < 0 or (price == 0 and price.is_signed()):
+                raise OpenRouterCostControlError("endpoint pricing is invalid for cost bounding")
+            raw_pricing[field] = price
+
+        prompt_cap = transmitted_caps.get("prompt")
+        if prompt_cap is None or prompt_cap < raw_pricing["prompt"]:
+            raise OpenRouterCostControlError(
+                "transmitted provider prompt cap rounds below endpoint pricing"
+            )
+        bounded: list[tuple[str, str]] = []
+        for field, current in raw_pricing.items():
+            if field in _UNENFORCEABLE_VARIABLE_PRICING_FIELDS:
+                raise OpenRouterCostControlError(
+                    "variable endpoint pricing component cannot be provider-capped"
+                )
+            if field in _PROMPT_DOMINATED_PRICING_FIELDS:
+                if current > raw_pricing["prompt"]:
+                    raise OpenRouterCostControlError(
+                        "input-cache-read endpoint price exceeds its provider-capped prompt price"
+                    )
+                price_bound = prompt_cap
+            elif field in _ROUTER_MAX_PRICE_FIELDS:
+                router_cap = transmitted_caps.get(field)
+                if router_cap is None or router_cap < current:
+                    raise OpenRouterCostControlError(
+                        "transmitted provider max_price rounds below endpoint pricing"
+                    )
+                price_bound = router_cap
+            else:
+                if current != 0:
+                    raise OpenRouterCostControlError(
+                        "nonzero endpoint pricing component cannot be provider-capped"
+                    )
+                price_bound = current
+            bounded.append((field, _format_cost_decimal(price_bound)))
+        return tuple(bounded)
+
+
+_TRUSTED_PROVIDER_CAPPED_COST_BOUND_PRICING = _provider_capped_cost_bound_pricing
 
 
 def _validated_model_catalog(response: dict[str, Any]) -> list[dict[str, Any]]:

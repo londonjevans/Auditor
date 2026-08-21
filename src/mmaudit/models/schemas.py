@@ -12344,10 +12344,33 @@ class AuditModelRefreshPricingAttemptEvidence(StrictModel):
         component_by_field = {item.pricing_field: item for item in self.components}
         with localcontext() as context:
             context.prec = 160
+            if {"input_cache_write", "internal_reasoning"}.intersection(current_fields):
+                raise ValueError(
+                    "pricing attempt contains an uncappable variable pricing component"
+                )
+            current_prompt_price = Decimal(self.current_pricing["prompt"])
+            prompt_cap = Decimal(self.provider_max_price["prompt"]) / Decimal(1_000_000)
+            current_cache_read = self.current_pricing.get("input_cache_read")
+            if (
+                current_cache_read is not None
+                and Decimal(current_cache_read) > current_prompt_price
+            ):
+                raise ValueError(
+                    "pricing attempt cache-read price is not dominated by its prompt price"
+                )
             for field in current_fields:
                 component_price = Decimal(component_by_field[field].unit_price_usd_exact)
                 current_price = Decimal(self.current_pricing[field])
-                if field in _ROUTER_MAX_PRICE_FIELDS:
+                if field == "input_cache_read":
+                    # Cache-read tokens are discounted prompt-token cache hits.  The provider's
+                    # prompt max_price is the enforceable fresh-input ceiling, so retained cost
+                    # evidence must reserve cache reads at that transmitted cap rather than at a
+                    # potentially stale discounted snapshot rate.
+                    if component_price != prompt_cap or component_price < current_price:
+                        raise ValueError(
+                            "pricing attempt cache-read bound differs from provider prompt cap"
+                        )
+                elif field in _ROUTER_MAX_PRICE_FIELDS:
                     projected = Decimal(self.provider_max_price[field])
                     if field in _PER_MILLION_ROUTER_PRICE_FIELDS:
                         projected /= Decimal(1_000_000)
@@ -12355,10 +12378,15 @@ class AuditModelRefreshPricingAttemptEvidence(StrictModel):
                         raise ValueError(
                             "pricing attempt cost bound is below refreshed provider max_price"
                         )
-                elif component_price != current_price:
-                    raise ValueError(
-                        "pricing attempt unrouteable component differs from refreshed price"
-                    )
+                else:
+                    if current_price != 0:
+                        raise ValueError(
+                            "pricing attempt contains an uncappable nonzero pricing component"
+                        )
+                    if component_price != current_price:
+                        raise ValueError(
+                            "pricing attempt unrouteable component differs from refreshed price"
+                        )
         try:
             _require_pristine_endpoint_cost_bound_types()
             reconstructed = EndpointRequestCostBound(

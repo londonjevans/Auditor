@@ -666,6 +666,7 @@ def _model_discovery_run(
     ),
     endpoint_supported_parameters: tuple[str, ...] | None = None,
     endpoint_reasoning_requested: bool = False,
+    endpoint_pricing: dict[str, str] | None = None,
 ) -> tuple[OpenRouterModelDiscoveryRunManifest, OpenRouterModelDiscoveryEvidence]:
     endpoint_snapshot = _endpoint_snapshot(
         model=exact_model,
@@ -678,6 +679,7 @@ def _model_discovery_run(
         ),
         reasoning_requested=endpoint_reasoning_requested,
         structured_output_required=False,
+        pricing=endpoint_pricing,
     )
     catalog = {
         "data": [
@@ -9242,6 +9244,21 @@ async def test_reasoning_cached_cost_and_latency_evidence_are_recorded(
     assert record.latency_ms is not None
     assert record.started_at is not None
     assert record.ended_at is not None
+
+
+@pytest.mark.parametrize(("cached_tokens", "accepted"), [(10, True), (11, False)])
+def test_cached_prompt_tokens_may_equal_but_not_exceed_total_prompt_tokens(
+    cached_tokens: int,
+    accepted: bool,
+) -> None:
+    usage = _completion('{"answer":"cache accounting"}')["usage"]
+    usage["prompt_tokens_details"] = {"cached_tokens": cached_tokens}
+
+    if accepted:
+        assert openrouter_module._validate_usage(usage) == usage
+    else:
+        with pytest.raises(OpenRouterSchemaError, match="token details are inconsistent"):
+            openrouter_module._validate_usage(usage)
 
 
 def test_token_route_intersection_uses_exact_endpoint_minima_and_snapshot_provenance(

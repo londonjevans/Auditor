@@ -3,6 +3,53 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-08-21T08:33Z — PREFLIGHT after `f6acf20` — FAILED on unenforceable variable pricing
+
+```
+mmaudit failed safely: variable endpoint pricing component cannot be provider-capped
+```
+
+Raised by `_routing_max_price` at `src/mmaudit/models/openrouter.py:13671`. Ledger unchanged — **$0**.
+
+This is a real catch by the new cost binding, not a regression. But it blocks **all three** roles.
+
+`_UNENFORCEABLE_VARIABLE_PRICING_FIELDS` (`openrouter.py:353`) = `input_cache_read`,
+`input_cache_write`, `internal_reasoning`. `_ROUTER_MAX_PRICE_FIELDS` (`openrouter.py:343`) =
+`completion`, `image`, `prompt`, `request`. OpenRouter's provider-side max-price routing cannot
+express a ceiling for cache pricing, so any nonzero unenforceable component defeats the guarantee.
+
+Retained (sealed) pricing in the three discovery runs — every route has nonzero `input_cache_read`:
+
+| role | prompt | completion | input_cache_read | cache_read vs prompt |
+|---|---|---|---|---|
+| candidate `deepseek-v4-pro-0813` | 0.00000132 | 0.00000396 | 0.000000132 | **10x cheaper** |
+| primary judge `minimax-m3` | 0.00000023 | 0.00000096 | 0.00000005 | **4.6x cheaper** |
+| replay judge `kimi-k3` | 0.000003 | 0.000015 | 0.0000003 | **10x cheaper** |
+
+None of the three declares `input_cache_write` or `internal_reasoning`.
+
+### Suggested narrow fix — a bound, not a bypass
+
+Rejecting every nonzero `input_cache_read` is stricter than the guarantee requires. Cache-read applies
+to *input* tokens, and on all three routes it is strictly **cheaper** than the `prompt` rate. So
+charging every input token at the enforceable `prompt` ceiling is already a valid upper bound on actual
+input cost — the provider-side prompt cap bounds the cache-read case a fortiori.
+
+Proposed rule: permit an unenforceable field when its price is **less than or equal to** the
+corresponding enforceable ceiling (`input_cache_read <= prompt`), and continue to reject outright when
+absent-or-zero cannot be shown for fields that may *exceed* the enforceable ceiling — notably
+`input_cache_write`, which on some providers costs more than fresh prompt, and `internal_reasoning`,
+which is not bounded by any input ceiling at all.
+
+That keeps the safety property (no unbounded provider-side spend) while not excluding routes whose
+variable component is provably dominated. If codex prefers to stay maximally conservative and reject
+all cache pricing, that is defensible — but it currently excludes all three selected models and, given
+that cache pricing is near-universal on OpenRouter, would likely exclude most viable routes. Either
+way the choice should be explicit.
+
+**This is advisory analysis, not evidence.** The rule change, its proof obligation, and any resealing
+are codex's to decide and implement.
+
 ## 2026-08-21T05:47Z — AUTHRUNNER PREFLIGHT — **VALID**
 
 First end-to-end validation of the campaign contract. Run after reseal `83bad61`; all three triple

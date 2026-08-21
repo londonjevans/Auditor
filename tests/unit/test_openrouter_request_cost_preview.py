@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -7,7 +8,9 @@ from typing import Any
 import httpx
 import pytest
 
+import mmaudit.models.openrouter as openrouter_module
 from mmaudit.models.openrouter import (
+    OpenRouterCostControlError,
     OpenRouterProviderPolicy,
     OpenRouterRequestCostPreviewError,
     OpenRouterStructuredRequestCostPreview,
@@ -26,6 +29,13 @@ from tests.unit.test_openrouter import (
     _completion_response,
     _model_discovery_run,
 )
+
+_PROMPT_DOMINATED_CACHE_READ_PRICING = {
+    "completion": "0.00001",
+    "input_cache_read": "0.0000001",
+    "prompt": "0.000001",
+    "request": "0",
+}
 
 
 def _disabled_reasoning_policy() -> ReasoningPolicyArtifact:
@@ -71,7 +81,10 @@ def test_provider_free_request_cost_preview_is_exact_stable_and_nonauthorizing(
     tmp_path: Path,
 ) -> None:
     config = config_factory(execution={"max_model_retries": 2, "max_requests_per_agent": 3})
-    manifest, evidence = _model_discovery_run(tmp_path)
+    manifest, evidence = _model_discovery_run(
+        tmp_path,
+        endpoint_pricing=_PROMPT_DOMINATED_CACHE_READ_PRICING,
+    )
     policy = OpenRouterProviderPolicy(
         only=("approved-provider",),
         certification=True,
@@ -106,11 +119,89 @@ def test_provider_free_request_cost_preview_is_exact_stable_and_nonauthorizing(
     assert Decimal(first.maximum_cost_usd_all_attempts_exact) == (
         Decimal(first.maximum_cost_usd_per_attempt_exact) * 3
     )
+    components = {component.pricing_field: component for component in first.cost_components}
+    raw_endpoint = evidence.endpoint_snapshot.endpoints[0]
+    assert raw_endpoint.pricing["input_cache_read"] == "0.0000001"
+    assert first.endpoint_pricing_sha256 == raw_endpoint.pricing_sha256
+    assert components["input_cache_read"].unit_price_usd_exact == "0.000001"
+    assert components["input_cache_read"].maximum_units == first.maximum_priced_prompt_units
+    assert components["prompt"].unit_price_usd_exact == "0.000001"
+    assert components["prompt"].maximum_units == first.maximum_priced_prompt_units
+    additive_input_worst_case = sum(
+        Decimal(components[field].unit_price_usd_exact) * components[field].maximum_units
+        for field in ("input_cache_read", "prompt")
+    )
+    assert Decimal(first.maximum_cost_usd_per_attempt_exact) >= (additive_input_worst_case)
     assert not first.authorizes_dispatch
     assert not first.authorizes_budget_reservation
     assert not first.authorizes_provider_transport
     assert not first.grants_review_credit
     assert not first.grants_completion_credit
+
+
+@pytest.mark.parametrize("cache_bound", ["0.0000001", "0.000001000000000001"])
+def test_request_cost_preview_rejects_self_resealed_cache_bound_different_from_prompt(
+    config_factory: Any,
+    tmp_path: Path,
+    cache_bound: str,
+) -> None:
+    config = config_factory()
+    manifest, evidence = _model_discovery_run(
+        tmp_path,
+        endpoint_pricing=_PROMPT_DOMINATED_CACHE_READ_PRICING,
+    )
+    preview = _preview(
+        config=config,
+        manifest=manifest,
+        evidence=evidence,
+        policy=OpenRouterProviderPolicy(
+            only=("approved-provider",),
+            certification=True,
+        ),
+        reasoning_policy=_disabled_reasoning_policy(),
+    )
+    payload = preview.model_dump(mode="python")
+    components = payload["cost_components"]
+    for component in components:
+        if component["pricing_field"] == "input_cache_read":
+            component["unit_price_usd_exact"] = cache_bound
+    pricing = {
+        component["pricing_field"]: component["unit_price_usd_exact"] for component in components
+    }
+    maximum_units = {
+        component["pricing_field"]: component["maximum_units"] for component in components
+    }
+    rebound = openrouter_module._trusted_endpoint_request_cost_bound_from_pricing(
+        exact_model_id=preview.exact_model_id,
+        provider_endpoint=preview.provider_endpoint,
+        request_material="mmaudit-provider-free-cost-preview",
+        pricing=pricing,
+        maximum_units=maximum_units,
+    )
+    rebound_maximum = openrouter_module._trusted_endpoint_request_maximum_cost_usd(rebound)
+    payload["endpoint_cost_bound_pricing_sha256"] = rebound.pricing_snapshot_sha256
+    payload["endpoint_cost_bound_projection_sha256"] = (
+        openrouter_module._endpoint_request_cost_bound_projection_sha256(
+            rebound,
+            request_material_projection_sha256=preview.request_material_projection_sha256,
+        )
+    )
+    payload["maximum_cost_usd_per_attempt_exact"] = openrouter_module._format_cost_decimal(
+        rebound_maximum
+    )
+    payload["maximum_cost_usd_all_attempts_exact"] = openrouter_module._multiply_cost_decimal(
+        rebound_maximum,
+        preview.maximum_attempts,
+    )
+    payload["preview_sha256"] = openrouter_module._canonical_sha256(
+        {key: value for key, value in payload.items() if key != "preview_sha256"}
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="input-cache-read bound differs from its prompt-price bound",
+    ):
+        OpenRouterStructuredRequestCostPreview.model_validate(payload, strict=True)
 
 
 @pytest.mark.asyncio
@@ -129,7 +220,10 @@ async def test_dispatch_enforces_exact_request_cost_preview_and_records_join(
         )
 
     config = config_factory()
-    manifest, evidence = _model_discovery_run(tmp_path)
+    manifest, evidence = _model_discovery_run(
+        tmp_path,
+        endpoint_pricing=_PROMPT_DOMINATED_CACHE_READ_PRICING,
+    )
     policy = OpenRouterProviderPolicy(
         only=("approved-provider",),
         certification=True,
@@ -180,6 +274,13 @@ async def test_dispatch_enforces_exact_request_cost_preview_and_records_join(
 
     assert result.value.answer == "ok"
     assert len(observed) == 1
+    request_body = json.loads(observed[0].content)
+    provider_max_price = request_body["provider"]["max_price"]
+    assert request_body["provider"]["only"] == ["approved-provider"]
+    assert "input_cache_read" not in provider_max_price
+    assert Decimal(str(provider_max_price["prompt"])) / Decimal(1_000_000) >= Decimal(
+        _PROMPT_DOMINATED_CACHE_READ_PRICING["prompt"]
+    )
     assert usage.records == [result.usage_record]
     assert result.usage_record.routing["request_cost_preview_sha256"] == (preview.preview_sha256)
     assert (
@@ -260,3 +361,34 @@ async def test_request_cost_preview_drift_rejects_before_reserve_or_transport(
     assert budget.spent_usd_exact == Decimal(0)
     assert budget.reserved_input_tokens == 0
     assert budget.reserved_output_tokens == 0
+
+
+def test_provider_free_request_cost_preview_rejects_cache_read_above_prompt(
+    config_factory: Any,
+    tmp_path: Path,
+) -> None:
+    config = config_factory()
+    manifest, evidence = _model_discovery_run(
+        tmp_path,
+        endpoint_pricing={
+            "completion": "0.00001",
+            "input_cache_read": "0.000001000000000001",
+            "prompt": "0.000001",
+        },
+    )
+    policy = OpenRouterProviderPolicy(
+        only=("approved-provider",),
+        certification=True,
+    )
+
+    with pytest.raises(
+        OpenRouterCostControlError,
+        match="input-cache-read endpoint price exceeds its provider-capped prompt price",
+    ):
+        _preview(
+            config=config,
+            manifest=manifest,
+            evidence=evidence,
+            policy=policy,
+            reasoning_policy=_disabled_reasoning_policy(),
+        )

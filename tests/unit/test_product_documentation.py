@@ -23,7 +23,7 @@ OBJECTIVE_RELATIVE_PATH = "docs/remediation/v3/product_completion_goal.txt"
 OBJECTIVE_SHA256 = "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15"
 PRODUCT_VISION_RELATIVE_PATH = "product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.md"
 PRODUCT_VISION_SHA256 = "8b878b665e636b3b48500fefe2967394b2abdd69ce2ebfa0033d04542d2965e1"
-OPERATOR_RESULTS_SHA256 = "41932dfe7cfa2a0dbc7f0f68d01c2fbf8bec2ad0276ac16a9837b6b9e66f2b69"
+OPERATOR_RESULTS_SHA256 = "3c8fc79c24615fae4f80dbbed6c86a9ddbb4b61cd0b1441ac83d2b020a1b60fd"
 PRODUCT_VISION_GIT_ATTRIBUTES = f"{PRODUCT_VISION_RELATIVE_PATH} -text"
 POLICY_ELIGIBILITY_TICKET = "V3-POLICYELIG-001"
 POLICY_ELIGIBILITY_QUEUE_HEADING = (
@@ -396,6 +396,8 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "runner public lineage does not prove three distinct roots" in operator_results
     assert "LINEAGE CAPTURE — SUCCESS, one coherent 15-source bundle" in operator_results
     assert "AUTHRUNNER PREFLIGHT — **VALID**" in operator_results
+    assert "FAILED on unenforceable variable pricing" in operator_results
+    assert "variable endpoint pricing component cannot be provider-capped" in operator_results
     assert "VALID / NONAUTHORIZING / NO PROVIDER EGRESS" in operator_results
     assert "f0ff2d76017dfcd075c6758f0da7256c98dd45ca749a42b81ca1ce8c95a93f9e" in (operator_results)
     assert "848b1dfda5b60c6793089ed3916073d86e3a734da9dbc5a824302bec7f4b37da" in (operator_results)
@@ -409,8 +411,13 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "Judge admission must remain `PENDING_REAL_CANDIDATE_OUTPUTS`" in (
         normalized_model_selection
     )
-    assert "This committed-byte rerun is pending" in normalized_model_selection
+    assert "This post-fix committed-byte rerun is pending" in normalized_model_selection
     assert "both exact judge plans derived" in normalized_model_selection
+    assert "f6acf206f2c55eeb57b1a11fcf58cc4694a41208" in model_selection
+    assert "That checkpoint is historical and must not be rerun" in normalized_model_selection
+    assert "The post-fix checkpoint is pending" in normalized_model_selection
+    assert "input_cache_read" in model_selection
+    assert "provider.max_price.prompt" in model_selection
     assert "Written by the monitoring session; treat as operator-supplied evidence." in (
         operator_results
     )

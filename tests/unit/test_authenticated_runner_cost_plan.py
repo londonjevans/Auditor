@@ -67,7 +67,7 @@ def _preview(
     completion_units = reserved_output_tokens + reserved_reasoning_tokens
     pricing = {
         "completion": "0.002",
-        "input_cache_read": "0.0001",
+        "input_cache_read": prompt_price,
         "prompt": prompt_price,
     }
     maximum_units = {

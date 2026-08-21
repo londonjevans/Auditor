@@ -15,6 +15,7 @@ import httpx
 import pytest
 
 import mmaudit.models.openrouter as openrouter_module
+import mmaudit.models.schemas as schemas_module
 import mmaudit.orchestration.pipeline as pipeline_module
 from mmaudit.models.endpoint_snapshots import validate_openrouter_endpoint_snapshot
 from mmaudit.models.openrouter import (
@@ -48,6 +49,12 @@ from tests.unit.test_openrouter_policy_eligibility import (
     _reasoning_policy,
 )
 
+_PROMPT_DOMINATED_CACHE_READ_PRICING = {
+    "completion": "0.000002",
+    "input_cache_read": "0.0000001",
+    "prompt": "0.000001",
+}
+
 
 class _ControlledDateTime(datetime):
     current: datetime
@@ -69,6 +76,66 @@ class _Harness:
     requests: list[dict[str, Any]]
     runtime: SyntheticRefreshRuntime
     model: str
+
+
+def _registered_endpoint_pricing(
+    *,
+    pricing: dict[str, str],
+    provider_endpoint: str = "provider/fp8",
+) -> openrouter_module._RegisteredEndpointPricing:
+    snapshot = validate_openrouter_endpoint_snapshot(
+        exact_model_id="alpha/atlas-secure",
+        configured_provider_endpoints=(provider_endpoint,),
+        provider_policy_mode="only",
+        endpoint_payload={
+            "data": {
+                "id": "alpha/atlas-secure",
+                "endpoints": [
+                    {
+                        "slug": provider_endpoint,
+                        "provider_name": f"Synthetic {provider_endpoint}",
+                        "status": 0,
+                        "context_length": 100_000,
+                        "max_prompt_tokens": 91_808,
+                        "max_completion_tokens": 8_192,
+                        "supported_parameters": [
+                            "max_tokens",
+                            "response_format",
+                            "temperature",
+                        ],
+                        "pricing": pricing,
+                    }
+                ],
+            }
+        },
+        require_zdr=False,
+        zdr_payload=None,
+        reasoning_requested=False,
+        structured_output_required=True,
+    )
+    observed = snapshot.endpoints[0]
+    return openrouter_module._RegisteredEndpointPricing(
+        provider_endpoint=observed.provider_endpoint,
+        provider_name=observed.provider_name,
+        provider_identities=(observed.provider_endpoint, observed.provider_name),
+        endpoint_tag=observed.endpoint_tag,
+        endpoint_slug=observed.endpoint_slug,
+        operational_status=observed.operational_status,
+        zdr_eligible=observed.zdr_eligible,
+        pricing=tuple(observed.pricing.items()),
+        pricing_sha256=observed.pricing_sha256,
+        snapshot_sha256=observed.endpoint_snapshot_sha256,
+        context_length=observed.context_length,
+        max_prompt_tokens=observed.max_prompt_tokens,
+        max_prompt_tokens_source=observed.max_prompt_tokens_source,
+        max_completion_tokens=observed.max_completion_tokens,
+        max_completion_tokens_source=observed.max_completion_tokens_source,
+        supported_parameters=observed.supported_parameters,
+        required_request_parameters=observed.required_request_parameters,
+        structured_output_parameters=observed.structured_output_parameters,
+        supported_output_modes=observed.supported_output_modes,
+        structured_output_mode=observed.structured_output_mode,
+    )
 
 
 @dataclass(slots=True)
@@ -753,7 +820,11 @@ def _assert_refresh_pricing_usage(harness: _Harness, routing: dict[str, Any]) ->
     )
     assert route.pricing_use_authorized is False
     assert route.exact_model_id == harness.model
-    assert route.baseline_pricing == {"completion": "0.000002", "prompt": "0.000001"}
+    assert route == next(
+        item
+        for item in evidence.routes
+        if item.exact_model_id == harness.model and item.audit_selected
+    )
     assert routing["audit_model_refresh_pricing_evidence_sha256"] == evidence.evidence_sha256
     assert routing["audit_model_refresh_pricing_route_evidence_sha256"] == (
         route.route_evidence_sha256
@@ -773,6 +844,109 @@ def _assert_refresh_pricing_usage(harness: _Harness, routing: dict[str, Any]) ->
     assert routing["audit_model_refresh_pricing_attempt_sha256"] == (attempts[-1].evidence_sha256)
     assert all(item.pricing_use_authorized is False for item in attempts)
     assert all(item.provider_access_authorized is False for item in attempts)
+
+
+def _reseal_cache_read_pricing_attempt(
+    attempt: AuditModelRefreshPricingAttemptEvidence,
+    *,
+    current_cache_read: str,
+    component_cache_read: str,
+) -> dict[str, Any]:
+    payload = attempt.model_dump(mode="python")
+    current_pricing = dict(payload["current_pricing"])
+    current_pricing["input_cache_read"] = current_cache_read
+    payload["current_pricing"] = current_pricing
+    payload["current_pricing_sha256"] = schemas_module._canonical_model_sha256(current_pricing)
+    components = [dict(component) for component in payload["components"]]
+    for component in components:
+        if component["pricing_field"] == "input_cache_read":
+            component["unit_price_usd_exact"] = component_cache_read
+    payload["components"] = tuple(components)
+    temporary_bound = openrouter_module._trusted_endpoint_request_cost_bound_from_pricing(
+        exact_model_id=attempt.exact_model_id,
+        provider_endpoint=attempt.provider_endpoint,
+        request_material="synthetic self-resealed pricing attempt",
+        pricing={
+            component["pricing_field"]: component["unit_price_usd_exact"]
+            for component in components
+        },
+        maximum_units={
+            component["pricing_field"]: component["maximum_units"] for component in components
+        },
+    )
+    rebound = EndpointRequestCostBound(
+        exact_model_id=attempt.exact_model_id,
+        provider_endpoint=attempt.provider_endpoint,
+        request_material_sha256=attempt.request_material_sha256,
+        pricing_snapshot_sha256=temporary_bound.pricing_snapshot_sha256,
+        components=temporary_bound.components,
+    )
+    payload["cost_bound_pricing_snapshot_sha256"] = rebound.pricing_snapshot_sha256
+    payload["maximum_cost_usd_exact"] = format(
+        openrouter_module._trusted_endpoint_request_maximum_cost_usd(rebound),
+        "f",
+    )
+    payload["evidence_sha256"] = schemas_module._pricing_attempt_sha256(
+        {key: value for key, value in payload.items() if key != "evidence_sha256"}
+    )
+    return payload
+
+
+def _reseal_extra_nonrouter_pricing_attempt(
+    attempt: AuditModelRefreshPricingAttemptEvidence,
+    *,
+    field: str,
+    price: str,
+) -> dict[str, Any]:
+    payload = attempt.model_dump(mode="python")
+    for map_field, hash_field in (
+        ("baseline_pricing", "baseline_pricing_sha256"),
+        ("current_pricing", "current_pricing_sha256"),
+    ):
+        pricing = dict(payload[map_field])
+        pricing[field] = price
+        pricing = dict(sorted(pricing.items()))
+        payload[map_field] = pricing
+        payload[hash_field] = schemas_module._canonical_model_sha256(pricing)
+    payload["qualified_pricing_snapshot_sha256"] = payload["baseline_pricing_sha256"]
+    components = [dict(component) for component in payload["components"]]
+    components.append(
+        {
+            "pricing_field": field,
+            "unit_price_usd_exact": price,
+            "maximum_units": 0,
+        }
+    )
+    components.sort(key=lambda component: component["pricing_field"])
+    payload["components"] = tuple(components)
+    temporary_bound = openrouter_module._trusted_endpoint_request_cost_bound_from_pricing(
+        exact_model_id=attempt.exact_model_id,
+        provider_endpoint=attempt.provider_endpoint,
+        request_material="synthetic self-resealed extra pricing attempt",
+        pricing={
+            component["pricing_field"]: component["unit_price_usd_exact"]
+            for component in components
+        },
+        maximum_units={
+            component["pricing_field"]: component["maximum_units"] for component in components
+        },
+    )
+    rebound = EndpointRequestCostBound(
+        exact_model_id=attempt.exact_model_id,
+        provider_endpoint=attempt.provider_endpoint,
+        request_material_sha256=attempt.request_material_sha256,
+        pricing_snapshot_sha256=temporary_bound.pricing_snapshot_sha256,
+        components=temporary_bound.components,
+    )
+    payload["cost_bound_pricing_snapshot_sha256"] = rebound.pricing_snapshot_sha256
+    payload["maximum_cost_usd_exact"] = format(
+        openrouter_module._trusted_endpoint_request_maximum_cost_usd(rebound),
+        "f",
+    )
+    payload["evidence_sha256"] = schemas_module._pricing_attempt_sha256(
+        {key: value for key, value in payload.items() if key != "evidence_sha256"}
+    )
+    return payload
 
 
 @pytest.mark.asyncio
@@ -900,6 +1074,103 @@ async def test_current_price_drives_provider_cap_and_exact_conservative_reservat
 
 
 @pytest.mark.asyncio
+async def test_refresh_cache_read_is_reserved_at_transmitted_prompt_cap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _build_harness(
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        qualified_pricing=_PROMPT_DOMINATED_CACHE_READ_PRICING,
+        current_pricing=_PROMPT_DOMINATED_CACHE_READ_PRICING,
+        response=lambda _request, model, provider: _completion_response(
+            '{"answer":"cache-read bounded"}',
+            model=model,
+            provider=provider,
+        ),
+    )
+    try:
+        completion = await _complete(harness)
+    finally:
+        await harness.client.close()
+
+    routing = completion.usage_record.routing
+    attempt = AuditModelRefreshPricingAttemptEvidence.model_validate_json(
+        json.dumps(routing["audit_model_refresh_pricing_attempt"]),
+        strict=True,
+    )
+    body_max_price = harness.requests[0]["provider"]["max_price"]
+    prompt_cap = Decimal(str(body_max_price["prompt"])) / Decimal(1_000_000)
+    components = {component.pricing_field: component for component in attempt.components}
+    assert attempt.current_pricing["input_cache_read"] == "0.0000001"
+    assert Decimal(components["prompt"].unit_price_usd_exact) == prompt_cap
+    assert Decimal(components["input_cache_read"].unit_price_usd_exact) == prompt_cap
+    assert components["prompt"].maximum_units == components["input_cache_read"].maximum_units
+    additive_input_worst_case = prompt_cap * (
+        components["prompt"].maximum_units + components["input_cache_read"].maximum_units
+    )
+    assert Decimal(attempt.maximum_cost_usd_exact) >= additive_input_worst_case
+    assert harness.ledger.snapshot().entries[0].reserved_usd == Decimal(
+        attempt.maximum_cost_usd_exact
+    )
+
+
+@pytest.mark.asyncio
+async def test_refresh_attempt_rejects_self_resealed_cache_dominance_and_bound_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _build_harness(
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        qualified_pricing=_PROMPT_DOMINATED_CACHE_READ_PRICING,
+        current_pricing=_PROMPT_DOMINATED_CACHE_READ_PRICING,
+        response=lambda _request, model, provider: _completion_response(
+            '{"answer":"cache-read evidence"}',
+            model=model,
+            provider=provider,
+        ),
+    )
+    try:
+        completion = await _complete(harness)
+    finally:
+        await harness.client.close()
+    attempt = AuditModelRefreshPricingAttemptEvidence.model_validate_json(
+        json.dumps(completion.usage_record.routing["audit_model_refresh_pricing_attempt"]),
+        strict=True,
+    )
+
+    nondominated = _reseal_cache_read_pricing_attempt(
+        attempt,
+        current_cache_read="0.000001000000000001",
+        component_cache_read="0.000001000000000001",
+    )
+    with pytest.raises(ValueError, match="not dominated by its prompt price"):
+        AuditModelRefreshPricingAttemptEvidence.model_validate(nondominated, strict=True)
+
+    underbounded = _reseal_cache_read_pricing_attempt(
+        attempt,
+        current_cache_read="0.0000001",
+        component_cache_read="0.0000001",
+    )
+    with pytest.raises(ValueError, match="bound differs from provider prompt cap"):
+        AuditModelRefreshPricingAttemptEvidence.model_validate(underbounded, strict=True)
+
+    for field, price, message in (
+        ("input_cache_write", "0", "uncappable variable pricing component"),
+        ("internal_reasoning", "0", "uncappable variable pricing component"),
+        ("web_search", "0.0000001", "uncappable nonzero pricing component"),
+    ):
+        resealed = _reseal_extra_nonrouter_pricing_attempt(
+            attempt,
+            field=field,
+            price=price,
+        )
+        with pytest.raises(ValueError, match=message):
+            AuditModelRefreshPricingAttemptEvidence.model_validate(resealed, strict=True)
+
+
+@pytest.mark.asyncio
 async def test_exact_accounted_cost_survives_hostile_ambient_decimal_precision(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1004,8 +1275,10 @@ async def test_retry_retains_one_ordered_self_hashed_price_bound_per_post(
     harness = _build_harness(
         tmp_path=tmp_path,
         monkeypatch=monkeypatch,
+        qualified_pricing=_PROMPT_DOMINATED_CACHE_READ_PRICING,
         current_pricing={
             "completion": "0.000002000000000000000000000000000001",
+            "input_cache_read": "0.0000001",
             "prompt": "0.000001",
         },
         response=respond,
@@ -1044,6 +1317,11 @@ async def test_retry_retains_one_ordered_self_hashed_price_bound_per_post(
     )
     snapshot = harness.ledger.snapshot()
     assert len(snapshot.entries) == 2
+    assert all("input_cache_read" in attempt.current_pricing for attempt in attempts)
+    assert all(
+        entry.reserved_usd == Decimal(attempt.maximum_cost_usd_exact)
+        for entry, attempt in zip(snapshot.entries, attempts, strict=True)
+    )
     with localcontext() as context:
         context.prec = 160
         exact_total = sum(
@@ -1872,61 +2150,209 @@ def test_pricing_constructor_rejects_refresh_without_technical_or_audit_policy_p
         )
 
 
-def test_endpoint_price_canonicalization_and_router_cap_ignore_ambient_decimal_precision() -> None:
-    exact_price = "0.000002000000000000000000000000000001"
-    endpoint = {
-        "slug": "provider/fp8",
-        "provider_name": "Synthetic Provider",
-        "status": 0,
-        "context_length": 100_000,
-        "max_prompt_tokens": 91_808,
-        "max_completion_tokens": 8_192,
-        "supported_parameters": [
-            "max_tokens",
-            "response_format",
-            "temperature",
-        ],
-        "pricing": {
-            "completion": exact_price,
+@pytest.mark.parametrize(
+    "cache_read_price",
+    ["0", "0.0000001", "0.000001"],
+)
+def test_routing_max_price_accepts_only_prompt_dominated_cache_read(
+    cache_read_price: str,
+) -> None:
+    registered = _registered_endpoint_pricing(
+        pricing={
+            "completion": "0.000002",
+            "input_cache_read": cache_read_price,
+            "prompt": "0.000001",
+        }
+    )
+
+    max_price = openrouter_module._routing_max_price((registered,))
+
+    assert "input_cache_read" not in max_price
+    assert Decimal(str(max_price["prompt"])) / Decimal(1_000_000) >= Decimal("0.000001")
+
+
+def test_prompt_and_cache_bounds_share_hostile_upward_rounded_transmitted_cap() -> None:
+    exact_price = "0.000001000000000000000000000000000001"
+    registered = _registered_endpoint_pricing(
+        pricing={
+            "completion": "0.000002",
+            "input_cache_read": exact_price,
+            "prompt": exact_price,
+        }
+    )
+
+    routing_max_price = openrouter_module._routing_max_price((registered,))
+    bounded_pricing = dict(
+        openrouter_module._provider_capped_cost_bound_pricing(
+            registered,
+            routing_max_price,
+        )
+    )
+    transmitted_prompt_cap = Decimal(str(routing_max_price["prompt"])) / Decimal(1_000_000)
+
+    assert transmitted_prompt_cap > Decimal(exact_price)
+    assert Decimal(bounded_pricing["prompt"]) == transmitted_prompt_cap
+    assert Decimal(bounded_pricing["input_cache_read"]) == transmitted_prompt_cap
+
+
+@pytest.mark.parametrize(
+    ("provider_endpoint", "prompt_price", "completion_price", "cache_read_price"),
+    [
+        ("novita/fp8", "0.00000132", "0.00000396", "0.000000132"),
+        ("coreweave/fp4", "0.00000023", "0.00000096", "0.00000005"),
+        ("together", "0.000003", "0.000015", "0.0000003"),
+    ],
+    ids=("candidate", "primary-judge", "replay-judge"),
+)
+def test_selected_operator_route_prices_admit_deterministically(
+    provider_endpoint: str,
+    prompt_price: str,
+    completion_price: str,
+    cache_read_price: str,
+) -> None:
+    registered = _registered_endpoint_pricing(
+        provider_endpoint=provider_endpoint,
+        pricing={
+            "completion": completion_price,
+            "input_cache_read": cache_read_price,
+            "prompt": prompt_price,
+        },
+    )
+
+    first = openrouter_module._routing_max_price((registered,))
+    second = openrouter_module._routing_max_price((registered,))
+    bounded_pricing = dict(
+        openrouter_module._provider_capped_cost_bound_pricing(
+            registered,
+            first,
+        )
+    )
+    transmitted_prompt_cap = Decimal(str(first["prompt"])) / Decimal(1_000_000)
+
+    assert first == second
+    assert Decimal(cache_read_price) <= Decimal(prompt_price) <= transmitted_prompt_cap
+    assert Decimal(bounded_pricing["prompt"]) == transmitted_prompt_cap
+    assert Decimal(bounded_pricing["input_cache_read"]) == transmitted_prompt_cap
+
+
+def test_routing_max_price_rejects_cache_read_above_same_endpoint_prompt() -> None:
+    registered = _registered_endpoint_pricing(
+        pricing={
+            "completion": "0.000002",
+            "input_cache_read": "0.000001000000000001",
+            "prompt": "0.000001",
+        }
+    )
+
+    with pytest.raises(
+        OpenRouterCostControlError,
+        match="input-cache-read endpoint price exceeds its provider-capped prompt price",
+    ):
+        openrouter_module._routing_max_price((registered,))
+
+
+def test_routing_max_price_checks_cache_dominance_per_endpoint_before_aggregate_maximum() -> None:
+    nondominated = _registered_endpoint_pricing(
+        provider_endpoint="provider-a/fp8",
+        pricing={
+            "completion": "0.000002",
+            "input_cache_read": "0.0000008",
+            "prompt": "0.0000005",
+        },
+    )
+    higher_aggregate_prompt = _registered_endpoint_pricing(
+        provider_endpoint="provider-b/fp8",
+        pricing={
+            "completion": "0.000003",
+            "input_cache_read": "0.0000009",
             "prompt": "0.000001",
         },
-    }
+    )
+
+    with pytest.raises(
+        OpenRouterCostControlError,
+        match="input-cache-read endpoint price exceeds its provider-capped prompt price",
+    ):
+        openrouter_module._routing_max_price((nondominated, higher_aggregate_prompt))
+
+
+@pytest.mark.parametrize("field", ["input_cache_write", "internal_reasoning"])
+@pytest.mark.parametrize("price", ["0", "0.0000001"])
+def test_routing_max_price_rejects_other_uncappable_variable_components(
+    field: str,
+    price: str,
+) -> None:
+    registered = _registered_endpoint_pricing(
+        pricing={
+            "completion": "0.000002",
+            field: price,
+            "prompt": "0.000001",
+        }
+    )
+
+    with pytest.raises(OpenRouterCostControlError, match="cannot be provider-capped"):
+        openrouter_module._routing_max_price((registered,))
+
+
+@pytest.mark.parametrize(
+    "pricing",
+    [
+        (("completion", "0.000002"),),
+        (("prompt", "0.000001"),),
+        (
+            ("completion", "0.000002"),
+            ("prompt", "0.000001"),
+            ("unknown_fee", "0"),
+        ),
+        (
+            ("completion", "0.000002"),
+            ("prompt", "0.000001"),
+            ("prompt", "0.000001"),
+        ),
+    ],
+)
+def test_routing_max_price_rejects_missing_unknown_or_duplicate_components(
+    pricing: tuple[tuple[str, str], ...],
+) -> None:
+    registered = replace(
+        _registered_endpoint_pricing(pricing={"completion": "0.000002", "prompt": "0.000001"}),
+        pricing=pricing,
+    )
+
+    with pytest.raises(OpenRouterCostControlError):
+        openrouter_module._routing_max_price((registered,))
+
+
+@pytest.mark.parametrize(
+    "raw_price",
+    ["", " ", "NaN", "sNaN", "Infinity", "-Infinity", "-0", "-0.000001"],
+)
+def test_routing_max_price_rejects_missing_nonfinite_or_negative_prices(
+    raw_price: str,
+) -> None:
+    registered = replace(
+        _registered_endpoint_pricing(pricing={"completion": "0.000002", "prompt": "0.000001"}),
+        pricing=(("completion", "0.000002"), ("prompt", raw_price)),
+    )
+
+    with pytest.raises(
+        OpenRouterCostControlError,
+        match="exact finite nonnegative decimal string",
+    ):
+        openrouter_module._routing_max_price((registered,))
+
+
+def test_endpoint_price_canonicalization_and_router_cap_ignore_ambient_decimal_precision() -> None:
+    exact_price = "0.000002000000000000000000000000000001"
     with localcontext() as context:
         context.prec = 6
-        snapshot = validate_openrouter_endpoint_snapshot(
-            exact_model_id="alpha/atlas-secure",
-            configured_provider_endpoints=("provider/fp8",),
-            provider_policy_mode="only",
-            endpoint_payload={"data": {"id": "alpha/atlas-secure", "endpoints": [endpoint]}},
-            require_zdr=True,
-            zdr_payload={"data": [{**endpoint, "model_id": "alpha/atlas-secure"}]},
-            reasoning_requested=False,
-            structured_output_required=True,
-        )
-        observed = snapshot.endpoints[0]
-        registered = openrouter_module._RegisteredEndpointPricing(
-            provider_endpoint=observed.provider_endpoint,
-            provider_name=observed.provider_name,
-            provider_identities=(observed.provider_endpoint, observed.provider_name),
-            endpoint_tag=observed.endpoint_tag,
-            endpoint_slug=observed.endpoint_slug,
-            operational_status=observed.operational_status,
-            zdr_eligible=observed.zdr_eligible,
-            pricing=tuple(observed.pricing.items()),
-            pricing_sha256=observed.pricing_sha256,
-            snapshot_sha256=observed.endpoint_snapshot_sha256,
-            context_length=observed.context_length,
-            max_prompt_tokens=observed.max_prompt_tokens,
-            max_prompt_tokens_source=observed.max_prompt_tokens_source,
-            max_completion_tokens=observed.max_completion_tokens,
-            max_completion_tokens_source=observed.max_completion_tokens_source,
-            supported_parameters=observed.supported_parameters,
-            required_request_parameters=observed.required_request_parameters,
-            structured_output_parameters=observed.structured_output_parameters,
-            supported_output_modes=observed.supported_output_modes,
-            structured_output_mode=observed.structured_output_mode,
+        registered = _registered_endpoint_pricing(
+            pricing={
+                "completion": exact_price,
+                "prompt": "0.000001",
+            }
         )
         max_price = openrouter_module._routing_max_price((registered,))
 
-    assert observed.pricing["completion"] == exact_price
+    assert dict(registered.pricing)["completion"] == exact_price
     assert Decimal(str(max_price["completion"])) / Decimal(1_000_000) >= Decimal(exact_price)

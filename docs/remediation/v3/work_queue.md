@@ -2099,7 +2099,7 @@ are invisible to source review by construction.
   `origin/agent/v3-wip-checkpoint`. Exact-ID public lineage for all three remains absent.
 - **PRIMARY r3 disposition and r4 completion 2026-08-21:** The exact operator-supplied result log is
   retained verbatim at `docs/remediation/v3/operator_results.md`, raw SHA-256
-  `41932dfe7cfa2a0dbc7f0f68d01c2fbf8bec2ad0276ac16a9837b6b9e66f2b69`, as nonauthorizing
+  `3c8fc79c24615fae4f80dbbed6c86a9ddbb4b61cd0b1441ac83d2b020a1b60fd`, as nonauthorizing
   metadata. Claude Opus 5/`amazon-bedrock` failed closed before registry publication because its
   provider display name is duplicated across the exact-model endpoint inventory; the injective
   provider-identity invariant remains unchanged. Of the operator-reported viable replacements,
@@ -2150,18 +2150,30 @@ are invisible to source review by construction.
   evidence or substitutes for derived caps. Current durable output is schema v1.1 and exact-joins
   both stage plans through reports, usage, token/reasoning plans, route/pricing hashes, attempt IDs,
   and per-attempt ledger reservations. Legacy v1.0 remains readable only as historical evidence;
-  the verifier refuses to label it current `VALID`. The consolidated affected matrix passed 486
-  tests in 122.47s, including a 47-test durable/CLI subset in 49.68s and schema verification/release
-  tests. Schema generation/verification, lint over 539 files, strict mypy over 203 source files,
-  12 product-documentation/objective tests, strict governance JSON, diff integrity, and an
-  independent 14-test no-blocker/HIGH review also passed. The terminal full unit gate then passed
-  5,989 tests in 1,175.51s (19m35s) under the required local loopback/Unix-socket permission, with
-  one deprecation warning. Its initial sandboxed invocation had only 12 local-socket
-  `PermissionError` setup errors; those were permission-denied environment results, not code
-  failures or test passes. A preflight on the new committed bytes and their checkpoint remain
-  pending. This governance slice made no real provider, operator-secret, or operator-private-ledger
-  access and changed no model-call, spend, audit, runner-authority, AUTHSEAL, benchmark, or release
-  counter/state.
+  the verifier refuses to label it current `VALID`. The base exact-cost implementation passed its
+  486-test affected matrix, 47-test durable/CLI subset, 5,989-test terminal full-unit gate, schema,
+  lint, strict-mypy, documentation, JSON, diff, and independent review gates before checkpoint
+  `f6acf206f2c55eeb57b1a11fcf58cc4694a41208` (`Bind exact AUTHRUNNER request costs`). The
+  17,087-byte operator-supplied log at raw SHA-256
+  `3c8fc79c24615fae4f80dbbed6c86a9ddbb4b61cd0b1441ac83d2b020a1b60fd` then records that
+  checkpoint's provider-free preflight failing safely at `_routing_max_price`: all three retained
+  routes have nonzero `input_cache_read`, which the provider cap cannot express. The failure occurred
+  before secret selection, provider egress, or reservation, and the operator reported an unchanged
+  `$0` campaign ledger. The same-ticket cache-dominance fix admits `input_cache_read` only when each
+  endpoint's raw cache-read price is no greater than its raw prompt price, transmits only the hard
+  prompt `max_price`, and reserves both full prompt and full cache-read units at the upward-rounded
+  prompt cap. Nonzero cache-write and internal-reasoning pricing remain rejected, and durable evidence
+  mirrors those invariants. Root-independent and owner affected matrices each passed all 406 tests
+  (the independent run in 110.81s); durable/CLI passed 47/47, execution/candidate/release passed
+  71/71, schema verification, Ruff, strict mypy over 203 source files, 12 product-documentation/
+  objective tests, strict governance JSON, and diff integrity passed, and independent red-team review
+  passed 16 focused tests with no blocker/HIGH. The terminal frozen post-fix suite
+  (`.venv/bin/pytest -q`) exited 0 with 6,230 passed, 21 skipped, and 2 warnings in 4,599.65s
+  (1:16:39) under required local loopback/Unix-socket permission. The skips are explicit unavailable
+  rootless, Foundry, scanner, and paid-provider prerequisites; the warnings are `os.fork`
+  deprecations in two existing tests. The cache-fix checkpoint and post-fix committed-byte preflight
+  remain pending. No model-call, governed spend, audit, runner-authority, AUTHSEAL, benchmark, or
+  release counter/state changed.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
   and non-crediting. Genuine production-issued lifecycle proof is absent; provider-free fixtures
   cannot mint owned-REAL origin, and the current repository rules prohibit reading real credentials
@@ -2171,9 +2183,9 @@ are invisible to source review by construction.
   issue-consume-revoke-reject lifecycle assay remain absent. Campaign/generation revocation beyond
   the top-level runner lease is not independently demonstrated. External-log publication and every
   benchmark run remain queued.
-- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. After the root
-  commits the exact-cost implementation and generated artifacts, rerun the unchanged provider-free
-  r2/r4/r2 preflight on those committed bytes and retain its exact nonauthorizing result. Only then
+- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Commit and push
+  the validated cache-dominance fix, then rerun the exact same provider-free r2/r4/r2 preflight on
+  that new checkpoint and retain its exact nonauthorizing result. Only then
   may the operator separately authorize one one-shot REAL candidates-first campaign; require both
   live judge route refreshes and aggregate exact judge admission before any judge POST. AUTHSEAL
   publication, real audits, benchmarks, and release remain queued.

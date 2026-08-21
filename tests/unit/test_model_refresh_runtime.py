@@ -270,6 +270,18 @@ def test_new_or_missing_price_component_is_not_authorized(
         )
 
 
+def test_new_cache_read_component_is_blocked_before_runtime_authority(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="inconsistent or blocking"):
+        synthetic_refresh_runtime(
+            tmp_path,
+            current_pricing={
+                "completion": "0.000002",
+                "input_cache_read": "0.0000001",
+                "prompt": "0.000001",
+            },
+        )
+
+
 def test_pricing_baseline_must_equal_qualified_hash(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="baseline differs from qualification"):
         synthetic_refresh_runtime(
