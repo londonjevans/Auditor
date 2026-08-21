@@ -8,19 +8,145 @@ AUTORUN_STATUS: BLOCKED_SAFETY
 CURRENT_MILESTONE: M1-DETERMINISTIC-PRODUCT (REACHED)
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001 (COMPLETE)
-NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY`. Await separate operator authorization for r6/r6/r2 metadata-only step A. Step B requires a second authorization and may begin only immediately after A exits `0` and its complete terminal record is exact-VALID, with no delay or intervening source/config/artifact/ledger/output/secret/environment change; otherwise separately authorize and rerun A. Normal preflight, verifier, discovery, construct-only, and full commands remain absent. `V3-AUTONOMY-001` Phase 0 remains queued and paused.
-LAST_COMMAND: Pushed command-guide checkpoint `4bebab16bb2e36d54665918dec64429602b4f4e6` successor reconciliation; twelve product-documentation/objective tests; Ruff check and format check; strict duplicate-key governance JSON; exact two-line command hash/parity against `092a09ee94d528f67b43edb180860d45328f741f`; operator-custody reread/hash; and diff integrity.
-LAST_RESULT: PASS / PARTIAL / BLOCKED_SAFETY — all 12 final documentation/objective tests and every final static gate passed. A root full-suite attempt began before the final governance bytes existed and was intentionally interrupted at displayed 2% while in `test_scheduler_accepts_default_in_repository_private_output_exclusion`; six skips were visible, exit was 130, no passed-test count was printed, and the attempt receives no terminal full-suite pass credit. Source checkpoint `692eb173f002818b4434b746c8801b4cbeb852e2`, historical eligibility checkpoint `02ed5bef89d094e0d0c4852e1bf73914d9960c6b`, and exact pushed command-emission guide checkpoint `4bebab16bb2e36d54665918dec64429602b4f4e6` are bound. Neither command has run. The operator record remains 50,211 bytes, 906 lines, raw SHA-256 `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd`; authority and governed counters are unchanged.
-REAL_MODEL_CALLS_ATTEMPTED: 11
-REAL_MODEL_CALLS_SUCCEEDED: 1
+NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY` and preserve current local checkpoint `dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d` without pushing or remote-resolving it. Keep every current capture, metadata, discovery, preflight, construct-only, paid-smoke, verifier, and full command absent. Separately review paid-smoke eligibility against the valid r8/r8/r8 evidence; any later emission requires a fresh adjacency sequence and separate authorization. Keep `V3-AUTONOMY-001` queued and paused.
+LAST_COMMAND: Root committed-byte suite; release-schema generation; Ruff check; strict mypy over 206 package source files; focused product-documentation/objective tests; strict duplicate-key JSON parsing; focused Ruff format/check; command-absence scan; operator-custody hash/size/line check; and diff integrity.
+LAST_RESULT: PASS / PARTIAL / BLOCKED_SAFETY — the root committed-byte suite passed 326 tests; schema generation, Ruff, and strict mypy over all 206 package source files passed. The current governance reconciliation preserves the 12/2/10 live call counters and reconciled `$0.01680888` ledger entry. Current checkpoint `dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d` remains unpushed. The current 71,771-byte, 1,276-line operator record at raw SHA-256 `25ee5395a7e2360637f89d89cc0e89084a530c8921d0af395b06bc9b700b01e5` records candidate, PRIMARY, and replay r8 discovery plus a valid r8/r8/r8 metadata-only gate at `$0`, with 15 logical GETs, at most 30 attempts, no completion, no output, and no bundle. No current command or authority exists; paid adjacency remains unproven.
+REAL_MODEL_CALLS_ATTEMPTED: 12
+REAL_MODEL_CALLS_SUCCEEDED: 2
 REAL_MODEL_CALLS_REJECTED: 10
-OPENROUTER_COST_USED_USD: 0.0034764325
+OPENROUTER_COST_USED_USD: 0.01680888
 OPENROUTER_COST_RESERVED_USD: 0.00
 
-OPENROUTER_BUDGET_REMAINING_USD: 249.9965235675
+OPENROUTER_BUDGET_REMAINING_USD: 249.98319112
+HISTORICAL_GOVERNED_LEDGER_USED_USD: 0.0034764325
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 4bebab16bb2e36d54665918dec64429602b4f4e6 — pushed, remote-resolved exact adjacent A/B command-emission guide. Current source implementation: 692eb173f002818b4434b746c8801b4cbeb852e2 (`Cascade AUTHRUNNER child revocation`). Historical zero-command eligibility base: 02ed5bef89d094e0d0c4852e1bf73914d9960c6b. Historical command-byte source: 092a09ee94d528f67b43edb180860d45328f741f.
+LAST_CHECKPOINT_COMMIT: dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d — local nonauthorizing replay-route-seed successor over explicit-capacity checkpoint 3975d2e12fd81a214b9faa1c3031c94506ab696d and compiled-lineage checkpoint 331bde27c7085d4da34c7b8ec1f688f2ce1e52b3; it is not pushed or remote-resolved. Historical ineligible Gemma plan: 3989e7592de6e1c355365443c10e00c2083829d8. Historical paid diagnostic base: b4134c70641e33cbbff2b430b135910df903733b.
+
+## 2026-08-21T23:05:42Z — replay drift and nonauthorizing allowlist successor reconciled
+
+- Evidence: local checkpoint `331bde27c7085d4da34c7b8ec1f688f2ce1e52b3` adopts the
+  17-source public-lineage reseal: raw manifest SHA-256
+  `b097a65613a07930f5c256c63065202a8998d5212a0021312a0e315ff6557b53`, semantic bundle
+  `815fc0e376682f83f994ac5c21962c5f43556a78f5e736045f93a6ee81e5de0d`, 16 aliases, 18
+  claims, 16 decisions, 12 confirmed and 4 unconfirmed identities, 11 roots, and 8 constraints.
+  All six directed independence checks for DeepSeek V4, Z.AI GLM-5.2, and Kimi K3 pass.
+- Plan boundary: current schema-v1.3 plan
+  `ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f` retains
+  DeepSeek/`parasail/fp8` and Z.AI/`sail-research/fp8`, and permits Kimi on `modal/mxfp4` or
+  `phala`. The operator must explicitly select one exact replay route; the sorted allowlist is not
+  automatic fallback. Sealed plan-local lineage remains advisory `UNCONFIRMED`/`false`; the separate
+  compiled lineage is confirmed.
+- Gate: historical checkpoint `3975d2e12fd81a214b9faa1c3031c94506ab696d` requires an
+  explicit endpoint completion limit. Current operator record
+  `25ee5395a7e2360637f89d89cc0e89084a530c8921d0af395b06bc9b700b01e5` (71,771 bytes / 1,276
+  lines) records candidate `parasail/fp8` r8 success at frozen SHA-256
+  `4e08e6496952e817e39d6872684a4e69cfb05cf74374870f51c234a6513b7306`, then replay
+  `wafer` rejecting at status `-5`, followed by explicit `modal/mxfp4` replay r8 success at
+  `75451839c72020a5e34c2f21a433e420f79c6db3e7238adb808e1c382af348f8` and a valid r8/r8/r8
+  gate with 15 logical GETs, at most 30 attempts, and `$0`. No completion, output, bundle, or new
+  spend followed; `max_repair_attempts=0` remains deliberate. Current allowlist checkpoint is
+  `dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d`.
+- Custody: aggregate live counters remain 12 attempted / 2 transport successes / 10 rejections; the
+  single live ledger entry remains reconciled at `$0.01680888`, with `$249.98319112` remaining. No
+  current command or authority is emitted.
+- Next: separately review paid-smoke eligibility. Governance emits no command; any later emission
+  requires a fresh separately reviewed adjacency sequence.
+
+## 2026-08-21T22:18:00Z — GLM-5.2 added only to the immutable capture inventory
+
+- Evidence: operator record SHA-256
+  `9d25d6b136269a85e1ee0c5390aa53126996855f74c6b414e6db065295da349e`
+  (62,935 bytes / 1,123 lines) reports a superseded 16-source capture at `$0`; GLM-5.2 was absent
+  because the compiled capture inventory stopped at GLM-4.7. No new completion, spend, or authority
+  resulted.
+- Implementation: local checkpoint `dce1c2591d62b0cfe8eef28385e3d9a8f759e3e3` adds only
+  `zai-org/GLM-5.2` at immutable revision `b4734de4facf877f85769a911abafc5283eab3d9`
+  as the exact seventeenth source. Publisher and independence identities remain canonical `z-ai`,
+  preventing a false split from the existing GLM-4.7 publisher.
+- Boundary: the current 16-source journal and manifest remain exact and unchanged. No GLM-5.2
+  alias, claim, decision, root, or runtime authority was added. The operator-reported 10,905-byte
+  content/hash remains unverified locally until a fresh capture supplies the exact bytes.
+- Validation: capture tests passed 25; the combined capture/manifest/authority matrix passed 62;
+  independent review passed 69 and reported `CLEAN`. Ruff, formatting, strict mypy, and diff integrity
+  passed.
+- Next: separately review a fresh 17-source capture. Only after exact byte validation may the
+  alias/claim/decision reseal be reviewed, including conservative GLM-4.7/GLM-5.2 same-publisher
+  collision semantics. No AUTHRUNNER command is current.
+
+## 2026-08-21T22:10:00Z — High-effort selection eligibility bound provider-free
+
+- Implementation: selection-plan schema v1.2 self-hashes `required_reasoning_effort=high` and
+  selected-role discovery now requires exact reasoning parameter support plus endpoint-first,
+  model-fallback evidence for the configured effort. Native `structured_outputs` remains mandatory;
+  generic and unselected candidates remain capability-adaptive.
+- Plan: local checkpoint `f6cc07aa5228c13a6c5c740ef0d57b550f25ec37` binds plan SHA-256
+  `120ef35de53a6c13b0d173a30b0e5e3f6310c3bf7032ce2a7ed92134a5099fbf` and proposes
+  Z.AI GLM-5.2/`sail-research/fp8` only as an unverified, unconfirmed, nonauthorizing seed. Public
+  lineage does not contain that exact ID, so current smoke/full admission remains fail-closed.
+- Evidence: the current operator record is 61,243 bytes / 1,092 lines / SHA-256
+  `00de61717cb6d61c003682abca12ae2c7e59613db03ef99558133b972c123516`; it records Gemma's
+  provider-free `effort=high` rejection, no additional completion or cost, and no bundle.
+- Validation: the expanded current matrix passed 323 tests; the focused reasoning slice passed 69;
+  Ruff, formatting, release-schema generation, strict mypy over 206 source files, and diff integrity
+  passed. Independent review reported `CLEAN` with no blocker/HIGH.
+- Boundary: the checkpoint is local and unpushed. Every current AUTHRUNNER command is absent; REAL
+  remains `BLOCKED_SAFETY`, and no qualification, runner, seal, audit, or release authority changed.
+
+## 2026-08-21T21:55:00Z — r7 proves the constraint and forces a PRIMARY replacement
+
+- Operator evidence: metadata-only r7 accepted DeepSeek/`fireworks`, then rejected
+  Tencent/`novita` at the new native-output gate before registry publication. No completion or new
+  cost occurred; the live ledger remains the one reconciled `$0.01680888` entry.
+- Disposition: Tencent has no reported ZDR route carrying both `response_format` and
+  `structured_outputs`, so the route-only PRIMARY repair is withdrawn. Already-lineage-confirmed
+  Gemma 4 26B A4B is proposed only for the transport smoke on `deepinfra/fp8`; fresh exact discovery
+  remains mandatory.
+- Plan: local successor `3989e7592de6e1c355365443c10e00c2083829d8` self-hashes plan
+  `41b5af9ae4def5ef535ae25a13c7c38b95d5819a878a5eef1c1c5bfb8386bf58`, appends Gemma at rank 12,
+  retains Tencent as an unselected historical adaptive seed, and binds the unverified proposal to
+  the current operator-log hash. It grants no authority and is not pushed or remote-resolved.
+- Custody: current operator record is 57,374 bytes / 1,029 lines / SHA-256
+  `14ece147138fb5bf6f32d2737ca6b174817a923c5ca50269bc14337c60a3453c`.
+- Boundary: no command is current; REAL remains `BLOCKED_SAFETY` and AUTONOMY remains queued.
+
+## 2026-08-21T21:28:36Z — Native structured-output admission implemented provider-free
+
+- Implementation: candidate-selection schema v1.1 self-hashes the exact
+  `NATIVE_JSON_SCHEMA` plus literal `structured_outputs` requirement. Fresh selection discovery,
+  pending-registry derivation, full AUTHRUNNER admission, smoke admission, and AUTHRUNNER-only live
+  route refresh all enforce it. Non-AUTHRUNNER discovery and benchmarking remain capability-adaptive.
+- Route seed at this checkpoint: the initial nonauthorizing plan proposed DeepSeek/`fireworks`,
+  Tencent/`novita`, and unchanged Kimi/`together`; r7 later superseded the Tencent proposal without
+  changing the code gate.
+- Regressions: candidate, PRIMARY, and REPLAY each reject response-format-only discovery before cost
+  derivation, client/executor dispatch, usage, ledger mutation, secret selection, or output.
+  `json_schema`-only native discovery also rejects, while an unselected plan entry remains adaptive.
+- Validation: the broad focused selection/discovery/benchmark/full-runner/smoke/CLI matrix passed
+  `348` tests; the independent current-byte audit passed `223` focused tests and reported `CLEAN`
+  with no blocker/HIGH. The generated release schema verifies and diff integrity passes.
+- Boundary: no network, provider, private artifact, secret, or operator ledger was accessed. Every
+  current AUTHRUNNER command remains withdrawn; REAL remains `BLOCKED_SAFETY`.
+- Checkpoint: `68d774b2cee5fa69476b1cfea2f8172731a365c8` is the exact local code-only
+  implementation checkpoint; it is not pushed or remote-resolved.
+
+## 2026-08-21T21:01:25Z — First REAL completion exposes structured-output eligibility gap
+
+- Status: `V3-AUTHRUNNER-001` is the sole `IN_PROGRESS` local work unit; REAL remains
+  `BLOCKED_SAFETY`. The unstarted AUTONOMY transition is superseded and Phase 0 is queued/paused.
+- Operator evidence: the first REAL smoke candidate request reserved `$0.0547272`, incurred and
+  reconciled `$0.01680888`, and used the exact smoke candidate namespace. It then rejected the loose
+  response as `SCHEMA_VALIDATION_FAILED`; no bundle was published.
+- Root cause: DeepSeek/`novita/fp8` and Tencent/`tencent/fp8` expose `response_format` without native
+  `structured_outputs`; the selection bridge copied this discoverable incompatibility into eligible
+  registries.
+- Bounded slice: require native structured output in the self-hashed selection plan and enforce it
+  in fresh-registry derivation plus smoke/full provider-free admission before secret, client,
+  provider, usage, or ledger mutation. Regenerate the plan schema and add negative regressions.
+- Repair policy: maximum-assurance certification deliberately forces JSON repair attempts to zero;
+  a loose response cannot be repaired into credit. Route eligibility is the correction.
+- Custody: operator record is 54,081 bytes / 979 lines / SHA-256
+  `f0c87e608633dc8ae940a977c8207d9e371b2bf683d0a91f415316273d5ac0dc`.
 
 ## 2026-08-21T20:40:00Z — Pushed command-emission guide identity reconciled
 

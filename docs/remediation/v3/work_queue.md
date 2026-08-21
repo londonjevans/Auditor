@@ -2057,6 +2057,50 @@ are invisible to source review by construction.
 - **Dependencies:** Completed `V3-AUTHLINEAGE-PUBLIC-001`, authenticated generation refetch, and closed
   usage/report evidence.
 - **Status:** `PARTIAL`
+- **Structured-output eligibility slice 2026-08-21:** The first REAL smoke candidate completion
+  reached transport, origin custody, and exact ledger reconciliation, reserving `$0.0547272` and
+  reconciling `$0.01680888`, then failed closed on strict response-schema validation. The retained
+  DeepSeek/`novita/fp8` and Tencent/`tencent/fp8` routes advertise `response_format` but not
+  `structured_outputs`; no bundle was published. That paid-attempt record was 54,081 bytes / 979
+  lines / SHA-256 `f0c87e608633dc8ae940a977c8207d9e371b2bf683d0a91f415316273d5ac0dc`.
+  The exact native structured-output constraint now covers the nonauthorizing selection plan and
+  smoke/full provider-free admission. Local code-only checkpoint
+  `68d774b2cee5fa69476b1cfea2f8172731a365c8` implements that first gate. Subsequent r7 metadata
+  accepted DeepSeek/`fireworks`, rejected Tencent/`novita` at native-output admission, and then
+  rejected the historical Gemma/`deepinfra/fp8` proposal because it cannot prove configured
+  `effort=high`; no later completion or new spend occurred.
+  Historical checkpoint `f6cc07aa5228c13a6c5c740ef0d57b550f25ec37` added the self-hashed
+  `required_reasoning_effort=high` constraint and proposed Z.AI GLM-5.2 on `sail-research/fp8` as a
+  nonauthorizing seed. Capture-source checkpoint
+  `dce1c2591d62b0cfe8eef28385e3d9a8f759e3e3` enabled a fresh 17-source `$0` capture. Local
+  checkpoint `331bde27c7085d4da34c7b8ec1f688f2ce1e52b3` adopts it in raw manifest SHA-256
+  `b097a65613a07930f5c256c63065202a8998d5212a0021312a0e315ff6557b53` and semantic bundle
+  `815fc0e376682f83f994ac5c21962c5f43556a78f5e736045f93a6ee81e5de0d`: 17 sources,
+  16 aliases, 18 claims, 16 decisions, 12 confirmed identities across 11 roots, four unconfirmed
+  identities, eight constraints, and all six directed DeepSeek/Z.AI/Moonshot independence checks.
+  Plan-local `UNCONFIRMED` and `distinct_root_lineages_verified=false` remain nonauthorizing while
+  the separately compiled public-lineage authority confirms the triple.
+
+  The operator then froze PRIMARY Z.AI/`sail-research/fp8` as r8 at `$0` with registry SHA-256
+  `8f3fc274390d983bde683e3039a91f7cb6ead0f4dfa9aa89caa02ecca7e9ed26`. The r7/r8/r7
+  live-route gate failed safely before completion because candidate `fireworks` and replay `together`
+  lacked explicit completion-capacity metadata; no new spend or bundle resulted. Historical local
+  checkpoint `3975d2e12fd81a214b9faa1c3031c94506ab696d` requires metadata-backed completion limits
+  and bound plan `4e6c744559b1cc49c8ede590c868df103a10402d429d5e5d02cf4f429e0f3a66`.
+  Candidate r8 then froze DeepSeek/`parasail/fp8` at
+  `4e08e6496952e817e39d6872684a4e69cfb05cf74374870f51c234a6513b7306`, while replay
+  Kimi/`wafer` failed closed at status `-5`; no replay registry, live-route gate, completion, new
+  spend, or bundle followed. Current checkpoint `dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d`
+  binds nonauthorizing plan v1.3
+  `ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f`, retaining candidate
+  `parasail/fp8` and PRIMARY `sail-research/fp8` while replacing the failed replay singleton with
+  sorted allowlist `modal/mxfp4`, `phala`. Exact operator choice remains mandatory; there is no
+  automatic fallback. The operator explicitly selected `modal/mxfp4`, froze replay r8 at
+  `75451839c72020a5e34c2f21a433e420f79c6db3e7238adb808e1c382af348f8`, and validated r8/r8/r8
+  through 15 logical GETs with at most 30 attempts, `$0`, no completion, and no output. Current
+  operator custody is 71,771 bytes / 1,276 lines / SHA-256
+  `25ee5395a7e2360637f89d89cc0e89084a530c8921d0af395b06bc9b700b01e5`. Every command is
+  absent; REAL remains `BLOCKED_SAFETY` and the historical A-to-B adjacency contract is unproven.
 - **Local revocation-cascade slice:** Pushed checkpoint
   `692eb173f002818b4434b746c8801b4cbeb852e2` adds explicit PID-bound campaign and generation
   revokers, parent-to-child cascade, traceback-safe execution handoff guards, and immediate smoke
@@ -2408,7 +2452,7 @@ are invisible to source review by construction.
   906-line operator record has raw SHA-256
   `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd`. PRIMARY drifted in
   under seven hours, so discovery freshness is measured in hours.
-- **Adjacent operator sequence re-emitted after cascade 2026-08-21:** The exact source base is
+- **Historical adjacent operator sequence after cascade 2026-08-21:** The exact source base was
   `692eb173f002818b4434b746c8801b4cbeb852e2`; pushed zero-command checkpoint
   `02ed5bef89d094e0d0c4852e1bf73914d9960c6b` is the historical eligibility state. Pushed,
   remote-resolved command-emission guide checkpoint
@@ -2420,15 +2464,20 @@ are invisible to source review by construction.
   after A exits `0` and its complete result exactly matches all three models, 15 logical GETs, at
   most 30 attempts, zero usage, unchanged budget/ledger, absent output, and pinned config, with no
   delay or intervening source/config/artifact/ledger/output/secret/environment change; otherwise A
-  must be separately reauthorized and rerun. Both commands are emitted but not run. No normal
-  preflight, verifier, discovery, construct-only, or full command is emitted.
+  must be separately reauthorized and rerun. At that boundary both commands were emitted and had not
+  yet run. The later paid attempt is the schema-validation failure recorded above; no fresh immediately
+  adjacent step-A record exists. No current normal preflight, verifier, discovery, construct-only,
+  smoke, or full command is emitted.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
   and non-crediting. Both the historical and post-fix provider-free smoke preflights were valid and
   nonauthorizing, but neither constructed the live client. The first paid attempt exposed a mismatch
   between request and atomic global input-token budgets before provider dispatch. The local parity
   repair is checkpointed and its committed-byte provider-free smoke preflight is valid. Paid smoke #2
   proved constructor parity, and the later metadata-only live-route gate established genuine
-  candidate endpoint-inventory drift. It did not test either judge route; no paid retry is authorized.
+  candidate endpoint-inventory drift. The latest paid candidate request reached transport, origin
+  custody, and exact ledger reconciliation, then failed strict schema validation because the retained
+  candidate route lacks native `structured_outputs`; no judge request or bundle followed. No paid retry
+  is authorized.
   Exact judge admission and the
   full-campaign cost bound cannot exist before both genuine candidate outputs. Current repository
   rules prohibit Codex from reading real credentials or accessing the provider. Judge request bytes
@@ -2442,12 +2491,13 @@ are invisible to source review by construction.
   positive owned-REAL parent issue-consume-revoke-reject assay against the external runtime remain
   absent; the completed provider-free cascade does not substitute for that evidence. External-log
   publication and every benchmark run remain queued.
-- **Next action:** Await separate operator authorization and the complete step-A terminal record.
-  Step B requires a second authorization and may begin only immediately after exact VALID
-  reconciliation with no delay or intervening change; otherwise separately authorize and rerun A.
-  Keep normal preflight, verifier, discovery, construct-only, and full commands absent. AUTHSEAL
-  publication, audits, benchmarks, and release remain unauthorized. `V3-AUTONOMY-001` Phase 0
-  remains queued and paused for this handoff.
+- **Next action:** Keep current local checkpoint
+  `dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d` unpushed and keep every metadata,
+  paid-smoke, verifier, normal-preflight, construct-only, and full command absent. Separately review
+  paid-smoke eligibility against the complete r8/r8/r8 evidence; any later command emission requires
+  a fresh separately reviewed adjacency sequence. AUTHSEAL publication,
+  audits, benchmarks, and release remain unauthorized. `V3-AUTONOMY-001` Phase 0 remains queued and
+  paused for this handoff.
 
 ## V3-TARGETSPEC-001 — Reconcile the product vision with the objective and correct the README
 
@@ -3143,10 +3193,11 @@ are invisible to source review by construction.
   - an operator-reviewed, hash-bound dependency snapshot;
   - an externally prebuilt CodeQL database.
 - **Acceptance criteria:**
-  - An exact, generated inventory of every operator input on the audit path exists, each
-    classified as: pre-provisionable once, client decision captured at purchase, or genuinely
-    irreducible. The classification is committed and kept current by a test that fails when a
-    new operator input appears without a disposition.
+  - An exact, generated inventory of every operator input on the audit path exists. Every entry
+    has one closed disposition: autonomous evidence substitute, pre-provisioned nonhuman input,
+    client decision captured before the run, or objective-out-of-scope. `HUMAN_REQUIRED` and
+    unclassified completion-path gates are forbidden. The classification is committed and kept
+    current by a test that fails when a new operator input appears without a disposition.
   - A **managed toolchain bundle** is defined and versioned: one pinned set of solc, anvil,
     Slither, Echidna, Medusa, Halmos, Kontrol, the Hardhat image, and the reporter, with all
     hashes recorded once. A run resolves its pins from the bundle rather than from per-run
@@ -3162,9 +3213,10 @@ are invisible to source review by construction.
     A declined non-ZDR consent selects the strict-ZDR model set and the report states the
     reduced ensemble. Consent still cannot activate implicitly, and its evidence is still
     recorded — the change is *who* consents and *when*, not *whether*.
-  - Model lineage approval becomes a one-time business decision recorded once per lineage with
-    rationale and evidence hash, not a per-audit judgment. Unreviewed lineages remain
-    fail-closed.
+  - Model lineage authority is supplied by the objective-defined external frozen truth,
+    cross-lineage independence, and reproducible externally anchored seal. It is never a signer or
+    one-time human business decision. Evidence that does not meet that autonomous authority basis
+    remains fail-closed.
   - Invariant harness approval is replaced by a reviewed, versioned, hash-pinned template
     library, so template-derived harnesses are pre-approved by construction. A harness outside
     the library remains unexecutable without review; automation must not become a path to
@@ -3177,11 +3229,11 @@ are invisible to source review by construction.
     input when provisioning is complete and refuses explicitly when it is not.
   - No gate is deleted. A diff that removes a verification, acknowledgement, or fail-closed
     branch without replacing it with an equivalent pre-satisfied check fails review.
-- **Irreducible, and out of scope for automation.** These are not run-path gates and must not
-  be automated away: the independent blind human comparison in `V3-HUMANCMP-001`, which is
-  evidence for a claim rather than a step in an audit; and the operator's own liability and
-  claim-language decisions. If the product later offers human sign-off as a premium tier, that
-  is an addition, not a gate restored.
+- **Objective-out-of-scope, not human blockers.** Private-repository auditing, human
+  signature/sign-off, and SaaS/liability claims beyond the conservative CLI-release ADR are outside
+  the frozen completion objective. Superiority evidence inside the objective is cross-lineage
+  automated performance over frozen synthetic/public ground truth, not a commissioned human gate.
+  An optional later human tier cannot become a completion prerequisite.
 - **Files expected to change:** `src/mmaudit/config.py`, `src/mmaudit/cli.py`, managed-bundle
   and provisioning modules, `src/mmaudit/isolation/`, `src/mmaudit/solidity/
   invariant_templates.py`, gating-inventory artifact and its schema, documentation,
@@ -3190,8 +3242,9 @@ are invisible to source review by construction.
   Design work can begin earlier; the gating inventory is useful immediately and should not
   wait.
 - **Status:** `QUEUED`
-- **Current state:** Phase 0 is paused and remains `QUEUED`; no generated inventory artifact was
-  adopted. Resume only after the active `V3-AUTHRUNNER-001` repair is tested and recorded.
+- **Current state:** Phase 0 remains provider-free and ready, but is paused without an adopted
+  artifact while `V3-AUTHRUNNER-001` fixes the newly demonstrated native structured-output
+  eligibility gap. Resume only after that bounded repair is tested and recorded.
 
 ## Execution order
 

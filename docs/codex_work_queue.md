@@ -382,6 +382,50 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Dependencies:** Completed `V3-AUTHLINEAGE-PUBLIC-001`, existing authenticated generation
   refetch, and closed usage/report evidence.
 - **Status:** `PARTIAL`
+- **Current local slice:** The first REAL smoke candidate completion proved transport-origin custody
+  and exact reserve/spend reconciliation (`$0.0547272` reserved; `$0.01680888` actual), then failed
+  closed because the selected DeepSeek/`novita/fp8` route lacks native `structured_outputs`. No
+  bundle was published. That paid-attempt record was 54,081 bytes / 979 lines / SHA-256
+  `f0c87e608633dc8ae940a977c8207d9e371b2bf683d0a91f415316273d5ac0dc`. The exact
+  structured-output eligibility constraint now covers selection-plan derivation and smoke/full
+  provider-free admission before any route is eligible. Local code-only checkpoint
+  `68d774b2cee5fa69476b1cfea2f8172731a365c8` implements that first gate. Subsequent r7 metadata
+  accepted DeepSeek/`fireworks`, rejected Tencent/`novita` at native-output admission, and then
+  rejected the historical Gemma/`deepinfra/fp8` proposal because it cannot prove configured
+  `effort=high`; no later completion or new spend occurred.
+  Historical checkpoint `f6cc07aa5228c13a6c5c740ef0d57b550f25ec37` added the self-hashed
+  `required_reasoning_effort=high` selection constraint and proposed Z.AI GLM-5.2 on
+  `sail-research/fp8` as a nonauthorizing seed. Capture-source checkpoint
+  `dce1c2591d62b0cfe8eef28385e3d9a8f759e3e3` enabled a fresh 17-source `$0` capture. Local
+  checkpoint `331bde27c7085d4da34c7b8ec1f688f2ce1e52b3` adopts that capture in manifest raw SHA-256
+  `b097a65613a07930f5c256c63065202a8998d5212a0021312a0e315ff6557b53` and semantic bundle
+  `815fc0e376682f83f994ac5c21962c5f43556a78f5e736045f93a6ee81e5de0d`: 17 sources,
+  16 aliases, 18 claims, 16 decisions, 12 confirmed identities across 11 roots, four unconfirmed
+  identities, eight constraints, and all six directed DeepSeek/Z.AI/Moonshot independence checks.
+  The plan's advisory `UNCONFIRMED` and `distinct_root_lineages_verified=false` literals remain
+  unchanged and nonauthorizing; compiled lineage separately confirms the triple.
+
+  The operator then froze PRIMARY Z.AI/`sail-research/fp8` as r8 at `$0` with registry SHA-256
+  `8f3fc274390d983bde683e3039a91f7cb6ead0f4dfa9aa89caa02ecca7e9ed26`. The r7/r8/r7
+  live-route gate failed safely before completion because the candidate `fireworks` and replay
+  `together` routes lacked explicit completion-capacity metadata; no new spend or bundle resulted.
+  Historical checkpoint `3975d2e12fd81a214b9faa1c3031c94506ab696d` requires metadata-backed
+  completion limits and bound plan
+  `4e6c744559b1cc49c8ede590c868df103a10402d429d5e5d02cf4f429e0f3a66`. Candidate r8 then
+  froze DeepSeek/`parasail/fp8` at
+  `4e08e6496952e817e39d6872684a4e69cfb05cf74374870f51c234a6513b7306`, while replay
+  Kimi/`wafer` failed closed at status `-5`; no replay registry, live-route gate, completion, new
+  spend, or bundle followed. Current checkpoint `dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d`
+  binds nonauthorizing plan v1.3
+  `ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f`, retaining candidate
+  `parasail/fp8` and PRIMARY `sail-research/fp8` while replacing the failed replay singleton with
+  sorted allowlist `modal/mxfp4`, `phala`. Exact operator choice remains mandatory; there is no
+  automatic fallback. The operator explicitly selected `modal/mxfp4`, froze replay r8 at
+  `75451839c72020a5e34c2f21a433e420f79c6db3e7238adb808e1c382af348f8`, and validated r8/r8/r8
+  through 15 logical GETs with at most 30 attempts, `$0`, no completion, and no output. Current
+  operator custody is 71,771 bytes / 1,276 lines / SHA-256
+  `25ee5395a7e2360637f89d89cc0e89084a530c8921d0af395b06bc9b700b01e5`. All commands are
+  absent, REAL remains `BLOCKED_SAFETY`, and the historical A-to-B adjacency contract is unproven.
 - **Local revocation-cascade slice:** Pushed checkpoint
   `692eb173f002818b4434b746c8801b4cbeb852e2` adds explicit PID-bound campaign and generation
   revokers, parent-to-child cascade, traceback-safe execution handoff guards, and immediate smoke
@@ -733,7 +777,7 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   906-line operator record has raw SHA-256
   `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd`. PRIMARY drifted in
   under seven hours, so discovery freshness is measured in hours.
-- **Adjacent operator sequence re-emitted after cascade 2026-08-21:** The exact source base is
+- **Historical adjacent operator sequence after cascade 2026-08-21:** The exact source base was
   `692eb173f002818b4434b746c8801b4cbeb852e2`; pushed zero-command checkpoint
   `02ed5bef89d094e0d0c4852e1bf73914d9960c6b` is the historical eligibility state. Pushed,
   remote-resolved command-emission guide checkpoint
@@ -745,15 +789,20 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   after A exits `0` and its complete result exactly matches all three models, 15 logical GETs, at
   most 30 attempts, zero usage, unchanged budget/ledger, absent output, and pinned config, with no
   delay or intervening source/config/artifact/ledger/output/secret/environment change; otherwise A
-  must be separately reauthorized and rerun. Both commands are emitted but not run. No normal
-  preflight, verifier, discovery, construct-only, or full command is emitted.
+  must be separately reauthorized and rerun. At that boundary both commands were emitted and had not
+  yet run. The later paid attempt is the schema-validation failure recorded above; no fresh immediately
+  adjacent step-A record exists. No current normal preflight, verifier, discovery, construct-only,
+  smoke, or full command is emitted.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
   and non-crediting. Both the historical and post-fix provider-free smoke preflights were valid and
   nonauthorizing, but neither constructed the live client. The first paid attempt exposed a mismatch
   between request and atomic global input-token budgets before provider dispatch. The local parity
   repair is checkpointed and its committed-byte provider-free smoke preflight is valid. Paid smoke #2
   proved constructor parity, and the later metadata-only live-route gate established genuine
-  candidate endpoint-inventory drift. It did not test either judge route; no paid retry is authorized.
+  candidate endpoint-inventory drift. The latest paid candidate request reached transport, origin
+  custody, and exact ledger reconciliation, then failed strict schema validation because the retained
+  candidate route lacks native `structured_outputs`; no judge request or bundle followed. No paid retry
+  is authorized.
   Exact judge admission and the
   full-campaign cost bound cannot exist before both genuine candidate outputs. Current repository
   rules prohibit Codex from reading real credentials or accessing the provider. Judge request bytes
@@ -767,12 +816,13 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   positive owned-REAL parent issue-consume-revoke-reject assay against the external runtime remain
   absent; the completed provider-free cascade does not substitute for that evidence. External-log
   publication and every benchmark run remain queued.
-- **Next action:** Await separate operator authorization and the complete step-A terminal record.
-  Step B requires a second authorization and may begin only immediately after exact VALID
-  reconciliation with no delay or intervening change; otherwise separately authorize and rerun A.
-  Keep normal preflight, verifier, discovery, construct-only, and full commands absent. AUTHSEAL
-  publication, audits, benchmarks, and release remain unauthorized. `V3-AUTONOMY-001` Phase 0
-  remains queued and paused for this handoff.
+- **Next action:** Keep current local checkpoint
+  `dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d` unpushed and keep every metadata,
+  paid-smoke, verifier, normal-preflight, construct-only, and full command absent. Separately review
+  paid-smoke eligibility against the complete r8/r8/r8 evidence; any later command emission requires
+  a fresh separately reviewed adjacency sequence. AUTHSEAL publication,
+  audits, benchmarks, and release remain unauthorized. `V3-AUTONOMY-001` Phase 0 remains queued and
+  paused for this handoff.
 
 ### V3-MODELREFRESH-001 — Provider-free model-refresh runtime and pricing custody
 
@@ -1545,9 +1595,14 @@ and report serialization.
 
 ## Next action
 
-`V3-AUTHRUNNER-001` is the sole `IN_PROGRESS` local work unit for bounded typed
-discovery-equivalence diagnosis after paid smoke #2 reached authenticated metadata refresh and failed
-closed at `$0` before completion. Its REAL subtask remains `BLOCKED_SAFETY`; paid smoke, verifier,
-preflight, construct-only, metadata-refresh, and full commands are absent. `V3-AUTONOMY-001` Phase 0
-remains queued and paused for this handoff; all downstream authority, benchmark, audit, and release
-work remains withheld.
+`V3-AUTHRUNNER-001` is `PARTIAL / BLOCKED_SAFETY`. Local checkpoint
+`dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d` includes the confirmed 17-source GLM-5.2
+documentary reseal and binds provider-free native-output, `effort=high`, and explicit metadata
+completion-capacity eligibility. Its v1.3 plan remains nonauthorizing and provider-unverified; the
+checkpoint is not pushed or remote-resolved. Every metadata, paid-smoke, verifier, and full command
+is absent. Candidate, PRIMARY, and explicitly selected replay `modal/mxfp4` r8 discovery succeeded,
+and the r8/r8/r8 live-route gate is valid nonauthorizing `$0` evidence. The next safe action is
+separate paid-smoke eligibility review; no command is emitted, and any later emission must satisfy
+fresh adjacency rules.
+`V3-AUTONOMY-001` Phase 0 remains queued and paused without an
+adopted artifact.

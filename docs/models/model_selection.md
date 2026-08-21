@@ -19,23 +19,35 @@ own frozen metadata snapshots.
 
 `config/models.selection-plan.json` is a canonical, self-hashed, explicitly
 `NONAUTHORIZING` replacement seed for the obsolete roster. Its plan SHA-256 is
-`f7d8df3c4bdc584c33a9ed80e6aab49c66180f198185b8f8ccff5150467af115`. It binds the exact bytes of the
+`ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f`. Schema v1.3 binds
+`required_reasoning_effort = high`, `required_completion_limit_source = metadata`,
+`required_output_mode = NATIVE_JSON_SCHEMA` and the literal required provider parameter
+`structured_outputs` into the AUTHRUNNER assignment. It binds the exact bytes of the
 operator-staged `model-ranking.py` and `V3-LINEAGE-001-operator-review.md`, but it does not
 claim that the ranker ran, that any proposed ID or route currently exists, that an advisory
 lineage label is correct, or that any model is qualified. Its endpoint lists are policy
 constraints only. Every discovery, lineage, qualification, runner, benchmark, seal, and
 release authority field is literally false.
 
-The proposed AUTHRUNNER roles are also only planning data: DeepSeek V4 candidate, Tencent Hy3
-primary judge, and Kimi K3 replay judge. The Tencent entry is restricted to the singleton
-`tencent/fp8` route; its entry SHA-256 is
-`cdcc7cc650c2d54bf91bc2f01dd9f8e496769f6697c31ca5f7994cb0653bcf1d`, and the role-assignment
-SHA-256 is `a1ac14a47c49b9776631edc0cd39520b6dd68fa91a8787968c02f741fbfdee45`.
-MiniMax M3 remains byte-for-byte unchanged as an unselected candidate entry. The plan still records
-`distinct_root_lineages_verified = false`; it does not qualify a model or authorize a runner,
-provider call, benchmark, seal, audit, or release.
+The proposed AUTHRUNNER roles are only planning data: DeepSeek V4 candidate, Z.AI GLM-5.2 PRIMARY,
+and Kimi K3 replay judge. The route allowlists are DeepSeek on `parasail/fp8`, GLM-5.2 on
+`sail-research/fp8`, and Kimi on either `modal/mxfp4` or `phala`. The replay allowlist is sorted
+policy input, not an automatic fallback order: the operator must explicitly choose and freshly
+discover one exact route. The DeepSeek entry SHA-256 is
+`da576e8d1835b41be94ea4dab6cd6329ae8c1483b830214d9e05acef44e8617b`, the GLM entry SHA-256 is
+`45f0a3f416a806932e2596ca4f6381e12bbc4901d15c301b22fd5d607a7f55ef`, the Kimi entry SHA-256 is
+`77217b6dca94bc292a13cc5a5ce84c48c68a6bb2e055462db51048013abd3f11`, and the
+role-assignment SHA-256 is `93a2487fceec4771749aa8c33d0870fba70941293bf57a2dd48e6c065e172421`.
+Tencent/`novita` remains an unselected historical adaptive seed at rank 10. Gemma remains an
+unselected rank-12 record of the superseded r7 proposal rather than being presented as viable for
+the configured high-effort profile. The plan's own advisory entries remain literally
+`documentary_lineage = UNCONFIRMED`, and it records `distinct_root_lineages_verified = false`; those
+sealed plan-local values are not rewritten by later documentary evidence. The separately compiled
+public-lineage manifest confirms the current DeepSeek/Z.AI/Moonshot triple and all six directed
+independence pairs. Neither artifact qualifies a model or authorizes a runner, provider call,
+benchmark, seal, audit, or release.
 
-The operator ran the three singleton metadata-only commands. DeepSeek succeeded on `novita/fp8`
+Historically, the operator ran the three singleton metadata-only commands. DeepSeek succeeded on `novita/fp8`
 with operator-reported frozen-registry SHA-256
 `59dfdaf498cc2a8201351a7c6aacdfc2a3fd7f6daec09aa927202071ee7a0619`. Qwen 3.8 Max failed
 closed because its exact model was absent from the ZDR endpoint snapshot, so it cannot serve as
@@ -43,11 +55,11 @@ the primary judge under `require_zdr = true`; the operator reports the same ZDR 
 Muse Spark 1.2. Kimi's `deepinfra/bf16` route was non-operational;
 the explicit `together` retry succeeded with operator-reported frozen-registry SHA-256
 `14937842d2a544540efa39199b2b0ed4c0f25e1f145f1385f32d43b728edbdea`. No completion was
-requested, and the operator reports that the ledger remains untouched at `$0`. These statements
-record operator-reported results only; the private artifacts and ledger were not read or promoted
-by Codex. The current exact operator-supplied log is retained at
-[`operator_results.md`](../remediation/v3/operator_results.md): 50,211 bytes, 906 lines, and raw
-SHA-256 `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd`. It is
+requested, and at that boundary the operator reported an untouched `$0` ledger. Those statements
+record operator-reported historical results only; the private artifacts and ledger were not read or
+promoted by Codex. The then-current operator-supplied log for that later r7 boundary was retained at
+[`operator_results.md`](../remediation/v3/operator_results.md): 57,374 bytes, 1,029 lines, and raw
+SHA-256 `14ece147138fb5bf6f32d2737ca6b174817a923c5ca50269bc14337c60a3453c`. It is
 `OPERATOR_SUPPLIED_UNVERIFIED` and grants no repository authority.
 
 The subsequent Claude Opus 5 `amazon-bedrock` PRIMARY r3 attempt also failed closed before registry
@@ -426,7 +438,7 @@ whole-inventory gate behaved correctly: the frozen candidate evidence had aged.
 
 The live-route preflight made authenticated metadata GETs but issued no model completion, spent `$0`,
 and published no bundle. It stopped at the candidate mismatch, so the PRIMARY and REPLAY judge routes
-remain untested. The current 47,422-byte, 855-line operator record has raw SHA-256
+remain untested. The then-current 47,422-byte, 855-line operator record had raw SHA-256
 `074c9f16a580473ac930f48715e737b6951ddc34cde7cd951e0b24373a3fcc16`.
 Checkpoint `5e94b77` classifies only the first failing role. Its bounded successor is committed,
 pushed, and remote-resolved at `9f5c94d97b3d79d51c10e250b99244591461e959` (`Aggregate
@@ -452,7 +464,7 @@ unchanged; output was not published; effective-config SHA-256 remained
 response. The PRIMARY evidence drifted in under seven hours, so the observed discovery-freshness
 window is operationally measured in hours.
 
-The current 50,211-byte, 906-line operator record has raw SHA-256
+The then-current 50,211-byte, 906-line operator record had raw SHA-256
 `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd`. The stale r2/r5/r2
 command is withdrawn. At that historical boundary, source implementation was bound to pushed,
 remote-resolved checkpoint `9f5c94d97b3d79d51c10e250b99244591461e959` and its zero-command evidence reconciliation was
@@ -472,62 +484,123 @@ independent review reported `CLEAN` with no blocker/HIGH.
 The provider-free `REVOCATION_CASCADE_FIX` is complete and clean at this local slice. It creates no
 genuine owned-REAL parent capability and does not validate the positive external lifecycle.
 
-The historical metadata-only step A and paid-smoke step B at checkpoint
-`092a09ee94d528f67b43edb180860d45328f741f` were never authorized or executed and remain historical.
-After the provider-free cascade correction, source checkpoint
-`692eb173f002818b4434b746c8801b4cbeb852e2` and pushed zero-command governance checkpoint
-`02ed5bef89d094e0d0c4852e1bf73914d9960c6b` are the exact historical eligibility base for the
-re-emitted sequence below. Pushed, remote-resolved command-emission guide checkpoint
-`4bebab16bb2e36d54665918dec64429602b4f4e6` freezes that exact sequence. Command emission does not
-prove execution, positive owned-REAL parent custody, qualification, or authority.
+The operator subsequently authorized the paid one-case smoke at repository checkpoint
+`b4134c70641e33cbbff2b430b135910df903733b`.
+Its first candidate completion reached the real transport and proved the production smoke namespace
+and reserve/reconcile path: `$0.0547272` was reserved and `$0.01680888` was charged and reconciled.
+The response then failed closed as `SCHEMA_VALIDATION_FAILED`; no bundle was published. The retained
+candidate DeepSeek/`novita/fp8` and PRIMARY Tencent/`tencent/fp8` routes advertise
+`response_format` without `structured_outputs`, so they could produce JSON-object output but not the
+native strict JSON-Schema protocol required by AUTHRUNNER. Replay Kimi/`together` advertises the
+required marker. That paid-attempt record was 54,081 bytes / 979 lines / SHA-256
+`f0c87e608633dc8ae940a977c8207d9e371b2bf683d0a91f415316273d5ac0dc`.
 
-The live-route gate and paid smoke are a mandatory adjacent two-step operator sequence. These are the
-only current AUTHRUNNER commands. They are separate and require separate operator authorization; do
-not chain them or paste them into one shell invocation. Before step A, inspect and confirm that the
-exact `r6/r6/r2` artifacts and hashes above still match, the effective configuration remains
-`42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54`, the dedicated ledger is
-exactly empty and unchanged, the `s1` output is absent, and its operator-owned parent directory
-already exists with mode `0700`.
+After local gate checkpoint `68d774b2cee5fa69476b1cfea2f8172731a365c8`, the operator ran two
+metadata-only r7 discoveries. DeepSeek/`fireworks` succeeded without a completion or new charge;
+Tencent/`novita` was rejected by the new native-output gate before registry publication. The
+operator reports that Tencent has no ZDR route carrying both `response_format` and
+`structured_outputs`, so the initial route-only repair is not viable. The then-current operator record was
+57,374 bytes / 1,029 lines / SHA-256
+`14ece147138fb5bf6f32d2737ca6b174817a923c5ca50269bc14337c60a3453c`.
+It reports `$0` additional spend and the same one-entry live ledger at `$0.01680888`.
 
-Step A is metadata egress only. Its bounded inventory is 15 logical GETs with at most 30 attempts;
-an authentication, network, malformed-response, registration, or policy failure can stop earlier.
-All-three typed comparison is reached only if every route reaches its exact comparison. The command
-does not reserve ledger cost, dispatch a model completion, create a usage record, or publish output;
-external billing semantics for authenticated metadata GETs are not controlled by this repository.
-Step A also runs the shared static corpus, lineage, configuration, token/cost-budget, ledger, and
-candidate-plan admission before metadata transport. Inserting a separate normal preflight adds no
-safety gate and would only age the live metadata. Neither the prior operator result nor step A proves
-post-response custody or adjudication.
+The operator then froze Gemma/`deepinfra/fp8` and refreshed Kimi/`together` as r7, still at `$0`.
+The r7/r7/r7 live-route gate rejected Gemma before paid transport because the configured profile
+requires `effort = high` and Gemma publishes no supported effort inventory. Nemotron's reported
+inventory also lacks `high`; neither already-confirmed alternative is eligible. The current operator
+record at that boundary was 61,243 bytes / 1,092 lines / SHA-256
+`00de61717cb6d61c003682abca12ae2c7e59613db03ef99558133b972c123516`.
 
-```shell
-env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models authenticated-runner-smoke --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r6.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260821-r6" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r6.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r6" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2" --smoke-corpus benchmarks/model_corpus_smoke --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260821-s1.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --secrets-env-file "$HOME/.mmaudit/secrets.env" --allow-metadata-egress --live-route-preflight-only --no-color
-```
+Every previously emitted AUTHRUNNER command is now withdrawn. There is currently no runnable
+metadata, discovery, smoke, verifier, normal-preflight, construct-only, or full AUTHRUNNER command.
+Local code-only checkpoint `68d774b2cee5fa69476b1cfea2f8172731a365c8` now enforces native
+`NATIVE_JSON_SCHEMA` plus literal `structured_outputs` in the self-hashed selection plan, fresh
+registry derivation, and smoke/full provider-free admission. It also requires native mode during
+AUTHRUNNER live refresh and preserves adaptive non-AUTHRUNNER selection. Historical local successor
+`3989e7592de6e1c355365443c10e00c2083829d8` captured the Gemma proposal but is now retained only as
+a failed-safe diagnostic; it is not a viable route plan.
 
-Step B may be separately authorized only after step A exits `0` and the operator inspects its
-complete terminal record. It must report the exact `VALID / NONCREDITING / NONAUTHORIZING / METADATA
-EGRESS ONLY / NO MODEL COMPLETION` result; exact displayed model IDs
-`deepseek/deepseek-v4-pro-0813`, `tencent/hy3`, and `moonshotai/kimi-k3`; `logical_gets=15` and
-`maximum_provider_attempts=30`; `usage_records=0`; unchanged budget and atomic ledger; output not
-published; and effective-config SHA-256
-`42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54`. Step B must begin
-immediately after that full exact-VALID inspection and its separate authorization, with no delay and
-no intervening source, configuration, registry, discovery artifact, lineage/corpus artifact, ledger,
-output path, secret file, or shell-environment change. The unchanged command and frozen evidence must
-still bind those models to `novita/fp8`, `tencent/fp8`, and `together`, respectively; endpoint tags
-are not claimed as terminal-display fields. Reconfirm the exact empty ledger, absent `s1` output, and
-mode-`0700` parent immediately before authorization. Any delay, interruption, mismatch, ambiguous
-terminal result, or intervening change invalidates adjacency: do not run step B; obtain separate
-authorization and rerun step A. The paid smoke is one-shot and non-resumable; it can reserve and
-spend provider cost.
+Historical provider-free checkpoint `f6cc07aa5228c13a6c5c740ef0d57b550f25ec37` bumped the plan
+schema to v1.2, self-hashed exact
+`required_reasoning_effort = high`, and applies the endpoint-first/model-fallback effort check to all
+three selected roles during discovery and pending-registry derivation. Its nonauthorizing plan
+proposed Z.AI GLM-5.2/`sail-research/fp8` while that exact ID was not yet confirmed. Generic and
+unselected candidates remain capability-adaptive. That exact local checkpoint binds plan SHA-256
+`120ef35de53a6c13b0d173a30b0e5e3f6310c3bf7032ce2a7ed92134a5099fbf`, and these
+provider-free admission tests; it remains an unpushed historical predecessor.
 
-```shell
-env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models authenticated-runner-smoke --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r6.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260821-r6" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r6.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r6" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2" --smoke-corpus benchmarks/model_corpus_smoke --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260821-s1.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --secrets-env-file "$HOME/.mmaudit/secrets.env" --allow-code-egress --no-color
-```
+The operator then ran a 16-source documentary capture at `$0`. That capture necessarily omitted
+GLM-5.2 because the compiled inventory contained only `zai-org/GLM-4.7`; its output is superseded and
+grants no lineage or runtime authority. Local checkpoint
+`dce1c2591d62b0cfe8eef28385e3d9a8f759e3e3` adds `zai-org/GLM-5.2` at immutable revision
+`b4734de4facf877f85769a911abafc5283eab3d9` as the exact seventeenth capture source, while retaining
+the repository's canonical `z-ai` publisher and independence identity. A fresh 17-source capture then
+reproduced exact GLM-5.2 bytes at SHA-256
+`ed5aca8ce3dc5f8de626c87e488444343e43b1dcbdeb0e643dc72fea63ab06e8`, observation-set
+SHA-256 `db27957fd9bae451acfb78409936b12d795e89c0ac31f7c53874dcb52adb7c73`, and capture semantic
+bundle SHA-256 `a7ef51f5c75b851c53991414d51f33af80cbfc419934dc9f5be6365829f7b114`.
 
-No normal provider-free preflight, verifier, discovery, construct-only, or full AUTHRUNNER command is
-emitted. Both current commands are emitted but not run. `V3-AUTHRUNNER-001` remains
-`PARTIAL / BLOCKED_SAFETY`; `V3-AUTONOMY-001` Phase 0 remains queued and paused. No provider result,
-ledger value, governed counter, qualification, release state, or authority changed.
+Local checkpoint `331bde27c7085d4da34c7b8ec1f688f2ce1e52b3` adopts that exact capture provider-free. The raw
+25,209-byte capture journal has SHA-256
+`e2c999f7860f4b5a4753bf872baa71b12edc500fa220c35cdc780292a67d7ef7`; the raw 61,852-byte
+manifest has SHA-256 `b097a65613a07930f5c256c63065202a8998d5212a0021312a0e315ff6557b53`, and its semantic
+bundle is `815fc0e376682f83f994ac5c21962c5f43556a78f5e736045f93a6ee81e5de0d`. It binds 17
+sources totaling 432,659 bytes, 16 aliases, 18 claims, 16 decisions, 12 confirmed identities across
+11 roots, four unconfirmed identities, and eight conservative constraints. Z.AI GLM-5.2 is confirmed
+at root `sha256:c75238db92f2deb5938759be4c163b22a95f1297a2eb560ab5d90ba69d0764e7`;
+the GLM-4.7/GLM-5.2 same-publisher constraint remains negative-only, and all six directed checks for
+the selected DeepSeek/Z.AI/Moonshot triple pass. This is documentary identity authority only; every
+provider, selection, qualification, runner, seal, benchmark, audit, and release flag remains false.
+
+After that reseal, the operator's metadata-only r8 discovery for Z.AI/`sail-research/fp8` succeeded at
+`$0` with frozen-registry SHA-256
+`8f3fc274390d983bde683e3039a91f7cb6ead0f4dfa9aa89caa02ecca7e9ed26`. The r7/r8/r7
+live-route gate then failed safely before a completion because DeepSeek/`fireworks` and Kimi/`together`
+lacked explicit `max_completion_tokens`; the Z.AI route supplied `131072`. No completion, new charge,
+or AUTHRUNNER bundle resulted. That 66,812-byte / 1,198-line historical operator record has SHA-256
+`5faa33fe1bd5b332e8dffa0b29ed5718886d0c8b22c65cb1dc67b306eba8d00f`.
+
+Local checkpoint `3975d2e12fd81a214b9faa1c3031c94506ab696d` fails closed on missing explicit completion
+capacity during plan, registry, smoke, and full-runner admission. Its historical schema-v1.3 plan
+`4e6c744559b1cc49c8ede590c868df103a10402d429d5e5d02cf4f429e0f3a66` proposed
+DeepSeek/`parasail/fp8`, Z.AI/`sail-research/fp8`, and Kimi/`wafer`. Subsequent `$0` r8 metadata
+discovery froze candidate DeepSeek/`parasail/fp8` at
+`4e08e6496952e817e39d6872684a4e69cfb05cf74374870f51c234a6513b7306`, while replay
+Kimi/`wafer` failed closed because the endpoint had drifted to status `-5`. No replay registry,
+live-route gate, completion, new charge, or bundle resulted. That 69,112-byte / 1,236-line operator
+record has SHA-256 `5fb3d3091e339b840e84468093c0f1f64c738673a40761fcf7d7b9d7ae4c41c6`.
+
+Current local checkpoint `dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d` retains the candidate and
+PRIMARY routes and replaces the failed replay singleton with the nonauthorizing sorted allowlist
+`modal/mxfp4`, `phala`. Plan SHA-256
+`ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f` remains provider-unverified,
+local only, and not pushed or remote-resolved. Fresh exact replay metadata discovery for one
+explicitly operator-chosen allowlisted route remains required after separate review; no discovery
+command is currently emitted.
+
+The operator then explicitly chose `modal/mxfp4`, froze replay r8 at
+`75451839c72020a5e34c2f21a433e420f79c6db3e7238adb808e1c382af348f8`, and validated the
+complete r8/r8/r8 live-route gate through 15 logical metadata GETs with at most 30 attempts. The
+effective config SHA-256 remained
+`42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54`; usage, budget, ledger,
+and output were unchanged, with no completion, new spend, or bundle. The current operator record is
+71,771 bytes / 1,276 lines / SHA-256
+`25ee5395a7e2360637f89d89cc0e89084a530c8921d0af395b06bc9b700b01e5`. Every command remains
+absent. Any paid-smoke eligibility or later emission requires separate review and the existing fresh
+adjacency rules.
+
+Root's earlier focused matrix passed `348` tests; an independent focused matrix passed `223`; the
+reasoning slice passed `69` focused tests; and the expanded selection, discovery, benchmark,
+full-runner, smoke, and CLI matrix passed `323`. The lineage capture successor passed 62 combined
+capture/manifest/authority tests (69 in independent review). Ruff, strict mypy, schema generation,
+formatting, and diff integrity passed for those bounded historical slices. No operator metadata or
+local checkpoint authorizes the current route proposal.
+
+`max_json_repair_attempts = 0` is deliberate in maximum-assurance certification. The effective
+configuration forces it to zero and certification independently rejects nonzero repair. The only
+optional non-certification repair strips one exact outer Markdown JSON fence, is marked
+noncreditable, and cannot repair schema-invalid content. Loose output therefore remains ineligible;
+route capability—not repair—is the correction.
 
 ### Full 24-case REAL command — withheld
 
