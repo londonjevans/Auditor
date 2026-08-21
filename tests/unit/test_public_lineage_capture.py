@@ -185,23 +185,17 @@ def test_committed_capture_journal_replays_exact_source_bytes() -> None:
     )
 
     specs_by_id = {spec.source_id: spec for spec in PUBLIC_LINEAGE_SOURCE_SPECS}
-    pending_fresh_capture_ids = {"tencent-hy3-card"}
-    historical_specs = tuple(
-        spec
-        for spec in PUBLIC_LINEAGE_SOURCE_SPECS
-        if spec.source_id not in pending_fresh_capture_ids
-    )
-    assert len(historical_specs) == 15
     assert tuple(source.source_id for source in journal.sources) == tuple(
-        spec.source_id for spec in historical_specs
+        spec.source_id for spec in PUBLIC_LINEAGE_SOURCE_SPECS
     )
     assert (
         journal.observation_set_sha256
-        == "848b1dfda5b60c6793089ed3916073d86e3a734da9dbc5a824302bec7f4b37da"
+        == "6ae6e75a1732c05b85ffe189febbc3ecfa8ae2eeeb83000a8a24d30035b966eb"
     )
     assert journal.bundle_sha256 == (
-        "d9e46cb7c29792ab3d9b2d696bdb889a20f79338d72d628d267bb3705576f8f5"
+        "7b6ff67506bceaaf05c944edb2c28bf6d8386df3690444b827035ed5c83bc134"
     )
+    assert sum(source.file_binding.size for source in journal.sources) == 421_754
     assert journal.sources[-1].retrieved_at - journal.sources[0].retrieved_at == timedelta(
         seconds=3
     )
@@ -228,6 +222,14 @@ def test_committed_capture_journal_replays_exact_source_bytes() -> None:
         )
         decoded = content.decode("utf-8", errors="strict")
         assert all(marker in decoded for marker in spec.required_markers)
+
+    tencent = next(source for source in journal.sources if source.source_id == "tencent-hy3-card")
+    assert tencent.retrieved_at == datetime(2026, 8, 21, 11, 42, 34, tzinfo=UTC)
+    assert tencent.file_binding.size == 10_325
+    assert (
+        tencent.file_binding.sha256
+        == "dbdfc5920bf548fb484b5ec1837032f6c85e1886f2930aa5bee629c1f9620e8b"
+    )
 
 
 def test_capture_retains_exact_bytes_metadata_and_identity_request_headers() -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable
+from itertools import permutations
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,6 @@ from mmaudit.models.candidate_selection import (
 )
 from mmaudit.models.discovery import DiscoveryCandidateRoute
 from mmaudit.models.public_lineage_authority import (
-    PublicModelLineageAuthorityError,
     require_independent_public_model_lineage,
     require_verified_public_model_lineage,
     resolve_verified_public_model_lineage,
@@ -227,26 +227,29 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
             )
 
 
-def test_committed_runner_selection_remains_blocked_on_tencent_lineage() -> None:
+def test_committed_runner_selection_has_three_documented_independent_roots() -> None:
     plan = load_candidate_selection_plan(ROOT / "config" / "models.selection-plan.json")
     selection = plan.authenticated_runner_selection
     assert selection is not None
     capability = resolve_verified_public_model_lineage()
-
-    confirmed_pair = require_independent_public_model_lineage(
-        capability,
+    active_triple = (
         selection.candidate_model_id,
+        selection.primary_judge_model_id,
         selection.replay_judge_model_id,
     )
-    assert confirmed_pair.independent is True
-    with pytest.raises(PublicModelLineageAuthorityError, match="lacks confirmed"):
-        require_verified_public_model_lineage(capability, selection.primary_judge_model_id)
-    with pytest.raises(PublicModelLineageAuthorityError, match="lacks confirmed"):
-        require_independent_public_model_lineage(
-            capability,
-            selection.candidate_model_id,
-            selection.primary_judge_model_id,
-        )
+
+    roots = {
+        exact_model_id: require_verified_public_model_lineage(
+            capability, exact_model_id
+        ).root_lineage
+        for exact_model_id in active_triple
+    }
+    assert len(set(roots.values())) == 3
+    for left, right in permutations(active_triple, 2):
+        independent = require_independent_public_model_lineage(capability, left, right)
+        assert independent.independent is True
+        assert independent.left_exact_model_id == left
+        assert independent.right_exact_model_id == right
 
 
 def test_selection_plan_rejects_one_source_relabelled_as_two() -> None:

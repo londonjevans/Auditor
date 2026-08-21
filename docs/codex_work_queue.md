@@ -502,7 +502,7 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   pushed governance successor is `5f35436e1ffdb2a5c8d229e79e7f4637abbb3279`; at that recorded
   validation boundary the committed-byte preflight was still pending. No model-call, governed spend,
   audit, runner-authority, AUTHSEAL, benchmark, or release counter/state changed.
-- **Reasoning-profile and PRIMARY r5 preparation 2026-08-21:** The current 24,059-byte
+- **Reasoning-profile and PRIMARY r5 preparation 2026-08-21:** The then-current 24,059-byte
   operator-supplied log at raw SHA-256
   `3af4473feac473c3ef5b7ecd553ed67dc141d6f174647e29bd2c1dc485bc609e` records that the
   `fd1459b519ea0ce28a2d123ddeb57653dd2f7918` preflight cleared the cache-price gate and then
@@ -519,16 +519,38 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   specification adds exact immutable Tencent card revision
   `a960ebc3da325ba167f069f76c41eb62c9280d22`, but the existing 15-source lineage bundle remains
   unchanged and Tencent is not yet confirmed. Owner matrices passed 419 and 134 tests, independent
-  red-team passed 15, candidate-selection passed 10, capture preparation passed 25, and root combined
-  matrices passed 166 and 57; 12 product-documentation/objective tests, schema verification, Ruff,
+  red-team passed 15, candidate-selection passed 10, capture preparation passed 25, root combined
+  matrices passed 166 and 57, and the final combined affected matrix passed 433/433 in 45.40s;
+  12 product-documentation/objective tests, schema verification, Ruff,
   strict mypy, strict governance JSON, and diff integrity passed. No terminal full-suite result is
-  claimed for these new bytes. The current implementation checkpoint is
-  `PENDING_CURRENT_REASONING_SELECTION_CAPTURE_CHECKPOINT`; no authority or counter changed.
+  claimed for these new bytes. The implementation is durably checkpointed, pushed, and
+  remote-verified at `9075ca7635c861194cc732e67d9ebb92e6ffa0af` (`Bind catalog reasoning and
+  select Tencent`); no authority or counter changed.
+- **PRIMARY r5 discovery and Tencent lineage reseal 2026-08-21:** The current 26,945-byte
+  operator-supplied log at raw SHA-256
+  `1ed1da7c47f7c595c099e5c70cfe947430db41bd7811b7b0b7ecddeb97e14ecc` records two exact
+  exit-zero prerequisites after `9075ca7635c861194cc732e67d9ebb92e6ffa0af`. PRIMARY r5 discovery
+  retained `tencent/hy3=tencent/fp8` in discovery manifest
+  `fe3e3daa21eeb370f35558c5eca5746c140f2b92e88a37233952ab77034dc07b` and frozen registry
+  `2d825234bfc1cf05fb9ec883c555bc007bd3a6033145507d629d5da7aa5619ad` without a completion
+  or spend. The coherent 16-source capture produced observation-set SHA-256
+  `6ae6e75a1732c05b85ffe189febbc3ecfa8ae2eeeb83000a8a24d30035b966eb` and capture-bundle
+  SHA-256 `7b6ff67506bceaaf05c944edb2c28bf6d8386df3690444b827035ed5c83bc134`.
+  Local exact-byte compilation and replay reseal raw manifest
+  `90389d27f553d6f167a21aab364cebdb40ca5afbdbcc977d9127338ace4a3008` and semantic bundle
+  `7c6dd26743733ae46aa94b7171ff2ca42f967ac8323b7f2d0aa95cf66f2dbc68`, binding 16 sources,
+  421,754 bytes, 15 aliases, 17 claims, 11 confirmed identities across 10 roots, four unchanged
+  unconfirmed identities, and seven negative-only constraints. Tencent Hy3 is confirmed, the
+  Tencent/Hunyuan organizational constraint remains negative-only, and all six directed current-triple
+  independence pairs replay successfully. Implementer validation passed 176 tests; root lineage passed
+  108; independent red-team passed 117, plus 22 schema and 16 runner tests; schema verification, Ruff,
+  strict mypy, and diff integrity passed. No terminal full-suite result is claimed. The current
+  reseal checkpoint is `PENDING_TENCENT_LINEAGE_RESEAL_CHECKPOINT`; the last durable pushed checkpoint
+  remains `9075ca7635c861194cc732e67d9ebb92e6ffa0af`. No authority or governed counter changed.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
-  and non-crediting. The historical PRIMARY r4 registry is unusable for the current plan, the fresh
-  Tencent r5 registry does not exist, and the sealed lineage bundle does not contain Tencent Hy3.
-  Consequently there is no current AUTHRUNNER preflight command. Genuine production-issued lifecycle
-  proof is absent; provider-free fixtures
+  and non-crediting. The current Tencent documentary reseal is not yet checkpointed, pushed, or
+  remote-verified, and the exact provider-free r2/r5/r2 preflight has not run. Genuine
+  production-issued lifecycle proof is absent; provider-free fixtures
   cannot mint owned-REAL origin, and the current repository rules prohibit reading real credentials
   or accessing the provider. Judge request bytes and exact caps cannot exist before both genuine
   candidate outputs, so the provider-free result intentionally supplies candidate-only admission,
@@ -537,12 +559,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   the top-level runner lease is not independently demonstrated. External-log publication and every
   benchmark run remain queued.
 - **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Commit, push, and
-  verify the reasoning/selection/capture-preparation checkpoint. Then run only fresh PRIMARY r5
-  metadata discovery for `tencent/hy3=tencent/fp8` and the complete coherent 16-source r2 documentary
-  capture. Reconcile both operator results, bind the exact Tencent claim span and a negative-only
-  Tencent/Hunyuan organizational constraint, reseal and replay the lineage bundle, and only then seal
-  and emit a new provider-free r2/r5/r2 preflight. No REAL campaign, AUTHSEAL publication, audit,
-  benchmark, or release action is authorized yet.
+  remote-verify `PENDING_TENCENT_LINEAGE_RESEAL_CHECKPOINT`, then emit and run the exact provider-free
+  r2/r5/r2 preflight and reconcile its nonauthorizing result. No REAL campaign, AUTHSEAL publication,
+  audit, benchmark, or release action is authorized yet.
 
 ### V3-MODELREFRESH-001 — Provider-free model-refresh runtime and pricing custody
 

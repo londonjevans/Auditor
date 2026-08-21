@@ -8,9 +8,9 @@ AUTORUN_STATUS: BLOCKED_SAFETY
 CURRENT_MILESTONE: M1-DETERMINISTIC-PRODUCT (REACHED)
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001 (COMPLETE)
-NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Commit, push, and verify `PENDING_CURRENT_REASONING_SELECTION_CAPTURE_CHECKPOINT`; then run only exact fresh PRIMARY r5 metadata discovery for `tencent/hy3=tencent/fp8` and the full coherent 16-source r2 public-document capture. Reconcile both results, bind and replay Tencent documentary lineage plus the negative-only Tencent/Hunyuan organizational constraint, and reseal before emitting any r2/r5/r2 provider-free preflight. No current preflight, REAL campaign, AUTHSEAL publication, real audit, benchmark, or release action is authorized yet.
-LAST_COMMAND: Owner reasoning matrices with 419 and 134 tests; independent 15-test reasoning red-team; 10-test candidate-selection matrix; 25-test capture-preparation matrix; root combined matrices with 166 and 57 tests; 12 product-documentation/objective tests; schema verification; Ruff; strict mypy; JSON parsing; `git diff --check`. No terminal full suite was run for the current reasoning/selection/capture-preparation bytes.
-LAST_RESULT: PASS / PARTIAL — owner reasoning matrices passed 419/419 and 134/134; independent reasoning red-team passed 15/15; candidate-selection passed 10/10; capture preparation passed 25/25; root combined matrices passed 166/166 and 57/57; 12 product-documentation/objective tests passed in 0.07s; schema verification, Ruff, strict mypy, strict governance JSON, and diff integrity passed. The operator-reported preflight on `fd1459b519ea0ce28a2d123ddeb57653dd2f7918` cleared the cache-price gate and failed safely before secret selection, provider egress, or reservation because configured max-token reasoning lacked exact frozen support; its dedicated ledger remained `$0`. No terminal full-suite result is claimed for the new bytes, and no authority or counter changed.
+NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Commit, push, and remote-verify `PENDING_TENCENT_LINEAGE_RESEAL_CHECKPOINT`; then emit and run the exact provider-free r2/r5/r2 preflight and reconcile its nonauthorizing result. No REAL campaign, AUTHSEAL publication, real audit, benchmark, or release action is authorized yet.
+LAST_COMMAND: Implementer 176-test Tencent lineage matrix; root 108-test lineage matrix; independent 117-test red-team plus 22 schema and 16 runner tests; 12 product-documentation/objective tests; schema verification; Ruff; strict mypy; JSON parsing; `git diff --check`. The prior reasoning checkpoint retains its 433/433 affected result in 45.40s. No terminal full suite was run for the current Tencent reseal bytes.
+LAST_RESULT: PASS / PARTIAL — implementer validation passed 176/176; root lineage validation passed 108/108; independent red-team passed 117/117 plus 22/22 schema and 16/16 runner tests; 12 product-documentation/objective tests passed; schema verification, Ruff, strict mypy, strict governance JSON, and diff integrity passed. Operator-reported PRIMARY r5 discovery and the coherent 16-source capture both exited zero without a completion or spend. Local reseal confirms Tencent and all six directed current-triple independence pairs while preserving seven negative-only constraints. No terminal full-suite result is claimed for the current bytes, and no authority or governed counter changed.
 REAL_MODEL_CALLS_ATTEMPTED: 11
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 10
@@ -20,14 +20,52 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9965235675
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 5f35436e1ffdb2a5c8d229e79e7f4637abbb3279 (`Record prompt-cache pricing checkpoint`); latest durable pushed checkpoint; current implementation checkpoint `PENDING_CURRENT_REASONING_SELECTION_CAPTURE_CHECKPOINT`
+LAST_CHECKPOINT_COMMIT: 9075ca7635c861194cc732e67d9ebb92e6ffa0af (`Bind catalog reasoning and select Tencent`); latest durable pushed and remote-verified checkpoint; current reseal checkpoint `PENDING_TENCENT_LINEAGE_RESEAL_CHECKPOINT`
+
+## 2026-08-21T12:02:32Z — PRIMARY r5 discovery adopted and Tencent lineage resealed
+
+- Status: `V3-AUTHRUNNER-001` remains `PARTIAL` / `BLOCKED_SAFETY`. The current reseal checkpoint is
+  `PENDING_TENCENT_LINEAGE_RESEAL_CHECKPOINT`; the last durable pushed and remote-verified checkpoint
+  remains `9075ca7635c861194cc732e67d9ebb92e6ffa0af`.
+- Operator result custody: the current 26,945-byte operator-supplied log has raw SHA-256
+  `1ed1da7c47f7c595c099e5c70cfe947430db41bd7811b7b0b7ecddeb97e14ecc`. It records the exact
+  r5 discovery and full 16-source capture commands after `9075ca7635c861194cc732e67d9ebb92e6ffa0af`
+  both exiting zero. PRIMARY r5 discovery retained `tencent/hy3=tencent/fp8` in manifest
+  `fe3e3daa21eeb370f35558c5eca5746c140f2b92e88a37233952ab77034dc07b` and frozen registry
+  `2d825234bfc1cf05fb9ec883c555bc007bd3a6033145507d629d5da7aa5619ad`; no model completion
+  was requested and the dedicated ledger remained `$0`. The capture observation-set and bundle
+  hashes are `6ae6e75a1732c05b85ffe189febbc3ecfa8ae2eeeb83000a8a24d30035b966eb` and
+  `7b6ff67506bceaaf05c944edb2c28bf6d8386df3690444b827035ed5c83bc134`.
+- Tencent documentary reseal: exact local replay produced raw manifest
+  `90389d27f553d6f167a21aab364cebdb40ca5afbdbcc977d9127338ace4a3008` and semantic bundle
+  `7c6dd26743733ae46aa94b7171ff2ca42f967ac8323b7f2d0aa95cf66f2dbc68`. The bundle binds 16
+  sources totaling 421,754 bytes, 15 aliases, 17 exact claims, 11 confirmed identities across 10
+  roots, four unchanged unconfirmed identities, and seven negative-only constraints. Tencent Hy3 is
+  confirmed; the Tencent/Hunyuan organizational constraint grants no positive root or Hunyuan upgrade;
+  all six directed DeepSeek/Tencent/Moonshot independence pairs replay successfully.
+- Validation: implementer validation passed 176/176; root lineage validation passed 108/108;
+  independent red-team passed 117/117 plus 22/22 schema and 16/16 runner tests. Twelve
+  product-documentation/objective tests, schema verification, Ruff, strict mypy, strict governance
+  JSON, and diff integrity passed. The prior reasoning checkpoint's 433/433 affected result in 45.40s
+  remains historical evidence. No terminal full-suite result is claimed for the current reseal bytes.
+- Authority and counters: governed REAL calls remain 11 attempted / 1 succeeded / 10 rejected; used
+  cost remains USD `0.0034764325`, reserved cost remains USD `0.00`, and completed real audits remain
+  `0`. Metadata discovery is now 7 attempted / 4 succeeded / 3 rejected, with zero provider
+  completions and `$0` dedicated campaign spend. No qualification, runner, AUTHSEAL, benchmark, audit,
+  or release authority or governed counter changed.
+- Files changed: Tencent public-lineage source/capture/manifest, lineage compilation and tests, and the
+  six governance mirrors. No private artifact was opened and no provider operation was performed by
+  Codex.
+- Next exact action: commit, push, and remote-verify the pending Tencent lineage reseal, then emit and
+  run the exact provider-free r2/r5/r2 preflight and reconcile its nonauthorizing result. Do not begin
+  any REAL campaign.
 
 ## 2026-08-21T11:19:34Z — AUTHRUNNER reasoning compatibility and PRIMARY r5 preparation validated
 
-- Status: `V3-AUTHRUNNER-001` remains `PARTIAL` / `BLOCKED_SAFETY`. The current implementation
-  checkpoint is `PENDING_CURRENT_REASONING_SELECTION_CAPTURE_CHECKPOINT`; the latest durable pushed
-  checkpoint remains `5f35436e1ffdb2a5c8d229e79e7f4637abbb3279`.
-- Operator result custody: the current 24,059-byte operator-supplied log has raw SHA-256
+- Status: `V3-AUTHRUNNER-001` remains `PARTIAL` / `BLOCKED_SAFETY`. The implementation checkpoint
+  `9075ca7635c861194cc732e67d9ebb92e6ffa0af` (`Bind catalog reasoning and select Tencent`) is
+  pushed and remote-verified.
+- Operator result custody: the then-current 24,059-byte operator-supplied log had raw SHA-256
   `3af4473feac473c3ef5b7ecd553ed67dc141d6f174647e29bd2c1dc485bc609e`. It records the
   preflight on `fd1459b519ea0ce28a2d123ddeb57653dd2f7918` clearing the cache-price gate and
   then failing safely during candidate cost-plan derivation because configured max-token reasoning
@@ -52,7 +90,8 @@ LAST_CHECKPOINT_COMMIT: 5f35436e1ffdb2a5c8d229e79e7f4637abbb3279 (`Record prompt
   identity a positive root.
 - Validation: owner reasoning matrices passed 419/419 and 134/134; independent reasoning red-team
   passed 15/15; candidate-selection passed 10/10; capture preparation passed 25/25; root combined
-  matrices passed 166/166 and 57/57. Twelve product-documentation/objective tests passed in 0.07s;
+  matrices passed 166/166 and 57/57; the final combined affected matrix passed 433/433 in 45.40s.
+  Twelve product-documentation/objective tests passed in 0.07s;
   schema verification, Ruff, strict mypy, strict governance JSON, and diff integrity passed. No
   terminal full-suite result is claimed for these new bytes.
 - Authority and counters: governed REAL calls remain 11 attempted / 1 succeeded / 10 rejected; used
@@ -63,8 +102,8 @@ LAST_CHECKPOINT_COMMIT: 5f35436e1ffdb2a5c8d229e79e7f4637abbb3279 (`Record prompt
 - Files changed: reasoning admission and tests, the high-effort configuration, Tencent selection and
   capture preparation, model-selection documentation, and the six governance mirrors. No private
   artifact was opened and no provider operation was performed by Codex.
-- Next exact action: commit, push, and verify the pending current checkpoint. Then run only the exact
-  fresh PRIMARY r5 metadata discovery and complete coherent 16-source r2 capture, reconcile both
+- Next exact action: run only the exact fresh PRIMARY r5 metadata discovery and complete coherent
+  16-source r2 capture, reconcile both
   operator results, bind/replay Tencent documentary evidence and the negative-only Tencent/Hunyuan
   constraint, and reseal. Do not emit a provider-free r2/r5/r2 preflight before both inputs are
   reconciled and resealed; do not begin any REAL campaign.

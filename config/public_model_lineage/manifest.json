@@ -1,5 +1,5 @@
 {
-  "alias_set_sha256": "d0d0f29195fabdaec0860e64d1da7d4c4475811858be5bc79168152755e9eeee",
+  "alias_set_sha256": "e2f9db1afd0189a24e9f694fd98e99c3c048fc95c239c132a9c05b0c059d22d4",
   "aliases": [
     {
       "alias_id": "alias-deepcogito-cogito-v2-1-671b",
@@ -133,6 +133,16 @@
       ]
     },
     {
+      "alias_id": "alias-tencent-hy3",
+      "alias_sha256": "867bd1b500f715a72a7f8352ad1dc238fa53ac3bf2eaec9df1fa9a1362b35201",
+      "documentary_model_id": "tencent/Hy3",
+      "exact_model_id": "tencent/hy3",
+      "publisher_id": "tencent",
+      "source_ids": [
+        "tencent-hy3-card"
+      ]
+    },
+    {
       "alias_id": "alias-z-ai-glm-4-7",
       "alias_sha256": "7e14303ba09761f15f69fc7222dced9e7b59d0312e18cc9923493ffc6144446d",
       "documentary_model_id": "zai-org/GLM-4.7",
@@ -149,19 +159,20 @@
     "sha256:366bc38f2866df7d09e60b3fe8c32bc0ba88cf504ce17fd65045374da8b6d65c",
     "sha256:434c90ff511c645580fa8063e912f163daf9285c0553a110b2d815c98eb2e46f",
     "sha256:8b67690ad7aa11f712b1edad5004d687c54382662fe8fb4d6960039409d94cd9",
+    "sha256:932e8cdba524bbf5280d368b0cb711bf0bf36b6fb57ea744bda2a86caea534fb",
     "sha256:a39b66884a35570fd22375af90fb732222aaab823ab14123c0061f7b3c6d0687",
     "sha256:acc057978b0d0f05378221091c495a48344b8b2d8a3d8c9b2d96cd6913f2b0f5",
     "sha256:af392aecac8fb109f7c577928242bc27edf0ad8a24142bc8e9c5151445b12b04",
     "sha256:e251821340d79fe40fba647e729f9dd8feea7b988efad1a61936bf62b3b38161"
   ],
   "benchmark_authorized": false,
-  "bundle_sha256": "de2192a2eaede4a54e1b24216d5c3c51cebd63086131c20367e166dfa672a388",
+  "bundle_sha256": "7c6dd26743733ae46aa94b7171ff2ca42f967ac8323b7f2d0aa95cf66f2dbc68",
   "capture_observations_file_binding": {
     "path": "capture-observations.json",
-    "sha256": "db08339e6d2790faef033f5695e9217a16ddf340e3787eb51863565869034712",
-    "size": 22401
+    "sha256": "3f67bd0a95a3263553ba0ae2d7dc30b1f9641013eb3badc31b209a0c085edf4c",
+    "size": 23795
   },
-  "claim_set_sha256": "997810727bf72e4d3dea7382d4550f71e56a605b59c603d04270e299f4087f92",
+  "claim_set_sha256": "d2f7e6e75052fe79896496945e8b564ddc7edb62683a5901c370f99583aaa24d",
   "claims": [
     {
       "byte_end": 86,
@@ -359,6 +370,19 @@
       "target_exact_model_id": null
     },
     {
+      "byte_end": 2148,
+      "byte_start": 1857,
+      "claim_id": "claim-tencent-hy3-anchor",
+      "claim_kind": "ROOT_ANCHOR",
+      "claim_sha256": "fc2de04f86b4bbb667925a046ad7f21fe4da18884c51c2d4db468556c22d9adf",
+      "decisive_primary_publisher": true,
+      "exact_marker": "**Hy3** is a 295B-parameter Mixture-of-Experts (MoE) model with 21B active parameters and 3.8B MTP layer parameters, developed by the Tencent Hy Team. Following the Hy3 Preview launch in late April, we gathered feedback from 50+ products and scaled up post-training with higher quality data.",
+      "marker_sha256": "b9e3eda30b51b800f26955d3f39299389dea8466df5292dd3504557a88b4ab9a",
+      "source_id": "tencent-hy3-card",
+      "subject_exact_model_id": "tencent/hy3",
+      "target_exact_model_id": null
+    },
+    {
       "byte_end": 940,
       "byte_start": 877,
       "claim_id": "claim-z-ai-anchor",
@@ -382,7 +406,8 @@
     "moonshotai/kimi-k2-thinking",
     "moonshotai/kimi-k3",
     "nvidia/nemotron-3-super-120b-a12b",
-    "qwen/qwen3.6-35b-a3b"
+    "qwen/qwen3.6-35b-a3b",
+    "tencent/hy3"
   ],
   "conservative_non_independence_constraints": [
     {
@@ -475,10 +500,25 @@
         "claim-nemotron-base-anchor",
         "claim-nemotron-posttrain-anchor"
       ]
+    },
+    {
+      "constraint_id": "constraint-tencent-hy3-hunyuan",
+      "constraint_kind": "CONSERVATIVE_ORGANIZATIONAL",
+      "constraint_sha256": "ecc85ddf8ee409423358071c1704e3c339866c2c4b1e08d5cb0c8935607650ec",
+      "member_exact_model_ids": [
+        "tencent/hunyuan-a13b-instruct",
+        "tencent/hy3"
+      ],
+      "negative_only": true,
+      "positive_root_assignment_authorized": false,
+      "supporting_claim_ids": [
+        "claim-hunyuan-anchor",
+        "claim-tencent-hy3-anchor"
+      ]
     }
   ],
-  "constraint_set_sha256": "d4960017f09a8d4e5c033931255bba6efce9d1692653b7b4c77d3e5236056d4c",
-  "decision_set_sha256": "8fe6243347c3f48ae9fb15df020488e6603be9307d8f4b34037afa8c9062c5b5",
+  "constraint_set_sha256": "0a17c450c0986fbf5a820be54176c7892ec9638424f2d4fe5db1fc11324a2e5b",
+  "decision_set_sha256": "9cbb892c4070042a16de939eeaa97c4e71165e1413ae4593999d22d859fbf6b1",
   "decisions": [
     {
       "decision_sha256": "5e1eb9dcf687d29799b1f8da299556503a551a58c5013814ffcb1340e91306d9",
@@ -626,6 +666,17 @@
       ]
     },
     {
+      "decision_sha256": "c9bf714c289ca3ab66cc06062145ff4dd12770f9c9f035c1c23732f338395673",
+      "documentary_model_id": "tencent/Hy3",
+      "exact_model_id": "tencent/hy3",
+      "root_lineage": "sha256:932e8cdba524bbf5280d368b0cb711bf0bf36b6fb57ea744bda2a86caea534fb",
+      "status": "CONFIRMED",
+      "supporting_claim_ids": [
+        "claim-tencent-hy3-anchor"
+      ],
+      "unconfirmed_reasons": []
+    },
+    {
       "decision_sha256": "499bf2ffbea8eb1cff69debe1df39a00922e3b262323747e07c159d2eddbf18f",
       "documentary_model_id": "zai-org/GLM-4.7",
       "exact_model_id": "z-ai/glm-4.7",
@@ -656,10 +707,10 @@
   "serialized_authority": false,
   "sigstore_lineage_receipt_required": false,
   "source_egress_authorized": false,
-  "source_set_sha256": "383b3ebf5282b3cfa7d1faea710b1d950b335042ae50a19facf790375226a012",
+  "source_set_sha256": "7a2b9bf677c22ee46ff797bfa78d1c33639e1e58cebcf0035ff761fee4a060dd",
   "sources": [
     {
-      "capture_observation_sha256": "aed128bb38a29544a07e059f9e71cbc1cdf43f0308320ec528c57f851241f3f7",
+      "capture_observation_sha256": "133247cdeb0bccd4abc8180afa1fb8b994751aefe7c92f76040cab2ba3be5e6c",
       "file_binding": {
         "path": "sources/deepcogito-cogito-v2-1-671b-card.md",
         "sha256": "a3dff9d9f7763a830bae89d7d83b0eb0463afc7247a5e9bf646a344cc8a82037",
@@ -675,13 +726,13 @@
         "https://huggingface.co/api/resolve-cache/models/deepcogito/cogito-671b-v2.1/f5b0199c2c54a284b00f1a2db3942299d4198484/README.md?%2Fdeepcogito%2Fcogito-671b-v2.1%2Fresolve%2Ff5b0199c2c54a284b00f1a2db3942299d4198484%2FREADME.md=&etag=%22abb9c853e039ae0cc77fd02bef234155eb6997de%22"
       ],
       "requested_url": "https://huggingface.co/deepcogito/cogito-671b-v2.1/resolve/f5b0199c2c54a284b00f1a2db3942299d4198484/README.md",
-      "retrieved_at": "2026-08-21T05:20:10Z",
-      "source_evidence_sha256": "de1a10bb78a6e7d6838a13c4d46562fe7392264050fb1bea4dd46e565da1c39b",
+      "retrieved_at": "2026-08-21T11:42:31Z",
+      "source_evidence_sha256": "41496d3b29b19b2343aba5cbc8ea8ede7707678ca8bf8a6887ba626b9459205a",
       "source_id": "deepcogito-cogito-v2-1-671b-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
     {
-      "capture_observation_sha256": "4ce9299a369a769ad02bae6f73eaa8a498842284a49cda218b04eb355931af02",
+      "capture_observation_sha256": "f27a664e3a975da85ea396bd3fa01083831a25cd55d153e4af2f4f9042fd40fb",
       "file_binding": {
         "path": "sources/deepseek-deepseek-v3-2-exp-card.md",
         "sha256": "389d4fbe4d7fc75ecf0130f56a0123256b9100940116769eb01049119523b8ee",
@@ -697,13 +748,13 @@
         "https://huggingface.co/api/resolve-cache/models/deepseek-ai/DeepSeek-V3.2-Exp/a678d82902a8da587f29fd3f3ad22dd35b522ed5/README.md?%2Fdeepseek-ai%2FDeepSeek-V3.2-Exp%2Fresolve%2Fa678d82902a8da587f29fd3f3ad22dd35b522ed5%2FREADME.md=&etag=%223938fc25634c495654417f049d52991836080ff2%22"
       ],
       "requested_url": "https://huggingface.co/deepseek-ai/DeepSeek-V3.2-Exp/resolve/a678d82902a8da587f29fd3f3ad22dd35b522ed5/README.md",
-      "retrieved_at": "2026-08-21T05:20:11Z",
-      "source_evidence_sha256": "b9833d387d111a4e8e1eaedd7a2491bcbaf2cfdc0968b007cd8220be22a88339",
+      "retrieved_at": "2026-08-21T11:42:31Z",
+      "source_evidence_sha256": "358970bec0337d461a73e04f2edeb9efecfcc21a5bba33e0882c4fae199b4fd1",
       "source_id": "deepseek-deepseek-v3-2-exp-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
     {
-      "capture_observation_sha256": "3b88b6c6dd14360842e2a21a158fdbc9f79ce3430f8f3ab9b2b2ef5683f8600a",
+      "capture_observation_sha256": "1ee266f3fa70d9359584a603a34ef542e9b81b69c48c886b95702a70e2bc79dd",
       "file_binding": {
         "path": "sources/deepseek-deepseek-v4-pro-0813-card.md",
         "sha256": "61755d88e95789fcd7a36f50892f97bba977a30fc99d0f2907ab787ed10b0e66",
@@ -719,13 +770,13 @@
         "https://huggingface.co/api/resolve-cache/models/deepseek-ai/DeepSeek-V4-Pro-0813/72e1d3230f6c080a530b0a1d46f8eb4602340597/README.md?%2Fdeepseek-ai%2FDeepSeek-V4-Pro-0813%2Fresolve%2F72e1d3230f6c080a530b0a1d46f8eb4602340597%2FREADME.md=&etag=%221036a5a34939182f5838147e851ac926ecad9a09%22"
       ],
       "requested_url": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro-0813/resolve/72e1d3230f6c080a530b0a1d46f8eb4602340597/README.md",
-      "retrieved_at": "2026-08-21T05:20:11Z",
-      "source_evidence_sha256": "1d497aaed271bef34caca162c88e4a9b57bb527fc4b5245e1fc1add64d8a3fc1",
+      "retrieved_at": "2026-08-21T11:42:31Z",
+      "source_evidence_sha256": "a996f49fa45affabc039b2941bf57ff46149534f80585b2472e8a8a73541caed",
       "source_id": "deepseek-deepseek-v4-pro-0813-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
     {
-      "capture_observation_sha256": "644cf0660bf9e4f831b5a16a8841e099b5c3c34ad150e72a7174ddb46ae485e2",
+      "capture_observation_sha256": "821b87e4edf163e6b71f4fb50c4caf3ff7f4b70b2b74a2410bc086f5ad027a3d",
       "file_binding": {
         "path": "sources/google-gemma-4-26b-a4b-it-card.md",
         "sha256": "e4c134b9dd81fc5d0e3782bb04fbc7034d27c6b6a2437f9c940a0b64b0a8ab6a",
@@ -741,13 +792,13 @@
         "https://huggingface.co/api/resolve-cache/models/google/gemma-4-26B-A4B-it/b2a81a03d25f927590a91d84ba43f96e8ef7349f/README.md?%2Fgoogle%2Fgemma-4-26B-A4B-it%2Fresolve%2Fb2a81a03d25f927590a91d84ba43f96e8ef7349f%2FREADME.md=&etag=%2295ceefc7798ee1e34bb740ca0c2d66b0f63db597%22"
       ],
       "requested_url": "https://huggingface.co/google/gemma-4-26B-A4B-it/resolve/b2a81a03d25f927590a91d84ba43f96e8ef7349f/README.md",
-      "retrieved_at": "2026-08-21T05:20:11Z",
-      "source_evidence_sha256": "720ad3799a6b11fb87fefe286da2b5f465a7cacf1a61f2e591c58eaaa8b2e3e8",
+      "retrieved_at": "2026-08-21T11:42:32Z",
+      "source_evidence_sha256": "0079c0edbfd58d731312aedc89d1f3a68e4144883749a4290816370e63fd3838",
       "source_id": "google-gemma-4-26b-a4b-it-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
     {
-      "capture_observation_sha256": "da7a40bab2e156a1d692c76000e2fd46fbdc8071d77258cea1370d08d6c17009",
+      "capture_observation_sha256": "11b91faef030bbbe4eff6966374d9d69b3e4fd97e3c0762f302b7841413cad13",
       "file_binding": {
         "path": "sources/meta-llama-4-maverick-card.md",
         "sha256": "cae8c581b1787780d095f0f827cee3469014f642cb7d054c0cc7aed5d156d5e3",
@@ -762,13 +813,13 @@
         "https://huggingface.co/meta-llama/Llama-4-Maverick-17B-128E-Instruct/resolve/73d14711bcc77c16df3470856949c3764056b617/README.md"
       ],
       "requested_url": "https://huggingface.co/meta-llama/Llama-4-Maverick-17B-128E-Instruct/resolve/73d14711bcc77c16df3470856949c3764056b617/README.md",
-      "retrieved_at": "2026-08-21T05:20:11Z",
-      "source_evidence_sha256": "9a708ac0b8acb0fc99135f2e86327a91067c4216cd6dc55e6c5f7f7dc9d96c0d",
+      "retrieved_at": "2026-08-21T11:42:32Z",
+      "source_evidence_sha256": "b1fb0836c221041d33861a0d94a3ca091a5eddaa696b6a5168ffb87e88468c56",
       "source_id": "meta-llama-4-maverick-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
     {
-      "capture_observation_sha256": "94ac4ef2d046f6c51a96cd7ff4d805308b0d45021b63028c39a7bf369c7c7b24",
+      "capture_observation_sha256": "88bb4f9828722621e4baef6bb86292df84f2fe9806e8417d0dbbe2ef72903986",
       "file_binding": {
         "path": "sources/minimax-m3-card.md",
         "sha256": "6148856dbf8be26dcf3f9b913be0252c38454e852108fdab01212fe965f3e327",
@@ -784,13 +835,13 @@
         "https://huggingface.co/api/resolve-cache/models/MiniMaxAI/MiniMax-M3/f0e1c1e04d40177e4673a22097036854f536e9c0/README.md?%2FMiniMaxAI%2FMiniMax-M3%2Fresolve%2Ff0e1c1e04d40177e4673a22097036854f536e9c0%2FREADME.md=&etag=%22b1e395c849f3147d0645ee6f8f17b3d5781af0e5%22"
       ],
       "requested_url": "https://huggingface.co/MiniMaxAI/MiniMax-M3/resolve/f0e1c1e04d40177e4673a22097036854f536e9c0/README.md",
-      "retrieved_at": "2026-08-21T05:20:11Z",
-      "source_evidence_sha256": "3256b6fa5562dbb32c7c0426f59107c1c349f445c933ec7c304e64e2faad7cb2",
+      "retrieved_at": "2026-08-21T11:42:32Z",
+      "source_evidence_sha256": "2396bdc8e2fb9ec5e5b6ecd94e68ec17c95b1e47aa24e8f85131065dc4a069e8",
       "source_id": "minimax-m3-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
     {
-      "capture_observation_sha256": "7cd5e85167f96e2bbf3765cc4ba1358bd01e119d9f1c20f8d7d736613f4f7eda",
+      "capture_observation_sha256": "dda7cd0124abcea9b86265f2dfb43609d5dc07deb6370de10af1e04acee1ee22",
       "file_binding": {
         "path": "sources/mistral-small-4-119b-2603-card.md",
         "sha256": "7f5ef56105580603ecbcf224c28bb0b147fc0f5ec564bb2e76fdf7abadb342c9",
@@ -806,13 +857,13 @@
         "https://huggingface.co/api/resolve-cache/models/mistralai/Mistral-Small-4-119B-2603/97ee14542b6c053394af45dd2ff89aadecf457a0/README.md?%2Fmistralai%2FMistral-Small-4-119B-2603%2Fresolve%2F97ee14542b6c053394af45dd2ff89aadecf457a0%2FREADME.md=&etag=%227711f4fefd63f4fbbcd3988838b9ba95fe462be9%22"
       ],
       "requested_url": "https://huggingface.co/mistralai/Mistral-Small-4-119B-2603/resolve/97ee14542b6c053394af45dd2ff89aadecf457a0/README.md",
-      "retrieved_at": "2026-08-21T05:20:11Z",
-      "source_evidence_sha256": "62a6c975814a7ec3ce1158f02889a6dcc863ce9cef7823029dca4510cb256f88",
+      "retrieved_at": "2026-08-21T11:42:32Z",
+      "source_evidence_sha256": "75024762c3da65b21f0b2b3ff1e2c0638af7c253d42624fd957f877df52b4e98",
       "source_id": "mistral-small-4-119b-2603-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
     {
-      "capture_observation_sha256": "921d2fd39793d982313a15d2710d7e1ac3da3eedb3627bb618356f17c74ae89f",
+      "capture_observation_sha256": "d421d8c93765f47506627f7335652b5e41196444a4285349a59392068893b8f9",
       "file_binding": {
         "path": "sources/moonshot-kimi-k2-thinking-card.md",
         "sha256": "8343341da86d2a74ee576768ea2f8c0be2d3e9cf1cb51838a794581e7a1466cd",
@@ -828,13 +879,13 @@
         "https://huggingface.co/api/resolve-cache/models/moonshotai/Kimi-K2-Thinking/1b9dbb7b20fe8e92047f956b75f3bc49d69f8f73/README.md?%2Fmoonshotai%2FKimi-K2-Thinking%2Fresolve%2F1b9dbb7b20fe8e92047f956b75f3bc49d69f8f73%2FREADME.md=&etag=%2210260d219a5aeffb22da322ad8d624f49cdae967%22"
       ],
       "requested_url": "https://huggingface.co/moonshotai/Kimi-K2-Thinking/resolve/1b9dbb7b20fe8e92047f956b75f3bc49d69f8f73/README.md",
-      "retrieved_at": "2026-08-21T05:20:12Z",
-      "source_evidence_sha256": "732b8503331de5da5b7994218cf8c6c589a83d1ce1eb67f81211edad585c8b16",
+      "retrieved_at": "2026-08-21T11:42:32Z",
+      "source_evidence_sha256": "8748808cd4257ddd132625762b2b17379997b5c47aaa5e6c1703374d4fa425e0",
       "source_id": "moonshot-kimi-k2-thinking-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
     {
-      "capture_observation_sha256": "4489093bf76aa05b6f77c010db752918f912da61b2bb8ab7df03e27f11042850",
+      "capture_observation_sha256": "667fa366d72a8ff316ebe00a1098488fb7398d987117b04c0210554bbccca387",
       "file_binding": {
         "path": "sources/moonshot-kimi-k3-card.md",
         "sha256": "57de265b5842dfa465c6e73b368b0e15a89b8793b5450528dad577da202cc6fe",
@@ -850,13 +901,13 @@
         "https://huggingface.co/api/resolve-cache/models/moonshotai/Kimi-K3/a590ce090cb049c93a33dfe8c208ec652aa20503/README.md?%2Fmoonshotai%2FKimi-K3%2Fresolve%2Fa590ce090cb049c93a33dfe8c208ec652aa20503%2FREADME.md=&etag=%2210466db3bd36b1eb9b14a099d9d8d77130247712%22"
       ],
       "requested_url": "https://huggingface.co/moonshotai/Kimi-K3/resolve/a590ce090cb049c93a33dfe8c208ec652aa20503/README.md",
-      "retrieved_at": "2026-08-21T05:20:12Z",
-      "source_evidence_sha256": "feaa8b120879e643e2c7d83daa12767e1acf21fbf2bce0bb908b72d2b11bb3eb",
+      "retrieved_at": "2026-08-21T11:42:32Z",
+      "source_evidence_sha256": "ceaf7c99f1139dbf391cd9c421503a60a30dae2bb4e1b304219cd9cd16b9afaf",
       "source_id": "moonshot-kimi-k3-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
     {
-      "capture_observation_sha256": "078379546cb869419087cadbabef7885913ddc71c6bbd4ebeb0e56798eb04d30",
+      "capture_observation_sha256": "8c82ffcc97f0c50ee0131529eb192024982811a12ae0b0f079330b54ad8764fc",
       "file_binding": {
         "path": "sources/nvidia-nemotron-3-super-120b-a12b-base-card.md",
         "sha256": "233bde2906a5aa7dab280e60137c365ad88bc7c507c884fb6b78978c4fb83dff",
@@ -872,13 +923,13 @@
         "https://huggingface.co/api/resolve-cache/models/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16/46cc6113d364942e7742b0b2afd35b5db5058b29/README.md?%2Fnvidia%2FNVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16%2Fresolve%2F46cc6113d364942e7742b0b2afd35b5db5058b29%2FREADME.md=&etag=%22d91b94084a56eacd79252cef11a93539aad841e0%22"
       ],
       "requested_url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16/resolve/46cc6113d364942e7742b0b2afd35b5db5058b29/README.md",
-      "retrieved_at": "2026-08-21T05:20:12Z",
-      "source_evidence_sha256": "8290c73f5fea200c7f46b103d6f4a40952349a37e739c0627f80ece07e22afcc",
+      "retrieved_at": "2026-08-21T11:42:33Z",
+      "source_evidence_sha256": "a88bab20d9a4de3a12098192de88a0c43ecd10b3d0487d01555d96a5ff6690ed",
       "source_id": "nvidia-nemotron-3-super-120b-a12b-base-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
     {
-      "capture_observation_sha256": "46237fb4fc8fad30634f2139de1001faffab7fd0bacc3907602948df9c9ea1b1",
+      "capture_observation_sha256": "b7d89bc98c9cff27c3fd252aae984a1cee84a5a6fb692f6e039a8509cbd56c61",
       "file_binding": {
         "path": "sources/nvidia-nemotron-3-super-120b-a12b-posttrain-card.md",
         "sha256": "258058128b7d82c16f53112d9cbee6cb85679465016df84a179d312de6c5d881",
@@ -894,13 +945,13 @@
         "https://huggingface.co/api/resolve-cache/models/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16/d51eab0d1f979ebc26b546e634a04f450d99158e/README.md?%2Fnvidia%2FNVIDIA-Nemotron-3-Super-120B-A12B-BF16%2Fresolve%2Fd51eab0d1f979ebc26b546e634a04f450d99158e%2FREADME.md=&etag=%226a0a11d4200b020153789ef79eddba3256142c9c%22"
       ],
       "requested_url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16/resolve/d51eab0d1f979ebc26b546e634a04f450d99158e/README.md",
-      "retrieved_at": "2026-08-21T05:20:12Z",
-      "source_evidence_sha256": "631e1c4d618fd1274ee201692a341e6a81951bb9fa2e768e9c3da7956adb318d",
+      "retrieved_at": "2026-08-21T11:42:33Z",
+      "source_evidence_sha256": "8f10f299bf2e6106d347f8e2568e07fd441d76f2f6c1f19b55bdab174351562f",
       "source_id": "nvidia-nemotron-3-super-120b-a12b-posttrain-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
     {
-      "capture_observation_sha256": "94955a8989028aae7fa4c7b125fd9e5e3074e28d3c17135fb313e30767bf8615",
+      "capture_observation_sha256": "b52b45b53cb9cde2ad3793d1888864336c9da995dda4d435a28f49ff91379c90",
       "file_binding": {
         "path": "sources/openai-gpt-oss-120b-readme.md",
         "sha256": "d4ba8a9cfda709b49e794911278c5a663b8fec1e2bbd86d8f9dc99d8371293e4",
@@ -915,13 +966,13 @@
         "https://raw.githubusercontent.com/openai/gpt-oss/599476783c6f88508dab8577808b5ead5cbee8d2/README.md"
       ],
       "requested_url": "https://raw.githubusercontent.com/openai/gpt-oss/599476783c6f88508dab8577808b5ead5cbee8d2/README.md",
-      "retrieved_at": "2026-08-21T05:20:12Z",
-      "source_evidence_sha256": "3959e86165cad19bcce84bd44d03d1358b60dc244303642e6b785f4d741114a8",
+      "retrieved_at": "2026-08-21T11:42:33Z",
+      "source_evidence_sha256": "fc1e70e9a183083dafa612ab9994794cdb671629965c5e80374f4f03ceb69ee6",
       "source_id": "openai-gpt-oss-120b-readme",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
     {
-      "capture_observation_sha256": "7c7eda187edb1407586b85769c176e3f5c2e3bfe282510329abf7def731fd199",
+      "capture_observation_sha256": "14afceff21199dc92ca7cae3be20d5772096d59e8d771c65bbcafc0a32cc04bb",
       "file_binding": {
         "path": "sources/qwen-qwen3-6-35b-a3b-card.md",
         "sha256": "c4ddaa065649ff6352648f64747a16eda31726f3e34add94ce04abb461c77b75",
@@ -937,13 +988,13 @@
         "https://huggingface.co/api/resolve-cache/models/Qwen/Qwen3.6-35B-A3B/995ad96eacd98c81ed38be0c5b274b04031597b0/README.md?%2FQwen%2FQwen3.6-35B-A3B%2Fresolve%2F995ad96eacd98c81ed38be0c5b274b04031597b0%2FREADME.md=&etag=%2220a5d849ac33ffa1dae83ea093710328fa1880f4%22"
       ],
       "requested_url": "https://huggingface.co/Qwen/Qwen3.6-35B-A3B/resolve/995ad96eacd98c81ed38be0c5b274b04031597b0/README.md",
-      "retrieved_at": "2026-08-21T05:20:12Z",
-      "source_evidence_sha256": "c418448ec58abe9d55ce1b1c3fe72bcf0d457c3b88e008af73d98ad81596868e",
+      "retrieved_at": "2026-08-21T11:42:33Z",
+      "source_evidence_sha256": "cdf24842d769417caeefe366b191e15a70db8ff60bd97f22fb89399659401f81",
       "source_id": "qwen-qwen3-6-35b-a3b-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
     {
-      "capture_observation_sha256": "a8b559307f55022bada3b3be62542eb74f941f3e76c54d6bac6c16711bf22aa6",
+      "capture_observation_sha256": "4760786de2df7f7cd2b82f44e736b386bdcb41f39fe7bc4127bcbe06ac0bd642",
       "file_binding": {
         "path": "sources/tencent-hunyuan-a13b-instruct-card.md",
         "sha256": "f7df4703f678f1baa19e4786be5fd8d55559bb3dc83c84cb6e015fb1aa08a969",
@@ -959,13 +1010,35 @@
         "https://huggingface.co/api/resolve-cache/models/tencent/Hunyuan-A13B-Instruct/290ddb9a56ed23c2c83a1c8081533e58925df952/README.md?%2Ftencent%2FHunyuan-A13B-Instruct%2Fresolve%2F290ddb9a56ed23c2c83a1c8081533e58925df952%2FREADME.md=&etag=%2250c823d10bf81573000a96165590f00590067eb3%22"
       ],
       "requested_url": "https://huggingface.co/tencent/Hunyuan-A13B-Instruct/resolve/290ddb9a56ed23c2c83a1c8081533e58925df952/README.md",
-      "retrieved_at": "2026-08-21T05:20:12Z",
-      "source_evidence_sha256": "bdd3101560d3bee44ea30ca2f67d5dcb8c5a19548a31b3129652315ffd60b2a0",
+      "retrieved_at": "2026-08-21T11:42:34Z",
+      "source_evidence_sha256": "4285fa8d7aa845e4bc68350c3c6086b12f3321e77daf7cea1074d51f62dfac0d",
       "source_id": "tencent-hunyuan-a13b-instruct-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     },
     {
-      "capture_observation_sha256": "8aa0db1341a2269036882c54842a597a2ffc45fe27fd55ac1665f0e5657b870a",
+      "capture_observation_sha256": "a1e1abb62454e3eb8c2cd40b4ccaccf35a48cea1878284d64af0e459159a1fce",
+      "file_binding": {
+        "path": "sources/tencent-hy3-card.md",
+        "sha256": "dbdfc5920bf548fb484b5ec1837032f6c85e1886f2930aa5bee629c1f9620e8b",
+        "size": 10325
+      },
+      "final_url": "https://huggingface.co/api/resolve-cache/models/tencent/Hy3/a960ebc3da325ba167f069f76c41eb62c9280d22/README.md?%2Ftencent%2FHy3%2Fresolve%2Fa960ebc3da325ba167f069f76c41eb62c9280d22%2FREADME.md=&etag=%22c6b5b63c62644761fa595fb736b879b0af081382%22",
+      "immutable_revision": "a960ebc3da325ba167f069f76c41eb62c9280d22",
+      "independence_key": "tencent",
+      "media_type": "text/plain",
+      "publisher_id": "tencent",
+      "redirect_chain": [
+        "https://huggingface.co/tencent/Hy3/resolve/a960ebc3da325ba167f069f76c41eb62c9280d22/README.md",
+        "https://huggingface.co/api/resolve-cache/models/tencent/Hy3/a960ebc3da325ba167f069f76c41eb62c9280d22/README.md?%2Ftencent%2FHy3%2Fresolve%2Fa960ebc3da325ba167f069f76c41eb62c9280d22%2FREADME.md=&etag=%22c6b5b63c62644761fa595fb736b879b0af081382%22"
+      ],
+      "requested_url": "https://huggingface.co/tencent/Hy3/resolve/a960ebc3da325ba167f069f76c41eb62c9280d22/README.md",
+      "retrieved_at": "2026-08-21T11:42:34Z",
+      "source_evidence_sha256": "bfb14603ed2708b63f878aec4a1b46c5e67541c1f0807024a0e8210a2993d23f",
+      "source_id": "tencent-hy3-card",
+      "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
+    },
+    {
+      "capture_observation_sha256": "2f332e6d220ab6c600cd4dacf126d12ab1634476b46620ebcb540ef759bd345a",
       "file_binding": {
         "path": "sources/z-ai-glm-4-7-card.md",
         "sha256": "ad072cbe81374f18149a107f2e1cbed93f27a6b220409a6bb34ba97a4d36757e",
@@ -981,8 +1054,8 @@
         "https://huggingface.co/api/resolve-cache/models/zai-org/GLM-4.7/2765a661c9061116a4bef693c61f5de3f0687f2c/README.md?%2Fzai-org%2FGLM-4.7%2Fresolve%2F2765a661c9061116a4bef693c61f5de3f0687f2c%2FREADME.md=&etag=%2280be377ea15441530aeed36120d345bffcb34e68%22"
       ],
       "requested_url": "https://huggingface.co/zai-org/GLM-4.7/resolve/2765a661c9061116a4bef693c61f5de3f0687f2c/README.md",
-      "retrieved_at": "2026-08-21T05:20:13Z",
-      "source_evidence_sha256": "154a366a7a4f41e88cd0a90a4802e007d92cf7a9855ed4dd12c9159674ca3d2d",
+      "retrieved_at": "2026-08-21T11:42:34Z",
+      "source_evidence_sha256": "15f98a40edb7f87a88f82e52541cec4754c476327a2d9b47ac049dee57924598",
       "source_id": "z-ai-glm-4-7-card",
       "source_kind": "PRIMARY_PUBLISHER_MODEL_CARD"
     }
@@ -993,6 +1066,6 @@
     "tencent/hunyuan-a13b-instruct",
     "z-ai/glm-4.7"
   ],
-  "valid_until": "2027-02-17T05:26:00Z",
-  "verified_at": "2026-08-21T05:26:00Z"
+  "valid_until": "2027-02-17T11:47:00Z",
+  "verified_at": "2026-08-21T11:47:00Z"
 }

@@ -3,6 +3,67 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-08-21T11:42Z — BOTH r5 prerequisites RUN AND PASSED
+
+Both commands listed in the operator guide after `9075ca7` were executed verbatim. Both exit 0.
+Cost ledger unchanged — **$0 spent**, no model completion requested.
+
+### 1. Lineage capture — 16 sources (was 15), Tencent Hy3 included
+
+```
+.venv/bin/python scripts/capture_public_model_lineage.py \
+  --output-dir /private/tmp/mmaudit-public-lineage-20260821-r2
+```
+
+```
+observation_set_sha256: 6ae6e75a1732c05b85ffe189febbc3ecfa8ae2eeeb83000a8a24d30035b966eb
+bundle_sha256:          7b6ff67506bceaaf05c944edb2c28bf6d8386df3690444b827035ed5c83bc134
+```
+
+| source | size | sha256 | immutable_revision | publisher_id | redirects |
+|---|---|---|---|---|---|
+| `sources/tencent-hy3-card.md` | 10325 | `dbdfc5920bf548fb484b5ec1837032f6c85e1886f2930aa5bee629c1f9620e8b` | `a960ebc3da325ba167f069f76c41eb62c9280d22` | `tencent` | 2 |
+
+These bytes are identical to the earlier independent pre-fetch recorded below — third consecutive
+capture where a separate retrieval reproduced the same sha256 against a pinned revision.
+
+### 2. PRIMARY r5 discovery — `tencent/hy3=tencent/fp8` — SUCCESS
+
+```
+output-dir: $HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r5
+run:        85ff0c1b872241e7aa48b2f2f77ccc84
+manifest:   fe3e3daa21eeb370f35558c5eca5746c140f2b92e88a37233952ab77034dc07b
+registry:   $HOME/.mmaudit/private/authrunner/primary-judge-registry-r5.json
+frozen:     2d825234bfc1cf05fb9ec883c555bc007bd3a6033145507d629d5da7aa5619ad
+```
+
+Stale discovery fields were not copied. The r2 candidate and r2 replay pairs were not rerun or
+overwritten, per the guide's instruction.
+
+### Reasoning capability confirmed present — the gap that disqualified MiniMax
+
+Sealed r5 evidence for `tencent/hy3`:
+
+```
+reasoning_parameter_support     = supported
+reasoning_mandatory             = False
+reasoning_default_enabled       = True
+reasoning_supports_max_tokens   = None
+supported_reasoning_efforts     = None          (endpoint-level; empty for all OpenRouter routes)
+model_supported_reasoning_efforts = ['none', 'low', 'high']
+max_output_tokens               = 128000
+```
+
+The new config `effort = "high"` is present in the catalog inventory, and `reserved_tokens = 4096`
+fits well inside `max_output_tokens = 128000`. All three roles carry `high`: candidate
+`['low','high','max']`, primary `['none','low','high']`, replay `['low','high','max']`. Validation
+depends on the catalog-fallback path added in `9075ca7`, since the endpoint-level inventory is `None`
+for every OpenRouter route.
+
+**Remaining before preflight:** claim-span binding, root decision, and manifest reseal over the 16-source
+capture. The preflight command is not currently emitted as a runnable line in the operator guide (the
+section is now a planned-artifact table) — re-emit it for the r2/r5/r2 composition and it will be run.
+
 ## 2026-08-21T10:55Z — Lineage prerequisites for BOTH replacement candidates (pre-fetched)
 
 Whichever primary judge is chosen, it needs a new lineage capture: **neither is in the sealed bundle.**

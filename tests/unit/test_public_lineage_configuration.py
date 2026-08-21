@@ -29,10 +29,12 @@ _KIMI_K3 = "moonshotai/kimi-k3"
 _META = "meta-llama/llama-4-maverick"
 _NEMOTRON = "nvidia/nemotron-3-super-120b-a12b"
 _GPT_OSS = "openai/gpt-oss-120b"
+_HUNYUAN = "tencent/hunyuan-a13b-instruct"
+_TENCENT_HY3 = "tencent/hy3"
 _UNCONFIRMED = (
     "mistralai/mistral-small-2603",
     _GPT_OSS,
-    "tencent/hunyuan-a13b-instruct",
+    _HUNYUAN,
     "z-ai/glm-4.7",
 )
 _EXPECTED_CONSTRAINT_IDS = (
@@ -42,6 +44,7 @@ _EXPECTED_CONSTRAINT_IDS = (
     "constraint-gpt-oss-gpt-5-6",
     "constraint-kimi-k2-k3",
     "constraint-nemotron-meta",
+    "constraint-tencent-hy3-hunyuan",
 )
 _EXPECTED_CONSTRAINT_MEMBERS = {
     "constraint-cogito-deepseek": (_COGITO, _DEEPSEEK_V3),
@@ -56,6 +59,7 @@ _EXPECTED_CONSTRAINT_MEMBERS = {
     ),
     "constraint-kimi-k2-k3": (_KIMI_K2, _KIMI_K3),
     "constraint-nemotron-meta": (_META, _NEMOTRON),
+    "constraint-tencent-hy3-hunyuan": (_HUNYUAN, _TENCENT_HY3),
 }
 
 _FALSE_AUTHORITY_FIELDS = (
@@ -118,8 +122,8 @@ def test_projection_preserves_current_inclusion_and_all_negative_constraints() -
         tuple(item.constraint_id for item in projection.conservative_non_independence_constraints)
         == _EXPECTED_CONSTRAINT_IDS
     )
-    assert len(projection.eligible_exact_candidate_ids) == 10
-    assert len(projection.approved_model_lineages) == 9
+    assert len(projection.eligible_exact_candidate_ids) == 11
+    assert len(projection.approved_model_lineages) == 10
     assert projection.excluded_unconfirmed_exact_model_ids == _UNCONFIRMED
     assert not set(_UNCONFIRMED) & set(projection.eligible_exact_candidate_ids)
     assert _NEMOTRON in projection.eligible_exact_candidate_ids

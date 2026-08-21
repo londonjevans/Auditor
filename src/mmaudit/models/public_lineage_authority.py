@@ -65,7 +65,7 @@ PUBLIC_MODEL_LINEAGE_CAPTURE_OBSERVATIONS_FILENAME = "capture-observations.json"
 # Updated only after a strict builder has emitted and replayed the committed
 # manifest.  An all-zero value is intentionally non-authorizing.
 PUBLIC_MODEL_LINEAGE_MANIFEST_FILE_SHA256 = (
-    "6f46b3c779262cf11b0ec58b1a2fe88947cd71d7ab788734abb36cd9f96374e4"
+    "90389d27f553d6f167a21aab364cebdb40ca5afbdbcc977d9127338ace4a3008"
 )
 
 PUBLIC_MODEL_LINEAGE_EXACT_CANDIDATE_IDS = (
@@ -82,6 +82,7 @@ PUBLIC_MODEL_LINEAGE_EXACT_CANDIDATE_IDS = (
     "openai/gpt-oss-120b",
     "qwen/qwen3.6-35b-a3b",
     "tencent/hunyuan-a13b-instruct",
+    "tencent/hy3",
     "z-ai/glm-4.7",
 )
 
@@ -1566,6 +1567,14 @@ _COMPILED_SOURCE_PINS = (
         "sources/tencent-hunyuan-a13b-instruct-card.md",
     ),
     (
+        "tencent-hy3-card",
+        "https://huggingface.co/tencent/Hy3/resolve/a960ebc3da325ba167f069f76c41eb62c9280d22/README.md",
+        "tencent",
+        "tencent",
+        "a960ebc3da325ba167f069f76c41eb62c9280d22",
+        "sources/tencent-hy3-card.md",
+    ),
+    (
         "z-ai-glm-4-7-card",
         "https://huggingface.co/zai-org/GLM-4.7/resolve/2765a661c9061116a4bef693c61f5de3f0687f2c/README.md",
         "z-ai",
@@ -1594,6 +1603,10 @@ _COMPILED_CONSERVATIVE_CONSTRAINTS = (
     (
         "constraint-nemotron-meta",
         ("meta-llama/llama-4-maverick", "nvidia/nemotron-3-super-120b-a12b"),
+    ),
+    (
+        "constraint-tencent-hy3-hunyuan",
+        ("tencent/hunyuan-a13b-instruct", "tencent/hy3"),
     ),
 )
 

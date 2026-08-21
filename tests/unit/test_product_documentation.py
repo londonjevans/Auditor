@@ -23,7 +23,7 @@ OBJECTIVE_RELATIVE_PATH = "docs/remediation/v3/product_completion_goal.txt"
 OBJECTIVE_SHA256 = "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15"
 PRODUCT_VISION_RELATIVE_PATH = "product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.md"
 PRODUCT_VISION_SHA256 = "8b878b665e636b3b48500fefe2967394b2abdd69ce2ebfa0033d04542d2965e1"
-OPERATOR_RESULTS_SHA256 = "3af4473feac473c3ef5b7ecd553ed67dc141d6f174647e29bd2c1dc485bc609e"
+OPERATOR_RESULTS_SHA256 = "1ed1da7c47f7c595c099e5c70cfe947430db41bd7811b7b0b7ecddeb97e14ecc"
 PRODUCT_VISION_GIT_ATTRIBUTES = f"{PRODUCT_VISION_RELATIVE_PATH} -text"
 POLICY_ELIGIBILITY_TICKET = "V3-POLICYELIG-001"
 POLICY_ELIGIBILITY_QUEUE_HEADING = (
@@ -399,6 +399,37 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "V3-LINEAGE-001-operator-review.md --candidate-registry-output "
         '"$HOME/.mmaudit/private/authrunner/primary-judge-registry-r5.json" --no-color'
     )
+    preflight_command = (
+        "env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 "
+        'MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" '
+        ".venv/bin/mmaudit models authenticated-runner --candidate-registry "
+        '"$HOME/.mmaudit/private/authrunner/candidate-registry-r2.json" '
+        '--candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/'
+        'authrunner-candidate-20260820-r2" --primary-judge-registry '
+        '"$HOME/.mmaudit/private/authrunner/primary-judge-registry-r5.json" '
+        '--primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/'
+        'authrunner-primary-judge-20260821-r5" --replay-judge-registry '
+        '"$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" '
+        '--replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/'
+        'authrunner-replay-judge-20260820-r2" '
+        "--qualification-policy config/models.maximum-assurance.toml "
+        '--primary-campaign-journal "$HOME/.mmaudit/private/authrunner/'
+        'primary-campaign-20260821-r5" --primary-portfolio '
+        '"$HOME/.mmaudit/private/authrunner/primary-portfolio-20260821-r5" '
+        '--replay-campaign-journal "$HOME/.mmaudit/private/authrunner/'
+        'replay-campaign-20260821-r5" --replay-portfolio '
+        '"$HOME/.mmaudit/private/authrunner/replay-portfolio-20260821-r5" '
+        '--output "$HOME/.mmaudit/private/authrunner/'
+        'authenticated-runner-evidence-20260821-r5.json" '
+        "--candidate-cost-cap-usd-per-attempt 1.00 "
+        "--primary-judge-cost-cap-usd-per-attempt 1.00 "
+        "--replay-judge-cost-cap-usd-per-attempt 1.00 "
+        "--config config/openrouter-qualification.toml "
+        "--corpus benchmarks/model_corpus/manifest.json "
+        "--ground-truth-provenance benchmarks/model_corpus/provenance.json "
+        '--cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" '
+        "--allow-code-egress --preflight-only --no-color"
+    )
 
     assert "docs/remediation/v3/operator_results.md" in agents
     assert "Before ending any turn that issued, reissued, or depended on an operator command" in (
@@ -418,23 +449,25 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "It is no longer selected." in model_selection
     assert model_selection.count(lineage_r2_command) == 1
     assert model_selection.count(tencent_r5_command) == 1
-    assert "only after the checkpoint" in normalized_model_selection
-    assert "committed, pushed, and verified" in normalized_model_selection
+    assert "historical command records and must not be rerun" in normalized_model_selection
+    assert "9075ca7635c861194cc732e67d9ebb92e6ffa0af" in model_selection
+    assert model_selection.count(preflight_command) == 1
+    assert model_selection.count(".venv/bin/mmaudit models authenticated-runner") == 1
+    assert model_selection.count("--preflight-only") == 2
+    assert "PENDING_TENCENT_LINEAGE_RESEAL_CHECKPOINT" in model_selection
+    assert "Do not execute it while that literal placeholder remains." in model_selection
+    assert "committed, pushed, and independently resolved" in normalized_model_selection
     assert "candidate-registry-r2.json" in model_selection
     assert "authrunner-candidate-20260820-r2" in model_selection
     assert "primary-judge-registry-r5.json" in model_selection
     assert "authrunner-primary-judge-20260821-r5" in model_selection
     assert "replay-judge-registry-r2.json" in model_selection
     assert "authrunner-replay-judge-20260820-r2" in model_selection
-    assert "There is therefore no current AUTHRUNNER preflight command to execute." in (
-        model_selection
-    )
-    assert ".venv/bin/mmaudit models authenticated-runner" not in model_selection
-    assert "--preflight-only" not in model_selection
-    assert "old r2/r4/r2 command is historical and must not be reused" in (
+    assert "No REAL AUTHRUNNER command is emitted or authorized here" in (
         normalized_model_selection
     )
     assert "--candidate anthropic/claude-opus-5=amazon-bedrock" not in model_selection
+    assert "BOTH r5 prerequisites RUN AND PASSED" in operator_results
     assert "PRIMARY r4 (`minimax/minimax-m3=coreweave/fp4`) — SUCCESS" in operator_results
     assert "runner public lineage does not prove three distinct roots" in operator_results
     assert "LINEAGE CAPTURE — SUCCESS, one coherent 15-source bundle" in operator_results
@@ -446,6 +479,20 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "VALID / NONAUTHORIZING / NO PROVIDER EGRESS" in operator_results
     assert "f0ff2d76017dfcd075c6758f0da7256c98dd45ca749a42b81ca1ce8c95a93f9e" in (operator_results)
     assert "848b1dfda5b60c6793089ed3916073d86e3a734da9dbc5a824302bec7f4b37da" in (operator_results)
+    assert "6ae6e75a1732c05b85ffe189febbc3ecfa8ae2eeeb83000a8a24d30035b966eb" in (model_selection)
+    assert "7b6ff67506bceaaf05c944edb2c28bf6d8386df3690444b827035ed5c83bc134" in (model_selection)
+    assert "fe3e3daa21eeb370f35558c5eca5746c140f2b92e88a37233952ab77034dc07b" in (model_selection)
+    assert "2d825234bfc1cf05fb9ec883c555bc007bd3a6033145507d629d5da7aa5619ad" in (model_selection)
+    assert "90389d27f553d6f167a21aab364cebdb40ca5afbdbcc977d9127338ace4a3008" in (model_selection)
+    assert "7c6dd26743733ae46aa94b7171ff2ca42f967ac8323b7f2d0aa95cf66f2dbc68" in (model_selection)
+    assert "sha256:932e8cdba524bbf5280d368b0cb711bf0bf36b6fb57ea744bda2a86caea534fb" in (
+        model_selection
+    )
+    assert "16 sources totaling 421,754 bytes" in normalized_model_selection
+    assert "15 aliases, 17 exact nonoverlapping claims" in normalized_model_selection
+    assert "11 confirmed identities across 10 roots" in normalized_model_selection
+    assert "seven conservative negative-only constraints" in normalized_model_selection
+    assert "All six ordered pair directions" in normalized_model_selection
     assert "capture_public_model_lineage.py --output-dir" in model_selection
     assert "6f46b3c779262cf11b0ec58b1a2fe88947cd71d7ab788734abb36cd9f96374e4" in (model_selection)
     assert "did not exercise the current exact-cost admission implementation" in (

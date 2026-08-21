@@ -43,6 +43,7 @@ CONFIRMED_EXACT_MODEL_IDS = (
     "moonshotai/kimi-k3",
     "nvidia/nemotron-3-super-120b-a12b",
     "qwen/qwen3.6-35b-a3b",
+    "tencent/hy3",
 )
 UNCONFIRMED_EXACT_MODEL_IDS = (
     "mistralai/mistral-small-2603",
@@ -57,6 +58,9 @@ HISTORICAL_DECISION_ROOTS = {
     "deepseek/deepseek-v3.2-exp": (
         "sha256:acc057978b0d0f05378221091c495a48344b8b2d8a3d8c9b2d96cd6913f2b0f5"
     ),
+    "deepseek/deepseek-v4-pro-0813": (
+        "sha256:8b67690ad7aa11f712b1edad5004d687c54382662fe8fb4d6960039409d94cd9"
+    ),
     "google/gemma-4-26b-a4b-it": (
         "sha256:af392aecac8fb109f7c577928242bc27edf0ad8a24142bc8e9c5151445b12b04"
     ),
@@ -69,6 +73,9 @@ HISTORICAL_DECISION_ROOTS = {
     "mistralai/mistral-small-2603": None,
     "moonshotai/kimi-k2-thinking": (
         "sha256:366bc38f2866df7d09e60b3fe8c32bc0ba88cf504ce17fd65045374da8b6d65c"
+    ),
+    "moonshotai/kimi-k3": (
+        "sha256:023696003e7f763ba904178265b60cdb11e4ed3deb362a768a0a87e8d6275363"
     ),
     "nvidia/nemotron-3-super-120b-a12b": (
         "sha256:a39b66884a35570fd22375af90fb732222aaab823ab14123c0061f7b3c6d0687"
@@ -96,6 +103,7 @@ EXPECTED_CLAIM_IDS = (
     "claim-nemotron-base-anchor",
     "claim-nemotron-posttrain-anchor",
     "claim-qwen-anchor",
+    "claim-tencent-hy3-anchor",
     "claim-z-ai-anchor",
 )
 EXPECTED_ALIASES = (
@@ -181,12 +189,137 @@ EXPECTED_ALIASES = (
         ("tencent-hunyuan-a13b-instruct-card",),
     ),
     (
+        "tencent/hy3",
+        "tencent/Hy3",
+        "tencent",
+        ("tencent-hy3-card",),
+    ),
+    (
         "z-ai/glm-4.7",
         "zai-org/GLM-4.7",
         "z-ai",
         ("z-ai-glm-4-7-card",),
     ),
 )
+HISTORICAL_SOURCE_FILE_SHA256S = {
+    "deepcogito-cogito-v2-1-671b-card": (
+        "a3dff9d9f7763a830bae89d7d83b0eb0463afc7247a5e9bf646a344cc8a82037"
+    ),
+    "deepseek-deepseek-v3-2-exp-card": (
+        "389d4fbe4d7fc75ecf0130f56a0123256b9100940116769eb01049119523b8ee"
+    ),
+    "deepseek-deepseek-v4-pro-0813-card": (
+        "61755d88e95789fcd7a36f50892f97bba977a30fc99d0f2907ab787ed10b0e66"
+    ),
+    "google-gemma-4-26b-a4b-it-card": (
+        "e4c134b9dd81fc5d0e3782bb04fbc7034d27c6b6a2437f9c940a0b64b0a8ab6a"
+    ),
+    "meta-llama-4-maverick-card": (
+        "cae8c581b1787780d095f0f827cee3469014f642cb7d054c0cc7aed5d156d5e3"
+    ),
+    "minimax-m3-card": "6148856dbf8be26dcf3f9b913be0252c38454e852108fdab01212fe965f3e327",
+    "mistral-small-4-119b-2603-card": (
+        "7f5ef56105580603ecbcf224c28bb0b147fc0f5ec564bb2e76fdf7abadb342c9"
+    ),
+    "moonshot-kimi-k2-thinking-card": (
+        "8343341da86d2a74ee576768ea2f8c0be2d3e9cf1cb51838a794581e7a1466cd"
+    ),
+    "moonshot-kimi-k3-card": ("57de265b5842dfa465c6e73b368b0e15a89b8793b5450528dad577da202cc6fe"),
+    "nvidia-nemotron-3-super-120b-a12b-base-card": (
+        "233bde2906a5aa7dab280e60137c365ad88bc7c507c884fb6b78978c4fb83dff"
+    ),
+    "nvidia-nemotron-3-super-120b-a12b-posttrain-card": (
+        "258058128b7d82c16f53112d9cbee6cb85679465016df84a179d312de6c5d881"
+    ),
+    "openai-gpt-oss-120b-readme": (
+        "d4ba8a9cfda709b49e794911278c5a663b8fec1e2bbd86d8f9dc99d8371293e4"
+    ),
+    "qwen-qwen3-6-35b-a3b-card": (
+        "c4ddaa065649ff6352648f64747a16eda31726f3e34add94ce04abb461c77b75"
+    ),
+    "tencent-hunyuan-a13b-instruct-card": (
+        "f7df4703f678f1baa19e4786be5fd8d55559bb3dc83c84cb6e015fb1aa08a969"
+    ),
+    "z-ai-glm-4-7-card": ("ad072cbe81374f18149a107f2e1cbed93f27a6b220409a6bb34ba97a4d36757e"),
+}
+HISTORICAL_ALIAS_SHA256S = {
+    "deepcogito/cogito-v2.1-671b": (
+        "2519ace3cd3faae48ff775ab0cbdc764fbc876e291eaa1ad1585610114d87e7d"
+    ),
+    "deepseek/deepseek-v3.2-exp": (
+        "7d801a7f967fa9375d7f16b5e615a4e6086078a1771f6001e664ad965eb7a324"
+    ),
+    "deepseek/deepseek-v4-pro-0813": (
+        "007fb8b58e8df2eb541c4f87955eba4c814a86ecfda9318f0921afcee13f7dda"
+    ),
+    "google/gemma-4-26b-a4b-it": (
+        "31e9a536ec1bde330097fb0086ce638b84df3bbad902e44433302cfcac5fe95c"
+    ),
+    "meta-llama/llama-4-maverick": (
+        "6f63b021e5e40019958f6771d6345847b324ceb9f4d6c3de3d47783545580306"
+    ),
+    "minimax/minimax-m3": "2ef09041514eafd591beba190109df45485281c3145eda2fda4f414df0562f3d",
+    "mistralai/mistral-small-2603": (
+        "6fdd04c88309f38db7458145388282c2339702d379d594df7663ad93dd5efed2"
+    ),
+    "moonshotai/kimi-k2-thinking": (
+        "a6d9f05ff80b6891df1096b463f22ed8ac3baa2bbc6878563a7abb0bf6ebaadb"
+    ),
+    "moonshotai/kimi-k3": ("d021893d36b3f97cc32b0cde64d3692d2bd979b69197812e017ea5bb32656f82"),
+    "nvidia/nemotron-3-super-120b-a12b": (
+        "147733332aa42b5d70a1208412a2c65bdaeafeed2d014ebb34b8e10e0cdd3656"
+    ),
+    "openai/gpt-oss-120b": ("1ae940000d4f520c9655f92745b38f8a25b67db7f3b66ab4cb987110ca94863a"),
+    "qwen/qwen3.6-35b-a3b": ("8c4b0cc344285ce321abb6a1387b7a7515d7bf50071824d65b34863e6162409d"),
+    "tencent/hunyuan-a13b-instruct": (
+        "374f4e8443ce01c1626ac5a661ac426b54a949a25fa1f9400b8c09ab51d24565"
+    ),
+    "z-ai/glm-4.7": "7e14303ba09761f15f69fc7222dced9e7b59d0312e18cc9923493ffc6144446d",
+}
+HISTORICAL_CLAIM_SHA256S = {
+    "claim-cogito-deepseek": ("ab0609f42064ec07d8890529f8ea64af8dad8d233d8d5aaff8ff6cca21a68893"),
+    "claim-deepseek-anchor": ("57cd0807b3d8162cfed00016b18dfe8e59343c359ee3f7e51feb5cd007f2559c"),
+    "claim-deepseek-v4-anchor": (
+        "757d0afd3689ce7a37778f77a70571038675731a98a90f2705d4f6f8a52a3fb2"
+    ),
+    "claim-gemma-anchor": ("a0d4a14f40030f4d23f19112bb4d22903a03aec2258daa1b027f701d9aa570a6"),
+    "claim-gpt-oss-publisher-identity": (
+        "3a88bd4122edeb3204191a73b748d0fc7494ad08296dec9fc066ff7ba2318105"
+    ),
+    "claim-hunyuan-anchor": ("12b3bebd757fae1ee852b0ce203f78714871ba0c71da026848d0ef159d9a190b"),
+    "claim-hunyuan-pretrain-instruct": (
+        "b585b54c4aee30509cf8d91f8498e48b0aff596060b185e6bf349b3c901a0daa"
+    ),
+    "claim-kimi-anchor": ("446a5f433fbd9ae05376c99b74b54e77d480b6224c2a72db281d2ff8a80507dd"),
+    "claim-kimi-k3-anchor": ("92998874acc7664846fa8b05266a97765e02e308cdfb9fa5461f4ed862dfc29f"),
+    "claim-llama-anchor": ("5f0a9fd419e94ee8defb6618ddc2c9edea7d727dfe729e5499f363070f994918"),
+    "claim-minimax-anchor": ("bb4303323856bc24b9912a32ad793ab1b8349124f668aba52b20ae473860a539"),
+    "claim-mistral-anchor": ("a2b6d9dcaf7726d97b9c75c0eac2bb0d33c826ac8d6469f4a2a31236e2095247"),
+    "claim-nemotron-base-anchor": (
+        "f439feee3ac17ceeae701cb3dc0af9bcb2b5d9dd2e3776a9d1692bce3103df7b"
+    ),
+    "claim-nemotron-posttrain-anchor": (
+        "33714d70ab18fdf2a9180f66ca24419d377b22e95d7fb3ad28a8df3e70cf5c06"
+    ),
+    "claim-qwen-anchor": ("22b8d9e30db8cdef5e6e60870696402b13fb3d5b8a40650bd7bfce513883337a"),
+    "claim-z-ai-anchor": ("18c8b275ad60b4279ab4fa464115350e26634d35b931cb379c59ad814c1645dc"),
+}
+HISTORICAL_CONSTRAINT_SHA256S = {
+    "constraint-cogito-deepseek": (
+        "7dfc4ea9597b0389307b87aaf912e3d2dad69bb315916707f17849dcffa6819c"
+    ),
+    "constraint-deepseek-family": (
+        "c9092c3899dbff3bef7493a734ee489e71c4b9f99ce1a9f52cdad7c2997e9edb"
+    ),
+    "constraint-gemma-gemini": ("32b26951e4e867adf0bd42ae11a277c99210d8fe98ac7909dd8abf65e385fc3e"),
+    "constraint-gpt-oss-gpt-5-6": (
+        "3a5ac5ecb782e6ab985fea4f073402bef26ddc10e8112deb76c7d8727008703b"
+    ),
+    "constraint-kimi-k2-k3": ("0dd13e7eb259b838458380a69618734157de2b86a332f9bf8405784a76604c8a"),
+    "constraint-nemotron-meta": (
+        "5e2e16e7f2ad5270ed8419179a60d66cb8af86fed1ed67827f313238c167b4c0"
+    ),
+}
 
 
 def test_committed_public_lineage_manifest_rebuilds_and_resolves_exactly() -> None:
@@ -196,6 +329,9 @@ def test_committed_public_lineage_manifest_rebuilds_and_resolves_exactly() -> No
     bundle = PublicModelLineageEvidenceBundle.model_validate_json(raw_manifest)
     assert stable_json(bundle).encode("utf-8") == raw_manifest
     assert build_manifest(EVIDENCE_ROOT) == bundle
+    assert bundle.bundle_sha256 == (
+        "7c6dd26743733ae46aa94b7171ff2ca42f967ac8323b7f2d0aa95cf66f2dbc68"
+    )
     assert (
         tuple(
             (
@@ -220,6 +356,26 @@ def test_committed_public_lineage_manifest_rebuilds_and_resolves_exactly() -> No
         for item in bundle.decisions
         if item.exact_model_id in HISTORICAL_DECISION_ROOTS
     } == HISTORICAL_DECISION_ROOTS
+    assert {
+        item.source_id: item.file_binding.sha256
+        for item in bundle.sources
+        if item.source_id in HISTORICAL_SOURCE_FILE_SHA256S
+    } == HISTORICAL_SOURCE_FILE_SHA256S
+    assert {
+        item.exact_model_id: item.alias_sha256
+        for item in bundle.aliases
+        if item.exact_model_id in HISTORICAL_ALIAS_SHA256S
+    } == HISTORICAL_ALIAS_SHA256S
+    assert {
+        item.claim_id: item.claim_sha256
+        for item in bundle.claims
+        if item.claim_id in HISTORICAL_CLAIM_SHA256S
+    } == HISTORICAL_CLAIM_SHA256S
+    assert {
+        item.constraint_id: item.constraint_sha256
+        for item in bundle.conservative_non_independence_constraints
+        if item.constraint_id in HISTORICAL_CONSTRAINT_SHA256S
+    } == HISTORICAL_CONSTRAINT_SHA256S
 
     capability = resolve_verified_public_model_lineage()
     inventory = public_model_lineage_inventory(capability)
@@ -232,8 +388,8 @@ def test_committed_public_lineage_manifest_rebuilds_and_resolves_exactly() -> No
     assert inventory.confirmed_exact_model_ids == CONFIRMED_EXACT_MODEL_IDS
     assert inventory.unconfirmed_exact_model_ids == UNCONFIRMED_EXACT_MODEL_IDS
     assert inventory.excluded_exact_model_ids == UNCONFIRMED_EXACT_MODEL_IDS
-    assert len(approved_public_model_lineages(capability)) == 9
-    assert len(inventory.conservative_non_independence_constraints) == 6
+    assert len(approved_public_model_lineages(capability)) == 10
+    assert len(inventory.conservative_non_independence_constraints) == 7
     assert all(
         constraint.negative_only and not constraint.positive_root_assignment_authorized
         for constraint in inventory.conservative_non_independence_constraints
@@ -276,7 +432,7 @@ def test_committed_public_lineage_manifest_rebuilds_and_resolves_exactly() -> No
 
     active_triple = (
         "deepseek/deepseek-v4-pro-0813",
-        "minimax/minimax-m3",
+        "tencent/hy3",
         "moonshotai/kimi-k3",
     )
     for left, right in permutations(active_triple, 2):
@@ -285,6 +441,17 @@ def test_committed_public_lineage_manifest_rebuilds_and_resolves_exactly() -> No
         assert independent.left_exact_model_id == left
         assert independent.right_exact_model_id == right
         assert independent.left_root_lineage != independent.right_root_lineage
+
+    tencent = require_verified_public_model_lineage(capability, "tencent/hy3")
+    assert tencent.root_lineage == (
+        "sha256:932e8cdba524bbf5280d368b0cb711bf0bf36b6fb57ea744bda2a86caea534fb"
+    )
+    tencent_decision = next(
+        item for item in bundle.decisions if item.exact_model_id == "tencent/hy3"
+    )
+    assert tencent_decision.decision_sha256 == (
+        "c9bf714c289ca3ab66cc06062145ff4dd12770f9c9f035c1c23732f338395673"
+    )
 
     for exact_model_id in UNCONFIRMED_EXACT_MODEL_IDS:
         with pytest.raises(PublicModelLineageAuthorityError, match="lacks confirmed"):
@@ -363,6 +530,29 @@ def test_committed_public_lineage_manifest_rebuilds_and_resolves_exactly() -> No
         "claim-kimi-anchor",
         "claim-kimi-k3-anchor",
     )
+    tencent_constraint = next(
+        item
+        for item in inventory.conservative_non_independence_constraints
+        if item.constraint_id == "constraint-tencent-hy3-hunyuan"
+    )
+    assert (
+        tencent_constraint.constraint_kind
+        is PublicModelLineageConstraintKind.CONSERVATIVE_ORGANIZATIONAL
+    )
+    assert tencent_constraint.member_exact_model_ids == (
+        "tencent/hunyuan-a13b-instruct",
+        "tencent/hy3",
+    )
+    assert tencent_constraint.supporting_claim_ids == (
+        "claim-hunyuan-anchor",
+        "claim-tencent-hy3-anchor",
+    )
+    with pytest.raises(PublicModelLineageAuthorityError, match="lacks confirmed"):
+        require_independent_public_model_lineage(
+            capability,
+            "tencent/hy3",
+            "tencent/hunyuan-a13b-instruct",
+        )
 
     meta = require_verified_public_model_lineage(capability, "meta-llama/llama-4-maverick")
     nvidia = require_verified_public_model_lineage(capability, "nvidia/nemotron-3-super-120b-a12b")
@@ -421,6 +611,14 @@ def test_committed_public_lineage_manifest_rebuilds_and_resolves_exactly() -> No
             42_081,
             42_228,
             "bc4d7b66366b975cfd5782bca59158f36b6c09ea61791aa85581d8853f70233d",
+        ),
+        (
+            "claim-tencent-hy3-anchor",
+            "BUILD_ANCESTRY",
+            "tencent-hy3-card",
+            1_857,
+            2_148,
+            "b9e3eda30b51b800f26955d3f39299389dea8466df5292dd3504557a88b4ab9a",
         ),
     ),
 )

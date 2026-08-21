@@ -31,7 +31,7 @@ from mmaudit.models.public_lineage_authority import (
 from mmaudit.orchestration.manifest import ManifestFileBinding, canonical_sha256
 from mmaudit.release_io import read_file_evidence, read_json_evidence, write_json_evidence
 
-VERIFIED_AT = datetime(2026, 8, 21, 5, 26, tzinfo=UTC)
+VERIFIED_AT = datetime(2026, 8, 21, 11, 47, tzinfo=UTC)
 VALID_UNTIL = VERIFIED_AT + timedelta(days=180)
 
 
@@ -144,6 +144,12 @@ _ALIASES = (
         "tencent/Hunyuan-A13B-Instruct",
         "tencent-hunyuan",
         ("tencent-hunyuan-a13b-instruct-card",),
+    ),
+    _AliasSpec(
+        "tencent/hy3",
+        "tencent/Hy3",
+        "tencent",
+        ("tencent-hy3-card",),
     ),
     _AliasSpec(
         "z-ai/glm-4.7",
@@ -313,6 +319,21 @@ _CLAIMS = (
         "TRAINING_PROVENANCE",
         True,
         exact_marker_end="- Training Stage: Pre-training & Post-training",
+    ),
+    _ClaimSpec(
+        "claim-tencent-hy3-anchor",
+        "tencent/hy3",
+        PublicModelLineageClaimKind.ROOT_ANCHOR,
+        None,
+        "tencent-hy3-card",
+        (
+            "**Hy3** is a 295B-parameter Mixture-of-Experts (MoE) model with 21B active "
+            "parameters and 3.8B MTP layer parameters, developed by the Tencent Hy Team. "
+            "Following the Hy3 Preview launch in late April, we gathered feedback from 50+ "
+            "products and scaled up post-training with higher quality data."
+        ),
+        "BUILD_ANCESTRY",
+        True,
     ),
     _ClaimSpec(
         "claim-z-ai-anchor",
@@ -516,6 +537,18 @@ def build_manifest(
                 "claim-llama-anchor",
                 "claim-nemotron-base-anchor",
                 "claim-nemotron-posttrain-anchor",
+            ),
+        ),
+        _hashed_constraint(
+            constraint_id="constraint-tencent-hy3-hunyuan",
+            constraint_kind=PublicModelLineageConstraintKind.CONSERVATIVE_ORGANIZATIONAL,
+            member_exact_model_ids=(
+                "tencent/hunyuan-a13b-instruct",
+                "tencent/hy3",
+            ),
+            supporting_claim_ids=(
+                "claim-hunyuan-anchor",
+                "claim-tencent-hy3-anchor",
             ),
         ),
     )
