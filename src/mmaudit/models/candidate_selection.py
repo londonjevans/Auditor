@@ -36,6 +36,7 @@ from mmaudit.models.qualification import (
     seal_operator_lineage_review,
     validate_candidate_registry_discovery,
 )
+from mmaudit.models.reasoning import ReasoningEffort
 from mmaudit.models.schemas import StrictModel
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.reporting.json_report import stable_json
@@ -132,6 +133,7 @@ class AuthenticatedRunnerSelection(StrictModel):
         min_length=1,
         max_length=1,
     )
+    required_reasoning_effort: Literal["high"]
     distinct_root_lineages_verified: Literal[False]
     role_assignment_sha256: str = Field(pattern=_SHA256_PATTERN)
 
@@ -161,6 +163,8 @@ class AuthenticatedRunnerSelection(StrictModel):
             raise ValueError("authenticated runner seed must require native structured outputs")
         if self.required_output_mode is not StructuredOutputMode.NATIVE_JSON_SCHEMA:
             raise ValueError("authenticated runner seed must require native JSON Schema")
+        if self.required_reasoning_effort != "high":
+            raise ValueError("authenticated runner seed must require reasoning effort=high")
         expected = canonical_sha256(
             self.model_dump(mode="json", exclude={"role_assignment_sha256"})
         )
@@ -172,7 +176,7 @@ class AuthenticatedRunnerSelection(StrictModel):
 class CandidateSelectionPlan(StrictModel):
     """Self-hashed operator-staged seed with only literal-false authority flags."""
 
-    schema_version: Literal["1.1"]
+    schema_version: Literal["1.2"]
     artifact_kind: Literal["OPERATOR_STAGED_MODEL_SELECTION"]
     status: Literal["NONAUTHORIZING"]
     objective_sha256: Literal["e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15"]
@@ -305,6 +309,7 @@ def seal_authenticated_runner_selection(
         "replay_judge_model_id": replay_judge_model_id,
         "required_output_mode": StructuredOutputMode.NATIVE_JSON_SCHEMA.value,
         "required_supported_parameters": ["structured_outputs"],
+        "required_reasoning_effort": "high",
         "distinct_root_lineages_verified": False,
     }
     values["role_assignment_sha256"] = canonical_sha256(values)
@@ -324,7 +329,7 @@ def seal_candidate_selection_plan(
     ordered_sources = tuple(sorted(source_bindings, key=lambda item: item.kind))
     ordered_entries = tuple(sorted(entries, key=lambda item: item.exact_model_id))
     values: dict[str, object] = {
-        "schema_version": "1.1",
+        "schema_version": "1.2",
         "artifact_kind": "OPERATOR_STAGED_MODEL_SELECTION",
         "status": "NONAUTHORIZING",
         "objective_sha256": OBJECTIVE_SHA256,
@@ -456,6 +461,45 @@ def require_authenticated_runner_native_structured_output(
         )
 
 
+def require_authenticated_runner_reasoning_effort(
+    evidence: OpenRouterModelDiscoveryPayload | OpenRouterModelDiscoveryEvidence,
+    *,
+    required_effort: ReasoningEffort,
+) -> None:
+    """Require explicit reasoning support and the endpoint-first configured effort."""
+
+    if type(evidence) not in {
+        OpenRouterModelDiscoveryPayload,
+        OpenRouterModelDiscoveryEvidence,
+    }:
+        raise CandidateSelectionError(
+            "authenticated runner reasoning evidence has the wrong exact type"
+        )
+    if required_effort != "high":
+        raise CandidateSelectionError(
+            "authenticated runner selection has an unsupported reasoning requirement"
+        )
+    endpoint = evidence.endpoint_snapshot.endpoint(evidence.approved_provider_endpoint)
+    required_parameters = {"reasoning"}
+    effective_efforts = (
+        endpoint.supported_reasoning_efforts
+        if endpoint.supported_reasoning_efforts is not None
+        else evidence.model_supported_reasoning_efforts
+    )
+    if (
+        evidence.reasoning_supported is not True
+        or not required_parameters.issubset(evidence.model_supported_parameters)
+        or not required_parameters.issubset(endpoint.supported_parameters)
+        or not required_parameters.issubset(evidence.reasoning_parameters)
+        or evidence.reasoning_capability.reasoning_parameter_support != "supported"
+        or effective_efforts is None
+        or required_effort not in effective_efforts
+    ):
+        raise CandidateSelectionError(
+            "authenticated runner route lacks required reasoning effort=high support"
+        )
+
+
 def validate_candidate_selection_discovery_capability(
     plan: CandidateSelectionPlan,
     *,
@@ -474,6 +518,10 @@ def validate_candidate_selection_discovery_capability(
     }
     if evidence.exact_model_id in selected_ids:
         require_authenticated_runner_native_structured_output(evidence)
+        require_authenticated_runner_reasoning_effort(
+            evidence,
+            required_effort=selection.required_reasoning_effort,
+        )
     return canonical
 
 

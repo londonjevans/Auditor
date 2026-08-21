@@ -29,6 +29,11 @@
           "title": "Required Output Mode",
           "type": "string"
         },
+        "required_reasoning_effort": {
+          "const": "high",
+          "title": "Required Reasoning Effort",
+          "type": "string"
+        },
         "required_supported_parameters": {
           "items": {
             "const": "structured_outputs",
@@ -51,6 +56,7 @@
         "replay_judge_model_id",
         "required_output_mode",
         "required_supported_parameters",
+        "required_reasoning_effort",
         "distinct_root_lineages_verified",
         "role_assignment_sha256"
       ],
@@ -282,7 +288,7 @@
       "type": "boolean"
     },
     "schema_version": {
-      "const": "1.1",
+      "const": "1.2",
       "title": "Schema Version",
       "type": "string"
     },

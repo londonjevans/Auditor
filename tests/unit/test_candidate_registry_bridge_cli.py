@@ -29,6 +29,7 @@ from mmaudit.models.qualification import (
     load_candidate_registry,
     validate_candidate_registry_discovery,
 )
+from mmaudit.models.reasoning import ReasoningEffort
 from mmaudit.privacy import PrivacyProfile
 from mmaudit.reporting.json_report import stable_json
 from tests.unit import test_candidate_benchmark as fixtures
@@ -40,6 +41,21 @@ PROVIDER_ENDPOINT = "provider-alpha"
 CANARY = "synthetic-registry-bridge-canary"
 RANKING_SOURCE = b"synthetic operator-staged ranking implementation\n"
 LINEAGE_SOURCE = b"synthetic operator-staged lineage review\n"
+HIGH_REASONING_EFFORTS: tuple[ReasoningEffort, ...] = (
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+)
+NON_HIGH_REASONING_EFFORTS: tuple[ReasoningEffort, ...] = (
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "xhigh",
+)
 
 
 def _config(config_factory: Callable[..., AuditConfig]) -> AuditConfig:
@@ -724,12 +740,21 @@ def test_discover_selection_plan_publishes_rootless_registry_from_fresh_evidence
     assert CANARY not in result.output
 
 
-@pytest.mark.parametrize("native_parameter", (None, "json_schema"))
-def test_discover_selection_plan_rejects_non_native_runner_route_before_publication(
+@pytest.mark.parametrize(
+    ("native_parameter", "endpoint_reasoning_efforts", "expected"),
+    (
+        (None, HIGH_REASONING_EFFORTS, "native structured_outputs"),
+        ("json_schema", HIGH_REASONING_EFFORTS, "native structured_outputs"),
+        ("structured_outputs", NON_HIGH_REASONING_EFFORTS, "reasoning effort=high"),
+    ),
+)
+def test_discover_selection_plan_rejects_ineligible_runner_route_before_publication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     config_factory: Callable[..., AuditConfig],
-    native_parameter: Literal["json_schema"] | None,
+    native_parameter: Literal["json_schema", "structured_outputs"] | None,
+    endpoint_reasoning_efforts: tuple[ReasoningEffort, ...],
+    expected: str,
 ) -> None:
     config = _config(config_factory)
     spec = fixtures._CandidateSpec(
@@ -738,6 +763,7 @@ def test_discover_selection_plan_rejects_non_native_runner_route_before_publicat
         provider_name="Provider Alpha",
         canonical_model_id="alpha/atlas-secure-20260820",
         native_structured_output_parameter=native_parameter,
+        endpoint_reasoning_efforts=endpoint_reasoning_efforts,
     )
     plan_path, ranking_path, lineage_path = _selection_plan_paths(tmp_path / "selection")
     secret_file = tmp_path / "synthetic-secrets.env"
@@ -815,7 +841,7 @@ def test_discover_selection_plan_rejects_non_native_runner_route_before_publicat
     )
 
     assert result.exit_code == ExitCode.CONFIGURATION
-    assert "native structured_outputs" in " ".join(result.output.split())
+    assert expected in " ".join(result.output.split())
     assert not discovery_output.exists()
     assert not registry_output.exists()
     assert CANARY not in result.output

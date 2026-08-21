@@ -3,13 +3,14 @@
   "authenticated_runner_selection": {
     "candidate_model_id": "deepseek/deepseek-v4-pro-0813",
     "distinct_root_lineages_verified": false,
-    "primary_judge_model_id": "google/gemma-4-26b-a4b-it",
+    "primary_judge_model_id": "z-ai/glm-5.2",
     "replay_judge_model_id": "moonshotai/kimi-k3",
     "required_output_mode": "NATIVE_JSON_SCHEMA",
+    "required_reasoning_effort": "high",
     "required_supported_parameters": [
       "structured_outputs"
     ],
-    "role_assignment_sha256": "f1c80252e94bf789d1b78f424a8b9c142f7e750e8ee0ba3bacfaae2a3330aa25"
+    "role_assignment_sha256": "0a41b623527b07c14ee15601e1dd5a9fbb7d6284f9ee77e66c92678f92e089d8"
   },
   "benchmark_authorized": false,
   "cached_ranking_payload_present": false,
@@ -185,23 +186,20 @@
     {
       "advisory_lineage_group": "Zhipu-GLM",
       "allowed_provider_endpoints": [
-        "deepinfra",
-        "google-vertex",
-        "novita",
-        "together"
+        "sail-research/fp8"
       ],
       "approved_roles": [],
       "availability": "UNVERIFIED",
       "documentary_lineage": "UNCONFIRMED",
       "entry_authority": false,
-      "entry_sha256": "24b672f27e5998cdf5be0c33cf726bbc4b4dc51dbfd1be4250a4f71e143efe3d",
+      "entry_sha256": "45f0a3f416a806932e2596ca4f6381e12bbc4901d15c301b22fd5d607a7f55ef",
       "exact_model_id": "z-ai/glm-5.2",
       "lineage_group_seed_sha256": "cef0b2d24fdb86b06b77f7280355447f05fc4318502b97d660ab400c52e3e59a",
       "priority_rank": 11
     }
   ],
   "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
-  "plan_sha256": "41b5af9ae4def5ef535ae25a13c7c38b95d5819a878a5eef1c1c5bfb8386bf58",
+  "plan_sha256": "120ef35de53a6c13b0d173a30b0e5e3f6310c3bf7032ce2a7ed92134a5099fbf",
   "production_selection_authorized": false,
   "provider_call_authorized": false,
   "provider_metadata_present": false,
@@ -209,7 +207,7 @@
   "ranking_executed": false,
   "release_authorized": false,
   "runner_authority_authorized": false,
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "seal_publication_authorized": false,
   "serialized_authority": false,
   "source_bindings": [
@@ -239,9 +237,10 @@
     "Every exact route, ZDR state, output capability, price, and capacity remains unverified.",
     "External ranking values are prioritization only and cannot grant qualification.",
     "Frontier retention-consent routes remain unusable unless exact ZDR eligibility is freshly proven.",
-    "Gemma smoke-judge rank 12 and deepinfra/fp8 are an unverified operator proposal from operator_results SHA-256 14ece147138fb5bf6f32d2737ca6b174817a923c5ca50269bc14337c60a3453c; fresh exact discovery is required.",
     "Meta Muse and Nemotron 3.5 ancestry remain unconfirmed.",
     "Mistral is excluded because the staged review supplies no exact current model ID.",
+    "Operator results SHA-256 00de61717cb6d61c003682abca12ae2c7e59613db03ef99558133b972c123516 records Gemma effort=high rejection and an unverified Z.AI GLM-5.2/sail-research-fp8 proposal; fresh documentary lineage capture and exact discovery are required.",
+    "Operator results SHA-256 14ece147138fb5bf6f32d2737ca6b174817a923c5ca50269bc14337c60a3453c records the historical unverified Gemma rank-12/deepinfra-fp8 proposal; later reasoning evidence supersedes it.",
     "Zhipu GLM 5.2 is an unverified availability seed; the review names unroutable GLM 5.3."
   ]
 }

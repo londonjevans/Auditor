@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable
-from itertools import permutations
 from pathlib import Path
 from typing import Literal
 
@@ -25,11 +24,12 @@ from mmaudit.models.candidate_selection import (
 )
 from mmaudit.models.discovery import DiscoveryCandidateRoute
 from mmaudit.models.public_lineage_authority import (
-    require_independent_public_model_lineage,
+    PublicModelLineageAuthorityError,
     require_verified_public_model_lineage,
     resolve_verified_public_model_lineage,
 )
 from mmaudit.models.qualification import CandidateBenchmarkStatus, LineageReviewStatus
+from mmaudit.models.reasoning import ReasoningEffort
 from mmaudit.privacy import PrivacyProfile
 from mmaudit.reporting.json_report import stable_json
 from tests.unit import test_candidate_benchmark as fixtures
@@ -45,6 +45,21 @@ ENDPOINT_B = "provider-beta/fp8"
 ENDPOINT_C = "provider-gamma/global"
 ENDPOINT_D = "provider-delta"
 ROOT = Path(__file__).parents[2]
+HIGH_REASONING_EFFORTS: tuple[ReasoningEffort, ...] = (
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+)
+NON_HIGH_REASONING_EFFORTS: tuple[ReasoningEffort, ...] = (
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "xhigh",
+)
 
 
 def _plan() -> CandidateSelectionPlan:
@@ -136,13 +151,14 @@ def test_selection_plan_is_deterministic_and_strictly_nonauthorizing() -> None:
         "serialized_authority",
     }.issubset(required)
     assert schema["properties"]["objective_sha256"]["const"] == OBJECTIVE_SHA256
-    assert schema["properties"]["schema_version"]["const"] == "1.1"
+    assert schema["properties"]["schema_version"]["const"] == "1.2"
     assignment_schema = schema["$defs"]["AuthenticatedRunnerSelection"]
     assert assignment_schema["properties"]["required_output_mode"]["const"] == (
         "NATIVE_JSON_SCHEMA"
     )
     assert assignment_schema["properties"]["required_supported_parameters"]["minItems"] == 1
     assert assignment_schema["properties"]["required_supported_parameters"]["maxItems"] == 1
+    assert assignment_schema["properties"]["required_reasoning_effort"]["const"] == "high"
     entry_schema = schema["$defs"]["CandidateSelectionEntry"]
     assert entry_schema["properties"]["exact_model_id"]["pattern"]
     assert "entry_authority" in entry_schema["required"]
@@ -152,8 +168,8 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
     plan = load_candidate_selection_plan(ROOT / "config" / "models.selection-plan.json")
     guide = (ROOT / "docs" / "models" / "model_selection.md").read_text(encoding="utf-8")
 
-    assert plan.schema_version == "1.1"
-    assert plan.plan_sha256 == "41b5af9ae4def5ef535ae25a13c7c38b95d5819a878a5eef1c1c5bfb8386bf58"
+    assert plan.schema_version == "1.2"
+    assert plan.plan_sha256 == "120ef35de53a6c13b0d173a30b0e5e3f6310c3bf7032ce2a7ed92134a5099fbf"
     assert plan.plan_sha256 in guide
     assert len(plan.entries) == 12
     assert plan.authenticated_runner_selection is not None
@@ -162,14 +178,13 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
     assert plan.authenticated_runner_selection.required_supported_parameters == (
         "structured_outputs",
     )
+    assert plan.authenticated_runner_selection.required_reasoning_effort == "high"
     assert plan.authenticated_runner_selection.candidate_model_id == (
         "deepseek/deepseek-v4-pro-0813"
     )
-    assert plan.authenticated_runner_selection.primary_judge_model_id == (
-        "google/gemma-4-26b-a4b-it"
-    )
+    assert plan.authenticated_runner_selection.primary_judge_model_id == "z-ai/glm-5.2"
     assert plan.authenticated_runner_selection.role_assignment_sha256 == (
-        "f1c80252e94bf789d1b78f424a8b9c142f7e750e8ee0ba3bacfaae2a3330aa25"
+        "0a41b623527b07c14ee15601e1dd5a9fbb7d6284f9ee77e66c92678f92e089d8"
     )
     assert plan.authenticated_runner_selection.replay_judge_model_id == "moonshotai/kimi-k3"
     entries = {entry.exact_model_id: entry for entry in plan.entries}
@@ -188,6 +203,11 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
     assert entries["tencent/hy3"].entry_sha256 == (
         "5ca2c5e02454bf0fed2f25464a9ac5666bba684cb06291437a902b1ddfcb4652"
     )
+    assert entries["z-ai/glm-5.2"].allowed_provider_endpoints == ("sail-research/fp8",)
+    assert entries["z-ai/glm-5.2"].entry_sha256 == (
+        "45f0a3f416a806932e2596ca4f6381e12bbc4901d15c301b22fd5d607a7f55ef"
+    )
+    assert any("00de61717cb6d61c" in item for item in plan.unresolved_requirements)
     assert any("14ece147138fb5bf" in item for item in plan.unresolved_requirements)
     assert all(entry.availability == "UNVERIFIED" for entry in plan.entries)
     assert all(entry.documentary_lineage == "UNCONFIRMED" for entry in plan.entries)
@@ -220,12 +240,12 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
             approved_provider_endpoint="fireworks",
         ),
         DiscoveryCandidateRoute(
-            exact_model_id="google/gemma-4-26b-a4b-it",
-            approved_provider_endpoint="deepinfra/fp8",
-        ),
-        DiscoveryCandidateRoute(
             exact_model_id="moonshotai/kimi-k3",
             approved_provider_endpoint="together",
+        ),
+        DiscoveryCandidateRoute(
+            exact_model_id="z-ai/glm-5.2",
+            approved_provider_endpoint="sail-research/fp8",
         ),
     )
 
@@ -234,9 +254,9 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
         ("deepseek/deepseek-v4-pro-0813", "novita/fp8"),
         ("deepseek/deepseek-v4-pro-0813", "novita"),
         ("deepseek/deepseek-v4-pro-0813", "together"),
-        ("google/gemma-4-26b-a4b-it", "google-vertex/global"),
-        ("google/gemma-4-26b-a4b-it", "nextbit/bf16"),
         ("moonshotai/kimi-k3", "deepinfra/bf16"),
+        ("z-ai/glm-5.2", "deepinfra/fp4"),
+        ("z-ai/glm-5.2", "deepinfra"),
     ):
         with pytest.raises(CandidateSelectionError, match="unlisted endpoint"):
             validate_candidate_selection_routes(
@@ -263,29 +283,17 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
     )
 
 
-def test_committed_runner_selection_has_three_documented_independent_roots() -> None:
+def test_committed_runner_selection_does_not_claim_unsealed_primary_lineage() -> None:
     plan = load_candidate_selection_plan(ROOT / "config" / "models.selection-plan.json")
     selection = plan.authenticated_runner_selection
     assert selection is not None
     capability = resolve_verified_public_model_lineage()
-    active_triple = (
-        selection.candidate_model_id,
-        selection.primary_judge_model_id,
-        selection.replay_judge_model_id,
-    )
-
-    roots = {
-        exact_model_id: require_verified_public_model_lineage(
-            capability, exact_model_id
-        ).root_lineage
-        for exact_model_id in active_triple
-    }
-    assert len(set(roots.values())) == 3
-    for left, right in permutations(active_triple, 2):
-        independent = require_independent_public_model_lineage(capability, left, right)
-        assert independent.independent is True
-        assert independent.left_exact_model_id == left
-        assert independent.right_exact_model_id == right
+    candidate = require_verified_public_model_lineage(capability, selection.candidate_model_id)
+    replay = require_verified_public_model_lineage(capability, selection.replay_judge_model_id)
+    assert candidate.root_lineage != replay.root_lineage
+    with pytest.raises(PublicModelLineageAuthorityError, match="lacks confirmed"):
+        require_verified_public_model_lineage(capability, selection.primary_judge_model_id)
+    assert selection.distinct_root_lineages_verified is False
 
 
 def test_selection_plan_rejects_one_source_relabelled_as_two() -> None:
@@ -382,6 +390,7 @@ def test_fresh_discovery_derives_only_rootless_pending_registry(
         provider_name="Provider Alpha",
         canonical_model_id="alpha/atlas-current-20260820",
         native_structured_output_parameter="structured_outputs",
+        endpoint_reasoning_efforts_published=False,
     )
     manifest, evidence, _legacy_registry = fixtures._discovery_and_registry(
         tmp_path=tmp_path,
@@ -478,7 +487,70 @@ def test_selected_runner_route_requires_literal_native_structured_outputs(
         )
 
 
-def test_non_runner_selection_entry_remains_output_capability_adaptive(
+@pytest.mark.parametrize(
+    (
+        "reasoning_supported",
+        "model_reasoning_efforts",
+        "endpoint_reasoning_efforts_published",
+        "endpoint_reasoning_efforts",
+    ),
+    (
+        (False, None, False, None),
+        (True, None, False, None),
+        (True, NON_HIGH_REASONING_EFFORTS, False, None),
+        (True, HIGH_REASONING_EFFORTS, True, NON_HIGH_REASONING_EFFORTS),
+    ),
+    ids=(
+        "reasoning-parameter-unsupported",
+        "effort-inventories-absent",
+        "model-inventory-lacks-high",
+        "endpoint-inventory-overrides-model-high",
+    ),
+)
+@pytest.mark.parametrize(
+    ("model_id", "provider_endpoint"),
+    (
+        (MODEL_A, ENDPOINT_A),
+        (MODEL_B, ENDPOINT_B),
+        (MODEL_C, ENDPOINT_C),
+    ),
+)
+def test_selected_runner_route_requires_explicit_high_reasoning_effort(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+    reasoning_supported: bool,
+    model_reasoning_efforts: tuple[ReasoningEffort, ...] | None,
+    endpoint_reasoning_efforts_published: bool,
+    endpoint_reasoning_efforts: tuple[ReasoningEffort, ...] | None,
+    model_id: str,
+    provider_endpoint: str,
+) -> None:
+    config = config_factory(privacy={"profile": PrivacyProfile.SYNTHETIC_BENCHMARK})
+    spec = fixtures._CandidateSpec(
+        model_id=model_id,
+        provider_endpoint=provider_endpoint,
+        provider_name="Provider Alpha",
+        reasoning_supported=reasoning_supported,
+        native_structured_output_parameter="structured_outputs",
+        endpoint_reasoning_efforts_published=endpoint_reasoning_efforts_published,
+        model_reasoning_efforts=model_reasoning_efforts,
+        endpoint_reasoning_efforts=endpoint_reasoning_efforts,
+    )
+    manifest, evidence, _legacy_registry = fixtures._discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(spec,),
+    )
+
+    with pytest.raises(CandidateSelectionError, match="reasoning effort=high"):
+        derive_pending_candidate_registry_from_selection_plan(
+            plan=_plan(),
+            run_manifest=manifest,
+            evidence=evidence,
+        )
+
+
+def test_non_runner_selection_entry_remains_capability_adaptive(
     tmp_path: Path,
     config_factory: Callable[..., AuditConfig],
 ) -> None:
@@ -504,6 +576,7 @@ def test_non_runner_selection_entry_remains_output_capability_adaptive(
                 model_id=MODEL_D,
                 provider_endpoint=ENDPOINT_D,
                 provider_name="Provider Delta",
+                reasoning_supported=False,
             ),
         ),
     )
@@ -516,3 +589,4 @@ def test_non_runner_selection_entry_remains_output_capability_adaptive(
 
     assert registry.candidates[0].exact_model_id == MODEL_D
     assert registry.candidates[0].structured_output_supported is True
+    assert registry.candidates[0].reasoning_supported is False

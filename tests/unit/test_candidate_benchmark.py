@@ -66,7 +66,7 @@ from mmaudit.models.qualification import (
     seal_operator_lineage_review,
     seal_qualification_policy,
 )
-from mmaudit.models.reasoning import ReasoningPolicyArtifact
+from mmaudit.models.reasoning import ReasoningEffort, ReasoningPolicyArtifact
 from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
@@ -84,6 +84,14 @@ ROOT = Path(__file__).parents[2]
 CORPUS_PATH = ROOT / "benchmarks" / "model_corpus" / "manifest.json"
 POLICY_PATH = ROOT / "config" / "models.maximum-assurance.toml"
 _NOW = datetime(2026, 7, 27, 9, 0, tzinfo=UTC)
+_DEFAULT_REASONING_EFFORTS: tuple[ReasoningEffort, ...] = (
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+)
 
 
 @dataclass(frozen=True)
@@ -94,6 +102,8 @@ class _CandidateSpec:
     reasoning_supported: bool = True
     native_structured_output_parameter: Literal["json_schema", "structured_outputs"] | None = None
     endpoint_reasoning_efforts_published: bool = True
+    model_reasoning_efforts: tuple[ReasoningEffort, ...] | None = _DEFAULT_REASONING_EFFORTS
+    endpoint_reasoning_efforts: tuple[ReasoningEffort, ...] | None = _DEFAULT_REASONING_EFFORTS
     canonical_model_id: str | None = None
 
 
@@ -330,16 +340,13 @@ def _endpoint(spec: _CandidateSpec) -> dict[str, Any]:
             "request": "0",
         },
     }
-    if spec.reasoning_supported and spec.endpoint_reasoning_efforts_published:
+    if (
+        spec.reasoning_supported
+        and spec.endpoint_reasoning_efforts_published
+        and spec.endpoint_reasoning_efforts is not None
+    ):
         endpoint["reasoning"] = {
-            "supported_efforts": [
-                "none",
-                "minimal",
-                "low",
-                "medium",
-                "high",
-                "xhigh",
-            ],
+            "supported_efforts": list(spec.endpoint_reasoning_efforts),
         }
     return endpoint
 
@@ -361,13 +368,15 @@ def _catalog_model(spec: _CandidateSpec) -> dict[str, Any]:
         "supported_parameters": sorted(parameters),
     }
     if spec.reasoning_supported:
-        payload["reasoning"] = {
+        reasoning: dict[str, Any] = {
             "mandatory": False,
             "default_enabled": False,
             "supports_max_tokens": True,
-            "supported_efforts": ["none", "minimal", "low", "medium", "high", "xhigh"],
             "max_reasoning_tokens": 8_192,
         }
+        if spec.model_reasoning_efforts is not None:
+            reasoning["supported_efforts"] = list(spec.model_reasoning_efforts)
+        payload["reasoning"] = reasoning
     return payload
 
 
