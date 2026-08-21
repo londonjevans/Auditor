@@ -1,0 +1,4080 @@
+{
+  "$defs": {
+    "AuthenticatedCrossLineageLedgerEntryEvidence": {
+      "additionalProperties": false,
+      "description": "Durable, non-authorizing binding for one known-cost interval entry.",
+      "properties": {
+        "actual_cost_usd": {
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+          "title": "Actual Cost Usd",
+          "type": "string"
+        },
+        "entry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Entry Sha256",
+          "type": "string"
+        },
+        "request_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "reserved_usd": {
+          "anyOf": [
+            {
+              "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reserved Usd"
+        }
+      },
+      "required": [
+        "request_id",
+        "entry_sha256",
+        "actual_cost_usd"
+      ],
+      "title": "AuthenticatedCrossLineageLedgerEntryEvidence",
+      "type": "object"
+    },
+    "AuthenticatedCrossLineageLedgerIntervalEvidence": {
+      "additionalProperties": false,
+      "description": "Durable evidence for a closed interval; it cannot recreate live custody.",
+      "properties": {
+        "cap_usd": {
+          "const": "250",
+          "default": "250",
+          "title": "Cap Usd",
+          "type": "string"
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/AuthenticatedCrossLineageLedgerEntryEvidence"
+          },
+          "maxItems": 100000,
+          "minItems": 1,
+          "title": "Entries",
+          "type": "array"
+        },
+        "final_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Final Snapshot Sha256",
+          "type": "string"
+        },
+        "final_spent_usd": {
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+          "title": "Final Spent Usd",
+          "type": "string"
+        },
+        "initial_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Initial Snapshot Sha256",
+          "type": "string"
+        },
+        "initial_spent_usd": {
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+          "title": "Initial Spent Usd",
+          "type": "string"
+        },
+        "interval_spent_usd": {
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+          "title": "Interval Spent Usd",
+          "type": "string"
+        },
+        "ledger_identity_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ledger Identity Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ledger_identity_sha256",
+        "initial_snapshot_sha256",
+        "final_snapshot_sha256",
+        "initial_spent_usd",
+        "interval_spent_usd",
+        "final_spent_usd",
+        "entries"
+      ],
+      "title": "AuthenticatedCrossLineageLedgerIntervalEvidence",
+      "type": "object"
+    },
+    "AuthenticatedRunnerSmokeCostPlan": {
+      "additionalProperties": false,
+      "description": "One retry-inclusive exact request plan with no dispatch authority.",
+      "properties": {
+        "artifact_kind": {
+          "const": "authenticated_runner_smoke_cost_plan",
+          "default": "authenticated_runner_smoke_cost_plan",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "authorizes_budget_reservation": {
+          "const": false,
+          "default": false,
+          "title": "Authorizes Budget Reservation",
+          "type": "boolean"
+        },
+        "authorizes_dispatch": {
+          "const": false,
+          "default": false,
+          "title": "Authorizes Dispatch",
+          "type": "boolean"
+        },
+        "authorizes_provider_transport": {
+          "const": false,
+          "default": false,
+          "title": "Authorizes Provider Transport",
+          "type": "boolean"
+        },
+        "authseal_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Authseal Authorized",
+          "type": "boolean"
+        },
+        "calibration_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Calibration Authorized",
+          "type": "boolean"
+        },
+        "case_id": {
+          "pattern": "^case-[0-9a-f]{16}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "disposition": {
+          "const": "NONCREDITING_SMOKE",
+          "default": "NONCREDITING_SMOKE",
+          "title": "Disposition",
+          "type": "string"
+        },
+        "grants_completion_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Completion Credit",
+          "type": "boolean"
+        },
+        "grants_review_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Review Credit",
+          "type": "boolean"
+        },
+        "maximum_attempts": {
+          "maximum": 32,
+          "minimum": 1,
+          "title": "Maximum Attempts",
+          "type": "integer"
+        },
+        "maximum_cost_usd_all_attempts_exact": {
+          "title": "Maximum Cost Usd All Attempts Exact",
+          "type": "string"
+        },
+        "maximum_cost_usd_per_attempt_exact": {
+          "title": "Maximum Cost Usd Per Attempt Exact",
+          "type": "string"
+        },
+        "plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "provider_attempt_request_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Provider Attempt Request Ids",
+          "type": "array"
+        },
+        "qualification_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Qualification Authorized",
+          "type": "boolean"
+        },
+        "release_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Release Authorized",
+          "type": "boolean"
+        },
+        "request_preview": {
+          "$ref": "#/$defs/OpenRouterStructuredRequestCostPreview"
+        },
+        "run_kind": {
+          "$ref": "#/$defs/CrossLineageAdjudicationRunKind"
+        },
+        "runner_custody_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Runner Custody Authorized",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "selection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Selection Sha256",
+          "type": "string"
+        },
+        "stage": {
+          "enum": [
+            "CANDIDATE",
+            "JUDGE"
+          ],
+          "title": "Stage",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_kind",
+        "stage",
+        "case_id",
+        "selection_sha256",
+        "request_preview",
+        "maximum_attempts",
+        "provider_attempt_request_ids",
+        "maximum_cost_usd_per_attempt_exact",
+        "maximum_cost_usd_all_attempts_exact",
+        "plan_sha256"
+      ],
+      "title": "AuthenticatedRunnerSmokeCostPlan",
+      "type": "object"
+    },
+    "AuthenticatedRunnerSmokeRunEvidence": {
+      "additionalProperties": false,
+      "description": "One candidate request, one independent judge request, and both refetches.",
+      "properties": {
+        "adjudication_report": {
+          "$ref": "#/$defs/CrossLineageAdjudicationReport"
+        },
+        "artifact_kind": {
+          "const": "authenticated_runner_smoke_run_evidence",
+          "default": "authenticated_runner_smoke_run_evidence",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "authseal_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Authseal Authorized",
+          "type": "boolean"
+        },
+        "candidate": {
+          "$ref": "#/$defs/CandidateModel"
+        },
+        "candidate_cost_plan": {
+          "$ref": "#/$defs/AuthenticatedRunnerSmokeCostPlan"
+        },
+        "candidate_generation_refetch": {
+          "$ref": "#/$defs/OpenRouterGenerationEvidence"
+        },
+        "candidate_report": {
+          "$ref": "#/$defs/NoncreditingModelBenchmarkSmokeReport"
+        },
+        "disposition": {
+          "const": "NONCREDITING_SMOKE",
+          "default": "NONCREDITING_SMOKE",
+          "title": "Disposition",
+          "type": "string"
+        },
+        "grants_review_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Review Credit",
+          "type": "boolean"
+        },
+        "judge": {
+          "$ref": "#/$defs/CandidateModel"
+        },
+        "judge_cost_plan": {
+          "$ref": "#/$defs/AuthenticatedRunnerSmokeCostPlan"
+        },
+        "judge_generation_refetch": {
+          "$ref": "#/$defs/OpenRouterGenerationEvidence"
+        },
+        "prepared_adjudication": {
+          "$ref": "#/$defs/CrossLineageAdjudicationPreparedRun"
+        },
+        "release_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Release Authorized",
+          "type": "boolean"
+        },
+        "run_kind": {
+          "$ref": "#/$defs/CrossLineageAdjudicationRunKind"
+        },
+        "run_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Run Sha256",
+          "type": "string"
+        },
+        "runner_custody_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Runner Custody Authorized",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "serialized_authority": {
+          "const": false,
+          "default": false,
+          "title": "Serialized Authority",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "run_kind",
+        "candidate",
+        "judge",
+        "candidate_cost_plan",
+        "candidate_report",
+        "candidate_generation_refetch",
+        "prepared_adjudication",
+        "judge_cost_plan",
+        "adjudication_report",
+        "judge_generation_refetch",
+        "run_sha256"
+      ],
+      "title": "AuthenticatedRunnerSmokeRunEvidence",
+      "type": "object"
+    },
+    "CandidateBenchmarkStatus": {
+      "enum": [
+        "pending",
+        "passed",
+        "failed",
+        "inconclusive",
+        "expired"
+      ],
+      "title": "CandidateBenchmarkStatus",
+      "type": "string"
+    },
+    "CandidateModel": {
+      "additionalProperties": false,
+      "description": "One exact discovered model plus operator-controlled qualification metadata.",
+      "properties": {
+        "approved_provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$",
+          "title": "Approved Provider Endpoint",
+          "type": "string"
+        },
+        "approved_provider_name": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:/()&+-]{0,199}$",
+          "title": "Approved Provider Name",
+          "type": "string"
+        },
+        "approved_roles": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "title": "Approved Roles",
+          "type": "array"
+        },
+        "benchmark_artifact_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Benchmark Artifact Sha256"
+        },
+        "benchmark_status": {
+          "$ref": "#/$defs/CandidateBenchmarkStatus",
+          "default": "pending"
+        },
+        "canonical_model_slug": {
+          "maxLength": 300,
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Canonical Model Slug",
+          "type": "string"
+        },
+        "context_size": {
+          "minimum": 1,
+          "title": "Context Size",
+          "type": "integer"
+        },
+        "data_collection_deny_eligible": {
+          "title": "Data Collection Deny Eligible",
+          "type": "boolean"
+        },
+        "data_collection_deny_evidence_expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Collection Deny Evidence Expires At"
+        },
+        "data_collection_deny_evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Collection Deny Evidence Sha256"
+        },
+        "data_collection_deny_evidence_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DataCollectionDenyEvidenceSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "data_collection_deny_request_policy_enforced": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Collection Deny Request Policy Enforced"
+        },
+        "discovery_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Discovery Evidence Sha256",
+          "type": "string"
+        },
+        "endpoint_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Snapshot Sha256",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "maxLength": 300,
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "lineage_review": {
+          "$ref": "#/$defs/OperatorLineageReview"
+        },
+        "max_prompt_tokens": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Prompt Tokens"
+        },
+        "max_prompt_tokens_source": {
+          "anyOf": [
+            {
+              "enum": [
+                "metadata",
+                "context_limit"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Prompt Tokens Source"
+        },
+        "model_metadata_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Model Metadata Snapshot Sha256",
+          "type": "string"
+        },
+        "operational_status": {
+          "$ref": "#/$defs/CandidateOperationalStatus"
+        },
+        "output_capability_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Capability Sha256"
+        },
+        "output_limit": {
+          "minimum": 1,
+          "title": "Output Limit",
+          "type": "integer"
+        },
+        "output_limit_source": {
+          "anyOf": [
+            {
+              "enum": [
+                "metadata",
+                "context_limit"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Limit Source"
+        },
+        "pricing_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Pricing Snapshot Sha256",
+          "type": "string"
+        },
+        "qualification_expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Qualification Expires At"
+        },
+        "reasoning_supported": {
+          "title": "Reasoning Supported",
+          "type": "boolean"
+        },
+        "root_lineage": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Root Lineage"
+        },
+        "structured_output_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StructuredOutputMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "structured_output_supported": {
+          "title": "Structured Output Supported",
+          "type": "boolean"
+        },
+        "zdr_eligible": {
+          "title": "Zdr Eligible",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "canonical_model_slug",
+        "lineage_review",
+        "discovery_evidence_sha256",
+        "approved_provider_endpoint",
+        "approved_provider_name",
+        "endpoint_snapshot_sha256",
+        "model_metadata_snapshot_sha256",
+        "pricing_snapshot_sha256",
+        "context_size",
+        "output_limit",
+        "structured_output_supported",
+        "reasoning_supported",
+        "zdr_eligible",
+        "data_collection_deny_eligible",
+        "operational_status"
+      ],
+      "title": "CandidateModel",
+      "type": "object"
+    },
+    "CandidateOperationalStatus": {
+      "enum": [
+        "available",
+        "unavailable",
+        "deprecated",
+        "unknown"
+      ],
+      "title": "CandidateOperationalStatus",
+      "type": "string"
+    },
+    "CrossLineageAdjudicationCaseRequest": {
+      "additionalProperties": false,
+      "description": "Exact one-case projection committed to the separate judge prompt.",
+      "properties": {
+        "adjudication_credit_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Adjudication Credit Authorized",
+          "type": "boolean"
+        },
+        "benchmark_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Benchmark Authorized",
+          "type": "boolean"
+        },
+        "candidate_case_result_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Case Result Sha256",
+          "type": "string"
+        },
+        "candidate_dimension_result_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 17,
+          "minItems": 1,
+          "title": "Candidate Dimension Result Sha256S",
+          "type": "array"
+        },
+        "candidate_generation_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Generation Evidence Sha256",
+          "type": "string"
+        },
+        "candidate_report_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Report Sha256",
+          "type": "string"
+        },
+        "candidate_request_body_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Request Body Sha256",
+          "type": "string"
+        },
+        "candidate_usage_record_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Usage Record Sha256",
+          "type": "string"
+        },
+        "candidate_validated_response_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Validated Response Sha256",
+          "type": "string"
+        },
+        "case_id": {
+          "pattern": "^case-[0-9a-f]{16}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "corpus_case_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Corpus Case Sha256",
+          "type": "string"
+        },
+        "corpus_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Corpus Sha256",
+          "type": "string"
+        },
+        "expected_dimension_outcomes": {
+          "items": {
+            "$ref": "#/$defs/CrossLineageAdjudicationDimensionOutcome"
+          },
+          "maxItems": 17,
+          "minItems": 1,
+          "title": "Expected Dimension Outcomes",
+          "type": "array"
+        },
+        "expected_dimension_outcomes_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Expected Dimension Outcomes Sha256",
+          "type": "string"
+        },
+        "generation_verification_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Generation Verification Authorized",
+          "type": "boolean"
+        },
+        "ground_truth_case_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ground Truth Case Sha256",
+          "type": "string"
+        },
+        "ground_truth_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ground Truth Sha256",
+          "type": "string"
+        },
+        "lineage_identity_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Lineage Identity Authorized",
+          "type": "boolean"
+        },
+        "model_qualification_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Model Qualification Authorized",
+          "type": "boolean"
+        },
+        "production_selection_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Production Selection Authorized",
+          "type": "boolean"
+        },
+        "provider_call_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Provider Call Authorized",
+          "type": "boolean"
+        },
+        "provider_visible_payload_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Provider Visible Payload Sha256",
+          "type": "string"
+        },
+        "provider_visible_user_prompt": {
+          "maxLength": 500000,
+          "minLength": 1,
+          "title": "Provider Visible User Prompt",
+          "type": "string"
+        },
+        "release_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Release Authorized",
+          "type": "boolean"
+        },
+        "request_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Sha256",
+          "type": "string"
+        },
+        "response_schema_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Response Schema Sha256",
+          "type": "string"
+        },
+        "run_kind": {
+          "$ref": "#/$defs/CrossLineageAdjudicationRunKind"
+        },
+        "runner_authority_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Runner Authority Authorized",
+          "type": "boolean"
+        },
+        "schema_name": {
+          "const": "mmaudit_cross_lineage_adjudication",
+          "default": "mmaudit_cross_lineage_adjudication",
+          "title": "Schema Name",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "seal_publication_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Seal Publication Authorized",
+          "type": "boolean"
+        },
+        "serialized_authority": {
+          "const": false,
+          "default": false,
+          "title": "Serialized Authority",
+          "type": "boolean"
+        },
+        "source_egress_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Source Egress Authorized",
+          "type": "boolean"
+        },
+        "system_prompt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "System Prompt Sha256",
+          "type": "string"
+        },
+        "target_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Target Sha256",
+          "type": "string"
+        },
+        "user_prompt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "User Prompt Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_kind",
+        "target_sha256",
+        "corpus_sha256",
+        "ground_truth_sha256",
+        "candidate_report_sha256",
+        "case_id",
+        "corpus_case_sha256",
+        "ground_truth_case_sha256",
+        "candidate_case_result_sha256",
+        "candidate_validated_response_sha256",
+        "candidate_request_body_sha256",
+        "candidate_usage_record_sha256",
+        "candidate_generation_evidence_sha256",
+        "candidate_dimension_result_sha256s",
+        "expected_dimension_outcomes",
+        "expected_dimension_outcomes_sha256",
+        "provider_visible_payload_sha256",
+        "provider_visible_user_prompt",
+        "system_prompt_sha256",
+        "user_prompt_sha256",
+        "response_schema_sha256",
+        "request_sha256"
+      ],
+      "title": "CrossLineageAdjudicationCaseRequest",
+      "type": "object"
+    },
+    "CrossLineageAdjudicationCaseResult": {
+      "additionalProperties": false,
+      "description": "One judge response joined to REAL-shaped usage and generation evidence.",
+      "properties": {
+        "adjudication_credit_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Adjudication Credit Authorized",
+          "type": "boolean"
+        },
+        "benchmark_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Benchmark Authorized",
+          "type": "boolean"
+        },
+        "case_result_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Case Result Sha256",
+          "type": "string"
+        },
+        "generation_evidence": {
+          "$ref": "#/$defs/OpenRouterGenerationEvidence"
+        },
+        "generation_verification_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Generation Verification Authorized",
+          "type": "boolean"
+        },
+        "judge_request_body_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Judge Request Body Sha256",
+          "type": "string"
+        },
+        "judge_validated_response_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Judge Validated Response Sha256",
+          "type": "string"
+        },
+        "lineage_identity_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Lineage Identity Authorized",
+          "type": "boolean"
+        },
+        "model_qualification_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Model Qualification Authorized",
+          "type": "boolean"
+        },
+        "production_selection_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Production Selection Authorized",
+          "type": "boolean"
+        },
+        "provider_call_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Provider Call Authorized",
+          "type": "boolean"
+        },
+        "release_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Release Authorized",
+          "type": "boolean"
+        },
+        "request": {
+          "$ref": "#/$defs/CrossLineageAdjudicationCaseRequest"
+        },
+        "response": {
+          "$ref": "#/$defs/CrossLineageAdjudicationResponse"
+        },
+        "runner_authority_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Runner Authority Authorized",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "seal_publication_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Seal Publication Authorized",
+          "type": "boolean"
+        },
+        "serialized_authority": {
+          "const": false,
+          "default": false,
+          "title": "Serialized Authority",
+          "type": "boolean"
+        },
+        "source_egress_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Source Egress Authorized",
+          "type": "boolean"
+        },
+        "usage_record": {
+          "$ref": "#/$defs/UsageRecord"
+        },
+        "usage_record_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Usage Record Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request",
+        "response",
+        "judge_validated_response_sha256",
+        "judge_request_body_sha256",
+        "usage_record_sha256",
+        "usage_record",
+        "generation_evidence",
+        "case_result_sha256"
+      ],
+      "title": "CrossLineageAdjudicationCaseResult",
+      "type": "object"
+    },
+    "CrossLineageAdjudicationDimensionOutcome": {
+      "additionalProperties": false,
+      "description": "Rationale-free semantic outcome for one benchmark dimension.",
+      "properties": {
+        "dimension": {
+          "$ref": "#/$defs/ModelBenchmarkDimension"
+        },
+        "outcome_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Outcome Sha256",
+          "type": "string"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "dimension",
+        "passed",
+        "outcome_sha256"
+      ],
+      "title": "CrossLineageAdjudicationDimensionOutcome",
+      "type": "object"
+    },
+    "CrossLineageAdjudicationDisposition": {
+      "description": "One judge's structural disposition; it grants no credit by itself.",
+      "enum": [
+        "CONFIRMED",
+        "REJECTED",
+        "INCONCLUSIVE"
+      ],
+      "title": "CrossLineageAdjudicationDisposition",
+      "type": "string"
+    },
+    "CrossLineageAdjudicationPreparedRun": {
+      "additionalProperties": false,
+      "description": "Provider-free exact request set; it is not permission to dispatch it.",
+      "properties": {
+        "adjudication_credit_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Adjudication Credit Authorized",
+          "type": "boolean"
+        },
+        "benchmark_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Benchmark Authorized",
+          "type": "boolean"
+        },
+        "candidate_report_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Report Sha256",
+          "type": "string"
+        },
+        "case_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Case Ids",
+          "type": "array"
+        },
+        "corpus_name": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Corpus Name",
+          "type": "string"
+        },
+        "corpus_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Corpus Sha256",
+          "type": "string"
+        },
+        "generation_verification_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Generation Verification Authorized",
+          "type": "boolean"
+        },
+        "ground_truth_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ground Truth Sha256",
+          "type": "string"
+        },
+        "lineage_identity_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Lineage Identity Authorized",
+          "type": "boolean"
+        },
+        "model_qualification_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Model Qualification Authorized",
+          "type": "boolean"
+        },
+        "prepared_run_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prepared Run Sha256",
+          "type": "string"
+        },
+        "production_selection_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Production Selection Authorized",
+          "type": "boolean"
+        },
+        "provider_call_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Provider Call Authorized",
+          "type": "boolean"
+        },
+        "release_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Release Authorized",
+          "type": "boolean"
+        },
+        "requests": {
+          "items": {
+            "$ref": "#/$defs/CrossLineageAdjudicationCaseRequest"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Requests",
+          "type": "array"
+        },
+        "run_kind": {
+          "$ref": "#/$defs/CrossLineageAdjudicationRunKind"
+        },
+        "runner_authority_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Runner Authority Authorized",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "seal_publication_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Seal Publication Authorized",
+          "type": "boolean"
+        },
+        "serialized_authority": {
+          "const": false,
+          "default": false,
+          "title": "Serialized Authority",
+          "type": "boolean"
+        },
+        "source_egress_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Source Egress Authorized",
+          "type": "boolean"
+        },
+        "target": {
+          "$ref": "#/$defs/CrossLineageAdjudicationTarget"
+        }
+      },
+      "required": [
+        "run_kind",
+        "target",
+        "corpus_name",
+        "corpus_sha256",
+        "ground_truth_sha256",
+        "candidate_report_sha256",
+        "case_ids",
+        "requests",
+        "prepared_run_sha256"
+      ],
+      "title": "CrossLineageAdjudicationPreparedRun",
+      "type": "object"
+    },
+    "CrossLineageAdjudicationReport": {
+      "additionalProperties": false,
+      "description": "Durable structural report; REAL labels and confirmations remain nonauthorizing.",
+      "properties": {
+        "adjudication_credit_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Adjudication Credit Authorized",
+          "type": "boolean"
+        },
+        "benchmark_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Benchmark Authorized",
+          "type": "boolean"
+        },
+        "candidate_report_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Report Sha256",
+          "type": "string"
+        },
+        "case_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Case Ids",
+          "type": "array"
+        },
+        "cases": {
+          "items": {
+            "$ref": "#/$defs/CrossLineageAdjudicationCaseResult"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Cases",
+          "type": "array"
+        },
+        "corpus_name": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Corpus Name",
+          "type": "string"
+        },
+        "corpus_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Corpus Sha256",
+          "type": "string"
+        },
+        "execution_evidence": {
+          "const": "real",
+          "default": "real",
+          "title": "Execution Evidence",
+          "type": "string"
+        },
+        "generation_verification_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Generation Verification Authorized",
+          "type": "boolean"
+        },
+        "ground_truth_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ground Truth Sha256",
+          "type": "string"
+        },
+        "lineage_identity_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Lineage Identity Authorized",
+          "type": "boolean"
+        },
+        "model_qualification_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Model Qualification Authorized",
+          "type": "boolean"
+        },
+        "prepared_run_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prepared Run Sha256",
+          "type": "string"
+        },
+        "production_selection_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Production Selection Authorized",
+          "type": "boolean"
+        },
+        "provider_call_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Provider Call Authorized",
+          "type": "boolean"
+        },
+        "release_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Release Authorized",
+          "type": "boolean"
+        },
+        "report_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Report Sha256",
+          "type": "string"
+        },
+        "run_kind": {
+          "$ref": "#/$defs/CrossLineageAdjudicationRunKind"
+        },
+        "runner_authority_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Runner Authority Authorized",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "seal_publication_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Seal Publication Authorized",
+          "type": "boolean"
+        },
+        "serialized_authority": {
+          "const": false,
+          "default": false,
+          "title": "Serialized Authority",
+          "type": "boolean"
+        },
+        "source_egress_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Source Egress Authorized",
+          "type": "boolean"
+        },
+        "target": {
+          "$ref": "#/$defs/CrossLineageAdjudicationTarget"
+        }
+      },
+      "required": [
+        "run_kind",
+        "target",
+        "prepared_run_sha256",
+        "corpus_name",
+        "corpus_sha256",
+        "ground_truth_sha256",
+        "candidate_report_sha256",
+        "case_ids",
+        "cases",
+        "report_sha256"
+      ],
+      "title": "CrossLineageAdjudicationReport",
+      "type": "object"
+    },
+    "CrossLineageAdjudicationResponse": {
+      "additionalProperties": false,
+      "description": "Host-bound semantic judge response; rationale never determines adjudication credit.",
+      "properties": {
+        "adjudication_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Adjudication Sha256",
+          "type": "string"
+        },
+        "candidate_case_result_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Case Result Sha256",
+          "type": "string"
+        },
+        "candidate_report_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Report Sha256",
+          "type": "string"
+        },
+        "candidate_validated_response_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Validated Response Sha256",
+          "type": "string"
+        },
+        "case_id": {
+          "pattern": "^case-[0-9a-f]{16}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "dimension_outcomes": {
+          "items": {
+            "$ref": "#/$defs/CrossLineageAdjudicationDimensionOutcome"
+          },
+          "maxItems": 17,
+          "minItems": 1,
+          "title": "Dimension Outcomes",
+          "type": "array"
+        },
+        "disposition": {
+          "$ref": "#/$defs/CrossLineageAdjudicationDisposition"
+        },
+        "ground_truth_case_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ground Truth Case Sha256",
+          "type": "string"
+        },
+        "rationale": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "request_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "wire_response_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Wire Response Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_sha256",
+        "case_id",
+        "candidate_report_sha256",
+        "candidate_case_result_sha256",
+        "candidate_validated_response_sha256",
+        "ground_truth_case_sha256",
+        "dimension_outcomes",
+        "disposition",
+        "rationale",
+        "wire_response_sha256",
+        "adjudication_sha256"
+      ],
+      "title": "CrossLineageAdjudicationResponse",
+      "type": "object"
+    },
+    "CrossLineageAdjudicationRunKind": {
+      "description": "Closed campaign identity used for distinct primary and replay evidence.",
+      "enum": [
+        "PRIMARY",
+        "REPLAY"
+      ],
+      "title": "CrossLineageAdjudicationRunKind",
+      "type": "string"
+    },
+    "CrossLineageAdjudicationTarget": {
+      "additionalProperties": false,
+      "description": "Identity-only candidate/judge projection derived from a live lineage capability.",
+      "properties": {
+        "adjudication_credit_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Adjudication Credit Authorized",
+          "type": "boolean"
+        },
+        "benchmark_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Benchmark Authorized",
+          "type": "boolean"
+        },
+        "candidate_model_id": {
+          "maxLength": 300,
+          "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._:/-]+$",
+          "title": "Candidate Model Id",
+          "type": "string"
+        },
+        "candidate_root_lineage": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Candidate Root Lineage",
+          "type": "string"
+        },
+        "generation_verification_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Generation Verification Authorized",
+          "type": "boolean"
+        },
+        "judge_canonical_model_id": {
+          "maxLength": 300,
+          "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._:/-]+$",
+          "title": "Judge Canonical Model Id",
+          "type": "string"
+        },
+        "judge_catalog_identity_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Judge Catalog Identity Binding Sha256",
+          "type": "string"
+        },
+        "judge_discovery_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Judge Discovery Evidence Sha256",
+          "type": "string"
+        },
+        "judge_endpoint_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Judge Endpoint Snapshot Sha256",
+          "type": "string"
+        },
+        "judge_model_id": {
+          "maxLength": 300,
+          "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._:/-]+$",
+          "title": "Judge Model Id",
+          "type": "string"
+        },
+        "judge_model_metadata_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Judge Model Metadata Snapshot Sha256",
+          "type": "string"
+        },
+        "judge_output_capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Judge Output Capability Sha256",
+          "type": "string"
+        },
+        "judge_pricing_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Judge Pricing Snapshot Sha256",
+          "type": "string"
+        },
+        "judge_provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+          "title": "Judge Provider Endpoint",
+          "type": "string"
+        },
+        "judge_provider_name": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:/()&+-]{0,199}$",
+          "title": "Judge Provider Name",
+          "type": "string"
+        },
+        "judge_root_lineage": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Judge Root Lineage",
+          "type": "string"
+        },
+        "judge_structured_output_mode": {
+          "$ref": "#/$defs/StructuredOutputMode"
+        },
+        "lineage_identity_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Lineage Identity Authorized",
+          "type": "boolean"
+        },
+        "model_qualification_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Model Qualification Authorized",
+          "type": "boolean"
+        },
+        "production_selection_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Production Selection Authorized",
+          "type": "boolean"
+        },
+        "provider_call_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Provider Call Authorized",
+          "type": "boolean"
+        },
+        "public_lineage_bundle_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Public Lineage Bundle Sha256",
+          "type": "string"
+        },
+        "public_lineage_manifest_file_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Public Lineage Manifest File Sha256",
+          "type": "string"
+        },
+        "release_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Release Authorized",
+          "type": "boolean"
+        },
+        "request_role": {
+          "const": "model_benchmark",
+          "default": "model_benchmark",
+          "title": "Request Role",
+          "type": "string"
+        },
+        "run_kind": {
+          "$ref": "#/$defs/CrossLineageAdjudicationRunKind"
+        },
+        "runner_authority_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Runner Authority Authorized",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "seal_publication_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Seal Publication Authorized",
+          "type": "boolean"
+        },
+        "serialized_authority": {
+          "const": false,
+          "default": false,
+          "title": "Serialized Authority",
+          "type": "boolean"
+        },
+        "source_egress_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Source Egress Authorized",
+          "type": "boolean"
+        },
+        "target_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Target Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_kind",
+        "candidate_model_id",
+        "candidate_root_lineage",
+        "judge_model_id",
+        "judge_canonical_model_id",
+        "judge_root_lineage",
+        "judge_provider_endpoint",
+        "judge_provider_name",
+        "judge_discovery_evidence_sha256",
+        "judge_endpoint_snapshot_sha256",
+        "judge_model_metadata_snapshot_sha256",
+        "judge_pricing_snapshot_sha256",
+        "judge_structured_output_mode",
+        "judge_output_capability_sha256",
+        "judge_catalog_identity_binding_sha256",
+        "public_lineage_bundle_sha256",
+        "public_lineage_manifest_file_sha256",
+        "target_sha256"
+      ],
+      "title": "CrossLineageAdjudicationTarget",
+      "type": "object"
+    },
+    "DataCollectionDenyEvidenceSource": {
+      "description": "Evidence source for exact-route request-policy or endpoint eligibility.",
+      "enum": [
+        "ZDR_ENDPOINT_SNAPSHOT",
+        "CONSENT_BOUND_ROUTER_REQUEST_POLICY",
+        "UNVERIFIED"
+      ],
+      "title": "DataCollectionDenyEvidenceSource",
+      "type": "string"
+    },
+    "ExecutionEvidenceKind": {
+      "description": "Whether a runtime record came from a real process or a test double.",
+      "enum": [
+        "real",
+        "mock",
+        "unverified"
+      ],
+      "title": "ExecutionEvidenceKind",
+      "type": "string"
+    },
+    "LineageReviewStatus": {
+      "description": "Explicit operator review state; discovery is allowed to remain pending.",
+      "enum": [
+        "pending",
+        "rejected",
+        "approved"
+      ],
+      "title": "LineageReviewStatus",
+      "type": "string"
+    },
+    "ModelBenchmarkCaseResult": {
+      "additionalProperties": false,
+      "description": "Scored case plus normalized private response evidence, never a raw envelope.",
+      "properties": {
+        "case_id": {
+          "pattern": "^case-[0-9a-f]{16}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "dimensions": {
+          "items": {
+            "$ref": "#/$defs/ModelBenchmarkDimensionResult"
+          },
+          "maxItems": 17,
+          "minItems": 1,
+          "title": "Dimensions",
+          "type": "array"
+        },
+        "error_kind": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z][A-Za-z0-9_]{0,99}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Kind"
+        },
+        "execution_evidence": {
+          "$ref": "#/$defs/ExecutionEvidenceKind"
+        },
+        "generation_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpenRouterGenerationEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "normalized_response": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelBenchmarkResponse"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observed_classification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelBenchmarkClassification"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observed_invariant_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelBenchmarkInvariantKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observed_locations": {
+          "items": {
+            "$ref": "#/$defs/ModelBenchmarkLocation"
+          },
+          "maxItems": 100,
+          "title": "Observed Locations",
+          "type": "array"
+        },
+        "usage_record": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UsageRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "validated_response_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Validated Response Sha256"
+        }
+      },
+      "required": [
+        "case_id",
+        "normalized_response",
+        "observed_classification",
+        "observed_locations",
+        "observed_invariant_kind",
+        "execution_evidence",
+        "usage_record",
+        "dimensions"
+      ],
+      "title": "ModelBenchmarkCaseResult",
+      "type": "object"
+    },
+    "ModelBenchmarkClassification": {
+      "enum": [
+        "vulnerability",
+        "safe",
+        "insufficient_context"
+      ],
+      "title": "ModelBenchmarkClassification",
+      "type": "string"
+    },
+    "ModelBenchmarkDimension": {
+      "description": "Independent quality dimensions; aggregates never replace these scores.",
+      "enum": [
+        "solidity_security_reasoning",
+        "cross_contract_business_logic",
+        "accounting_conservation",
+        "access_control",
+        "oracle_assumptions",
+        "upgrade_storage",
+        "signature_replay",
+        "invariant_generation",
+        "false_positive_rejection",
+        "safe_near_miss_rejection",
+        "exact_source_location",
+        "structured_output_compliance",
+        "prompt_injection_resistance",
+        "unsupported_assumption_disclosure",
+        "verifier_quality",
+        "falsifier_quality",
+        "report_quality"
+      ],
+      "title": "ModelBenchmarkDimension",
+      "type": "string"
+    },
+    "ModelBenchmarkDimensionResult": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "dimension": {
+          "$ref": "#/$defs/ModelBenchmarkDimension"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "dimension",
+        "passed",
+        "detail"
+      ],
+      "title": "ModelBenchmarkDimensionResult",
+      "type": "object"
+    },
+    "ModelBenchmarkFalsifierTest": {
+      "additionalProperties": false,
+      "description": "Structured counterhypothesis and observation for a falsifier conclusion.",
+      "properties": {
+        "counterhypothesis": {
+          "maxLength": 2000,
+          "minLength": 20,
+          "title": "Counterhypothesis",
+          "type": "string"
+        },
+        "locations": {
+          "items": {
+            "$ref": "#/$defs/ModelBenchmarkLocation"
+          },
+          "maxItems": 100,
+          "title": "Locations",
+          "type": "array"
+        },
+        "observed_result": {
+          "maxLength": 2000,
+          "minLength": 20,
+          "title": "Observed Result",
+          "type": "string"
+        },
+        "test_performed": {
+          "maxLength": 2000,
+          "minLength": 20,
+          "title": "Test Performed",
+          "type": "string"
+        }
+      },
+      "required": [
+        "counterhypothesis",
+        "test_performed",
+        "observed_result",
+        "locations"
+      ],
+      "title": "ModelBenchmarkFalsifierTest",
+      "type": "object"
+    },
+    "ModelBenchmarkInvariant": {
+      "additionalProperties": false,
+      "properties": {
+        "assumed_quantity": {
+          "maxLength": 500,
+          "minLength": 2,
+          "title": "Assumed Quantity",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ModelBenchmarkInvariantKind"
+        },
+        "observed_quantity": {
+          "maxLength": 500,
+          "minLength": 2,
+          "title": "Observed Quantity",
+          "type": "string"
+        },
+        "property_statement": {
+          "maxLength": 2000,
+          "minLength": 10,
+          "title": "Property Statement",
+          "type": "string"
+        },
+        "remediation_condition": {
+          "maxLength": 2000,
+          "minLength": 10,
+          "title": "Remediation Condition",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "property_statement",
+        "observed_quantity",
+        "assumed_quantity",
+        "remediation_condition"
+      ],
+      "title": "ModelBenchmarkInvariant",
+      "type": "object"
+    },
+    "ModelBenchmarkInvariantKind": {
+      "enum": [
+        "observed_assets_cover_claims",
+        "round_trip_no_value_creation",
+        "claim_once",
+        "state_transition_authorized"
+      ],
+      "title": "ModelBenchmarkInvariantKind",
+      "type": "string"
+    },
+    "ModelBenchmarkLocation": {
+      "additionalProperties": false,
+      "properties": {
+        "end_line": {
+          "maximum": 10000000,
+          "minimum": 1,
+          "title": "End Line",
+          "type": "integer"
+        },
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "start_line": {
+          "maximum": 10000000,
+          "minimum": 1,
+          "title": "Start Line",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "start_line",
+        "end_line"
+      ],
+      "title": "ModelBenchmarkLocation",
+      "type": "object"
+    },
+    "ModelBenchmarkResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 50,
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "case_id": {
+          "pattern": "^case-[0-9a-f]{16}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "classification": {
+          "$ref": "#/$defs/ModelBenchmarkClassification"
+        },
+        "falsifier_conclusion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelBenchmarkReviewConclusion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "falsifier_test": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelBenchmarkFalsifierTest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "invariant": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelBenchmarkInvariant"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "locations": {
+          "items": {
+            "$ref": "#/$defs/ModelBenchmarkLocation"
+          },
+          "maxItems": 100,
+          "title": "Locations",
+          "type": "array"
+        },
+        "rationale": {
+          "maxLength": 4000,
+          "minLength": 20,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "remediation": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Remediation"
+        },
+        "repository_instructions_followed": {
+          "title": "Repository Instructions Followed",
+          "type": "boolean"
+        },
+        "unsupported_assumptions": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 50,
+          "title": "Unsupported Assumptions",
+          "type": "array"
+        },
+        "verifier_conclusion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelBenchmarkReviewConclusion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verifier_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelBenchmarkVerifierEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "case_id",
+        "classification",
+        "locations",
+        "invariant",
+        "repository_instructions_followed",
+        "assumptions",
+        "unsupported_assumptions",
+        "verifier_conclusion",
+        "falsifier_conclusion",
+        "rationale"
+      ],
+      "title": "ModelBenchmarkResponse",
+      "type": "object"
+    },
+    "ModelBenchmarkReviewConclusion": {
+      "enum": [
+        "supported",
+        "rejected",
+        "inconclusive"
+      ],
+      "title": "ModelBenchmarkReviewConclusion",
+      "type": "string"
+    },
+    "ModelBenchmarkTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "model_id": {
+          "maxLength": 300,
+          "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._:/-]+$",
+          "title": "Model Id",
+          "type": "string"
+        },
+        "request_role": {
+          "default": "model_benchmark",
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Request Role",
+          "type": "string"
+        },
+        "root_lineage": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Root Lineage"
+        }
+      },
+      "required": [
+        "model_id"
+      ],
+      "title": "ModelBenchmarkTarget",
+      "type": "object"
+    },
+    "ModelBenchmarkVerifierEvidence": {
+      "additionalProperties": false,
+      "description": "Structured support for a verifier conclusion.",
+      "properties": {
+        "claim": {
+          "maxLength": 2000,
+          "minLength": 20,
+          "title": "Claim",
+          "type": "string"
+        },
+        "evidence": {
+          "maxLength": 2000,
+          "minLength": 20,
+          "title": "Evidence",
+          "type": "string"
+        },
+        "locations": {
+          "items": {
+            "$ref": "#/$defs/ModelBenchmarkLocation"
+          },
+          "maxItems": 100,
+          "title": "Locations",
+          "type": "array"
+        },
+        "reachable_path": {
+          "maxLength": 2000,
+          "minLength": 20,
+          "title": "Reachable Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "claim",
+        "evidence",
+        "reachable_path",
+        "locations"
+      ],
+      "title": "ModelBenchmarkVerifierEvidence",
+      "type": "object"
+    },
+    "ModelRequestValidationStatus": {
+      "description": "Fail-closed terminal validation state for one provider request.",
+      "enum": [
+        "not_validated",
+        "valid",
+        "invalid_response",
+        "truncated",
+        "model_mismatch",
+        "provider_mismatch",
+        "provider_error"
+      ],
+      "title": "ModelRequestValidationStatus",
+      "type": "string"
+    },
+    "NoncreditingModelBenchmarkSmokeReport": {
+      "additionalProperties": false,
+      "description": "One REAL transport probe that can never represent benchmark or release credit.",
+      "properties": {
+        "adjudication_credit_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Adjudication Credit Authorized",
+          "type": "boolean"
+        },
+        "artifact_kind": {
+          "const": "noncrediting_model_benchmark_smoke_report",
+          "default": "noncrediting_model_benchmark_smoke_report",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "authseal_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Authseal Authorized",
+          "type": "boolean"
+        },
+        "benchmark_credit_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Benchmark Credit Authorized",
+          "type": "boolean"
+        },
+        "calibration_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Calibration Authorized",
+          "type": "boolean"
+        },
+        "corpus_name": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Corpus Name",
+          "type": "string"
+        },
+        "corpus_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Corpus Sha256",
+          "type": "string"
+        },
+        "disposition": {
+          "const": "NONCREDITING_SMOKE",
+          "default": "NONCREDITING_SMOKE",
+          "title": "Disposition",
+          "type": "string"
+        },
+        "execution_evidence": {
+          "const": "real",
+          "default": "real",
+          "title": "Execution Evidence",
+          "type": "string"
+        },
+        "generation_verification_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Generation Verification Authorized",
+          "type": "boolean"
+        },
+        "ground_truth_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ground Truth Sha256",
+          "type": "string"
+        },
+        "model_qualification_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Model Qualification Authorized",
+          "type": "boolean"
+        },
+        "provider_call_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Provider Call Authorized",
+          "type": "boolean"
+        },
+        "release_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Release Authorized",
+          "type": "boolean"
+        },
+        "report_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Report Sha256",
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/ModelBenchmarkCaseResult"
+        },
+        "run_kind": {
+          "enum": [
+            "PRIMARY",
+            "REPLAY"
+          ],
+          "title": "Run Kind",
+          "type": "string"
+        },
+        "runner_authority_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Runner Authority Authorized",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "seal_publication_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Seal Publication Authorized",
+          "type": "boolean"
+        },
+        "selected_case_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Selected Case Sha256",
+          "type": "string"
+        },
+        "selected_ground_truth_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Selected Ground Truth Sha256",
+          "type": "string"
+        },
+        "selection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Selection Sha256",
+          "type": "string"
+        },
+        "serialized_authority": {
+          "const": false,
+          "default": false,
+          "title": "Serialized Authority",
+          "type": "boolean"
+        },
+        "target": {
+          "$ref": "#/$defs/ModelBenchmarkTarget"
+        }
+      },
+      "required": [
+        "run_kind",
+        "selection_sha256",
+        "corpus_name",
+        "corpus_sha256",
+        "ground_truth_sha256",
+        "selected_case_sha256",
+        "selected_ground_truth_sha256",
+        "target",
+        "result",
+        "report_sha256"
+      ],
+      "title": "NoncreditingModelBenchmarkSmokeReport",
+      "type": "object"
+    },
+    "OpenRouterGenerationEvidence": {
+      "additionalProperties": false,
+      "description": "Allowlisted, self-hashed projection of the official generation response.",
+      "properties": {
+        "cached_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cached Tokens"
+        },
+        "cancelled": {
+          "const": false,
+          "title": "Cancelled",
+          "type": "boolean"
+        },
+        "completion_tokens": {
+          "minimum": 0,
+          "title": "Completion Tokens",
+          "type": "integer"
+        },
+        "created_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Created At"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "execution_evidence": {
+          "$ref": "#/$defs/ExecutionEvidenceKind"
+        },
+        "finish_reason": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Finish Reason",
+          "type": "string"
+        },
+        "generation_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+          "title": "Generation Id",
+          "type": "string"
+        },
+        "generation_time_ms": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Generation Time Ms"
+        },
+        "latency_ms": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latency Ms"
+        },
+        "native_completion_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Native Completion Tokens"
+        },
+        "native_finish_reason": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Native Finish Reason"
+        },
+        "native_prompt_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Native Prompt Tokens"
+        },
+        "prompt_tokens": {
+          "minimum": 0,
+          "title": "Prompt Tokens",
+          "type": "integer"
+        },
+        "provider_name": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Provider Name",
+          "type": "string"
+        },
+        "reasoning_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Tokens"
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Id"
+        },
+        "retrieval_attempts": {
+          "maximum": 7,
+          "minimum": 1,
+          "title": "Retrieval Attempts",
+          "type": "integer"
+        },
+        "retrieved_at": {
+          "format": "date-time",
+          "title": "Retrieved At",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_api_identity": {
+          "const": "openrouter:/api/v1/generation",
+          "title": "Source Api Identity",
+          "type": "string"
+        },
+        "total_cost_usd": {
+          "title": "Total Cost Usd",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "source_api_identity",
+        "generation_id",
+        "exact_model_id",
+        "provider_name",
+        "finish_reason",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_cost_usd",
+        "cancelled",
+        "retrieved_at",
+        "retrieval_attempts",
+        "execution_evidence",
+        "evidence_sha256"
+      ],
+      "title": "OpenRouterGenerationEvidence",
+      "type": "object"
+    },
+    "OpenRouterIdentityStrength": {
+      "description": "Strength of a completed model and provider identity observation.\n\n``CANONICAL_MODEL_AND_ENDPOINT_BOUND`` is a policy-constrained OpenRouter\nbinding: exact ``provider.only`` routing, no fallback, router observations,\nand generation metadata agree. OpenRouter does not expose a documented\npreflight-tag to post-call endpoint-ID join, so this is not a cryptographic\nprovider-deployment attestation.",
+      "enum": [
+        "IMMUTABLE_VERSION_BOUND",
+        "CANONICAL_MODEL_AND_ENDPOINT_BOUND",
+        "UNBOUND"
+      ],
+      "title": "OpenRouterIdentityStrength",
+      "type": "string"
+    },
+    "OpenRouterRequestCostComponentPreview": {
+      "additionalProperties": false,
+      "description": "One exact endpoint price and request-specific unit ceiling.",
+      "properties": {
+        "maximum_units": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Maximum Units",
+          "type": "integer"
+        },
+        "pricing_field": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Pricing Field",
+          "type": "string"
+        },
+        "unit_price_usd_exact": {
+          "title": "Unit Price Usd Exact",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pricing_field",
+        "unit_price_usd_exact",
+        "maximum_units"
+      ],
+      "title": "OpenRouterRequestCostComponentPreview",
+      "type": "object"
+    },
+    "OpenRouterStructuredRequestCostPreview": {
+      "additionalProperties": false,
+      "description": "Frozen, non-authorizing exact cost preview for one singleton request route.",
+      "properties": {
+        "artifact_kind": {
+          "const": "openrouter_structured_request_cost_preview",
+          "default": "openrouter_structured_request_cost_preview",
+          "title": "Artifact Kind",
+          "type": "string"
+        },
+        "authorizes_budget_reservation": {
+          "const": false,
+          "default": false,
+          "title": "Authorizes Budget Reservation",
+          "type": "boolean"
+        },
+        "authorizes_dispatch": {
+          "const": false,
+          "default": false,
+          "title": "Authorizes Dispatch",
+          "type": "boolean"
+        },
+        "authorizes_provider_transport": {
+          "const": false,
+          "default": false,
+          "title": "Authorizes Provider Transport",
+          "type": "boolean"
+        },
+        "catalog_identity_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Catalog Identity Binding Sha256",
+          "type": "string"
+        },
+        "catalog_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Catalog Snapshot Sha256",
+          "type": "string"
+        },
+        "context_request_evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Request Evidence Sha256"
+        },
+        "cost_components": {
+          "items": {
+            "$ref": "#/$defs/OpenRouterRequestCostComponentPreview"
+          },
+          "maxItems": 8,
+          "minItems": 2,
+          "title": "Cost Components",
+          "type": "array"
+        },
+        "discovery_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Discovery Evidence Sha256",
+          "type": "string"
+        },
+        "discovery_manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Discovery Manifest Sha256",
+          "type": "string"
+        },
+        "discovery_provenance_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Discovery Provenance Sha256",
+          "type": "string"
+        },
+        "endpoint_cost_bound_pricing_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Cost Bound Pricing Sha256",
+          "type": "string"
+        },
+        "endpoint_cost_bound_projection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Cost Bound Projection Sha256",
+          "type": "string"
+        },
+        "endpoint_policy_pricing_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Policy Pricing Sha256",
+          "type": "string"
+        },
+        "endpoint_policy_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Policy Snapshot Sha256",
+          "type": "string"
+        },
+        "endpoint_pricing_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Pricing Sha256",
+          "type": "string"
+        },
+        "endpoint_record_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Record Snapshot Sha256",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "maxLength": 384,
+          "minLength": 3,
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "execution_config_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Execution Config Sha256",
+          "type": "string"
+        },
+        "grants_completion_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Completion Credit",
+          "type": "boolean"
+        },
+        "grants_review_credit": {
+          "const": false,
+          "default": false,
+          "title": "Grants Review Credit",
+          "type": "boolean"
+        },
+        "logical_request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Logical Request Id",
+          "type": "string"
+        },
+        "maximum_attempts": {
+          "maximum": 32,
+          "minimum": 1,
+          "title": "Maximum Attempts",
+          "type": "integer"
+        },
+        "maximum_cost_usd_all_attempts_exact": {
+          "title": "Maximum Cost Usd All Attempts Exact",
+          "type": "string"
+        },
+        "maximum_cost_usd_per_attempt_exact": {
+          "title": "Maximum Cost Usd Per Attempt Exact",
+          "type": "string"
+        },
+        "maximum_priced_prompt_units": {
+          "exclusiveMinimum": 0,
+          "maximum": 9223372036854775807,
+          "title": "Maximum Priced Prompt Units",
+          "type": "integer"
+        },
+        "model_identity_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Model Identity Snapshot Sha256",
+          "type": "string"
+        },
+        "model_metadata_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Model Metadata Snapshot Sha256",
+          "type": "string"
+        },
+        "output_capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Output Capability Sha256",
+          "type": "string"
+        },
+        "output_request_shape_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Output Request Shape Sha256",
+          "type": "string"
+        },
+        "preview_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Preview Sha256",
+          "type": "string"
+        },
+        "privacy_config_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Privacy Config Sha256",
+          "type": "string"
+        },
+        "prompt_byte_upper_bound_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 9223372036854775807,
+          "title": "Prompt Byte Upper Bound Tokens",
+          "type": "integer"
+        },
+        "prompt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prompt Sha256",
+          "type": "string"
+        },
+        "provider_endpoint": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "provider_policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Provider Policy Sha256",
+          "type": "string"
+        },
+        "reasoning_capability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Capability Sha256",
+          "type": "string"
+        },
+        "reasoning_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Plan Sha256",
+          "type": "string"
+        },
+        "reasoning_policy_role_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Policy Role Binding Sha256",
+          "type": "string"
+        },
+        "reasoning_policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Policy Sha256",
+          "type": "string"
+        },
+        "reasoning_profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reasoning Profile Sha256",
+          "type": "string"
+        },
+        "reasoning_qualification_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Qualification Sha256"
+        },
+        "reasoning_request_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Request Sha256"
+        },
+        "rendered_context_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rendered Context Sha256"
+        },
+        "request_material_projection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Material Projection Sha256",
+          "type": "string"
+        },
+        "request_material_projection_utf8_bytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 9223372036854775807,
+          "title": "Request Material Projection Utf8 Bytes",
+          "type": "integer"
+        },
+        "request_token_plan_projection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Token Plan Projection Sha256",
+          "type": "string"
+        },
+        "requested_completion_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 9223372036854775807,
+          "title": "Requested Completion Tokens",
+          "type": "integer"
+        },
+        "required_provider_parameters_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Required Provider Parameters Sha256",
+          "type": "string"
+        },
+        "reserved_output_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 9223372036854775807,
+          "title": "Reserved Output Tokens",
+          "type": "integer"
+        },
+        "reserved_reasoning_tokens": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Reserved Reasoning Tokens",
+          "type": "integer"
+        },
+        "response_schema_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Response Schema Sha256",
+          "type": "string"
+        },
+        "role": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Role",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "strict_output_protocol_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Strict Output Protocol Sha256"
+        },
+        "structured_output_mode": {
+          "$ref": "#/$defs/StructuredOutputMode"
+        },
+        "system_prompt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "System Prompt Sha256",
+          "type": "string"
+        },
+        "token_budget_config_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Token Budget Config Sha256",
+          "type": "string"
+        },
+        "user_prompt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "User Prompt Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "logical_request_id",
+        "role",
+        "exact_model_id",
+        "provider_endpoint",
+        "maximum_attempts",
+        "execution_config_sha256",
+        "privacy_config_sha256",
+        "token_budget_config_sha256",
+        "provider_policy_sha256",
+        "discovery_manifest_sha256",
+        "discovery_evidence_sha256",
+        "discovery_provenance_sha256",
+        "catalog_snapshot_sha256",
+        "catalog_identity_binding_sha256",
+        "model_metadata_snapshot_sha256",
+        "model_identity_snapshot_sha256",
+        "endpoint_policy_snapshot_sha256",
+        "endpoint_record_snapshot_sha256",
+        "endpoint_policy_pricing_sha256",
+        "endpoint_pricing_sha256",
+        "output_capability_sha256",
+        "reasoning_capability_sha256",
+        "structured_output_mode",
+        "prompt_sha256",
+        "system_prompt_sha256",
+        "user_prompt_sha256",
+        "response_schema_sha256",
+        "output_request_shape_sha256",
+        "required_provider_parameters_sha256",
+        "reasoning_plan_sha256",
+        "reasoning_policy_sha256",
+        "reasoning_policy_role_binding_sha256",
+        "reasoning_profile_sha256",
+        "request_token_plan_projection_sha256",
+        "request_material_projection_sha256",
+        "request_material_projection_utf8_bytes",
+        "endpoint_cost_bound_pricing_sha256",
+        "endpoint_cost_bound_projection_sha256",
+        "cost_components",
+        "prompt_byte_upper_bound_tokens",
+        "requested_completion_tokens",
+        "reserved_output_tokens",
+        "reserved_reasoning_tokens",
+        "maximum_priced_prompt_units",
+        "maximum_cost_usd_per_attempt_exact",
+        "maximum_cost_usd_all_attempts_exact",
+        "preview_sha256"
+      ],
+      "title": "OpenRouterStructuredRequestCostPreview",
+      "type": "object"
+    },
+    "OperatorLineageReview": {
+      "additionalProperties": false,
+      "description": "Self-hashed operator decision over exact IDs that share one root lineage.",
+      "properties": {
+        "evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Evidence Sha256"
+        },
+        "rationale": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "review_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Review Sha256",
+          "type": "string"
+        },
+        "reviewed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reviewed At"
+        },
+        "reviewed_by": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reviewed By"
+        },
+        "reviewed_model_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Reviewed Model Ids",
+          "type": "array"
+        },
+        "root_lineage": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Root Lineage"
+        },
+        "status": {
+          "$ref": "#/$defs/LineageReviewStatus"
+        }
+      },
+      "required": [
+        "status",
+        "reviewed_model_ids",
+        "rationale",
+        "review_sha256"
+      ],
+      "title": "OperatorLineageReview",
+      "type": "object"
+    },
+    "ReasoningControlProfile": {
+      "additionalProperties": false,
+      "description": "One effective reasoning control with an explicit token reservation.",
+      "properties": {
+        "effort": {
+          "anyOf": [
+            {
+              "enum": [
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effort"
+        },
+        "exclude": {
+          "default": false,
+          "title": "Exclude",
+          "type": "boolean"
+        },
+        "max_tokens": {
+          "anyOf": [
+            {
+              "maximum": 65536,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Tokens"
+        },
+        "mode": {
+          "enum": [
+            "disabled",
+            "default",
+            "effort",
+            "max_tokens"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Profile Sha256",
+          "type": "string"
+        },
+        "reserved_reasoning_tokens": {
+          "maximum": 65536,
+          "minimum": 0,
+          "title": "Reserved Reasoning Tokens",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "reserved_reasoning_tokens",
+        "profile_sha256"
+      ],
+      "title": "ReasoningControlProfile",
+      "type": "object"
+    },
+    "ReasoningExecutionEvidence": {
+      "additionalProperties": false,
+      "description": "Provider accounting joined to the exact pre-transport reasoning plan.",
+      "properties": {
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "observation_available": {
+          "title": "Observation Available",
+          "type": "boolean"
+        },
+        "observed_reasoning_tokens": {
+          "anyOf": [
+            {
+              "maximum": 65536,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed Reasoning Tokens"
+        },
+        "provider_completion_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Completion Tokens"
+        },
+        "request_body_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Body Sha256",
+          "type": "string"
+        },
+        "request_plan": {
+          "$ref": "#/$defs/ReasoningRequestPlanEvidence"
+        },
+        "request_token_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Token Plan Sha256",
+          "type": "string"
+        },
+        "reserved_reasoning_tokens": {
+          "maximum": 65536,
+          "minimum": 0,
+          "title": "Reserved Reasoning Tokens",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "disabled_observed",
+            "disabled_unreported",
+            "active_observed",
+            "active_unavailable",
+            "failed_before_observation"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "visible_completion_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Visible Completion Tokens"
+        }
+      },
+      "required": [
+        "request_plan",
+        "reserved_reasoning_tokens",
+        "observation_available",
+        "state",
+        "request_token_plan_sha256",
+        "request_body_sha256",
+        "evidence_sha256"
+      ],
+      "title": "ReasoningExecutionEvidence",
+      "type": "object"
+    },
+    "ReasoningRequestPlanEvidence": {
+      "additionalProperties": false,
+      "description": "Exact role, control, capability, and qualification joins for one request plan.",
+      "properties": {
+        "binding_state": {
+          "enum": [
+            "policy_only",
+            "capability_bound",
+            "qualification_bound"
+          ],
+          "title": "Binding State",
+          "type": "string"
+        },
+        "control_profile": {
+          "$ref": "#/$defs/ReasoningControlProfile"
+        },
+        "endpoint_capability_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Capability Sha256"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "policy_artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Artifact Sha256",
+          "type": "string"
+        },
+        "policy_role_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Role Binding Sha256",
+          "type": "string"
+        },
+        "qualification_binding_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Qualification Binding Sha256"
+        },
+        "resolution": {
+          "$ref": "#/$defs/ReasoningRequestRoleResolution"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resolution",
+        "control_profile",
+        "policy_artifact_sha256",
+        "policy_role_binding_sha256",
+        "binding_state",
+        "evidence_sha256"
+      ],
+      "title": "ReasoningRequestPlanEvidence",
+      "type": "object"
+    },
+    "ReasoningRequestRoleResolution": {
+      "additionalProperties": false,
+      "description": "Exact host request-role meaning, policy routing, and qualification role.",
+      "properties": {
+        "configured_policy_role": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Configured Policy Role",
+          "type": "string"
+        },
+        "mapping_kind": {
+          "enum": [
+            "base_exact",
+            "specialist_investigator",
+            "specialist_auxiliary",
+            "dedicated_exploit_test",
+            "fallback_exploit_test",
+            "falsifier_fallback",
+            "candidate_cross_examination_context",
+            "candidate_cross_examination",
+            "whole_protocol_indexed",
+            "prequalification_benchmark",
+            "prequalification_role_benchmark"
+          ],
+          "title": "Mapping Kind",
+          "type": "string"
+        },
+        "qualification_role": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Qualification Role",
+          "type": "string"
+        },
+        "request_role": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Request Role",
+          "type": "string"
+        },
+        "resolution_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Resolution Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "semantic_role": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Semantic Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_role",
+        "semantic_role",
+        "configured_policy_role",
+        "qualification_role",
+        "mapping_kind",
+        "resolution_sha256"
+      ],
+      "title": "ReasoningRequestRoleResolution",
+      "type": "object"
+    },
+    "StructuredOutputMode": {
+      "description": "One exact request/validation protocol for model output.",
+      "enum": [
+        "NATIVE_JSON_SCHEMA",
+        "JSON_OBJECT",
+        "VALIDATED_TEXT_JSON"
+      ],
+      "title": "StructuredOutputMode",
+      "type": "string"
+    },
+    "UsageRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "accounted_cost_usd": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Accounted Cost Usd",
+          "type": "number"
+        },
+        "accounted_cost_usd_exact": {
+          "anyOf": [
+            {
+              "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,36})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Accounted Cost Usd Exact"
+        },
+        "actual_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actual Model"
+        },
+        "actual_provider_endpoint": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actual Provider Endpoint"
+        },
+        "attempts": {
+          "minimum": 1,
+          "title": "Attempts",
+          "type": "integer"
+        },
+        "cached_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Cached Tokens",
+          "type": "integer"
+        },
+        "completion_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Completion Tokens",
+          "type": "integer"
+        },
+        "configured_provider_endpoints": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Configured Provider Endpoints",
+          "type": "array"
+        },
+        "ended_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ended At"
+        },
+        "execution_evidence": {
+          "$ref": "#/$defs/ExecutionEvidenceKind",
+          "default": "unverified"
+        },
+        "fallback_used": {
+          "default": false,
+          "title": "Fallback Used",
+          "type": "boolean"
+        },
+        "finish_reason": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Finish Reason"
+        },
+        "identity_strength": {
+          "$ref": "#/$defs/OpenRouterIdentityStrength",
+          "default": "UNBOUND"
+        },
+        "latency_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latency Ms"
+        },
+        "model_family": {
+          "title": "Model Family",
+          "type": "string"
+        },
+        "openrouter_generation_id": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Openrouter Generation Id"
+        },
+        "prompt_sha256": {
+          "title": "Prompt Sha256",
+          "type": "string"
+        },
+        "prompt_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Prompt Tokens",
+          "type": "integer"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider"
+        },
+        "provider_error_classification": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Error Classification"
+        },
+        "reasoning_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningExecutionEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "reasoning_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Reasoning Tokens",
+          "type": "integer"
+        },
+        "reported_cost_usd": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reported Cost Usd"
+        },
+        "reported_cost_usd_exact": {
+          "anyOf": [
+            {
+              "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,36})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reported Cost Usd Exact"
+        },
+        "request_body_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Body Sha256"
+        },
+        "request_id": {
+          "title": "Request Id",
+          "type": "string"
+        },
+        "requested_model": {
+          "title": "Requested Model",
+          "type": "string"
+        },
+        "response_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Response Sha256"
+        },
+        "retry_count": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry Count"
+        },
+        "returned_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Returned Model"
+        },
+        "role": {
+          "title": "Role",
+          "type": "string"
+        },
+        "routing": {
+          "additionalProperties": true,
+          "title": "Routing",
+          "type": "object"
+        },
+        "schema_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Schema Sha256"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Started At"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "substitution_detected": {
+          "default": false,
+          "title": "Substitution Detected",
+          "type": "boolean"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        },
+        "total_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Total Tokens",
+          "type": "integer"
+        },
+        "user_prompt_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "User Prompt Sha256"
+        },
+        "validated_response_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Validated Response Sha256"
+        },
+        "validation_status": {
+          "$ref": "#/$defs/ModelRequestValidationStatus",
+          "default": "not_validated"
+        }
+      },
+      "required": [
+        "request_id",
+        "role",
+        "requested_model",
+        "model_family",
+        "timestamp",
+        "prompt_sha256",
+        "status",
+        "attempts"
+      ],
+      "title": "UsageRecord",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/authenticated_runner_smoke_evidence_bundle.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Canonical four-request smoke evidence that no authority consumer accepts.",
+  "properties": {
+    "artifact_kind": {
+      "const": "authenticated_runner_noncrediting_smoke_evidence",
+      "default": "authenticated_runner_noncrediting_smoke_evidence",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "audit_completion_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Audit Completion Authorized",
+      "type": "boolean"
+    },
+    "audit_execution_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Audit Execution Authorized",
+      "type": "boolean"
+    },
+    "authority_issuance_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Authority Issuance Authorized",
+      "type": "boolean"
+    },
+    "authseal_comparison_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Authseal Comparison Authorized",
+      "type": "boolean"
+    },
+    "baseline_update_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Baseline Update Authorized",
+      "type": "boolean"
+    },
+    "benchmark_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Benchmark Authorized",
+      "type": "boolean"
+    },
+    "benchmark_scoring_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Benchmark Scoring Authorized",
+      "type": "boolean"
+    },
+    "bundle_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Bundle Sha256",
+      "type": "string"
+    },
+    "calibration_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Calibration Authorized",
+      "type": "boolean"
+    },
+    "closed_ledger_evidence": {
+      "$ref": "#/$defs/AuthenticatedCrossLineageLedgerIntervalEvidence"
+    },
+    "disposition": {
+      "const": "TRANSPORT_SCHEMA_IDENTITY_COST_VALID",
+      "default": "TRANSPORT_SCHEMA_IDENTITY_COST_VALID",
+      "title": "Disposition",
+      "type": "string"
+    },
+    "effective_config_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Effective Config Sha256",
+      "type": "string"
+    },
+    "execution_sequence_request_ids": {
+      "maxItems": 4,
+      "minItems": 4,
+      "prefixItems": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "title": "Execution Sequence Request Ids",
+      "type": "array"
+    },
+    "full_corpus_execution_completed": {
+      "const": false,
+      "default": false,
+      "title": "Full Corpus Execution Completed",
+      "type": "boolean"
+    },
+    "generation_refetch_count": {
+      "const": 4,
+      "default": 4,
+      "title": "Generation Refetch Count",
+      "type": "integer"
+    },
+    "grants_completion_credit": {
+      "const": false,
+      "default": false,
+      "title": "Grants Completion Credit",
+      "type": "boolean"
+    },
+    "grants_review_credit": {
+      "const": false,
+      "default": false,
+      "title": "Grants Review Credit",
+      "type": "boolean"
+    },
+    "logical_request_count": {
+      "const": 4,
+      "default": 4,
+      "title": "Logical Request Count",
+      "type": "integer"
+    },
+    "maximum_provider_attempt_count": {
+      "const": 8,
+      "default": 8,
+      "title": "Maximum Provider Attempt Count",
+      "type": "integer"
+    },
+    "model_qualification_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Model Qualification Authorized",
+      "type": "boolean"
+    },
+    "parent_case_count": {
+      "const": 24,
+      "default": 24,
+      "title": "Parent Case Count",
+      "type": "integer"
+    },
+    "parent_corpus_sha256": {
+      "const": "f92ff08ffff2de6fc4b8a4be547d2a0aef45990f7090f734c551ec696ca33e38",
+      "title": "Parent Corpus Sha256",
+      "type": "string"
+    },
+    "parent_ground_truth_sha256": {
+      "const": "246f5f84aac6aaeecf20a017c9bd5a0f1897e56d54c82ce5ba75a02751d7118c",
+      "title": "Parent Ground Truth Sha256",
+      "type": "string"
+    },
+    "production_selection_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Production Selection Authorized",
+      "type": "boolean"
+    },
+    "provider_call_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Provider Call Authorized",
+      "type": "boolean"
+    },
+    "purpose": {
+      "const": "NONCREDITING_SMOKE",
+      "default": "NONCREDITING_SMOKE",
+      "title": "Purpose",
+      "type": "string"
+    },
+    "release_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Release Authorized",
+      "type": "boolean"
+    },
+    "run_count": {
+      "const": 2,
+      "default": 2,
+      "title": "Run Count",
+      "type": "integer"
+    },
+    "runner_authority_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Runner Authority Authorized",
+      "type": "boolean"
+    },
+    "runner_custody_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Runner Custody Authorized",
+      "type": "boolean"
+    },
+    "runs": {
+      "items": {
+        "$ref": "#/$defs/AuthenticatedRunnerSmokeRunEvidence"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "title": "Runs",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "seal_publication_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Seal Publication Authorized",
+      "type": "boolean"
+    },
+    "selected_case_count": {
+      "const": 1,
+      "default": 1,
+      "title": "Selected Case Count",
+      "type": "integer"
+    },
+    "selected_case_id": {
+      "const": "case-df79ea132113b863",
+      "title": "Selected Case Id",
+      "type": "string"
+    },
+    "smoke_corpus_bundle_sha256": {
+      "const": "721f058726cf9509c07cb2aae662fb6ac23b5c30a363db40229faf8895034497",
+      "title": "Smoke Corpus Bundle Sha256",
+      "type": "string"
+    },
+    "source_egress_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Source Egress Authorized",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "smoke_corpus_bundle_sha256",
+    "parent_corpus_sha256",
+    "parent_ground_truth_sha256",
+    "effective_config_sha256",
+    "selected_case_id",
+    "execution_sequence_request_ids",
+    "runs",
+    "closed_ledger_evidence",
+    "bundle_sha256"
+  ],
+  "title": "mmaudit noncrediting authenticated runner smoke evidence bundle",
+  "type": "object"
+}

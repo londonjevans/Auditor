@@ -1292,6 +1292,11 @@ def _require_complete_judge_execution(
         or report.case_ids != tuple(case.case_id for case in benchmark_suite.cases)
         or len(report.cases) != _FROZEN_CASE_COUNT
         or observed_usage != report_usage
+        or any(
+            item.routing.get("privacy_source_proof_kind")
+            != "RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION"
+            for item in report_usage
+        )
     ):
         raise AuthenticatedRunnerExecutionError(
             "judge execution is not the exact complete prepared 24-case report"

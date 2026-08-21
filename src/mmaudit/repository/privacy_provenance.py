@@ -179,6 +179,8 @@ class PrivacySourceProvenanceEvidence(BaseModel):
         "PACKAGE_PINNED_SYNTHETIC",
         "RELEASE_PINNED_MODEL_BENCHMARK",
         "RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION",
+        "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK",
+        "PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION",
     ]
     distribution_commit: str | None = Field(
         default=None,
@@ -259,6 +261,10 @@ class PrivacySourceProvenanceEvidence(BaseModel):
             self.adjudication_ground_truth_sha256,
         )
         release_pinned_adjudication = self.proof_kind == "RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION"
+        smoke_pinned_benchmark = self.proof_kind == "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK"
+        smoke_pinned_adjudication = (
+            self.proof_kind == "PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION"
+        )
         if committed_synthetic:
             if (
                 self.source_classification != "SYNTHETIC_COMMITTED"
@@ -309,6 +315,36 @@ class PrivacySourceProvenanceEvidence(BaseModel):
                 or self.provider_visible_case_count < 1
             ):
                 raise ValueError("release-pinned cross-lineage provenance is incomplete")
+        elif smoke_pinned_benchmark:
+            if (
+                self.source_classification != "SYNTHETIC_COMMITTED"
+                or self.distribution_commit is not None
+                or self.distribution_scope != "benchmarks/model_corpus_smoke"
+                or self.committed_file_count
+                or self.committed_file_inventory_sha256 is not None
+                or self.synthetic_declaration_path is not None
+                or self.synthetic_declaration_sha256 is not None
+                or self.synthetic_declaration_entry_sha256 is not None
+                or any(value is None for value in release_values)
+                or any(value is not None for value in adjudication_values)
+                or self.provider_visible_case_count != 1
+            ):
+                raise ValueError("pinned noncrediting smoke benchmark provenance is incomplete")
+        elif smoke_pinned_adjudication:
+            if (
+                self.source_classification != "SYNTHETIC_COMMITTED"
+                or self.distribution_commit is not None
+                or self.distribution_scope != "benchmarks/model_corpus_smoke"
+                or self.committed_file_count
+                or self.committed_file_inventory_sha256 is not None
+                or self.synthetic_declaration_path is not None
+                or self.synthetic_declaration_sha256 is not None
+                or self.synthetic_declaration_entry_sha256 is not None
+                or any(value is None for value in release_values)
+                or any(value is None for value in adjudication_values)
+                or self.provider_visible_case_count != 1
+            ):
+                raise ValueError("pinned noncrediting smoke cross-lineage provenance is incomplete")
         elif (
             self.source_classification != "PRIVATE_OPERATOR_SOURCE"
             or self.distribution_commit is not None
@@ -905,6 +941,252 @@ def _build_release_pinned_cross_lineage_adjudication_evidence(
     )
 
 
+def _validated_authenticated_runner_smoke_bundle(value: object) -> Any:
+    """Detach one code-pinned singleton smoke bundle before deriving egress proof."""
+
+    from mmaudit.models.authenticated_runner_smoke_corpus import (
+        AUTHENTICATED_RUNNER_SMOKE_CASE_ID,
+        AuthenticatedRunnerSmokeCorpusBundle,
+    )
+
+    if type(value) is not AuthenticatedRunnerSmokeCorpusBundle:
+        raise ValueError("noncrediting smoke source requires the exact pinned bundle type")
+    try:
+        bundle = AuthenticatedRunnerSmokeCorpusBundle.model_validate_json(
+            value.model_dump_json(),
+            strict=True,
+        )
+    except Exception:
+        raise ValueError("noncrediting smoke source bundle failed detached validation") from None
+    if (
+        bundle != value
+        or bundle.case.case_id != AUTHENTICATED_RUNNER_SMOKE_CASE_ID
+        or bundle.ground_truth_case.case_id != AUTHENTICATED_RUNNER_SMOKE_CASE_ID
+        or bundle.case_binding.case_id != AUTHENTICATED_RUNNER_SMOKE_CASE_ID
+    ):
+        raise ValueError("noncrediting smoke source differs from its exact singleton pin")
+    return bundle
+
+
+def _build_pinned_noncrediting_smoke_model_benchmark_evidence(
+    smoke_bundle: object,
+    *,
+    now: datetime,
+    _validate_bundle: Callable[[object], Any] = _validated_authenticated_runner_smoke_bundle,
+) -> tuple[PrivacySourceProvenanceEvidence, frozenset[str]]:
+    """Prove only the exact singleton candidate prompt pinned by the smoke bundle."""
+
+    from mmaudit.benchmark.models import (
+        MODEL_BENCHMARK_SCHEMA_NAME,
+        ModelBenchmarkResponse,
+        blinded_model_benchmark_request,
+        model_benchmark_provider_request_commitment,
+        model_benchmark_system_prompt,
+    )
+    from mmaudit.models.output_modes import StructuredOutputMode
+
+    bundle = _validate_bundle(smoke_bundle)
+    case = bundle.case
+    user_prompt = blinded_model_benchmark_request(case)
+    case_commitment_sha256, _closed_request_commitment_sha256 = (
+        model_benchmark_provider_request_commitment(
+            request_role="model_benchmark",
+            system_prompt=model_benchmark_system_prompt(),
+            user_prompt=user_prompt,
+            response_model=ModelBenchmarkResponse,
+            schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
+            structured_output_mode=StructuredOutputMode.NATIVE_JSON_SCHEMA,
+            context_package=None,
+        )
+    )
+    case_sha256 = _canonical_sha256(case.model_dump(mode="json"))
+    inventory = (
+        {
+            "case_id": case.case_id,
+            "source_path": case.source_path,
+            "case_sha256": case_sha256,
+            "case_commitment_sha256": case_commitment_sha256,
+            "request_size": len(user_prompt.encode("utf-8")),
+        },
+    )
+    observed_at = _whole_second_utc(now)
+    return (
+        _seal(
+            {
+                "schema_version": "1.0",
+                "source_classification": "SYNTHETIC_COMMITTED",
+                "source_sha256": bundle.source_sha256,
+                "proof_kind": "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK",
+                "distribution_commit": None,
+                "distribution_scope": "benchmarks/model_corpus_smoke",
+                "committed_file_count": 0,
+                "committed_file_inventory_sha256": None,
+                "synthetic_declaration_path": None,
+                "synthetic_declaration_sha256": None,
+                "synthetic_declaration_entry_sha256": None,
+                "release_pin_set_sha256": bundle.bundle_sha256,
+                "provider_visible_case_count": 1,
+                "provider_visible_case_inventory_sha256": _canonical_sha256(inventory),
+                "observed_at": observed_at,
+                "limitations": tuple(
+                    sorted(
+                        {
+                            "This proof admits one pinned transport-smoke candidate prompt only.",
+                            "Smoke source custody grants no benchmark, qualification, seal, audit, or release credit.",
+                        }
+                    )
+                ),
+            }
+        ),
+        frozenset({case_commitment_sha256}),
+    )
+
+
+def _build_pinned_noncrediting_smoke_cross_lineage_adjudication_evidence(
+    smoke_bundle: object,
+    candidate_result: object,
+    prepared_run: object,
+    *,
+    now: datetime,
+    _validate_bundle: Callable[[object], Any] = _validated_authenticated_runner_smoke_bundle,
+) -> tuple[PrivacySourceProvenanceEvidence, frozenset[str]]:
+    """Prove one exact smoke judge prompt over the pinned case and candidate result."""
+
+    from mmaudit.benchmark.cross_lineage_adjudication import (
+        CROSS_LINEAGE_ADJUDICATION_SCHEMA_NAME,
+        CrossLineageAdjudicationPreparedRun,
+        CrossLineageAdjudicationWireResponse,
+        cross_lineage_adjudication_provider_request_commitment,
+        cross_lineage_adjudication_source_sha256,
+        cross_lineage_adjudication_system_prompt,
+    )
+    from mmaudit.benchmark.models import ModelBenchmarkCaseResult
+
+    bundle = _validate_bundle(smoke_bundle)
+    if type(candidate_result) is not ModelBenchmarkCaseResult:
+        raise ValueError("noncrediting smoke adjudication requires one exact candidate result")
+    if type(prepared_run) is not CrossLineageAdjudicationPreparedRun:
+        raise ValueError("noncrediting smoke adjudication requires one exact prepared run")
+    try:
+        result = ModelBenchmarkCaseResult.model_validate(
+            candidate_result.model_dump(mode="python"),
+            strict=True,
+        )
+        prepared = CrossLineageAdjudicationPreparedRun.model_validate(
+            prepared_run.model_dump(mode="python"),
+            strict=True,
+        )
+    except Exception:
+        raise ValueError(
+            "noncrediting smoke adjudication inputs failed detached validation"
+        ) from None
+    if result != candidate_result or prepared != prepared_run:
+        raise ValueError("noncrediting smoke adjudication inputs changed at the boundary")
+    case = bundle.case
+    truth = bundle.ground_truth_case
+    response = result.normalized_response
+    usage = result.usage_record
+    generation = result.generation_evidence
+    if (
+        prepared.case_ids != (case.case_id,)
+        or len(prepared.requests) != 1
+        or prepared.corpus_sha256 != bundle.manifest.parent.corpus_sha256
+        or prepared.ground_truth_sha256 != bundle.manifest.parent.ground_truth_sha256
+        or result.case_id != case.case_id
+        or result.error_kind is not None
+        or response is None
+        or usage is None
+        or generation is None
+    ):
+        raise ValueError("noncrediting smoke adjudication is not an exact successful singleton")
+    request = prepared.requests[0]
+    case_sha256 = _canonical_sha256(case.model_dump(mode="json"))
+    truth_sha256 = _canonical_sha256(truth.model_dump(mode="json"))
+    result_sha256 = _canonical_sha256(result.model_dump(mode="json"))
+    usage_sha256 = _canonical_sha256(usage.model_dump(mode="json"))
+    dimension_sha256s = tuple(
+        _canonical_sha256(item.model_dump(mode="json")) for item in result.dimensions
+    )
+    try:
+        prompt_envelope = json.loads(request.provider_visible_user_prompt)
+        prompt_payload = prompt_envelope["case_payload"]
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("noncrediting smoke adjudication prompt is malformed") from None
+    if (
+        request.case_id != case.case_id
+        or request.corpus_sha256 != bundle.manifest.parent.corpus_sha256
+        or request.ground_truth_sha256 != bundle.manifest.parent.ground_truth_sha256
+        or request.corpus_case_sha256 != case_sha256
+        or request.ground_truth_case_sha256 != truth_sha256
+        or request.candidate_case_result_sha256 != result_sha256
+        or request.candidate_validated_response_sha256 != result.validated_response_sha256
+        or request.candidate_request_body_sha256 != usage.request_body_sha256
+        or request.candidate_usage_record_sha256 != usage_sha256
+        or request.candidate_generation_evidence_sha256 != generation.evidence_sha256
+        or request.candidate_dimension_result_sha256s != dimension_sha256s
+        or prompt_payload.get("case") != case.model_dump(mode="json")
+        or prompt_payload.get("ground_truth") != truth.model_dump(mode="json")
+        or prompt_payload.get("candidate_response") != response.model_dump(mode="json")
+        or prompt_payload.get("dimensions") != [item.dimension.value for item in result.dimensions]
+    ):
+        raise ValueError(
+            "noncrediting smoke adjudication prompt differs from the pinned singleton source"
+        )
+    output_mode = prepared.target.judge_structured_output_mode
+    request_commitment_sha256 = cross_lineage_adjudication_provider_request_commitment(
+        request_role="model_benchmark",
+        system_prompt=cross_lineage_adjudication_system_prompt(),
+        user_prompt=request.provider_visible_user_prompt,
+        response_model=CrossLineageAdjudicationWireResponse,
+        schema_name=CROSS_LINEAGE_ADJUDICATION_SCHEMA_NAME,
+        structured_output_mode=output_mode,
+        context_package=None,
+    )
+    inventory = (
+        {
+            "case_id": request.case_id,
+            "request_sha256": request.request_sha256,
+            "provider_visible_payload_sha256": request.provider_visible_payload_sha256,
+            "provider_request_commitment_sha256": request_commitment_sha256,
+            "request_size": len(request.provider_visible_user_prompt.encode("utf-8")),
+        },
+    )
+    observed_at = _whole_second_utc(now)
+    return (
+        _seal(
+            {
+                "schema_version": "1.0",
+                "source_classification": "SYNTHETIC_COMMITTED",
+                "source_sha256": cross_lineage_adjudication_source_sha256(prepared),
+                "proof_kind": ("PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION"),
+                "distribution_commit": None,
+                "distribution_scope": "benchmarks/model_corpus_smoke",
+                "committed_file_count": 0,
+                "committed_file_inventory_sha256": None,
+                "synthetic_declaration_path": None,
+                "synthetic_declaration_sha256": None,
+                "synthetic_declaration_entry_sha256": None,
+                "release_pin_set_sha256": bundle.bundle_sha256,
+                "provider_visible_case_count": 1,
+                "provider_visible_case_inventory_sha256": _canonical_sha256(inventory),
+                "adjudication_prepared_run_sha256": prepared.prepared_run_sha256,
+                "adjudication_candidate_report_sha256": prepared.candidate_report_sha256,
+                "adjudication_ground_truth_sha256": prepared.ground_truth_sha256,
+                "observed_at": observed_at,
+                "limitations": tuple(
+                    sorted(
+                        {
+                            "This proof admits one exact pinned transport-smoke judge prompt only.",
+                            "Smoke adjudication grants no benchmark, qualification, seal, audit, or release credit.",
+                        }
+                    )
+                ),
+            }
+        ),
+        frozenset({request_commitment_sha256}),
+    )
+
+
 def _build_privacy_source_provenance_authority(
     source_builder: Callable[..., tuple[PrivacySourceProvenanceEvidence, frozenset[str]]],
     release_builder: Callable[..., tuple[PrivacySourceProvenanceEvidence, frozenset[str]]],
@@ -912,8 +1194,18 @@ def _build_privacy_source_provenance_authority(
         ...,
         tuple[PrivacySourceProvenanceEvidence, frozenset[str]],
     ],
+    smoke_benchmark_builder: Callable[
+        ...,
+        tuple[PrivacySourceProvenanceEvidence, frozenset[str]],
+    ],
+    smoke_adjudication_builder: Callable[
+        ...,
+        tuple[PrivacySourceProvenanceEvidence, frozenset[str]],
+    ],
     smoke_request_commitment: Callable[..., str],
 ) -> tuple[
+    Callable[..., PrivacySourceProvenanceObservation],
+    Callable[..., PrivacySourceProvenanceObservation],
     Callable[..., PrivacySourceProvenanceObservation],
     Callable[..., PrivacySourceProvenanceObservation],
     Callable[..., PrivacySourceProvenanceObservation],
@@ -1010,6 +1302,29 @@ def _build_privacy_source_provenance_authority(
             prepared_run,
             benchmark_suite,
             candidate_report,
+            now=now,
+        )
+        return issue(evidence, request_sha256s)
+
+    def prove_smoke_benchmark(
+        smoke_bundle: object,
+        *,
+        now: datetime,
+    ) -> PrivacySourceProvenanceObservation:
+        evidence, request_sha256s = smoke_benchmark_builder(smoke_bundle, now=now)
+        return issue(evidence, request_sha256s)
+
+    def prove_smoke_adjudication(
+        smoke_bundle: object,
+        candidate_result: object,
+        prepared_run: object,
+        *,
+        now: datetime,
+    ) -> PrivacySourceProvenanceObservation:
+        evidence, request_sha256s = smoke_adjudication_builder(
+            smoke_bundle,
+            candidate_result,
+            prepared_run,
             now=now,
         )
         return issue(evidence, request_sha256s)
@@ -1134,6 +1449,36 @@ def _build_privacy_source_provenance_authority(
                 context_package=context_package,
             )
             expected_count = evidence.provider_visible_case_count
+        elif evidence.proof_kind == "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK":
+            from mmaudit.benchmark.models import model_benchmark_provider_request_commitment
+
+            request_commitment_sha256, _closed_request_commitment_sha256 = (
+                model_benchmark_provider_request_commitment(
+                    request_role=request_role,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    response_model=response_model,
+                    schema_name=schema_name,
+                    structured_output_mode=structured_output_mode,
+                    context_package=context_package,
+                )
+            )
+            expected_count = 1
+        elif evidence.proof_kind == "PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION":
+            from mmaudit.benchmark.cross_lineage_adjudication import (
+                cross_lineage_adjudication_provider_request_commitment,
+            )
+
+            request_commitment_sha256 = cross_lineage_adjudication_provider_request_commitment(
+                request_role=request_role,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                structured_output_mode=structured_output_mode,
+                context_package=context_package,
+            )
+            expected_count = 1
         elif evidence.proof_kind in {
             "DISTRIBUTION_COMMITTED_SYNTHETIC",
             "PACKAGE_PINNED_SYNTHETIC",
@@ -1162,6 +1507,13 @@ def _build_privacy_source_provenance_authority(
                     "request is absent from the live release-pinned provider-visible "
                     "benchmark inventory"
                 )
+            if evidence.proof_kind in {
+                "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK",
+                "PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION",
+            }:
+                raise ValueError(
+                    "request is absent from the live pinned noncrediting smoke inventory"
+                )
             raise ValueError("request is absent from the live provider-visible source inventory")
         return evidence
 
@@ -1174,6 +1526,8 @@ def _build_privacy_source_provenance_authority(
         prove_source,
         prove_release,
         prove_adjudication,
+        prove_smoke_benchmark,
+        prove_smoke_adjudication,
         reobserve_retained,
         validate,
         validate_request,
@@ -1467,6 +1821,8 @@ def _model_content_sha256(value: BaseModel) -> str:
     prove_privacy_source_classification,
     prove_release_pinned_model_benchmark_source,
     prove_release_pinned_cross_lineage_adjudication_source,
+    prove_pinned_noncrediting_smoke_model_benchmark_source,
+    prove_pinned_noncrediting_smoke_cross_lineage_adjudication_source,
     reobserve_retained_privacy_source_provenance,
     validate_privacy_source_provenance_observation,
     validate_provider_visible_source_request,
@@ -1475,12 +1831,17 @@ def _model_content_sha256(value: BaseModel) -> str:
     _build_privacy_source_classification_evidence,
     _build_release_pinned_model_benchmark_evidence,
     _build_release_pinned_cross_lineage_adjudication_evidence,
+    _build_pinned_noncrediting_smoke_model_benchmark_evidence,
+    _build_pinned_noncrediting_smoke_cross_lineage_adjudication_evidence,
     _TRUSTED_PROVIDER_SMOKE_REQUEST_COMMITMENT,
 )
 del _build_privacy_source_provenance_authority
 del _build_privacy_source_classification_evidence
 del _build_release_pinned_model_benchmark_evidence
 del _build_release_pinned_cross_lineage_adjudication_evidence
+del _build_pinned_noncrediting_smoke_model_benchmark_evidence
+del _build_pinned_noncrediting_smoke_cross_lineage_adjudication_evidence
+del _validated_authenticated_runner_smoke_bundle
 del _TRUSTED_REQUIRE_RELEASE_PINNED_MODEL_BENCHMARK
 del _TRUSTED_BUILD_PROVIDER_SMOKE_USER_PROMPT
 del _TRUSTED_PROVIDER_SMOKE_REQUEST_COMMITMENT

@@ -12,6 +12,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 import mmaudit
 import mmaudit.config as config_module
@@ -20,6 +21,7 @@ from mmaudit.benchmark.models import (
     MODEL_BENCHMARK_SCHEMA_NAME,
     ModelBenchmarkCorpusPayload,
     ModelBenchmarkGroundTruthPayload,
+    ModelBenchmarkReport,
     ModelBenchmarkResponse,
     ModelBenchmarkSuite,
     blinded_model_benchmark_request,
@@ -28,15 +30,21 @@ from mmaudit.benchmark.models import (
     seal_model_benchmark_corpus,
     seal_model_benchmark_ground_truth,
 )
+from mmaudit.models.authenticated_runner_smoke_corpus import (
+    load_authenticated_runner_smoke_corpus_bundle,
+)
 from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.privacy import (
+    EffectivePrivacyPolicyEvidence,
     PrivacyProfile,
     PrivacySourceClassification,
     resolve_effective_privacy_policy,
 )
 from mmaudit.repository.discovery import DiscoveredFile, DiscoveryResult
 from mmaudit.repository.privacy_provenance import (
+    PrivacySourceProvenanceEvidence,
     PrivacySourceProvenanceObservation,
+    prove_pinned_noncrediting_smoke_model_benchmark_source,
     prove_privacy_source_classification,
     prove_release_pinned_model_benchmark_source,
     reobserve_retained_privacy_source_provenance,
@@ -48,6 +56,7 @@ _NOW = datetime(2026, 7, 29, 12, 0, tzinfo=UTC)
 _DECLARATION_PATH = Path("src/mmaudit/resources/privacy-synthetic-sources.json")
 _DEFAULT_SCOPE = "tests/fixtures/synthetic"
 _MODEL_BENCHMARK_CORPUS = Path(__file__).parents[2] / "benchmarks/model_corpus/manifest.json"
+_MODEL_BENCHMARK_SMOKE_CORPUS = Path(__file__).parents[2] / "benchmarks/model_corpus_smoke"
 
 
 def _git(root: Path, *arguments: str, input_bytes: bytes | None = None) -> bytes:
@@ -185,6 +194,17 @@ def _source_sha256(discovery: DiscoveryResult) -> str:
     ).hexdigest()
 
 
+def _canonical_sha256(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def _prove(discovery: DiscoveryResult) -> PrivacySourceProvenanceObservation:
     return prove_privacy_source_classification(
         discovery,
@@ -261,6 +281,166 @@ def test_release_pinned_model_benchmark_proves_exact_provider_visible_inventory(
         )
 
 
+def test_pinned_noncrediting_smoke_proves_only_the_exact_candidate_prompt() -> None:
+    bundle = load_authenticated_runner_smoke_corpus_bundle(_MODEL_BENCHMARK_SMOKE_CORPUS)
+    observation = prove_pinned_noncrediting_smoke_model_benchmark_source(bundle, now=_NOW)
+    evidence = validate_privacy_source_provenance_observation(
+        observation,
+        source_sha256=bundle.source_sha256,
+        source_classification=PrivacySourceClassification.SYNTHETIC_COMMITTED,
+    )
+
+    assert evidence.proof_kind == "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK"
+    assert evidence.distribution_scope == "benchmarks/model_corpus_smoke"
+    assert evidence.release_pin_set_sha256 == bundle.bundle_sha256
+    assert evidence.provider_visible_case_count == 1
+    assert evidence.adjudication_prepared_run_sha256 is None
+    validated = validate_release_pinned_model_benchmark_request(
+        observation,
+        request_role="model_benchmark",
+        system_prompt=model_benchmark_system_prompt(),
+        user_prompt=blinded_model_benchmark_request(bundle.case),
+        response_model=ModelBenchmarkResponse,
+        schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
+        structured_output_mode=StructuredOutputMode.JSON_OBJECT,
+        context_package=None,
+    )
+    assert validated.evidence_sha256 == evidence.evidence_sha256
+
+    policy = resolve_effective_privacy_policy(
+        profile=PrivacyProfile.SYNTHETIC_BENCHMARK,
+        require_zdr=True,
+        consent_observation=None,
+        source_sha256=bundle.source_sha256,
+        source_classification=PrivacySourceClassification.SYNTHETIC_COMMITTED,
+        source_provenance_observation=observation,
+        configured_model_ids=("anthropic/claude-opus-4.1", "openai/gpt-5"),
+        configured_provider_endpoints=("anthropic:claude", "openai:gpt"),
+        requested_budget_usd=Decimal("1"),
+        now=_NOW,
+    )
+    assert policy.source_proof_kind == "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK"
+    assert policy.source_distribution_scope == "benchmarks/model_corpus_smoke"
+
+    full_suite = load_model_benchmark_corpus(_MODEL_BENCHMARK_CORPUS)
+    assert full_suite.cases[0].case_id != bundle.case.case_id
+    with pytest.raises(ValueError, match="pinned noncrediting smoke inventory"):
+        validate_release_pinned_model_benchmark_request(
+            observation,
+            request_role="model_benchmark",
+            system_prompt=model_benchmark_system_prompt(),
+            user_prompt=blinded_model_benchmark_request(full_suite.cases[0]),
+            response_model=ModelBenchmarkResponse,
+            schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
+            structured_output_mode=StructuredOutputMode.NATIVE_JSON_SCHEMA,
+            context_package=None,
+        )
+    with pytest.raises(ValueError, match="exact pinned bundle type"):
+        prove_pinned_noncrediting_smoke_model_benchmark_source(
+            bundle.manifest,
+            now=_NOW,
+        )
+
+
+def test_pinned_noncrediting_smoke_proves_only_the_exact_judge_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tests.unit.test_authenticated_runner_smoke_benchmark as smoke_fixtures
+    from mmaudit.benchmark.cross_lineage_adjudication import (
+        CROSS_LINEAGE_ADJUDICATION_SCHEMA_NAME,
+        CrossLineageAdjudicationRunKind,
+        CrossLineageAdjudicationWireResponse,
+        cross_lineage_adjudication_source_sha256,
+        cross_lineage_adjudication_system_prompt,
+        prepare_noncrediting_cross_lineage_adjudication_smoke,
+    )
+    from mmaudit.models.public_lineage_authority import resolve_verified_public_model_lineage
+    from mmaudit.repository.privacy_provenance import (
+        prove_pinned_noncrediting_smoke_cross_lineage_adjudication_source,
+    )
+
+    bundle = load_authenticated_runner_smoke_corpus_bundle(_MODEL_BENCHMARK_SMOKE_CORPUS)
+    suite = load_model_benchmark_corpus(_MODEL_BENCHMARK_CORPUS)
+    original_structural_real = smoke_fixtures._as_structural_real
+
+    def selected_structural_real(report: ModelBenchmarkReport) -> ModelBenchmarkReport:
+        source = original_structural_real(report)
+        model_result = source.results[0]
+        selected = next(item for item in model_result.cases if item.case_id == bundle.case.case_id)
+        reordered = [selected, *(item for item in model_result.cases if item is not selected)]
+        return source.model_copy(
+            update={"results": [model_result.model_copy(update={"cases": reordered})]}
+        )
+
+    monkeypatch.setattr(
+        smoke_fixtures,
+        "_selection",
+        lambda _suite: (bundle.case, bundle.ground_truth_case),
+    )
+    monkeypatch.setattr(smoke_fixtures, "_as_structural_real", selected_structural_real)
+    candidate_report = smoke_fixtures._smoke_report(suite)
+    prepared = prepare_noncrediting_cross_lineage_adjudication_smoke(
+        public_lineage_capability=resolve_verified_public_model_lineage(),
+        suite=suite,
+        selected_case=bundle.case,
+        selected_ground_truth=bundle.ground_truth_case,
+        selection_sha256=smoke_fixtures.SELECTION_SHA256,
+        candidate_report=candidate_report,
+        judge=smoke_fixtures._judge(smoke_fixtures.JUDGE_ID),
+        run_kind=CrossLineageAdjudicationRunKind.PRIMARY,
+    )
+
+    observation = prove_pinned_noncrediting_smoke_cross_lineage_adjudication_source(
+        bundle,
+        candidate_report.result,
+        prepared,
+        now=_NOW,
+    )
+    evidence = validate_privacy_source_provenance_observation(
+        observation,
+        source_sha256=cross_lineage_adjudication_source_sha256(prepared),
+        source_classification=PrivacySourceClassification.SYNTHETIC_COMMITTED,
+    )
+    request = prepared.requests[0]
+
+    assert evidence.proof_kind == ("PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION")
+    assert evidence.distribution_scope == "benchmarks/model_corpus_smoke"
+    assert evidence.release_pin_set_sha256 == bundle.bundle_sha256
+    assert evidence.provider_visible_case_count == 1
+    assert evidence.adjudication_prepared_run_sha256 == prepared.prepared_run_sha256
+    assert evidence.adjudication_candidate_report_sha256 == candidate_report.report_sha256
+    validated = validate_release_pinned_model_benchmark_request(
+        observation,
+        request_role="model_benchmark",
+        system_prompt=cross_lineage_adjudication_system_prompt(),
+        user_prompt=request.provider_visible_user_prompt,
+        response_model=CrossLineageAdjudicationWireResponse,
+        schema_name=CROSS_LINEAGE_ADJUDICATION_SCHEMA_NAME,
+        structured_output_mode=prepared.target.judge_structured_output_mode,
+        context_package=None,
+    )
+    assert validated.evidence_sha256 == evidence.evidence_sha256
+    with pytest.raises(ValueError, match="pinned noncrediting smoke inventory"):
+        validate_release_pinned_model_benchmark_request(
+            observation,
+            request_role="model_benchmark",
+            system_prompt=cross_lineage_adjudication_system_prompt(),
+            user_prompt="arbitrary caller-controlled adjudication source",
+            response_model=CrossLineageAdjudicationWireResponse,
+            schema_name=CROSS_LINEAGE_ADJUDICATION_SCHEMA_NAME,
+            structured_output_mode=prepared.target.judge_structured_output_mode,
+            context_package=None,
+        )
+    forged_result = candidate_report.result.model_copy(update={"case_id": "case-0000000000000000"})
+    with pytest.raises(ValueError, match="inputs failed detached validation"):
+        prove_pinned_noncrediting_smoke_cross_lineage_adjudication_source(
+            bundle,
+            forged_result,
+            prepared,
+            now=_NOW,
+        )
+
+
 def test_retained_provenance_reobservation_requires_matching_current_live_authority() -> None:
     suite = load_model_benchmark_corpus(_MODEL_BENCHMARK_CORPUS)
     retained_observation = prove_release_pinned_model_benchmark_source(suite, now=_NOW)
@@ -321,6 +501,112 @@ def test_runtime_config_pin_monkeypatch_cannot_bless_custom_benchmark(
 
     with pytest.raises(ValueError, match="release-pinned synthetic prequalification"):
         prove_release_pinned_model_benchmark_source(custom_suite, now=_NOW)
+
+
+@pytest.mark.parametrize(
+    ("proof_kind", "scope", "case_count", "adjudication_values", "message"),
+    [
+        (
+            "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK",
+            "benchmarks/model_corpus",
+            1,
+            False,
+            "pinned noncrediting smoke benchmark provenance",
+        ),
+        (
+            "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK",
+            "benchmarks/model_corpus_smoke",
+            2,
+            False,
+            "pinned noncrediting smoke benchmark provenance",
+        ),
+        (
+            "PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION",
+            "benchmarks/model_corpus_smoke",
+            1,
+            False,
+            "pinned noncrediting smoke cross-lineage provenance",
+        ),
+        (
+            "RELEASE_PINNED_MODEL_BENCHMARK",
+            "benchmarks/model_corpus_smoke",
+            1,
+            False,
+            "release-pinned model benchmark provenance",
+        ),
+    ],
+)
+def test_smoke_proof_kinds_reject_scope_count_and_adjudication_confusion(
+    proof_kind: str,
+    scope: str,
+    case_count: int,
+    adjudication_values: bool,
+    message: str,
+) -> None:
+    suite = load_model_benchmark_corpus(_MODEL_BENCHMARK_CORPUS)
+    payload = prove_release_pinned_model_benchmark_source(suite, now=_NOW).evidence.model_dump(
+        mode="json",
+        exclude={"evidence_sha256"},
+    )
+    payload.update(
+        {
+            "proof_kind": proof_kind,
+            "distribution_scope": scope,
+            "provider_visible_case_count": case_count,
+            "adjudication_prepared_run_sha256": "a" * 64 if adjudication_values else None,
+            "adjudication_candidate_report_sha256": "b" * 64 if adjudication_values else None,
+            "adjudication_ground_truth_sha256": "c" * 64 if adjudication_values else None,
+        }
+    )
+
+    with pytest.raises(ValidationError, match=message):
+        PrivacySourceProvenanceEvidence.model_validate(
+            {**payload, "evidence_sha256": _canonical_sha256(payload)}
+        )
+
+
+@pytest.mark.parametrize(
+    "proof_kind",
+    [
+        "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK",
+        "PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION",
+    ],
+)
+def test_effective_policy_accepts_smoke_proof_only_in_disjoint_scope(
+    proof_kind: str,
+) -> None:
+    suite = load_model_benchmark_corpus(_MODEL_BENCHMARK_CORPUS)
+    observation = prove_release_pinned_model_benchmark_source(suite, now=_NOW)
+    release_policy = resolve_effective_privacy_policy(
+        profile=PrivacyProfile.SYNTHETIC_BENCHMARK,
+        require_zdr=True,
+        consent_observation=None,
+        source_sha256=suite.corpus_sha256,
+        source_classification=PrivacySourceClassification.SYNTHETIC_COMMITTED,
+        source_provenance_observation=observation,
+        configured_model_ids=("anthropic/claude-opus-4.1", "openai/gpt-5"),
+        configured_provider_endpoints=("anthropic:claude", "openai:gpt"),
+        requested_budget_usd=Decimal("1"),
+        now=_NOW,
+    )
+    payload = release_policy.model_dump(mode="json", exclude={"evidence_sha256"})
+    payload.update(
+        {
+            "source_proof_kind": proof_kind,
+            "source_distribution_scope": "benchmarks/model_corpus_smoke",
+        }
+    )
+    smoke_policy = EffectivePrivacyPolicyEvidence.model_validate(
+        {**payload, "evidence_sha256": _canonical_sha256(payload)}
+    )
+
+    assert smoke_policy.source_distribution_scope == "benchmarks/model_corpus_smoke"
+    wrong_scope = smoke_policy.model_dump(mode="json", exclude={"evidence_sha256"})
+    wrong_scope["source_distribution_scope"] = "benchmarks/model_corpus"
+    with pytest.raises(ValidationError, match="pinned noncrediting smoke privacy policy"):
+        EffectivePrivacyPolicyEvidence.model_validate(
+            {**wrong_scope, "evidence_sha256": _canonical_sha256(wrong_scope)}
+        )
 
 
 def test_clean_declared_distribution_fixture_proves_synthetic_committed(
@@ -622,6 +908,9 @@ def test_provenance_authority_has_no_importable_issuer_or_registry_handles() -> 
         "_build_privacy_source_provenance_authority",
         "_build_privacy_source_classification_evidence",
         "_build_release_pinned_model_benchmark_evidence",
+        "_build_pinned_noncrediting_smoke_model_benchmark_evidence",
+        "_build_pinned_noncrediting_smoke_cross_lineage_adjudication_evidence",
+        "_validated_authenticated_runner_smoke_bundle",
         "_TRUSTED_REQUIRE_RELEASE_PINNED_MODEL_BENCHMARK",
     )
     assert all(not hasattr(provenance_module, name) for name in forbidden_names)

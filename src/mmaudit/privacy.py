@@ -324,6 +324,8 @@ class EffectivePrivacyPolicyEvidence(BaseModel):
         "PACKAGE_PINNED_SYNTHETIC",
         "RELEASE_PINNED_MODEL_BENCHMARK",
         "RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION",
+        "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK",
+        "PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION",
     ]
     source_distribution_commit: str | None = Field(
         default=None,
@@ -459,6 +461,18 @@ class EffectivePrivacyPolicyEvidence(BaseModel):
                 ):
                     raise ValueError(
                         "release-pinned benchmark privacy policy has invalid source provenance"
+                    )
+            elif self.source_proof_kind in {
+                "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK",
+                "PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION",
+            }:
+                if (
+                    self.source_distribution_scope != "benchmarks/model_corpus_smoke"
+                    or self.source_distribution_commit is not None
+                    or any(value is not None for value in synthetic_declaration_provenance)
+                ):
+                    raise ValueError(
+                        "pinned noncrediting smoke privacy policy has invalid source provenance"
                     )
             else:
                 raise ValueError("synthetic privacy policy lacks approved source provenance")

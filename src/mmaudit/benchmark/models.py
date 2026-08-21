@@ -9,9 +9,9 @@ from collections import Counter
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import Literal, Protocol, cast
+from typing import Any, Literal, Protocol, Self, cast
 
-from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from mmaudit.config import (
     AuditConfig,
@@ -24,6 +24,7 @@ from mmaudit.models.openrouter import (
     OpenRouterError,
     OpenRouterRequestCostPreviewError,
     OpenRouterStructuredRequestCostPreview,
+    StructuredCompletion,
     strict_json_schema,
     structured_output_prompt_sha256,
 )
@@ -36,6 +37,7 @@ from mmaudit.models.schemas import (
     UsageRecord,
 )
 from mmaudit.models.usage import (
+    UsageLedger,
     _is_structurally_creditable_usage_record,
     is_creditable_usage_record,
 )
@@ -65,6 +67,22 @@ _GENERIC_TASK = (
 class ModelBenchmarkRequestDescriptor:
     """Exact provider-visible coordinates for one deterministic benchmark request."""
 
+    case_id: str
+    logical_request_id: str
+    exact_model_id: str
+    request_role: str
+    system_prompt: str
+    user_prompt: str
+    response_model: type[ModelBenchmarkResponse]
+    schema_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class ModelBenchmarkSmokeRequestDescriptor:
+    """One exact NONCREDITING smoke request in a disjoint ledger namespace."""
+
+    run_kind: AuthenticatedRunnerModelBenchmarkRunKind
+    selection_sha256: str
     case_id: str
     logical_request_id: str
     exact_model_id: str
@@ -664,6 +682,91 @@ def authenticated_runner_model_benchmark_request_descriptors(
     )
 
 
+def authenticated_runner_smoke_model_benchmark_request_descriptor(
+    *,
+    run_kind: AuthenticatedRunnerModelBenchmarkRunKind,
+    selection_sha256: str,
+    case: ModelBenchmarkCase,
+    target: ModelBenchmarkTarget,
+) -> ModelBenchmarkSmokeRequestDescriptor:
+    """Build one exact NONCREDITING smoke request without relaxing the 24-case API."""
+
+    if (
+        type(run_kind) is not str
+        or run_kind not in {"PRIMARY", "REPLAY"}
+        or not _is_sha256(selection_sha256)
+        or type(case) is not ModelBenchmarkCase
+        or type(target) is not ModelBenchmarkTarget
+    ):
+        raise ValueError("authenticated runner smoke benchmark coordinates are invalid")
+    sealed_case = ModelBenchmarkCase.model_validate_json(case.model_dump_json(), strict=True)
+    sealed_target = ModelBenchmarkTarget.model_validate_json(target.model_dump_json(), strict=True)
+    if sealed_case != case or sealed_target != target:
+        raise ValueError("authenticated runner smoke request inputs changed at the boundary")
+    canonical_run_kind = cast(AuthenticatedRunnerModelBenchmarkRunKind, str(run_kind))
+    return ModelBenchmarkSmokeRequestDescriptor(
+        run_kind=canonical_run_kind,
+        selection_sha256=selection_sha256,
+        case_id=sealed_case.case_id,
+        logical_request_id=_authenticated_runner_smoke_candidate_logical_request_id(
+            run_kind=canonical_run_kind,
+            selection_sha256=selection_sha256,
+        ),
+        exact_model_id=sealed_target.model_id,
+        request_role=sealed_target.request_role,
+        system_prompt=_SYSTEM_PROMPT,
+        user_prompt=blinded_model_benchmark_request(sealed_case),
+        response_model=ModelBenchmarkResponse,
+        schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
+    )
+
+
+def validate_authenticated_runner_smoke_model_benchmark_cost_preview(
+    *,
+    descriptor: ModelBenchmarkSmokeRequestDescriptor,
+    expected_request_cost_preview: OpenRouterStructuredRequestCostPreview,
+) -> OpenRouterStructuredRequestCostPreview:
+    """Detach and bind one nonauthorizing preview to the exact smoke request."""
+
+    if (
+        type(descriptor) is not ModelBenchmarkSmokeRequestDescriptor
+        or type(expected_request_cost_preview) is not OpenRouterStructuredRequestCostPreview
+    ):
+        raise ValueError("authenticated runner smoke cost preview type is invalid")
+    try:
+        preview = OpenRouterStructuredRequestCostPreview.model_validate_json(
+            expected_request_cost_preview.model_dump_json(),
+            strict=True,
+        )
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError(
+            "authenticated runner smoke cost preview failed detached validation"
+        ) from exc
+    expected_schema_sha256 = canonical_sha256(strict_json_schema(descriptor.response_model))
+    expected_prompt_sha256 = structured_output_prompt_sha256(
+        mode=preview.structured_output_mode,
+        system_prompt=descriptor.system_prompt,
+        user_prompt=descriptor.user_prompt,
+        response_model=descriptor.response_model,
+        schema_name=descriptor.schema_name,
+    )
+    if (
+        preview != expected_request_cost_preview
+        or preview.logical_request_id != descriptor.logical_request_id
+        or preview.role != descriptor.request_role
+        or preview.exact_model_id != descriptor.exact_model_id
+        or preview.user_prompt_sha256
+        != hashlib.sha256(descriptor.user_prompt.encode("utf-8")).hexdigest()
+        or preview.response_schema_sha256 != expected_schema_sha256
+        or preview.prompt_sha256 != expected_prompt_sha256
+        or preview.reasoning_qualification_sha256 is not None
+        or preview.context_request_evidence_sha256 is not None
+        or preview.rendered_context_sha256 is not None
+    ):
+        raise ValueError("authenticated runner smoke cost preview differs from its exact request")
+    return preview
+
+
 class ModelBenchmarkProviderResult(StrictModel):
     """One provider response and its exact non-secret request evidence."""
 
@@ -1040,6 +1143,97 @@ class ModelBenchmarkReport(ModelBenchmarkReportPayload):
         return self
 
 
+class NoncreditingModelBenchmarkSmokeReport(StrictModel):
+    """One REAL transport probe that can never represent benchmark or release credit."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        revalidate_instances="always",
+    )
+
+    artifact_kind: Literal["noncrediting_model_benchmark_smoke_report"] = (
+        "noncrediting_model_benchmark_smoke_report"
+    )
+    schema_version: Literal["1.0"] = "1.0"
+    disposition: Literal["NONCREDITING_SMOKE"] = "NONCREDITING_SMOKE"
+    run_kind: AuthenticatedRunnerModelBenchmarkRunKind
+    selection_sha256: str = Field(pattern=_SHA256_PATTERN)
+    corpus_name: str = Field(min_length=1, max_length=500)
+    corpus_sha256: str = Field(pattern=_SHA256_PATTERN)
+    ground_truth_sha256: str = Field(pattern=_SHA256_PATTERN)
+    selected_case_sha256: str = Field(pattern=_SHA256_PATTERN)
+    selected_ground_truth_sha256: str = Field(pattern=_SHA256_PATTERN)
+    target: ModelBenchmarkTarget
+    result: ModelBenchmarkCaseResult
+    execution_evidence: Literal[ExecutionEvidenceKind.REAL] = ExecutionEvidenceKind.REAL
+    serialized_authority: Literal[False] = False
+    provider_call_authorized: Literal[False] = False
+    runner_authority_authorized: Literal[False] = False
+    generation_verification_authorized: Literal[False] = False
+    adjudication_credit_authorized: Literal[False] = False
+    benchmark_credit_authorized: Literal[False] = False
+    model_qualification_authorized: Literal[False] = False
+    calibration_authorized: Literal[False] = False
+    authseal_authorized: Literal[False] = False
+    seal_publication_authorized: Literal[False] = False
+    release_authorized: Literal[False] = False
+    report_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @field_validator(
+        "serialized_authority",
+        "provider_call_authorized",
+        "runner_authority_authorized",
+        "generation_verification_authorized",
+        "adjudication_credit_authorized",
+        "benchmark_credit_authorized",
+        "model_qualification_authorized",
+        "calibration_authorized",
+        "authseal_authorized",
+        "seal_publication_authorized",
+        "release_authorized",
+        mode="before",
+    )
+    @classmethod
+    def authority_is_literal_false(cls, value: object) -> object:
+        if type(value) is not bool or value is not False:
+            raise ValueError("model benchmark smoke reports grant no authority or credit")
+        return value
+
+    @model_validator(mode="after")
+    def one_successful_case_is_self_bound(self) -> Self:
+        result = self.result
+        usage = result.usage_record
+        generation = result.generation_evidence
+        if (
+            result.case_id == ""
+            or result.error_kind is not None
+            or result.normalized_response is None
+            or result.validated_response_sha256 is None
+            or result.execution_evidence is not ExecutionEvidenceKind.REAL
+            or usage is None
+            or usage.execution_evidence is not ExecutionEvidenceKind.REAL
+            or generation is None
+            or generation.execution_evidence is not ExecutionEvidenceKind.REAL
+            or usage.requested_model != self.target.model_id
+            or usage.openrouter_generation_id != generation.generation_id
+        ):
+            raise ValueError(
+                "model benchmark smoke report requires one successful REAL-shaped case"
+            )
+        expected_request_id = _authenticated_runner_smoke_candidate_logical_request_id(
+            run_kind=self.run_kind,
+            selection_sha256=self.selection_sha256,
+        )
+        if usage.request_id != expected_request_id:
+            raise ValueError("model benchmark smoke usage has a different logical request ID")
+        expected = canonical_sha256(self.model_dump(mode="json", exclude={"report_sha256"}))
+        if self.report_sha256 != expected:
+            raise ValueError("model benchmark smoke report hash is inconsistent")
+        return self
+
+
 def seal_model_benchmark_corpus(
     payload: ModelBenchmarkCorpusPayload,
 ) -> ModelBenchmarkCorpus:
@@ -1336,6 +1530,211 @@ async def run_model_benchmark(
         results=model_results,
         report_sha256=canonical_sha256(serialized),
     )
+
+
+async def execute_noncrediting_model_benchmark_smoke(
+    *,
+    suite: ModelBenchmarkSuite,
+    selected_case: ModelBenchmarkCase,
+    selected_ground_truth: ModelBenchmarkGroundTruthCase,
+    selection_sha256: str,
+    target: ModelBenchmarkTarget,
+    client: OpenRouterClient,
+    run_kind: AuthenticatedRunnerModelBenchmarkRunKind,
+    expected_request_cost_preview: OpenRouterStructuredRequestCostPreview,
+) -> NoncreditingModelBenchmarkSmokeReport:
+    """Execute one exact REAL smoke request while issuing no benchmark credit."""
+
+    sealed_suite, case, truth = _validated_authenticated_runner_smoke_selection(
+        suite=suite,
+        selected_case=selected_case,
+        selected_ground_truth=selected_ground_truth,
+        selection_sha256=selection_sha256,
+    )
+    if type(target) is not ModelBenchmarkTarget or type(client) is not OpenRouterClient:
+        raise TypeError("model benchmark smoke target or client has the wrong exact type")
+    sealed_target = ModelBenchmarkTarget.model_validate_json(target.model_dump_json(), strict=True)
+    if sealed_target != target:
+        raise ValueError("model benchmark smoke target changed at the boundary")
+    descriptor = authenticated_runner_smoke_model_benchmark_request_descriptor(
+        run_kind=run_kind,
+        selection_sha256=selection_sha256,
+        case=case,
+        target=sealed_target,
+    )
+    preview = validate_authenticated_runner_smoke_model_benchmark_cost_preview(
+        descriptor=descriptor,
+        expected_request_cost_preview=expected_request_cost_preview,
+    )
+    usage = client.usage
+    if type(usage) is not UsageLedger:
+        raise TypeError("model benchmark smoke requires the exact shared usage ledger")
+    before = tuple(usage.records)
+    completion = await OpenRouterClient.complete_with_evidence(
+        client,
+        role=descriptor.request_role,
+        models=[descriptor.exact_model_id],
+        system_prompt=descriptor.system_prompt,
+        user_prompt=descriptor.user_prompt,
+        response_model=descriptor.response_model,
+        schema_name=descriptor.schema_name,
+        logical_request_id=descriptor.logical_request_id,
+        expected_request_cost_preview=preview,
+    )
+    after = tuple(usage.records)
+    if (
+        type(completion) is not StructuredCompletion
+        or type(completion.value) is not ModelBenchmarkResponse
+        or type(completion.usage_record) is not UsageRecord
+        or after[: len(before)] != before
+        or len(after) != len(before) + 1
+        or after[-1] is not completion.usage_record
+    ):
+        raise ValueError("model benchmark smoke completion changed usage custody")
+    usage_record = completion.usage_record
+    usage_error = _successful_usage_error(
+        usage_record,
+        target=sealed_target,
+        system_prompt=descriptor.system_prompt,
+        user_prompt=descriptor.user_prompt,
+        response=completion.value,
+    )
+    if usage_error is not None or completion.value.case_id != case.case_id:
+        raise ValueError("model benchmark smoke completion is not exact successful REAL evidence")
+    generation_id = usage_record.openrouter_generation_id
+    if generation_id is None:
+        raise ValueError("model benchmark smoke completion lacks a generation identity")
+    generation = await OpenRouterClient.get_generation_evidence(client, generation_id)
+    if tuple(usage.records) != after or type(generation) is not OpenRouterGenerationEvidence:
+        raise ValueError("model benchmark smoke generation retrieval changed usage custody")
+    result = ModelBenchmarkCaseResult(
+        case_id=case.case_id,
+        normalized_response=completion.value,
+        validated_response_sha256=_validated_response_sha256(completion.value),
+        observed_classification=completion.value.classification,
+        observed_locations=completion.value.locations,
+        observed_invariant_kind=(
+            completion.value.invariant.kind if completion.value.invariant is not None else None
+        ),
+        execution_evidence=ExecutionEvidenceKind.REAL,
+        usage_record=usage_record,
+        generation_evidence=generation,
+        dimensions=_case_dimension_results(
+            ground_truth=truth,
+            response=completion.value,
+        ),
+        error_kind=None,
+    )
+    values: dict[str, Any] = {
+        "artifact_kind": "noncrediting_model_benchmark_smoke_report",
+        "schema_version": "1.0",
+        "disposition": "NONCREDITING_SMOKE",
+        "run_kind": run_kind,
+        "selection_sha256": selection_sha256,
+        "corpus_name": sealed_suite.name,
+        "corpus_sha256": sealed_suite.corpus_sha256,
+        "ground_truth_sha256": sealed_suite.ground_truth_sha256,
+        "selected_case_sha256": canonical_sha256(case.model_dump(mode="json")),
+        "selected_ground_truth_sha256": canonical_sha256(truth.model_dump(mode="json")),
+        "target": sealed_target,
+        "result": result,
+        "execution_evidence": ExecutionEvidenceKind.REAL,
+        **_false_smoke_authority_payload(),
+    }
+    provisional = NoncreditingModelBenchmarkSmokeReport.model_construct(
+        **values,
+        report_sha256="0" * 64,
+    )
+    report = NoncreditingModelBenchmarkSmokeReport.model_validate(
+        {
+            **values,
+            "report_sha256": canonical_sha256(
+                provisional.model_dump(mode="json", exclude={"report_sha256"})
+            ),
+        },
+        strict=True,
+    )
+    verify_noncrediting_model_benchmark_smoke_report(
+        report,
+        suite=sealed_suite,
+        selected_case=case,
+        selected_ground_truth=truth,
+        selection_sha256=selection_sha256,
+    )
+    return report
+
+
+def verify_noncrediting_model_benchmark_smoke_report(
+    report: NoncreditingModelBenchmarkSmokeReport,
+    *,
+    suite: ModelBenchmarkSuite,
+    selected_case: ModelBenchmarkCase,
+    selected_ground_truth: ModelBenchmarkGroundTruthCase,
+    selection_sha256: str,
+) -> None:
+    """Replay one smoke report structurally without minting runtime or score authority."""
+
+    if type(report) is not NoncreditingModelBenchmarkSmokeReport:
+        raise TypeError("model benchmark smoke report has the wrong exact type")
+    try:
+        sealed_report = NoncreditingModelBenchmarkSmokeReport.model_validate(
+            report.model_dump(mode="python"),
+            strict=True,
+        )
+    except (TypeError, ValueError, ValidationError) as exc:
+        raise ValueError("model benchmark smoke report failed detached validation") from exc
+    if sealed_report != report:
+        raise ValueError("model benchmark smoke report changed across replay")
+    if sealed_report.selection_sha256 != selection_sha256:
+        raise ValueError("model benchmark smoke report has a different selection binding")
+    sealed_suite, case, truth = _validated_authenticated_runner_smoke_selection(
+        suite=suite,
+        selected_case=selected_case,
+        selected_ground_truth=selected_ground_truth,
+        selection_sha256=selection_sha256,
+    )
+    result = sealed_report.result
+    response = result.normalized_response
+    usage = result.usage_record
+    generation = result.generation_evidence
+    if response is None or usage is None or generation is None:
+        raise ValueError("model benchmark smoke report omitted complete case evidence")
+    descriptor = authenticated_runner_smoke_model_benchmark_request_descriptor(
+        run_kind=sealed_report.run_kind,
+        selection_sha256=selection_sha256,
+        case=case,
+        target=sealed_report.target,
+    )
+    expected_error = _successful_usage_error(
+        usage,
+        target=sealed_report.target,
+        system_prompt=descriptor.system_prompt,
+        user_prompt=descriptor.user_prompt,
+        response=response,
+        require_runtime_attestation=False,
+    )
+    expected_dimensions = _case_dimension_results(
+        ground_truth=truth,
+        response=response if expected_error is None and response.case_id == case.case_id else None,
+    )
+    if (
+        sealed_report.selection_sha256 != selection_sha256
+        or sealed_report.corpus_name != sealed_suite.name
+        or sealed_report.corpus_sha256 != sealed_suite.corpus_sha256
+        or sealed_report.ground_truth_sha256 != sealed_suite.ground_truth_sha256
+        or sealed_report.selected_case_sha256 != canonical_sha256(case.model_dump(mode="json"))
+        or sealed_report.selected_ground_truth_sha256
+        != canonical_sha256(truth.model_dump(mode="json"))
+        or result.case_id != case.case_id
+        or result.error_kind is not None
+        or expected_error is not None
+        or response.case_id != case.case_id
+        or result.dimensions != expected_dimensions
+        or usage.request_id != descriptor.logical_request_id
+        or usage.openrouter_generation_id != generation.generation_id
+        or generation.exact_model_id != usage.actual_model
+    ):
+        raise ValueError("model benchmark smoke report differs from its exact selected case")
 
 
 def write_model_benchmark_report(path: Path, report: ModelBenchmarkReport) -> None:
@@ -1928,3 +2327,76 @@ def _dimension_scores(
             )
         )
     return sorted(results, key=lambda item: item.dimension.value)
+
+
+def _validated_authenticated_runner_smoke_selection(
+    *,
+    suite: ModelBenchmarkSuite,
+    selected_case: ModelBenchmarkCase,
+    selected_ground_truth: ModelBenchmarkGroundTruthCase,
+    selection_sha256: str,
+) -> tuple[ModelBenchmarkSuite, ModelBenchmarkCase, ModelBenchmarkGroundTruthCase]:
+    if (
+        type(suite) is not ModelBenchmarkSuite
+        or type(selected_case) is not ModelBenchmarkCase
+        or type(selected_ground_truth) is not ModelBenchmarkGroundTruthCase
+        or not _is_sha256(selection_sha256)
+    ):
+        raise TypeError("authenticated runner smoke selection has the wrong exact type")
+    sealed_suite = ModelBenchmarkSuite.model_validate_json(suite.model_dump_json(), strict=True)
+    case = ModelBenchmarkCase.model_validate_json(selected_case.model_dump_json(), strict=True)
+    truth = ModelBenchmarkGroundTruthCase.model_validate_json(
+        selected_ground_truth.model_dump_json(),
+        strict=True,
+    )
+    cases = {item.case_id: item for item in sealed_suite.cases}
+    truths = {item.case_id: item for item in sealed_suite.ground_truth.cases}
+    if (
+        sealed_suite != suite
+        or case != selected_case
+        or truth != selected_ground_truth
+        or len(sealed_suite.cases) != AUTHENTICATED_RUNNER_MODEL_BENCHMARK_CASE_COUNT
+        or case.case_id != truth.case_id
+        or cases.get(case.case_id) != case
+        or truths.get(truth.case_id) != truth
+    ):
+        raise ValueError(
+            "authenticated runner smoke selection differs from the frozen 24-case suite"
+        )
+    return sealed_suite, case, truth
+
+
+def _authenticated_runner_smoke_candidate_logical_request_id(
+    *,
+    run_kind: AuthenticatedRunnerModelBenchmarkRunKind,
+    selection_sha256: str,
+) -> str:
+    if run_kind not in {"PRIMARY", "REPLAY"} or not _is_sha256(selection_sha256):
+        raise ValueError("authenticated runner smoke logical request coordinates are invalid")
+    request_id = f"authrunner.smoke.r1.candidate.{run_kind.casefold()}:{selection_sha256}"
+    if len(request_id) > 128:
+        raise ValueError("authenticated runner smoke logical request ID exceeds its bound")
+    return request_id
+
+
+def _false_smoke_authority_payload() -> dict[str, bool]:
+    return {
+        name: False
+        for name in (
+            "serialized_authority",
+            "provider_call_authorized",
+            "runner_authority_authorized",
+            "generation_verification_authorized",
+            "adjudication_credit_authorized",
+            "benchmark_credit_authorized",
+            "model_qualification_authorized",
+            "calibration_authorized",
+            "authseal_authorized",
+            "seal_publication_authorized",
+            "release_authorized",
+        )
+    }
+
+
+def _is_sha256(value: object) -> bool:
+    return type(value) is str and re.fullmatch(_SHA256_PATTERN, value) is not None

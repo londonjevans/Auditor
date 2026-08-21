@@ -22,6 +22,10 @@ from mmaudit.models.authenticated_runner_durable_bundle import (
     AUTHENTICATED_RUNNER_DURABLE_RUN_COUNT,
     AuthenticatedRunnerDurableEvidenceBundle,
 )
+from mmaudit.models.authenticated_runner_smoke import AuthenticatedRunnerSmokeEvidenceBundle
+from mmaudit.models.authenticated_runner_smoke_corpus import (
+    AuthenticatedRunnerSmokeCorpusBundle,
+)
 from mmaudit.models.autonomous_benchmark_verdict import (
     EvidenceSealVerdictPolicy,
     EvidenceSealVerdictProjection,
@@ -135,6 +139,10 @@ MODELS: dict[str, type[BaseModel]] = {
         AuthenticatedRunnerDurableEvidenceBundle
     ),
     "authenticated_runner_staged_cost_plan.schema.json": AuthenticatedRunnerStagedCostPlan,
+    "authenticated_runner_smoke_evidence_bundle.schema.json": (
+        AuthenticatedRunnerSmokeEvidenceBundle
+    ),
+    "authenticated_runner_smoke_corpus_bundle.schema.json": (AuthenticatedRunnerSmokeCorpusBundle),
     "audit_model_refresh_evidence.schema.json": AuditModelRefreshEvidence,
     "audit_model_refresh_pricing_attempt_evidence.schema.json": (
         AuditModelRefreshPricingAttemptEvidence
@@ -216,6 +224,12 @@ TITLE_OVERRIDES = {
     ),
     "authenticated_runner_staged_cost_plan.schema.json": (
         "mmaudit non-authorizing staged authenticated runner cost plan"
+    ),
+    "authenticated_runner_smoke_evidence_bundle.schema.json": (
+        "mmaudit noncrediting authenticated runner smoke evidence bundle"
+    ),
+    "authenticated_runner_smoke_corpus_bundle.schema.json": (
+        "mmaudit exact noncrediting authenticated runner smoke corpus bundle"
     ),
     "audit_model_refresh_evidence.schema.json": "mmaudit audit-scoped model refresh evidence",
     "audit_model_refresh_pricing_attempt_evidence.schema.json": (

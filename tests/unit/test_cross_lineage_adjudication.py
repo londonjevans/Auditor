@@ -147,7 +147,7 @@ def _judge_usage_and_generation(
     started_at = NOW + timedelta(seconds=case_index * 2)
     ended_at = started_at + timedelta(milliseconds=125)
     generation_id = f"judge-generation-{case_index}"
-    request_id = f"judge-request-{case_index}"
+    request_id = f"cross-lineage-{request.request_sha256}"
     endpoint = judge.approved_provider_endpoint
     provider_name = judge.approved_provider_name
     schema_sha256 = cross_lineage_adjudication_response_schema_sha256()

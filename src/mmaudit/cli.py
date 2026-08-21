@@ -91,6 +91,16 @@ from mmaudit.models.authenticated_runner_durable_bundle import (
 from mmaudit.models.authenticated_runner_execution import (
     AuthenticatedRunnerRunPlan,
 )
+from mmaudit.models.authenticated_runner_smoke import (
+    MAX_AUTHENTICATED_RUNNER_SMOKE_BUNDLE_BYTES,
+    AuthenticatedRunnerSmokeError,
+    AuthenticatedRunnerSmokeEvidenceBundle,
+    authenticated_runner_smoke_evidence_bytes,
+    revalidate_authenticated_runner_smoke_evidence_bytes,
+)
+from mmaudit.models.authenticated_runner_smoke_corpus import (
+    load_authenticated_runner_smoke_corpus_bundle,
+)
 from mmaudit.models.calibration import (
     build_model_calibration_artifact,
     derive_calibrated_qualification_policy,
@@ -228,6 +238,12 @@ from mmaudit.orchestration.authenticated_runner_openrouter import (
     AuthenticatedRunnerOpenRouterRunSnapshot,
     execute_authenticated_openrouter_runner,
     preflight_authenticated_openrouter_launch,
+)
+from mmaudit.orchestration.authenticated_runner_smoke_openrouter import (
+    AuthenticatedRunnerSmokeOpenRouterLaunch,
+    AuthenticatedRunnerSmokeRunPlan,
+    execute_authenticated_runner_smoke_openrouter,
+    preflight_authenticated_runner_smoke_openrouter_launch,
 )
 from mmaudit.orchestration.budgets import BudgetManager
 from mmaudit.orchestration.certification import (
@@ -2264,6 +2280,360 @@ def models_verify_authenticated_runner(
         )
         local_console.print(
             f"AUTHSEAL comparison: {bundle.authseal_comparison.status}",
+            markup=False,
+        )
+
+    _run_async_cli(execute)
+
+
+@models_app.command("authenticated-runner-smoke")
+def models_authenticated_runner_smoke(
+    candidate_registry: Annotated[
+        Path,
+        typer.Option(
+            "--candidate-registry",
+            help="Fresh-discovery-bound singleton smoke candidate registry.",
+        ),
+    ],
+    candidate_discovery_run: Annotated[
+        Path,
+        typer.Option(
+            "--candidate-discovery-run",
+            help="Fresh atomic discovery directory for the singleton smoke candidate.",
+        ),
+    ],
+    primary_judge_registry: Annotated[
+        Path,
+        typer.Option(
+            "--primary-judge-registry",
+            help="Fresh-discovery-bound singleton PRIMARY smoke judge registry.",
+        ),
+    ],
+    primary_judge_discovery_run: Annotated[
+        Path,
+        typer.Option(
+            "--primary-judge-discovery-run",
+            help="Fresh atomic discovery directory for the PRIMARY smoke judge.",
+        ),
+    ],
+    replay_judge_registry: Annotated[
+        Path,
+        typer.Option(
+            "--replay-judge-registry",
+            help="Fresh-discovery-bound singleton REPLAY smoke judge registry.",
+        ),
+    ],
+    replay_judge_discovery_run: Annotated[
+        Path,
+        typer.Option(
+            "--replay-judge-discovery-run",
+            help="Fresh atomic discovery directory for the REPLAY smoke judge.",
+        ),
+    ],
+    smoke_corpus: Annotated[
+        Path,
+        typer.Option(
+            "--smoke-corpus",
+            help="Exact four-file NONCREDITING smoke corpus directory.",
+        ),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            help="Fresh absolute private NONCREDITING smoke evidence JSON.",
+        ),
+    ],
+    candidate_cost_tripwire_usd_per_attempt: Annotated[
+        str,
+        typer.Option(
+            "--candidate-cost-cap-usd-per-attempt",
+            help="Positive candidate per-attempt smoke cost tripwire (decimal USD).",
+        ),
+    ],
+    primary_judge_cost_tripwire_usd_per_attempt: Annotated[
+        str,
+        typer.Option(
+            "--primary-judge-cost-cap-usd-per-attempt",
+            help="Positive PRIMARY judge per-attempt smoke cost tripwire (decimal USD).",
+        ),
+    ],
+    replay_judge_cost_tripwire_usd_per_attempt: Annotated[
+        str,
+        typer.Option(
+            "--replay-judge-cost-cap-usd-per-attempt",
+            help="Positive REPLAY judge per-attempt smoke cost tripwire (decimal USD).",
+        ),
+    ],
+    config_path: ConfigOption = Path(DEFAULT_CONFIG_NAME),
+    secrets_env_file: SecretsEnvFileOption = None,
+    corpus: Annotated[
+        Path,
+        typer.Option("--corpus", help="Exact frozen 24-case parent benchmark corpus."),
+    ] = DEFAULT_MODEL_BENCHMARK_CORPUS,
+    cost_ledger: Annotated[
+        Path | None,
+        typer.Option(
+            "--cost-ledger",
+            help="Existing absolute exact-250-USD cumulative provider cost ledger.",
+        ),
+    ] = None,
+    allow_code_egress: Annotated[
+        bool,
+        typer.Option(
+            "--allow-code-egress",
+            help="Explicitly permit only the frozen synthetic smoke case to reach providers.",
+        ),
+    ] = False,
+    preflight_only: Annotated[
+        bool,
+        typer.Option(
+            "--preflight-only",
+            help=(
+                "Validate the smoke launch without selecting secrets, provider access, "
+                "ledger mutation, or output publication."
+            ),
+        ),
+    ] = False,
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
+) -> None:
+    """Run one non-resumable, one-case REAL transport smoke without benchmark credit."""
+
+    async def execute() -> None:
+        if not allow_code_egress:
+            raise ConfigError(
+                "models authenticated-runner-smoke requires explicit --allow-code-egress"
+            )
+        candidate_tripwire = _parse_authenticated_runner_cost_cap(
+            candidate_cost_tripwire_usd_per_attempt,
+            label="smoke candidate",
+        )
+        primary_judge_tripwire = _parse_authenticated_runner_cost_cap(
+            primary_judge_cost_tripwire_usd_per_attempt,
+            label="smoke PRIMARY judge",
+        )
+        replay_judge_tripwire = _parse_authenticated_runner_cost_cap(
+            replay_judge_cost_tripwire_usd_per_attempt,
+            label="smoke REPLAY judge",
+        )
+
+        config = load_config(config_path)
+        benchmark_suite = load_model_benchmark_corpus(corpus)
+        smoke_bundle = load_authenticated_runner_smoke_corpus_bundle(smoke_corpus)
+        public_lineage_capability = resolve_verified_public_model_lineage()
+        candidate = load_candidate_registry(candidate_registry)
+        candidate_manifest, candidate_evidence = load_model_discovery_run(candidate_discovery_run)
+        primary_judge = load_candidate_registry(primary_judge_registry)
+        primary_manifest, primary_evidence = load_model_discovery_run(primary_judge_discovery_run)
+        replay_judge = load_candidate_registry(replay_judge_registry)
+        replay_manifest, replay_evidence = load_model_discovery_run(replay_judge_discovery_run)
+        ledger_path = _selected_cost_ledger_path(config, cost_ledger)
+        if ledger_path is None:
+            raise ConfigError(
+                "models authenticated-runner-smoke requires an existing --cost-ledger "
+                "initialized with models init-cost-ledger or execution.cost_ledger_path"
+            )
+        budget, usage = _budget_and_usage(
+            config,
+            ledger_path=ledger_path,
+            require_endpoint_cost_bound=True,
+        )
+        ledger = budget.atomic_ledger
+        if ledger is None:
+            raise ConfigError("authenticated runner smoke cost ledger failed to open")
+
+        launch = AuthenticatedRunnerSmokeOpenRouterLaunch(
+            config=config,
+            explicitly_allow_synthetic_egress=allow_code_egress,
+            public_lineage_capability=public_lineage_capability,
+            benchmark_suite=benchmark_suite,
+            smoke_corpus=smoke_bundle,
+            candidate_discovery_manifest=candidate_manifest,
+            candidate_discovery_evidence=candidate_evidence,
+            candidate_registry=candidate,
+            budget=budget,
+            usage=usage,
+            run_plans=(
+                AuthenticatedRunnerSmokeRunPlan(
+                    run_kind=CrossLineageAdjudicationRunKind.PRIMARY,
+                    judge_discovery_manifest=primary_manifest,
+                    judge_discovery_evidence=primary_evidence,
+                    judge_registry=primary_judge,
+                    candidate_cost_tripwire_usd_per_attempt=candidate_tripwire,
+                    judge_cost_tripwire_usd_per_attempt=primary_judge_tripwire,
+                ),
+                AuthenticatedRunnerSmokeRunPlan(
+                    run_kind=CrossLineageAdjudicationRunKind.REPLAY,
+                    judge_discovery_manifest=replay_manifest,
+                    judge_discovery_evidence=replay_evidence,
+                    judge_registry=replay_judge,
+                    candidate_cost_tripwire_usd_per_attempt=candidate_tripwire,
+                    judge_cost_tripwire_usd_per_attempt=replay_judge_tripwire,
+                ),
+            ),
+        )
+        source_paths: tuple[Path, ...] = (
+            config_path,
+            corpus,
+            smoke_corpus,
+            candidate_registry,
+            candidate_discovery_run,
+            primary_judge_registry,
+            primary_judge_discovery_run,
+            replay_judge_registry,
+            replay_judge_discovery_run,
+            ledger.path,
+            ledger.lock_path,
+        )
+        _preflight_authenticated_runner_smoke_cli_paths(
+            output=output,
+            source_paths=source_paths,
+        )
+        if preflight_only:
+            _preflight_authenticated_runner_smoke_output_readonly(output)
+        else:
+            _preflight_authenticated_runner_output(output)
+        inventory = preflight_authenticated_runner_smoke_openrouter_launch(launch)
+
+        if preflight_only:
+            local_console = Console(no_color=no_color)
+            local_console.print(
+                "AUTHRUNNER smoke preflight: VALID / NONCREDITING / NONAUTHORIZING / "
+                "NO PROVIDER EGRESS",
+                markup=False,
+            )
+            local_console.print(
+                f"Inventory: runs={inventory.run_count}; cases={inventory.case_count}; "
+                f"logical_requests={inventory.logical_request_count}; "
+                f"maximum_provider_attempts={inventory.maximum_provider_attempt_count}; "
+                f"generation_refetches={inventory.generation_refetch_count}",
+                markup=False,
+            )
+            local_console.print(
+                "Operator cost tripwires: "
+                f"initial_spent_usd={inventory.initial_spent_usd}; "
+                f"operator_interval_cap_usd={inventory.operator_interval_tripwire_usd}; "
+                f"operator_final_spent_cap_usd={inventory.operator_final_spent_tripwire_usd}",
+                markup=False,
+            )
+            local_console.print(
+                "Candidate exact admission: "
+                f"plan_sha256s={','.join(item.plan_sha256 for item in inventory.candidate_cost_plans)}; "
+                "derived_interval_cap_usd="
+                f"{inventory.candidate_derived_interval_cost_cap_usd}; "
+                "derived_final_spent_cap_usd="
+                f"{inventory.candidate_derived_final_spent_cap_usd}",
+                markup=False,
+            )
+            local_console.print(
+                "Judge exact admission: "
+                f"status={inventory.judge_cost_admission_status}; "
+                "full_smoke_cost_bound=UNAVAILABLE_BEFORE_REAL_CANDIDATE_OUTPUTS",
+                markup=False,
+            )
+            local_console.print(
+                f"Effective config SHA-256: {inventory.effective_config_sha256}",
+                markup=False,
+            )
+            return
+
+        selected_secret_file = select_operator_secret_file(secrets_env_file)
+        if selected_secret_file is None:
+            raise ConfigError(
+                "models authenticated-runner-smoke requires --secrets-env-file or "
+                "MMAUDIT_SECRETS_ENV_FILE"
+            )
+        _preflight_authenticated_runner_smoke_cli_paths(
+            output=output,
+            source_paths=(*source_paths, selected_secret_file),
+        )
+        with load_operator_secrets(selected_secret_file, required=True) as operator_secrets:
+            if not operator_secrets.openrouter_api_key_present:
+                raise ConfigError("OPENROUTER_API_KEY is missing from the operator secret file")
+            result = await execute_authenticated_runner_smoke_openrouter(
+                launch=launch,
+                operator_secrets=operator_secrets,
+            )
+
+        _preflight_authenticated_runner_output(output)
+        _write_authenticated_runner_smoke_output_fresh(output, result.bundle)
+        local_console = Console(no_color=no_color)
+        local_console.print(
+            "AUTHRUNNER smoke: COMPLETE / NONCREDITING / NONAUTHORIZING",
+            markup=False,
+        )
+        local_console.print(f"Bundle SHA-256: {result.bundle.bundle_sha256}", markup=False)
+        local_console.print(
+            f"Closed ledger: entries={len(result.bundle.closed_ledger_evidence.entries)}; "
+            f"final_spent_usd={result.bundle.closed_ledger_evidence.final_spent_usd}",
+            markup=False,
+        )
+        local_console.print(f"Result: {output}", markup=False)
+
+    _run_async_cli(execute)
+
+
+@models_app.command("verify-authenticated-runner-smoke")
+def models_verify_authenticated_runner_smoke(
+    bundle_path: Annotated[
+        Path,
+        typer.Option(
+            "--bundle",
+            help="Absolute private mode-0600 NONCREDITING smoke evidence bundle.",
+        ),
+    ],
+    smoke_corpus: Annotated[
+        Path,
+        typer.Option(
+            "--smoke-corpus",
+            help="Exact tracked four-file NONCREDITING smoke corpus directory.",
+        ),
+    ],
+    config_path: ConfigOption = Path(DEFAULT_CONFIG_NAME),
+    corpus: Annotated[
+        Path,
+        typer.Option("--corpus", help="Exact frozen 24-case parent benchmark corpus."),
+    ] = DEFAULT_MODEL_BENCHMARK_CORPUS,
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
+) -> None:
+    """Strictly replay one smoke bundle offline without recreating live authority."""
+
+    async def execute() -> None:
+        bundle = _load_authenticated_runner_smoke_evidence_bundle(bundle_path)
+        smoke = load_authenticated_runner_smoke_corpus_bundle(smoke_corpus)
+        parent = load_model_benchmark_corpus(corpus)
+        config = load_config(config_path)
+        parent_case = {item.case_id: item for item in parent.cases}.get(bundle.selected_case_id)
+        parent_truth = {item.case_id: item for item in parent.ground_truth.cases}.get(
+            bundle.selected_case_id
+        )
+        if (
+            bundle.smoke_corpus_bundle_sha256 != smoke.bundle_sha256
+            or bundle.parent_corpus_sha256 != parent.corpus_sha256
+            or bundle.parent_ground_truth_sha256 != parent.ground_truth_sha256
+            or bundle.effective_config_sha256 != config.stable_hash()
+            or bundle.selected_case_id != smoke.case.case_id
+            or parent_case != smoke.case
+            or parent_truth != smoke.ground_truth_case
+        ):
+            raise ConfigError(
+                "authenticated runner smoke evidence differs from its tracked corpus, "
+                "parent, or effective configuration"
+            )
+        local_console = Console(no_color=no_color)
+        local_console.print(
+            "AUTHRUNNER smoke evidence: VALID / NONCREDITING / NONAUTHORIZING",
+            markup=False,
+        )
+        local_console.print(f"Bundle SHA-256: {bundle.bundle_sha256}", markup=False)
+        local_console.print(
+            f"Inventory: case={bundle.selected_case_id}; runs={bundle.run_count}; "
+            f"logical_requests={bundle.logical_request_count}",
+            markup=False,
+        )
+        local_console.print(
+            f"Closed ledger: entries={len(bundle.closed_ledger_evidence.entries)}; "
+            f"final_spent_usd={bundle.closed_ledger_evidence.final_spent_usd}",
             markup=False,
         )
 
@@ -4604,8 +4974,113 @@ def _preflight_authenticated_runner_cli_paths(
             )
 
 
+def _preflight_authenticated_runner_smoke_cli_paths(
+    *,
+    output: Path,
+    source_paths: tuple[Path, ...],
+) -> None:
+    """Reject smoke output/source aliasing before an operator secret is opened."""
+
+    path_type = type(Path("/"))
+    if type(output) is not path_type or type(source_paths) is not tuple or not source_paths:
+        raise ConfigError("authenticated runner smoke path inventory is incomplete")
+    if not output.is_absolute():
+        raise ConfigError("authenticated runner smoke output must be an exact absolute path")
+    normalized_output = Path(os.path.abspath(output))
+    if (
+        normalized_output != output
+        or not normalized_output.name
+        or normalized_output.name in {".", ".."}
+    ):
+        raise ConfigError("authenticated runner smoke output must be a canonical leaf")
+    if is_sensitive_workspace_name(normalized_output.name):
+        raise ConfigError("refusing a sensitive authenticated runner smoke output path")
+    for source in source_paths:
+        if type(source) is not path_type:
+            raise ConfigError("authenticated runner smoke sources must use concrete paths")
+        normalized_source = Path(os.path.abspath(source))
+        if _paths_overlap(normalized_output, normalized_source):
+            raise ConfigError(
+                "authenticated runner smoke output overlaps immutable input or ledger state"
+            )
+
+
 def _paths_overlap(left: Path, right: Path) -> bool:
     return left == right or left in right.parents or right in left.parents
+
+
+def _preflight_authenticated_runner_smoke_output_readonly(output: Path) -> None:
+    """Validate one fresh private smoke leaf without creating a probe or publishing output."""
+
+    path_type = type(Path("/"))
+    if type(output) is not path_type or not output.is_absolute():
+        raise ConfigError("authenticated runner smoke output must be an exact absolute path")
+    absolute = Path(os.path.abspath(output))
+    if absolute != output or not absolute.name or absolute.name in {".", ".."}:
+        raise ConfigError("authenticated runner smoke output must be a canonical leaf")
+    if is_sensitive_workspace_name(absolute.name):
+        raise ConfigError("refusing a sensitive authenticated runner smoke output filename")
+
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    if (
+        no_follow <= 0
+        or directory <= 0
+        or os.open not in os.supports_dir_fd
+        or os.stat not in os.supports_dir_fd
+        or os.stat not in os.supports_follow_symlinks
+    ):
+        raise ConfigError(
+            "authenticated runner smoke output preflight requires descriptor-relative "
+            "no-follow support"
+        )
+    descriptor = -1
+    directory_flags = os.O_RDONLY | no_follow | directory | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(absolute.anchor, directory_flags)
+        for component in absolute.parts[1:-1]:
+            child = os.open(component, directory_flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        parent = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(parent.st_mode)
+            or stat.S_IMODE(parent.st_mode) != 0o700
+            or parent.st_uid != os.geteuid()
+        ):
+            raise ConfigError(
+                "authenticated runner smoke output parent must be an owned mode-0700 directory"
+            )
+        parent_identity = (parent.st_dev, parent.st_ino, parent.st_mode, parent.st_uid)
+        if _authenticated_runner_output_parent_identity(absolute, directory_flags) != (
+            parent_identity
+        ):
+            raise ConfigError("authenticated runner smoke output parent changed during preflight")
+        try:
+            os.stat(absolute.name, dir_fd=descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise ConfigError("authenticated runner smoke final output must be fresh")
+        after = os.fstat(descriptor)
+        if (
+            after.st_dev,
+            after.st_ino,
+            after.st_mode,
+            after.st_uid,
+        ) != parent_identity or _authenticated_runner_output_parent_identity(
+            absolute, directory_flags
+        ) != parent_identity:
+            raise ConfigError("authenticated runner smoke output parent changed during preflight")
+    except ConfigError:
+        raise
+    except OSError as exc:
+        raise ConfigError(
+            "authenticated runner smoke output parent is unavailable or linked"
+        ) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _preflight_authenticated_runner_output(output: Path) -> None:
@@ -4900,6 +5375,274 @@ def _write_authenticated_runner_output_fresh(
     if not published:
         raise ConfigError("authenticated runner final output was not published")
     return len(serialized)
+
+
+def _write_authenticated_runner_smoke_output_fresh(
+    output: Path,
+    value: AuthenticatedRunnerSmokeEvidenceBundle,
+) -> int:
+    """Atomically publish one fresh, bounded, private NONCREDITING smoke bundle."""
+
+    if type(value) is not AuthenticatedRunnerSmokeEvidenceBundle:
+        raise ConfigError("authenticated runner smoke final output payload is invalid")
+    try:
+        serialized = authenticated_runner_smoke_evidence_bytes(value)
+    except AuthenticatedRunnerSmokeError:
+        raise ConfigError("authenticated runner smoke final output payload is invalid") from None
+    if (
+        type(serialized) is not bytes
+        or not serialized
+        or len(serialized) > MAX_AUTHENTICATED_RUNNER_SMOKE_BUNDLE_BYTES
+    ):
+        raise ConfigError("authenticated runner smoke final output is invalid or exceeds its bound")
+    _preflight_authenticated_runner_output(output)
+
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    if (
+        no_follow <= 0
+        or directory <= 0
+        or os.open not in os.supports_dir_fd
+        or os.link not in os.supports_dir_fd
+        or os.unlink not in os.supports_dir_fd
+        or os.link not in os.supports_follow_symlinks
+    ):
+        raise ConfigError(
+            "authenticated runner smoke publication requires descriptor-relative support"
+        )
+
+    descriptor = -1
+    temporary_name: str | None = None
+    published = False
+    directory_flags = os.O_RDONLY | no_follow | directory | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(output.anchor, directory_flags)
+        for component in output.parts[1:-1]:
+            child = os.open(component, directory_flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        parent = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(parent.st_mode)
+            or stat.S_IMODE(parent.st_mode) != 0o700
+            or parent.st_uid != os.geteuid()
+        ):
+            raise ConfigError(
+                "authenticated runner smoke output parent must be an owned mode-0700 directory"
+            )
+        parent_identity = (parent.st_dev, parent.st_ino, parent.st_mode, parent.st_uid)
+        if _authenticated_runner_output_parent_identity(output, directory_flags) != (
+            parent_identity
+        ):
+            raise ConfigError("authenticated runner smoke output parent changed before publication")
+
+        temporary_name = f".mmaudit-authrunner-smoke-output-{uuid.uuid4().hex}"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | no_follow | getattr(os, "O_CLOEXEC", 0)
+        temporary = os.open(temporary_name, flags, 0o600, dir_fd=descriptor)
+        try:
+            remaining = memoryview(serialized)
+            while remaining:
+                written = os.write(temporary, remaining)
+                if written <= 0:
+                    raise OSError("authenticated runner smoke output write made no progress")
+                remaining = remaining[written:]
+            os.fsync(temporary)
+            metadata = os.fstat(temporary)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_nlink != 1
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or metadata.st_size != len(serialized)
+            ):
+                raise ConfigError(
+                    "authenticated runner smoke temporary output is not exact and private"
+                )
+        finally:
+            os.close(temporary)
+
+        if _authenticated_runner_output_parent_identity(output, directory_flags) != (
+            parent_identity
+        ):
+            raise ConfigError("authenticated runner smoke output parent changed before publication")
+        os.link(
+            temporary_name,
+            output.name,
+            src_dir_fd=descriptor,
+            dst_dir_fd=descriptor,
+            follow_symlinks=False,
+        )
+        if _authenticated_runner_output_parent_identity(output, directory_flags) != (
+            parent_identity
+        ):
+            raise ConfigError("authenticated runner smoke output parent changed during publication")
+        os.unlink(temporary_name, dir_fd=descriptor)
+        temporary_name = None
+        os.fsync(descriptor)
+        final = os.stat(output.name, dir_fd=descriptor, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(final.st_mode)
+            or final.st_nlink != 1
+            or stat.S_IMODE(final.st_mode) != 0o600
+            or final.st_size != len(serialized)
+        ):
+            raise ConfigError("authenticated runner smoke final output is not exact and private")
+        if _authenticated_runner_output_parent_identity(output, directory_flags) != (
+            parent_identity
+        ):
+            raise ConfigError("authenticated runner smoke output parent changed during publication")
+        published = True
+    except FileExistsError:
+        raise ConfigError("authenticated runner smoke final output must remain fresh") from None
+    except ConfigError:
+        raise
+    except OSError as exc:
+        raise ConfigError("authenticated runner smoke output publication failed safely") from exc
+    finally:
+        if descriptor >= 0:
+            if temporary_name is not None:
+                with suppress(OSError):
+                    os.unlink(temporary_name, dir_fd=descriptor)
+            os.close(descriptor)
+    if not published:
+        raise ConfigError("authenticated runner smoke final output was not published")
+    return len(serialized)
+
+
+def _load_authenticated_runner_smoke_evidence_bundle(
+    path: Path,
+) -> AuthenticatedRunnerSmokeEvidenceBundle:
+    """Read one canonical private smoke file without following any path component."""
+
+    path_type = type(Path("/"))
+    if type(path) is not path_type or not path.is_absolute() or not path.name:
+        raise ConfigError("authenticated runner smoke bundle path must be one absolute file")
+    absolute = Path(os.path.abspath(path))
+    if absolute != path or is_sensitive_workspace_name(absolute.name):
+        raise ConfigError("authenticated runner smoke bundle path is unsafe")
+
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    if (
+        no_follow <= 0
+        or directory <= 0
+        or os.open not in os.supports_dir_fd
+        or os.stat not in os.supports_dir_fd
+        or os.stat not in os.supports_follow_symlinks
+    ):
+        raise ConfigError(
+            "authenticated runner smoke replay requires descriptor-relative no-follow support"
+        )
+    directory_descriptor = -1
+    file_descriptor = -1
+    directory_flags = os.O_RDONLY | no_follow | directory | getattr(os, "O_CLOEXEC", 0)
+    try:
+        directory_descriptor = os.open(absolute.anchor, directory_flags)
+        for component in absolute.parts[1:-1]:
+            child = os.open(component, directory_flags, dir_fd=directory_descriptor)
+            os.close(directory_descriptor)
+            directory_descriptor = child
+        parent_before = os.fstat(directory_descriptor)
+        if (
+            not stat.S_ISDIR(parent_before.st_mode)
+            or stat.S_IMODE(parent_before.st_mode) != 0o700
+            or parent_before.st_uid != os.geteuid()
+        ):
+            raise ConfigError(
+                "authenticated runner smoke bundle parent must be owned and mode-0700"
+            )
+        file_descriptor = os.open(
+            absolute.name,
+            os.O_RDONLY | no_follow | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=directory_descriptor,
+        )
+        file_before = os.fstat(file_descriptor)
+        if (
+            not stat.S_ISREG(file_before.st_mode)
+            or stat.S_IMODE(file_before.st_mode) != 0o600
+            or file_before.st_uid != os.geteuid()
+            or file_before.st_nlink != 1
+            or not 0 < file_before.st_size <= MAX_AUTHENTICATED_RUNNER_SMOKE_BUNDLE_BYTES
+        ):
+            raise ConfigError(
+                "authenticated runner smoke bundle must be owned, private, regular, and unshared"
+            )
+        chunks: list[bytes] = []
+        remaining = file_before.st_size
+        while remaining:
+            chunk = os.read(file_descriptor, min(remaining, 64 * 1024))
+            if not chunk:
+                raise ConfigError("authenticated runner smoke bundle was truncated while reading")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        if os.read(file_descriptor, 1):
+            raise ConfigError("authenticated runner smoke bundle grew while reading")
+        raw = b"".join(chunks)
+        file_after = os.fstat(file_descriptor)
+        path_after = os.stat(
+            absolute.name,
+            dir_fd=directory_descriptor,
+            follow_symlinks=False,
+        )
+        parent_after = os.fstat(directory_descriptor)
+        if (
+            _authenticated_runner_smoke_file_identity(file_before)
+            != _authenticated_runner_smoke_file_identity(file_after)
+            or _authenticated_runner_smoke_file_identity(file_before)
+            != _authenticated_runner_smoke_file_identity(path_after)
+            or _authenticated_runner_smoke_directory_identity(parent_before)
+            != _authenticated_runner_smoke_directory_identity(parent_after)
+            or _authenticated_runner_output_parent_identity(absolute, directory_flags)
+            != (
+                parent_before.st_dev,
+                parent_before.st_ino,
+                parent_before.st_mode,
+                parent_before.st_uid,
+            )
+        ):
+            raise ConfigError("authenticated runner smoke bundle changed during replay")
+    except ConfigError:
+        raise
+    except OSError as exc:
+        raise ConfigError(
+            "authenticated runner smoke bundle is absent, unsafe, or changed"
+        ) from exc
+    finally:
+        if file_descriptor >= 0:
+            os.close(file_descriptor)
+        if directory_descriptor >= 0:
+            os.close(directory_descriptor)
+    try:
+        return revalidate_authenticated_runner_smoke_evidence_bytes(raw)
+    except AuthenticatedRunnerSmokeError:
+        raise ConfigError("authenticated runner smoke bundle failed canonical replay") from None
+
+
+def _authenticated_runner_smoke_file_identity(
+    metadata: os.stat_result,
+) -> tuple[int, int, int, int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_nlink,
+        metadata.st_uid,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _authenticated_runner_smoke_directory_identity(
+    metadata: os.stat_result,
+) -> tuple[int, int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_uid,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
 
 
 def _authenticated_runner_durable_output(
