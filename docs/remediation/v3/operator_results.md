@@ -3,6 +3,35 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-08-21T04:36Z — PRIMARY r4 (`minimax/minimax-m3=coreweave/fp4`) — SUCCESS
+
+All three role registries now exist. No model completion was requested; cost ledger still empty.
+
+```
+output-dir: $HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r4
+run:        03d64875bbd447a8936edd5faed84177
+manifest:   3921c5682bedf1f938236a5268fcf6d5a9138d1646726df00147705cba0b8969
+registry:   $HOME/.mmaudit/private/authrunner/primary-judge-registry-r4.json
+frozen:     eaed67e745d448299e3aa5d58b406de065fae09813b3c6ff1c646403ca8023a1
+```
+
+Stale discovery fields were not copied. Selection plan `8899739a0a4a36bacacb17592df8263f57f94c65b96a63b69ab61ab67e455761`.
+
+### Complete triple — three distinct lineages, three distinct serving providers
+
+| role | model | lineage | route | provider | registry |
+|---|---|---|---|---|---|
+| candidate | `deepseek/deepseek-v4-pro-0813` | DeepSeek | `novita/fp8` | Novita | `candidate-registry-r2.json` |
+| primary judge | `minimax/minimax-m3` | MiniMax | `coreweave/fp4` | CoreWeave | `primary-judge-registry-r4.json` |
+| replay judge | `moonshotai/kimi-k3` | Moonshot | `together` | Together | `replay-judge-registry-r2.json` |
+
+No two roles share a lineage or a serving provider. Note `distinct_root_lineages_verified` remains
+`false` in the plan — that requires documentary public-lineage evidence, which metadata discovery
+cannot supply.
+
+**Next expected operator command:** the provider-free r2/r4/r2 `--preflight-only` run. Emit it and it
+will be executed.
+
 ## 2026-08-20T19:59Z — PRIMARY r3 (`anthropic/claude-opus-5=amazon-bedrock`) — FAILED, unfixable
 
 ```
@@ -72,4 +101,5 @@ bears on cross-lineage adjudication quality claims.
 
 Cost ledger untouched: `{"cap_usd":"250","entries":{},"schema_version":1}` — **$0 spent**.
 
-Re-emit the PRIMARY command with a viable model and it will be run.
+The PRIMARY role was resolved on 2026-08-21 with `minimax/minimax-m3=coreweave/fp4` (see top of file).
+`tencent/hy3` and `z-ai/glm-5.2` remain unused viable alternates if MiniMax later fails a gate.

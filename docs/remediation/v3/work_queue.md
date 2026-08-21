@@ -2096,17 +2096,30 @@ are invisible to source review by construction.
   PRIMARY r3 pair is outstanding. Green checkpoint
   `09a6288fe39d76b6bd7d58c1e92a9989e3ea575e` is verified on
   `origin/agent/v3-wip-checkpoint`. Exact-ID public lineage for all three remains absent.
+- **PRIMARY r3 disposition and r4 completion 2026-08-21:** The exact operator-supplied result log is
+  retained verbatim at `docs/remediation/v3/operator_results.md`, raw SHA-256
+  `961a0e9d29388d2727989c2aab504ddfd36e12e4c4f6696f3f2e15e81379104a`, as nonauthorizing
+  metadata. Claude Opus 5/`amazon-bedrock` failed closed before registry publication because its
+  provider display name is duplicated across the exact-model endpoint inventory; the injective
+  provider-identity invariant remains unchanged. Of the operator-reported viable replacements,
+  MiniMax M3/`coreweave/fp4` is the only exact ID already `CONFIRMED` by the compiled documentary
+  lineage manifest. The nonauthorizing selection plan is therefore resealed as
+  `8899739a0a4a36bacacb17592df8263f57f94c65b96a63b69ab61ab67e455761` over singleton
+  DeepSeek/`novita/fp8`, MiniMax/`coreweave/fp4`, and Kimi/`together` routes. PRIMARY r4 then
+  succeeded with operator-reported frozen registry SHA-256
+  `eaed67e745d448299e3aa5d58b406de065fae09813b3c6ff1c646403ca8023a1`. All three rootless,
+  pending registry+discovery pairs now exist. Metadata discovery is 6 attempted / 3 succeeded / 3
+  rejected; completion calls and campaign spend remain zero.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
   and non-crediting. Genuine production-issued lifecycle proof is absent; provider-free fixtures
   cannot mint owned-REAL origin, and the current repository rules prohibit reading real credentials
   or accessing the provider. Campaign/generation revocation beyond the top-level runner lease is
   not independently demonstrated. External-log publication and every benchmark run remain queued.
 - **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator
-  run only the fresh PRIMARY r3 metadata discovery command in `docs/models/model_selection.md` for
-  `anthropic/claude-opus-5=amazon-bedrock`; reject any unavailable, non-ZDR, identity-drifted, or
-  capability-incomplete result without substitution. Then compile fresh documentary public-lineage
-  evidence for DeepSeek V4, Claude Opus 5, and Kimi K3 and run the frozen provider-free
-  r2/r3/r2 `--preflight-only` command. Derive final request-bound caps from retained
+  run the exact provider-free r2/r4/r2 `--preflight-only` command in
+  `docs/models/model_selection.md` as a zero-secret blocker probe. Accept only its exact fail-closed
+  result; current compiled lineage should reject DeepSeek V4 and Kimi K3. Then compile their fresh
+  documentary public-lineage evidence, rerun the same preflight, and derive final request-bound caps from retained
   pricing/capacity evidence before any one-shot REAL launch. AUTHSEAL publication, real audits,
   benchmarks, and release remain queued.
 

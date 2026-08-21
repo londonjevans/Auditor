@@ -44,7 +44,7 @@ requested, and the operator reports that the ledger remains untouched at `$0`. T
 record operator-reported results only; the private artifacts and ledger were not read or promoted
 by Codex. The exact operator-supplied log is retained at
 [`operator_results.md`](../remediation/v3/operator_results.md), raw SHA-256
-`f0d0987d6d35d6759aa7b922886913b2eb01e8b66838c37ad3ec5695fcb6976c`, and is
+`961a0e9d29388d2727989c2aab504ddfd36e12e4c4f6696f3f2e15e81379104a`, and is
 `OPERATOR_SUPPLIED_UNVERIFIED`: it grants no repository authority.
 
 The subsequent Claude Opus 5 `amazon-bedrock` PRIMARY r3 attempt also failed closed before registry
@@ -55,13 +55,15 @@ pricing, or capability evidence from an unapproved sibling route. Under the curr
 reported Claude ZDR route can satisfy this invariant; route substitution alone cannot repair r3.
 No completion was requested and the operator reports no ledger spend.
 
-The replacement PRIMARY r4 proposal is `minimax/minimax-m3=coreweave/fp4`. Of the operator-reported
-technically discoverable replacements, MiniMax M3 is the only exact ID already `CONFIRMED` by the
-compiled public-lineage manifest. The plan restricts each selected role to one route: DeepSeek to
-successful `novita/fp8`, MiniMax to operator-reported viable `coreweave/fp4`, and Kimi to successful
-`together`. Any unavailable, non-ZDR, ambiguous, identity-drifted, or capability-incomplete route
-must fail closed and must not be silently substituted. The `20260821-r4` primary paths below are
-fresh and must not reuse the failed Qwen r2 or Claude r3 paths.
+The replacement PRIMARY r4 `minimax/minimax-m3=coreweave/fp4` metadata discovery succeeded. The
+operator reports frozen registry SHA-256
+`eaed67e745d448299e3aa5d58b406de065fae09813b3c6ff1c646403ca8023a1`, discovery manifest
+SHA-256 `3921c5682bedf1f938236a5268fcf6d5a9138d1646726df00147705cba0b8969`, no completion, and no
+ledger spend. Of the technically discoverable replacements, MiniMax M3 is the only exact ID already
+`CONFIRMED` by the compiled public-lineage manifest. The plan restricts each selected role to one
+route: DeepSeek to successful `novita/fp8`, MiniMax to successful `coreweave/fp4`, and Kimi to
+successful `together`. All three registries now exist, remain rootless/role-empty/`PENDING`, and are
+nonauthorizing. Do not rerun or overwrite any discovery path.
 
 If the cumulative ledger does not already exist, initialize it exactly once. Never replace an
 existing ledger; its historical prefix is part of later AUTHRUNNER custody.
@@ -70,21 +72,14 @@ existing ledger; its historical prefix is part of later AUTHRUNNER custody.
 MMAUDIT_BUDGET_USD=250 .venv/bin/mmaudit models init-cost-ledger --config config/openrouter-qualification.toml --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --no-color
 ```
 
-```shell
-MMAUDIT_SECRETS_ENV_FILE="$HOME/.mmaudit/secrets.env" MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models discover --candidate minimax/minimax-m3=coreweave/fp4 --config config/openrouter-qualification.toml --secrets-env-file "$HOME/.mmaudit/secrets.env" --output-dir "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r4" --candidate-selection-plan config/models.selection-plan.json --candidate-selection-ranking-source /Users/generalcuster/Documents/dev/CODEX_HANDOFF_v3-unblock-2026-08-17/model-ranking.py --candidate-selection-lineage-review-source /Users/generalcuster/Documents/dev/CODEX_HANDOFF_v3-unblock-2026-08-17/V3-LINEAGE-001-operator-review.md --candidate-registry-output "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r4.json" --no-color
-```
-
-The output registry must remain rootless, role-empty, and `PENDING`, with every runtime field
-copied from that exact fresh discovery bundle. Do not run AUTHRUNNER after metadata discovery
-alone: fresh exact-ID documentary lineage and request-bound cost caps remain required.
-
-After all three discovery outputs exist **and** the compiled public-lineage bundle has been
-rebuilt to prove the three exact IDs pairwise independent, the following command performs the
-complete launch preflight without selecting a secret, accessing a provider, mutating the ledger,
-or creating any output. The `$1.00` values are restrictive policy tripwires, not claims about
-provider pricing. With one retry they cap 96 candidate-attempt slots plus 48 PRIMARY-judge and 48
-REPLAY-judge slots at `$192.00`; any exact live request cost bound above `$1.00` will later reject
-before reservation or completion POST.
+The following command is now the exact provider-free r2/r4/r2 blocker-probe preflight. It selects
+no secret, accesses no provider, does not mutate the ledger, and creates no output. Until DeepSeek
+V4 and Kimi K3 exact-ID documentary lineage is compiled, it must fail closed at the public-lineage
+gate and that rejection must not be promoted to launch authority. After the lineage bundle is
+rebuilt, rerun the same command to require the complete preflight. The `$1.00` values are restrictive
+policy tripwires, not claims about provider pricing. With one retry they cap 96 candidate-attempt
+slots plus 48 PRIMARY-judge and 48 REPLAY-judge slots at `$192.00`; any exact live request cost
+bound above `$1.00` will later reject before reservation or completion POST.
 
 ```shell
 env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models authenticated-runner --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r2.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260820-r2" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r4.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r4" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2" --qualification-policy config/models.maximum-assurance.toml --primary-campaign-journal "$HOME/.mmaudit/private/authrunner/primary-campaign-20260821-r4" --primary-portfolio "$HOME/.mmaudit/private/authrunner/primary-portfolio-20260821-r4" --replay-campaign-journal "$HOME/.mmaudit/private/authrunner/replay-campaign-20260821-r4" --replay-portfolio "$HOME/.mmaudit/private/authrunner/replay-portfolio-20260821-r4" --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-evidence-20260821-r4.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --ground-truth-provenance benchmarks/model_corpus/provenance.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --allow-code-egress --preflight-only --no-color

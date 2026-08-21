@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-20T19:55:26Z",
+  "updated_at": "2026-08-21T04:40:13Z",
   "objective_path": "docs/remediation/v3/product_completion_goal.txt",
   "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
   "objective_supersession": {
@@ -13,11 +13,11 @@
     "authorized_at": "2026-08-17T20:06:41Z",
     "decision": "EXPLICIT_OPERATOR_TARGET_CHANGE"
   },
-  "candidate_commit": "09a6288fe39d76b6bd7d58c1e92a9989e3ea575e",
+  "candidate_commit": "cb3fc34174e028c2d2ff208c50c23a90a4b29d72",
   "autorun_status": "BLOCKED_SAFETY",
   "current_milestone": "M1-DETERMINISTIC-PRODUCT (REACHED)",
   "current_ticket": "V3-AUTHRUNNER-001",
-  "last_checkpoint_commit": "09a6288fe39d76b6bd7d58c1e92a9989e3ea575e",
+  "last_checkpoint_commit": "cb3fc34174e028c2d2ff208c50c23a90a4b29d72",
   "real_model_calls": {
     "attempted": 11,
     "succeeded": 1,
@@ -35,11 +35,11 @@
     "V3-LINEAGE-001": "The calibration-only signed authority contract is implemented, but ticket completion requires a successful current exact provider refresh and an actual authorized operator-signed decision over that exact candidate set. Runtime approvals remain empty.",
     "V3-CALIBRATE-001": "Provider-free empirical derivation and the exact two-campaign authority bridge are implemented, but statistically meaningful thresholds require a representative randomized independently adjudicated holdout plus current refreshed, signed, and real calibration evidence.",
     "V3-AUTHSEAL-001": "The provider-free frozen-ground-truth, exact scoring, frozen comparison verdict, and structural seal layers are implemented, but runtime authority remains unavailable until independently anchored public lineage, authenticated REAL cross-lineage runner evidence, and an independently verified external transparency-log inclusion receipt exist. The baseline and trusted evaluation clock remain explicitly unevaluable; no human signature or adjudication is requested.",
-    "V3-AUTHRUNNER-001": "Corrected documentary public lineage and the provider-free same-process runner path are implemented, including exact candidate/judge/generation/ledger custody, strict durable replay, egress and cost fail-stops, a one-way PID-local runner lease, post-replay recheck, exactly-once post-AUTHSEAL disposal, post-revoke self-check, and a detached capability-free return snapshot. Operator-reported metadata discovery produced exact rootless pending DeepSeek/novita-fp8 and Kimi/together pairs without a completion or spend; Qwen and Meta lacked ZDR eligibility, and Kimi/deepinfra-bf16 was non-operational. The nonauthorizing replacement plan now selects Claude Opus 5/Amazon Bedrock for the outstanding PRIMARY r3 pair and keeps all three selected routes singleton. Exact-ID documentary lineage, PRIMARY r3, genuine REAL issuance, and the positive issue-consume-revoke-reject lifecycle assay remain unperformed; downstream external-log and benchmark work stay queued."
+    "V3-AUTHRUNNER-001": "Corrected documentary public lineage and the provider-free same-process runner path are implemented, including exact candidate/judge/generation/ledger custody, strict durable replay, egress and cost fail-stops, a one-way PID-local runner lease, post-replay recheck, exactly-once post-AUTHSEAL disposal, post-revoke self-check, and a detached capability-free return snapshot. Operator-reported metadata discovery produced exact rootless pending DeepSeek/novita-fp8, MiniMax/coreweave-fp4, and Kimi/together pairs without a completion or spend; Qwen and Meta lacked ZDR eligibility, Kimi/deepinfra-bf16 was non-operational, and Claude Opus 5/Amazon Bedrock failed injective provider-display identity. The nonauthorizing plan keeps all three selected routes singleton, and MiniMax M3 already has exact-ID confirmed documentary lineage. DeepSeek V4 and Kimi K3 exact-ID documentary lineage, the provider-free r2/r4/r2 preflight, genuine REAL issuance, and the positive issue-consume-revoke-reject lifecycle assay remain unperformed; downstream external-log and benchmark work stay queued."
   },
   "last_validation": {
-    "command": "Provider-free 82-test candidate-selection/registry-bridge/AUTHRUNNER-CLI/schema/objective/documentation matrix; release-schema verification; full Ruff over 535 files; strict mypy over 202 source files; strict governance JSON parsing; diff integrity",
-    "result": "PASS / BLOCKED_SAFETY: 82 relevant tests passed. Generated schemas were current; Ruff, strict mypy, JSON, and diff gates passed; independent exact-byte and contract reviews found no blocker/HIGH. Operator-reported successful metadata pairs remain nonauthorizing; PRIMARY r3, exact-ID public lineage, REAL AUTHRUNNER issuance, and release authority remain absent."
+    "command": "Provider-free 106-test candidate-selection/registry-bridge/AUTHRUNNER-CLI/schema/objective/documentation matrix; release-schema verification; full Ruff over 536 files; strict mypy over 202 source files; strict governance JSON parsing; diff integrity",
+    "result": "PASS / BLOCKED_SAFETY: 106 relevant tests passed. Generated schemas were current; Ruff, strict mypy, JSON, and diff gates passed. Read-only audits preserved injective provider identity and selected the only viable replacement with existing exact-ID confirmed lineage. Operator-reported PRIMARY r4 metadata succeeded and all three pairs remain nonauthorizing; DeepSeek V4 and Kimi K3 exact-ID lineage, provider-free triple preflight, REAL AUTHRUNNER issuance, and release authority remain absent."
   },
   "pause_state": {
     "requested_at": "2026-08-03T20:08:17Z",
@@ -202,7 +202,10 @@
     "next_action_after_v3_authrunner_provider_contract": "Have the operator run the three fresh -r2 metadata-only discovery commands in docs/models/model_selection.md. Reject any unavailable, non-ZDR, identity-drifted, or capability-incomplete route without substitution. Then compile exact-ID documentary lineage and run the provider-free authenticated-runner preflight before deriving final live request-bound caps.",
     "checkpointed_at_v3_authrunner_primary_replacement": "2026-08-20T19:55:26Z",
     "result_v3_authrunner_primary_replacement": "Green checkpoint 09a6288fe39d76b6bd7d58c1e92a9989e3ea575e is verified on origin/agent/v3-wip-checkpoint. Operator-reported metadata discovery retained exact DeepSeek/novita-fp8 and Kimi/together rootless pending pairs, rejected Qwen and Meta for absent ZDR eligibility, and rejected Kimi/deepinfra-bf16 as non-operational. The nonauthorizing plan is resealed over singleton DeepSeek/novita-fp8, Claude Opus 5/Amazon Bedrock, and Kimi/together routes. The 82-test relevant matrix and static/governance gates passed; no completion, ledger spend, lineage, qualification, runner, or release authority is claimed.",
-    "next_action_after_v3_authrunner_primary_replacement": "Run only the fresh PRIMARY r3 metadata command for anthropic/claude-opus-5=amazon-bedrock. Then compile admissible immutable documentary sources for all three exact IDs, prove pairwise-independent roots, and run the provider-free candidate-r2/primary-r3/replay-r2 AUTHRUNNER preflight before deriving final live request-bound caps."
+    "next_action_after_v3_authrunner_primary_replacement": "Historical action superseded after PRIMARY r3 rejected injective provider-display identity; see the PRIMARY r4 selection checkpoint.",
+    "checkpointed_at_v3_authrunner_primary_r4_selection": "2026-08-21T04:40:13Z",
+    "result_v3_authrunner_primary_r4_selection": "Green checkpoint cb3fc34174e028c2d2ff208c50c23a90a4b29d72 is verified on origin/agent/v3-wip-checkpoint. The exact operator-supplied result log is retained verbatim at raw SHA-256 961a0e9d29388d2727989c2aab504ddfd36e12e4c4f6696f3f2e15e81379104a. PRIMARY r3 rejected because Claude Opus 5 ZDR endpoints have non-injective provider display identities; the invariant remains intact. The nonauthorizing plan is resealed as 8899739a0a4a36bacacb17592df8263f57f94c65b96a63b69ab61ab67e455761 over singleton DeepSeek/novita-fp8, exact-ID-lineage-confirmed MiniMax M3/coreweave-fp4, and Kimi/together routes. PRIMARY r4 then produced frozen registry eaed67e745d448299e3aa5d58b406de065fae09813b3c6ff1c646403ca8023a1 and discovery manifest 3921c5682bedf1f938236a5268fcf6d5a9138d1646726df00147705cba0b8969. Metadata discovery is operator-reported as 6 attempts, 3 successes, and 3 rejections; provider completion calls and dedicated campaign spend remain zero.",
+    "next_action_after_v3_authrunner_primary_r4_selection": "Run the exact provider-free candidate-r2/primary-r4/replay-r2 AUTHRUNNER preflight as a zero-secret blocker probe. Current compiled lineage should reject DeepSeek V4 and Kimi K3. Then compile their admissible immutable documentary sources, prove pairwise-independent roots with MiniMax, rerun preflight, and derive final live request-bound caps."
   },
   "scheduler_assurance_validation": {
     "status": "PASS_COMPONENT_FULL_ASSURANCE",
@@ -288,28 +291,34 @@
   },
   "authrunner_candidate_selection_validation": {
     "status": "PASS_NONAUTHORIZING_PROVIDER_FREE",
-    "commit": "09a6288fe39d76b6bd7d58c1e92a9989e3ea575e",
+    "commit": "cb3fc34174e028c2d2ff208c50c23a90a4b29d72",
     "remote_ref": "origin/agent/v3-wip-checkpoint",
-    "remote_verified_at": "2026-08-20T19:55:26Z",
+    "remote_verified_at": "2026-08-21T04:35:26Z",
     "initial_plan_sha256": "b365a0ce5056ec1328f3f54722a97104dd25308a1cfab663d4185476165b06a7",
-    "supersedes_plan_sha256": "e1fcfa451f7d4b352663c4c870d65fe03fbaff1745efc0350277b84194288a05",
-    "plan_sha256": "47cd417c3aa73369da16981bbef3a3c450040e95ecf55f9af837f6a0b3edf459",
-    "command": "82-test candidate-selection/registry-bridge/AUTHRUNNER-CLI/schema/objective/documentation matrix; release-schema verification; repository Ruff and strict mypy; strict governance JSON; diff integrity",
-    "result": "PASS: singleton selected route allowlists, rank-1 exact-ID PRIMARY replacement, r2 pair reuse, fresh r3 path custody, pre-secret full launch preflight, and nonauthorizing boundaries validated; independent review found no blocker/HIGH",
+    "supersedes_plan_sha256": "47cd417c3aa73369da16981bbef3a3c450040e95ecf55f9af837f6a0b3edf459",
+    "plan_sha256": "8899739a0a4a36bacacb17592df8263f57f94c65b96a63b69ab61ab67e455761",
+    "command": "106-test candidate-selection/registry-bridge/AUTHRUNNER-CLI/schema/objective/documentation matrix; release-schema verification; repository Ruff and strict mypy; strict governance JSON; diff integrity",
+    "result": "PASS: singleton selected route allowlists, exact-ID-confirmed MiniMax PRIMARY replacement, r2 pair reuse, fresh r4 path custody, pre-secret full launch preflight, operator-results reconciliation, and nonauthorizing boundaries validated; independent review found no blocker/HIGH",
     "provider_calls": 0,
-    "candidate_registries_created": 2,
+    "candidate_registries_created": 3,
     "authority": false
   },
   "authrunner_singleton_discovery_status": {
     "status": "PARTIAL_OPERATOR_REPORTED_NONAUTHORIZING",
     "provider_completion_calls": 0,
-    "operator_metadata_discovery_attempts": 4,
-    "operator_metadata_discovery_succeeded": 2,
-    "operator_metadata_discovery_rejected": 2,
+    "operator_metadata_discovery_attempts": 6,
+    "operator_metadata_discovery_succeeded": 3,
+    "operator_metadata_discovery_rejected": 3,
     "candidate_registry_sha256": "59dfdaf498cc2a8201351a7c6aacdfc2a3fd7f6daec09aa927202071ee7a0619",
     "replay_judge_registry_sha256": "14937842d2a544540efa39199b2b0ed4c0f25e1f145f1385f32d43b728edbdea",
-    "primary_judge_registry_sha256": null,
+    "primary_judge_registry_sha256": "eaed67e745d448299e3aa5d58b406de065fae09813b3c6ff1c646403ca8023a1",
+    "primary_judge_discovery_run_id": "03d64875bbd447a8936edd5faed84177",
+    "primary_judge_discovery_manifest_sha256": "3921c5682bedf1f938236a5268fcf6d5a9138d1646726df00147705cba0b8969",
     "ledger_spend_usd": "0",
+    "operator_results_path": "docs/remediation/v3/operator_results.md",
+    "operator_results_sha256": "961a0e9d29388d2727989c2aab504ddfd36e12e4c4f6696f3f2e15e81379104a",
+    "operator_results_authenticity": "OPERATOR_SUPPLIED_UNVERIFIED",
+    "operator_results_authority": false,
     "codex_independently_opened_private_artifacts": false,
     "authority": false
   },

@@ -8,9 +8,9 @@ AUTORUN_STATUS: BLOCKED_SAFETY
 CURRENT_MILESTONE: M1-DETERMINISTIC-PRODUCT (REACHED)
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001 (COMPLETE)
-NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator run only the fresh PRIMARY r3 metadata discovery command in `docs/models/model_selection.md` for `anthropic/claude-opus-5=amazon-bedrock`; reject any unavailable, non-ZDR, identity-drifted, or capability-incomplete result without substitution. Then compile exact-ID documentary public lineage for DeepSeek V4, Claude Opus 5, and Kimi K3 and run the frozen provider-free r2/r3/r2 `--preflight-only` command. Derive final request-bound caps from retained pricing/capacity evidence before any one-shot REAL launch. AUTHSEAL publication, real audits, benchmarks, and release remain queued.
-LAST_COMMAND: Provider-free 82-test candidate-selection/registry-bridge/AUTHRUNNER-CLI/schema/objective/documentation matrix; `.venv/bin/python scripts/generate_release_schemas.py`; `make PYTHON=.venv/bin/python lint`; `make PYTHON=.venv/bin/python type`; strict governance JSON parsing; diff integrity.
-LAST_RESULT: PASS / BLOCKED_SAFETY — 82 relevant tests passed; generated schemas were current; Ruff passed over 535 files; strict mypy passed over 202 source files; governance JSON and diff gates passed. Independent contract audits confirmed the two successful r2 pairs remain exact-bound and reusable, chose the rank-1 exact-ID Anthropic/Amazon Bedrock replacement, and found no authority promotion. PRIMARY r3 and exact-ID public lineage remain absent; Codex made no secret, provider, or ledger access.
+NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator run the exact provider-free r2/r4/r2 `--preflight-only` command in `docs/models/model_selection.md` as a zero-secret blocker probe; accept only its exact fail-closed result. Current compiled lineage should reject DeepSeek V4 and Kimi K3. Then compile their exact-ID documentary lineage, rerun preflight, and derive final request-bound caps before any one-shot REAL launch. AUTHSEAL publication, real audits, benchmarks, and release remain queued.
+LAST_COMMAND: Provider-free 106-test candidate-selection/registry-bridge/AUTHRUNNER-CLI/schema/objective/documentation matrix; `.venv/bin/python scripts/generate_release_schemas.py`; `make PYTHON=.venv/bin/python lint`; `make PYTHON=.venv/bin/python type`; strict governance JSON parsing; diff integrity.
+LAST_RESULT: PASS / BLOCKED_SAFETY — 106 relevant tests passed; generated schemas were current; Ruff passed over 536 files; strict mypy passed over 202 source files; governance JSON and diff gates passed. Read-only audits preserved injective provider identity and selected the only viable replacement with existing exact-ID confirmed lineage. Operator-reported PRIMARY r4 metadata succeeded; DeepSeek V4/Kimi K3 exact-ID lineage and provider-free triple preflight remain absent. Codex made no secret, provider, or ledger access.
 REAL_MODEL_CALLS_ATTEMPTED: 11
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 10
@@ -20,7 +20,41 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9965235675
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 09a6288fe39d76b6bd7d58c1e92a9989e3ea575e (verified at `origin/agent/v3-wip-checkpoint`)
+LAST_CHECKPOINT_COMMIT: cb3fc34174e028c2d2ff208c50c23a90a4b29d72 (verified at `origin/agent/v3-wip-checkpoint`)
+
+## 2026-08-21T04:40:13Z — AUTHRUNNER PRIMARY r3 rejection reconciled to r4
+
+- Status: `V3-AUTHRUNNER-001` remains `PARTIAL` / `BLOCKED_SAFETY`; no provider result was
+  fabricated or promoted to lineage, qualification, runner, seal, benchmark, audit, or release
+  authority.
+- Operator-result custody: added the exact 5,757-byte operator-supplied result log at
+  `docs/remediation/v3/operator_results.md`, raw SHA-256
+  `961a0e9d29388d2727989c2aab504ddfd36e12e4c4f6696f3f2e15e81379104a`. Codex did not open or
+  replay private registries, discovery bundles, the secret file, or the ledger. Metadata discovery
+  is now operator-reported as 6 attempted / 3 succeeded / 3 rejected; completion calls and the
+  dedicated campaign ledger spend remain zero. Governed historical counters remain unchanged.
+- Fail-closed disposition: Claude Opus 5/`amazon-bedrock` failed before registry publication
+  because its provider display name is duplicated across the exact-model endpoint inventory. The
+  whole-inventory uniqueness check remains intact: generation evidence cannot always disambiguate a
+  sibling route by tag, so weakening it could misbind ZDR, pricing, and capability evidence.
+- Provider-free r4 selection: chose `minimax/minimax-m3=coreweave/fp4`. It is the only
+  operator-reported technically discoverable replacement whose exact ID is already `CONFIRMED` by
+  the compiled public-lineage manifest. Resealed the wholly nonauthorizing plan as
+  `8899739a0a4a36bacacb17592df8263f57f94c65b96a63b69ab61ab67e455761`; the selected routes are
+  singleton DeepSeek/`novita/fp8`, MiniMax/`coreweave/fp4`, and Kimi/`together`.
+- PRIMARY r4 result: the operator reports successful metadata-only publication at the fresh r4
+  paths, frozen registry SHA-256
+  `eaed67e745d448299e3aa5d58b406de065fae09813b3c6ff1c646403ca8023a1`, and manifest SHA-256
+  `3921c5682bedf1f938236a5268fcf6d5a9138d1646726df00147705cba0b8969`. All three rootless,
+  pending singleton pairs now exist; no completion or spend occurred.
+- Validation and durability: the 106-test relevant matrix, release-schema verification, Ruff,
+  strict mypy over 202 source files, governance JSON parsing, and diff integrity passed. Commit
+  `cb3fc34174e028c2d2ff208c50c23a90a4b29d72` is verified at
+  `origin/agent/v3-wip-checkpoint`.
+- Remaining limitation and next action: DeepSeek V4 and Kimi K3 still need exact-ID documentary
+  lineage before the r2/r4/r2 provider-free preflight can succeed. Run the documented zero-secret
+  preflight as a blocker probe and retain its exact rejection; no completion, AUTHSEAL, audit,
+  benchmark, or release action is authorized by this slice.
 
 ## 2026-08-20T19:50:26Z — AUTHRUNNER singleton discovery outcomes bound to replacement plan
 
