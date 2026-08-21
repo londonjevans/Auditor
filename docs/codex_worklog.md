@@ -10,7 +10,7 @@ LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001
 NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator run the unchanged exact r2/r4/r2 provider-free preflight in `docs/models/model_selection.md` and retain its exact result. Do not infer success from the resealed documentary lineage. AUTHSEAL publication, real audits, benchmarks, and release remain queued.
 LAST_VALIDATION_COMMAND: Provider-free 194-test capture/manifest/lineage-authority/configuration/AUTHRUNNER/OpenRouter/candidate-selection/CLI/documentation/objective/release-schema matrix; `.venv/bin/python scripts/generate_release_schemas.py`; 24-test release/objective subset; `make PYTHON=.venv/bin/python lint`; `make PYTHON=.venv/bin/python type`; strict runtime/review JSON parsing; diff integrity.
 LAST_VALIDATION_RESULT: PASS / PARTIAL — 194 affected tests passed in 37.22s and the release/objective subset passed 24 in 0.63s. Generated schemas were current; 536 files were already formatted and Ruff-clean; strict mypy passed over 202 source files; both governance JSON documents and diff integrity passed. The documentary lineage reseal is green, while provider-free preflight success and every downstream authority remain unclaimed. Codex made no secret, provider, or ledger access.
-LAST_CHECKPOINT_COMMIT: 735aabc934fb8a428e1d1a16244035939c9bc5be — `Prepare AUTHRUNNER lineage recapture`.
+LAST_CHECKPOINT_COMMIT: 83bad611a888a685e83b0ed442984fa05e755873 — `Reseal AUTHRUNNER public lineage`.
 REMAINING_ACTIONABLE_TICKETS: The provider-free stale candidate-registry rebuild and exact AUTHRUNNER campaign preparation are actionable. Credentialed execution remains `BLOCKED_SAFETY`; external authority-log publication and all benchmark/release work remain queued behind genuine REAL runner evidence.
 
 ## 2026-08-21T05:30:31Z — AUTHRUNNER documentary capture adopted and lineage resealed
@@ -39,6 +39,8 @@ REMAINING_ACTIONABLE_TICKETS: The provider-free stale candidate-registry rebuild
 - **Validation:** The affected provider-free matrix passed 194 tests in 37.22s and the
   release/objective subset passed 24 in 0.63s. Schema verification, Ruff/format over 536 files,
   strict mypy over 202 source files, both governance JSON documents, and diff integrity passed.
+- **Checkpoint:** Commit `83bad611a888a685e83b0ed442984fa05e755873` preserves the canonical
+  capture adoption, documentary decisions, runtime pins, defensive tests, and governance record.
 - **Counters and boundary:** Governed REAL model-call counters remain 11 attempted / 1 succeeded /
   10 rejected, cost remains USD `0.0034764325`, and completed real audits remain `0`. The dedicated
   operator campaign ledger is separately reported at `$0`; it is not merged into governed history.

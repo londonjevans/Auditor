@@ -20,7 +20,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9965235675
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 735aabc934fb8a428e1d1a16244035939c9bc5be (`Prepare AUTHRUNNER lineage recapture`)
+LAST_CHECKPOINT_COMMIT: 83bad611a888a685e83b0ed442984fa05e755873 (`Reseal AUTHRUNNER public lineage`)
 
 ## 2026-08-21T05:30:31Z — AUTHRUNNER documentary capture adopted and lineage resealed
 
@@ -48,6 +48,8 @@ LAST_CHECKPOINT_COMMIT: 735aabc934fb8a428e1d1a16244035939c9bc5be (`Prepare AUTHR
 - Validation: the affected provider-free matrix passed 194 tests in 37.22s and the
   release/objective subset passed 24 in 0.63s. Schema verification, Ruff/format over 536 files,
   strict mypy over 202 source files, both governance JSON documents, and diff integrity passed.
+- Checkpoint: commit `83bad611a888a685e83b0ed442984fa05e755873` preserves the canonical
+  capture adoption, documentary decisions, runtime pins, defensive tests, and governance record.
 - Counters and boundary: governed REAL model-call counters remain 11 attempted / 1 succeeded / 10
   rejected, cost remains USD `0.0034764325`, and completed real audits remain `0`. The dedicated
   operator campaign ledger is separately reported at `$0`; it is not merged into governed history.

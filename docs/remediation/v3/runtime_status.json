@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-21T05:30:31Z",
+  "updated_at": "2026-08-21T05:46:03Z",
   "objective_path": "docs/remediation/v3/product_completion_goal.txt",
   "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
   "objective_supersession": {
@@ -13,11 +13,11 @@
     "authorized_at": "2026-08-17T20:06:41Z",
     "decision": "EXPLICIT_OPERATOR_TARGET_CHANGE"
   },
-  "candidate_commit": "735aabc934fb8a428e1d1a16244035939c9bc5be",
+  "candidate_commit": "83bad611a888a685e83b0ed442984fa05e755873",
   "autorun_status": "BLOCKED_SAFETY",
   "current_milestone": "M1-DETERMINISTIC-PRODUCT (REACHED)",
   "current_ticket": "V3-AUTHRUNNER-001",
-  "last_checkpoint_commit": "735aabc934fb8a428e1d1a16244035939c9bc5be",
+  "last_checkpoint_commit": "83bad611a888a685e83b0ed442984fa05e755873",
   "real_model_calls": {
     "attempted": 11,
     "succeeded": 1,
