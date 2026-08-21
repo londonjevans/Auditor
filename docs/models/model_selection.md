@@ -45,10 +45,10 @@ the explicit `together` retry succeeded with operator-reported frozen-registry S
 `14937842d2a544540efa39199b2b0ed4c0f25e1f145f1385f32d43b728edbdea`. No completion was
 requested, and the operator reports that the ledger remains untouched at `$0`. These statements
 record operator-reported results only; the private artifacts and ledger were not read or promoted
-by Codex. The exact operator-supplied log is retained at
-[`operator_results.md`](../remediation/v3/operator_results.md), raw SHA-256
-`5b9d455d1a82c8ae70dedfb2b38ad17bcd2a881c5d3ca7a9e56bac1379cd7c19`, and is
-`OPERATOR_SUPPLIED_UNVERIFIED`: it grants no repository authority.
+by Codex. The current exact operator-supplied log is retained at
+[`operator_results.md`](../remediation/v3/operator_results.md): 50,211 bytes, 906 lines, and raw
+SHA-256 `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd`. It is
+`OPERATOR_SUPPLIED_UNVERIFIED` and grants no repository authority.
 
 The subsequent Claude Opus 5 `amazon-bedrock` PRIMARY r3 attempt also failed closed before registry
 publication. Although the tag matched, the endpoint's `provider_name` was duplicated elsewhere in
@@ -454,16 +454,57 @@ window is operationally measured in hours.
 
 The current 50,211-byte, 906-line operator record has raw SHA-256
 `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd`. The stale r2/r5/r2
-command is withdrawn. No paid smoke, verifier, normal provider-free preflight, construct-only,
-fresh-discovery, live-route, or full AUTHRUNNER command is currently emitted. The next local decision
-is whether a live-route preflight and its paid launch must be treated as one mandatory adjacent
-operator sequence so rapidly aging discovery cannot be silently reused between gates. Command
-emission is not execution authority. `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`;
-`V3-AUTONOMY-001` Phase 0 remains queued and paused with no generated artifact adopted. No governed
-counter or authority changed.
+command is withdrawn. Source implementation remains bound to pushed, remote-resolved checkpoint
+`9f5c94d97b3d79d51c10e250b99244591461e959`; the zero-command evidence reconciliation is
+checkpointed at `3bcac02da30bdad2c7e584d35c091ea5cb75ea7d`.
 
-No paid, provider-free preflight, verifier, construct-only, or full AUTHRUNNER command is emitted;
-the same is true of fresh-discovery and live-route commands at this evidence checkpoint.
+The live-route gate and paid smoke are now a mandatory adjacent two-step operator sequence. The two
+commands below are the only current AUTHRUNNER commands. They are separate and must be authorized
+separately; do not chain them or paste them into one shell invocation. Before step A, the exact
+`r6/r6/r2` artifacts and hashes above must still match, the effective configuration must remain
+`42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54`, the dedicated ledger must be
+exactly empty and unchanged, the `s1` output must be absent, and its operator-owned parent directory
+must already exist with mode `0700`.
+
+Step A is metadata egress only. Its bounded inventory is 15 logical GETs with at most 30 attempts;
+an authentication, network, malformed-response, registration, or policy failure can stop earlier.
+All-three typed comparison is reached only if every route reaches its exact comparison. The command
+does not reserve ledger cost, dispatch a model completion, create a usage record, or publish output;
+external billing semantics for authenticated metadata GETs are not controlled by this repository.
+Step A also runs the shared static corpus, lineage, configuration, token/cost-budget, ledger, and
+candidate-plan admission before metadata transport. The historical post-`59f9f40` provider-free
+result covers only that mode branch, so inserting another normal preflight adds no safety gate and
+would only age the live metadata. Neither result proves post-response custody or adjudication.
+
+```shell
+env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models authenticated-runner-smoke --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r6.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260821-r6" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r6.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r6" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2" --smoke-corpus benchmarks/model_corpus_smoke --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260821-s1.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --secrets-env-file "$HOME/.mmaudit/secrets.env" --allow-metadata-egress --live-route-preflight-only --no-color
+```
+
+Step B may be separately authorized only after step A exits `0` and the operator inspects its
+complete terminal record. It must report the exact `VALID / NONCREDITING / NONAUTHORIZING / METADATA
+EGRESS ONLY / NO MODEL COMPLETION` result; exact displayed model IDs
+`deepseek/deepseek-v4-pro-0813`, `tencent/hy3`, and `moonshotai/kimi-k3`; `logical_gets=15` and
+`maximum_provider_attempts=30`; `usage_records=0`; unchanged budget and atomic ledger; output not
+published; and effective-config SHA-256
+`42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54`. Step B must begin
+immediately after that inspection and its separate authorization, with no intervening source,
+configuration, registry, discovery artifact, lineage/corpus artifact, ledger, output-path,
+secret-file, or shell-environment change. The unchanged command and frozen evidence must still bind
+those models to `novita/fp8`, `tencent/fp8`, and `together`, respectively; endpoint tags are not
+claimed as terminal-display fields. Reconfirm the exact empty ledger, absent `s1` output, and
+mode-`0700` parent immediately before authorization. Any delay, interruption, mismatch, ambiguous
+terminal result, or intervening change invalidates adjacency: do not run step B; obtain separate
+authorization and rerun step A. The paid smoke is one-shot and non-resumable; it can reserve and
+spend provider cost.
+
+```shell
+env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models authenticated-runner-smoke --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r6.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260821-r6" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r6.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r6" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2" --smoke-corpus benchmarks/model_corpus_smoke --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260821-s1.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --secrets-env-file "$HOME/.mmaudit/secrets.env" --allow-code-egress --no-color
+```
+
+Command emission is not execution authority. No normal provider-free preflight, verifier,
+construct-only, fresh-discovery, or full AUTHRUNNER command is emitted. `V3-AUTHRUNNER-001` remains
+`PARTIAL / BLOCKED_SAFETY`; `V3-AUTONOMY-001` Phase 0 remains queued and paused with no generated
+artifact adopted. No governed counter or authority changed.
 
 ### Full 24-case REAL command — withheld
 

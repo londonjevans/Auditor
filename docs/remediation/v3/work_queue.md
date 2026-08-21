@@ -2061,9 +2061,12 @@ are invisible to source review by construction.
   `5e94b77` proved genuine candidate endpoint-inventory drift at `$0`. Aggregate successor
   `9f5c94d97b3d79d51c10e250b99244591461e959` is pushed and remote-resolved. The operator used it
   to identify candidate and PRIMARY drift while REPLAY remained unchanged, independently re-froze
-  the two affected roles as r6/r6, and validated the r6/r6/r2 live metadata path. All current
-  AUTHRUNNER commands are absent while mandatory live-preflight/paid-launch adjacency is decided.
-  REAL remains `BLOCKED_SAFETY`; this status grants no runtime authority.
+  the two affected roles as r6/r6, and validated the r6/r6/r2 live metadata path. Zero-command
+  evidence checkpoint `3bcac02da30bdad2c7e584d35c091ea5cb75ea7d` is committed. Exactly two current
+  commands now encode a mandatory adjacent r6/r6/r2 sequence: a separately authorized metadata-only
+  live-route gate, then a separately authorized paid smoke only after complete exact-VALID review
+  and with no delay, interruption, or intervening state change. REAL remains `BLOCKED_SAFETY`; this
+  status and command emission grant no execution or runtime authority.
 - **Result:** The provider-free same-process candidate/judge/generation/ledger and AUTHSEAL
   path, strict self-hashed nonauthorizing prepared-run/report/ledger bundle, explicit egress gate,
   pre-reservation per-attempt ceiling, callback-ledger fail-stop, and fresh-only publication are
@@ -2404,8 +2407,16 @@ are invisible to source review by construction.
   ledger, no output, unchanged effective config, and operator-reported `$0`. The current 50,211-byte,
   906-line operator record has raw SHA-256
   `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd`. PRIMARY drifted in
-  under seven hours, so discovery freshness is measured in hours. Every current AUTHRUNNER command is
-  absent pending the local decision on mandatory live-preflight/paid-launch adjacency.
+  under seven hours, so discovery freshness is measured in hours.
+- **Adjacent operator sequence emitted 2026-08-21:** Checkpoint
+  `3bcac02da30bdad2c7e584d35c091ea5cb75ea7d` freezes the preceding zero-command evidence state.
+  The guide now emits exactly two separate r6/r6/r2 commands: metadata-only live-route step A and
+  paid one-case step B. B is eligible for separate authorization only immediately after the complete
+  A result matches every exact route, 15/30 counts, zero usage, unchanged budget and ledger, absent
+  output, and the pinned effective config, with no delay, interruption, or intervening source,
+  configuration, artifact, ledger, output, secret-file, or shell-environment change. A must be rerun
+  under separate authorization otherwise. No normal preflight, verifier, discovery, construct-only,
+  or full command is emitted.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
   and non-crediting. Both the historical and post-fix provider-free smoke preflights were valid and
   nonauthorizing, but neither constructed the live client. The first paid attempt exposed a mismatch
@@ -2426,11 +2437,12 @@ are invisible to source review by construction.
   issue-consume-revoke-reject lifecycle assay remain absent. Campaign/generation revocation beyond
   the top-level runner lease is not independently demonstrated. External-log publication and every
   benchmark run remain queued.
-- **Next action:** Decide locally whether the live-route preflight and paid launch must form one
-  mandatory adjacent operator sequence for smoke and the later full campaign. Emit no paid, verifier,
-  normal-preflight, construct-only, fresh-discovery, live-route, or full command until that decision is
-  recorded. AUTHSEAL publication, audits, benchmarks, and release remain
-  unauthorized. `V3-AUTONOMY-001` Phase 0 remains queued and paused for this handoff.
+- **Next action:** Await separate operator authorization and the complete step-A terminal record. Run
+  step B only under a second authorization immediately after exact VALID reconciliation with no delay,
+  interruption, or state change; otherwise rerun step A. Keep the normal preflight, verifier,
+  construct-only, fresh-discovery, and full commands absent. AUTHSEAL publication, audits,
+  benchmarks, and release remain unauthorized. `V3-AUTONOMY-001` Phase 0 remains queued and paused
+  for this handoff.
 
 ## V3-TARGETSPEC-001 — Reconcile the product vision with the objective and correct the README
 

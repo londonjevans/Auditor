@@ -7,11 +7,27 @@ credentials, RPC URLs, or operational attack instructions.
 AUTORUN_STATUS: BLOCKED_SAFETY
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001
-NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Decide locally whether live-route preflight and paid launch must form one mandatory adjacent operator sequence for smoke and the later full campaign, given observed discovery drift within seven hours. Emit no paid, verifier, normal provider-free preflight, construct-only, fresh-discovery, live-route, or full command until that decision is recorded. `V3-AUTONOMY-001` Phase 0 remains queued and paused.
-LAST_VALIDATION_COMMAND: Aggregate source checkpoint `9f5c94d` validation: owner/root each 164 tests, independent 237 broad plus seven focused tests, repository Ruff, format, strict mypy, schema verification, and diff integrity.
-LAST_VALIDATION_RESULT: PASS / PARTIAL / BLOCKED_SAFETY — checkpoint `9f5c94d97b3d79d51c10e250b99244591461e959` is pushed and remote-resolved. The current 50,211-byte, 906-line operator record at raw SHA-256 `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd` reports the aggregate probe found candidate and PRIMARY whole-inventory drift while REPLAY remained unaffected. The operator independently re-froze candidate and PRIMARY as r6/r6, kept REPLAY r2, then validated all three live routes through 15 authenticated logical GETs with at most 30 attempts. There was no completion or usage record; budget and ledger were unchanged; no output was published; effective config was unchanged; operator-reported spend was `$0`. All current AUTHRUNNER commands are absent. No authority or governed counter changed.
-LAST_CHECKPOINT_COMMIT: 9f5c94d97b3d79d51c10e250b99244591461e959 — `Aggregate AUTHRUNNER route drift diagnostics`; source-only checkpoint pushed and remote-resolved. Historical live-route checkpoint: `5e94b779f2592a2a0a46e7535de3e346310285e2`. Historical token-budget checkpoint: `59f9f40a97dce41a16fb3ab9243b4d8588bcf3cb`. Historical failed paid-command checkpoint: `7b2db061ceb7449674399d6133428b97b74b4b96`. Safety withdrawal checkpoint: `ca63b924f244cc9bcee2d2405d20b000ce0bb9d6`. Historical unsafe launch checkpoint: `f5afb2bff074254ee5c4a484386ee4c416b17a88`.
-REMAINING_ACTIONABLE_TICKETS: `V3-AUTHRUNNER-001` is `PARTIAL / BLOCKED_SAFETY` pending the local live-preflight/paid-launch adjacency decision. Paid smoke, verifier, normal provider-free preflight, construct-only, fresh discovery, live-route, full REAL, external authority-log publication, and benchmark/release work remain withheld. `V3-AUTONOMY-001` Phase 0 is queued and paused with no generated artifact adopted.
+NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Await separate operator authorization for r6/r6/r2 metadata-only step A. Step B requires a second authorization and may begin only immediately after A exits `0` and its complete terminal result matches every pinned field, with no delay, interruption, or intervening state change; otherwise rerun A under separate authorization. Normal preflight, verifier, fresh discovery, construct-only, and full commands remain absent. `V3-AUTONOMY-001` Phase 0 remains queued and paused.
+LAST_VALIDATION_COMMAND: Aggregate source checkpoint `9f5c94d` validation plus paired-guide product documentation/objective, Ruff/format, strict governance JSON, operator-custody, command-parity, and diff checks.
+LAST_VALIDATION_RESULT: PASS / PARTIAL / BLOCKED_SAFETY — implementation checkpoint `9f5c94d97b3d79d51c10e250b99244591461e959` remains pushed and remote-resolved; zero-command evidence checkpoint `3bcac02da30bdad2c7e584d35c091ea5cb75ea7d` is committed. The current 50,211-byte, 906-line operator record at raw SHA-256 `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd` records fresh r6/r6/r2 live-route validation with no completion or usage, unchanged budget and ledger, no output, unchanged config, and `$0` reported spend. Exactly two adjacent commands are emitted for separate operator authorization; no execution, authority, or governed counter changed.
+LAST_CHECKPOINT_COMMIT: 3bcac02da30bdad2c7e584d35c091ea5cb75ea7d — zero-command e7 evidence reconciliation. Current source implementation: `9f5c94d97b3d79d51c10e250b99244591461e959` (`Aggregate AUTHRUNNER route drift diagnostics`), pushed and remote-resolved. Historical live-route checkpoint: `5e94b779f2592a2a0a46e7535de3e346310285e2`. Historical token-budget checkpoint: `59f9f40a97dce41a16fb3ab9243b4d8588bcf3cb`.
+REMAINING_ACTIONABLE_TICKETS: `V3-AUTHRUNNER-001` is `PARTIAL / BLOCKED_SAFETY`. Metadata-only step A and conditional paid step B are emitted but not authorized or executed; normal preflight, verifier, fresh discovery, construct-only, full REAL, external authority-log publication, and benchmark/release work remain withheld. `V3-AUTONOMY-001` Phase 0 is queued and paused with no generated artifact adopted.
+
+## 2026-08-21T18:27:00Z — Adjacent r6/r6/r2 operator sequence emitted
+
+- **Status:** `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`; command emission is
+  nonauthorizing. `V3-AUTONOMY-001` Phase 0 remains queued and paused.
+- **Checkpoint custody:** Source implementation is exact pushed checkpoint `9f5c94d97b3d79d51c10e250b99244591461e959`; preceding zero-command evidence reconciliation is exact committed checkpoint `3bcac02da30bdad2c7e584d35c091ea5cb75ea7d`.
+- **Commands:** The guide emits exactly two separate r6/r6/r2 commands with byte-identical shared
+  inputs: metadata-only live-route step A and paid one-case step B. No normal preflight, verifier,
+  fresh discovery, construct-only, or full command is emitted.
+- **Adjacency gate:** B requires separate authorization immediately after A exits `0` and the full
+  terminal record matches the exact three model IDs, 15 logical GETs, at most 30 attempts, zero
+  usage, unchanged budget and ledger, absent output, and pinned config. Any delay, interruption, or
+  intervening source/config/artifact/ledger/output/secret/shell change requires a separately
+  authorized A rerun.
+- **Evidence boundary:** Neither command has run. The current operator record remains 50,211 bytes,
+  906 lines, raw SHA-256 `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd`.
 
 ## 2026-08-21T18:07:00Z — Fresh r6/r6/r2 live-route preflight VALID
 
@@ -33,8 +49,8 @@ REMAINING_ACTIONABLE_TICKETS: `V3-AUTHRUNNER-001` is `PARTIAL / BLOCKED_SAFETY` 
   response. PRIMARY drifted in under seven hours.
 - **Command disposition:** The old r2/r5/r2 probe is historical. Every current AUTHRUNNER command is
   absent.
-- **Next safe action:** Decide the mandatory adjacency of live-route preflight and paid launch before
-  emitting either step.
+- **Historical next action:** Superseded by the 18:27 adjacent-sequence decision and two-command
+  emission above.
 
 ## 2026-08-21 — Aggregate live-route diagnostics checkpointed; one probe emitted
 
