@@ -81,12 +81,12 @@ def _redirect_url(spec: PublicLineageSourceSpec) -> str:
 
 
 def test_fixed_source_inventory_is_exact_unique_and_immutable() -> None:
-    assert len(PUBLIC_LINEAGE_SOURCE_SPECS) == 16
+    assert len(PUBLIC_LINEAGE_SOURCE_SPECS) == 17
     assert tuple(spec.source_id for spec in PUBLIC_LINEAGE_SOURCE_SPECS) == tuple(
         sorted(spec.source_id for spec in PUBLIC_LINEAGE_SOURCE_SPECS)
     )
-    assert len({spec.requested_url for spec in PUBLIC_LINEAGE_SOURCE_SPECS}) == 16
-    assert len({spec.relative_path for spec in PUBLIC_LINEAGE_SOURCE_SPECS}) == 16
+    assert len({spec.requested_url for spec in PUBLIC_LINEAGE_SOURCE_SPECS}) == 17
+    assert len({spec.relative_path for spec in PUBLIC_LINEAGE_SOURCE_SPECS}) == 17
     assert all(len(spec.immutable_revision) == 40 for spec in PUBLIC_LINEAGE_SOURCE_SPECS)
     assert all(spec.required_markers for spec in PUBLIC_LINEAGE_SOURCE_SPECS)
     assert all(
@@ -117,6 +117,25 @@ def test_fixed_source_inventory_is_exact_unique_and_immutable() -> None:
         required_markers=(
             "**Hy3** is a 295B-parameter Mixture-of-Experts (MoE) model",
             "developed by the Tencent Hy Team",
+        ),
+    )
+    glm_5_2_spec = next(
+        spec for spec in PUBLIC_LINEAGE_SOURCE_SPECS if spec.source_id == "z-ai-glm-5-2-card"
+    )
+    assert glm_5_2_spec == PublicLineageSourceSpec(
+        source_id="z-ai-glm-5-2-card",
+        requested_url=(
+            "https://huggingface.co/zai-org/GLM-5.2/resolve/"
+            "b4734de4facf877f85769a911abafc5283eab3d9/README.md"
+        ),
+        publisher_id="z-ai",
+        independence_key="z-ai",
+        immutable_revision="b4734de4facf877f85769a911abafc5283eab3d9",
+        repository_path="zai-org/GLM-5.2",
+        relative_path="sources/z-ai-glm-5-2-card.md",
+        required_markers=(
+            "We're introducing GLM-5.2, our latest flagship model for long-horizon tasks.",
+            "over its predecessor GLM-5.1",
         ),
     )
 
@@ -185,9 +204,13 @@ def test_committed_capture_journal_replays_exact_source_bytes() -> None:
     )
 
     specs_by_id = {spec.source_id: spec for spec in PUBLIC_LINEAGE_SOURCE_SPECS}
-    assert tuple(source.source_id for source in journal.sources) == tuple(
-        spec.source_id for spec in PUBLIC_LINEAGE_SOURCE_SPECS
+    journal_source_ids = tuple(source.source_id for source in journal.sources)
+    assert journal_source_ids == tuple(
+        spec.source_id
+        for spec in PUBLIC_LINEAGE_SOURCE_SPECS
+        if spec.source_id != "z-ai-glm-5-2-card"
     )
+    assert "z-ai-glm-5-2-card" not in journal_source_ids
     assert (
         journal.observation_set_sha256
         == "6ae6e75a1732c05b85ffe189febbc3ecfa8ae2eeeb83000a8a24d30035b966eb"

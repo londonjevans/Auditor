@@ -392,6 +392,22 @@ PUBLIC_LINEAGE_SOURCE_SPECS = (
         relative_path="sources/z-ai-glm-4-7-card.md",
         required_markers=("# GLM-4.7",),
     ),
+    PublicLineageSourceSpec(
+        source_id="z-ai-glm-5-2-card",
+        requested_url=(
+            "https://huggingface.co/zai-org/GLM-5.2/resolve/"
+            "b4734de4facf877f85769a911abafc5283eab3d9/README.md"
+        ),
+        publisher_id="z-ai",
+        independence_key="z-ai",
+        immutable_revision="b4734de4facf877f85769a911abafc5283eab3d9",
+        repository_path="zai-org/GLM-5.2",
+        relative_path="sources/z-ai-glm-5-2-card.md",
+        required_markers=(
+            "We're introducing GLM-5.2, our latest flagship model for long-horizon tasks.",
+            "over its predecessor GLM-5.1",
+        ),
+    ),
 )
 _PUBLIC_LINEAGE_SOURCE_SPECS_BY_ID = {spec.source_id: spec for spec in PUBLIC_LINEAGE_SOURCE_SPECS}
 
