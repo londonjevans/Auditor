@@ -7,6 +7,7 @@ AUTHSEAL issuers.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, localcontext
@@ -78,6 +79,7 @@ from mmaudit.models.public_lineage_authority import (
 from mmaudit.models.qualification import (
     CandidateModel,
     CandidateRegistry,
+    LineageReviewStatus,
     validate_candidate_registry_discovery,
 )
 from mmaudit.models.runtime import build_reasoning_policy
@@ -99,6 +101,7 @@ from mmaudit.repository.privacy_provenance import (
 )
 
 _LEDGER_CAP_USD = Decimal("250")
+_ROOT_LINEAGE_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 class AuthenticatedRunnerSmokeOpenRouterError(ValueError):
@@ -962,6 +965,15 @@ def _require_three_distinct_roots(
             "smoke public lineage capability has the wrong exact type"
         )
     pairs = ((candidate, judges[0]), (candidate, judges[1]), (judges[0], judges[1]))
+    models = (candidate, judges[0], judges[1])
+    if any(
+        model.root_lineage is None
+        and model.lineage_review.status is not LineageReviewStatus.PENDING
+        for model in models
+    ):
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            "smoke registry lineage review does not permit documentary root projection"
+        )
     try:
         projections = tuple(
             require_independent_public_model_lineage(
@@ -975,26 +987,33 @@ def _require_three_distinct_roots(
         raise AuthenticatedRunnerSmokeOpenRouterError(
             "smoke public lineage does not prove three distinct roots"
         ) from None
-    expected = tuple(
-        (
-            left.exact_model_id,
-            left.root_lineage,
-            right.exact_model_id,
-            right.root_lineage,
-        )
-        for left, right in pairs
-    )
     if any(
         type(item) is not VerifiedIndependentPublicModelLineageProjection
         or item.independent is not True
-        or (
-            item.left_exact_model_id,
-            item.left_root_lineage,
-            item.right_exact_model_id,
-            item.right_root_lineage,
+        or item.left_exact_model_id != left.exact_model_id
+        or item.right_exact_model_id != right.exact_model_id
+        or _ROOT_LINEAGE_PATTERN.fullmatch(item.left_root_lineage) is None
+        or _ROOT_LINEAGE_PATTERN.fullmatch(item.right_root_lineage) is None
+        or (left.root_lineage is not None and item.left_root_lineage != left.root_lineage)
+        or (right.root_lineage is not None and item.right_root_lineage != right.root_lineage)
+        for item, (left, right) in zip(projections, pairs, strict=True)
+    ):
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            "smoke public lineage returned a non-independent projection"
         )
-        != expected[index]
-        for index, item in enumerate(projections)
+    candidate_primary, candidate_replay, primary_replay = projections
+    documentary_roots = (
+        candidate_primary.left_root_lineage,
+        candidate_primary.right_root_lineage,
+        candidate_replay.right_root_lineage,
+    )
+    if (
+        candidate_replay.left_root_lineage != documentary_roots[0]
+        or primary_replay.left_root_lineage != documentary_roots[1]
+        or primary_replay.right_root_lineage != documentary_roots[2]
+        or len(set(documentary_roots)) != 3
+        or len({item.bundle_sha256 for item in projections}) != 1
+        or len({item.manifest_file_sha256 for item in projections}) != 1
     ):
         raise AuthenticatedRunnerSmokeOpenRouterError(
             "smoke public lineage returned a non-independent projection"

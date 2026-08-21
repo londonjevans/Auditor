@@ -27,7 +27,7 @@ from mmaudit.models.generation_evidence import (
     _reconcile_generation_evidence_structural,
 )
 from mmaudit.models.openrouter import OpenRouterStructuredRequestCostPreview
-from mmaudit.models.qualification import CandidateModel
+from mmaudit.models.qualification import CandidateModel, LineageReviewStatus
 from mmaudit.models.schemas import UsageRecord
 from mmaudit.models.token_planning import RequestTokenPlan
 from mmaudit.reporting.json_report import stable_json_bytes
@@ -38,6 +38,7 @@ AUTHENTICATED_RUNNER_SMOKE_LOGICAL_REQUEST_COUNT = 4
 MAX_AUTHENTICATED_RUNNER_SMOKE_BUNDLE_BYTES = 4_000_000
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
+_ROOT_LINEAGE_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 _CASE_ID_PATTERN = r"^case-[0-9a-f]{16}$"
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _CANONICAL_DECIMAL_PATTERN = re.compile(r"^(?:0|[1-9][0-9]{0,49})(?:\.[0-9]{1,48})?$")
@@ -208,10 +209,20 @@ class AuthenticatedRunnerSmokeRunEvidence(_StrictSmokeModel):
         candidate_usage = self.candidate_report.result.usage_record
         judge_cases = self.adjudication_report.cases
         judge_usage = judge_cases[0].usage_record if len(judge_cases) == 1 else None
+        target = self.prepared_adjudication.target
+        candidate_report_root = self.candidate_report.target.root_lineage
         if (
             type(self.candidate) is not CandidateModel
             or type(self.judge) is not CandidateModel
             or self.candidate.exact_model_id == self.judge.exact_model_id
+            or (
+                self.candidate.root_lineage is None
+                and self.candidate.lineage_review.status is not LineageReviewStatus.PENDING
+            )
+            or (
+                self.judge.root_lineage is None
+                and self.judge.lineage_review.status is not LineageReviewStatus.PENDING
+            )
             or self.candidate_cost_plan.run_kind is not self.run_kind
             or self.candidate_cost_plan.stage != "CANDIDATE"
             or self.candidate_report.run_kind != self.run_kind.value
@@ -227,9 +238,21 @@ class AuthenticatedRunnerSmokeRunEvidence(_StrictSmokeModel):
             or self.prepared_adjudication.run_kind is not self.run_kind
             or self.prepared_adjudication.candidate_report_sha256
             != self.candidate_report.report_sha256
-            or self.prepared_adjudication.target.candidate_root_lineage
-            != self.candidate.root_lineage
-            or self.prepared_adjudication.target.judge_root_lineage != self.judge.root_lineage
+            or _ROOT_LINEAGE_PATTERN.fullmatch(target.candidate_root_lineage) is None
+            or _ROOT_LINEAGE_PATTERN.fullmatch(target.judge_root_lineage) is None
+            or (
+                self.candidate.root_lineage is not None
+                and target.candidate_root_lineage != self.candidate.root_lineage
+            )
+            or (
+                self.judge.root_lineage is not None
+                and target.judge_root_lineage != self.judge.root_lineage
+            )
+            or (
+                candidate_report_root is not None
+                and target.candidate_root_lineage != candidate_report_root
+            )
+            or candidate_report_root != self.candidate.root_lineage
             or self.prepared_adjudication.corpus_sha256 != _PARENT_CORPUS_SHA256
             or self.prepared_adjudication.ground_truth_sha256 != _PARENT_GROUND_TRUTH_SHA256
             or self.prepared_adjudication.case_ids != (self.candidate_cost_plan.case_id,)
@@ -256,9 +279,8 @@ class AuthenticatedRunnerSmokeRunEvidence(_StrictSmokeModel):
             or judge_usage is None
             or judge_usage.request_id != self.judge_cost_plan.request_preview.logical_request_id
             or self.candidate_report.target.model_id != self.candidate.exact_model_id
-            or self.candidate_report.target.root_lineage != self.candidate.root_lineage
-            or self.prepared_adjudication.target.candidate_model_id != self.candidate.exact_model_id
-            or self.prepared_adjudication.target.judge_model_id != self.judge.exact_model_id
+            or target.candidate_model_id != self.candidate.exact_model_id
+            or target.judge_model_id != self.judge.exact_model_id
             or self.candidate_cost_plan.request_preview.exact_model_id
             != self.candidate.exact_model_id
             or self.judge_cost_plan.request_preview.exact_model_id != self.judge.exact_model_id
@@ -381,6 +403,7 @@ class AuthenticatedRunnerSmokeEvidenceBundle(_StrictSmokeModel):
 
     @model_validator(mode="after")
     def protocol_is_exact_and_self_bound(self) -> Self:
+        targets = tuple(item.prepared_adjudication.target for item in self.runs)
         if (
             tuple(item.run_kind for item in self.runs)
             != (
@@ -397,6 +420,26 @@ class AuthenticatedRunnerSmokeEvidenceBundle(_StrictSmokeModel):
             )
         ):
             raise ValueError("authenticated runner smoke bundle has a different protocol inventory")
+        documentary_roots = (
+            targets[0].candidate_root_lineage,
+            targets[0].judge_root_lineage,
+            targets[1].judge_root_lineage,
+        )
+        if (
+            targets[1].candidate_root_lineage != documentary_roots[0]
+            or len(set(documentary_roots)) != 3
+            or any(_ROOT_LINEAGE_PATTERN.fullmatch(item) is None for item in documentary_roots)
+            or len({item.public_lineage_bundle_sha256 for item in targets}) != 1
+            or len({item.public_lineage_manifest_file_sha256 for item in targets}) != 1
+            or any(
+                target.candidate_model_id != run.candidate.exact_model_id
+                or target.judge_model_id != run.judge.exact_model_id
+                for target, run in zip(targets, self.runs, strict=True)
+            )
+        ):
+            raise ValueError(
+                "authenticated runner smoke bundle has inconsistent documentary lineage"
+            )
         plans = tuple(
             plan for run in self.runs for plan in (run.candidate_cost_plan, run.judge_cost_plan)
         )

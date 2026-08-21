@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -32,6 +33,8 @@ from mmaudit.models.authenticated_runner_smoke_corpus import (
 )
 from mmaudit.models.generation_evidence import OpenRouterGenerationEvidence
 from mmaudit.models.public_lineage_authority import (
+    VerifiedIndependentPublicModelLineageProjection,
+    require_independent_public_model_lineage,
     require_verified_public_model_lineage,
     resolve_verified_public_model_lineage,
 )
@@ -310,6 +313,22 @@ def _fake_bundle_validator_subject() -> tuple[
         for index in range(4)
     ]
     candidate = SimpleNamespace(exact_model_id=CANDIDATE_ID)
+    primary_lineage_target = SimpleNamespace(
+        candidate_model_id=CANDIDATE_ID,
+        candidate_root_lineage=f"sha256:{'1' * 64}",
+        judge_model_id=PRIMARY_JUDGE_ID,
+        judge_root_lineage=f"sha256:{'2' * 64}",
+        public_lineage_bundle_sha256="4" * 64,
+        public_lineage_manifest_file_sha256="5" * 64,
+    )
+    replay_lineage_target = SimpleNamespace(
+        candidate_model_id=CANDIDATE_ID,
+        candidate_root_lineage=f"sha256:{'1' * 64}",
+        judge_model_id=REPLAY_JUDGE_ID,
+        judge_root_lineage=f"sha256:{'3' * 64}",
+        public_lineage_bundle_sha256="4" * 64,
+        public_lineage_manifest_file_sha256="5" * 64,
+    )
     primary = SimpleNamespace(
         run_kind=CrossLineageAdjudicationRunKind.PRIMARY,
         run_sha256="7" * 64,
@@ -318,6 +337,7 @@ def _fake_bundle_validator_subject() -> tuple[
         candidate_cost_plan=plans[0],
         judge_cost_plan=plans[1],
         candidate_report=SimpleNamespace(result=SimpleNamespace(usage_record=usages[0])),
+        prepared_adjudication=SimpleNamespace(target=primary_lineage_target),
         adjudication_report=SimpleNamespace(cases=(SimpleNamespace(usage_record=usages[1]),)),
     )
     replay = SimpleNamespace(
@@ -328,6 +348,7 @@ def _fake_bundle_validator_subject() -> tuple[
         candidate_cost_plan=plans[2],
         judge_cost_plan=plans[3],
         candidate_report=SimpleNamespace(result=SimpleNamespace(usage_record=usages[2])),
+        prepared_adjudication=SimpleNamespace(target=replay_lineage_target),
         adjudication_report=SimpleNamespace(cases=(SimpleNamespace(usage_record=usages[3]),)),
     )
     entries = [
@@ -375,9 +396,21 @@ def _validate_fake_bundle(
     return validator(bundle)
 
 
-def _fake_run_validator_subject() -> tuple[SimpleNamespace, SimpleNamespace, SimpleNamespace]:
-    candidate = _approved_candidate(CANDIDATE_ID)
-    judge = _approved_candidate(PRIMARY_JUDGE_ID)
+def _fake_run_validator_subject(
+    *,
+    pending_registry_roots: bool = False,
+) -> tuple[SimpleNamespace, SimpleNamespace, SimpleNamespace]:
+    if pending_registry_roots:
+        candidate = _candidate_registry((CANDIDATE_ID,)).candidates[0]
+        judge = _candidate_registry((PRIMARY_JUDGE_ID,)).candidates[0]
+    else:
+        candidate = _approved_candidate(CANDIDATE_ID)
+        judge = _approved_candidate(PRIMARY_JUDGE_ID)
+    documentary = require_independent_public_model_lineage(
+        resolve_verified_public_model_lineage(),
+        candidate.exact_model_id,
+        judge.exact_model_id,
+    )
     request_sha256 = "a" * 64
     candidate_usage = SimpleNamespace(
         request_id="candidate-request",
@@ -435,9 +468,9 @@ def _fake_run_validator_subject() -> tuple[SimpleNamespace, SimpleNamespace, Sim
         ),
         target=SimpleNamespace(
             candidate_model_id=candidate.exact_model_id,
-            candidate_root_lineage=candidate.root_lineage,
+            candidate_root_lineage=documentary.left_root_lineage,
             judge_model_id=judge.exact_model_id,
-            judge_root_lineage=judge.root_lineage,
+            judge_root_lineage=documentary.right_root_lineage,
         ),
     )
     judge_plan = SimpleNamespace(
@@ -777,6 +810,174 @@ def test_smoke_preflight_lineage_requires_exact_documentary_roots() -> None:
         )
 
 
+def test_smoke_preflight_lineage_fills_all_three_pending_null_roots_from_public_evidence() -> None:
+    capability = resolve_verified_public_model_lineage()
+    candidate = _candidate_registry((CANDIDATE_ID,)).candidates[0]
+    primary = _candidate_registry((PRIMARY_JUDGE_ID,)).candidates[0]
+    replay = _candidate_registry((REPLAY_JUDGE_ID,)).candidates[0]
+    assert tuple(model.root_lineage for model in (candidate, primary, replay)) == (None, None, None)
+    assert tuple(model.lineage_review.status for model in (candidate, primary, replay)) == (
+        LineageReviewStatus.PENDING,
+        LineageReviewStatus.PENDING,
+        LineageReviewStatus.PENDING,
+    )
+
+    _require_three_distinct_roots(
+        capability,
+        candidate=candidate,
+        judges=(primary, replay),
+    )
+
+
+def test_smoke_preflight_lineage_rejects_rejected_null_review() -> None:
+    capability = resolve_verified_public_model_lineage()
+    candidate = _candidate_registry((CANDIDATE_ID,)).candidates[0]
+    primary = _candidate_registry((PRIMARY_JUDGE_ID,)).candidates[0]
+    replay = _candidate_registry((REPLAY_JUDGE_ID,)).candidates[0]
+    rejected_review = seal_operator_lineage_review(
+        status=LineageReviewStatus.REJECTED,
+        reviewed_model_ids=(primary.exact_model_id,),
+        rationale="Synthetic explicit negative lineage decision.",
+        reviewed_by="synthetic-unit-reviewer",
+        reviewed_at=NOW,
+        evidence_sha256="f" * 64,
+    )
+    rejected_primary = CandidateModel.model_validate(
+        {
+            **primary.model_dump(mode="python"),
+            "lineage_review": rejected_review,
+        },
+        strict=True,
+    )
+
+    with pytest.raises(
+        AuthenticatedRunnerSmokeOpenRouterError,
+        match="review does not permit",
+    ):
+        _require_three_distinct_roots(
+            capability,
+            candidate=candidate,
+            judges=(rejected_primary, replay),
+        )
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    "forgery",
+    ("model_id", "independent", "repeated_root", "duplicate_root", "bundle_pin"),
+)
+def test_smoke_preflight_lineage_rejects_forged_three_projection_inventory(
+    monkeypatch: pytest.MonkeyPatch,
+    forgery: str,
+) -> None:
+    capability = resolve_verified_public_model_lineage()
+    candidate = _candidate_registry((CANDIDATE_ID,)).candidates[0]
+    primary = _candidate_registry((PRIMARY_JUDGE_ID,)).candidates[0]
+    replay = _candidate_registry((REPLAY_JUDGE_ID,)).candidates[0]
+    projections = [
+        require_independent_public_model_lineage(
+            capability,
+            left.exact_model_id,
+            right.exact_model_id,
+        )
+        for left, right in ((candidate, primary), (candidate, replay), (primary, replay))
+    ]
+    if forgery == "model_id":
+        projections[0] = replace(projections[0], left_exact_model_id=REPLAY_JUDGE_ID)
+    elif forgery == "independent":
+        projections[0] = replace(projections[0], independent=cast(Any, False))
+    elif forgery == "repeated_root":
+        projections[1] = replace(projections[1], left_root_lineage=f"sha256:{'0' * 64}")
+    elif forgery == "duplicate_root":
+        duplicate = projections[0].right_root_lineage
+        projections[1] = replace(projections[1], right_root_lineage=duplicate)
+        projections[2] = replace(projections[2], right_root_lineage=duplicate)
+    else:
+        projections[2] = replace(projections[2], bundle_sha256="f" * 64)
+    projection_iterator = iter(projections)
+
+    def forged_projection(
+        *_args: object,
+        **_kwargs: object,
+    ) -> VerifiedIndependentPublicModelLineageProjection:
+        return next(projection_iterator)
+
+    monkeypatch.setattr(
+        smoke_runtime_module,
+        "require_independent_public_model_lineage",
+        forged_projection,
+    )
+    with pytest.raises(
+        AuthenticatedRunnerSmokeOpenRouterError,
+        match="non-independent projection",
+    ):
+        _require_three_distinct_roots(
+            capability,
+            candidate=candidate,
+            judges=(primary, replay),
+        )
+
+
+def test_smoke_execution_lineage_mismatch_precedes_secrets_provider_and_ledger_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    launch = _launch(config=_smoke_config(config_factory), tmp_path=tmp_path)
+    pending_primary = launch.run_plans[0].judge
+    wrong_review = seal_operator_lineage_review(
+        status=LineageReviewStatus.APPROVED,
+        reviewed_model_ids=(pending_primary.exact_model_id,),
+        rationale="Synthetic negative with a wrong documentary root.",
+        root_lineage=f"sha256:{'f' * 64}",
+        reviewed_by="synthetic-unit-reviewer",
+        reviewed_at=NOW,
+        evidence_sha256="f" * 64,
+    )
+    wrong_primary = CandidateModel.model_validate(
+        {
+            **pending_primary.model_dump(mode="python"),
+            "root_lineage": wrong_review.root_lineage,
+            "lineage_review": wrong_review,
+        },
+        strict=True,
+    )
+
+    def registry_model(**kwargs: object) -> CandidateModel:
+        registry = cast(Any, kwargs["registry"])
+        model = registry.candidates[0]
+        return wrong_primary if model.exact_model_id == PRIMARY_JUDGE_ID else model
+
+    def forbidden(*_args: object, **_kwargs: object) -> Any:
+        raise AssertionError(
+            "lineage mismatch must reject before cost derivation or provider setup"
+        )
+
+    monkeypatch.setattr(smoke_runtime_module, "_require_singleton_registry", registry_model)
+    monkeypatch.setattr(smoke_runtime_module, "_candidate_cost_plan", forbidden)
+    monkeypatch.setattr(smoke_runtime_module, "_SmokeOpenRouterAdapter", forbidden)
+    ledger = launch.budget.atomic_ledger
+    assert ledger is not None
+    before = ledger.snapshot()
+    secrets = OperatorSecrets({OPENROUTER_API_KEY_NAME: "synthetic-provider-free-lineage-test"})
+    try:
+        with pytest.raises(
+            AuthenticatedRunnerSmokeOpenRouterError,
+            match="non-independent projection",
+        ):
+            asyncio.run(
+                execute_authenticated_runner_smoke_openrouter(
+                    launch=launch,
+                    operator_secrets=secrets,
+                )
+            )
+        assert secrets.openrouter_api_key_present is True
+        assert secrets.cleared is False
+        assert ledger.snapshot() == before
+        assert launch.usage.records == []
+    finally:
+        secrets.clear()
+
+
 def test_callback_ledger_delta_rejects_equal_aggregate_with_wrong_per_usage_costs() -> None:
     suite = load_model_benchmark_corpus(CORPUS_PATH)
     report = _as_structural_real(_report(suite, CANDIDATE_ID))
@@ -923,13 +1124,13 @@ def test_preflight_operator_tripwire_sums_unequal_candidate_and_judge_roles(
         lambda **kwargs: kwargs["registry"].candidates[0],
     )
     monkeypatch.setattr(
-        smoke_runtime_module, "_require_three_distinct_roots", lambda *_a, **_k: None
-    )
-    monkeypatch.setattr(
         smoke_runtime_module,
         "_candidate_cost_plan",
         lambda **kwargs: plans[kwargs["run_kind"]],
     )
+    ledger = launch.budget.atomic_ledger
+    assert ledger is not None
+    before = ledger.snapshot()
 
     inventory = preflight_authenticated_runner_smoke_openrouter_launch(launch)
 
@@ -939,6 +1140,8 @@ def test_preflight_operator_tripwire_sums_unequal_candidate_and_judge_roles(
         (Decimal(plan.maximum_cost_usd_all_attempts_exact) for plan in plans.values()),
         start=Decimal(0),
     )
+    assert ledger.snapshot() == before
+    assert launch.usage.records == []
 
 
 def test_execution_orders_both_candidates_then_both_judge_preparations_and_judges(
@@ -1130,6 +1333,43 @@ def test_run_requires_monotonic_generation_refetch_timestamps(
         _validate_fake_run(monkeypatch, run)
 
 
+def test_run_accepts_pending_null_registry_and_report_roots_bound_to_prepared_lineage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run, prepared, candidate_report = _fake_run_validator_subject(pending_registry_roots=True)
+    assert run.candidate.root_lineage is None
+    assert run.judge.root_lineage is None
+    assert candidate_report.target.root_lineage is None
+    assert prepared.target.candidate_root_lineage is not None
+    assert prepared.target.judge_root_lineage is not None
+
+    assert _validate_fake_run(monkeypatch, run) is run
+
+
+def test_run_rejects_rejected_null_registry_lineage_on_offline_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run, _prepared, _candidate_report = _fake_run_validator_subject(pending_registry_roots=True)
+    rejected_review = seal_operator_lineage_review(
+        status=LineageReviewStatus.REJECTED,
+        reviewed_model_ids=(run.judge.exact_model_id,),
+        rationale="Synthetic explicit negative lineage decision.",
+        reviewed_by="synthetic-unit-reviewer",
+        reviewed_at=NOW,
+        evidence_sha256="f" * 64,
+    )
+    run.judge = CandidateModel.model_validate(
+        {
+            **run.judge.model_dump(mode="python"),
+            "lineage_review": rejected_review,
+        },
+        strict=True,
+    )
+
+    with pytest.raises(ValueError, match="differs from its exact pair"):
+        _validate_fake_run(monkeypatch, run)
+
+
 def test_run_requires_exact_judge_request_suffix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1157,3 +1397,28 @@ def test_run_requires_documentary_lineage_root_joins(
 
     with pytest.raises(ValueError, match="differs from its exact pair"):
         _validate_fake_run(monkeypatch, run)
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    "drift", ("candidate_root", "judge_root", "bundle_pin", "manifest_pin", "target_id")
+)
+def test_bundle_requires_one_exact_three_root_documentary_inventory(
+    monkeypatch: pytest.MonkeyPatch,
+    drift: str,
+) -> None:
+    bundle, _previews, _usages, _entries = _fake_bundle_validator_subject()
+    primary_target = bundle.runs[0].prepared_adjudication.target
+    replay_target = bundle.runs[1].prepared_adjudication.target
+    if drift == "candidate_root":
+        replay_target.candidate_root_lineage = f"sha256:{'f' * 64}"
+    elif drift == "judge_root":
+        replay_target.judge_root_lineage = primary_target.judge_root_lineage
+    elif drift == "bundle_pin":
+        replay_target.public_lineage_bundle_sha256 = "f" * 64
+    elif drift == "manifest_pin":
+        replay_target.public_lineage_manifest_file_sha256 = "f" * 64
+    else:
+        replay_target.judge_model_id = PRIMARY_JUDGE_ID
+
+    with pytest.raises(ValueError, match="inconsistent documentary lineage"):
+        _validate_fake_bundle(monkeypatch, bundle)
