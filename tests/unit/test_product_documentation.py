@@ -469,11 +469,11 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert model_selection.count(tencent_r5_command) == 1
     assert "historical command records and must not be rerun" in normalized_model_selection
     assert "9075ca7635c861194cc732e67d9ebb92e6ffa0af" in model_selection
-    assert model_selection.count(smoke_real_command) == 1
+    assert smoke_real_command not in model_selection
     assert smoke_preflight_command not in model_selection
-    assert model_selection.count(smoke_verify_command) == 1
-    assert model_selection.count(".venv/bin/mmaudit models authenticated-runner-smoke") == 1
-    assert model_selection.count(".venv/bin/mmaudit models verify-authenticated-runner-smoke") == 1
+    assert smoke_verify_command not in model_selection
+    assert ".venv/bin/mmaudit models authenticated-runner-smoke" not in model_selection
+    assert ".venv/bin/mmaudit models verify-authenticated-runner-smoke" not in model_selection
     assert ".venv/bin/mmaudit models authenticated-runner --" not in model_selection
     assert "--preflight-only" not in model_selection
     assert "PENDING_TENCENT_LINEAGE_RESEAL_CHECKPOINT" not in model_selection
@@ -486,7 +486,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "Document provider-free smoke preflight" in normalized_model_selection
     assert "provider-free r2/r5/r2 preflight" in normalized_model_selection
     assert "has now completed and is historical; do not rerun it" in (normalized_model_selection)
-    assert "Historical smoke preflight and exact one-case REAL launch" in model_selection
+    assert "One-case smoke paid path — `BLOCKED_SAFETY`; commands withheld" in model_selection
     assert "smoke public lineage returned a non-independent projection" in (
         normalized_model_selection
     )
@@ -494,9 +494,28 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "The operator ran it verbatim. It is now historical and must not be rerun." in (
         normalized_model_selection
     )
-    assert "one-shot paid REAL smoke command" in normalized_model_selection
-    assert "If and only if that REAL command succeeds" in normalized_model_selection
-    assert "same two non-secret configuration overrides" in normalized_model_selection
+    assert "f5afb2bff074254ee5c4a484386ee4c416b17a88" in model_selection
+    assert "historical and unsafe to execute" in normalized_model_selection
+    assert "accepts only `RELEASE_PINNED_MODEL_BENCHMARK`" in normalized_model_selection
+    assert "`RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION`" in model_selection
+    assert "`PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK`" in model_selection
+    assert "`PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION`" in model_selection
+    assert "after a provider response has been charged and bound" in normalized_model_selection
+    assert "REAL bound usage lacks AUTHRUNNER transport-origin custody" in (
+        normalized_model_selection
+    )
+    assert "first paid candidate completion could therefore spend money and then fail" in (
+        normalized_model_selection
+    )
+    assert "Provider-free preflight cannot exercise this post-response issuer boundary" in (
+        normalized_model_selection
+    )
+    assert "No smoke REAL command and no offline-verifier command is emitted" in (
+        normalized_model_selection
+    )
+    assert "contains no paid smoke attempt, provider completion, or spend" in (
+        normalized_model_selection
+    )
     assert "only for a `PENDING` review with a null registry root" in (normalized_model_selection)
     assert "33 focused and 81 bounded smoke/neighbor tests" in normalized_model_selection
     assert "candidate-registry-r2.json" in model_selection
@@ -533,9 +552,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "Whole-inventory `provider_name` uniqueness remains enforced." in model_selection
     assert "end-to-end wire and evidence redesign" in normalized_model_selection
     assert "explicit selection-quality limitation" in normalized_model_selection
-    assert "Emission is not execution authority" in normalized_model_selection
-    assert "operator with mode `0700`" in normalized_model_selection
-    assert "published output is mode `0600`" in normalized_model_selection
+    assert "re-emit provider-free preflight first" in normalized_model_selection
     assert "full 24-case REAL command is deliberately withheld" in normalized_model_selection
     assert "case-df79ea132113b863" in model_selection
     assert "synthetic/C0015.sol" in model_selection

@@ -285,7 +285,7 @@ The exact runtime answers for both the smoke and full paths are:
   multi-homed frontier judges and is an explicit selection-quality limitation; route diversity is not
   evidence that the excluded models were technically inferior.
 
-### Historical smoke preflight and exact one-case REAL launch
+### One-case smoke paid path — `BLOCKED_SAFETY`; commands withheld
 
 The initial smoke implementation is durably checkpointed at
 `af70559ddaf84178efffee1ec1bf7b99bf0b12df` (`Add noncrediting provider smoke path`). Its first
@@ -319,26 +319,25 @@ That identical configuration does not make the top-level runners identical: smok
 orchestrator while exercising the shared request, transport, generation-refetch, adjudication, cost,
 and evidence internals on the one-case projection.
 
-The operator may authorize and run the following one-shot paid REAL smoke command. Codex did not run
-it. The output path must still be absent and its private parent must already exist owned by the
-operator with mode `0700`; the published output is mode `0600`. This command can select the explicit
-secret file, contact the three pinned provider routes, reserve and spend against the retained ledger,
-and cannot be resumed; the nonresumability and judge safeguards above therefore apply exactly.
+Checkpoint `f5afb2bff074254ee5c4a484386ee4c416b17a88` (`Emit noncrediting smoke launch`) is
+historical and unsafe to execute. A deeper
+local paid-path audit found that the internal AUTHRUNNER owned-REAL usage-origin issuer accepts only
+`RELEASE_PINNED_MODEL_BENCHMARK` or `RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION`, while the smoke path
+deliberately routes `PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK` and
+`PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION`. The mismatch is reached after a provider
+response has been charged and bound, when origin attestation raises `REAL bound usage lacks AUTHRUNNER
+transport-origin custody`. The first paid candidate completion could therefore spend money and then
+fail before smoke evidence can be completed. Provider-free preflight cannot exercise this
+post-response issuer boundary.
 
-```shell
-env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models authenticated-runner-smoke --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r2.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260820-r2" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r5.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r5" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2" --smoke-corpus benchmarks/model_corpus_smoke --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260821-s1.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --secrets-env-file "$HOME/.mmaudit/secrets.env" --allow-code-egress --no-color
-```
-
-If and only if that REAL command succeeds and publishes the exact fresh bundle above, run this
-provider-free verifier under the same two non-secret configuration overrides. It requires no secret,
-provider access, egress flag, or ledger mutation:
-
-```shell
-env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models verify-authenticated-runner-smoke --bundle "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260821-s1.json" --smoke-corpus benchmarks/model_corpus_smoke --corpus benchmarks/model_corpus/manifest.json --config config/openrouter-qualification.toml --no-color
-```
-
-Retain both complete terminal records in `docs/remediation/v3/operator_results.md`. Emission is not
-execution authority, smoke success remains noncrediting, and it does not authorize the full campaign.
+No smoke REAL command and no offline-verifier command is emitted. The operator record contains no paid
+smoke attempt, provider completion, or spend; it remains the green provider-free preflight with an
+unchanged `$0` dedicated ledger. `V3-AUTHRUNNER-001` is `BLOCKED_SAFETY` until a narrow origin-custody
+fix admits only the exact noncrediting smoke proof kinds without granting release, qualification,
+calibration, benchmark, audit, AUTHSEAL, or production authority, and focused post-response
+regressions plus a new provider-free checkpoint pass. Codex must then re-emit provider-free preflight
+first; no paid command may be restored from historical checkpoint
+`f5afb2bff074254ee5c4a484386ee4c416b17a88`.
 
 ### Full 24-case REAL command — withheld
 
