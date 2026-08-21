@@ -8,9 +8,9 @@ AUTORUN_STATUS: BLOCKED_SAFETY
 CURRENT_MILESTONE: M1-DETERMINISTIC-PRODUCT (REACHED)
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001 (COMPLETE)
-NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. The operator may separately authorize and run only the exact paid one-case smoke command emitted in `docs/models/model_selection.md`, then run the exact provider-free offline verifier only after successful publication. Reconcile both terminal records before any follow-up. The full 24-case REAL command remains absent. Codex must not execute a provider command.
-LAST_COMMAND: Implementer 584-test provider-free matrix; independent 371 usage/OpenRouter, 83 runner/smoke/cross-lineage, and 123 generation/candidate tests plus final focused 22 usage-scope and 3 transport-path tests; repository Ruff; scoped format; strict mypy over 206 sources; documentation/objective tests; strict governance JSON; `git diff --check`; operator-run exact c137f8b provider-free preflight. A terminal full-suite run started before the live operator evidence and reconciliation bytes changed, then was interrupted after 82 passed, 13 prerequisite skips, and 1381.01 seconds; it receives no pass credit.
-LAST_RESULT: PASS / PARTIAL / BLOCKED_SAFETY — implementation checkpoint `c9a8923064ef1bb606a67b14641c4c8df55bc9ea` binds each exact release/smoke proof kind to its disjoint request namespace and rejects cross-kind or malformed mappings without granting release authority. Distinct guide checkpoint `c137f8bae9d27f5120e7e08eba2d9b5b384e1ca5` froze the operator-visible preflight, which the operator reports `VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS` with `$0` spend. The 584 implementer tests, independent 371/83/123 matrices (577 broad), and final focused 22+3 tests passed; red-team review was clean with no blocker/HIGH. Ruff, scoped format, strict mypy over 206 sources, documentation/objective, JSON, and diff gates passed. Current operator record SHA-256 `ed416745d3d0d957e05919e7cf10e14e75b4e9f3da800000e5789371520abbe2` confirms no paid run, provider completion, or spend and a `$0` dedicated ledger. The invalidated terminal run is recorded as 82 passed and 13 skipped before interruption, with no pass credit and no code-red inference.
+NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Decide locally whether live-route preflight and paid launch must form one mandatory adjacent operator sequence for smoke and the later full campaign, given observed discovery drift within seven hours. Emit no paid, verifier, normal provider-free preflight, construct-only, fresh-discovery, live-route, or full command until that decision is recorded. `V3-AUTONOMY-001` Phase 0 remains queued and paused.
+LAST_COMMAND: Aggregate source checkpoint `9f5c94d` validation: owner/root each 164 tests, independent 237 broad plus seven focused tests, repository Ruff, format, strict mypy, schema verification, and diff integrity.
+LAST_RESULT: PASS / PARTIAL / BLOCKED_SAFETY — checkpoint `9f5c94d97b3d79d51c10e250b99244591461e959` is pushed and remote-resolved. The current 50,211-byte, 906-line operator record at raw SHA-256 `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd` reports the aggregate probe found candidate and PRIMARY whole-inventory drift while REPLAY remained unaffected. The operator independently re-froze candidate and PRIMARY as r6/r6, kept REPLAY r2, then validated all three live routes through 15 authenticated logical GETs with at most 30 attempts. There was no completion or usage record; budget and ledger were unchanged; no output was published; effective config was unchanged; operator-reported spend was `$0`. All current AUTHRUNNER commands are absent. No authority or governed counter changed.
 REAL_MODEL_CALLS_ATTEMPTED: 11
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 10
@@ -20,7 +20,145 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9965235675
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 7b2db061ceb7449674399d6133428b97b74b4b96 (`Emit fixed noncrediting smoke launch`); pushed and remote-resolved paid-smoke guide/evidence checkpoint over provider-free guide/preflight checkpoint c137f8bae9d27f5120e7e08eba2d9b5b384e1ca5 and implementation checkpoint c9a8923064ef1bb606a67b14641c4c8df55bc9ea. Safety withdrawal checkpoint: ca63b924f244cc9bcee2d2405d20b000ce0bb9d6. Historical unsafe launch checkpoint: f5afb2bff074254ee5c4a484386ee4c416b17a88
+LAST_CHECKPOINT_COMMIT: 9f5c94d97b3d79d51c10e250b99244591461e959 — `Aggregate AUTHRUNNER route drift diagnostics`; source-only checkpoint pushed and remote-resolved. Historical live-route checkpoint: 5e94b779f2592a2a0a46e7535de3e346310285e2. Historical token-budget checkpoint: 59f9f40a97dce41a16fb3ab9243b4d8588bcf3cb. Historical failed paid-command checkpoint: 7b2db061ceb7449674399d6133428b97b74b4b96. Safety withdrawal checkpoint: ca63b924f244cc9bcee2d2405d20b000ce0bb9d6. Historical unsafe launch checkpoint: f5afb2bff074254ee5c4a484386ee4c416b17a88
+
+## 2026-08-21T18:07:00Z — Fresh r6/r6/r2 live-route preflight VALID
+
+- Status: `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`; `V3-AUTONOMY-001` Phase 0 remains
+  queued and paused.
+- Aggregate result: the 9f5 aggregate r2/r5/r2 probe reported candidate and PRIMARY whole-inventory
+  drift; REPLAY was unaffected.
+- Fresh evidence: the operator independently created candidate r6 (`candidate-registry-r6.json`,
+  `authrunner-candidate-20260821-r6`, frozen
+  `6cd3463347e794e92831d69629a820fbdc4a6cb226ee4f2ef7daff03603117e1`) and PRIMARY r6
+  (`primary-judge-registry-r6.json`, `authrunner-primary-judge-20260821-r6`, frozen
+  `7b2f11aed42a7d1c5c79b68339682eb21c7f57c765db0ea0d83004a717d8fa8c`), retaining REPLAY r2.
+- Live-route result: r6/r6/r2 was VALID across 15 authenticated logical GETs with at most 30
+  attempts. No completion or usage record ran; budget and atomic ledger were unchanged; no output was
+  published; effective config remained `42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54`;
+  operator-reported spend was `$0`. The current 50,211-byte, 906-line operator record has raw SHA-256
+  `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd`.
+- Limitation: this validates the pre-transport metadata path, not any completion request or response.
+  PRIMARY drifted in under seven hours.
+- Command disposition: the old r2/r5/r2 probe is historical. Every current AUTHRUNNER command is
+  absent.
+- Next safe action: decide the mandatory adjacency of live-route preflight and paid launch before
+  emitting either step.
+
+## 2026-08-21 — Aggregate live-route diagnostics checkpointed; one probe emitted
+
+- Status: `V3-AUTHRUNNER-001` is `PARTIAL / BLOCKED_SAFETY`; `V3-AUTONOMY-001` Phase 0 remains
+  queued and paused.
+- Correction: pushed and remote-resolved checkpoint
+  `9f5c94d97b3d79d51c10e250b99244591461e959` completes all three retained route comparisons before
+  returning one bounded typed role-to-category mismatch set and preserves usage, budget, ledger, and
+  output nonmutation.
+- Validation: owner and root each passed 164 tests; independent validation passed 237 broad plus
+  seven focused tests and reported `CLEAN` with no blocker/HIGH. Ruff, format, strict mypy, schema
+  verification, and diff integrity passed.
+- Operator evidence custody: the unchanged current 47,422-byte, 855-line operator record at SHA-256
+  `074c9f16a580473ac930f48715e737b6951ddc34cde7cd951e0b24373a3fcc16` proves only
+  candidate drift; PRIMARY and REPLAY remain untested.
+- Command disposition: the aggregate r2/r5/r2 live-route command was emitted and has now run; it is
+  historical. See the superseding 18:07 entry. Paid smoke, verifier, normal provider-free preflight,
+  construct-only, fresh discovery, and full commands remained absent.
+- Next safe action: superseded by the 18:07 adjacency decision above.
+
+## 2026-08-21T17:55:00Z — Live-route preflight proves genuine candidate drift
+
+- Status: `V3-AUTHRUNNER-001` is `IN_PROGRESS` only for bounded local aggregate role diagnostics;
+  its REAL subtask remains `BLOCKED_SAFETY`. `V3-AUTONOMY-001` Phase 0 remains queued and paused.
+- Checkpoint and validation: `5e94b779f2592a2a0a46e7535de3e346310285e2` (`Add AUTHRUNNER
+  live-route preflight`) is pushed and remote-resolved. Root passed 291 tests, source owner passed
+  160, independent red-team passed 233 with `CLEAN`/no blocker-HIGH, and a second audit passed 160
+  with `CLEAN`. Repository Ruff, format over 525 files, strict mypy over 206 sources, schema
+  verification, 12 documentation/objective tests, strict governance JSON, and diff integrity passed.
+- Operator evidence: the metadata-only live-route preflight against unchanged r2/r5/r2 evidence
+  failed safely at `$0` on candidate category `endpoint exact-model identity inventory`. The frozen
+  candidate inventory had 12 endpoints and the live inventory had 13, adding
+  `sail-research/fp4`; selected `novita/fp8` remained unchanged. The earlier normalization
+  hypothesis is refuted and genuine candidate provider drift is established. No model completion ran
+  and no bundle was published. The candidate-first stop left both judge roles untested. The current
+  47,422-byte, 855-line operator record has raw SHA-256
+  `074c9f16a580473ac930f48715e737b6951ddc34cde7cd951e0b24373a3fcc16`.
+- Command disposition: no paid, verifier, provider-free preflight, construct-only, metadata-refresh,
+  live-route, or full AUTHRUNNER command is emitted.
+- Next safe action: finish the bounded local aggregate role-to-category successor, validate it, and
+  checkpoint before deciding whether to request any fresh discovery or other operator step.
+
+## 2026-08-21T17:15:00Z — Paid smoke #2 failed during authenticated discovery refresh
+
+- Status: `V3-AUTHRUNNER-001` is `IN_PROGRESS` only for bounded local typed
+  discovery-equivalence diagnosis; its REAL subtask remains `BLOCKED_SAFETY`.
+  `V3-AUTONOMY-001` Phase 0 remains queued and paused for this handoff.
+- Operator evidence: the exact paid smoke reached authenticated live metadata refresh, proving the
+  earlier token-budget constructor mismatch is gone, then rejected `smoke current discovery differs
+  from its frozen exact route`. No model completion occurred, the dedicated ledger stayed empty at
+  `$0`, and no bundle was published. The current 44,808-byte, 807-line operator record has raw
+  SHA-256 `5b9d455d1a82c8ae70dedfb2b38ad17bcd2a881c5d3ca7a9e56bac1379cd7c19`.
+- Cause boundary: `INCONCLUSIVE`. The operator observed similar absent-versus-default field
+  differences and suggested normalization rather than drift, but used a naive recursive scan; this is
+  advisory analysis, not evidence. Compare the actual typed frozen and live objects locally.
+- Command disposition: paid smoke and verifier are withdrawn again. No preflight, construct-only,
+  metadata-refresh, or full command is emitted. The verifier has no bundle and was not run.
+- Next safe action: reproduce the typed mismatch provider-free, determine normalization versus
+  genuine drift, add fail-closed regressions, and checkpoint before considering any external command.
+
+## 2026-08-21T16:56:00Z — Post-token-budget-fix provider-free preflight VALID
+
+- Status: `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`; `V3-AUTONOMY-001` Phase 0 remains
+  queued and paused for this handoff.
+- Operator reconciliation: the operator ran the exact fresh provider-free one-case preflight after
+  source checkpoint `59f9f40a97dce41a16fb3ab9243b4d8588bcf3cb`. The current operator record at
+  raw SHA-256 `5b9d455d1a82c8ae70dedfb2b38ad17bcd2a881c5d3ca7a9e56bac1379cd7c19`
+  retains that result as
+  `VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS`, four logical requests, at most eight
+  attempts, exact candidate final cap USD `0.21890352`, unchanged effective-config SHA-256
+  `42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54`, and `$0` spend.
+- Paid-readiness decision at that boundary: independent review was `SAFE` with no blocker/HIGH. The previous paid
+  attempt reached the exact constructor before any provider request, and `59f9f40` deterministically
+  binds both token budgets and all adjacent shared-budget fields used by real CLI-built clients. A
+  construct-only mode is not required first.
+- Command disposition: the paid command emitted at that boundary was later run and failed safely; it
+  and the conditional verifier are now withdrawn. See the superseding 17:15 entry above.
+- Next safe action: superseded by the 17:15 discovery-equivalence diagnosis above.
+
+## 2026-08-21T16:54:00Z — Token-budget parity fixed; fresh provider-free preflight emitted
+
+- Status: `V3-AUTHRUNNER-001` returns to `PARTIAL / BLOCKED_SAFETY`; the local fix is complete,
+  but no paid smoke proof or genuine runner authority exists. `V3-AUTONOMY-001` Phase 0 remains
+  queued and paused for this handoff.
+- Correction: source checkpoint `59f9f40a97dce41a16fb3ab9243b4d8588bcf3cb` (`Bind AUTHRUNNER
+  token budgets`) is pushed and remote-resolved. Smoke and full runners construct their shared budget
+  managers from the exact configured global input/output and scoped cost budgets, and both preflights
+  reject any relevant drift before secret selection, client construction, or transport.
+- Validation: owner and root each passed the same 136-test five-file matrix. Independent validation
+  passed 122 tests and reported `CLEAN` with no blocker/HIGH; seven focused ordering tests passed.
+  Ruff, tracked-Python format over 510 files, strict mypy over 206 sources, schema verification, 12
+  documentation/objective tests, strict governance JSON, and diff integrity passed.
+- Operator evidence custody: the current 44,808-byte, 807-line operator record at raw SHA-256
+  `5b9d455d1a82c8ae70dedfb2b38ad17bcd2a881c5d3ca7a9e56bac1379cd7c19` retains the exact
+  provider-free preflight as valid at `$0`; see the superseding 16:56 entry above.
+- Command disposition: the fresh provider-free preflight was emitted at this boundary and has now
+  been run and reconciled. Paid smoke, offline verifier, and full 24-case REAL commands remain absent.
+- Next safe action: superseded by the 16:56 paid-readiness decision above.
+
+## 2026-08-21T16:30:00Z — Paid smoke found pre-provider token-budget mismatch
+
+- Status: `V3-AUTHRUNNER-001` is the sole current `IN_PROGRESS` engineering ticket; its REAL
+  subtask remains `BLOCKED_SAFETY`. `V3-AUTONOMY-001` Phase 0 is paused before artifact adoption.
+- Operator evidence: the exact paid one-case command failed during client construction with
+  `request and atomic global input token budgets differ`; no provider request occurred, the
+  dedicated ledger stayed empty at `$0`, and no bundle was published. The current 44,808-byte,
+  807-line operator record has raw SHA-256
+  `5b9d455d1a82c8ae70dedfb2b38ad17bcd2a881c5d3ca7a9e56bac1379cd7c19` and retains the
+  post-fix provider-free preflight as valid at `$0`.
+- Command disposition: the paid smoke and conditional verifier are withdrawn; the verifier has no
+  input and was not run. The full command remains absent.
+- Validation state: local fix validation and its checkpoint remain pending.
+- Next safe action: bind smoke and full-runner budget managers to the exact configured input and
+  output token budgets, make mismatch fail provider-free before client/secret/transport access,
+  validate, checkpoint, and emit only a fresh provider-free preflight.
 
 ## 2026-08-21T15:36:00Z — Post-origin-custody smoke preflight VALID
 

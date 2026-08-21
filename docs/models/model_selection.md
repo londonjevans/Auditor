@@ -47,7 +47,7 @@ requested, and the operator reports that the ledger remains untouched at `$0`. T
 record operator-reported results only; the private artifacts and ledger were not read or promoted
 by Codex. The exact operator-supplied log is retained at
 [`operator_results.md`](../remediation/v3/operator_results.md), raw SHA-256
-`ed416745d3d0d957e05919e7cf10e14e75b4e9f3da800000e5789371520abbe2`, and is
+`5b9d455d1a82c8ae70dedfb2b38ad17bcd2a881c5d3ca7a9e56bac1379cd7c19`, and is
 `OPERATOR_SUPPLIED_UNVERIFIED`: it grants no repository authority.
 
 The subsequent Claude Opus 5 `amazon-bedrock` PRIMARY r3 attempt also failed closed before registry
@@ -190,14 +190,14 @@ Verification is anchored at `2026-08-21T11:47:00Z` and expires at `2027-02-17T11
 This is documentary identity/root authority only; it does not qualify a model or authorize a provider
 call, runner, seal, benchmark, audit, or release.
 
-The current r2/r5/r2 input composition and the planned smoke boundary are:
+The current r6/r6/r2 input composition and the planned smoke boundary are:
 
 | Role/artifact | Exact path |
 | --- | --- |
-| Candidate registry | `$HOME/.mmaudit/private/authrunner/candidate-registry-r2.json` |
-| Candidate discovery | `$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260820-r2` |
-| PRIMARY registry | `$HOME/.mmaudit/private/authrunner/primary-judge-registry-r5.json` |
-| PRIMARY discovery | `$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r5` |
+| Candidate registry | `$HOME/.mmaudit/private/authrunner/candidate-registry-r6.json` |
+| Candidate discovery | `$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260821-r6` |
+| PRIMARY registry | `$HOME/.mmaudit/private/authrunner/primary-judge-registry-r6.json` |
+| PRIMARY discovery | `$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r6` |
 | REPLAY registry | `$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json` |
 | REPLAY discovery | `$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2` |
 | Parent 24-case corpus | `benchmarks/model_corpus/manifest.json` |
@@ -285,7 +285,7 @@ The exact runtime answers for both the smoke and full paths are:
   multi-homed frontier judges and is an explicit selection-quality limitation; route diversity is not
   evidence that the excluded models were technically inferior.
 
-### Post-fix smoke preflight and exact one-case REAL launch
+### Post-origin fixes, failed one-case REAL attempt, and token-budget parity repair
 
 The initial smoke implementation is durably checkpointed at
 `af70559ddaf84178efffee1ec1bf7b99bf0b12df` (`Add noncrediting provider smoke path`). Its first
@@ -361,7 +361,7 @@ The implementation checkpoint and the operator-visible guide checkpoint are inte
 Checkpoint `c9a8923064ef1bb606a67b14641c4c8df55bc9ea` is the pushed source correction. Guide checkpoint
 `c137f8bae9d27f5120e7e08eba2d9b5b384e1ca5` (`Emit fixed smoke preflight`) froze the exact
 provider-free command over that implementation. The operator ran the guide command verbatim at
-`2026-08-21T15:36:00Z`. The current 38,352-byte, 690-line operator record at raw SHA-256
+`2026-08-21T15:36:00Z`. The then-current 38,352-byte, 690-line operator record at raw SHA-256
 `ed416745d3d0d957e05919e7cf10e14e75b4e9f3da800000e5789371520abbe2` records
 `VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS`, `$0` spend, two runs, one case, four
 logical requests, at most eight attempts, four generation refetches, USD `8.00` operator interval and
@@ -375,34 +375,95 @@ bytes changed; it was interrupted after 82 passed, 13 prerequisite skips, and 13
 receives no pass credit.
 
 Paid-smoke guide/evidence checkpoint `7b2db061ceb7449674399d6133428b97b74b4b96`
-(`Emit fixed noncrediting smoke launch`) is pushed and remote-resolved. It freezes the exact paid
-command and conditional verifier below over the unchanged `c9a8923` implementation. A later docs-only
-checkpoint may record this hash without changing either command.
+(`Emit fixed noncrediting smoke launch`) is now historical and unsafe to rerun unchanged. At
+`2026-08-21T16:30:00Z` the operator executed its exact one-case command; construction failed closed
+with `request and atomic global input token budgets differ` before a provider request. The dedicated
+ledger remained empty at `$0`, and no bundle was published. This is useful fail-closed evidence, not
+a REAL completion.
 
-The operator may authorize and run the following one-shot paid REAL smoke command. Codex did not run
-it. The output path must still be absent and its private parent must already exist owned by the
-operator with mode `0700`; the published output is mode `0600`. This command can select the explicit
-secret file, contact the three pinned provider routes, reserve and spend against the retained ledger,
-and cannot be resumed; the nonresumability and judge safeguards above therefore apply exactly.
+Both the paid smoke and its conditional offline verifier are withdrawn. The verifier precondition
+cannot hold because no bundle exists. The bounded correction is committed, pushed, and
+remote-resolved at `59f9f40a97dce41a16fb3ab9243b4d8588bcf3cb` (`Bind AUTHRUNNER token
+budgets`). Smoke and full-runner construction now initialize the shared budget manager from the
+exact configured global input and output token budgets plus the configured model and role cost
+budgets. Both preflights compare those values, the total USD budget, maximum output tokens,
+conservative rate, request cap, and endpoint-cost requirement before secret selection, client
+construction, or transport. Any mismatch fails provider-free at that boundary.
 
-```shell
-env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models authenticated-runner-smoke --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r2.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260820-r2" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r5.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r5" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2" --smoke-corpus benchmarks/model_corpus_smoke --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260821-s1.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --secrets-env-file "$HOME/.mmaudit/secrets.env" --allow-code-egress --no-color
-```
+Owner and root validation each passed the same 136-test five-file AUTHRUNNER matrix. Independent
+validation passed 122 tests and reported `CLEAN` with no blocker/HIGH; seven focused CLI-ordering
+tests also passed. Ruff, tracked-Python format over 510 files, strict mypy over 206 source files,
+schema verification, 12 product-documentation/objective tests, strict governance JSON parsing, and
+diff integrity passed. No provider, secret, private ledger, completion, spend, authority, or governed
+counter was accessed or changed.
 
-If and only if that REAL command succeeds and publishes the exact fresh bundle above, run this
-provider-free verifier under the same two non-secret configuration overrides. It requires no secret,
-provider access, egress flag, or ledger mutation:
+At `2026-08-21T16:56:00Z`, the operator ran the exact fresh provider-free one-case smoke preflight
+against source checkpoint `59f9f40a97dce41a16fb3ab9243b4d8588bcf3cb`. It reported
+`VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS`, two runs, one case, four logical
+requests, at most eight attempts, exact candidate final cap USD `0.21890352`, unchanged effective
+config SHA-256 `42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54`, and `$0`
+spend. No bundle was published.
 
-```shell
-env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models verify-authenticated-runner-smoke --bundle "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260821-s1.json" --smoke-corpus benchmarks/model_corpus_smoke --corpus benchmarks/model_corpus/manifest.json --config config/openrouter-qualification.toml --no-color
-```
+The output is byte-identical to the earlier provider-free preflight and still does not construct the
+live `OpenRouterClient`. Independent paid-readiness review then concluded `SAFE`, with no
+blocker/HIGH, and one paid command plus its conditional verifier were emitted.
 
-Retain both complete terminal records in `../remediation/v3/operator_results.md`. Command emission is
-not execution authority, smoke success remains `NONCREDITING`, and it does not authorize the full
-campaign. `V3-AUTHRUNNER-001` remains `PARTIAL` with autorun `BLOCKED_SAFETY`; every authority and
-governed counter remains unchanged until genuine evidence is reconciled. Do not run or restore either
-paid command from historical checkpoint `f5afb2bff074254ee5c4a484386ee4c416b17a88`; only the exact
-current command above is emitted for separate operator authorization.
+At `2026-08-21T17:15:00Z`, the operator executed that exact paid command. The token-budget mismatch
+was gone, and the run progressed to authenticated live metadata refresh before failing closed with
+`smoke current discovery differs from its frozen exact route`. No model completion occurred, the
+dedicated ledger remained empty at `$0`, and no bundle was published, so the verifier did not run.
+That attempt's normalization-versus-drift cause was initially `INCONCLUSIVE`: the operator's similar
+absent-versus-default field scan was naive, advisory, and nonauthorizing analysis.
+
+Source checkpoint `5e94b779f2592a2a0a46e7535de3e346310285e2` (`Add AUTHRUNNER live-route
+preflight`) is pushed and remote-resolved. At `2026-08-21T17:55:00Z`, the operator ran its bounded
+metadata-only live-route preflight against the unchanged r2/r5/r2 evidence. It reproduced the
+candidate rejection at `$0` with the precise category `endpoint exact-model identity inventory`.
+The frozen `deepseek/deepseek-v4-pro-0813` inventory had 12 endpoints; the live inventory had 13,
+adding `sail-research/fp4`, while selected route `novita/fp8` remained present and unchanged. This
+refutes the normalization hypothesis and establishes genuine candidate provider drift. The exact
+whole-inventory gate behaved correctly: the frozen candidate evidence had aged.
+
+The live-route preflight made authenticated metadata GETs but issued no model completion, spent `$0`,
+and published no bundle. It stopped at the candidate mismatch, so the PRIMARY and REPLAY judge routes
+remain untested. The current 47,422-byte, 855-line operator record has raw SHA-256
+`074c9f16a580473ac930f48715e737b6951ddc34cde7cd951e0b24373a3fcc16`.
+Checkpoint `5e94b77` classifies only the first failing role. Its bounded successor is committed,
+pushed, and remote-resolved at `9f5c94d97b3d79d51c10e250b99244591461e959` (`Aggregate
+AUTHRUNNER route drift diagnostics`). Owner and root validation each passed 164 tests; independent
+validation passed 237 plus seven focused tests and reported `CLEAN` with no blocker/HIGH. Repository
+Ruff, format, strict mypy, schema verification, and diff integrity passed.
+
+The operator ran the aggregate r2/r5/r2 probe. It reported typed whole-inventory drift for candidate
+and PRIMARY judge, while REPLAY was unaffected. The operator then independently re-froze only the two
+drifted roles: candidate discovery `authrunner-candidate-20260821-r6` with
+`candidate-registry-r6.json` and frozen SHA-256
+`6cd3463347e794e92831d69629a820fbdc4a6cb226ee4f2ef7daff03603117e1`; PRIMARY discovery
+`authrunner-primary-judge-20260821-r6` with `primary-judge-registry-r6.json` and frozen SHA-256
+`7b2f11aed42a7d1c5c79b68339682eb21c7f57c765db0ea0d83004a717d8fa8c`. REPLAY retains its
+validated r2 pair.
+
+The subsequent r6/r6/r2 live-route preflight was `VALID / NONCREDITING / NONAUTHORIZING / METADATA
+EGRESS ONLY / NO MODEL COMPLETION`. All three exact routes completed 15 authenticated logical GETs
+within a maximum of 30 attempts. It produced zero usage records; budget and the atomic ledger were
+unchanged; output was not published; effective-config SHA-256 remained
+`42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54`; operator-reported spend was
+`$0`. This validates the full current pre-transport metadata path, not any completion request or
+response. The PRIMARY evidence drifted in under seven hours, so the observed discovery-freshness
+window is operationally measured in hours.
+
+The current 50,211-byte, 906-line operator record has raw SHA-256
+`e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd`. The stale r2/r5/r2
+command is withdrawn. No paid smoke, verifier, normal provider-free preflight, construct-only,
+fresh-discovery, live-route, or full AUTHRUNNER command is currently emitted. The next local decision
+is whether a live-route preflight and its paid launch must be treated as one mandatory adjacent
+operator sequence so rapidly aging discovery cannot be silently reused between gates. Command
+emission is not execution authority. `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`;
+`V3-AUTONOMY-001` Phase 0 remains queued and paused with no generated artifact adopted. No governed
+counter or authority changed.
+
+No paid, provider-free preflight, verifier, construct-only, or full AUTHRUNNER command is emitted;
+the same is true of fresh-discovery and live-route commands at this evidence checkpoint.
 
 ### Full 24-case REAL command — withheld
 

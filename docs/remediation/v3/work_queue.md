@@ -2057,6 +2057,13 @@ are invisible to source review by construction.
 - **Dependencies:** Completed `V3-AUTHLINEAGE-PUBLIC-001`, authenticated generation refetch, and closed
   usage/report evidence.
 - **Status:** `PARTIAL`
+- **Current defect slice:** Token-budget parity remains fixed at `59f9f40`; live-route checkpoint
+  `5e94b77` proved genuine candidate endpoint-inventory drift at `$0`. Aggregate successor
+  `9f5c94d97b3d79d51c10e250b99244591461e959` is pushed and remote-resolved. The operator used it
+  to identify candidate and PRIMARY drift while REPLAY remained unchanged, independently re-froze
+  the two affected roles as r6/r6, and validated the r6/r6/r2 live metadata path. All current
+  AUTHRUNNER commands are absent while mandatory live-preflight/paid-launch adjacency is decided.
+  REAL remains `BLOCKED_SAFETY`; this status grants no runtime authority.
 - **Result:** The provider-free same-process candidate/judge/generation/ledger and AUTHSEAL
   path, strict self-hashed nonauthorizing prepared-run/report/ledger bundle, explicit egress gate,
   pre-reservation per-attempt ceiling, callback-ledger fail-stop, and fresh-only publication are
@@ -2309,7 +2316,7 @@ are invisible to source review by construction.
   preflight is emitted; paid smoke, offline verifier, and full REAL commands remain absent.
 - **Post-fix smoke preflight VALID 2026-08-21:** Implementation checkpoint
   `c9a8923064ef1bb606a67b14641c4c8df55bc9ea` remains the source correction; distinct pushed guide
-  checkpoint `c137f8bae9d27f5120e7e08eba2d9b5b384e1ca5` froze the operator-visible command. The current
+  checkpoint `c137f8bae9d27f5120e7e08eba2d9b5b384e1ca5` froze the operator-visible command. The then-current
   38,352-byte, 690-line operator record at SHA-256
   `ed416745d3d0d957e05919e7cf10e14e75b4e9f3da800000e5789371520abbe2` records that exact command
   as `VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS`, with `$0` spend, two runs, one
@@ -2324,14 +2331,92 @@ are invisible to source review by construction.
   Paid-smoke guide/evidence checkpoint `7b2db061ceb7449674399d6133428b97b74b4b96` is pushed and
   remote-resolved and freezes the one-case command plus conditional verifier over the unchanged
   `c9a8923` implementation.
+- **Paid smoke failed closed before provider request 2026-08-21:** The operator attempted the exact
+  one-case command from historical checkpoint `7b2db061ceb7449674399d6133428b97b74b4b96`.
+  `OpenRouterClient` construction rejected `request and atomic global input token budgets differ`
+  before any provider request. The dedicated ledger remained empty at `$0`, and no bundle was
+  published, so its conditional verifier has no input and was not run. The current 44,808-byte,
+  807-line operator record has raw SHA-256
+  `5b9d455d1a82c8ae70dedfb2b38ad17bcd2a881c5d3ca7a9e56bac1379cd7c19`. Both commands were
+  withdrawn at that boundary;
+  the full 24-case command remains absent. `V3-AUTHRUNNER-001` is `IN_PROGRESS` only for the local
+  token-budget parity fix, while its REAL subtask remained `BLOCKED_SAFETY`. `V3-AUTONOMY-001`
+  Phase 0 was paused before artifact adoption.
+- **Token-budget parity correction 2026-08-21:** Source checkpoint
+  `59f9f40a97dce41a16fb3ab9243b4d8588bcf3cb` (`Bind AUTHRUNNER token budgets`) is pushed and
+  remote-resolved. Smoke and full-runner shared budgets now receive the exact configured global input
+  and output token budgets and scoped cost caps. Both preflights compare every relevant shared-budget
+  field before secret selection, client construction, or transport, so any construction drift fails
+  provider-free. Owner and root each passed the same 136-test five-file matrix; independent review
+  passed 122 tests and was `CLEAN` with no blocker/HIGH; seven focused ordering tests passed. Ruff,
+  tracked-Python format over 510 files, strict mypy over 206 source files, schema verification, 12
+  product-documentation/objective tests, strict governance JSON, and diff integrity passed. The
+  operator ran the exact fresh provider-free preflight after this checkpoint; the current
+  44,808-byte, 807-line record at raw SHA-256
+  `5b9d455d1a82c8ae70dedfb2b38ad17bcd2a881c5d3ca7a9e56bac1379cd7c19` reports
+  `VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS`, four logical requests, at most eight
+  attempts, exact candidate final cap USD `0.21890352`, and `$0` spend. Its output is byte-identical
+  to the pre-fix preflight and still does not construct the live `OpenRouterClient`, so it does not
+  exercise that construction seam. Paid smoke, offline verifier, and full 24-case REAL commands
+  were absent at that evidence boundary. Independent paid-readiness review was `SAFE` with no
+  blocker/HIGH: the prior attempt reached the exact constructor at `$0`, while `59f9f40` binds both
+  token budgets and every adjacent shared-budget field used by real CLI-built clients. One exact paid
+  smoke command is now emitted for separate operator authorization, with one verifier strictly
+  conditional on exit zero and a fresh bundle; no construct-only command or full-run command is
+  emitted. No provider, secret, private ledger, completion, spend, authority, or governed counter
+  changed at that boundary. `V3-AUTHRUNNER-001` returned to `PARTIAL / BLOCKED_SAFETY`;
+  `V3-AUTONOMY-001` Phase 0 remained queued and paused.
+- **Paid smoke #2 failed during live discovery refresh 2026-08-21:** The operator ran the exact
+  post-`59f9f40` paid smoke. The token-budget mismatch was gone, but authenticated live metadata
+  refresh rejected `smoke current discovery differs from its frozen exact route` before any model
+  completion. The ledger remained empty at `$0` and no bundle was published, so the conditional
+  verifier did not run. The current 44,808-byte, 807-line operator record has raw SHA-256
+  `5b9d455d1a82c8ae70dedfb2b38ad17bcd2a881c5d3ca7a9e56bac1379cd7c19`.
+  The operator's normalization-versus-drift analysis is advisory and used a naive recursive scan;
+  root cause remains `INCONCLUSIVE` until the actual typed frozen and live objects are compared.
+  Paid smoke and verifier are withdrawn again; no preflight, construct-only, metadata-refresh, or
+  full command is emitted. `V3-AUTHRUNNER-001` is `IN_PROGRESS` only for this bounded local diagnosis,
+  its REAL subtask remains `BLOCKED_SAFETY`, and `V3-AUTONOMY-001` Phase 0 remains queued and paused.
+- **Live-route preflight proved genuine candidate drift 2026-08-21:** At pushed and remote-resolved
+  source checkpoint `5e94b779f2592a2a0a46e7535de3e346310285e2`, the operator ran the bounded
+  metadata-only live-route preflight against the unchanged r2/r5/r2 evidence. It failed safely at
+  `$0` on candidate category `endpoint exact-model identity inventory`: the frozen DeepSeek V4-Pro
+  inventory had 12 endpoints and the live inventory had 13, adding `sail-research/fp4`, while the
+  selected `novita/fp8` route remained unchanged. This refutes the earlier normalization hypothesis
+  and establishes genuine candidate provider drift. No model completion ran and no bundle was
+  published. The gate stopped on candidate, so both judge roles remain untested. The current
+  47,422-byte, 855-line operator record has raw SHA-256
+  `074c9f16a580473ac930f48715e737b6951ddc34cde7cd951e0b24373a3fcc16`. All current
+  At that evidence boundary, AUTHRUNNER paid, verifier, normal-preflight, fresh-discovery, and full
+  commands remained absent.
+  Aggregate successor `9f5c94d97b3d79d51c10e250b99244591461e959` is pushed and remote-resolved;
+  owner/root each passed 164 tests, independent validation passed 237 plus seven focused tests with
+  `CLEAN`/no blocker-HIGH, and Ruff/format/mypy/schema/diff gates passed. The formerly emitted
+  r2/r5/r2 probe has now run and is historical. `V3-AUTONOMY-001` Phase 0 remains queued and paused.
+- **Fresh r6/r6/r2 live-route preflight VALID 2026-08-21:** The aggregate probe reported candidate
+  and PRIMARY whole-inventory drift and no REPLAY mismatch. The operator independently re-froze
+  candidate as `candidate-registry-r6.json` / `authrunner-candidate-20260821-r6` with frozen SHA-256
+  `6cd3463347e794e92831d69629a820fbdc4a6cb226ee4f2ef7daff03603117e1`, and PRIMARY as
+  `primary-judge-registry-r6.json` / `authrunner-primary-judge-20260821-r6` with frozen SHA-256
+  `7b2f11aed42a7d1c5c79b68339682eb21c7f57c765db0ea0d83004a717d8fa8c`; REPLAY kept r2.
+  The r6/r6/r2 live-route preflight then validated all three exact routes through 15 authenticated
+  logical GETs with at most 30 attempts: zero completion, zero usage, unchanged budget and atomic
+  ledger, no output, unchanged effective config, and operator-reported `$0`. The current 50,211-byte,
+  906-line operator record has raw SHA-256
+  `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd`. PRIMARY drifted in
+  under seven hours, so discovery freshness is measured in hours. Every current AUTHRUNNER command is
+  absent pending the local decision on mandatory live-preflight/paid-launch adjacency.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
   and non-crediting. Both the historical and post-fix provider-free smoke preflights were valid and
-  nonauthorizing, but neither can exercise the post-response origin issuer. Exact judge admission and the
-  full-campaign cost bound cannot exist before both genuine candidate outputs.
-  The corrected origin seam is validated only provider-free; no genuine smoke completion has exercised
-  it. Current repository rules prohibit
-  Codex from reading real credentials or accessing the provider. Judge request bytes and exact caps
-  cannot exist before both genuine
+  nonauthorizing, but neither constructed the live client. The first paid attempt exposed a mismatch
+  between request and atomic global input-token budgets before provider dispatch. The local parity
+  repair is checkpointed and its committed-byte provider-free smoke preflight is valid. Paid smoke #2
+  proved constructor parity, and the later metadata-only live-route gate established genuine
+  candidate endpoint-inventory drift. It did not test either judge route; no paid retry is authorized.
+  Exact judge admission and the
+  full-campaign cost bound cannot exist before both genuine candidate outputs. Current repository
+  rules prohibit Codex from reading real credentials or accessing the provider. Judge request bytes
+  and exact caps cannot exist before both genuine
   candidate outputs, so the provider-free result intentionally supplies candidate-only admission,
   not a fabricated full-campaign bound. The authenticated runner is a one-shot, non-resumable
   same-process launch; interrupted work cannot be resumed as valid campaign evidence. The retained
@@ -2341,11 +2426,11 @@ are invisible to source review by construction.
   issue-consume-revoke-reject lifecycle assay remain absent. Campaign/generation revocation beyond
   the top-level runner lease is not independently demonstrated. External-log publication and every
   benchmark run remain queued.
-- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` with autorun `BLOCKED_SAFETY`. The operator may
-  separately authorize and run only the exact paid one-case smoke command now emitted in
-  `docs/models/model_selection.md`, then run its exact provider-free offline verifier only after a
-  successful publication. Reconcile both complete terminal records before any follow-up. Keep the full
-  24-case REAL command absent; AUTHSEAL publication, audits, benchmarks, and release remain unauthorized.
+- **Next action:** Decide locally whether the live-route preflight and paid launch must form one
+  mandatory adjacent operator sequence for smoke and the later full campaign. Emit no paid, verifier,
+  normal-preflight, construct-only, fresh-discovery, live-route, or full command until that decision is
+  recorded. AUTHSEAL publication, audits, benchmarks, and release remain
+  unauthorized. `V3-AUTONOMY-001` Phase 0 remains queued and paused for this handoff.
 
 ## V3-TARGETSPEC-001 — Reconcile the product vision with the objective and correct the README
 
@@ -3088,6 +3173,8 @@ are invisible to source review by construction.
   Design work can begin earlier; the gating inventory is useful immediately and should not
   wait.
 - **Status:** `QUEUED`
+- **Current state:** Phase 0 is paused and remains `QUEUED`; no generated inventory artifact was
+  adopted. Resume only after the active `V3-AUTHRUNNER-001` repair is tested and recorded.
 
 ## Execution order
 
