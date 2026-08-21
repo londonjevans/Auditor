@@ -93,6 +93,7 @@ from mmaudit.models.ground_truth_authority import (
     VerifiedFrozenGroundTruthProjection,
 )
 from mmaudit.models.openrouter import OpenRouterClient, OpenRouterProviderPolicy
+from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.public_lineage_authority import VerifiedPublicModelLineage
 from mmaudit.models.qualification import CandidateModel, CandidateRegistry, QualificationPolicy
 from mmaudit.models.runtime import build_reasoning_policy
@@ -971,7 +972,7 @@ async def _refresh_and_register_judge_discovery(
             require_zdr=config.privacy.require_zdr,
             zdr_payload=zdr_payload,
             reasoning_requested=False,
-            structured_output_required=False,
+            required_output_mode=StructuredOutputMode.NATIVE_JSON_SCHEMA,
         )
     except (TypeError, ValueError):
         raise AuthenticatedRunnerOpenRouterError(

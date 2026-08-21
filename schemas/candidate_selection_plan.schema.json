@@ -24,6 +24,21 @@
           "title": "Replay Judge Model Id",
           "type": "string"
         },
+        "required_output_mode": {
+          "const": "NATIVE_JSON_SCHEMA",
+          "title": "Required Output Mode",
+          "type": "string"
+        },
+        "required_supported_parameters": {
+          "items": {
+            "const": "structured_outputs",
+            "type": "string"
+          },
+          "maxItems": 1,
+          "minItems": 1,
+          "title": "Required Supported Parameters",
+          "type": "array"
+        },
         "role_assignment_sha256": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Role Assignment Sha256",
@@ -34,6 +49,8 @@
         "candidate_model_id",
         "primary_judge_model_id",
         "replay_judge_model_id",
+        "required_output_mode",
+        "required_supported_parameters",
         "distinct_root_lineages_verified",
         "role_assignment_sha256"
       ],
@@ -265,7 +282,7 @@
       "type": "boolean"
     },
     "schema_version": {
-      "const": "1.0",
+      "const": "1.1",
       "title": "Schema Version",
       "type": "string"
     },

@@ -530,6 +530,86 @@ def test_authenticated_runner_preflight_only_never_selects_secrets_or_mutates_ou
         assert not (tmp_path / name).exists()
 
 
+def test_authenticated_runner_structured_output_rejection_precedes_secret_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = SimpleNamespace(execution=SimpleNamespace(cost_ledger_path=None))
+    ledger = SimpleNamespace(
+        path=tmp_path / "cost-ledger.json",
+        lock_path=tmp_path / "cost-ledger.json.lock",
+    )
+    monkeypatch.setattr(cli_module, "load_config", lambda _path: config)
+    monkeypatch.setattr(cli_module, "load_model_benchmark_corpus", lambda _path: object())
+    monkeypatch.setattr(
+        cli_module,
+        "load_frozen_ground_truth_provenance",
+        lambda _path: object(),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "resolve_verified_frozen_ground_truth",
+        lambda **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "resolve_verified_public_model_lineage",
+        lambda: object(),
+    )
+    monkeypatch.setattr(cli_module, "load_candidate_registry", lambda _path: object())
+    monkeypatch.setattr(
+        cli_module,
+        "load_model_discovery_run",
+        lambda _path: (object(), (object(),)),
+    )
+    monkeypatch.setattr(cli_module, "load_qualification_policy", lambda _path: object())
+    monkeypatch.setattr(cli_module, "_require_qualification_release_pins", lambda **_kw: None)
+    monkeypatch.setattr(
+        cli_module,
+        "_budget_and_usage",
+        lambda *_args, **_kwargs: (
+            SimpleNamespace(atomic_ledger=ledger),
+            object(),
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_preflight_authenticated_runner_cli_paths",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_preflight_authenticated_runner_output",
+        lambda _path: None,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "preflight_authenticated_openrouter_launch",
+        lambda _launch: (_ for _ in ()).throw(
+            AuthenticatedRunnerExecutionError(
+                "runner candidate route lacks required native structured_outputs support"
+            )
+        ),
+    )
+
+    def forbidden(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("structured-output rejection must precede secret selection")
+
+    for name in (
+        "select_operator_secret_file",
+        "load_operator_secrets",
+        "execute_authenticated_openrouter_runner",
+        "_write_authenticated_runner_output_fresh",
+    ):
+        monkeypatch.setattr(cli_module, name, forbidden)
+
+    result = RUNNER.invoke(cli_module.app, _required_arguments(tmp_path))
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "native structured_outputs" in " ".join(result.stdout.split())
+    assert not (tmp_path / "runner-evidence.json").exists()
+
+
 @pytest.mark.parametrize("explicit_secret", (True, False))
 @pytest.mark.parametrize("authseal_reject", (False, True))
 def test_authenticated_runner_preflights_before_secret_and_writes_only_durable_inputs(

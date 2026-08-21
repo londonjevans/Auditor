@@ -53,6 +53,10 @@ from mmaudit.models.authenticated_runner_smoke_corpus import (
     AuthenticatedRunnerSmokeCorpusBundle,
 )
 from mmaudit.models.candidate_benchmark import validate_candidate_benchmark_egress
+from mmaudit.models.candidate_selection import (
+    CandidateSelectionError,
+    require_authenticated_runner_native_structured_output,
+)
 from mmaudit.models.discovery import (
     ModelDiscoveryValidationError,
     OpenRouterLiveDiscoveryMismatchCategory,
@@ -79,6 +83,7 @@ from mmaudit.models.openrouter import (
     OpenRouterProviderPolicy,
     preview_openrouter_structured_request_cost,
 )
+from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.public_lineage_authority import (
     VerifiedIndependentPublicModelLineageProjection,
     VerifiedPublicModelLineage,
@@ -1376,6 +1381,12 @@ def _require_singleton_registry(
         ) from None
     model = registry.candidates[0]
     discovery = evidence[0]
+    try:
+        require_authenticated_runner_native_structured_output(discovery)
+    except CandidateSelectionError:
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            f"smoke {label} route lacks required native structured_outputs support"
+        ) from None
     if (
         model.exact_model_id != discovery.exact_model_id
         or model.canonical_model_slug != discovery.canonical_slug
@@ -1528,7 +1539,7 @@ async def _refresh_and_register_exact_route(
             require_zdr=config.privacy.require_zdr,
             zdr_payload=zdr_payload,
             reasoning_requested=False,
-            structured_output_required=False,
+            required_output_mode=StructuredOutputMode.NATIVE_JSON_SCHEMA,
         )
         current_model = validate_openrouter_model_discovery(
             exact_model_id=model.exact_model_id,

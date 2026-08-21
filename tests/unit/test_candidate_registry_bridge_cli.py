@@ -3,7 +3,7 @@ from __future__ import annotations
 import stat
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from typer.testing import CliRunner
@@ -618,6 +618,7 @@ def test_discover_selection_plan_publishes_rootless_registry_from_fresh_evidence
         provider_endpoint=PROVIDER_ENDPOINT,
         provider_name="Provider Alpha",
         canonical_model_id="alpha/atlas-secure-20260820",
+        native_structured_output_parameter="structured_outputs",
     )
     _fixture_manifest, sealed_evidence, _template = fixtures._discovery_and_registry(
         tmp_path=tmp_path / "fixture-discovery",
@@ -720,4 +721,101 @@ def test_discover_selection_plan_publishes_rootless_registry_from_fresh_evidence
     assert candidate.approved_roles == ()
     assert candidate.output_capability_sha256 == evidence[0].output_capability_sha256
     assert stat.S_IMODE(registry_output.stat().st_mode) == 0o600
+    assert CANARY not in result.output
+
+
+@pytest.mark.parametrize("native_parameter", (None, "json_schema"))
+def test_discover_selection_plan_rejects_non_native_runner_route_before_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+    native_parameter: Literal["json_schema"] | None,
+) -> None:
+    config = _config(config_factory)
+    spec = fixtures._CandidateSpec(
+        model_id=MODEL_ID,
+        provider_endpoint=PROVIDER_ENDPOINT,
+        provider_name="Provider Alpha",
+        canonical_model_id="alpha/atlas-secure-20260820",
+        native_structured_output_parameter=native_parameter,
+    )
+    plan_path, ranking_path, lineage_path = _selection_plan_paths(tmp_path / "selection")
+    secret_file = tmp_path / "synthetic-secrets.env"
+    secret_file.write_text(f"OPENROUTER_API_KEY={CANARY}\n", encoding="utf-8")
+    secret_file.chmod(0o600)
+    endpoint = fixtures._endpoint(spec)
+    catalog_payload = {"data": [fixtures._catalog_model(spec)]}
+    endpoint_payload = {
+        "data": {
+            "id": MODEL_ID,
+            "endpoints": [{key: value for key, value in endpoint.items() if key != "model_id"}],
+        }
+    }
+
+    class ProviderFreeSelectionClient:
+        def __init__(self, *, api_key: str, **_kwargs: object) -> None:
+            assert api_key == CANARY
+
+        async def validate_authentication(self) -> None:
+            return None
+
+        async def get_certification_model_metadata(self) -> dict[str, Any]:
+            return catalog_payload
+
+        async def list_zdr_endpoints(self) -> dict[str, Any]:
+            return {"data": [endpoint]}
+
+        async def get_model_metadata(self, model_id: str) -> dict[str, Any]:
+            assert model_id == MODEL_ID
+            return {"data": fixtures._catalog_model(spec)}
+
+        async def get_model_endpoint_metadata(self, model_id: str) -> dict[str, Any]:
+            assert model_id == MODEL_ID
+            return endpoint_payload
+
+        def seal_real_model_discovery_run(self, **_kwargs: object) -> object:
+            raise AssertionError("ineligible route must reject before discovery sealing")
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(cli_module, "load_config", lambda _path: config)
+    monkeypatch.setattr(cli_module, "OpenRouterClient", ProviderFreeSelectionClient)
+    monkeypatch.setattr(
+        cli_module,
+        "_TRUSTED_OPENROUTER_CLIENT_TYPE",
+        ProviderFreeSelectionClient,
+    )
+    discovery_output = tmp_path / "private" / "rejected-selection-discovery"
+    registry_output = tmp_path / "private" / "rejected-selection-registry.json"
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "discover",
+            "--candidate",
+            f"{MODEL_ID}={PROVIDER_ENDPOINT}",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--secrets-env-file",
+            str(secret_file),
+            "--output-dir",
+            str(discovery_output),
+            "--candidate-selection-plan",
+            str(plan_path),
+            "--candidate-selection-ranking-source",
+            str(ranking_path),
+            "--candidate-selection-lineage-review-source",
+            str(lineage_path),
+            "--candidate-registry-output",
+            str(registry_output),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "native structured_outputs" in " ".join(result.output.split())
+    assert not discovery_output.exists()
+    assert not registry_output.exists()
     assert CANARY not in result.output

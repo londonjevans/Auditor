@@ -55,6 +55,7 @@ from mmaudit.models.openrouter import (
     OpenRouterStructuredRequestCostPreview,
     preview_openrouter_structured_request_cost,
 )
+from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.qualification import (
     CandidateModel,
     CandidateOperationalStatus,
@@ -91,6 +92,7 @@ class _CandidateSpec:
     provider_endpoint: str
     provider_name: str
     reasoning_supported: bool = True
+    native_structured_output_parameter: Literal["json_schema", "structured_outputs"] | None = None
     endpoint_reasoning_efforts_published: bool = True
     canonical_model_id: str | None = None
 
@@ -149,6 +151,11 @@ class _MockClientFactory:
             provider_endpoint=candidate.approved_provider_endpoint,
             provider_name=candidate.approved_provider_name,
             reasoning_supported=candidate.reasoning_supported,
+            native_structured_output_parameter=(
+                "structured_outputs"
+                if candidate.structured_output_mode is StructuredOutputMode.NATIVE_JSON_SCHEMA
+                else None
+            ),
             endpoint_reasoning_efforts_published=(
                 candidate.exact_model_id not in self.endpoint_effort_omission_models
             ),
@@ -304,6 +311,8 @@ class _MockClientFactory:
 
 def _endpoint(spec: _CandidateSpec) -> dict[str, Any]:
     parameters = ["max_tokens", "response_format", "temperature"]
+    if spec.native_structured_output_parameter is not None:
+        parameters.append(spec.native_structured_output_parameter)
     if spec.reasoning_supported:
         parameters.append("reasoning")
     endpoint: dict[str, Any] = {
@@ -337,6 +346,8 @@ def _endpoint(spec: _CandidateSpec) -> dict[str, Any]:
 
 def _catalog_model(spec: _CandidateSpec) -> dict[str, Any]:
     parameters = ["max_tokens", "response_format", "temperature"]
+    if spec.native_structured_output_parameter is not None:
+        parameters.append(spec.native_structured_output_parameter)
     if spec.reasoning_supported:
         parameters.append("reasoning")
     payload: dict[str, Any] = {
@@ -994,6 +1005,7 @@ async def test_authenticated_runner_candidate_consumes_exact_cost_preview_invent
         provider_endpoint="provider-alpha",
         provider_name="Provider Alpha",
         canonical_model_id="alpha/atlas-secure-20260727",
+        native_structured_output_parameter="structured_outputs",
     )
     manifest, evidence, registry = _discovery_and_registry(
         tmp_path=tmp_path,

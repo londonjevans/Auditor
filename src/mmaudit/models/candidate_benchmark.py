@@ -42,6 +42,7 @@ from mmaudit.models.openrouter import (
     OpenRouterRequestCostPreviewError,
     OpenRouterStructuredRequestCostPreview,
 )
+from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.qualification import (
     CandidateModel,
     CandidateRegistry,
@@ -1070,7 +1071,11 @@ async def _execute_candidate(
                 require_zdr=config.privacy.require_zdr,
                 zdr_payload=zdr_payload,
                 reasoning_requested=False,
-                structured_output_required=False,
+                required_output_mode=(
+                    StructuredOutputMode.NATIVE_JSON_SCHEMA
+                    if authenticated_runner_run_kind is not None
+                    else None
+                ),
             )
             current_model_evidence = validate_openrouter_model_discovery(
                 exact_model_id=candidate.exact_model_id,

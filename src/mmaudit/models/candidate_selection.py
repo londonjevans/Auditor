@@ -21,9 +21,11 @@ from pydantic import Field, field_validator, model_validator
 from mmaudit.models.discovery import (
     DiscoveryCandidateRoute,
     OpenRouterModelDiscoveryEvidence,
+    OpenRouterModelDiscoveryPayload,
     OpenRouterModelDiscoveryRunManifest,
 )
 from mmaudit.models.identifiers import EXACT_MODEL_ID_PATTERN, require_exact_openrouter_model_id
+from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.qualification import (
     CandidateBenchmarkStatus,
     CandidateModel,
@@ -125,6 +127,11 @@ class AuthenticatedRunnerSelection(StrictModel):
     candidate_model_id: str = Field(pattern=EXACT_MODEL_ID_PATTERN)
     primary_judge_model_id: str = Field(pattern=EXACT_MODEL_ID_PATTERN)
     replay_judge_model_id: str = Field(pattern=EXACT_MODEL_ID_PATTERN)
+    required_output_mode: Literal[StructuredOutputMode.NATIVE_JSON_SCHEMA]
+    required_supported_parameters: tuple[Literal["structured_outputs"], ...] = Field(
+        min_length=1,
+        max_length=1,
+    )
     distinct_root_lineages_verified: Literal[False]
     role_assignment_sha256: str = Field(pattern=_SHA256_PATTERN)
 
@@ -150,6 +157,10 @@ class AuthenticatedRunnerSelection(StrictModel):
         )
         if len(set(model_ids)) != len(model_ids):
             raise ValueError("authenticated runner seed model IDs must be distinct")
+        if self.required_supported_parameters != ("structured_outputs",):
+            raise ValueError("authenticated runner seed must require native structured outputs")
+        if self.required_output_mode is not StructuredOutputMode.NATIVE_JSON_SCHEMA:
+            raise ValueError("authenticated runner seed must require native JSON Schema")
         expected = canonical_sha256(
             self.model_dump(mode="json", exclude={"role_assignment_sha256"})
         )
@@ -161,7 +172,7 @@ class AuthenticatedRunnerSelection(StrictModel):
 class CandidateSelectionPlan(StrictModel):
     """Self-hashed operator-staged seed with only literal-false authority flags."""
 
-    schema_version: Literal["1.0"]
+    schema_version: Literal["1.1"]
     artifact_kind: Literal["OPERATOR_STAGED_MODEL_SELECTION"]
     status: Literal["NONAUTHORIZING"]
     objective_sha256: Literal["e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15"]
@@ -292,6 +303,8 @@ def seal_authenticated_runner_selection(
         "candidate_model_id": candidate_model_id,
         "primary_judge_model_id": primary_judge_model_id,
         "replay_judge_model_id": replay_judge_model_id,
+        "required_output_mode": StructuredOutputMode.NATIVE_JSON_SCHEMA.value,
+        "required_supported_parameters": ["structured_outputs"],
         "distinct_root_lineages_verified": False,
     }
     values["role_assignment_sha256"] = canonical_sha256(values)
@@ -311,7 +324,7 @@ def seal_candidate_selection_plan(
     ordered_sources = tuple(sorted(source_bindings, key=lambda item: item.kind))
     ordered_entries = tuple(sorted(entries, key=lambda item: item.exact_model_id))
     values: dict[str, object] = {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "artifact_kind": "OPERATOR_STAGED_MODEL_SELECTION",
         "status": "NONAUTHORIZING",
         "objective_sha256": OBJECTIVE_SHA256,
@@ -416,6 +429,54 @@ def validate_candidate_selection_routes(
     return canonical
 
 
+def require_authenticated_runner_native_structured_output(
+    evidence: OpenRouterModelDiscoveryPayload | OpenRouterModelDiscoveryEvidence,
+) -> None:
+    """Require the exact native-schema marker on both model and endpoint metadata."""
+
+    if type(evidence) not in {
+        OpenRouterModelDiscoveryPayload,
+        OpenRouterModelDiscoveryEvidence,
+    }:
+        raise CandidateSelectionError(
+            "authenticated runner structured-output evidence has the wrong exact type"
+        )
+    endpoint = evidence.endpoint_snapshot.endpoint(evidence.approved_provider_endpoint)
+    required = {"structured_outputs"}
+    if (
+        evidence.structured_output_mode is not StructuredOutputMode.NATIVE_JSON_SCHEMA
+        or evidence.structured_output_supported is not True
+        or not required.issubset(evidence.model_supported_parameters)
+        or not required.issubset(endpoint.supported_parameters)
+        or not required.issubset(evidence.structured_output_parameters)
+        or not required.issubset(endpoint.structured_output_parameters)
+    ):
+        raise CandidateSelectionError(
+            "authenticated runner route lacks required native structured_outputs support"
+        )
+
+
+def validate_candidate_selection_discovery_capability(
+    plan: CandidateSelectionPlan,
+    *,
+    evidence: OpenRouterModelDiscoveryPayload | OpenRouterModelDiscoveryEvidence,
+) -> CandidateSelectionPlan:
+    """Enforce every selected AUTHRUNNER role capability before registry publication."""
+
+    canonical = CandidateSelectionPlan.model_validate(plan.model_dump(mode="python"))
+    selection = canonical.authenticated_runner_selection
+    if selection is None:
+        return canonical
+    selected_ids = {
+        selection.candidate_model_id,
+        selection.primary_judge_model_id,
+        selection.replay_judge_model_id,
+    }
+    if evidence.exact_model_id in selected_ids:
+        require_authenticated_runner_native_structured_output(evidence)
+    return canonical
+
+
 def derive_pending_candidate_registry_from_selection_plan(
     *,
     plan: CandidateSelectionPlan,
@@ -445,6 +506,7 @@ def derive_pending_candidate_registry_from_selection_plan(
 
     candidates: list[CandidateModel] = []
     for item in records:
+        validate_candidate_selection_discovery_capability(canonical_plan, evidence=item)
         if item.zdr_eligible is not True or not item.endpoint_snapshot.require_zdr:
             raise CandidateSelectionError(
                 "fresh candidate discovery is not bound to exact ZDR eligibility"

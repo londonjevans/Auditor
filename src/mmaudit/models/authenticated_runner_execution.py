@@ -69,6 +69,10 @@ from mmaudit.models.candidate_benchmark import (
     validate_candidate_benchmark_egress,
     validate_candidate_benchmark_policy_capacity,
 )
+from mmaudit.models.candidate_selection import (
+    CandidateSelectionError,
+    require_authenticated_runner_native_structured_output,
+)
 from mmaudit.models.discovery import (
     OpenRouterModelDiscoveryEvidence,
     OpenRouterModelDiscoveryRunManifest,
@@ -1263,6 +1267,12 @@ def _preflight_execution(
         raise AuthenticatedRunnerExecutionError(
             "runner candidate registry differs from fresh discovery"
         ) from None
+    try:
+        require_authenticated_runner_native_structured_output(discovery_evidence[0])
+    except CandidateSelectionError:
+        raise AuthenticatedRunnerExecutionError(
+            "runner candidate route lacks required native structured_outputs support"
+        ) from None
     _require_exact_runner_egress_policy(
         config=config,
         benchmark_suite=benchmark_suite,
@@ -1354,6 +1364,12 @@ def _preflight_execution(
             ) from None
         judge = plan.judge
         judge_evidence = plan.judge_discovery_evidence[0]
+        try:
+            require_authenticated_runner_native_structured_output(judge_evidence)
+        except CandidateSelectionError:
+            raise AuthenticatedRunnerExecutionError(
+                "runner judge route lacks required native structured_outputs support"
+            ) from None
         judge_manifest_hashes.append(plan.judge_discovery_manifest.manifest_sha256)
         judge_evidence_hashes.append(judge_evidence.discovery_evidence_sha256)
         if (

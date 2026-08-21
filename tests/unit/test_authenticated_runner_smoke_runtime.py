@@ -1665,6 +1665,68 @@ async def test_live_route_launch_preflight_retains_pure_synthetic_privacy_checks
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("role_index", [-1, 0, 1])
+async def test_smoke_preflight_rejects_non_native_structured_output_for_every_role(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+    role_index: int,
+) -> None:
+    launch = replace(
+        await _live_route_launch(tmp_path=tmp_path / "native", config_factory=config_factory),
+        explicitly_allow_synthetic_egress=True,
+    )
+    if role_index == -1:
+        model = launch.candidate_registry.candidates[0]
+    else:
+        model = launch.run_plans[role_index].judge
+    manifest, evidence, registry = candidate_fixtures._discovery_and_registry(
+        tmp_path=tmp_path / f"loose-{role_index}",
+        config=launch.config,
+        specs=(
+            candidate_fixtures._CandidateSpec(
+                model_id=model.exact_model_id,
+                provider_endpoint=model.approved_provider_endpoint,
+                provider_name=model.approved_provider_name,
+                canonical_model_id=model.canonical_model_slug,
+            ),
+        ),
+    )
+    if role_index == -1:
+        launch = replace(
+            launch,
+            candidate_discovery_manifest=manifest,
+            candidate_discovery_evidence=evidence,
+            candidate_registry=registry,
+        )
+        expected = "smoke candidate route lacks required native structured_outputs support"
+    else:
+        plans = list(launch.run_plans)
+        plans[role_index] = replace(
+            plans[role_index],
+            judge_discovery_manifest=manifest,
+            judge_discovery_evidence=evidence,
+            judge_registry=registry,
+        )
+        launch = replace(launch, run_plans=tuple(plans))
+        expected = "smoke judge route lacks required native structured_outputs support"
+    ledger = launch.budget.atomic_ledger
+    assert ledger is not None
+    before = ledger.snapshot()
+
+    def forbidden_cost_plan(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("structured-output admission must reject before cost derivation")
+
+    monkeypatch.setattr(smoke_runtime_module, "_candidate_cost_plan", forbidden_cost_plan)
+
+    with pytest.raises(AuthenticatedRunnerSmokeOpenRouterError, match=expected):
+        preflight_authenticated_runner_smoke_openrouter_launch(launch)
+
+    assert launch.usage.records == []
+    assert ledger.snapshot() == before
+
+
+@pytest.mark.asyncio
 async def test_live_route_preflight_requires_positive_metadata_egress_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

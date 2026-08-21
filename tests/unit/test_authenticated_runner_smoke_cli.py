@@ -18,6 +18,7 @@ from mmaudit.orchestration.authenticated_runner_smoke_openrouter import (
     AuthenticatedRunnerSmokeLiveRouteMismatch,
     AuthenticatedRunnerSmokeLiveRouteMismatchError,
     AuthenticatedRunnerSmokeLiveRouteRole,
+    AuthenticatedRunnerSmokeOpenRouterError,
 )
 from scripts.generate_release_schemas import MODELS, rendered_schema
 
@@ -252,6 +253,42 @@ def test_authenticated_runner_smoke_preflight_is_provider_free_and_does_not_muta
     assert "runs=2; cases=1; logical_requests=4" in normalized
     assert "maximum_provider_attempts=8; generation_refetches=4" in normalized
     assert "full_smoke_cost_bound=UNAVAILABLE_BEFORE_REAL_CANDIDATE_OUTPUTS" in normalized
+
+
+def test_authenticated_runner_smoke_structured_output_rejection_precedes_secret_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tmp_path.chmod(0o700)
+    _patch_launch_inputs(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        cli_module,
+        "preflight_authenticated_runner_smoke_openrouter_launch",
+        lambda _launch: (_ for _ in ()).throw(
+            AuthenticatedRunnerSmokeOpenRouterError(
+                "smoke candidate route lacks required native structured_outputs support"
+            )
+        ),
+    )
+
+    def forbidden(*_args: object, **_kwargs: object) -> Any:
+        raise AssertionError("structured-output rejection must precede secret selection")
+
+    for name in (
+        "select_operator_secret_file",
+        "load_operator_secrets",
+        "execute_authenticated_runner_smoke_openrouter",
+        "_write_authenticated_runner_smoke_output_fresh",
+    ):
+        monkeypatch.setattr(cli_module, name, forbidden)
+    monkeypatch.setattr(cli_module, "_preflight_authenticated_runner_output", lambda _path: None)
+
+    output = tmp_path / "smoke-evidence.json"
+    result = RUNNER.invoke(cli_module.app, _required_arguments(tmp_path))
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "native structured_outputs" in " ".join(result.stdout.split())
+    assert not output.exists()
 
 
 def test_authenticated_runner_smoke_preflight_modes_are_mutually_exclusive_before_loading(

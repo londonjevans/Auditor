@@ -5,6 +5,7 @@ import os
 from collections.abc import Callable
 from itertools import permutations
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -38,9 +39,11 @@ REVIEW_BYTES = b"synthetic operator-staged lineage review\n"
 MODEL_A = "alpha/atlas-current"
 MODEL_B = "beta/beacon-current"
 MODEL_C = "gamma/compass-current"
+MODEL_D = "delta/delta-current"
 ENDPOINT_A = "provider-alpha"
 ENDPOINT_B = "provider-beta/fp8"
 ENDPOINT_C = "provider-gamma/global"
+ENDPOINT_D = "provider-delta"
 ROOT = Path(__file__).parents[2]
 
 
@@ -133,6 +136,13 @@ def test_selection_plan_is_deterministic_and_strictly_nonauthorizing() -> None:
         "serialized_authority",
     }.issubset(required)
     assert schema["properties"]["objective_sha256"]["const"] == OBJECTIVE_SHA256
+    assert schema["properties"]["schema_version"]["const"] == "1.1"
+    assignment_schema = schema["$defs"]["AuthenticatedRunnerSelection"]
+    assert assignment_schema["properties"]["required_output_mode"]["const"] == (
+        "NATIVE_JSON_SCHEMA"
+    )
+    assert assignment_schema["properties"]["required_supported_parameters"]["minItems"] == 1
+    assert assignment_schema["properties"]["required_supported_parameters"]["maxItems"] == 1
     entry_schema = schema["$defs"]["CandidateSelectionEntry"]
     assert entry_schema["properties"]["exact_model_id"]["pattern"]
     assert "entry_authority" in entry_schema["required"]
@@ -142,30 +152,35 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
     plan = load_candidate_selection_plan(ROOT / "config" / "models.selection-plan.json")
     guide = (ROOT / "docs" / "models" / "model_selection.md").read_text(encoding="utf-8")
 
-    assert plan.plan_sha256 == "f7d8df3c4bdc584c33a9ed80e6aab49c66180f198185b8f8ccff5150467af115"
+    assert plan.schema_version == "1.1"
+    assert plan.plan_sha256 == "3e5f8ffa98bd2e30726e3ef9e6e43721d26ea1816f62879a8c031f350ed9ce14"
     assert plan.plan_sha256 in guide
     assert len(plan.entries) == 11
     assert plan.authenticated_runner_selection is not None
     assert plan.authenticated_runner_selection.distinct_root_lineages_verified is False
+    assert plan.authenticated_runner_selection.required_output_mode.value == "NATIVE_JSON_SCHEMA"
+    assert plan.authenticated_runner_selection.required_supported_parameters == (
+        "structured_outputs",
+    )
     assert plan.authenticated_runner_selection.candidate_model_id == (
         "deepseek/deepseek-v4-pro-0813"
     )
     assert plan.authenticated_runner_selection.primary_judge_model_id == "tencent/hy3"
     assert plan.authenticated_runner_selection.role_assignment_sha256 == (
-        "a1ac14a47c49b9776631edc0cd39520b6dd68fa91a8787968c02f741fbfdee45"
+        "c56e829eae79d1e1187a7eb657d4535339e6302b691d2c233cb2c60953dfe794"
     )
     assert plan.authenticated_runner_selection.replay_judge_model_id == "moonshotai/kimi-k3"
     entries = {entry.exact_model_id: entry for entry in plan.entries}
-    assert entries["deepseek/deepseek-v4-pro-0813"].allowed_provider_endpoints == ("novita/fp8",)
+    assert entries["deepseek/deepseek-v4-pro-0813"].allowed_provider_endpoints == ("fireworks",)
     assert entries["minimax/minimax-m3"].allowed_provider_endpoints == ("coreweave/fp4",)
     assert entries["minimax/minimax-m3"].entry_sha256 == (
         "caf35cf7507cb1f7299dcdcfbc06e405f10d855361f13a4d8dd21c844bc15176"
     )
     assert entries["qwen/qwen3.8-max"].allowed_provider_endpoints == ("alibaba",)
     assert entries["moonshotai/kimi-k3"].allowed_provider_endpoints == ("together",)
-    assert entries["tencent/hy3"].allowed_provider_endpoints == ("tencent/fp8",)
+    assert entries["tencent/hy3"].allowed_provider_endpoints == ("novita",)
     assert entries["tencent/hy3"].entry_sha256 == (
-        "cdcc7cc650c2d54bf91bc2f01dd9f8e496769f6697c31ca5f7994cb0653bcf1d"
+        "5ca2c5e02454bf0fed2f25464a9ac5666bba684cb06291437a902b1ddfcb4652"
     )
     assert all(entry.availability == "UNVERIFIED" for entry in plan.entries)
     assert all(entry.documentary_lineage == "UNCONFIRMED" for entry in plan.entries)
@@ -195,7 +210,7 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
     corrected = (
         DiscoveryCandidateRoute(
             exact_model_id="deepseek/deepseek-v4-pro-0813",
-            approved_provider_endpoint="novita/fp8",
+            approved_provider_endpoint="fireworks",
         ),
         DiscoveryCandidateRoute(
             exact_model_id="moonshotai/kimi-k3",
@@ -203,16 +218,17 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
         ),
         DiscoveryCandidateRoute(
             exact_model_id="tencent/hy3",
-            approved_provider_endpoint="tencent/fp8",
+            approved_provider_endpoint="novita",
         ),
     )
 
     assert validate_candidate_selection_routes(plan, routes=corrected) == plan
     for model_id, stale_endpoint in (
+        ("deepseek/deepseek-v4-pro-0813", "novita/fp8"),
         ("deepseek/deepseek-v4-pro-0813", "novita"),
         ("deepseek/deepseek-v4-pro-0813", "together"),
         ("tencent/hy3", "deepinfra/fp8"),
-        ("tencent/hy3", "novita"),
+        ("tencent/hy3", "tencent/fp8"),
         ("moonshotai/kimi-k3", "deepinfra/bf16"),
     ):
         with pytest.raises(CandidateSelectionError, match="unlisted endpoint"):
@@ -345,6 +361,7 @@ def test_fresh_discovery_derives_only_rootless_pending_registry(
         provider_endpoint=ENDPOINT_A,
         provider_name="Provider Alpha",
         canonical_model_id="alpha/atlas-current-20260820",
+        native_structured_output_parameter="structured_outputs",
     )
     manifest, evidence, _legacy_registry = fixtures._discovery_and_registry(
         tmp_path=tmp_path,
@@ -399,3 +416,83 @@ def test_derivation_rejects_route_not_authorized_by_plan(
             run_manifest=manifest,
             evidence=evidence,
         )
+
+
+@pytest.mark.parametrize(
+    "native_parameter",
+    (None, "json_schema"),
+)
+@pytest.mark.parametrize(
+    ("model_id", "provider_endpoint"),
+    (
+        (MODEL_A, ENDPOINT_A),
+        (MODEL_B, ENDPOINT_B),
+        (MODEL_C, ENDPOINT_C),
+    ),
+)
+def test_selected_runner_route_requires_literal_native_structured_outputs(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+    native_parameter: Literal["json_schema"] | None,
+    model_id: str,
+    provider_endpoint: str,
+) -> None:
+    config = config_factory(privacy={"profile": PrivacyProfile.SYNTHETIC_BENCHMARK})
+    spec = fixtures._CandidateSpec(
+        model_id=model_id,
+        provider_endpoint=provider_endpoint,
+        provider_name="Provider Alpha",
+        native_structured_output_parameter=native_parameter,
+    )
+    manifest, evidence, _legacy_registry = fixtures._discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(spec,),
+    )
+
+    with pytest.raises(CandidateSelectionError, match="native structured_outputs"):
+        derive_pending_candidate_registry_from_selection_plan(
+            plan=_plan(),
+            run_manifest=manifest,
+            evidence=evidence,
+        )
+
+
+def test_non_runner_selection_entry_remains_output_capability_adaptive(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    base = _plan()
+    adaptive_entry = seal_candidate_selection_entry(
+        exact_model_id=MODEL_D,
+        priority_rank=4,
+        advisory_lineage_group="Delta advisory root",
+        allowed_provider_endpoints=(ENDPOINT_D,),
+    )
+    plan = seal_candidate_selection_plan(
+        source_bindings=base.source_bindings,
+        entries=(*base.entries, adaptive_entry),
+        authenticated_runner_selection=base.authenticated_runner_selection,
+        unresolved_requirements=base.unresolved_requirements,
+    )
+    config = config_factory(privacy={"profile": PrivacyProfile.SYNTHETIC_BENCHMARK})
+    manifest, evidence, _legacy_registry = fixtures._discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(
+            fixtures._CandidateSpec(
+                model_id=MODEL_D,
+                provider_endpoint=ENDPOINT_D,
+                provider_name="Provider Delta",
+            ),
+        ),
+    )
+
+    registry = derive_pending_candidate_registry_from_selection_plan(
+        plan=plan,
+        run_manifest=manifest,
+        evidence=evidence,
+    )
+
+    assert registry.candidates[0].exact_model_id == MODEL_D
+    assert registry.candidates[0].structured_output_supported is True

@@ -5,7 +5,11 @@
     "distinct_root_lineages_verified": false,
     "primary_judge_model_id": "tencent/hy3",
     "replay_judge_model_id": "moonshotai/kimi-k3",
-    "role_assignment_sha256": "a1ac14a47c49b9776631edc0cd39520b6dd68fa91a8787968c02f741fbfdee45"
+    "required_output_mode": "NATIVE_JSON_SCHEMA",
+    "required_supported_parameters": [
+      "structured_outputs"
+    ],
+    "role_assignment_sha256": "c56e829eae79d1e1187a7eb657d4535339e6302b691d2c233cb2c60953dfe794"
   },
   "benchmark_authorized": false,
   "cached_ranking_payload_present": false,
@@ -29,13 +33,13 @@
     {
       "advisory_lineage_group": "DeepSeek",
       "allowed_provider_endpoints": [
-        "novita/fp8"
+        "fireworks"
       ],
       "approved_roles": [],
       "availability": "UNVERIFIED",
       "documentary_lineage": "UNCONFIRMED",
       "entry_authority": false,
-      "entry_sha256": "f9960e10651e500ddd716ef5b74266bfc385c019eb533fff6d3acc3b2620b34c",
+      "entry_sha256": "f4121383c7b35443c653ccb155640e08340fa450ff03d4ed6b35415f65c36b9a",
       "exact_model_id": "deepseek/deepseek-v4-pro-0813",
       "lineage_group_seed_sha256": "0a736ab443477cef4d0ee92b36ef4a18aadb36e8c54bab3b5654d03cc0fc2483",
       "priority_rank": 5
@@ -136,13 +140,13 @@
     {
       "advisory_lineage_group": "Tencent-Hunyuan",
       "allowed_provider_endpoints": [
-        "tencent/fp8"
+        "novita"
       ],
       "approved_roles": [],
       "availability": "UNVERIFIED",
       "documentary_lineage": "UNCONFIRMED",
       "entry_authority": false,
-      "entry_sha256": "cdcc7cc650c2d54bf91bc2f01dd9f8e496769f6697c31ca5f7994cb0653bcf1d",
+      "entry_sha256": "5ca2c5e02454bf0fed2f25464a9ac5666bba684cb06291437a902b1ddfcb4652",
       "exact_model_id": "tencent/hy3",
       "lineage_group_seed_sha256": "94d9d5398632e20d982d35d15d5946f15fe07f29fcc2a3b557de3bf223c4dc68",
       "priority_rank": 10
@@ -183,7 +187,7 @@
     }
   ],
   "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
-  "plan_sha256": "f7d8df3c4bdc584c33a9ed80e6aab49c66180f198185b8f8ccff5150467af115",
+  "plan_sha256": "3e5f8ffa98bd2e30726e3ef9e6e43721d26ea1816f62879a8c031f350ed9ce14",
   "production_selection_authorized": false,
   "provider_call_authorized": false,
   "provider_metadata_present": false,
@@ -191,7 +195,7 @@
   "ranking_executed": false,
   "release_authorized": false,
   "runner_authority_authorized": false,
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "seal_publication_authorized": false,
   "serialized_authority": false,
   "source_bindings": [

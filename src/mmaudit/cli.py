@@ -126,6 +126,7 @@ from mmaudit.models.candidate_selection import (
     derive_pending_candidate_registry_from_selection_plan,
     load_candidate_selection_plan,
     read_candidate_selection_source,
+    validate_candidate_selection_discovery_capability,
     validate_candidate_selection_plan_sources,
     validate_candidate_selection_routes,
 )
@@ -1057,14 +1058,18 @@ def models_discover(
                         zdr_payload=zdr_payload,
                         structured_output_required=False,
                     )
-                    structural_payloads.append(
-                        validate_openrouter_model_discovery(
-                            exact_model_id=model_id,
-                            models_payload=models_payload,
-                            single_model_payload=single_model_payload,
-                            endpoint_snapshot=endpoint_snapshot,
-                        )
+                    structural_payload = validate_openrouter_model_discovery(
+                        exact_model_id=model_id,
+                        models_payload=models_payload,
+                        single_model_payload=single_model_payload,
+                        endpoint_snapshot=endpoint_snapshot,
                     )
+                    if selection_plan is not None:
+                        validate_candidate_selection_discovery_capability(
+                            selection_plan,
+                            evidence=structural_payload,
+                        )
+                    structural_payloads.append(structural_payload)
                 retrieved_at = datetime.now(UTC).replace(microsecond=0)
                 provenance, evidence = client.seal_real_model_discovery_run(
                     run_id=uuid.uuid4().hex,
