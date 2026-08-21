@@ -174,6 +174,25 @@ PUBLIC_LINEAGE_SOURCE_SPECS = (
         ),
     ),
     PublicLineageSourceSpec(
+        source_id="deepseek-deepseek-v4-pro-0813-card",
+        requested_url=(
+            "https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro-0813/resolve/"
+            "72e1d3230f6c080a530b0a1d46f8eb4602340597/README.md"
+        ),
+        publisher_id="deepseek-ai",
+        independence_key="deepseek-ai",
+        immutable_revision="72e1d3230f6c080a530b0a1d46f8eb4602340597",
+        repository_path="deepseek-ai/DeepSeek-V4-Pro-0813",
+        relative_path="sources/deepseek-deepseek-v4-pro-0813-card.md",
+        required_markers=(
+            "**DeepSeek-V4-Pro-0813** is the official release of **DeepSeek-V4-Pro**, "
+            "superseding the preview version, with greatly enhanced agentic capabilities and "
+            "performance improvements that are especially pronounced in production environments. "
+            "It is built on the DeepSeek-V4-Pro (Preview) model structure, with a DSpark "
+            "speculative decoding module attached.",
+        ),
+    ),
+    PublicLineageSourceSpec(
         source_id="google-gemma-4-26b-a4b-it-card",
         requested_url=(
             "https://huggingface.co/google/gemma-4-26B-A4B-it/resolve/"
@@ -248,6 +267,22 @@ PUBLIC_LINEAGE_SOURCE_SPECS = (
         required_markers=(
             "Kimi K2 Thinking is the latest",
             "Homepage-Moonshot%20AI",
+        ),
+    ),
+    PublicLineageSourceSpec(
+        source_id="moonshot-kimi-k3-card",
+        requested_url=(
+            "https://huggingface.co/moonshotai/Kimi-K3/resolve/"
+            "a590ce090cb049c93a33dfe8c208ec652aa20503/README.md"
+        ),
+        publisher_id="moonshot-ai",
+        independence_key="moonshot-ai",
+        immutable_revision="a590ce090cb049c93a33dfe8c208ec652aa20503",
+        repository_path="moonshotai/Kimi-K3",
+        relative_path="sources/moonshot-kimi-k3-card.md",
+        required_markers=(
+            "Kimi K3 applies quantization-aware training from the SFT stage onward, using MXFP4 "
+            "weights with MXFP8 activations for broad hardware compatibility.",
         ),
     ),
     PublicLineageSourceSpec(

@@ -81,18 +81,80 @@ def _redirect_url(spec: PublicLineageSourceSpec) -> str:
 
 
 def test_fixed_source_inventory_is_exact_unique_and_immutable() -> None:
-    assert len(PUBLIC_LINEAGE_SOURCE_SPECS) == 13
+    assert len(PUBLIC_LINEAGE_SOURCE_SPECS) == 15
     assert tuple(spec.source_id for spec in PUBLIC_LINEAGE_SOURCE_SPECS) == tuple(
         sorted(spec.source_id for spec in PUBLIC_LINEAGE_SOURCE_SPECS)
     )
-    assert len({spec.requested_url for spec in PUBLIC_LINEAGE_SOURCE_SPECS}) == 13
-    assert len({spec.relative_path for spec in PUBLIC_LINEAGE_SOURCE_SPECS}) == 13
+    assert len({spec.requested_url for spec in PUBLIC_LINEAGE_SOURCE_SPECS}) == 15
+    assert len({spec.relative_path for spec in PUBLIC_LINEAGE_SOURCE_SPECS}) == 15
     assert all(len(spec.immutable_revision) == 40 for spec in PUBLIC_LINEAGE_SOURCE_SPECS)
     assert all(spec.required_markers for spec in PUBLIC_LINEAGE_SOURCE_SPECS)
-    assert all("/resolve/" in spec.requested_url for spec in PUBLIC_LINEAGE_SOURCE_SPECS[:9])
-    assert "/599476783c6f88508dab8577808b5ead5cbee8d2/" in (
-        PUBLIC_LINEAGE_SOURCE_SPECS[9].requested_url
+    assert all(
+        "/resolve/" in spec.requested_url
+        for spec in PUBLIC_LINEAGE_SOURCE_SPECS
+        if spec.source_id != "openai-gpt-oss-120b-readme"
     )
+    openai_spec = next(
+        spec
+        for spec in PUBLIC_LINEAGE_SOURCE_SPECS
+        if spec.source_id == "openai-gpt-oss-120b-readme"
+    )
+    assert "/599476783c6f88508dab8577808b5ead5cbee8d2/" in openai_spec.requested_url
+
+
+@pytest.mark.parametrize(
+    (
+        "source_id",
+        "staged_relative_path",
+        "expected_size",
+        "expected_sha256",
+        "byte_start",
+        "byte_end",
+        "marker_sha256",
+    ),
+    (
+        (
+            "deepseek-deepseek-v4-pro-0813-card",
+            "docs/remediation/v3/operator_captures/deepseek-v4-pro-0813-card.md",
+            7_522,
+            "61755d88e95789fcd7a36f50892f97bba977a30fc99d0f2907ab787ed10b0e66",
+            1_896,
+            2_246,
+            "3c3b6f124f6fd16710f60e936aa019ba585f4cbb380b8789e1611aeab8aa6f70",
+        ),
+        (
+            "moonshot-kimi-k3-card",
+            "docs/remediation/v3/operator_captures/moonshot-kimi-k3-card.md",
+            45_261,
+            "57de265b5842dfa465c6e73b368b0e15a89b8793b5450528dad577da202cc6fe",
+            42_081,
+            42_228,
+            "bc4d7b66366b975cfd5782bca59158f36b6c09ea61791aa85581d8853f70233d",
+        ),
+    ),
+)
+def test_operator_staged_sources_bind_exact_compiled_claim_marker(
+    source_id: str,
+    staged_relative_path: str,
+    expected_size: int,
+    expected_sha256: str,
+    byte_start: int,
+    byte_end: int,
+    marker_sha256: str,
+) -> None:
+    spec = next(spec for spec in PUBLIC_LINEAGE_SOURCE_SPECS if spec.source_id == source_id)
+    assert len(spec.required_markers) == 1
+    marker = spec.required_markers[0].encode("utf-8")
+    staged_path = REPOSITORY_ROOT / staged_relative_path
+    content = staged_path.read_bytes()
+
+    assert not staged_path.is_symlink()
+    assert len(content) == expected_size
+    assert hashlib.sha256(content).hexdigest() == expected_sha256
+    assert content.count(marker) == 1
+    assert content[byte_start:byte_end] == marker
+    assert byte_end - byte_start == len(marker)
+    assert hashlib.sha256(marker).hexdigest() == marker_sha256
 
 
 def test_committed_capture_journal_replays_exact_source_bytes() -> None:
@@ -101,10 +163,18 @@ def test_committed_capture_journal_replays_exact_source_bytes() -> None:
         (corpus_root / PUBLIC_LINEAGE_CAPTURE_OBSERVATIONS_FILENAME).read_bytes()
     )
 
+    specs_by_id = {spec.source_id: spec for spec in PUBLIC_LINEAGE_SOURCE_SPECS}
+    pending_fresh_capture_ids = {
+        "deepseek-deepseek-v4-pro-0813-card",
+        "moonshot-kimi-k3-card",
+    }
     assert tuple(source.source_id for source in journal.sources) == tuple(
-        spec.source_id for spec in PUBLIC_LINEAGE_SOURCE_SPECS
+        spec.source_id
+        for spec in PUBLIC_LINEAGE_SOURCE_SPECS
+        if spec.source_id not in pending_fresh_capture_ids
     )
-    for source, spec in zip(journal.sources, PUBLIC_LINEAGE_SOURCE_SPECS, strict=True):
+    for source in journal.sources:
+        spec = specs_by_id[source.source_id]
         path = corpus_root / source.file_binding.path
         content = path.read_bytes()
         assert not path.is_symlink()

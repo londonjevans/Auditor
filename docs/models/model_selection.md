@@ -44,7 +44,7 @@ requested, and the operator reports that the ledger remains untouched at `$0`. T
 record operator-reported results only; the private artifacts and ledger were not read or promoted
 by Codex. The exact operator-supplied log is retained at
 [`operator_results.md`](../remediation/v3/operator_results.md), raw SHA-256
-`961a0e9d29388d2727989c2aab504ddfd36e12e4c4f6696f3f2e15e81379104a`, and is
+`1e4a6424c215b1c29b316f523e13623c080b2f6c5bc225e913ae6d6dcfbb81a4`, and is
 `OPERATOR_SUPPLIED_UNVERIFIED`: it grants no repository authority.
 
 The subsequent Claude Opus 5 `amazon-bedrock` PRIMARY r3 attempt also failed closed before registry
@@ -65,6 +65,29 @@ route: DeepSeek to successful `novita/fp8`, MiniMax to successful `coreweave/fp4
 successful `together`. All three registries now exist, remain rootless/role-empty/`PENDING`, and are
 nonauthorizing. Do not rerun or overwrite any discovery path.
 
+The operator ran the exact provider-free r2/r4/r2 preflight twice. Both runs accepted every
+registry, discovery bundle, policy, corpus, provenance, ledger, and output-path input, then failed
+closed only at `runner public lineage does not prove three distinct roots`; neither selected a
+secret, contacted a model provider, mutated the ledger, or published an output. The two staged
+publisher cards bind the missing immutable revisions and exact bytes, but remain nonauthorizing:
+they do not retain the exact final URL, redirect chain, media type, and retrieval timestamp required
+by the capture journal, and they cannot be merged into the Aug-18 journal without violating its
+ten-minute coherent-capture window. Claim preparation binds DeepSeek bytes `[1896, 2246)` as
+decisive `BUILD_ANCESTRY` and Kimi bytes `[42081, 42228)` as decisive
+`TRAINING_PROVENANCE`; no decision or production manifest pin has been changed.
+
+After the two new immutable source specifications are committed, run exactly one fresh full
+15-source documentary capture. This command reads no secret and calls no model/provider API; it
+contacts only the compiled first-party public-document URLs. The destination must be absent.
+
+```shell
+.venv/bin/python scripts/capture_public_model_lineage.py --output-dir /private/tmp/mmaudit-public-lineage-20260821-r1
+```
+
+Adopt nothing unless all 13 historical immutable files reproduce byte-for-byte and the two new
+files reproduce SHA-256 `61755d88e95789fcd7a36f50892f97bba977a30fc99d0f2907ab787ed10b0e66`
+and `57de265b5842dfa465c6e73b368b0e15a89b8793b5450528dad577da202cc6fe`.
+
 If the cumulative ledger does not already exist, initialize it exactly once. Never replace an
 existing ledger; its historical prefix is part of later AUTHRUNNER custody.
 
@@ -72,7 +95,7 @@ existing ledger; its historical prefix is part of later AUTHRUNNER custody.
 MMAUDIT_BUDGET_USD=250 .venv/bin/mmaudit models init-cost-ledger --config config/openrouter-qualification.toml --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --no-color
 ```
 
-The following command is now the exact provider-free r2/r4/r2 blocker-probe preflight. It selects
+The following command remains the exact provider-free r2/r4/r2 blocker-probe preflight. It selects
 no secret, accesses no provider, does not mutate the ledger, and creates no output. Until DeepSeek
 V4 and Kimi K3 exact-ID documentary lineage is compiled, it must fail closed at the public-lineage
 gate and that rejection must not be promoted to launch authority. After the lineage bundle is

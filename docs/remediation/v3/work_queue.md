@@ -2098,7 +2098,7 @@ are invisible to source review by construction.
   `origin/agent/v3-wip-checkpoint`. Exact-ID public lineage for all three remains absent.
 - **PRIMARY r3 disposition and r4 completion 2026-08-21:** The exact operator-supplied result log is
   retained verbatim at `docs/remediation/v3/operator_results.md`, raw SHA-256
-  `961a0e9d29388d2727989c2aab504ddfd36e12e4c4f6696f3f2e15e81379104a`, as nonauthorizing
+  `1e4a6424c215b1c29b316f523e13623c080b2f6c5bc225e913ae6d6dcfbb81a4`, as nonauthorizing
   metadata. Claude Opus 5/`amazon-bedrock` failed closed before registry publication because its
   provider display name is duplicated across the exact-model endpoint inventory; the injective
   provider-identity invariant remains unchanged. Of the operator-reported viable replacements,
@@ -2110,16 +2110,23 @@ are invisible to source review by construction.
   `eaed67e745d448299e3aa5d58b406de065fae09813b3c6ff1c646403ca8023a1`. All three rootless,
   pending registry+discovery pairs now exist. Metadata discovery is 6 attempted / 3 succeeded / 3
   rejected; completion calls and campaign spend remain zero.
+- **Lineage-only preflight and capture preparation 2026-08-21:** The exact r2/r4/r2 secret-free
+  preflight accepted every non-lineage input and rejected only because DeepSeek V4 and Kimi K3
+  lack compiled exact-ID roots. Two operator-staged publisher cards are exact-bound at 7,522 and
+  45,261 bytes, but remain nonauthorizing because their full HTTP capture observations are absent
+  and their Aug-21 bytes cannot be merged into the coherent Aug-18 journal. The compiled capture
+  inventory now includes both immutable source specifications and tests bind the decisive claim
+  spans. No manifest pin or lineage decision changed.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
   and non-crediting. Genuine production-issued lifecycle proof is absent; provider-free fixtures
   cannot mint owned-REAL origin, and the current repository rules prohibit reading real credentials
   or accessing the provider. Campaign/generation revocation beyond the top-level runner lease is
   not independently demonstrated. External-log publication and every benchmark run remain queued.
 - **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator
-  run the exact provider-free r2/r4/r2 `--preflight-only` command in
-  `docs/models/model_selection.md` as a zero-secret blocker probe. Accept only its exact fail-closed
-  result; current compiled lineage should reject DeepSeek V4 and Kimi K3. Then compile their fresh
-  documentary public-lineage evidence, rerun the same preflight, and derive final request-bound caps from retained
+  run the exact fresh full 15-source capture command in `docs/models/model_selection.md`; accept
+  only a complete coherent journal whose 13 historical sources reproduce and whose two new hashes
+  match the staged cards. Then compile and reseal the two exact-ID roots with same-family negative
+  constraints, rerun the unchanged provider-free preflight, and derive final request-bound caps from retained
   pricing/capacity evidence before any one-shot REAL launch. AUTHSEAL publication, real audits,
   benchmarks, and release remain queued.
 

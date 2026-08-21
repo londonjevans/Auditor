@@ -3,6 +3,79 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-08-21T05:00Z — PREFLIGHT (codex's exact emitted command, line 85 of the operator guide) — FAILED at the lineage gate, as predicted
+
+```
+mmaudit failed safely: runner public lineage does not prove three distinct roots
+```
+
+Ran verbatim with `env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE`, `--preflight-only`,
+per-attempt caps 1.00/1.00/1.00, `--allow-code-egress`. Cost ledger unchanged — **$0 spent**.
+
+All other inputs validated: the three registries, all three discovery runs, the maximum-assurance
+qualification policy, the corpus manifest, and the ground-truth provenance were accepted. **Documentary
+lineage is the sole remaining failure.**
+
+NOTE FOR CODEX: you recorded this file at sha256 `961a0e9d…9104a` before responding, which was prior
+to the lineage-capture section below being written. Current sha256 is
+`9db31a83d28fb901fa31b5376ed834521621e837de79bcb9c5939987e7159572`. **Re-read from here down** — the
+two missing publisher model cards are already fetched and staged in
+`docs/remediation/v3/operator_captures/`.
+
+## 2026-08-21T04:45Z — PREFLIGHT r2/r4/r2 — FAILED at the lineage gate
+
+```
+mmaudit failed safely: runner public lineage does not prove three distinct roots
+```
+
+Registry validation passed; all three registries were accepted. The blocker is
+`authenticated_runner_execution.py:722`. Cost ledger still empty — **$0 spent**.
+
+### Cause: the lineage bundle is stale in the same way the registry was
+
+`config/public_model_lineage/manifest.json` (`evidence_standard DOCUMENTARY_EXACT_BYTES_V1`,
+`verified_at 2026-08-18`, `valid_until 2027-02-14`) covers the previous model generation:
+
+| triple role | model | in bundle? |
+|---|---|---|
+| primary judge | `minimax/minimax-m3` | **CONFIRMED**, root `sha256:e251821340d79fe40fba647e729f9dd8feea7b988efad1a61936bf62b3b38161` |
+| candidate | `deepseek/deepseek-v4-pro-0813` | **ABSENT** — bundle holds `deepseek/deepseek-v3.2-exp` |
+| replay judge | `moonshotai/kimi-k3` | **ABSENT** — bundle holds `moonshotai/kimi-k2-thinking` |
+
+Two of three need fresh documentary capture. `minimax/minimax-m3` needs nothing.
+
+### Operator-staged captures — publisher model cards, immutable-revision pinned
+
+Fetched from the primary publisher over HTTPS, matching the existing capture method
+(HuggingFace README at a pinned commit, keyed by publisher org). Raw bytes staged in
+`docs/remediation/v3/operator_captures/`. **Unverified operator-supplied evidence — not a bundle
+entry, not an authority claim.** Codex must do the claim extraction, byte-range binding, root
+decision, and resealing.
+
+| file | source repo | immutable revision | bytes | sha256 |
+|---|---|---|---|---|
+| `operator_captures/deepseek-v4-pro-0813-card.md` | `deepseek-ai/DeepSeek-V4-Pro-0813` | `72e1d3230f6c080a530b0a1d46f8eb4602340597` | 7522 | `61755d88e95789fcd7a36f50892f97bba977a30fc99d0f2907ab787ed10b0e66` |
+| `operator_captures/moonshot-kimi-k3-card.md` | `moonshotai/Kimi-K3` | `a590ce090cb049c93a33dfe8c208ec652aa20503` | 45261 | `57de265b5842dfa465c6e73b368b0e15a89b8793b5450528dad577da202cc6fe` |
+
+Resolve URL form used by existing sources:
+`https://huggingface.co/<repo>/resolve/<revision>/README.md`. Both repos are ungated (`gated: false`).
+Suggested `independence_key` values matching existing convention: `deepseek-ai`, `moonshot-ai`.
+
+Lineage-bearing text located in each capture:
+
+- **DeepSeek-V4-Pro-0813**, line 43: *"is the official release of DeepSeek-V4-Pro, superseding the
+  preview version... It is built on the DeepSeek-V4-Pro (Preview) model structure, with a DSpark
+  speculative decoding module attached."* Note this cites a predecessor within the same publisher; a
+  base/post-train pair capture may be wanted, as done for Nemotron. The preview repo
+  `deepseek-ai/DeepSeek-V4-Pro` exists at sha `b5968e9190ef611bbf34a7229255be88a0e937c1`
+  (lastModified 2026-06-22) if a second capture is required.
+- **Kimi-K3**, lines 40 and 43: *"a 2.8T-parameter model built on Kimi Delta Attention (KDA) and
+  Attention Residuals (AttnRes)"*, *"New Architecture... yielding an approximate 2.5x improvement in
+  overall scaling efficiency over Kimi K2."* K2 appears as a scaling comparison, not a derivation.
+
+On this documentary basis the three roots (DeepSeek / MiniMax / Moonshot) appear mutually
+independent, but that determination is codex's to make and seal, not this file's.
+
 ## 2026-08-21T04:36Z — PRIMARY r4 (`minimax/minimax-m3=coreweave/fp4`) — SUCCESS
 
 All three role registries now exist. No model completion was requested; cost ledger still empty.

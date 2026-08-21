@@ -7,11 +7,36 @@ credentials, RPC URLs, or operational attack instructions.
 AUTORUN_STATUS: BLOCKED_SAFETY
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001
-NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator run the exact provider-free r2/r4/r2 `--preflight-only` command in `docs/models/model_selection.md` as a zero-secret blocker probe; accept only its exact fail-closed result. Current compiled lineage should reject DeepSeek V4 and Kimi K3. Then compile their exact-ID documentary lineage, rerun preflight, and derive final request-bound caps before any one-shot REAL launch. AUTHSEAL publication, real audits, benchmarks, and release remain queued.
-LAST_VALIDATION_COMMAND: Provider-free 106-test candidate-selection/registry-bridge/AUTHRUNNER-CLI/schema/objective/documentation matrix; `.venv/bin/python scripts/generate_release_schemas.py`; `make PYTHON=.venv/bin/python lint`; `make PYTHON=.venv/bin/python type`; strict governance JSON parsing; diff integrity.
-LAST_VALIDATION_RESULT: PASS / BLOCKED_SAFETY — 106 relevant tests passed; generated schemas were current; Ruff passed over 536 files; strict mypy passed over 202 source files; governance JSON and diff gates passed. Read-only audits preserved injective provider identity and selected the only viable replacement with existing exact-ID confirmed lineage. Operator-reported PRIMARY r4 metadata succeeded; DeepSeek V4/Kimi K3 exact-ID lineage and provider-free triple preflight remain absent. Codex made no secret, provider, or ledger access.
+NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator run the exact fresh full 15-source documentary capture command in `docs/models/model_selection.md`. Accept only a coherent journal whose 13 historical sources reproduce byte-for-byte and whose two new hashes match the staged cards; then compile and reseal the two exact-ID roots with same-family negative constraints and rerun the unchanged provider-free preflight. AUTHSEAL publication, real audits, benchmarks, and release remain queued.
+LAST_VALIDATION_COMMAND: Provider-free 99-test public-lineage capture/manifest/authority/configuration/objective/documentation/release-schema matrix; `.venv/bin/python scripts/generate_release_schemas.py`; `make PYTHON=.venv/bin/python lint`; `make PYTHON=.venv/bin/python type`; strict governance JSON parsing; diff integrity.
+LAST_VALIDATION_RESULT: PASS / PARTIAL — 99 relevant tests passed; generated schemas were current; Ruff passed over 536 files; strict mypy passed over 202 source files; governance JSON and diff gates passed. Exact staged-card claims and the two immutable capture specs are bound, while the raw-only files remain nonauthorizing and the production manifest remains unchanged pending one coherent full capture. Codex made no secret, provider, or ledger access.
 LAST_CHECKPOINT_COMMIT: cb3fc34174e028c2d2ff208c50c23a90a4b29d72 — `Select viable AUTHRUNNER primary judge`, verified on `origin/agent/v3-wip-checkpoint`.
 REMAINING_ACTIONABLE_TICKETS: The provider-free stale candidate-registry rebuild and exact AUTHRUNNER campaign preparation are actionable. Credentialed execution remains `BLOCKED_SAFETY`; external authority-log publication and all benchmark/release work remain queued behind genuine REAL runner evidence.
+
+## 2026-08-21T05:07:32Z — AUTHRUNNER lineage-only preflight and capture preparation
+
+- **Status:** `V3-AUTHRUNNER-001` remains `PARTIAL` / `BLOCKED_SAFETY`. The provider-free
+  documentary extension is active; no lineage decision, runtime authority, provider completion,
+  ledger entry, audit, benchmark, or release result was fabricated.
+- **Exact operator result:** The r2/r4/r2 `--preflight-only` command accepted every registry,
+  discovery, policy, corpus, provenance, ledger, and path input and failed only with
+  `runner public lineage does not prove three distinct roots`. The operator-supplied log is now
+  10,131 bytes at raw SHA-256
+  `1e4a6424c215b1c29b316f523e13623c080b2f6c5bc225e913ae6d6dcfbb81a4`; Codex did not open
+  the private registries, discovery bundles, secret file, or ledger.
+- **Provider-free preparation:** Added exact immutable capture specifications for DeepSeek V4 Pro
+  0813 and Kimi K3. Tests bind staged source sizes and SHA-256s plus the unique decisive DeepSeek
+  `BUILD_ANCESTRY` span `[1896, 2246)` and Kimi `TRAINING_PROVENANCE` span
+  `[42081, 42228)`. The staged cards remain explicitly nonauthorizing.
+- **Fail-closed blocker:** The staged files omit exact final URL, redirect chain, media type, and
+  retrieval timestamp. Their Aug-21 bytes also cannot be appended to the Aug-18 journal without
+  violating the compiled ten-minute coherent-capture window. No field was inferred from mtime and
+  the production manifest pin remains unchanged. A fresh complete 15-source capture is required;
+  a base-plus-delta authority redesign and freshness relaxation were rejected as broader/weaker.
+- **Next exact action:** Run the one fresh public-document capture command in
+  `docs/models/model_selection.md`, then require all 13 prior immutable bytes and both staged hashes
+  before adopting the journal. Only then add the two aliases/claims, DeepSeek-family and
+  Kimi-generation negative constraints, reseal, and rerun provider-free preflight.
 
 ## 2026-08-21T04:40:13Z — AUTHRUNNER PRIMARY r3 rejection reconciled to r4
 

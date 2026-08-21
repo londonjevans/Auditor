@@ -23,7 +23,7 @@ OBJECTIVE_RELATIVE_PATH = "docs/remediation/v3/product_completion_goal.txt"
 OBJECTIVE_SHA256 = "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15"
 PRODUCT_VISION_RELATIVE_PATH = "product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.md"
 PRODUCT_VISION_SHA256 = "8b878b665e636b3b48500fefe2967394b2abdd69ce2ebfa0033d04542d2965e1"
-OPERATOR_RESULTS_SHA256 = "961a0e9d29388d2727989c2aab504ddfd36e12e4c4f6696f3f2e15e81379104a"
+OPERATOR_RESULTS_SHA256 = "1e4a6424c215b1c29b316f523e13623c080b2f6c5bc225e913ae6d6dcfbb81a4"
 PRODUCT_VISION_GIT_ATTRIBUTES = f"{PRODUCT_VISION_RELATIVE_PATH} -text"
 POLICY_ELIGIBILITY_TICKET = "V3-POLICYELIG-001"
 POLICY_ELIGIBILITY_QUEUE_HEADING = (
@@ -389,6 +389,8 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "primary-judge-registry-r4.json" in model_selection
     assert "--candidate anthropic/claude-opus-5=amazon-bedrock" not in model_selection
     assert "PRIMARY r4 (`minimax/minimax-m3=coreweave/fp4`) — SUCCESS" in operator_results
+    assert "runner public lineage does not prove three distinct roots" in operator_results
+    assert "capture_public_model_lineage.py --output-dir" in model_selection
     assert "Written by the monitoring session; treat as operator-supplied evidence." in (
         operator_results
     )
