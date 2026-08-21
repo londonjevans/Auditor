@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-21T05:07:32Z",
+  "updated_at": "2026-08-21T05:17:35Z",
   "objective_path": "docs/remediation/v3/product_completion_goal.txt",
   "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
   "objective_supersession": {
@@ -13,11 +13,11 @@
     "authorized_at": "2026-08-17T20:06:41Z",
     "decision": "EXPLICIT_OPERATOR_TARGET_CHANGE"
   },
-  "candidate_commit": "cb3fc34174e028c2d2ff208c50c23a90a4b29d72",
+  "candidate_commit": "735aabc934fb8a428e1d1a16244035939c9bc5be",
   "autorun_status": "BLOCKED_SAFETY",
   "current_milestone": "M1-DETERMINISTIC-PRODUCT (REACHED)",
   "current_ticket": "V3-AUTHRUNNER-001",
-  "last_checkpoint_commit": "cb3fc34174e028c2d2ff208c50c23a90a4b29d72",
+  "last_checkpoint_commit": "735aabc934fb8a428e1d1a16244035939c9bc5be",
   "real_model_calls": {
     "attempted": 11,
     "succeeded": 1,
@@ -207,7 +207,7 @@
     "result_v3_authrunner_primary_r4_selection": "Green checkpoint cb3fc34174e028c2d2ff208c50c23a90a4b29d72 is verified on origin/agent/v3-wip-checkpoint. The exact operator-supplied result log is retained verbatim at raw SHA-256 961a0e9d29388d2727989c2aab504ddfd36e12e4c4f6696f3f2e15e81379104a. PRIMARY r3 rejected because Claude Opus 5 ZDR endpoints have non-injective provider display identities; the invariant remains intact. The nonauthorizing plan is resealed as 8899739a0a4a36bacacb17592df8263f57f94c65b96a63b69ab61ab67e455761 over singleton DeepSeek/novita-fp8, exact-ID-lineage-confirmed MiniMax M3/coreweave-fp4, and Kimi/together routes. PRIMARY r4 then produced frozen registry eaed67e745d448299e3aa5d58b406de065fae09813b3c6ff1c646403ca8023a1 and discovery manifest 3921c5682bedf1f938236a5268fcf6d5a9138d1646726df00147705cba0b8969. Metadata discovery is operator-reported as 6 attempts, 3 successes, and 3 rejections; provider completion calls and dedicated campaign spend remain zero.",
     "next_action_after_v3_authrunner_primary_r4_selection": "The exact provider-free candidate-r2/primary-r4/replay-r2 AUTHRUNNER preflight rejected only at the expected documentary-lineage gate. Run one fresh coherent 15-source public-document capture, require the 13 historical bytes and two staged hashes exactly, then compile DeepSeek V4 and Kimi K3 with same-family negative constraints and rerun preflight.",
     "checkpointed_at_v3_authrunner_lineage_capture_preparation": "2026-08-21T05:07:32Z",
-    "result_v3_authrunner_lineage_capture_preparation": "The operator-supplied result log is retained at raw SHA-256 1e4a6424c215b1c29b316f523e13623c080b2f6c5bc225e913ae6d6dcfbb81a4. The exact secret-free r2/r4/r2 preflight accepted every non-lineage input and rejected only because the compiled public-lineage bundle lacks DeepSeek V4 and Kimi K3. Their staged publisher cards bind 7522 and 45261 exact bytes and unique decisive claim spans, but lack complete HTTP capture observations and cannot be appended to the Aug-18 coherent journal. The capture tool now compiles both immutable sources; no manifest pin, lineage decision, completion, ledger entry, or downstream authority changed.",
+    "result_v3_authrunner_lineage_capture_preparation": "Green commit 735aabc934fb8a428e1d1a16244035939c9bc5be preserves the exact preparation. The operator-supplied result log is retained at raw SHA-256 1e4a6424c215b1c29b316f523e13623c080b2f6c5bc225e913ae6d6dcfbb81a4. The exact secret-free r2/r4/r2 preflight accepted every non-lineage input and rejected only because the compiled public-lineage bundle lacks DeepSeek V4 and Kimi K3. Their staged publisher cards bind 7522 and 45261 exact bytes and unique decisive claim spans, but lack complete HTTP capture observations and cannot be appended to the Aug-18 coherent journal. The capture tool now compiles both immutable sources; no manifest pin, lineage decision, completion, ledger entry, or downstream authority changed.",
     "next_action_after_v3_authrunner_lineage_capture_preparation": "Run the exact fresh full 15-source capture command in docs/models/model_selection.md. Reject partial capture, any historical-byte drift, or either new hash mismatch; only then reseal the two exact-ID roots and rerun the unchanged provider-free AUTHRUNNER preflight."
   },
   "scheduler_assurance_validation": {

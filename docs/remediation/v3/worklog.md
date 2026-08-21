@@ -20,7 +20,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9965235675
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: cb3fc34174e028c2d2ff208c50c23a90a4b29d72 (verified at `origin/agent/v3-wip-checkpoint`)
+LAST_CHECKPOINT_COMMIT: 735aabc934fb8a428e1d1a16244035939c9bc5be (`Prepare AUTHRUNNER lineage recapture`)
 
 ## 2026-08-21T05:07:32Z — AUTHRUNNER lineage-only preflight and capture preparation
 
@@ -46,6 +46,8 @@ LAST_CHECKPOINT_COMMIT: cb3fc34174e028c2d2ff208c50c23a90a4b29d72 (verified at `o
   `docs/models/model_selection.md`, then require all 13 prior immutable bytes and both staged hashes
   before adopting the journal. Only then add the two aliases/claims, DeepSeek-family and
   Kimi-generation negative constraints, reseal, and rerun provider-free preflight.
+- Checkpoint: commit `735aabc934fb8a428e1d1a16244035939c9bc5be` preserves this green
+  provider-free preparation; remote verification is pending the push.
 
 ## 2026-08-21T04:40:13Z — AUTHRUNNER PRIMARY r3 rejection reconciled to r4
 

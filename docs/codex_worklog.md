@@ -10,7 +10,7 @@ LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001
 NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator run the exact fresh full 15-source documentary capture command in `docs/models/model_selection.md`. Accept only a coherent journal whose 13 historical sources reproduce byte-for-byte and whose two new hashes match the staged cards; then compile and reseal the two exact-ID roots with same-family negative constraints and rerun the unchanged provider-free preflight. AUTHSEAL publication, real audits, benchmarks, and release remain queued.
 LAST_VALIDATION_COMMAND: Provider-free 99-test public-lineage capture/manifest/authority/configuration/objective/documentation/release-schema matrix; `.venv/bin/python scripts/generate_release_schemas.py`; `make PYTHON=.venv/bin/python lint`; `make PYTHON=.venv/bin/python type`; strict governance JSON parsing; diff integrity.
 LAST_VALIDATION_RESULT: PASS / PARTIAL — 99 relevant tests passed; generated schemas were current; Ruff passed over 536 files; strict mypy passed over 202 source files; governance JSON and diff gates passed. Exact staged-card claims and the two immutable capture specs are bound, while the raw-only files remain nonauthorizing and the production manifest remains unchanged pending one coherent full capture. Codex made no secret, provider, or ledger access.
-LAST_CHECKPOINT_COMMIT: cb3fc34174e028c2d2ff208c50c23a90a4b29d72 — `Select viable AUTHRUNNER primary judge`, verified on `origin/agent/v3-wip-checkpoint`.
+LAST_CHECKPOINT_COMMIT: 735aabc934fb8a428e1d1a16244035939c9bc5be — `Prepare AUTHRUNNER lineage recapture`.
 REMAINING_ACTIONABLE_TICKETS: The provider-free stale candidate-registry rebuild and exact AUTHRUNNER campaign preparation are actionable. Credentialed execution remains `BLOCKED_SAFETY`; external authority-log publication and all benchmark/release work remain queued behind genuine REAL runner evidence.
 
 ## 2026-08-21T05:07:32Z — AUTHRUNNER lineage-only preflight and capture preparation
@@ -37,6 +37,8 @@ REMAINING_ACTIONABLE_TICKETS: The provider-free stale candidate-registry rebuild
   `docs/models/model_selection.md`, then require all 13 prior immutable bytes and both staged hashes
   before adopting the journal. Only then add the two aliases/claims, DeepSeek-family and
   Kimi-generation negative constraints, reseal, and rerun provider-free preflight.
+- **Checkpoint:** Commit `735aabc934fb8a428e1d1a16244035939c9bc5be` preserves this green
+  provider-free preparation; remote verification is pending the push.
 
 ## 2026-08-21T04:40:13Z — AUTHRUNNER PRIMARY r3 rejection reconciled to r4
 
