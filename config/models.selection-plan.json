@@ -3,9 +3,9 @@
   "authenticated_runner_selection": {
     "candidate_model_id": "deepseek/deepseek-v4-pro-0813",
     "distinct_root_lineages_verified": false,
-    "primary_judge_model_id": "anthropic/claude-opus-5",
+    "primary_judge_model_id": "minimax/minimax-m3",
     "replay_judge_model_id": "moonshotai/kimi-k3",
-    "role_assignment_sha256": "e75f8cb7a0defa36f113c9662c38f56f4ae39428716f70e41c05201a31fab7ab"
+    "role_assignment_sha256": "7f9b3850869ca789643f4e154a683d1ae8a2196d143b10ca602dccd6af6e7ef2"
   },
   "benchmark_authorized": false,
   "cached_ranking_payload_present": false,
@@ -77,16 +77,13 @@
     {
       "advisory_lineage_group": "MiniMax",
       "allowed_provider_endpoints": [
-        "deepinfra",
-        "google-vertex",
-        "novita",
-        "together"
+        "coreweave/fp4"
       ],
       "approved_roles": [],
       "availability": "UNVERIFIED",
       "documentary_lineage": "UNCONFIRMED",
       "entry_authority": false,
-      "entry_sha256": "8f28fd90a69b2f06aa52d9f59fee8e4cede4171a31d3e18126815193aab376d8",
+      "entry_sha256": "caf35cf7507cb1f7299dcdcfbc06e405f10d855361f13a4d8dd21c844bc15176",
       "exact_model_id": "minimax/minimax-m3",
       "lineage_group_seed_sha256": "3acd272a826261666ebcd47a0e0f71f268a5a4bde2350f2a28c902dd43591e47",
       "priority_rank": 9
@@ -189,7 +186,7 @@
     }
   ],
   "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
-  "plan_sha256": "47cd417c3aa73369da16981bbef3a3c450040e95ecf55f9af837f6a0b3edf459",
+  "plan_sha256": "8899739a0a4a36bacacb17592df8263f57f94c65b96a63b69ab61ab67e455761",
   "production_selection_authorized": false,
   "provider_call_authorized": false,
   "provider_metadata_present": false,

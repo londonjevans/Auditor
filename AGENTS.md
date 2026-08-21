@@ -167,6 +167,14 @@ Maintain `docs/codex_worklog.md` with:
 Update the worklog after every meaningful implementation slice so interrupted work
 can resume safely.
 
+## Operator Result Contract
+
+Before ending any turn that issued, reissued, or depended on an operator command,
+read `docs/remediation/v3/operator_results.md` and reconcile its latest result with
+the active selection plan, operator guide, queue, worklog, and runtime status. Treat
+that file as operator-supplied, nonauthorizing evidence; never infer a provider call,
+lineage decision, qualification, or release result that it does not record.
+
 ## Test-Fixture Rules
 
 Security fixtures must be synthetic, minimal, intentionally non-production, stored

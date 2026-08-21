@@ -22,6 +22,11 @@ from mmaudit.models.candidate_selection import (
     validate_candidate_selection_routes,
 )
 from mmaudit.models.discovery import DiscoveryCandidateRoute
+from mmaudit.models.public_lineage_authority import (
+    PublicModelLineageAuthorityError,
+    require_verified_public_model_lineage,
+    resolve_verified_public_model_lineage,
+)
 from mmaudit.models.qualification import CandidateBenchmarkStatus, LineageReviewStatus
 from mmaudit.privacy import PrivacyProfile
 from mmaudit.reporting.json_report import stable_json
@@ -136,7 +141,7 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
     plan = load_candidate_selection_plan(ROOT / "config" / "models.selection-plan.json")
     guide = (ROOT / "docs" / "models" / "model_selection.md").read_text(encoding="utf-8")
 
-    assert plan.plan_sha256 == "47cd417c3aa73369da16981bbef3a3c450040e95ecf55f9af837f6a0b3edf459"
+    assert plan.plan_sha256 == "8899739a0a4a36bacacb17592df8263f57f94c65b96a63b69ab61ab67e455761"
     assert plan.plan_sha256 in guide
     assert len(plan.entries) == 11
     assert plan.authenticated_runner_selection is not None
@@ -144,11 +149,11 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
     assert plan.authenticated_runner_selection.candidate_model_id == (
         "deepseek/deepseek-v4-pro-0813"
     )
-    assert plan.authenticated_runner_selection.primary_judge_model_id == ("anthropic/claude-opus-5")
+    assert plan.authenticated_runner_selection.primary_judge_model_id == "minimax/minimax-m3"
     assert plan.authenticated_runner_selection.replay_judge_model_id == "moonshotai/kimi-k3"
     entries = {entry.exact_model_id: entry for entry in plan.entries}
-    assert entries["anthropic/claude-opus-5"].allowed_provider_endpoints == ("amazon-bedrock",)
     assert entries["deepseek/deepseek-v4-pro-0813"].allowed_provider_endpoints == ("novita/fp8",)
+    assert entries["minimax/minimax-m3"].allowed_provider_endpoints == ("coreweave/fp4",)
     assert entries["qwen/qwen3.8-max"].allowed_provider_endpoints == ("alibaba",)
     assert entries["moonshotai/kimi-k3"].allowed_provider_endpoints == ("together",)
     assert all(entry.availability == "UNVERIFIED" for entry in plan.entries)
@@ -178,12 +183,12 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
     plan = load_candidate_selection_plan(ROOT / "config" / "models.selection-plan.json")
     corrected = (
         DiscoveryCandidateRoute(
-            exact_model_id="anthropic/claude-opus-5",
-            approved_provider_endpoint="amazon-bedrock",
-        ),
-        DiscoveryCandidateRoute(
             exact_model_id="deepseek/deepseek-v4-pro-0813",
             approved_provider_endpoint="novita/fp8",
+        ),
+        DiscoveryCandidateRoute(
+            exact_model_id="minimax/minimax-m3",
+            approved_provider_endpoint="coreweave/fp4",
         ),
         DiscoveryCandidateRoute(
             exact_model_id="moonshotai/kimi-k3",
@@ -193,9 +198,9 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
 
     assert validate_candidate_selection_routes(plan, routes=corrected) == plan
     for model_id, stale_endpoint in (
-        ("anthropic/claude-opus-5", "google-vertex"),
         ("deepseek/deepseek-v4-pro-0813", "novita"),
         ("deepseek/deepseek-v4-pro-0813", "together"),
+        ("minimax/minimax-m3", "amazon-bedrock"),
         ("moonshotai/kimi-k3", "deepinfra/bf16"),
     ):
         with pytest.raises(CandidateSelectionError, match="unlisted endpoint"):
@@ -208,6 +213,27 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
                     ),
                 ),
             )
+
+
+def test_committed_primary_minimizes_remaining_exact_lineage_debt() -> None:
+    plan = load_candidate_selection_plan(ROOT / "config" / "models.selection-plan.json")
+    selection = plan.authenticated_runner_selection
+    assert selection is not None
+    capability = resolve_verified_public_model_lineage()
+
+    primary = require_verified_public_model_lineage(
+        capability,
+        selection.primary_judge_model_id,
+    )
+    assert primary.root_lineage == (
+        "sha256:e251821340d79fe40fba647e729f9dd8feea7b988efad1a61936bf62b3b38161"
+    )
+    for exact_model_id in (
+        selection.candidate_model_id,
+        selection.replay_judge_model_id,
+    ):
+        with pytest.raises(PublicModelLineageAuthorityError, match="lacks confirmed"):
+            require_verified_public_model_lineage(capability, exact_model_id)
 
 
 def test_selection_plan_rejects_one_source_relabelled_as_two() -> None:

@@ -9,9 +9,11 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+AGENTS_PATH = ROOT / "AGENTS.md"
 QUEUE_PATH = ROOT / "docs/remediation/v3/work_queue.md"
 TRACEABILITY_PATH = ROOT / "docs/remediation/v3/review_traceability.json"
 RUNTIME_STATUS_PATH = ROOT / "docs/remediation/v3/runtime_status.json"
+OPERATOR_RESULTS_PATH = ROOT / "docs/remediation/v3/operator_results.md"
 README_PATH = ROOT / "README.md"
 MODEL_SELECTION_PATH = ROOT / "docs/models/model_selection.md"
 PRODUCT_VISION_PATH = ROOT / "product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.md"
@@ -21,6 +23,7 @@ OBJECTIVE_RELATIVE_PATH = "docs/remediation/v3/product_completion_goal.txt"
 OBJECTIVE_SHA256 = "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15"
 PRODUCT_VISION_RELATIVE_PATH = "product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.md"
 PRODUCT_VISION_SHA256 = "8b878b665e636b3b48500fefe2967394b2abdd69ce2ebfa0033d04542d2965e1"
+OPERATOR_RESULTS_SHA256 = "f0d0987d6d35d6759aa7b922886913b2eb01e8b66838c37ad3ec5695fcb6976c"
 PRODUCT_VISION_GIT_ATTRIBUTES = f"{PRODUCT_VISION_RELATIVE_PATH} -text"
 POLICY_ELIGIBILITY_TICKET = "V3-POLICYELIG-001"
 POLICY_ELIGIBILITY_QUEUE_HEADING = (
@@ -362,6 +365,31 @@ def test_readme_and_model_work_markings_derive_from_queue_ticket_statuses() -> N
     )
     runtime_status = json.loads(RUNTIME_STATUS_PATH.read_text(encoding="utf-8"))
     assert release_matches[0] == runtime_status["release_status"]
+
+
+def test_operator_command_results_have_a_persistent_reconciliation_contract() -> None:
+    agents = AGENTS_PATH.read_text(encoding="utf-8")
+    model_selection = MODEL_SELECTION_PATH.read_text(encoding="utf-8")
+    operator_result_bytes = OPERATOR_RESULTS_PATH.read_bytes()
+    operator_results = operator_result_bytes.decode("utf-8")
+    queues = (
+        (ROOT / "docs/codex_work_queue.md").read_text(encoding="utf-8"),
+        QUEUE_PATH.read_text(encoding="utf-8"),
+    )
+
+    assert "docs/remediation/v3/operator_results.md" in agents
+    assert "Before ending any turn that issued, reissued, or depended on an operator command" in (
+        agents
+    )
+    assert "../remediation/v3/operator_results.md" in model_selection
+    assert hashlib.sha256(operator_result_bytes).hexdigest() == OPERATOR_RESULTS_SHA256
+    assert OPERATOR_RESULTS_SHA256 in model_selection
+    assert all(OPERATOR_RESULTS_SHA256 in queue for queue in queues)
+    assert "--candidate minimax/minimax-m3=coreweave/fp4" in model_selection
+    assert "--candidate anthropic/claude-opus-5=amazon-bedrock" not in model_selection
+    assert "Written by the monitoring session; treat as operator-supplied evidence." in (
+        operator_results
+    )
 
 
 def test_policy_eligibility_status_and_vision_boundary_are_documented_exactly() -> None:
