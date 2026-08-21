@@ -47,7 +47,7 @@ requested, and the operator reports that the ledger remains untouched at `$0`. T
 record operator-reported results only; the private artifacts and ledger were not read or promoted
 by Codex. The exact operator-supplied log is retained at
 [`operator_results.md`](../remediation/v3/operator_results.md), raw SHA-256
-`612943ec6e7f138d7a85ce7f4439a5054127b385f008fb1d1af25134890ebfb9`, and is
+`ed416745d3d0d957e05919e7cf10e14e75b4e9f3da800000e5789371520abbe2`, and is
 `OPERATOR_SUPPLIED_UNVERIFIED`: it grants no repository authority.
 
 The subsequent Claude Opus 5 `amazon-bedrock` PRIMARY r3 attempt also failed closed before registry
@@ -285,7 +285,7 @@ The exact runtime answers for both the smoke and full paths are:
   multi-homed frontier judges and is an explicit selection-quality limitation; route diversity is not
   evidence that the excluded models were technically inferior.
 
-### Exact provider-free one-case smoke preflight after origin-custody fix — emission only
+### Post-fix smoke preflight and exact one-case REAL launch
 
 The initial smoke implementation is durably checkpointed at
 `af70559ddaf84178efffee1ec1bf7b99bf0b12df` (`Add noncrediting provider smoke path`). Its first
@@ -331,7 +331,7 @@ money and then failed before smoke evidence completed. Provider-free preflight c
 post-response issuer boundary.
 
 At safety checkpoint `ca63b924f244cc9bcee2d2405d20b000ce0bb9d6`, the unsafe launch was withdrawn before
-execution. The current 35,771-byte operator record at raw SHA-256
+execution. The then-current 35,771-byte operator record at raw SHA-256
 `612943ec6e7f138d7a85ce7f4439a5054127b385f008fb1d1af25134890ebfb9` independently confirms no
 paid smoke attempt, provider completion, or spend occurred and the dedicated ledger remains `$0`.
 
@@ -357,20 +357,47 @@ intentionally not credited because it would rewrite a Python code fence inside t
 operator-owned result bytes; those bytes remain untouched. No terminal full-suite result is claimed,
 and no provider call, secret selection, ledger mutation, authority, or governed counter changed.
 
-The following exact command is emitted only for the next provider-free one-case smoke preflight
-against checkpoint `c9a8923064ef1bb606a67b14641c4c8df55bc9ea`. It returns before secret
-selection, provider access, ledger mutation, or output publication. Codex did not execute it:
+The implementation checkpoint and the operator-visible guide checkpoint are intentionally distinct.
+Checkpoint `c9a8923064ef1bb606a67b14641c4c8df55bc9ea` is the pushed source correction. Guide checkpoint
+`c137f8bae9d27f5120e7e08eba2d9b5b384e1ca5` (`Emit fixed smoke preflight`) froze the exact
+provider-free command over that implementation. The operator ran the guide command verbatim at
+`2026-08-21T15:36:00Z`. The current 38,352-byte, 690-line operator record at raw SHA-256
+`ed416745d3d0d957e05919e7cf10e14e75b4e9f3da800000e5789371520abbe2` records
+`VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS`, `$0` spend, two runs, one case, four
+logical requests, at most eight attempts, four generation refetches, USD `8.00` operator interval and
+final tripwires, exact candidate final cap USD `0.21890352`, judge admission
+`PENDING_REAL_CANDIDATE_OUTPUTS`, and effective-config SHA-256
+`42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54`. The operator also reports
+that this result is identical to the pre-fix provider-free result. This closes the committed-byte
+provider-free gate but cannot exercise the post-response origin issuer; only a paid call can settle
+that runtime seam. A terminal suite started before the live operator evidence and reconciliation
+bytes changed; it was interrupted after 82 passed, 13 prerequisite skips, and 1381.01 seconds and
+receives no pass credit.
+
+The operator may authorize and run the following one-shot paid REAL smoke command. Codex did not run
+it. The output path must still be absent and its private parent must already exist owned by the
+operator with mode `0700`; the published output is mode `0600`. This command can select the explicit
+secret file, contact the three pinned provider routes, reserve and spend against the retained ledger,
+and cannot be resumed; the nonresumability and judge safeguards above therefore apply exactly.
 
 ```shell
-env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models authenticated-runner-smoke --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r2.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260820-r2" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r5.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r5" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2" --smoke-corpus benchmarks/model_corpus_smoke --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260821-s1.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --secrets-env-file "$HOME/.mmaudit/secrets.env" --allow-code-egress --preflight-only --no-color
+env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models authenticated-runner-smoke --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r2.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260820-r2" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r5.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r5" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2" --smoke-corpus benchmarks/model_corpus_smoke --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260821-s1.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --secrets-env-file "$HOME/.mmaudit/secrets.env" --allow-code-egress --no-color
 ```
 
-Retain its complete terminal record in `../remediation/v3/operator_results.md`. Command emission is
-not execution authority. No smoke REAL command and no offline-verifier command is emitted; the full
-24-case REAL command remains withheld below. `V3-AUTHRUNNER-001` remains `PARTIAL` with autorun
-`BLOCKED_SAFETY` until this exact committed-byte preflight is reconciled as operator-supplied
-`VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS` evidence. Do not run or restore either
-paid command from historical checkpoint `f5afb2bff074254ee5c4a484386ee4c416b17a88`.
+If and only if that REAL command succeeds and publishes the exact fresh bundle above, run this
+provider-free verifier under the same two non-secret configuration overrides. It requires no secret,
+provider access, egress flag, or ledger mutation:
+
+```shell
+env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models verify-authenticated-runner-smoke --bundle "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260821-s1.json" --smoke-corpus benchmarks/model_corpus_smoke --corpus benchmarks/model_corpus/manifest.json --config config/openrouter-qualification.toml --no-color
+```
+
+Retain both complete terminal records in `../remediation/v3/operator_results.md`. Command emission is
+not execution authority, smoke success remains `NONCREDITING`, and it does not authorize the full
+campaign. `V3-AUTHRUNNER-001` remains `PARTIAL` with autorun `BLOCKED_SAFETY`; every authority and
+governed counter remains unchanged until genuine evidence is reconciled. Do not run or restore either
+paid command from historical checkpoint `f5afb2bff074254ee5c4a484386ee4c416b17a88`; only the exact
+current command above is emitted for separate operator authorization.
 
 ### Full 24-case REAL command — withheld
 

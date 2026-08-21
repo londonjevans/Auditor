@@ -7,11 +7,38 @@ credentials, RPC URLs, or operational attack instructions.
 AUTORUN_STATUS: BLOCKED_SAFETY
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001
-NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. The operator may run only the exact provider-free one-case smoke preflight emitted in `docs/models/model_selection.md`; reconcile its complete result before considering any paid command. Paid smoke, offline verifier, and full REAL remain absent. Codex must not execute a provider command.
-LAST_VALIDATION_COMMAND: Implementer 584-test provider-free matrix; independent 371 usage/OpenRouter, 83 runner/smoke/cross-lineage, and 123 generation/candidate tests plus final focused 22 usage-scope and 3 transport-path tests; repository Ruff; scoped format; strict mypy over 206 sources; documentation/objective tests; strict governance JSON; `git diff --check`.
-LAST_VALIDATION_RESULT: PASS / PARTIAL / BLOCKED_SAFETY — checkpoint `c9a8923064ef1bb606a67b14641c4c8df55bc9ea` binds each exact release/smoke proof kind to its disjoint request namespace and rejects cross-kind or malformed mappings without granting release authority. The 584 implementer tests, independent 371/83/123 matrices (577 broad), and final focused 22+3 tests passed; red-team review was clean with no blocker/HIGH. Ruff, scoped format, strict mypy over 206 sources, documentation/objective, JSON, and diff gates passed. The whole-repository format check receives no pass credit because it would rewrite exact operator-owned evidence. Current operator record SHA-256 `612943ec6e7f138d7a85ce7f4439a5054127b385f008fb1d1af25134890ebfb9` still confirms no paid run, provider completion, or spend and a `$0` dedicated ledger. Only provider-free preflight is emitted.
-LAST_CHECKPOINT_COMMIT: c9a8923064ef1bb606a67b14641c4c8df55bc9ea — `Bind smoke REAL origin custody`; pushed and remote-resolved. Safety withdrawal checkpoint: `ca63b924f244cc9bcee2d2405d20b000ce0bb9d6`. Historical unsafe launch checkpoint: `f5afb2bff074254ee5c4a484386ee4c416b17a88`.
-REMAINING_ACTIONABLE_TICKETS: Reconcile the operator-run provider-free smoke preflight against checkpoint `c9a8923064ef1bb606a67b14641c4c8df55bc9ea`. Only after a valid nonauthorizing result may a paid smoke command be reconsidered. Paid smoke, offline verifier, full REAL, external authority-log publication, and all benchmark/release work remain withheld.
+NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. The operator may separately authorize and run only the exact paid one-case smoke command emitted in `docs/models/model_selection.md`, then run the exact provider-free offline verifier only after successful publication. Reconcile both terminal records before any follow-up. The full 24-case REAL command remains absent. Codex must not execute a provider command.
+LAST_VALIDATION_COMMAND: Implementer 584-test provider-free matrix; independent 371 usage/OpenRouter, 83 runner/smoke/cross-lineage, and 123 generation/candidate tests plus final focused 22 usage-scope and 3 transport-path tests; repository Ruff; scoped format; strict mypy over 206 sources; documentation/objective tests; strict governance JSON; `git diff --check`; operator-run exact c137f8b provider-free preflight. A terminal full-suite run started before the live operator evidence and reconciliation bytes changed, then was interrupted after 82 passed, 13 prerequisite skips, and 1381.01 seconds; it receives no pass credit.
+LAST_VALIDATION_RESULT: PASS / PARTIAL / BLOCKED_SAFETY — implementation checkpoint `c9a8923064ef1bb606a67b14641c4c8df55bc9ea` binds each exact release/smoke proof kind to its disjoint request namespace and rejects cross-kind or malformed mappings without granting release authority. Distinct guide checkpoint `c137f8bae9d27f5120e7e08eba2d9b5b384e1ca5` froze the operator-visible preflight, which the operator reports `VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS` with `$0` spend. The 584 implementer tests, independent 371/83/123 matrices (577 broad), and final focused 22+3 tests passed; red-team review was clean with no blocker/HIGH. Ruff, scoped format, strict mypy over 206 sources, documentation/objective, JSON, and diff gates passed. Current operator record SHA-256 `ed416745d3d0d957e05919e7cf10e14e75b4e9f3da800000e5789371520abbe2` confirms no paid run, provider completion, or spend and a `$0` dedicated ledger. The invalidated terminal run is recorded as 82 passed and 13 skipped before interruption, with no pass credit and no code-red inference.
+LAST_CHECKPOINT_COMMIT: c137f8bae9d27f5120e7e08eba2d9b5b384e1ca5 — `Emit fixed smoke preflight`; pushed and remote-resolved guide/preflight checkpoint over implementation checkpoint `c9a8923064ef1bb606a67b14641c4c8df55bc9ea`. Safety withdrawal checkpoint: `ca63b924f244cc9bcee2d2405d20b000ce0bb9d6`. Historical unsafe launch checkpoint: `f5afb2bff074254ee5c4a484386ee4c416b17a88`.
+REMAINING_ACTIONABLE_TICKETS: Run and reconcile only the exact paid one-case NONCREDITING smoke and its conditional provider-free offline verification. Full REAL, external authority-log publication, and all benchmark/release work remain withheld.
+
+## 2026-08-21T15:36:00Z — Post-origin-custody smoke preflight VALID
+
+- **Status:** `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`; the exact one-case paid smoke
+  and conditional provider-free verifier are emitted for separate operator authorization. The full
+  24-case command remains absent.
+- **Checkpoint custody:** Source implementation is
+  `c9a8923064ef1bb606a67b14641c4c8df55bc9ea` (`Bind smoke REAL origin custody`). Distinct guide
+  checkpoint `c137f8bae9d27f5120e7e08eba2d9b5b384e1ca5` (`Emit fixed smoke preflight`) froze the command
+  the operator ran.
+- **Operator reconciliation:** The current 38,352-byte, 690-line operator record has raw SHA-256
+  `ed416745d3d0d957e05919e7cf10e14e75b4e9f3da800000e5789371520abbe2`. It records
+  `VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS`, two runs, one case, four logical
+  requests, eight maximum attempts, four refetches, exact candidate final cap USD `0.21890352`, judge
+  admission `PENDING_REAL_CANDIDATE_OUTPUTS`, effective config
+  `42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54`, and `$0` spend. No authority
+  or governed counter changed.
+- **Honest boundary:** Provider-free preflight and code review cannot exercise the post-response
+  issuer. A genuine paid smoke plus successful offline verification is the next evidence gate. The
+  runner is nonresumable; staged judge admission, atomic per-attempt reservations, and the retained
+  whole-inventory provider-name uniqueness decision remain unchanged.
+- **Validation state:** Existing static/provider-free validation remains green as recorded. A terminal
+  suite launched before the operator log and reconciliation bytes changed; it was interrupted after
+  82 passed, 13 prerequisite skips, and 1381.01 seconds and receives no pass credit.
+- **Next safe action:** The operator may authorize and run only the exact paid smoke command now in
+  the guide, then run the verifier only if publication succeeds. Reconcile both complete results
+  before modifying, retrying, or emitting the full campaign.
 
 ## 2026-08-21 — Smoke owned-REAL origin custody fixed; provider-free preflight re-emitted
 
@@ -29,7 +56,7 @@ REMAINING_ACTIONABLE_TICKETS: Reconcile the operator-run provider-free smoke pre
   206-source tree, documentation/objective tests, strict governance JSON, and diff integrity passed.
   Whole-repository format receives no pass credit because it would rewrite exact operator-owned
   evidence; no terminal full-suite result is claimed.
-- **Operator reconciliation:** The unchanged 35,771-byte operator record at SHA-256
+- **Operator reconciliation:** The then-current 35,771-byte operator record at SHA-256
   `612943ec6e7f138d7a85ce7f4439a5054127b385f008fb1d1af25134890ebfb9` confirms the historical
   paid command was withdrawn before execution. No paid attempt, provider completion, or spend
   occurred; the dedicated ledger remains `$0` and governed counters are unchanged.

@@ -611,7 +611,7 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   is charged and bound, the first completion would fail origin attestation before durable smoke
   evidence completes. No operator paid command ran; the dedicated ledger remains `$0`. Safety
   withdrawal checkpoint `ca63b924f244cc9bcee2d2405d20b000ce0bb9d6` removes both smoke commands.
-  The current 35,771-byte operator record at SHA-256
+  The then-current 35,771-byte operator record at SHA-256
   `612943ec6e7f138d7a85ce7f4439a5054127b385f008fb1d1af25134890ebfb9` independently confirms the
   source mismatch, withdrawal-before-execution, zero provider completions, and `$0` ledger. Smoke and
   full REAL commands are absent; the ticket remains `PARTIAL / BLOCKED_SAFETY`.
@@ -627,16 +627,31 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   repository-wide Ruff, scoped format, strict mypy over both
   changed source files and the full 206-source tree, and diff integrity passed. The whole-repository
   format check is not credited because it would rewrite a code fence in the exact operator-owned
-  result bytes; no terminal full-suite result is claimed. The operator record remains 35,771 bytes at
+  result bytes; no terminal full-suite result is claimed. At that correction checkpoint, the operator
+  record remained 35,771 bytes at
   SHA-256 `612943ec6e7f138d7a85ce7f4439a5054127b385f008fb1d1af25134890ebfb9`, with no paid run,
   provider completion, or spend and a `$0` dedicated ledger. Only the exact provider-free one-case
   preflight is emitted; paid smoke, offline verifier, and full REAL commands remain absent.
+- **Post-fix smoke preflight VALID 2026-08-21:** Implementation checkpoint
+  `c9a8923064ef1bb606a67b14641c4c8df55bc9ea` remains the source correction; distinct pushed guide
+  checkpoint `c137f8bae9d27f5120e7e08eba2d9b5b384e1ca5` froze the operator-visible command. The current
+  38,352-byte, 690-line operator record at SHA-256
+  `ed416745d3d0d957e05919e7cf10e14e75b4e9f3da800000e5789371520abbe2` records that exact command
+  as `VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS`, with `$0` spend, two runs, one
+  case, four logical requests, at most eight attempts, four generation refetches, USD `8.00`
+  interval/final tripwires, exact candidate final cap USD `0.21890352`, judge admission
+  `PENDING_REAL_CANDIDATE_OUTPUTS`, and unchanged effective-config SHA-256
+  `42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54`. The operator's code review
+  agrees with the four-way namespace correction but explicitly cannot exercise the post-response
+  issuer. No provider completion, spend, authority, or governed counter changed. A terminal suite
+  launched before the live operator evidence and reconciliation bytes changed; it was interrupted
+  after 82 passed, 13 prerequisite skips, and 1381.01 seconds and receives no pass credit.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
-  and non-crediting. The historical pre-fix provider-free smoke preflight was valid and
-  nonauthorizing; the post-fix preflight is emitted but not yet run. Exact judge admission and the
+  and non-crediting. Both the historical and post-fix provider-free smoke preflights were valid and
+  nonauthorizing, but neither can exercise the post-response origin issuer. Exact judge admission and the
   full-campaign cost bound cannot exist before both genuine candidate outputs.
   The corrected origin seam is validated only provider-free; no genuine smoke completion has exercised
-  it, and the new committed-byte operator preflight result is pending. Current repository rules prohibit
+  it. Current repository rules prohibit
   Codex from reading real credentials or accessing the provider. Judge request bytes and exact caps
   cannot exist before both genuine
   candidate outputs, so the provider-free result intentionally supplies candidate-only admission,
@@ -649,10 +664,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   the top-level runner lease is not independently demonstrated. External-log publication and every
   benchmark run remain queued.
 - **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` with autorun `BLOCKED_SAFETY`. The operator may
-  run only the exact provider-free one-case smoke preflight emitted in `docs/models/model_selection.md`.
-  Reconcile its complete terminal record before considering any paid command. Keep paid smoke,
-  offline verifier, and full REAL commands absent; AUTHSEAL publication, audits, benchmarks, and
-  release remain unauthorized.
+  separately authorize and run only the exact paid one-case smoke command now emitted in
+  `docs/models/model_selection.md`, then run its exact provider-free offline verifier only after a
+  successful publication. Reconcile both complete terminal records before any follow-up. Keep the full
+  24-case REAL command absent; AUTHSEAL publication, audits, benchmarks, and release remain unauthorized.
 
 ### V3-MODELREFRESH-001 — Provider-free model-refresh runtime and pricing custody
 
@@ -1425,8 +1440,7 @@ and report serialization.
 
 ## Next action
 
-No safe actionable queue ticket remains. `EVAL-001` is complete without production
-implementation changes. Its separately recorded defects require future authorized
-remediation tickets; `E2E-002` and the blocked `RELEASE-001` gates can resume only
-when an operator supplies the explicitly recorded real-model, engine, isolation,
-holdout, and comparison prerequisites.
+`V3-AUTHRUNNER-001` is the sole active work unit. Its post-fix provider-free smoke preflight is
+VALID and nonauthorizing; the exact paid one-case smoke plus conditional offline verifier are the
+next operator-run evidence steps. The full 24-case command and all downstream authority, benchmark,
+audit, and release work remain withheld.

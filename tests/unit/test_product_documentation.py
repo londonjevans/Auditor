@@ -23,7 +23,7 @@ OBJECTIVE_RELATIVE_PATH = "docs/remediation/v3/product_completion_goal.txt"
 OBJECTIVE_SHA256 = "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15"
 PRODUCT_VISION_RELATIVE_PATH = "product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.md"
 PRODUCT_VISION_SHA256 = "8b878b665e636b3b48500fefe2967394b2abdd69ce2ebfa0033d04542d2965e1"
-OPERATOR_RESULTS_SHA256 = "612943ec6e7f138d7a85ce7f4439a5054127b385f008fb1d1af25134890ebfb9"
+OPERATOR_RESULTS_SHA256 = "ed416745d3d0d957e05919e7cf10e14e75b4e9f3da800000e5789371520abbe2"
 PRODUCT_VISION_GIT_ATTRIBUTES = f"{PRODUCT_VISION_RELATIVE_PATH} -text"
 POLICY_ELIGIBILITY_TICKET = "V3-POLICYELIG-001"
 POLICY_ELIGIBILITY_QUEUE_HEADING = (
@@ -470,13 +470,13 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert model_selection.count(tencent_r5_command) == 1
     assert "historical command records and must not be rerun" in normalized_model_selection
     assert "9075ca7635c861194cc732e67d9ebb92e6ffa0af" in model_selection
-    assert smoke_real_command not in model_selection
-    assert model_selection.count(smoke_preflight_command) == 1
-    assert smoke_verify_command not in model_selection
+    assert model_selection.count(smoke_real_command) == 1
+    assert smoke_preflight_command not in model_selection
+    assert model_selection.count(smoke_verify_command) == 1
     assert model_selection.count(".venv/bin/mmaudit models authenticated-runner-smoke") == 1
-    assert ".venv/bin/mmaudit models verify-authenticated-runner-smoke" not in model_selection
+    assert model_selection.count(".venv/bin/mmaudit models verify-authenticated-runner-smoke") == 1
     assert ".venv/bin/mmaudit models authenticated-runner --" not in model_selection
-    assert model_selection.count("--preflight-only") == 1
+    assert "--preflight-only" not in model_selection
     assert "PENDING_TENCENT_LINEAGE_RESEAL_CHECKPOINT" not in model_selection
     assert "a1ace778afcf308b57fe436271cdc16a2bb8e156" in model_selection
     assert "af70559ddaf84178efffee1ec1bf7b99bf0b12df" in model_selection
@@ -487,10 +487,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "Document provider-free smoke preflight" in normalized_model_selection
     assert "provider-free r2/r5/r2 preflight" in normalized_model_selection
     assert "has now completed and is historical; do not rerun it" in (normalized_model_selection)
-    assert (
-        "Exact provider-free one-case smoke preflight after origin-custody fix — emission only"
-        in model_selection
-    )
+    assert "Post-fix smoke preflight and exact one-case REAL launch" in model_selection
     assert "smoke public lineage returned a non-independent projection" in (
         normalized_model_selection
     )
@@ -514,9 +511,10 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "Provider-free preflight cannot exercise that post-response issuer boundary" in (
         normalized_model_selection
     )
-    assert "No smoke REAL command and no offline-verifier command is emitted" in (
+    assert "The operator may authorize and run the following one-shot paid REAL smoke command" in (
         normalized_model_selection
     )
+    assert "If and only if that REAL command succeeds" in normalized_model_selection
     assert "no paid smoke attempt, provider completion, or spend occurred" in (
         normalized_model_selection
     )
@@ -548,23 +546,58 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "whole-repository format check is intentionally not credited" in (
         normalized_model_selection
     )
-    assert "Command emission is not execution authority." in normalized_model_selection
+    assert "Command emission is not execution authority" in normalized_model_selection
     assert runtime_status["candidate_commit"] == ("c9a8923064ef1bb606a67b14641c4c8df55bc9ea")
+    assert runtime_status["last_checkpoint_commit"] == ("c137f8bae9d27f5120e7e08eba2d9b5b384e1ca5")
     assert runtime_status["autorun_status"] == "BLOCKED_SAFETY"
+    resume_action = runtime_status["pause_state"]["resume_action_v3_authrunner"]
+    assert "post-origin-fix provider-free smoke preflight" in resume_action
+    assert "exact paid one-case smoke command" in resume_action
+    assert "offline verifier only after successful publication" in resume_action
+    assert "not-yet-run provider-free smoke preflight" not in resume_action
     assert smoke_status["implementation_checkpoint"] == ("c9a8923064ef1bb606a67b14641c4c8df55bc9ea")
-    assert smoke_status["preflight_status"] == "PENDING_OPERATOR_POST_FIX_PROVIDER_FREE_PREFLIGHT"
-    assert smoke_status["provider_free_preflight_command_emission_status"] == "EMITTED_NOT_RUN"
-    assert smoke_status["real_command_emission_status"] == "ABSENT_WITHHELD_BLOCKED_SAFETY"
+    assert smoke_status["post_origin_fix_guide_checkpoint"] == (
+        "c137f8bae9d27f5120e7e08eba2d9b5b384e1ca5"
+    )
+    assert smoke_status["preflight_status"] == (
+        "VALID_NONCREDITING_NONAUTHORIZING_NO_PROVIDER_EGRESS_POST_ORIGIN_FIX"
+    )
+    assert smoke_status["provider_free_preflight_command_emission_status"] == (
+        "HISTORICAL_EXECUTED_VALID_DO_NOT_RERUN"
+    )
+    assert smoke_status["real_command_emission_status"] == (
+        "EMITTED_OPERATOR_AUTHORIZATION_REQUIRED"
+    )
     assert smoke_status["offline_verifier_command_emission_status"] == (
-        "ABSENT_WITHHELD_BLOCKED_SAFETY"
+        "EMITTED_CONDITIONAL_PROVIDER_FREE_AFTER_SUCCESSFUL_PUBLICATION"
     )
     assert smoke_status["full_24_case_real_command_status"] == "ABSENT_WITHHELD_BLOCKED_SAFETY"
     assert smoke_status["current_operator_results_sha256"] == OPERATOR_RESULTS_SHA256
+    assert smoke_status["current_operator_results_bytes"] == 38_352
+    assert smoke_status["current_operator_results_lines"] == 690
     assert smoke_status["operator_paid_smoke_run"] is False
     assert smoke_status["operator_paid_smoke_provider_completions"] == 0
     assert smoke_status["operator_paid_smoke_spend_usd"] == "0"
     assert smoke_status["origin_custody_code_fix_status"] == (
         "IMPLEMENTED_CHECKPOINTED_PUSHED_REMOTE_VERIFIED_NONAUTHORIZING"
+    )
+    assert (
+        smoke_status["origin_custody_fix_validation"][
+            "terminal_full_suite_status_for_current_reconciliation"
+        ]
+        == "INTERRUPTED_CONCURRENT_OPERATOR_EVIDENCE_CHANGE_NO_CREDIT"
+    )
+    assert (
+        smoke_status["origin_custody_fix_validation"][
+            "terminal_full_suite_tests_passed_before_interruption"
+        ]
+        == 82
+    )
+    assert (
+        smoke_status["origin_custody_fix_validation"][
+            "terminal_full_suite_prerequisite_skips_before_interruption"
+        ]
+        == 13
     )
     assert "candidate-registry-r2.json" in model_selection
     assert "authrunner-candidate-20260820-r2" in model_selection
@@ -600,7 +633,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "Whole-inventory `provider_name` uniqueness remains enforced." in model_selection
     assert "end-to-end wire and evidence redesign" in normalized_model_selection
     assert "explicit selection-quality limitation" in normalized_model_selection
-    assert "exact committed-byte preflight" in normalized_model_selection
+    assert "committed-byte provider-free gate" in normalized_model_selection
     assert "full 24-case REAL command is deliberately withheld" in normalized_model_selection
     assert "case-df79ea132113b863" in model_selection
     assert "synthetic/C0015.sol" in model_selection

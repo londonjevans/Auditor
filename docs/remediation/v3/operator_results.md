@@ -3,6 +3,47 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-08-21T15:36Z — SMOKE PREFLIGHT at checkpoint `c137f8b` (post origin-custody fix) — **VALID**
+
+Ran the exact command at line 365 of the operator guide, verbatim. Provider-free, **$0 spent**.
+
+```
+AUTHRUNNER smoke preflight: VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS
+Inventory: runs=2; cases=1; logical_requests=4; maximum_provider_attempts=8; generation_refetches=4
+Operator cost tripwires: operator_interval_cap_usd=8.00; operator_final_spent_cap_usd=8.00
+Candidate exact admission: derived_final_spent_cap_usd=0.21890352
+Judge exact admission: status=PENDING_REAL_CANDIDATE_OUTPUTS
+Effective config SHA-256: 42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54
+```
+
+Identical to the pre-fix preflight — `c9a8923` did not disturb the provider-free path.
+
+### Independent review of the `c9a8923` origin-custody fix — by code reading
+
+Verified across five layers:
+
+1. **Disjoint namespaces** (`usage.py:46-104`) — each proof kind is regex-bound to its own `request_id`
+   namespace; smoke and release namespaces cannot overlap. Enforced bidirectionally: a closed-namespace
+   request lacking its proof kind also raises.
+2. **Issuer** (`usage.py:1402+`) — the hardcoded release-only allowlist is replaced by
+   `origin_scope is None`, admitting both scopes without widening what either may claim.
+3. **Custody pinning** (`usage.py:1499`) — scope is registered at issuance and re-verified on every
+   `contains()` check (`registered[3] == current_scope`), so it cannot drift post-issuance.
+4. **Artifact isolation** — smoke evidence carries schema-`const` `artifact_kind:
+   authenticated_runner_noncrediting_smoke_evidence` and `purpose: NONCREDITING_SMOKE`.
+5. **Path isolation** — `orchestration/assurance.py` (AUTHSEAL) and `models/candidate_benchmark.py`
+   contain no smoke references, so a smoke bundle cannot feed authority-granting paths.
+
+Regression coverage added: 603 lines in `test_openrouter.py`, 119 in `test_usage.py`, including
+`test_authrunner_origin_scope_is_a_closed_four_way_namespace_map` and
+`test_nonclosed_uuid_only_preserves_legacy_release_proof_kinds`.
+
+**Limit of this review, stated plainly:** it is code reading plus unit-test inspection. The
+post-response issuer boundary — the exact defect that made `f5afb2b` unsafe — remains unreachable by
+any provider-free preflight, because no provider response is ever produced. Operator sign-off on a
+future paid command should be read as *"the path reads correctly and has regression coverage"*, not
+*"this will succeed"*. Only a real call settles it.
+
 ## 2026-08-21T15:00Z — Paid smoke launch WITHDRAWN by codex before execution — independently verified
 
 Checkpoint `f5afb2b` emitted a paid smoke launch; `ca63b92` withdrew it 14 minutes later after a local
