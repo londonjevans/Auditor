@@ -579,7 +579,7 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   remote-resolved at `af70559ddaf84178efffee1ec1bf7b99bf0b12df` (`Add noncrediting provider
   smoke path`). Codex did not read a secret, contact the provider, mutate the retained ledger, or
   execute a REAL command. The full 24-case REAL command remains absent and withheld.
-- **Smoke preflight defect 2026-08-21:** The current 31,643-byte operator-supplied log at raw SHA-256
+- **Smoke preflight defect 2026-08-21:** The then-current 31,643-byte operator-supplied log at raw SHA-256
   `4f71b2ebf33037317095a1f16c64d21b102bb6229be75ae58a55158c95454e0a` records the
   provider-free smoke `--preflight-only` run after `af70559` failing safely with `smoke public lineage
   returned a non-independent projection`. Real discovery registries have `root_lineage = None`, but
@@ -593,8 +593,18 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `independent = true`, three-root distinctness, non-null mismatches, and `REJECTED` reviews remain
   fail-closed. Validation passed 33 focused and 81 bounded smoke/neighbor tests, Ruff/format, strict
   mypy, and diff integrity. Checkpoint `7e9db03145b4afc1834dd47e9f4f97800e1edffb` (`Fix smoke null
-  lineage projection`) is pushed and remote-resolved. Only its exact provider-free smoke preflight is
-  emitted; no REAL or verifier command is present.
+  lineage projection`) is pushed and remote-resolved. Guide checkpoint
+  `f0a0f39ee275bc774709bd0fbff411cfa7ecac04` then froze its exact provider-free preflight.
+- **Corrected smoke preflight VALID 2026-08-21:** The current 33,621-byte operator-supplied log at raw
+  SHA-256 `33d06db3bde140204843282dda56c91704d58a054f02532ea68cfa830f618e62`
+  records that exact preflight as `VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS`, with
+  `$0` spend, two runs, one case, four logical requests, at most eight attempts, four generation
+  refetches, and USD `8.00` arithmetic interval/final tripwires. Candidate plans
+  `944343e272b05b9925a0d4c618946ffbd4742f861e792c83be423531af07ea19` and
+  `b281a184b96ee208284f57de5c17adf59a9a61a72788bfb1fb5b9ac80e25dd3d` derive exact candidate
+  interval/final caps of USD `0.21890352`. Judge admission remains
+  `PENDING_REAL_CANDIDATE_OUTPUTS`; the smoke REAL command and its provider-free offline verifier are
+  now emitted for separate operator authorization, while the full 24-case command remains absent.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
   and non-crediting. The current provider-free preflight is valid and nonauthorizing, but exact judge
   admission and the full-campaign cost bound cannot exist before both genuine candidate outputs.
@@ -610,10 +620,11 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   issue-consume-revoke-reject lifecycle assay remain absent. Campaign/generation revocation beyond
   the top-level runner lease is not independently demonstrated. External-log publication and every
   benchmark run remain queued.
-- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` with autorun `BLOCKED_SAFETY`. Have the operator
-  run only the exact provider-free smoke preflight emitted in the guide and reconcile its terminal
-  result. Keep both REAL commands withheld until it is `VALID / NONAUTHORIZING / NO PROVIDER EGRESS`;
-  AUTHSEAL publication, audits, benchmarks, and release remain unauthorized.
+- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` with autorun `BLOCKED_SAFETY`. Have only the
+  operator authorize and run the exact one-case smoke REAL command emitted in the guide, then run the
+  emitted provider-free offline verifier only after successful publication and reconcile both
+  terminal records. Keep the full 24-case REAL command absent and withheld; AUTHSEAL publication,
+  audits, benchmarks, and release remain unauthorized.
 
 ### V3-MODELREFRESH-001 — Provider-free model-refresh runtime and pricing custody
 

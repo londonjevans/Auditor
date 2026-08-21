@@ -23,7 +23,7 @@ OBJECTIVE_RELATIVE_PATH = "docs/remediation/v3/product_completion_goal.txt"
 OBJECTIVE_SHA256 = "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15"
 PRODUCT_VISION_RELATIVE_PATH = "product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.md"
 PRODUCT_VISION_SHA256 = "8b878b665e636b3b48500fefe2967394b2abdd69ce2ebfa0033d04542d2965e1"
-OPERATOR_RESULTS_SHA256 = "4f71b2ebf33037317095a1f16c64d21b102bb6229be75ae58a55158c95454e0a"
+OPERATOR_RESULTS_SHA256 = "33d06db3bde140204843282dda56c91704d58a054f02532ea68cfa830f618e62"
 PRODUCT_VISION_GIT_ATTRIBUTES = f"{PRODUCT_VISION_RELATIVE_PATH} -text"
 POLICY_ELIGIBILITY_TICKET = "V3-POLICYELIG-001"
 POLICY_ELIGIBILITY_QUEUE_HEADING = (
@@ -469,29 +469,34 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert model_selection.count(tencent_r5_command) == 1
     assert "historical command records and must not be rerun" in normalized_model_selection
     assert "9075ca7635c861194cc732e67d9ebb92e6ffa0af" in model_selection
-    assert smoke_real_command not in model_selection
-    assert model_selection.count(smoke_preflight_command) == 1
-    assert smoke_verify_command not in model_selection
+    assert model_selection.count(smoke_real_command) == 1
+    assert smoke_preflight_command not in model_selection
+    assert model_selection.count(smoke_verify_command) == 1
     assert model_selection.count(".venv/bin/mmaudit models authenticated-runner-smoke") == 1
-    assert ".venv/bin/mmaudit models verify-authenticated-runner-smoke" not in model_selection
+    assert model_selection.count(".venv/bin/mmaudit models verify-authenticated-runner-smoke") == 1
     assert ".venv/bin/mmaudit models authenticated-runner --" not in model_selection
-    assert model_selection.count("--preflight-only") == 1
+    assert "--preflight-only" not in model_selection
     assert "PENDING_TENCENT_LINEAGE_RESEAL_CHECKPOINT" not in model_selection
     assert "a1ace778afcf308b57fe436271cdc16a2bb8e156" in model_selection
     assert "af70559ddaf84178efffee1ec1bf7b99bf0b12df" in model_selection
     assert "Add noncrediting provider smoke path" in normalized_model_selection
     assert "7e9db03145b4afc1834dd47e9f4f97800e1edffb" in model_selection
     assert "Fix smoke null lineage projection" in normalized_model_selection
+    assert "f0a0f39ee275bc774709bd0fbff411cfa7ecac04" in model_selection
+    assert "Document provider-free smoke preflight" in normalized_model_selection
     assert "provider-free r2/r5/r2 preflight" in normalized_model_selection
     assert "has now completed and is historical; do not rerun it" in (normalized_model_selection)
-    assert "Exact provider-free one-case smoke preflight — emission only" in (model_selection)
+    assert "Historical smoke preflight and exact one-case REAL launch" in model_selection
     assert "smoke public lineage returned a non-independent projection" in (
         normalized_model_selection
     )
     assert "root_lineage = None" in model_selection
-    assert "No smoke REAL or offline-verifier command is emitted until" in (
+    assert "The operator ran it verbatim. It is now historical and must not be rerun." in (
         normalized_model_selection
     )
+    assert "one-shot paid REAL smoke command" in normalized_model_selection
+    assert "If and only if that REAL command succeeds" in normalized_model_selection
+    assert "same two non-secret configuration overrides" in normalized_model_selection
     assert "only for a `PENDING` review with a null registry root" in (normalized_model_selection)
     assert "33 focused and 81 bounded smoke/neighbor tests" in normalized_model_selection
     assert "candidate-registry-r2.json" in model_selection
@@ -517,7 +522,10 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "fit its USD `1.00` role tripwire" in normalized_model_selection
     assert "reserves before every attempt" in normalized_model_selection
     assert "unknown actual charge is finalized at the reserved amount" in normalized_model_selection
-    assert "There is no separate live `$192.00` cumulative meter" in normalized_model_selection
+    assert "no separate live USD `8.00` smoke or USD `192.00` full cumulative meter" in (
+        normalized_model_selection
+    )
+    assert "each figure is attempt-count arithmetic" in normalized_model_selection
     assert "not deferred to an end-only interval check" in normalized_model_selection
     assert "checked again when the interval closes" in normalized_model_selection
     assert "Kimi's total judge plan" in normalized_model_selection
@@ -526,6 +534,8 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "end-to-end wire and evidence redesign" in normalized_model_selection
     assert "explicit selection-quality limitation" in normalized_model_selection
     assert "Emission is not execution authority" in normalized_model_selection
+    assert "operator with mode `0700`" in normalized_model_selection
+    assert "published output is mode `0600`" in normalized_model_selection
     assert "full 24-case REAL command is deliberately withheld" in normalized_model_selection
     assert "case-df79ea132113b863" in model_selection
     assert "synthetic/C0015.sol" in model_selection
@@ -545,6 +555,12 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "--candidate anthropic/claude-opus-5=amazon-bedrock" not in model_selection
     assert "PREFLIGHT r2/r5/r2 — **VALID**, with derived exact caps" in operator_results
     assert "SMOKE PREFLIGHT after `af70559`" in operator_results
+    assert "SMOKE PREFLIGHT at checkpoint `f0a0f39` — **VALID**" in operator_results
+    assert "VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS" in operator_results
+    assert "944343e272b05b9925a0d4c618946ffbd4742f861e792c83be423531af07ea19" in (model_selection)
+    assert "b281a184b96ee208284f57de5c17adf59a9a61a72788bfb1fb5b9ac80e25dd3d" in (model_selection)
+    assert "0.21890352" in model_selection
+    assert "33,621-byte operator record" in normalized_model_selection
     assert "The smoke path fails for any real registry set." in operator_results
     assert "Not yet run:** the smoke REAL launch" in operator_results
     assert "f0f367605dd75674b08c8974bf69570190e4137be46a47619c1b5b9d85c83b57" in (model_selection)

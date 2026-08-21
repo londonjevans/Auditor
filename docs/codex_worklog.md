@@ -7,11 +7,33 @@ credentials, RPC URLs, or operational attack instructions.
 AUTORUN_STATUS: BLOCKED_SAFETY
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001
-NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator run only the exact provider-free one-case smoke preflight emitted in the guide and reconcile its terminal result. Keep both REAL commands withheld until it is `VALID / NONAUTHORIZING / NO PROVIDER EGRESS`. Codex must not execute any provider command.
-LAST_VALIDATION_COMMAND: Null-root correction: 33 focused and 81 bounded smoke/neighbor tests; Ruff/format; strict mypy over the two production modules and isolated runtime test; `git diff --check`. Prior operator-run failed-safe preflight and initial smoke matrices remain recorded.
-LAST_VALIDATION_RESULT: PASS / PARTIAL — null registry roots are tolerated only for a `PENDING` review; exact model IDs, projected sealed roots and bundle pins, projection type, independence, three-root distinctness, non-null mismatches, and `REJECTED` reviews remain fail-closed. Validation passed 33 focused and 81 bounded tests with no blocker/HIGH, Ruff/format, strict mypy, and diff integrity. Checkpoint `7e9db03145b4afc1834dd47e9f4f97800e1edffb` is pushed and remote-resolved. No new operator preflight, secret selection, provider call, ledger mutation, authority, or governed counter changed.
-LAST_CHECKPOINT_COMMIT: 7e9db03145b4afc1834dd47e9f4f97800e1edffb — `Fix smoke null lineage projection`; latest durable pushed and remote-verified implementation checkpoint.
-REMAINING_ACTIONABLE_TICKETS: Obtain and reconcile the exact provider-free smoke preflight result for checkpoint `7e9db03145b4afc1834dd47e9f4f97800e1edffb`. Both REAL commands, external authority-log publication, and all benchmark/release work remain withheld. Codex must not execute provider calls.
+NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have only the operator authorize and run the emitted exact one-case smoke REAL command, then run the emitted provider-free offline verifier after successful publication and reconcile both records. Keep the full 24-case REAL command absent and withheld. Codex must not execute a provider command.
+LAST_VALIDATION_COMMAND: Operator-run exact provider-free smoke preflight at guide checkpoint `f0a0f39`; documentation/objective tests; Ruff format/check; strict governance JSON; `git diff --check`.
+LAST_VALIDATION_RESULT: PASS / PARTIAL — the operator reports the corrected one-case preflight `VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS`, `$0` spend, four logical requests, at most eight attempts, candidate cap USD `0.21890352`, and judge admission `PENDING_REAL_CANDIDATE_OUTPUTS`. The guide emits only the smoke REAL command and its offline verifier; the full command remains absent. No authority or governed counter changed.
+LAST_CHECKPOINT_COMMIT: f0a0f39ee275bc774709bd0fbff411cfa7ecac04 — `Document provider-free smoke preflight`; latest durable pushed guide checkpoint over implementation checkpoint `7e9db03145b4afc1834dd47e9f4f97800e1edffb`.
+REMAINING_ACTIONABLE_TICKETS: Obtain and reconcile the operator-run one-case REAL smoke and, only after successful publication, its provider-free offline verification. Full 24-case REAL, external authority-log publication, and all benchmark/release work remain withheld. Codex must not execute provider calls.
+
+## 2026-08-21T14:33:00Z — Corrected smoke preflight VALID; paid smoke command emitted
+
+- **Status:** `V3-AUTHRUNNER-001` remains `PARTIAL`; autorun remains `BLOCKED_SAFETY`.
+- **Operator result custody:** The current 33,621-byte operator-supplied log has raw SHA-256
+  `33d06db3bde140204843282dda56c91704d58a054f02532ea68cfa830f618e62`. It records the exact
+  provider-free command from guide checkpoint `f0a0f39ee275bc774709bd0fbff411cfa7ecac04` as
+  `VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS`, with `$0` spend.
+- **Exact admission:** Two runs over one C0015 case produce four logical requests, at most eight
+  attempts, and four generation refetches. Candidate plans
+  `944343e272b05b9925a0d4c618946ffbd4742f861e792c83be423531af07ea19` and
+  `b281a184b96ee208284f57de5c17adf59a9a61a72788bfb1fb5b9ac80e25dd3d` derive exact interval/final
+  caps of USD `0.21890352`; the arithmetic operator interval/final tripwires are USD `8.00`. Judge
+  admission is `PENDING_REAL_CANDIDATE_OUTPUTS`.
+- **Guide and limitations:** The preflight is historical. The guide emits the exact one-shot smoke
+  REAL command and provider-free offline verifier with the same non-secret overrides; the full
+  24-case command remains absent. Both runners remain nonresumable and cannot adopt or refund paid
+  candidate work. Judge aggregate admission, per-request tripwires, and atomic reservations remain
+  enforced. Whole-inventory `provider_name` uniqueness remains an explicit selection-quality limit.
+- **Authority and counters:** No provider call, spend, authority, or governed counter changed.
+- **Exact next safe action:** Have only the operator authorize and run the emitted smoke REAL command,
+  then run its emitted offline verifier only after successful publication and reconcile both records.
 
 ## 2026-08-21T14:24:33Z — Smoke null-root correction checkpointed
 

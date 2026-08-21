@@ -47,7 +47,7 @@ requested, and the operator reports that the ledger remains untouched at `$0`. T
 record operator-reported results only; the private artifacts and ledger were not read or promoted
 by Codex. The exact operator-supplied log is retained at
 [`operator_results.md`](../remediation/v3/operator_results.md), raw SHA-256
-`4f71b2ebf33037317095a1f16c64d21b102bb6229be75ae58a55158c95454e0a`, and is
+`33d06db3bde140204843282dda56c91704d58a054f02532ea68cfa830f618e62`, and is
 `OPERATOR_SUPPLIED_UNVERIFIED`: it grants no repository authority.
 
 The subsequent Claude Opus 5 `amazon-bedrock` PRIMARY r3 attempt also failed closed before registry
@@ -270,9 +270,11 @@ The exact runtime answers for both the smoke and full paths are:
   the atomic ledger checks remaining cumulative capacity and reserves before every attempt, with at
   most two attempts per logical request. An unknown actual charge is finalized at the reserved amount,
   and any actual-cost overrun is durably recorded and blocks further calls. There is no separate live
-  `$192.00` cumulative meter; judge enforcement is not deferred to an end-only interval check because
-  aggregate stage admission happens before the first judge POST and every attempt must reserve against
-  the retained ledger. Exact interval and final spend are checked again when the interval closes.
+  USD `8.00` smoke or USD `192.00` full cumulative meter: each figure is attempt-count arithmetic over
+  the USD `1.00` role ceilings. Judge enforcement is not deferred to an end-only interval check
+  because aggregate stage admission happens before the first judge POST and every attempt must reserve
+  against the retained ledger. Exact interval and final spend are checked again when the interval
+  closes.
   Kimi's total judge plan is unavailable before candidate outputs, but it becomes exactly bounded
   before dispatch; it is never uncapped at the POST boundary.
 - **Whole-inventory `provider_name` uniqueness remains enforced.** Current generation/response
@@ -283,7 +285,7 @@ The exact runtime answers for both the smoke and full paths are:
   multi-homed frontier judges and is an explicit selection-quality limitation; route diversity is not
   evidence that the excluded models were technically inferior.
 
-### Exact provider-free one-case smoke preflight — emission only
+### Historical smoke preflight and exact one-case REAL launch
 
 The initial smoke implementation is durably checkpointed at
 `af70559ddaf84178efffee1ec1bf7b99bf0b12df` (`Add noncrediting provider smoke path`). Its first
@@ -299,16 +301,44 @@ bundle pins, `independent = true`, three distinct roots, and rejection of a non-
 strict mypy, and diff integrity. It is committed, pushed, and remote-resolved at
 `7e9db03145b4afc1834dd47e9f4f97800e1edffb` (`Fix smoke null lineage projection`).
 
-The following command is emitted only for the next provider-free preflight. It returns before secret
-selection, provider access, ledger mutation, or output publication and was not executed by Codex:
+The provider-free preflight command was frozen in guide checkpoint
+`f0a0f39ee275bc774709bd0fbff411cfa7ecac04` (`Document provider-free smoke preflight`) over
+implementation checkpoint `7e9db03145b4afc1834dd47e9f4f97800e1edffb`. The operator ran it
+verbatim. It is now historical and must not be rerun. The current 33,621-byte operator record at raw
+SHA-256 `33d06db3bde140204843282dda56c91704d58a054f02532ea68cfa830f618e62`
+reports `VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS`, an unchanged `$0` ledger, two
+runs, one case, four logical requests, at most eight attempts, and four generation refetches. Its
+operator interval/final tripwires are USD `8.00`; its exact candidate plans are
+`944343e272b05b9925a0d4c618946ffbd4742f861e792c83be423531af07ea19` and
+`b281a184b96ee208284f57de5c17adf59a9a61a72788bfb1fb5b9ac80e25dd3d`, with exact derived
+candidate interval and final-spend caps of USD `0.21890352`. Judge admission remains
+`PENDING_REAL_CANDIDATE_OUTPUTS`, and the full smoke bound remains
+`UNAVAILABLE_BEFORE_REAL_CANDIDATE_OUTPUTS`. The effective configuration SHA-256 is unchanged at
+`42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54`.
+That identical configuration does not make the top-level runners identical: smoke uses a dedicated
+orchestrator while exercising the shared request, transport, generation-refetch, adjudication, cost,
+and evidence internals on the one-case projection.
+
+The operator may authorize and run the following one-shot paid REAL smoke command. Codex did not run
+it. The output path must still be absent and its private parent must already exist owned by the
+operator with mode `0700`; the published output is mode `0600`. This command can select the explicit
+secret file, contact the three pinned provider routes, reserve and spend against the retained ledger,
+and cannot be resumed; the nonresumability and judge safeguards above therefore apply exactly.
 
 ```shell
-env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models authenticated-runner-smoke --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r2.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260820-r2" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r5.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r5" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2" --smoke-corpus benchmarks/model_corpus_smoke --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260821-s1.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --secrets-env-file "$HOME/.mmaudit/secrets.env" --allow-code-egress --preflight-only --no-color
+env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models authenticated-runner-smoke --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r2.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260820-r2" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r5.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r5" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2" --smoke-corpus benchmarks/model_corpus_smoke --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260821-s1.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --secrets-env-file "$HOME/.mmaudit/secrets.env" --allow-code-egress --no-color
 ```
 
-Retain its complete terminal record in `docs/remediation/v3/operator_results.md`. No smoke REAL or
-offline-verifier command is emitted until this exact checkpoint reports
-`VALID / NONAUTHORIZING / NO PROVIDER EGRESS`. Emission is not execution authority.
+If and only if that REAL command succeeds and publishes the exact fresh bundle above, run this
+provider-free verifier under the same two non-secret configuration overrides. It requires no secret,
+provider access, egress flag, or ledger mutation:
+
+```shell
+env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models verify-authenticated-runner-smoke --bundle "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260821-s1.json" --smoke-corpus benchmarks/model_corpus_smoke --corpus benchmarks/model_corpus/manifest.json --config config/openrouter-qualification.toml --no-color
+```
+
+Retain both complete terminal records in `docs/remediation/v3/operator_results.md`. Emission is not
+execution authority, smoke success remains noncrediting, and it does not authorize the full campaign.
 
 ### Full 24-case REAL command — withheld
 

@@ -3,6 +3,133 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-08-21T14:33Z — SMOKE PREFLIGHT at checkpoint `f0a0f39` — **VALID**
+
+Ran the exact command emitted at line 306 of the operator guide, verbatim. Provider-free.
+Cost ledger unchanged — **$0 spent**.
+
+```
+AUTHRUNNER smoke preflight: VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS
+Inventory: runs=2; cases=1; logical_requests=4; maximum_provider_attempts=8; generation_refetches=4
+Operator cost tripwires: initial_spent_usd=0; operator_interval_cap_usd=8.00;
+                         operator_final_spent_cap_usd=8.00
+Candidate exact admission:
+  plan_sha256s=944343e272b05b9925a0d4c618946ffbd4742f861e792c83be423531af07ea19,
+               b281a184b96ee208284f57de5c17adf59a9a61a72788bfb1fb5b9ac80e25dd3d
+  derived_interval_cap_usd=0.21890352; derived_final_spent_cap_usd=0.21890352
+Judge exact admission: status=PENDING_REAL_CANDIDATE_OUTPUTS
+                       full_smoke_cost_bound=UNAVAILABLE_BEFORE_REAL_CANDIDATE_OUTPUTS
+Effective config SHA-256: 42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54
+```
+
+The `7e9db03` null-root fix works: `root_lineage = None` with `lineage_review.status = PENDING` is now
+accepted, and the sha256 root-format validation passes on all three pairs.
+
+### Smoke vs full campaign
+
+| | full 24-case | smoke 1-case |
+|---|---|---|
+| logical requests | 96 | 4 |
+| max provider attempts | 192 | 8 |
+| derived candidate cap | $5.27438208 | **$0.21890352** |
+| operator tripwire (hard ceiling) | $192.00 | **$8.00** |
+
+**The effective config SHA-256 is byte-identical to the full 24-case preflight**
+(`42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54`). Same runtime configuration, same
+code paths, same three routes — only the corpus differs. The smoke run is therefore representative of
+what the full run will exercise, not an easier alternate path.
+
+**Awaiting the paid smoke command.** Emit it and the operator will authorize; it will then be run
+verbatim and the result recorded here.
+
+## 2026-08-21T14:10Z — SMOKE PREFLIGHT after `af70559` — BUG: smoke path drops the null-root tolerance
+
+Ran `models authenticated-runner-smoke --preflight-only` with the r2/r5/r2 inputs and
+`--smoke-corpus benchmarks/model_corpus_smoke`. Provider-free, **$0 spent**.
+
+```
+mmaudit failed safely: smoke public lineage returned a non-independent projection
+```
+
+`authenticated_runner_smoke_openrouter.py:996-1001` requires each returned projection to equal
+`expected[index]`, where `expected` is built from the **registry** objects:
+
+```python
+expected = tuple((left.exact_model_id, left.root_lineage,
+                  right.exact_model_id, right.root_lineage) for left, right in pairs)
+```
+
+But discovery does not bind lineage, so `root_lineage` is `None` in every registry:
+
+| registry | exact_model_id | root_lineage |
+|---|---|---|
+| `candidate-registry-r2.json` | `deepseek/deepseek-v4-pro-0813` | **None** |
+| `primary-judge-registry-r5.json` | `tencent/hy3` | **None** |
+| `replay-judge-registry-r2.json` | `moonshotai/kimi-k3` | **None** |
+
+The projection returns real sha256 roots from the sealed bundle, so `None != sha256:...` and the
+comparison can never succeed. **The smoke path fails for any real registry set.**
+
+The full runner already handles this. `authenticated_runner_execution.py:997` and `:1004` both guard
+with `is not None`:
+
+```python
+if judge.root_lineage is not None and judge.root_lineage != projection.right_root_lineage:
+```
+
+`grep -c "root_lineage is not None"` returns **2** in `authenticated_runner_execution.py` and **0** in
+`authenticated_runner_smoke_openrouter.py`. The tolerance was not carried over.
+
+Suggested fix: apply the same null-tolerant comparison in the smoke path — compare
+`exact_model_id` unconditionally, and `root_lineage` only when the registry value is not `None`,
+while still requiring `item.independent is True` and the correct projection type. Note this also means
+the smoke path's unit tests are passing against fixtures whose registries carry non-null
+`root_lineage`, which real discovery output never does — worth a regression test using a null-root
+registry.
+
+**Not yet run:** the smoke REAL launch. Blocked on this fix. Derived smoke cost bound is still unknown
+because preflight cannot complete.
+
+## 2026-08-21T12:20Z — PREFLIGHT r2/r5/r2 — **VALID**, with derived exact caps
+
+Run after `a1ace77`. All three roles CONFIRMED in the resealed 16-source / 10-root bundle
+(`verified_at 2026-08-21T11:47:00Z`). Ledger unchanged — **$0 spent**.
+
+```
+AUTHRUNNER preflight: VALID / NONAUTHORIZING / NO PROVIDER EGRESS
+Inventory: runs=2; cases=24; candidate_logical_requests=48; judge_logical_requests=48;
+           logical_requests=96
+Attempts:  maximum_per_logical_request=2; maximum_provider_attempts=192; generation_refetches=96
+Operator cost tripwires: initial_spent_usd=0; operator_interval_cap_usd=192.00;
+                         operator_final_spent_cap_usd=192.00
+Candidate exact admission:
+  plan_sha256s=f0f367605dd75674b08c8974bf69570190e4137be46a47619c1b5b9d85c83b57,
+               3fc6e535d22baf9bbbdafe4ccb50f9127fdb6d5c2fba7ce0463388765d2f8436
+  derived_interval_cap_usd=5.27438208; derived_final_spent_cap_usd=5.27438208
+Judge exact admission: status=PENDING_REAL_CANDIDATE_OUTPUTS
+                       full_campaign_cost_bound=UNAVAILABLE_BEFORE_REAL_CANDIDATE_OUTPUTS
+Effective config SHA-256: 42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54
+```
+
+The effort-mode catalog fallback works: all three roles validated on `effort = "high"`.
+
+### Cost exposure for the REAL launch — partially bounded
+
+- **Candidate phase: exactly bounded at $5.27.** Derived from sealed pricing, not estimated.
+- **Judge phase: not boundable in advance.** Judges consume real candidate outputs, whose token counts
+  do not exist until the candidate phase runs. Correctly reported as `UNAVAILABLE`, not guessed.
+- Backstops if the judge phase runs long: operator tripwire $192.00, ledger cap $250.00.
+
+So the REAL launch has a known floor of ~$5.27 and a judge component capped only by the $192 tripwire.
+The replay judge `moonshotai/kimi-k3` on `together` is the cost risk at $15.00/1M completion tokens —
+roughly 4x the candidate and far above the primary judge. If judge output volume resembles candidate
+volume, total spend should land in the low tens of dollars; the $192 tripwire is the guard against
+that assumption being wrong, and it is well inside the $250 ledger cap.
+
+**This is the point requiring explicit operator authorization.** Everything to here has been
+provider-free and cost-free. The REAL launch is the first step that spends money and the first that can
+produce a completed real audit.
+
 ## 2026-08-21T11:42Z — BOTH r5 prerequisites RUN AND PASSED
 
 Both commands listed in the operator guide after `9075ca7` were executed verbatim. Both exit 0.
