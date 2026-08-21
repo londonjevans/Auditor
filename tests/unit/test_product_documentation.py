@@ -548,7 +548,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     )
     assert "Command emission is not execution authority" in normalized_model_selection
     assert runtime_status["candidate_commit"] == ("c9a8923064ef1bb606a67b14641c4c8df55bc9ea")
-    assert runtime_status["last_checkpoint_commit"] == ("c137f8bae9d27f5120e7e08eba2d9b5b384e1ca5")
+    assert runtime_status["last_checkpoint_commit"] == ("7b2db061ceb7449674399d6133428b97b74b4b96")
     assert runtime_status["autorun_status"] == "BLOCKED_SAFETY"
     resume_action = runtime_status["pause_state"]["resume_action_v3_authrunner"]
     assert "post-origin-fix provider-free smoke preflight" in resume_action
@@ -559,6 +559,10 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert smoke_status["post_origin_fix_guide_checkpoint"] == (
         "c137f8bae9d27f5120e7e08eba2d9b5b384e1ca5"
     )
+    assert smoke_status["paid_smoke_guide_checkpoint"] == (
+        "7b2db061ceb7449674399d6133428b97b74b4b96"
+    )
+    assert "7b2db061ceb7449674399d6133428b97b74b4b96" in model_selection
     assert smoke_status["preflight_status"] == (
         "VALID_NONCREDITING_NONAUTHORIZING_NO_PROVIDER_EGRESS_POST_ORIGIN_FIX"
     )

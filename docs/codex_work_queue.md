@@ -646,6 +646,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   issuer. No provider completion, spend, authority, or governed counter changed. A terminal suite
   launched before the live operator evidence and reconciliation bytes changed; it was interrupted
   after 82 passed, 13 prerequisite skips, and 1381.01 seconds and receives no pass credit.
+  Paid-smoke guide/evidence checkpoint `7b2db061ceb7449674399d6133428b97b74b4b96` is pushed and
+  remote-resolved and freezes the one-case command plus conditional verifier over the unchanged
+  `c9a8923` implementation.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
   and non-crediting. Both the historical and post-fix provider-free smoke preflights were valid and
   nonauthorizing, but neither can exercise the post-response origin issuer. Exact judge admission and the

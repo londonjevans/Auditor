@@ -374,6 +374,11 @@ that runtime seam. A terminal suite started before the live operator evidence an
 bytes changed; it was interrupted after 82 passed, 13 prerequisite skips, and 1381.01 seconds and
 receives no pass credit.
 
+Paid-smoke guide/evidence checkpoint `7b2db061ceb7449674399d6133428b97b74b4b96`
+(`Emit fixed noncrediting smoke launch`) is pushed and remote-resolved. It freezes the exact paid
+command and conditional verifier below over the unchanged `c9a8923` implementation. A later docs-only
+checkpoint may record this hash without changing either command.
+
 The operator may authorize and run the following one-shot paid REAL smoke command. Codex did not run
 it. The output path must still be absent and its private parent must already exist owned by the
 operator with mode `0700`; the published output is mode `0600`. This command can select the explicit

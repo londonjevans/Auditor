@@ -20,7 +20,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9965235675
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: c137f8bae9d27f5120e7e08eba2d9b5b384e1ca5 (`Emit fixed smoke preflight`); pushed and remote-resolved guide/preflight checkpoint over implementation checkpoint c9a8923064ef1bb606a67b14641c4c8df55bc9ea. Safety withdrawal checkpoint: ca63b924f244cc9bcee2d2405d20b000ce0bb9d6. Historical unsafe launch checkpoint: f5afb2bff074254ee5c4a484386ee4c416b17a88
+LAST_CHECKPOINT_COMMIT: 7b2db061ceb7449674399d6133428b97b74b4b96 (`Emit fixed noncrediting smoke launch`); pushed and remote-resolved paid-smoke guide/evidence checkpoint over provider-free guide/preflight checkpoint c137f8bae9d27f5120e7e08eba2d9b5b384e1ca5 and implementation checkpoint c9a8923064ef1bb606a67b14641c4c8df55bc9ea. Safety withdrawal checkpoint: ca63b924f244cc9bcee2d2405d20b000ce0bb9d6. Historical unsafe launch checkpoint: f5afb2bff074254ee5c4a484386ee4c416b17a88
 
 ## 2026-08-21T15:36:00Z — Post-origin-custody smoke preflight VALID
 
@@ -30,7 +30,9 @@ LAST_CHECKPOINT_COMMIT: c137f8bae9d27f5120e7e08eba2d9b5b384e1ca5 (`Emit fixed sm
 - Checkpoint custody: source implementation is
   `c9a8923064ef1bb606a67b14641c4c8df55bc9ea` (`Bind smoke REAL origin custody`). Distinct guide
   checkpoint `c137f8bae9d27f5120e7e08eba2d9b5b384e1ca5` (`Emit fixed smoke preflight`) froze the command
-  the operator ran.
+  the operator ran. Paid-smoke guide/evidence checkpoint
+  `7b2db061ceb7449674399d6133428b97b74b4b96` (`Emit fixed noncrediting smoke launch`) freezes the
+  exact paid command and conditional verifier now emitted.
 - Operator reconciliation: the current 38,352-byte, 690-line operator record has raw SHA-256
   `ed416745d3d0d957e05919e7cf10e14e75b4e9f3da800000e5789371520abbe2`. It records
   `VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS`, two runs, one case, four logical
