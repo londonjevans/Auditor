@@ -8,9 +8,9 @@ AUTORUN_STATUS: BLOCKED_SAFETY
 CURRENT_MILESTONE: M1-DETERMINISTIC-PRODUCT (REACHED)
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001 (COMPLETE)
-NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY`. Review the exact r6/r6/r2 inputs against pushed checkpoint `692eb173f002818b4434b746c8801b4cbeb852e2`, then emit only a fresh metadata-only live-route gate if still exact. Normal preflight, paid smoke, verifier, fresh discovery, construct-only, and full commands remain absent. Positive owned-REAL parent external execution remains unvalidated. `V3-AUTONOMY-001` Phase 0 remains queued and paused.
-LAST_COMMAND: Root 229-test focused and 266-test adjacent matrices; repository Ruff; format over 510 tracked Python files; strict mypy over 206 source files; schema verification; independent review; `.venv/bin/pytest -q tests/unit/test_product_documentation.py tests/unit/test_product_objective.py`; Ruff check/format for the product-documentation contract; strict governance JSON parse; zero-current-command scan; operator-results custody; `git diff --check`.
-LAST_RESULT: PASS — provider-free revocation cascade is `CLEAN` with no blocker/HIGH at pushed checkpoint `692eb173f002818b4434b746c8801b4cbeb852e2`; 12 documentation/objective tests, documentation Ruff/format, both governance JSON documents, zero current AUTHRUNNER commands, operator record custody, and diff integrity also passed. This does not validate a positive owned-REAL parent against the external provider. Authority and governed counters are unchanged.
+NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY`. Await separate operator authorization for r6/r6/r2 metadata-only step A. Step B requires a second authorization and may begin only immediately after A exits `0` and its complete terminal record is exact-VALID, with no delay or intervening source/config/artifact/ledger/output/secret/environment change; otherwise separately authorize and rerun A. Normal preflight, verifier, discovery, construct-only, and full commands remain absent. `V3-AUTONOMY-001` Phase 0 remains queued and paused.
+LAST_COMMAND: Twelve product-documentation/objective tests; Ruff check and format check over both documentation-test files; strict duplicate-key parsing of both governance JSON files; exact two-line command parity against `092a09ee94d528f67b43edb180860d45328f741f`; operator-custody reread/hash; and diff integrity.
+LAST_RESULT: PASS / PARTIAL / BLOCKED_SAFETY — all 12 tests passed; Ruff, format, strict JSON, exact command parity, operator custody, and diff gates passed. Source checkpoint `692eb173f002818b4434b746c8801b4cbeb852e2` and zero-command governance checkpoint `02ed5bef89d094e0d0c4852e1bf73914d9960c6b` remain pushed and remote-resolved. Exactly two historical-byte r6/r6/r2 commands are re-emitted for separate authorization: metadata-only A, then conditional paid one-case B only under immediate exact-VALID adjacency. Neither command has run. The operator record remains 50,211 bytes, 906 lines, raw SHA-256 `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd`; authority and governed counters are unchanged.
 REAL_MODEL_CALLS_ATTEMPTED: 11
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 10
@@ -20,7 +20,33 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9965235675
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 692eb173f002818b4434b746c8801b4cbeb852e2 — pushed provider-free AUTHRUNNER revocation cascade. Historical adjacent sequence 092a09ee94d528f67b43edb180860d45328f741f remains withdrawn unexecuted; zero-command evidence checkpoint 3bcac02da30bdad2c7e584d35c091ea5cb75ea7d remains historical.
+LAST_CHECKPOINT_COMMIT: 02ed5bef89d094e0d0c4852e1bf73914d9960c6b — pushed zero-command governance reconciliation. Current source implementation: 692eb173f002818b4434b746c8801b4cbeb852e2 (`Cascade AUTHRUNNER child revocation`), pushed and remote-resolved. Historical command-byte source: 092a09ee94d528f67b43edb180860d45328f741f.
+
+## 2026-08-21T20:24:00Z — Adjacent r6/r6/r2 sequence re-emitted after cascade
+
+- Status: `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`; command emission is
+  nonauthorizing and neither command has run.
+- Checkpoint custody: exact source is pushed checkpoint
+  `692eb173f002818b4434b746c8801b4cbeb852e2`; the immediately preceding pushed zero-command
+  governance checkpoint is `02ed5bef89d094e0d0c4852e1bf73914d9960c6b`. Command bytes come from
+  historical checkpoint `092a09ee94d528f67b43edb180860d45328f741f`.
+- Commands: exactly two separate r6/r6/r2 commands are emitted: metadata-only step A and paid
+  one-case step B. They must not be chained and require separate authorization. No normal preflight,
+  verifier, discovery, construct-only, or full command is emitted.
+- Pre-A inspection: confirm an exactly empty dedicated ledger, absent `s1` output, mode-`0700`
+  operator-owned output parent, and unchanged exact artifacts/configuration before authorization.
+- Adjacency gate: B may begin only immediately after the complete A terminal result is exact VALID
+  and matches all three models, 15 logical GETs, at most 30 attempts, zero usage, unchanged
+  budget/ledger, absent output, and pinned config. Any delay or intervening source, configuration,
+  artifact, ledger, output, secret, or environment change requires separate A reauthorization and
+  rerun.
+- Evidence boundary: the operator record is unchanged at 50,211 bytes, 906 lines, raw SHA-256
+  `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd`. No provider result,
+  authority, qualification, release, or governed counter changed; the full command remains withheld.
+- Validation: twelve product-documentation/objective tests passed. Ruff check and format check over
+  both documentation-test files, strict duplicate-key parsing of both governance JSON files, exact
+  two-command byte parity against `092a09ee94d528f67b43edb180860d45328f741f`, operator-record
+  custody, and diff integrity passed.
 
 ## 2026-08-21T20:10:00Z — Provider-free revocation cascade clean; REAL remains blocked
 

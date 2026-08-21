@@ -479,16 +479,26 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert model_selection.count(tencent_r5_command) == 1
     assert "historical command records and must not be rerun" in normalized_model_selection
     assert "9075ca7635c861194cc732e67d9ebb92e6ffa0af" in model_selection
-    assert smoke_live_route_command not in model_selection
-    assert smoke_real_command not in model_selection
+    assert model_selection.count(smoke_live_route_command) == 1
+    assert model_selection.count(smoke_real_command) == 1
+    assert model_selection.index(smoke_live_route_command) < model_selection.index(
+        smoke_real_command
+    )
+    assert (
+        smoke_live_route_command.replace(
+            "--allow-metadata-egress --live-route-preflight-only --no-color",
+            "--allow-code-egress --no-color",
+        )
+        == smoke_real_command
+    )
     assert smoke_preflight_command not in model_selection
     assert smoke_verify_command not in model_selection
-    assert ".venv/bin/mmaudit models authenticated-runner-smoke" not in model_selection
+    assert model_selection.count(".venv/bin/mmaudit models authenticated-runner-smoke") == 2
     assert ".venv/bin/mmaudit models verify-authenticated-runner-smoke" not in model_selection
     assert ".venv/bin/mmaudit models authenticated-runner --" not in model_selection
-    assert "--live-route-preflight-only" not in model_selection
-    assert "--allow-metadata-egress" not in model_selection
-    assert "--allow-code-egress" not in model_selection
+    assert model_selection.count("--live-route-preflight-only") == 1
+    assert model_selection.count("--allow-metadata-egress") == 1
+    assert model_selection.count("--allow-code-egress") == 1
     assert "--preflight-only" not in model_selection
     assert "PENDING_TENCENT_LINEAGE_RESEAL_CHECKPOINT" not in model_selection
     assert "a1ace778afcf308b57fe436271cdc16a2bb8e156" in model_selection
@@ -562,7 +572,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "whole-repository format check is intentionally not credited" in (
         normalized_model_selection
     )
-    assert "The local fix changed no provider result" in normalized_model_selection
+    assert "No provider result, ledger value, governed counter" in normalized_model_selection
     assert "59f9f40a97dce41a16fb3ab9243b4d8588bcf3cb" in model_selection
     assert "Bind AUTHRUNNER token budgets" in normalized_model_selection
     assert "136-test five-file AUTHRUNNER matrix" in normalized_model_selection
@@ -571,21 +581,27 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "blocking lifecycle gap" in normalized_model_selection
     assert "retained candidate-campaign" in normalized_model_selection
     assert "Negative downstream consumer tests cover" in normalized_model_selection
-    assert "were not authorized or executed and are withdrawn" in normalized_model_selection
-    assert "There is no current normal preflight, live-route, paid smoke" in (
+    assert "were never authorized or executed and remain historical" in normalized_model_selection
+    assert "Command emission does not prove execution" in normalized_model_selection
+    assert "only current AUTHRUNNER commands" in normalized_model_selection
+    assert "require separate operator authorization" in normalized_model_selection
+    assert "do not chain them" in normalized_model_selection
+    assert "No normal provider-free preflight, verifier, discovery, construct-only" in (
         normalized_model_selection
     )
-    assert "full AUTHRUNNER command" in normalized_model_selection
+    assert "full AUTHRUNNER command is emitted" in normalized_model_selection
     assert "9f5c94d97b3d79d51c10e250b99244591461e959" in model_selection
     assert "3bcac02da30bdad2c7e584d35c091ea5cb75ea7d" in model_selection
     assert "092a09ee94d528f67b43edb180860d45328f741f" in model_selection
-    assert "does not close post-response custody, adjudication, or revocation" in (
-        normalized_model_selection
+    assert (
+        "Neither the prior operator result nor step A proves post-response custody or adjudication"
+        in (normalized_model_selection)
     )
     assert "provider-free `REVOCATION_CASCADE_FIX` is complete and clean" in (
         normalized_model_selection
     )
     assert "692eb173f002818b4434b746c8801b4cbeb852e2" in model_selection
+    assert "02ed5bef89d094e0d0c4852e1bf73914d9960c6b" in model_selection
     assert "exact PID-bound campaign and generation revokers" in normalized_model_selection
     assert "parent-to-child cascade" in normalized_model_selection
     assert "traceback-safe execution handoff guards" in normalized_model_selection
@@ -595,8 +611,24 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "strict mypy over 206 source files" in normalized_model_selection
     assert "independent review reported `CLEAN` with no blocker/HIGH" in model_selection
     assert "no genuine owned-REAL parent capability" in normalized_model_selection
-    assert "Every AUTHRUNNER runnable command remains absent" in normalized_model_selection
-    assert "fresh r6/r6/r2 metadata-only live-route gate" in normalized_model_selection
+    assert "Step A is metadata egress only" in model_selection
+    assert "15 logical GETs with at most 30 attempts" in normalized_model_selection
+    assert "does not reserve ledger cost" in normalized_model_selection
+    assert "Inserting a separate normal preflight adds no safety gate" in (
+        normalized_model_selection
+    )
+    assert "Step B may be separately authorized only after step A exits `0`" in model_selection
+    assert "complete terminal record" in normalized_model_selection
+    assert "immediately after that full exact-VALID inspection" in normalized_model_selection
+    assert "no delay and no intervening source" in normalized_model_selection
+    assert "Any delay, interruption" in model_selection
+    assert "obtain separate authorization and rerun step A" in normalized_model_selection
+    assert "dedicated ledger is exactly empty" in normalized_model_selection
+    assert "the `s1` output is absent" in model_selection
+    assert "operator-owned parent directory already exists with mode `0700`" in (
+        normalized_model_selection
+    )
+    assert "Both current commands are emitted but not run" in normalized_model_selection
     assert "current r6/r6/r2 input composition" in normalized_model_selection
     assert "current r2/r5/r2 input composition" not in normalized_model_selection
     assert "candidate-registry-r6.json" in model_selection
@@ -604,28 +636,27 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "primary-judge-registry-r6.json" in model_selection
     assert "authrunner-primary-judge-20260821-r6" in model_selection
     assert runtime_status["candidate_commit"] == ("692eb173f002818b4434b746c8801b4cbeb852e2")
-    assert runtime_status["last_checkpoint_commit"] == ("692eb173f002818b4434b746c8801b4cbeb852e2")
+    assert runtime_status["last_checkpoint_commit"] == ("02ed5bef89d094e0d0c4852e1bf73914d9960c6b")
     assert runtime_status["autorun_status"] == "BLOCKED_SAFETY"
     assert runtime_status["current_ticket"] == "V3-AUTHRUNNER-001"
     assert runtime_status["active_provider_free_work"] == {
         "ticket": "V3-AUTHRUNNER-001",
-        "slice": "REVOCATION_CASCADE_FIX_COMPLETE_AWAITING_METADATA_GATE_REVIEW",
+        "slice": "ADJACENT_R6_R6_R2_LIVE_ROUTE_GATE_AND_PAID_SMOKE_REEMITTED_POST_CASCADE",
         "status": "PARTIAL_BLOCKED_SAFETY",
         "provider_access_authorized": False,
         "secret_access_authorized": False,
         "private_operator_artifact_access_authorized": False,
         "runtime_authority_granted": False,
-        "operator_metadata_egress_command_emitted": False,
-        "operator_paid_smoke_command_emitted": False,
+        "operator_metadata_egress_command_emitted": True,
+        "operator_paid_smoke_command_emitted": True,
         "operator_command_execution_authorized": False,
         "parked_ticket": "V3-AUTONOMY-001",
         "parked_ticket_status": "QUEUED_PHASE_0_PAUSED",
     }
     resume_action = runtime_status["pause_state"]["resume_action_v3_authrunner"]
-    assert "provider-free revocation cascade is CLEAN" in resume_action
-    assert "PARTIAL" in resume_action
-    assert "fresh metadata-only live-route gate" in resume_action
-    assert "Positive owned-REAL parent external execution remains unvalidated" in resume_action
+    assert "Step B requires separate authorization" in resume_action
+    assert "otherwise rerun A under separate authorization" in resume_action
+    assert "Normal preflight, verifier, discovery, construct-only" in resume_action
     assert smoke_status["implementation_checkpoint"] == ("692eb173f002818b4434b746c8801b4cbeb852e2")
     assert smoke_status["post_origin_fix_guide_checkpoint"] == (
         "c137f8bae9d27f5120e7e08eba2d9b5b384e1ca5"
@@ -646,13 +677,13 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "ZERO_SPEND_NO_OUTPUT"
     )
     assert smoke_status["real_command_emission_status"] == (
-        "ABSENT_WITHHELD_POSITIVE_OWNED_REAL_PARENT_UNVALIDATED"
+        "EMITTED_NOT_RUN_SEPARATE_AUTHORIZATION_REQUIRED_AFTER_IMMEDIATE_EXACT_VALID_STEP_A"
     )
     assert smoke_status["offline_verifier_command_emission_status"] == (
         "ABSENT_WITHHELD_NO_CURRENT_BUNDLE"
     )
     assert smoke_status["live_route_preflight_command_emission_status"] == (
-        "ABSENT_PENDING_FRESH_R6_R6_R2_METADATA_GATE_REVIEW"
+        "EMITTED_NOT_RUN_SEPARATE_AUTHORIZATION_REQUIRED_ADJACENT_STEP_A"
     )
     assert smoke_status["full_24_case_real_command_status"] == "ABSENT_WITHHELD_BLOCKED_SAFETY"
     assert smoke_status["current_operator_results_sha256"] == OPERATOR_RESULTS_SHA256
@@ -668,15 +699,28 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert smoke_status["current_live_route_preflight_atomic_ledger_unchanged"] is True
     assert smoke_status["current_live_route_preflight_output_published"] is False
     assert smoke_status["zero_command_evidence_checkpoint"] == (
-        "3bcac02da30bdad2c7e584d35c091ea5cb75ea7d"
+        "02ed5bef89d094e0d0c4852e1bf73914d9960c6b"
     )
     assert smoke_status["historical_adjacent_sequence_emitted_then_withdrawn_unexecuted"] is True
-    assert smoke_status["adjacent_sequence_required"] is False
-    assert smoke_status["step_a_exit_zero_required"] is False
-    assert smoke_status["step_a_complete_exact_result_required"] is False
-    assert smoke_status["step_b_separate_operator_authorization_required"] is False
-    assert smoke_status["step_b_must_begin_immediately_after_step_a_review"] is False
-    assert smoke_status["delay_or_interruption_requires_step_a_rerun"] is False
+    assert smoke_status["adjacent_sequence_required"] is True
+    assert smoke_status["current_adjacent_command_count"] == 2
+    assert smoke_status["current_adjacent_commands_emitted_not_run"] is True
+    assert smoke_status["commands_must_not_be_chained"] is True
+    assert smoke_status["pre_a_ledger_exactly_empty_inspection_required"] is True
+    assert smoke_status["pre_a_output_absent_inspection_required"] is True
+    assert smoke_status["pre_a_output_parent_mode_0700_inspection_required"] is True
+    assert smoke_status["pre_a_exact_artifact_and_config_inspection_required"] is True
+    assert smoke_status["step_a_exit_zero_required"] is True
+    assert smoke_status["step_a_complete_exact_result_required"] is True
+    assert smoke_status["step_b_separate_operator_authorization_required"] is True
+    assert smoke_status["step_b_must_begin_immediately_after_step_a_review"] is True
+    assert smoke_status["delay_or_interruption_requires_step_a_rerun"] is True
+    assert (
+        smoke_status[
+            "intervening_source_config_artifact_ledger_output_secret_or_shell_env_change_allowed"
+        ]
+        is False
+    )
     assert smoke_status["normal_provider_free_preflight_currently_emitted"] is False
     assert smoke_status["operator_paid_smoke_run"] is True
     assert smoke_status["operator_paid_smoke_succeeded"] is False
@@ -737,18 +781,20 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert cascade_validation["tracked_python_format_files_unchanged"] == 510
     assert cascade_validation["strict_mypy_source_files"] == 206
     assert cascade_validation["independent_review"] == "CLEAN_NO_BLOCKER_OR_HIGH"
-    assert exact_status["status"] == "PARTIAL_REVOCATION_CASCADE_FIX_CLEAN_REAL_BLOCKED_SAFETY"
+    assert exact_status["status"] == (
+        "PARTIAL_ADJACENT_R6_R6_R2_GATE_AND_PAID_SMOKE_REEMITTED_POST_CASCADE_REAL_BLOCKED_SAFETY"
+    )
     assert exact_status["ticket_status"] == "PARTIAL"
     assert exact_status["autorun_status"] == (
-        "BLOCKED_SAFETY_POSITIVE_OWNED_REAL_PARENT_UNVALIDATED"
+        "BLOCKED_SAFETY_PAIRED_COMMANDS_EMITTED_NOT_RUN_SEPARATE_AUTHORIZATION_REQUIRED"
     )
     assert exact_status["paid_smoke_real_command_status"] == (
-        "ABSENT_WITHHELD_POSITIVE_OWNED_REAL_PARENT_UNVALIDATED"
+        "EMITTED_NOT_RUN_SEPARATE_AUTHORIZATION_REQUIRED_AFTER_IMMEDIATE_EXACT_VALID_STEP_A"
     )
     assert exact_status["offline_smoke_verifier_command_status"] == (
         "ABSENT_WITHHELD_NO_CURRENT_BUNDLE"
     )
-    assert exact_status["real_command_emission_authorized_for_operator_review"] is False
+    assert exact_status["real_command_emission_authorized_for_operator_review"] is True
     revocation_fix = exact_status["revocation_cascade_fix"]
     assert revocation_fix["acceptance_requirement"] == (
         "REVOCATION_INVALIDATES_EVERY_DOWNSTREAM_CONSUMER"
@@ -771,11 +817,16 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert current_selection["primary_registry_generation"] == "r6"
     assert current_selection["replay_registry_generation"] == "r2"
     assert current_selection["normal_provider_free_preflight_command_currently_emitted"] is False
-    assert current_selection["current_live_route_preflight_command_emitted"] is False
-    assert current_selection["current_paid_smoke_command_emitted"] is False
+    assert current_selection["current_live_route_preflight_command_emitted"] is True
+    assert current_selection["current_paid_smoke_command_emitted"] is True
     assert "historical_full_r2_r5_r2_candidate_admission" in exact_status
     assert exact_status["zero_command_evidence_checkpoint"] == (
-        "3bcac02da30bdad2c7e584d35c091ea5cb75ea7d"
+        "02ed5bef89d094e0d0c4852e1bf73914d9960c6b"
+    )
+    assert exact_status["current_guide_checkpoint"] == "PENDING_CURRENT_GOVERNANCE_CHECKPOINT"
+    assert (
+        "EXACTLY_TWO_HISTORICAL_BYTE_SEPARATE_ADJACENT_R6_R6_R2_COMMANDS"
+        in exact_status["current_guide_checkpoint_scope"]
     )
     assert smoke_status["post_token_budget_fix_preflight_operator_results_sha256"] == (
         "76eff45c95116dea28cdaad78115d3926c6da3674a6b322784203335bfef7465"
