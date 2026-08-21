@@ -111,13 +111,14 @@
     {
       "advisory_lineage_group": "Moonshot-Kimi",
       "allowed_provider_endpoints": [
-        "wafer"
+        "modal/mxfp4",
+        "phala"
       ],
       "approved_roles": [],
       "availability": "UNVERIFIED",
       "documentary_lineage": "UNCONFIRMED",
       "entry_authority": false,
-      "entry_sha256": "f0a9d880f6f02928ffb5ec67d962b9bc1def6ce896faf92c3800a7fa8456d589",
+      "entry_sha256": "77217b6dca94bc292a13cc5a5ce84c48c68a6bb2e055462db51048013abd3f11",
       "exact_model_id": "moonshotai/kimi-k3",
       "lineage_group_seed_sha256": "f46cb1c7d55406b73aebebce2386b927039759f3d24aa6930422f0d125551c34",
       "priority_rank": 7
@@ -200,7 +201,7 @@
     }
   ],
   "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
-  "plan_sha256": "4e6c744559b1cc49c8ede590c868df103a10402d429d5e5d02cf4f429e0f3a66",
+  "plan_sha256": "ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f",
   "production_selection_authorized": false,
   "provider_call_authorized": false,
   "provider_metadata_present": false,
@@ -243,6 +244,7 @@
     "Operator results SHA-256 00de61717cb6d61c003682abca12ae2c7e59613db03ef99558133b972c123516 records Gemma effort=high rejection and an unverified Z.AI GLM-5.2/sail-research-fp8 proposal; fresh documentary lineage capture and exact discovery are required.",
     "Operator results SHA-256 14ece147138fb5bf6f32d2737ca6b174817a923c5ca50269bc14337c60a3453c records the historical unverified Gemma rank-12/deepinfra-fp8 proposal; later reasoning evidence supersedes it.",
     "Operator results SHA-256 5faa33fe1bd5b332e8dffa0b29ed5718886d0c8b22c65cb1dc67b306eba8d00f records the metadata-only r7/r8/r7 completion-capacity rejection and the nonauthorizing DeepSeek/parasail-fp8 and Kimi/Wafer successor routes; fresh exact discovery remains required.",
+    "Operator results SHA-256 5fb3d3091e339b840e84468093c0f1f64c738673a40761fcf7d7b9d7ae4c41c6 records successful DeepSeek/parasail-fp8 metadata discovery and fail-closed Kimi/Wafer non-operational drift; modal/mxfp4 and phala remain nonauthorizing allowlist seeds requiring fresh exact discovery.",
     "Zhipu GLM 5.2 is an unverified availability seed; the review names unroutable GLM 5.3."
   ]
 }

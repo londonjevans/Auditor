@@ -173,7 +173,7 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
     guide = (ROOT / "docs" / "models" / "model_selection.md").read_text(encoding="utf-8")
 
     assert plan.schema_version == "1.3"
-    assert plan.plan_sha256 == "4e6c744559b1cc49c8ede590c868df103a10402d429d5e5d02cf4f429e0f3a66"
+    assert plan.plan_sha256 == "ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f"
     assert plan.plan_sha256 in guide
     assert len(plan.entries) == 12
     assert plan.authenticated_runner_selection is not None
@@ -202,9 +202,12 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
         "caf35cf7507cb1f7299dcdcfbc06e405f10d855361f13a4d8dd21c844bc15176"
     )
     assert entries["qwen/qwen3.8-max"].allowed_provider_endpoints == ("alibaba",)
-    assert entries["moonshotai/kimi-k3"].allowed_provider_endpoints == ("wafer",)
+    assert entries["moonshotai/kimi-k3"].allowed_provider_endpoints == (
+        "modal/mxfp4",
+        "phala",
+    )
     assert entries["moonshotai/kimi-k3"].entry_sha256 == (
-        "f0a9d880f6f02928ffb5ec67d962b9bc1def6ce896faf92c3800a7fa8456d589"
+        "77217b6dca94bc292a13cc5a5ce84c48c68a6bb2e055462db51048013abd3f11"
     )
     assert entries["google/gemma-4-26b-a4b-it"].allowed_provider_endpoints == ("deepinfra/fp8",)
     assert entries["google/gemma-4-26b-a4b-it"].entry_sha256 == (
@@ -221,6 +224,7 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
     assert any("00de61717cb6d61c" in item for item in plan.unresolved_requirements)
     assert any("14ece147138fb5bf" in item for item in plan.unresolved_requirements)
     assert any("5faa33fe1bd5b332" in item for item in plan.unresolved_requirements)
+    assert any("5fb3d3091e339b84" in item for item in plan.unresolved_requirements)
     assert all(entry.availability == "UNVERIFIED" for entry in plan.entries)
     assert all(entry.documentary_lineage == "UNCONFIRMED" for entry in plan.entries)
 
@@ -253,7 +257,7 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
         ),
         DiscoveryCandidateRoute(
             exact_model_id="moonshotai/kimi-k3",
-            approved_provider_endpoint="wafer",
+            approved_provider_endpoint="modal/mxfp4",
         ),
         DiscoveryCandidateRoute(
             exact_model_id="z-ai/glm-5.2",
@@ -262,6 +266,18 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
     )
 
     assert validate_candidate_selection_routes(plan, routes=corrected) == plan
+    assert (
+        validate_candidate_selection_routes(
+            plan,
+            routes=(
+                DiscoveryCandidateRoute(
+                    exact_model_id="moonshotai/kimi-k3",
+                    approved_provider_endpoint="phala",
+                ),
+            ),
+        )
+        == plan
+    )
     for model_id, stale_endpoint in (
         ("deepseek/deepseek-v4-pro-0813", "novita/fp8"),
         ("deepseek/deepseek-v4-pro-0813", "novita"),
@@ -269,6 +285,7 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
         ("deepseek/deepseek-v4-pro-0813", "fireworks"),
         ("moonshotai/kimi-k3", "deepinfra/bf16"),
         ("moonshotai/kimi-k3", "together"),
+        ("moonshotai/kimi-k3", "wafer"),
         ("z-ai/glm-5.2", "deepinfra/fp4"),
         ("z-ai/glm-5.2", "deepinfra"),
     ):
