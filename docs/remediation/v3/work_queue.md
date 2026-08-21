@@ -2290,12 +2290,30 @@ are invisible to source review by construction.
   `612943ec6e7f138d7a85ce7f4439a5054127b385f008fb1d1af25134890ebfb9` independently confirms the
   source mismatch, withdrawal-before-execution, zero provider completions, and `$0` ledger. Smoke and
   full REAL commands are absent; the ticket remains `PARTIAL / BLOCKED_SAFETY`.
+- **Origin-custody correction checkpoint 2026-08-21:** Checkpoint
+  `c9a8923064ef1bb606a67b14641c4c8df55bc9ea` (`Bind smoke REAL origin custody`) is pushed and
+  remote-resolved. Each of the four closed release/smoke proof kinds is now bound to its exact,
+  disjoint candidate or judge request namespace before owned-REAL origin can be minted; missing,
+  malformed, cross-kind, release-to-smoke, smoke-to-release, and forged mappings reject, and smoke
+  custody grants no release or downstream authority. Implementer validation passed 584 provider-free
+  tests. Independent validation passed 371 usage/OpenRouter, 83 runner/smoke/cross-lineage, and 123
+  generation/candidate tests (577 broad tests total), followed by 22 focused usage-scope and three
+  OpenRouter transport-path passes; final red-team review was clean with no blocker/HIGH. Scoped and
+  repository-wide Ruff, scoped format, strict mypy over both
+  changed source files and the full 206-source tree, and diff integrity passed. The whole-repository
+  format check is not credited because it would rewrite a code fence in the exact operator-owned
+  result bytes; no terminal full-suite result is claimed. The operator record remains 35,771 bytes at
+  SHA-256 `612943ec6e7f138d7a85ce7f4439a5054127b385f008fb1d1af25134890ebfb9`, with no paid run,
+  provider completion, or spend and a `$0` dedicated ledger. Only the exact provider-free one-case
+  preflight is emitted; paid smoke, offline verifier, and full REAL commands remain absent.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
-  and non-crediting. The current provider-free preflight is valid and nonauthorizing, but exact judge
-  admission and the full-campaign cost bound cannot exist before both genuine candidate outputs.
-  Genuine production-issued lifecycle proof is absent; provider-free fixtures
-  cannot mint owned-REAL origin, and the current repository rules prohibit reading real credentials
-  or accessing the provider. Judge request bytes and exact caps cannot exist before both genuine
+  and non-crediting. The historical pre-fix provider-free smoke preflight was valid and
+  nonauthorizing; the post-fix preflight is emitted but not yet run. Exact judge admission and the
+  full-campaign cost bound cannot exist before both genuine candidate outputs.
+  The corrected origin seam is validated only provider-free; no genuine smoke completion has exercised
+  it, and the new committed-byte operator preflight result is pending. Current repository rules prohibit
+  Codex from reading real credentials or accessing the provider. Judge request bytes and exact caps
+  cannot exist before both genuine
   candidate outputs, so the provider-free result intentionally supplies candidate-only admission,
   not a fabricated full-campaign bound. The authenticated runner is a one-shot, non-resumable
   same-process launch; interrupted work cannot be resumed as valid campaign evidence. The retained
@@ -2305,10 +2323,11 @@ are invisible to source review by construction.
   issue-consume-revoke-reject lifecycle assay remain absent. Campaign/generation revocation beyond
   the top-level runner lease is not independently demonstrated. External-log publication and every
   benchmark run remain queued.
-- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` with autorun `BLOCKED_SAFETY`. Implement and
-  validate the narrow noncrediting owned-REAL origin-custody fix, checkpoint it, then emit only a new
-  provider-free preflight. Keep smoke and full REAL commands absent and withheld; AUTHSEAL
-  publication, audits, benchmarks, and release remain unauthorized.
+- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` with autorun `BLOCKED_SAFETY`. The operator may
+  run only the exact provider-free one-case smoke preflight emitted in `docs/models/model_selection.md`.
+  Reconcile its complete terminal record before considering any paid command. Keep paid smoke,
+  offline verifier, and full REAL commands absent; AUTHSEAL publication, audits, benchmarks, and
+  release remain unauthorized.
 
 ## V3-TARGETSPEC-001 — Reconcile the product vision with the objective and correct the README
 

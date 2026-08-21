@@ -379,6 +379,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     )
     runtime_status = json.loads(RUNTIME_STATUS_PATH.read_text(encoding="utf-8"))
     preflight_status = runtime_status["authrunner_provider_free_preflight"]
+    smoke_status = runtime_status["authrunner_noncrediting_smoke"]
     local_contract = preflight_status["local_preflight_contract"]
     lineage_r2_command = (
         ".venv/bin/python scripts/capture_public_model_lineage.py --output-dir "
@@ -470,12 +471,12 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "historical command records and must not be rerun" in normalized_model_selection
     assert "9075ca7635c861194cc732e67d9ebb92e6ffa0af" in model_selection
     assert smoke_real_command not in model_selection
-    assert smoke_preflight_command not in model_selection
+    assert model_selection.count(smoke_preflight_command) == 1
     assert smoke_verify_command not in model_selection
-    assert ".venv/bin/mmaudit models authenticated-runner-smoke" not in model_selection
+    assert model_selection.count(".venv/bin/mmaudit models authenticated-runner-smoke") == 1
     assert ".venv/bin/mmaudit models verify-authenticated-runner-smoke" not in model_selection
     assert ".venv/bin/mmaudit models authenticated-runner --" not in model_selection
-    assert "--preflight-only" not in model_selection
+    assert model_selection.count("--preflight-only") == 1
     assert "PENDING_TENCENT_LINEAGE_RESEAL_CHECKPOINT" not in model_selection
     assert "a1ace778afcf308b57fe436271cdc16a2bb8e156" in model_selection
     assert "af70559ddaf84178efffee1ec1bf7b99bf0b12df" in model_selection
@@ -486,7 +487,10 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "Document provider-free smoke preflight" in normalized_model_selection
     assert "provider-free r2/r5/r2 preflight" in normalized_model_selection
     assert "has now completed and is historical; do not rerun it" in (normalized_model_selection)
-    assert "One-case smoke paid path — `BLOCKED_SAFETY`; commands withheld" in model_selection
+    assert (
+        "Exact provider-free one-case smoke preflight after origin-custody fix — emission only"
+        in model_selection
+    )
     assert "smoke public lineage returned a non-independent projection" in (
         normalized_model_selection
     )
@@ -496,18 +500,18 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     )
     assert "f5afb2bff074254ee5c4a484386ee4c416b17a88" in model_selection
     assert "historical and unsafe to execute" in normalized_model_selection
-    assert "accepts only `RELEASE_PINNED_MODEL_BENCHMARK`" in normalized_model_selection
+    assert "accepted only `RELEASE_PINNED_MODEL_BENCHMARK`" in normalized_model_selection
     assert "`RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION`" in model_selection
     assert "`PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK`" in model_selection
     assert "`PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION`" in model_selection
-    assert "after a provider response has been charged and bound" in normalized_model_selection
+    assert "after a provider response had been charged and bound" in normalized_model_selection
     assert "REAL bound usage lacks AUTHRUNNER transport-origin custody" in (
         normalized_model_selection
     )
-    assert "first paid candidate completion could therefore spend money and then fail" in (
+    assert "first paid candidate completion could therefore have spent money and then failed" in (
         normalized_model_selection
     )
-    assert "Provider-free preflight cannot exercise this post-response issuer boundary" in (
+    assert "Provider-free preflight cannot exercise that post-response issuer boundary" in (
         normalized_model_selection
     )
     assert "No smoke REAL command and no offline-verifier command is emitted" in (
@@ -518,6 +522,50 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     )
     assert "only for a `PENDING` review with a null registry root" in (normalized_model_selection)
     assert "33 focused and 81 bounded smoke/neighbor tests" in normalized_model_selection
+    assert "ca63b924f244cc9bcee2d2405d20b000ce0bb9d6" in model_selection
+    assert "c9a8923064ef1bb606a67b14641c4c8df55bc9ea" in model_selection
+    assert "Bind smoke REAL origin custody" in normalized_model_selection
+    assert "four closed proof kinds to its disjoint request namespace" in normalized_model_selection
+    assert "release candidate and cross-lineage requests retain only" in normalized_model_selection
+    assert "smoke candidate and judge namespaces admit only" in normalized_model_selection
+    assert (
+        "Missing, malformed, cross-kind, release-to-smoke, smoke-to-release, and forged namespace "
+        "mappings reject." in normalized_model_selection
+    )
+    assert "admitting a smoke proof kind grants no release" in normalized_model_selection
+    assert "Implementer validation passed 584 provider-free tests" in normalized_model_selection
+    assert "Independent validation passed 371 usage/OpenRouter tests" in normalized_model_selection
+    assert "83 runner/smoke/cross-lineage tests" in normalized_model_selection
+    assert "123 generation/candidate tests" in normalized_model_selection
+    assert "577 broad tests total" in normalized_model_selection
+    assert (
+        "final focused checks passed 22 usage-scope and three OpenRouter transport-path tests"
+        in (normalized_model_selection)
+    )
+    assert "red-team verdict was clean with no blocker/HIGH" in normalized_model_selection
+    assert "repository-wide Ruff passed" in normalized_model_selection
+    assert "full 206-source tree" in normalized_model_selection
+    assert "whole-repository format check is intentionally not credited" in (
+        normalized_model_selection
+    )
+    assert "Command emission is not execution authority." in normalized_model_selection
+    assert runtime_status["candidate_commit"] == ("c9a8923064ef1bb606a67b14641c4c8df55bc9ea")
+    assert runtime_status["autorun_status"] == "BLOCKED_SAFETY"
+    assert smoke_status["implementation_checkpoint"] == ("c9a8923064ef1bb606a67b14641c4c8df55bc9ea")
+    assert smoke_status["preflight_status"] == "PENDING_OPERATOR_POST_FIX_PROVIDER_FREE_PREFLIGHT"
+    assert smoke_status["provider_free_preflight_command_emission_status"] == "EMITTED_NOT_RUN"
+    assert smoke_status["real_command_emission_status"] == "ABSENT_WITHHELD_BLOCKED_SAFETY"
+    assert smoke_status["offline_verifier_command_emission_status"] == (
+        "ABSENT_WITHHELD_BLOCKED_SAFETY"
+    )
+    assert smoke_status["full_24_case_real_command_status"] == "ABSENT_WITHHELD_BLOCKED_SAFETY"
+    assert smoke_status["current_operator_results_sha256"] == OPERATOR_RESULTS_SHA256
+    assert smoke_status["operator_paid_smoke_run"] is False
+    assert smoke_status["operator_paid_smoke_provider_completions"] == 0
+    assert smoke_status["operator_paid_smoke_spend_usd"] == "0"
+    assert smoke_status["origin_custody_code_fix_status"] == (
+        "IMPLEMENTED_CHECKPOINTED_PUSHED_REMOTE_VERIFIED_NONAUTHORIZING"
+    )
     assert "candidate-registry-r2.json" in model_selection
     assert "authrunner-candidate-20260820-r2" in model_selection
     assert "primary-judge-registry-r5.json" in model_selection
@@ -552,7 +600,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "Whole-inventory `provider_name` uniqueness remains enforced." in model_selection
     assert "end-to-end wire and evidence redesign" in normalized_model_selection
     assert "explicit selection-quality limitation" in normalized_model_selection
-    assert "re-emit provider-free preflight first" in normalized_model_selection
+    assert "exact committed-byte preflight" in normalized_model_selection
     assert "full 24-case REAL command is deliberately withheld" in normalized_model_selection
     assert "case-df79ea132113b863" in model_selection
     assert "synthetic/C0015.sol" in model_selection

@@ -8,9 +8,9 @@ AUTORUN_STATUS: BLOCKED_SAFETY
 CURRENT_MILESTONE: M1-DETERMINISTIC-PRODUCT (REACHED)
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001 (COMPLETE)
-NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Fix and regress the noncrediting owned-REAL origin proof-kind mismatch, checkpoint it, then emit only a new provider-free preflight. Smoke and full REAL commands remain absent. Codex must not execute a provider command.
-LAST_COMMAND: `.venv/bin/pytest -q tests/unit/test_product_documentation.py tests/unit/test_product_objective.py`; strict governance JSON; Ruff documentation-test check; `git diff --check`.
-LAST_RESULT: PARTIAL / BLOCKED_SAFETY — JSON, Ruff, and diff checks pass. Documentation/objective tests are 11 passed and 1 expected scoped failure because the product-test checksum still pins the historical `33d06db3...18e62` operator bytes while the current operator record is `612943ec...ebfb9`; the guide/test pair is excluded from this six-file slice and the documentation test receives no pass credit. Historical checkpoint `f5afb2bff074254ee5c4a484386ee4c416b17a88` would charge before rejecting its noncrediting proof kind; checkpoint `ca63b924f244cc9bcee2d2405d20b000ce0bb9d6` withdraws both smoke commands. Code fix, guide/test checksum reconciliation, and a new provider-free preflight remain pending.
+NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. The operator may run only the exact provider-free one-case smoke preflight emitted in `docs/models/model_selection.md`; reconcile its complete result before considering any paid command. Paid smoke, offline verifier, and full REAL remain absent. Codex must not execute a provider command.
+LAST_COMMAND: Implementer 584-test provider-free matrix; independent 371 usage/OpenRouter, 83 runner/smoke/cross-lineage, and 123 generation/candidate tests plus final focused 22 usage-scope and 3 transport-path tests; repository Ruff; scoped format; strict mypy over 206 sources; documentation/objective tests; strict governance JSON; `git diff --check`.
+LAST_RESULT: PASS / PARTIAL / BLOCKED_SAFETY — checkpoint `c9a8923064ef1bb606a67b14641c4c8df55bc9ea` binds each exact release/smoke proof kind to its disjoint request namespace and rejects cross-kind or malformed mappings without granting release authority. The 584 implementer tests, independent 371/83/123 matrices (577 broad), and final focused 22+3 tests passed; red-team review was clean with no blocker/HIGH. Ruff, scoped format, strict mypy over 206 sources, documentation/objective, JSON, and diff gates passed. The whole-repository format check receives no pass credit because it would rewrite exact operator-owned evidence. Current operator record SHA-256 `612943ec6e7f138d7a85ce7f4439a5054127b385f008fb1d1af25134890ebfb9` still confirms no paid run, provider completion, or spend and a `$0` dedicated ledger. Only provider-free preflight is emitted.
 REAL_MODEL_CALLS_ATTEMPTED: 11
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 10
@@ -20,7 +20,30 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9965235675
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: ca63b924f244cc9bcee2d2405d20b000ce0bb9d6 (`Withdraw unsafe smoke launch`); current pushed safety checkpoint. Historical unsafe launch checkpoint: f5afb2bff074254ee5c4a484386ee4c416b17a88
+LAST_CHECKPOINT_COMMIT: c9a8923064ef1bb606a67b14641c4c8df55bc9ea (`Bind smoke REAL origin custody`); pushed and remote-resolved. Safety withdrawal checkpoint: ca63b924f244cc9bcee2d2405d20b000ce0bb9d6. Historical unsafe launch checkpoint: f5afb2bff074254ee5c4a484386ee4c416b17a88
+
+## 2026-08-21 — Smoke owned-REAL origin custody fixed; provider-free preflight re-emitted
+
+- Status: `V3-AUTHRUNNER-001` is `PARTIAL / BLOCKED_SAFETY`; only provider-free preflight is
+  emitted. Paid smoke, offline verifier, and full REAL commands are absent.
+- Correction: checkpoint `c9a8923064ef1bb606a67b14641c4c8df55bc9ea` (`Bind smoke REAL origin
+  custody`) binds the four exact release/smoke proof kinds to disjoint candidate/judge request
+  namespaces before owned-REAL origin issuance. Missing, malformed, cross-kind, release-to-smoke,
+  smoke-to-release, and forged mappings reject. Smoke custody remains noncrediting and grants no
+  release, qualification, calibration, benchmark, audit, AUTHSEAL, or production authority.
+- Validation: implementer validation passed 584 provider-free tests. Independent validation passed
+  371 usage/OpenRouter, 83 runner/smoke/cross-lineage, and 123 generation/candidate tests (577 broad),
+  followed by 22 focused usage-scope and three transport-path passes; final red-team review was clean
+  with no blocker/HIGH. Scoped and repository-wide Ruff, scoped format, strict mypy over both changed source files and the full
+  206-source tree, documentation/objective tests, strict governance JSON, and diff integrity passed.
+  Whole-repository format receives no pass credit because it would rewrite exact operator-owned
+  evidence; no terminal full-suite result is claimed.
+- Operator reconciliation: the unchanged 35,771-byte operator record at SHA-256
+  `612943ec6e7f138d7a85ce7f4439a5054127b385f008fb1d1af25134890ebfb9` confirms the historical
+  paid command was withdrawn before execution. No paid attempt, provider completion, or spend
+  occurred; the dedicated ledger remains `$0` and governed counters are unchanged.
+- Next safe action: the operator may run only the exact provider-free preflight emitted in the guide.
+  Retain and reconcile its complete result before any paid command is considered.
 
 ## 2026-08-21 — Unsafe paid smoke launch withdrawn before operator execution
 

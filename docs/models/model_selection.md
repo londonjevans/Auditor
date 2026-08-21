@@ -285,7 +285,7 @@ The exact runtime answers for both the smoke and full paths are:
   multi-homed frontier judges and is an explicit selection-quality limitation; route diversity is not
   evidence that the excluded models were technically inferior.
 
-### One-case smoke paid path — `BLOCKED_SAFETY`; commands withheld
+### Exact provider-free one-case smoke preflight after origin-custody fix — emission only
 
 The initial smoke implementation is durably checkpointed at
 `af70559ddaf84178efffee1ec1bf7b99bf0b12df` (`Add noncrediting provider smoke path`). Its first
@@ -319,28 +319,58 @@ That identical configuration does not make the top-level runners identical: smok
 orchestrator while exercising the shared request, transport, generation-refetch, adjudication, cost,
 and evidence internals on the one-case projection.
 
-Checkpoint `f5afb2bff074254ee5c4a484386ee4c416b17a88` (`Emit noncrediting smoke launch`) is
-historical and unsafe to execute. A deeper
-local paid-path audit found that the internal AUTHRUNNER owned-REAL usage-origin issuer accepts only
-`RELEASE_PINNED_MODEL_BENCHMARK` or `RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION`, while the smoke path
-deliberately routes `PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK` and
-`PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION`. The mismatch is reached after a provider
-response has been charged and bound, when origin attestation raises `REAL bound usage lacks AUTHRUNNER
-transport-origin custody`. The first paid candidate completion could therefore spend money and then
-fail before smoke evidence can be completed. Provider-free preflight cannot exercise this
+Checkpoint `f5afb2bff074254ee5c4a484386ee4c416b17a88` (`Emit noncrediting smoke launch`) remains
+historical and unsafe to execute. A deeper local paid-path audit found that the then-current
+AUTHRUNNER owned-REAL usage-origin issuer accepted only `RELEASE_PINNED_MODEL_BENCHMARK` or
+`RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION`, while the smoke path deliberately routes
+`PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK` and
+`PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION`. The mismatch was reached after a provider
+response had been charged and bound, when origin attestation raised `REAL bound usage lacks
+AUTHRUNNER transport-origin custody`. The first paid candidate completion could therefore have spent
+money and then failed before smoke evidence completed. Provider-free preflight cannot exercise that
 post-response issuer boundary.
 
-No smoke REAL command and no offline-verifier command is emitted. The current 35,771-byte operator
-record at raw SHA-256
-`612943ec6e7f138d7a85ce7f4439a5054127b385f008fb1d1af25134890ebfb9` independently confirms that
-the command was withdrawn before execution: no paid smoke attempt, provider completion, or spend
-occurred, and the dedicated ledger remains `$0`. `V3-AUTHRUNNER-001` is `BLOCKED_SAFETY` until a
-narrow origin-custody
-fix admits only the exact noncrediting smoke proof kinds without granting release, qualification,
-calibration, benchmark, audit, AUTHSEAL, or production authority, and focused post-response
-regressions plus a new provider-free checkpoint pass. Codex must then re-emit provider-free preflight
-first; no paid command may be restored from historical checkpoint
-`f5afb2bff074254ee5c4a484386ee4c416b17a88`.
+At safety checkpoint `ca63b924f244cc9bcee2d2405d20b000ce0bb9d6`, the unsafe launch was withdrawn before
+execution. The current 35,771-byte operator record at raw SHA-256
+`612943ec6e7f138d7a85ce7f4439a5054127b385f008fb1d1af25134890ebfb9` independently confirms no
+paid smoke attempt, provider completion, or spend occurred and the dedicated ledger remains `$0`.
+
+The narrow origin-custody correction is committed, pushed, and remote-resolved at
+`c9a8923064ef1bb606a67b14641c4c8df55bc9ea` (`Bind smoke REAL origin custody`). It binds each of
+the four closed proof kinds to its disjoint request namespace before owned-REAL origin is minted:
+release candidate and cross-lineage requests retain only their two `RELEASE_PINNED_*` kinds, while
+the smoke candidate and judge namespaces admit only their corresponding
+`PINNED_NONCREDITING_SMOKE_*` kinds. Missing, malformed, cross-kind, release-to-smoke,
+smoke-to-release, and forged namespace mappings reject. The sealed origin registry retains and
+rechecks that scope; admitting a smoke proof kind grants no release, qualification, calibration,
+benchmark, audit, AUTHSEAL, or production authority.
+
+Implementer validation passed 584 provider-free tests across usage, OpenRouter, generation evidence,
+authenticated runner/smoke, cross-lineage adjudication, privacy provenance, and candidate benchmark
+surfaces. Independent validation passed 371 usage/OpenRouter tests, 83 runner/smoke/cross-lineage
+tests, and 123 generation/candidate tests (577 broad tests total); final focused checks passed 22
+usage-scope and three OpenRouter transport-path tests, and the red-team verdict was clean with no
+blocker/HIGH. Scoped and repository-wide Ruff passed; Ruff format
+reported the four changed source/test files already formatted; strict mypy passed both changed source
+files and the full 206-source tree; and diff integrity passed. The whole-repository format check is
+intentionally not credited because it would rewrite a Python code fence inside the exact
+operator-owned result bytes; those bytes remain untouched. No terminal full-suite result is claimed,
+and no provider call, secret selection, ledger mutation, authority, or governed counter changed.
+
+The following exact command is emitted only for the next provider-free one-case smoke preflight
+against checkpoint `c9a8923064ef1bb606a67b14641c4c8df55bc9ea`. It returns before secret
+selection, provider access, ledger mutation, or output publication. Codex did not execute it:
+
+```shell
+env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models authenticated-runner-smoke --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r2.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260820-r2" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r5.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r5" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2" --smoke-corpus benchmarks/model_corpus_smoke --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260821-s1.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --secrets-env-file "$HOME/.mmaudit/secrets.env" --allow-code-egress --preflight-only --no-color
+```
+
+Retain its complete terminal record in `../remediation/v3/operator_results.md`. Command emission is
+not execution authority. No smoke REAL command and no offline-verifier command is emitted; the full
+24-case REAL command remains withheld below. `V3-AUTHRUNNER-001` remains `PARTIAL` with autorun
+`BLOCKED_SAFETY` until this exact committed-byte preflight is reconciled as operator-supplied
+`VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS` evidence. Do not run or restore either
+paid command from historical checkpoint `f5afb2bff074254ee5c4a484386ee4c416b17a88`.
 
 ### Full 24-case REAL command — withheld
 
