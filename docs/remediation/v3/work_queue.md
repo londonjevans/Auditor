@@ -2099,7 +2099,7 @@ are invisible to source review by construction.
   `origin/agent/v3-wip-checkpoint`. Exact-ID public lineage for all three remains absent.
 - **PRIMARY r3 disposition and r4 completion 2026-08-21:** The exact operator-supplied result log is
   retained verbatim at `docs/remediation/v3/operator_results.md`, raw SHA-256
-  `e109e5808eb7179521fa2aa4d4670f2faaecc5d6256bf1b98f2083c50291aa92`, as nonauthorizing
+  `41932dfe7cfa2a0dbc7f0f68d01c2fbf8bec2ad0276ac16a9837b6b9e66f2b69`, as nonauthorizing
   metadata. Claude Opus 5/`amazon-bedrock` failed closed before registry publication because its
   provider display name is duplicated across the exact-model endpoint inventory; the injective
   provider-identity invariant remains unchanged. Of the operator-reported viable replacements,
@@ -2127,19 +2127,28 @@ are invisible to source review by construction.
   `6f46b3c779262cf11b0ec58b1a2fe88947cd71d7ab788734abb36cd9f96374e4` and semantic bundle
   `de2192a2eaede4a54e1b24216d5c3c51cebd63086131c20367e166dfa672a388` prove the active
   DeepSeek/MiniMax/Moonshot triple pairwise independent while preserving all six negative-only
-  non-independence constraints. Only the DeepSeek-family and Kimi-generation groups are new. No
-  provider-free preflight success is claimed yet.
+  non-independence constraints. Only the DeepSeek-family and Kimi-generation groups are new. The
+  reseal itself claimed no provider-free preflight result.
+- **Provider-free r2/r4/r2 preflight 2026-08-21:** The operator subsequently reported
+  `VALID / NONAUTHORIZING / NO PROVIDER EGRESS` for two runs, 24 cases, 96 logical requests, at
+  most 192 provider attempts, and 96 generation refetches under effective-config SHA-256
+  `f0ff2d76017dfcd075c6758f0da7256c98dd45ca749a42b81ca1ce8c95a93f9e`. The `$192.00`
+  declared interval/final cap is the arithmetic result of placeholder `$1.00` attempt tripwires,
+  not a derived live request cap. The operator reports no provider egress and an unchanged `$0`
+  ledger. The locally verified preflight contract stops before secret selection, completion, or
+  durable output publication; transient private write probes are created and removed during path
+  preflight. No authority transition occurred.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
   and non-crediting. Genuine production-issued lifecycle proof is absent; provider-free fixtures
   cannot mint owned-REAL origin, and the current repository rules prohibit reading real credentials
-  or accessing the provider. Campaign/generation revocation beyond the top-level runner lease is
+  or accessing the provider. Exact role/request-bound caps have not been derived from retained
+  pricing/capacity evidence. Campaign/generation revocation beyond the top-level runner lease is
   not independently demonstrated. External-log publication and every benchmark run remain queued.
-- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator
-  run the unchanged exact r2/r4/r2 provider-free preflight in `docs/models/model_selection.md` and
-  retain its exact result. Do not infer success from the resealed lineage alone. Only an
-  operator-recorded `VALID / NONAUTHORIZING / NO PROVIDER EGRESS` result may precede derivation of
-  final request-bound caps and a separately authorized one-shot REAL launch. AUTHSEAL publication,
-  real audits, benchmarks, and release remain queued.
+- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Derive and
+  reconcile exact role/request-bound caps provider-free from retained pricing/capacity evidence;
+  do not adopt advisory estimates or the placeholder `$192.00` ceiling as final authority. Only
+  then emit a separately authorized one-shot REAL launch command. AUTHSEAL publication, real
+  audits, benchmarks, and release remain queued.
 
 ## V3-TARGETSPEC-001 — Reconcile the product vision with the objective and correct the README
 

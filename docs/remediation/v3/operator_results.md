@@ -3,6 +3,50 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-08-21T05:47Z — AUTHRUNNER PREFLIGHT — **VALID**
+
+First end-to-end validation of the campaign contract. Run after reseal `83bad61`; all three triple
+members now CONFIRMED in the lineage bundle (15 sources, 9 roots, `verified_at 2026-08-21T05:26:00Z`).
+
+```
+AUTHRUNNER preflight: VALID / NONAUTHORIZING / NO PROVIDER EGRESS
+Inventory: runs=2; cases=24; candidate_logical_requests=48; judge_logical_requests=48;
+           logical_requests=96
+Attempts:  maximum_per_logical_request=2; maximum_provider_attempts=192; generation_refetches=96
+Cost tripwire: initial_spent_usd=0; declared_interval_cap_usd=192.00;
+               declared_final_spent_cap_usd=192.00
+Effective config SHA-256: f0ff2d76017dfcd075c6758f0da7256c98dd45ca749a42b81ca1ce8c95a93f9e
+```
+
+Cost ledger unchanged — **$0 spent**. No known gate remains before a REAL launch.
+
+### Cost analysis for the REAL run — the $1.00/attempt caps are placeholders and inflate the ceiling ~25x
+
+Live per-token pricing on the exact pinned routes (USD per 1M tokens):
+
+| role | model | route | prompt | completion |
+|---|---|---|---|---|
+| candidate | `deepseek/deepseek-v4-pro-0813` | `novita/fp8` | $1.32 | $3.96 |
+| primary judge | `minimax/minimax-m3` | `coreweave/fp4` | $0.23 | $0.96 |
+| replay judge | `moonshotai/kimi-k3` | `together` | **$3.00** | **$15.00** |
+
+Estimated actual campaign cost over 96 logical requests:
+
+| per-request size | single attempt | if every request retries |
+|---|---|---|
+| 4k prompt + 1k completion | ~$1.14 | ~$2.27 |
+| 10k prompt + 2k completion | ~$2.56 | ~$5.11 |
+| 30k prompt + 6k completion | ~$7.67 | ~$15.33 |
+
+The declared $192.00 tripwire is 192 attempts x the placeholder $1.00/attempt cap. Realistic spend is
+**single-digit to low-double-digit dollars**. Deriving per-attempt caps from the retained pricing
+evidence (as already queued) would tighten the tripwire from $192 to something proportionate and make
+it an effective runaway guard rather than a nominal one.
+
+Note `moonshotai/kimi-k3` on `together` is by far the most expensive leg — $15.00/1M completion tokens,
+roughly 4x the candidate and 15x the primary judge. It is the replay judge, so its volume is half the
+candidate's, but a per-attempt cap derived uniformly across roles would be badly calibrated for it.
+
 ## 2026-08-21T05:25Z — LINEAGE CAPTURE — SUCCESS, one coherent 15-source bundle
 
 ```

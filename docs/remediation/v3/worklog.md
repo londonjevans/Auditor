@@ -8,9 +8,9 @@ AUTORUN_STATUS: BLOCKED_SAFETY
 CURRENT_MILESTONE: M1-DETERMINISTIC-PRODUCT (REACHED)
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001 (COMPLETE)
-NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator run the unchanged exact r2/r4/r2 provider-free preflight in `docs/models/model_selection.md` and retain its exact result. Do not infer success from the resealed documentary lineage. AUTHSEAL publication, real audits, benchmarks, and release remain queued.
+NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Derive and reconcile exact role/request-bound caps provider-free from retained pricing/capacity evidence without adopting advisory estimates or the placeholder `$192.00` ceiling as authority. Then emit a separately authorized one-shot REAL launch command. AUTHSEAL publication, real audits, benchmarks, and release remain queued.
 LAST_COMMAND: Provider-free 194-test capture/manifest/lineage-authority/configuration/AUTHRUNNER/OpenRouter/candidate-selection/CLI/documentation/objective/release-schema matrix; `.venv/bin/python scripts/generate_release_schemas.py`; 24-test release/objective subset; `make PYTHON=.venv/bin/python lint`; `make PYTHON=.venv/bin/python type`; strict runtime/review JSON parsing; diff integrity.
-LAST_RESULT: PASS / PARTIAL — 194 affected tests passed in 37.22s and the release/objective subset passed 24 in 0.63s. Generated schemas were current; 536 files were already formatted and Ruff-clean; strict mypy passed over 202 source files; both governance JSON documents and diff integrity passed. The documentary lineage reseal is green, while provider-free preflight success and every downstream authority remain unclaimed. Codex made no secret, provider, or ledger access.
+LAST_RESULT: PASS / PARTIAL — 194 affected tests passed in 37.22s and the release/objective subset passed 24 in 0.63s. Generated schemas were current; 536 files were already formatted and Ruff-clean; strict mypy passed over 202 source files; both governance JSON documents and diff integrity passed. The documentary lineage reseal is green; the subsequent operator-reported provider-free preflight is recorded separately and remains nonauthorizing. Codex made no secret, provider, or ledger access.
 REAL_MODEL_CALLS_ATTEMPTED: 11
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 10
@@ -21,6 +21,32 @@ OPENROUTER_BUDGET_REMAINING_USD: 249.9965235675
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
 LAST_CHECKPOINT_COMMIT: 83bad611a888a685e83b0ed442984fa05e755873 (`Reseal AUTHRUNNER public lineage`)
+
+## 2026-08-21T05:47:00Z — AUTHRUNNER provider-free preflight valid and nonauthorizing
+
+- Status: `V3-AUTHRUNNER-001` remains `PARTIAL` / `BLOCKED_SAFETY`. The operator-reported
+  preflight completed, but no REAL runner, provider-call, AUTHSEAL, audit, benchmark, or release
+  authority was issued.
+- Operator result custody: the 14,315-byte operator-supplied log now has raw SHA-256
+  `41932dfe7cfa2a0dbc7f0f68d01c2fbf8bec2ad0276ac16a9837b6b9e66f2b69` and records
+  `VALID / NONAUTHORIZING / NO PROVIDER EGRESS` after checkpoint
+  `83bad611a888a685e83b0ed442984fa05e755873`. It remains nonauthorizing evidence.
+- Exact preflight inventory: two runs over 24 cases produce 48 candidate and 48 judge logical
+  requests, 96 total logical requests, at most two attempts each / 192 provider attempts, and 96
+  generation refetches. The effective configuration SHA-256 is
+  `f0ff2d76017dfcd075c6758f0da7256c98dd45ca749a42b81ca1ce8c95a93f9e`.
+- Cost and side-effect boundary: initial spend was `$0`; the declared interval and final-spend caps
+  were each `$192.00`, derived mechanically from placeholder `$1.00` per-attempt tripwires. The
+  operator reports no provider egress and an unchanged `$0` ledger. The locally verified preflight
+  contract returns before secret selection, durable output publication, or completion; transient
+  private write probes are created and removed during path preflight. Those placeholders and the
+  operator's estimates are not final live caps.
+- Counters and authority: governed REAL model calls remain 11 attempted / 1 succeeded / 10
+  rejected, used cost remains USD `0.0034764325`, and completed real audits remain `0`. The
+  operator's statement that no known gate remains is not adopted as repository authority.
+- Next exact action: derive and reconcile exact role/request-bound caps provider-free from the
+  retained pricing/capacity evidence. Do not invent caps. Only after that evidence is bound may a
+  separately authorized one-shot REAL launch command be emitted.
 
 ## 2026-08-21T05:30:31Z — AUTHRUNNER documentary capture adopted and lineage resealed
 

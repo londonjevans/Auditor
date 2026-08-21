@@ -23,7 +23,7 @@ OBJECTIVE_RELATIVE_PATH = "docs/remediation/v3/product_completion_goal.txt"
 OBJECTIVE_SHA256 = "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15"
 PRODUCT_VISION_RELATIVE_PATH = "product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.md"
 PRODUCT_VISION_SHA256 = "8b878b665e636b3b48500fefe2967394b2abdd69ce2ebfa0033d04542d2965e1"
-OPERATOR_RESULTS_SHA256 = "e109e5808eb7179521fa2aa4d4670f2faaecc5d6256bf1b98f2083c50291aa92"
+OPERATOR_RESULTS_SHA256 = "41932dfe7cfa2a0dbc7f0f68d01c2fbf8bec2ad0276ac16a9837b6b9e66f2b69"
 PRODUCT_VISION_GIT_ATTRIBUTES = f"{PRODUCT_VISION_RELATIVE_PATH} -text"
 POLICY_ELIGIBILITY_TICKET = "V3-POLICYELIG-001"
 POLICY_ELIGIBILITY_QUEUE_HEADING = (
@@ -376,6 +376,9 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         (ROOT / "docs/codex_work_queue.md").read_text(encoding="utf-8"),
         QUEUE_PATH.read_text(encoding="utf-8"),
     )
+    runtime_status = json.loads(RUNTIME_STATUS_PATH.read_text(encoding="utf-8"))
+    preflight_status = runtime_status["authrunner_provider_free_preflight"]
+    local_contract = preflight_status["local_preflight_contract"]
 
     assert "docs/remediation/v3/operator_results.md" in agents
     assert "Before ending any turn that issued, reissued, or depended on an operator command" in (
@@ -391,6 +394,9 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "PRIMARY r4 (`minimax/minimax-m3=coreweave/fp4`) — SUCCESS" in operator_results
     assert "runner public lineage does not prove three distinct roots" in operator_results
     assert "LINEAGE CAPTURE — SUCCESS, one coherent 15-source bundle" in operator_results
+    assert "AUTHRUNNER PREFLIGHT — **VALID**" in operator_results
+    assert "VALID / NONAUTHORIZING / NO PROVIDER EGRESS" in operator_results
+    assert "f0ff2d76017dfcd075c6758f0da7256c98dd45ca749a42b81ca1ce8c95a93f9e" in (operator_results)
     assert "848b1dfda5b60c6793089ed3916073d86e3a734da9dbc5a824302bec7f4b37da" in (operator_results)
     assert "capture_public_model_lineage.py --output-dir" in model_selection
     assert "6f46b3c779262cf11b0ec58b1a2fe88947cd71d7ab788734abb36cd9f96374e4" in (model_selection)
@@ -399,6 +405,21 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "Written by the monitoring session; treat as operator-supplied evidence." in (
         operator_results
     )
+    assert preflight_status["operator_reported_no_provider_egress"] is True
+    assert preflight_status["operator_reported_ledger_unchanged"] is True
+    assert preflight_status["operator_reported_provider_completion_calls"] == 0
+    assert local_contract == {
+        "source": "LOCALLY_VERIFIED_PREFLIGHT_CODE",
+        "secret_selection_reached": False,
+        "provider_dispatch_reached": False,
+        "durable_output_publication_reached": False,
+        "transient_private_write_probes_are_created_and_removed": True,
+    }
+    assert "ledger_unchanged" not in preflight_status
+    assert "artifacts_created" not in preflight_status
+    assert "secret_selected" not in preflight_status
+    assert "provider_egress" not in preflight_status
+    assert "provider_completion_calls" not in preflight_status
 
 
 def test_policy_eligibility_status_and_vision_boundary_are_documented_exactly() -> None:
