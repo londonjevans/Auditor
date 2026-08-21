@@ -2201,14 +2201,15 @@ are invisible to source review by construction.
   claimed for these new bytes. The implementation is durably checkpointed, pushed, and
   remote-verified at `9075ca7635c861194cc732e67d9ebb92e6ffa0af` (`Bind catalog reasoning and
   select Tencent`); no authority or counter changed.
-- **PRIMARY r5 discovery and Tencent lineage reseal 2026-08-21:** The current 26,945-byte
+- **PRIMARY r5 discovery and Tencent lineage reseal 2026-08-21:** The then-current 26,945-byte
   operator-supplied log at raw SHA-256
   `1ed1da7c47f7c595c099e5c70cfe947430db41bd7811b7b0b7ecddeb97e14ecc` records two exact
   exit-zero prerequisites after `9075ca7635c861194cc732e67d9ebb92e6ffa0af`. PRIMARY r5 discovery
   retained `tencent/hy3=tencent/fp8` in discovery manifest
   `fe3e3daa21eeb370f35558c5eca5746c140f2b92e88a37233952ab77034dc07b` and frozen registry
   `2d825234bfc1cf05fb9ec883c555bc007bd3a6033145507d629d5da7aa5619ad` without a completion
-  or spend. The coherent 16-source capture produced observation-set SHA-256
+  or spend; metadata discovery now totals 7 attempted / 4 succeeded / 3 rejected. The coherent
+  16-source capture produced observation-set SHA-256
   `6ae6e75a1732c05b85ffe189febbc3ecfa8ae2eeeb83000a8a24d30035b966eb` and capture-bundle
   SHA-256 `7b6ff67506bceaaf05c944edb2c28bf6d8386df3690444b827035ed5c83bc134`.
   Local exact-byte compilation and replay reseal raw manifest
@@ -2218,25 +2219,76 @@ are invisible to source review by construction.
   unconfirmed identities, and seven negative-only constraints. Tencent Hy3 is confirmed, the
   Tencent/Hunyuan organizational constraint remains negative-only, and all six directed current-triple
   independence pairs replay successfully. Implementer validation passed 176 tests; root lineage passed
-  108; independent red-team passed 117, plus 22 schema and 16 runner tests; schema verification, Ruff,
-  strict mypy, and diff integrity passed. No terminal full-suite result is claimed. The current
-  reseal checkpoint is `PENDING_TENCENT_LINEAGE_RESEAL_CHECKPOINT`; the last durable pushed checkpoint
-  remains `9075ca7635c861194cc732e67d9ebb92e6ffa0af`. No authority or governed counter changed.
+  108; independent red-team passed 117, plus 22 schema and 16 runner tests. Current root affected
+  validation passed 120/120 in 43.91s and 22 release-schema checks in 0.59s; schema verification,
+  Ruff, strict mypy, strict governance JSON, and diff integrity passed. No terminal full-suite result
+  is claimed. The reseal is durably checkpointed, pushed, and remote-verified at
+  `a1ace778afcf308b57fe436271cdc16a2bb8e156` (`Confirm Tencent documentary lineage`). No authority
+  or governed counter changed.
+- **Provider-free r2/r5/r2 preflight 2026-08-21:** The current 29,375-byte operator-supplied log at
+  raw SHA-256 `911081e8d6121896ae4edb4514855431b7024b164307e5bb808b7f4099cc85c4`
+  records the exact post-`a1ace778afcf308b57fe436271cdc16a2bb8e156` preflight as
+  `VALID / NONAUTHORIZING / NO PROVIDER EGRESS`. It binds two runs, 24 cases, 48 candidate and 48
+  judge logical requests, 96 total logical requests, at most two attempts per request, 192 maximum
+  attempts, and 96 generation refetches under effective-config SHA-256
+  `42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54`. Candidate plans
+  `f0f367605dd75674b08c8974bf69570190e4137be46a47619c1b5b9d85c83b57` and
+  `3fc6e535d22baf9bbbdafe4ccb50f9127fdb6d5c2fba7ce0463388765d2f8436` derive exact candidate
+  interval and final-spend caps of USD `5.27438208`. Judge exact admission remains
+  `PENDING_REAL_CANDIDATE_OUTPUTS`, and a full-campaign bound is unavailable before genuine candidate
+  outputs exist. The USD `192.00` operator interval/final tripwires and USD `250.00` ledger cap remain
+  backstops, not exact judge-price evidence. All three roles validated `effort = "high"`; the ledger
+  remained `$0`, no completion or provider egress occurred, and no REAL or downstream authority was
+  granted.
+- **One-case noncrediting smoke boundary 2026-08-21:** The active ticket freezes exact parent
+  case `case-df79ea132113b863` (`synthetic/C0015.sol`) in the four-file
+  `benchmarks/model_corpus_smoke/` bundle. Semantic bundle SHA-256
+  `721f058726cf9509c07cb2aae662fb6ac23b5c30a363db40229faf8895034497` binds one case, two
+  candidate plus two judge logical requests, at most eight attempts, and four generation refetches.
+  Every credit/authority field is literal false; the bundle is explicitly
+  `NONCREDITING_SMOKE`, nonrepresentative for calibration, and unable to authorize the later full
+  launch. The dedicated one-shot smoke CLI and strict offline verifier passed the 231-test affected
+  matrix in 72.13s, 18 focused and 109 neighboring independent red-team tests with no blocker/HIGH,
+  the combined 108-test CLI/schema matrix, repository-wide Ruff, format over 525 files, strict mypy
+  over 206 sources, schema verification, and diff integrity. The implementation is pushed and
+  remote-resolved at `af70559ddaf84178efffee1ec1bf7b99bf0b12df` (`Add noncrediting provider
+  smoke path`). Codex did not read a secret, contact the provider, mutate the retained ledger, or
+  execute a REAL command. The full 24-case REAL command remains absent and withheld.
+- **Smoke preflight defect 2026-08-21:** The current 31,643-byte operator-supplied log at raw SHA-256
+  `4f71b2ebf33037317095a1f16c64d21b102bb6229be75ae58a55158c95454e0a` records the
+  provider-free smoke `--preflight-only` run after `af70559` failing safely with `smoke public lineage
+  returned a non-independent projection`. Real discovery registries have `root_lineage = None`, but
+  the smoke adapter compared those null values unconditionally with the genuine sealed roots. The
+  full runner already checks a registry root only when non-null. No secret was selected, no provider
+  egress or REAL completion occurred, the ledger remained `$0`, and the smoke REAL command is removed
+  and withheld pending a narrow fix, real-registry-shape regression, new checkpoint, and successful
+  provider-free preflight.
+- **Null-root correction 2026-08-21:** The smoke adapter now tolerates a null registry root only for a
+  `PENDING` review, while exact model IDs, sealed projected roots and bundle pins, projection type,
+  `independent = true`, three-root distinctness, non-null mismatches, and `REJECTED` reviews remain
+  fail-closed. Validation passed 33 focused and 81 bounded smoke/neighbor tests, Ruff/format, strict
+  mypy, and diff integrity. Checkpoint `7e9db03145b4afc1834dd47e9f4f97800e1edffb` (`Fix smoke null
+  lineage projection`) is pushed and remote-resolved. Only its exact provider-free smoke preflight is
+  emitted; no REAL or verifier command is present.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
-  and non-crediting. The current Tencent documentary reseal is not yet checkpointed, pushed, or
-  remote-verified, and the exact provider-free r2/r5/r2 preflight has not run. Genuine
-  production-issued lifecycle proof is absent; provider-free fixtures
+  and non-crediting. The current provider-free preflight is valid and nonauthorizing, but exact judge
+  admission and the full-campaign cost bound cannot exist before both genuine candidate outputs.
+  Genuine production-issued lifecycle proof is absent; provider-free fixtures
   cannot mint owned-REAL origin, and the current repository rules prohibit reading real credentials
   or accessing the provider. Judge request bytes and exact caps cannot exist before both genuine
   candidate outputs, so the provider-free result intentionally supplies candidate-only admission,
-  not a fabricated full-campaign bound. Genuine v1.1 durable REAL evidence and the positive
+  not a fabricated full-campaign bound. The authenticated runner is a one-shot, non-resumable
+  same-process launch; interrupted work cannot be resumed as valid campaign evidence. The retained
+  whole-inventory provider-display-name uniqueness invariant conservatively excludes otherwise viable
+  routes whose regional endpoints reuse a display name; this is an explicit selection-quality
+  limitation and is not relaxed for the current triple. Genuine v1.1 durable REAL evidence and the positive
   issue-consume-revoke-reject lifecycle assay remain absent. Campaign/generation revocation beyond
   the top-level runner lease is not independently demonstrated. External-log publication and every
   benchmark run remain queued.
-- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Commit, push, and
-  remote-verify `PENDING_TENCENT_LINEAGE_RESEAL_CHECKPOINT`, then emit and run the exact provider-free
-  r2/r5/r2 preflight and reconcile its nonauthorizing result. No REAL campaign, AUTHSEAL publication,
-  audit, benchmark, or release action is authorized yet.
+- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` with autorun `BLOCKED_SAFETY`. Have the operator
+  run only the exact provider-free smoke preflight emitted in the guide and reconcile its terminal
+  result. Keep both REAL commands withheld until it is `VALID / NONAUTHORIZING / NO PROVIDER EGRESS`;
+  AUTHSEAL publication, audits, benchmarks, and release remain unauthorized.
 
 ## V3-TARGETSPEC-001 — Reconcile the product vision with the objective and correct the README
 

@@ -23,7 +23,7 @@ OBJECTIVE_RELATIVE_PATH = "docs/remediation/v3/product_completion_goal.txt"
 OBJECTIVE_SHA256 = "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15"
 PRODUCT_VISION_RELATIVE_PATH = "product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.md"
 PRODUCT_VISION_SHA256 = "8b878b665e636b3b48500fefe2967394b2abdd69ce2ebfa0033d04542d2965e1"
-OPERATOR_RESULTS_SHA256 = "1ed1da7c47f7c595c099e5c70cfe947430db41bd7811b7b0b7ecddeb97e14ecc"
+OPERATOR_RESULTS_SHA256 = "4f71b2ebf33037317095a1f16c64d21b102bb6229be75ae58a55158c95454e0a"
 PRODUCT_VISION_GIT_ATTRIBUTES = f"{PRODUCT_VISION_RELATIVE_PATH} -text"
 POLICY_ELIGIBILITY_TICKET = "V3-POLICYELIG-001"
 POLICY_ELIGIBILITY_QUEUE_HEADING = (
@@ -399,10 +399,10 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "V3-LINEAGE-001-operator-review.md --candidate-registry-output "
         '"$HOME/.mmaudit/private/authrunner/primary-judge-registry-r5.json" --no-color'
     )
-    preflight_command = (
+    smoke_real_command = (
         "env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 "
         'MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" '
-        ".venv/bin/mmaudit models authenticated-runner --candidate-registry "
+        ".venv/bin/mmaudit models authenticated-runner-smoke --candidate-registry "
         '"$HOME/.mmaudit/private/authrunner/candidate-registry-r2.json" '
         '--candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/'
         'authrunner-candidate-20260820-r2" --primary-judge-registry '
@@ -412,25 +412,38 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         '"$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" '
         '--replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/'
         'authrunner-replay-judge-20260820-r2" '
-        "--qualification-policy config/models.maximum-assurance.toml "
-        '--primary-campaign-journal "$HOME/.mmaudit/private/authrunner/'
-        'primary-campaign-20260821-r5" --primary-portfolio '
-        '"$HOME/.mmaudit/private/authrunner/primary-portfolio-20260821-r5" '
-        '--replay-campaign-journal "$HOME/.mmaudit/private/authrunner/'
-        'replay-campaign-20260821-r5" --replay-portfolio '
-        '"$HOME/.mmaudit/private/authrunner/replay-portfolio-20260821-r5" '
+        "--smoke-corpus benchmarks/model_corpus_smoke "
         '--output "$HOME/.mmaudit/private/authrunner/'
-        'authenticated-runner-evidence-20260821-r5.json" '
+        'authenticated-runner-smoke-evidence-20260821-s1.json" '
         "--candidate-cost-cap-usd-per-attempt 1.00 "
         "--primary-judge-cost-cap-usd-per-attempt 1.00 "
         "--replay-judge-cost-cap-usd-per-attempt 1.00 "
         "--config config/openrouter-qualification.toml "
         "--corpus benchmarks/model_corpus/manifest.json "
-        "--ground-truth-provenance benchmarks/model_corpus/provenance.json "
         '--cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" '
-        "--allow-code-egress --preflight-only --no-color"
+        '--secrets-env-file "$HOME/.mmaudit/secrets.env" '
+        "--allow-code-egress --no-color"
     )
-
+    smoke_preflight_command = smoke_real_command.replace(
+        "--allow-code-egress --no-color",
+        "--allow-code-egress --preflight-only --no-color",
+    )
+    smoke_verify_command = (
+        "env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 "
+        'MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" '
+        ".venv/bin/mmaudit models verify-authenticated-runner-smoke --bundle "
+        '"$HOME/.mmaudit/private/authrunner/'
+        'authenticated-runner-smoke-evidence-20260821-s1.json" '
+        "--smoke-corpus benchmarks/model_corpus_smoke "
+        "--corpus benchmarks/model_corpus/manifest.json "
+        "--config config/openrouter-qualification.toml --no-color"
+    )
+    smoke_file_sha256s = {
+        "manifest.json": "aa453f655a4d09adf19498387c9cd2b48939119f1494e9517182dbb2b3ee685c",
+        "ground_truth.json": "e5e2baef1b986c77ae448fad1eb96052f061a8db1daae1b6f4122f61cbce8765",
+        "provenance.json": "d3f9e13733949f660ae4f3eeac8c3576a8b8b620e37adb4f1fc268e45163d46c",
+        "verdict_policy.json": "79b1aee6b28fc90f64887fff189b9f404114bd7671a7363bdb437e19d258d68f",
+    }
     assert "docs/remediation/v3/operator_results.md" in agents
     assert "Before ending any turn that issued, reissued, or depended on an operator command" in (
         agents
@@ -439,6 +452,11 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert hashlib.sha256(operator_result_bytes).hexdigest() == OPERATOR_RESULTS_SHA256
     assert OPERATOR_RESULTS_SHA256 in model_selection
     assert all(OPERATOR_RESULTS_SHA256 in queue for queue in queues)
+    for filename, expected_sha256 in smoke_file_sha256s.items():
+        artifact_bytes = (ROOT / "benchmarks/model_corpus_smoke" / filename).read_bytes()
+        assert hashlib.sha256(artifact_bytes).hexdigest() == expected_sha256
+        assert expected_sha256 in model_selection
+    assert "721f058726cf9509c07cb2aae662fb6ac23b5c30a363db40229faf8895034497" in (model_selection)
     assert "f7d8df3c4bdc584c33a9ed80e6aab49c66180f198185b8f8ccff5150467af115" in (model_selection)
     assert '`effort = "high"`' in model_selection
     assert "4,096-token atomic reasoning reserve" in normalized_model_selection
@@ -451,22 +469,87 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert model_selection.count(tencent_r5_command) == 1
     assert "historical command records and must not be rerun" in normalized_model_selection
     assert "9075ca7635c861194cc732e67d9ebb92e6ffa0af" in model_selection
-    assert model_selection.count(preflight_command) == 1
-    assert model_selection.count(".venv/bin/mmaudit models authenticated-runner") == 1
-    assert model_selection.count("--preflight-only") == 2
-    assert "PENDING_TENCENT_LINEAGE_RESEAL_CHECKPOINT" in model_selection
-    assert "Do not execute it while that literal placeholder remains." in model_selection
-    assert "committed, pushed, and independently resolved" in normalized_model_selection
+    assert smoke_real_command not in model_selection
+    assert model_selection.count(smoke_preflight_command) == 1
+    assert smoke_verify_command not in model_selection
+    assert model_selection.count(".venv/bin/mmaudit models authenticated-runner-smoke") == 1
+    assert ".venv/bin/mmaudit models verify-authenticated-runner-smoke" not in model_selection
+    assert ".venv/bin/mmaudit models authenticated-runner --" not in model_selection
+    assert model_selection.count("--preflight-only") == 1
+    assert "PENDING_TENCENT_LINEAGE_RESEAL_CHECKPOINT" not in model_selection
+    assert "a1ace778afcf308b57fe436271cdc16a2bb8e156" in model_selection
+    assert "af70559ddaf84178efffee1ec1bf7b99bf0b12df" in model_selection
+    assert "Add noncrediting provider smoke path" in normalized_model_selection
+    assert "7e9db03145b4afc1834dd47e9f4f97800e1edffb" in model_selection
+    assert "Fix smoke null lineage projection" in normalized_model_selection
+    assert "provider-free r2/r5/r2 preflight" in normalized_model_selection
+    assert "has now completed and is historical; do not rerun it" in (normalized_model_selection)
+    assert "Exact provider-free one-case smoke preflight — emission only" in (model_selection)
+    assert "smoke public lineage returned a non-independent projection" in (
+        normalized_model_selection
+    )
+    assert "root_lineage = None" in model_selection
+    assert "No smoke REAL or offline-verifier command is emitted until" in (
+        normalized_model_selection
+    )
+    assert "only for a `PENDING` review with a null registry root" in (normalized_model_selection)
+    assert "33 focused and 81 bounded smoke/neighbor tests" in normalized_model_selection
     assert "candidate-registry-r2.json" in model_selection
     assert "authrunner-candidate-20260820-r2" in model_selection
     assert "primary-judge-registry-r5.json" in model_selection
     assert "authrunner-primary-judge-20260821-r5" in model_selection
     assert "replay-judge-registry-r2.json" in model_selection
     assert "authrunner-replay-judge-20260820-r2" in model_selection
-    assert "No REAL AUTHRUNNER command is emitted or authorized here" in (
+    assert "A stopped run is not resumable." in model_selection
+    assert "Neither CLI has a resume flag" in normalized_model_selection
+    assert "requires all five mutable output leaves to be fresh" in normalized_model_selection
+    assert "Deterministic logical request IDs collide" in normalized_model_selection
+    assert "process-local live custody cannot be recreated" in normalized_model_selection
+    assert "neither one-shot runner can adopt that work and spend cannot be refunded" in (
         normalized_model_selection
     )
+    assert "do not rerun the same command or reuse/overwrite" in normalized_model_selection
+    assert "Changing only the smoke output path does not repair" in normalized_model_selection
+    assert "repeats paid candidate work" in normalized_model_selection
+    assert "after both candidates and before either judge POST" in normalized_model_selection
+    assert "Actual candidate spend plus the aggregate maximum" in normalized_model_selection
+    assert "strictly below the USD `250.00` ledger cap" in normalized_model_selection
+    assert "fit its USD `1.00` role tripwire" in normalized_model_selection
+    assert "reserves before every attempt" in normalized_model_selection
+    assert "unknown actual charge is finalized at the reserved amount" in normalized_model_selection
+    assert "There is no separate live `$192.00` cumulative meter" in normalized_model_selection
+    assert "not deferred to an end-only interval check" in normalized_model_selection
+    assert "checked again when the interval closes" in normalized_model_selection
+    assert "Kimi's total judge plan" in normalized_model_selection
+    assert "becomes exactly bounded before dispatch" in normalized_model_selection
+    assert "Whole-inventory `provider_name` uniqueness remains enforced." in model_selection
+    assert "end-to-end wire and evidence redesign" in normalized_model_selection
+    assert "explicit selection-quality limitation" in normalized_model_selection
+    assert "Emission is not execution authority" in normalized_model_selection
+    assert "full 24-case REAL command is deliberately withheld" in normalized_model_selection
+    assert "case-df79ea132113b863" in model_selection
+    assert "synthetic/C0015.sol" in model_selection
+    assert 'purpose = "NONCREDITING_SMOKE"' in model_selection
+    assert "representative_for_calibration = false" in model_selection
+    assert "semantic_scores_creditable = false" in model_selection
+    assert "smoke_success_authorizes_full_launch = false" in model_selection
+    assert "four logical requests" in normalized_model_selection
+    assert "at most eight provider attempts" in normalized_model_selection
+    assert "four generation refetches" in normalized_model_selection
+    assert "--qualification-policy" not in smoke_real_command
+    assert "--ground-truth-provenance" not in smoke_real_command
+    assert "--primary-campaign-journal" not in smoke_real_command
+    assert "--primary-portfolio" not in smoke_real_command
+    assert "--replay-campaign-journal" not in smoke_real_command
+    assert "--replay-portfolio" not in smoke_real_command
     assert "--candidate anthropic/claude-opus-5=amazon-bedrock" not in model_selection
+    assert "PREFLIGHT r2/r5/r2 — **VALID**, with derived exact caps" in operator_results
+    assert "SMOKE PREFLIGHT after `af70559`" in operator_results
+    assert "The smoke path fails for any real registry set." in operator_results
+    assert "Not yet run:** the smoke REAL launch" in operator_results
+    assert "f0f367605dd75674b08c8974bf69570190e4137be46a47619c1b5b9d85c83b57" in (model_selection)
+    assert "3fc6e535d22baf9bbbdafe4ccb50f9127fdb6d5c2fba7ce0463388765d2f8436" in (model_selection)
+    assert "5.27438208" in model_selection
     assert "BOTH r5 prerequisites RUN AND PASSED" in operator_results
     assert "PRIMARY r4 (`minimax/minimax-m3=coreweave/fp4`) — SUCCESS" in operator_results
     assert "runner public lineage does not prove three distinct roots" in operator_results
@@ -498,8 +581,10 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "did not exercise the current exact-cost admission implementation" in (
         normalized_model_selection
     )
-    assert "judge admission `PENDING_REAL_CANDIDATE_OUTPUTS`" in (normalized_model_selection)
-    assert "both exact judge plans derived" in normalized_model_selection
+    assert "Judge admission correctly remains `PENDING_REAL_CANDIDATE_OUTPUTS`" in (
+        normalized_model_selection
+    )
+    assert "two exact retry-inclusive plans are derived" in normalized_model_selection
     assert "f6acf206f2c55eeb57b1a11fcf58cc4694a41208" in model_selection
     assert "That checkpoint is historical and must not be rerun" in normalized_model_selection
     assert "fd1459b519ea0ce28a2d123ddeb57653dd2f7918" in model_selection

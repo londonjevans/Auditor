@@ -47,7 +47,7 @@ requested, and the operator reports that the ledger remains untouched at `$0`. T
 record operator-reported results only; the private artifacts and ledger were not read or promoted
 by Codex. The exact operator-supplied log is retained at
 [`operator_results.md`](../remediation/v3/operator_results.md), raw SHA-256
-`1ed1da7c47f7c595c099e5c70cfe947430db41bd7811b7b0b7ecddeb97e14ecc`, and is
+`4f71b2ebf33037317095a1f16c64d21b102bb6229be75ae58a55158c95454e0a`, and is
 `OPERATOR_SUPPLIED_UNVERIFIED`: it grants no repository authority.
 
 The subsequent Claude Opus 5 `amazon-bedrock` PRIMARY r3 attempt also failed closed before registry
@@ -190,7 +190,7 @@ Verification is anchored at `2026-08-21T11:47:00Z` and expires at `2027-02-17T11
 This is documentary identity/root authority only; it does not qualify a model or authorize a provider
 call, runner, seal, benchmark, audit, or release.
 
-The current r2/r5/r2 input composition and the still-fresh mutable output paths are:
+The current r2/r5/r2 input composition and the planned smoke boundary are:
 
 | Role/artifact | Exact path |
 | --- | --- |
@@ -200,29 +200,123 @@ The current r2/r5/r2 input composition and the still-fresh mutable output paths 
 | PRIMARY discovery | `$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r5` |
 | REPLAY registry | `$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json` |
 | REPLAY discovery | `$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2` |
-| PRIMARY campaign journal | `$HOME/.mmaudit/private/authrunner/primary-campaign-20260821-r5` |
-| PRIMARY portfolio | `$HOME/.mmaudit/private/authrunner/primary-portfolio-20260821-r5` |
-| REPLAY campaign journal | `$HOME/.mmaudit/private/authrunner/replay-campaign-20260821-r5` |
-| REPLAY portfolio | `$HOME/.mmaudit/private/authrunner/replay-portfolio-20260821-r5` |
-| Durable runner output | `$HOME/.mmaudit/private/authrunner/authenticated-runner-evidence-20260821-r5.json` |
+| Parent 24-case corpus | `benchmarks/model_corpus/manifest.json` |
+| One-case smoke bundle | `benchmarks/model_corpus_smoke/` |
+| Retained cost ledger | `$HOME/.mmaudit/private/openrouter-cost-ledger.json` |
+| Fresh smoke output | `$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260821-s1.json` |
 
-Run the following provider-free preflight only after checkpoint
-`PENDING_TENCENT_LINEAGE_RESEAL_CHECKPOINT` is committed, pushed, and independently resolved at
-`origin/agent/v3-wip-checkpoint`. Do not execute it while that literal placeholder remains. The
-command explicitly removes provider-secret environment variables and includes `--preflight-only`;
-it must return before secret selection, provider dispatch, ledger mutation, or durable output
-publication. The three `$1.00` values are additional operator tripwires, not pricing evidence or a
-substitute for the exact request-bound cost plans:
+The exact provider-free r2/r5/r2 preflight emitted from checkpoint
+`a1ace778afcf308b57fe436271cdc16a2bb8e156` has now completed and is historical; do not rerun it.
+The operator reports `VALID / NONAUTHORIZING / NO PROVIDER EGRESS`, an unchanged `$0` ledger, and the
+expected inventory of 96 logical requests, at most 192 provider attempts, and 96 generation
+refetches. The two exact candidate-plan SHA-256s are
+`f0f367605dd75674b08c8974bf69570190e4137be46a47619c1b5b9d85c83b57` and
+`3fc6e535d22baf9bbbdafe4ccb50f9127fdb6d5c2fba7ce0463388765d2f8436`; both the derived
+candidate interval cap and derived final-spend cap are exactly USD `5.27438208`. The effective
+configuration SHA-256 is `42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54`.
+
+Judge admission correctly remains `PENDING_REAL_CANDIDATE_OUTPUTS`, and the full campaign cost bound
+remains unavailable until genuine candidate outputs exist. The `$192.00` figure is pre-callback
+attempt-count arithmetic plus per-attempt tripwires; it is not a standalone live cumulative meter or
+an end-only spend check.
+
+Before the full launch, the repository freezes one exact case from the parent corpus as a separate
+four-file smoke bundle. The chosen case is `case-df79ea132113b863`
+(`synthetic/C0015.sol`): it exercises request construction, strict structured output, prompt-injection
+resistance, exact source-location evidence, candidate generation metadata, and cross-lineage judge
+adjudication while minimizing paid exposure. A second case would double this transport smoke without
+making it representative or exercising another runtime stage, so the sealed subset contains one.
+`manifest.json`, `ground_truth.json`,
+`provenance.json`, and `verdict_policy.json` have file SHA-256 values
+`aa453f655a4d09adf19498387c9cd2b48939119f1494e9517182dbb2b3ee685c`,
+`e5e2baef1b986c77ae448fad1eb96052f061a8db1daae1b6f4122f61cbce8765`,
+`d3f9e13733949f660ae4f3eeac8c3576a8b8b620e37adb4f1fc268e45163d46c`, and
+`79b1aee6b28fc90f64887fff189b9f404114bd7671a7363bdb437e19d258d68f` respectively. The policy's
+semantic bundle SHA-256 is
+`721f058726cf9509c07cb2aae662fb6ac23b5c30a363db40229faf8895034497`.
+
+Every artifact says `purpose = "NONCREDITING_SMOKE"`, every authority/credit flag is literal false,
+and the policy says `representative_for_calibration = false`, `semantic_scores_creditable = false`,
+and `smoke_success_authorizes_full_launch = false`. The bundle is an exact one-case projection, not a
+replacement or mutation of the frozen 24-case corpus. It therefore leaves `V3-CALIBRATE-001`'s
+representativeness requirement untouched and can never count as qualification, calibration,
+benchmark, audit, AUTHSEAL, production-selection, or release evidence. Its fixed inventory is two
+candidate requests plus two judge requests, four logical requests, at most eight provider attempts,
+and four generation refetches. The operator's rough USD `0.22` candidate estimate is useful for
+scale comparison only; the runtime derives exact candidate plans from frozen pricing and derives
+judge plans only after genuine candidate outputs exist.
+
+The exact runtime answers for both the smoke and full paths are:
+
+- **A stopped run is not resumable.** Neither CLI has a resume flag. The full AUTHRUNNER requires all
+  five mutable output leaves to be fresh and always creates new candidate campaigns; the smoke path
+  likewise requires a fresh final output and does not expose an adoptable candidate journal or
+  portfolio. Deterministic logical request IDs collide with retained ledger entries, and process-local
+  live custody cannot be recreated from serialized evidence. Full-run candidate journals and
+  portfolios, any partial smoke ledger entries, and all recorded spend remain durable accounting,
+  but neither one-shot runner can adopt that work and spend cannot be refunded. After any cap,
+  tripwire, interruption, or other partial failure, do not rerun the same command or reuse/overwrite
+  its mutable paths. Changing only the smoke output path does not repair its deterministic ledger-ID
+  collision. A later attempt requires either an explicitly implemented and validated resume mechanism
+  or separately authorized fresh campaign identities and paths; the latter repeats paid candidate
+  work.
+- **Judge admission happens after both candidates and before either judge POST.** Both candidate runs
+  must finish, then both judge routes are refreshed and two exact retry-inclusive plans are derived
+  from the REAL candidate outputs: one request per judge in smoke and 24 per judge in the full run.
+  Actual candidate spend plus the aggregate maximum of both judge plans must remain strictly below
+  the USD `250.00` ledger cap before the first judge POST.
+  Every judge request preview and attempt must also fit its USD `1.00` role tripwire. Immediately
+  before transport, dispatch recomputes the exact body, route, pricing, and active per-request ceiling;
+  the atomic ledger checks remaining cumulative capacity and reserves before every attempt, with at
+  most two attempts per logical request. An unknown actual charge is finalized at the reserved amount,
+  and any actual-cost overrun is durably recorded and blocks further calls. There is no separate live
+  `$192.00` cumulative meter; judge enforcement is not deferred to an end-only interval check because
+  aggregate stage admission happens before the first judge POST and every attempt must reserve against
+  the retained ledger. Exact interval and final spend are checked again when the interval closes.
+  Kimi's total judge plan is unavailable before candidate outputs, but it becomes exactly bounded
+  before dispatch; it is never uncapped at the POST boundary.
+- **Whole-inventory `provider_name` uniqueness remains enforced.** Current generation/response
+  evidence may expose only `provider_name`, and runtime identity handling accepts tag, slug, or name
+  forms. If a display name is duplicated, an unconfigured sibling route could otherwise be mistaken
+  for the approved route. Pair- or tag-granular identity would require an end-to-end wire and evidence
+  redesign, not a local validator relaxation. This deliberate fail-closed rule excludes some
+  multi-homed frontier judges and is an explicit selection-quality limitation; route diversity is not
+  evidence that the excluded models were technically inferior.
+
+### Exact provider-free one-case smoke preflight — emission only
+
+The initial smoke implementation is durably checkpointed at
+`af70559ddaf84178efffee1ec1bf7b99bf0b12df` (`Add noncrediting provider smoke path`). Its first
+operator-run preflight failed safely with `smoke public lineage returned a non-independent
+projection`, selected no secret, made no provider request, and spent `$0`. Real discovery registries
+intentionally leave documentary lineage unset; the smoke adapter had compared those
+`root_lineage = None` values unconditionally with the genuine sealed roots.
+
+The narrow correction mirrors the full runner only for a `PENDING` review with a null registry root.
+It still requires exact model IDs, resolver-projected sealed roots, the exact projection type and
+bundle pins, `independent = true`, three distinct roots, and rejection of a non-null mismatch or any
+`REJECTED` review. The fix passed 33 focused and 81 bounded smoke/neighbor tests, Ruff and format,
+strict mypy, and diff integrity. It is committed, pushed, and remote-resolved at
+`7e9db03145b4afc1834dd47e9f4f97800e1edffb` (`Fix smoke null lineage projection`).
+
+The following command is emitted only for the next provider-free preflight. It returns before secret
+selection, provider access, ledger mutation, or output publication and was not executed by Codex:
 
 ```shell
-env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models authenticated-runner --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r2.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260820-r2" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r5.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r5" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2" --qualification-policy config/models.maximum-assurance.toml --primary-campaign-journal "$HOME/.mmaudit/private/authrunner/primary-campaign-20260821-r5" --primary-portfolio "$HOME/.mmaudit/private/authrunner/primary-portfolio-20260821-r5" --replay-campaign-journal "$HOME/.mmaudit/private/authrunner/replay-campaign-20260821-r5" --replay-portfolio "$HOME/.mmaudit/private/authrunner/replay-portfolio-20260821-r5" --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-evidence-20260821-r5.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --ground-truth-provenance benchmarks/model_corpus/provenance.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --allow-code-egress --preflight-only --no-color
+env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models authenticated-runner-smoke --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r2.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260820-r2" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r5.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r5" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2" --smoke-corpus benchmarks/model_corpus_smoke --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260821-s1.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --secrets-env-file "$HOME/.mmaudit/secrets.env" --allow-code-egress --preflight-only --no-color
 ```
 
-This command is nonauthorizing and must still leave judge admission
-`PENDING_REAL_CANDIDATE_OUTPUTS`. In any separately authorized live process, both candidate runs must
-complete first, then both judge routes must be refreshed, both exact judge plans derived, and their
-aggregate remaining cost admitted before the first judge POST. No REAL AUTHRUNNER command is emitted
-or authorized here; AUTHSEAL publication, qualification, benchmark, audit, and release remain blocked.
+Retain its complete terminal record in `docs/remediation/v3/operator_results.md`. No smoke REAL or
+offline-verifier command is emitted until this exact checkpoint reports
+`VALID / NONAUTHORIZING / NO PROVIDER EGRESS`. Emission is not execution authority.
+
+### Full 24-case REAL command — withheld
+
+The full 24-case REAL command is deliberately withheld. It will be emitted only after the one-case
+REAL smoke succeeds, its durable evidence verifies offline, every defect observed during that run is
+fixed and checkpointed, and the operator separately requests the full launch. A successful smoke is
+diagnostic evidence only and does not itself authorize that later command. AUTHSEAL publication,
+qualification, calibration, benchmark, audit, the full run, and release remain blocked.
 
 ## Queue-derived model-work status
 
