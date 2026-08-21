@@ -665,6 +665,7 @@ def _model_discovery_run(
         "temperature",
     ),
     endpoint_supported_parameters: tuple[str, ...] | None = None,
+    model_reasoning: dict[str, Any] | None = None,
     endpoint_reasoning_requested: bool = False,
     endpoint_pricing: dict[str, str] | None = None,
 ) -> tuple[OpenRouterModelDiscoveryRunManifest, OpenRouterModelDiscoveryEvidence]:
@@ -681,20 +682,19 @@ def _model_discovery_run(
         structured_output_required=False,
         pricing=endpoint_pricing,
     )
-    catalog = {
-        "data": [
-            {
-                "id": exact_model,
-                "canonical_slug": canonical_model,
-                "context_length": 200_000,
-                "top_provider": {
-                    "context_length": 200_000,
-                    "max_completion_tokens": 20_000,
-                },
-                "supported_parameters": list(model_supported_parameters),
-            }
-        ]
+    catalog_model: dict[str, Any] = {
+        "id": exact_model,
+        "canonical_slug": canonical_model,
+        "context_length": 200_000,
+        "top_provider": {
+            "context_length": 200_000,
+            "max_completion_tokens": 20_000,
+        },
+        "supported_parameters": list(model_supported_parameters),
     }
+    if model_reasoning is not None:
+        catalog_model["reasoning"] = model_reasoning
+    catalog = {"data": [catalog_model]}
     payload = validate_openrouter_model_discovery(
         exact_model_id=exact_model,
         models_payload=catalog,
@@ -736,6 +736,40 @@ def _model_discovery_run(
     )
     manifest = write_model_discovery_run(tmp_path / canonical_model.rsplit("/", 1)[-1], evidence)
     return manifest, evidence[0]
+
+
+def test_model_discovery_registration_cannot_overwrite_reasoning_parent(
+    config_factory: Any,
+    tmp_path: Path,
+) -> None:
+    first_manifest, first_evidence = _model_discovery_run(tmp_path / "first")
+    second_manifest, second_evidence = _model_discovery_run(
+        tmp_path / "second",
+        model_reasoning={
+            "default_enabled": True,
+            "supported_efforts": ["high"],
+        },
+    )
+    client, http_client, _usage = _client(
+        config_factory(),
+        lambda _request: _completion_response('{"answer":"unused"}'),
+        provider_policy=OpenRouterProviderPolicy(only=("approved-provider",)),
+    )
+    client.register_model_discovery(evidence=first_evidence, manifest=first_manifest)
+    original = client._reasoning_discoveries[first_evidence.exact_model_id]
+    try:
+        with pytest.raises(
+            OpenRouterProviderPolicyError,
+            match="conflicting reasoning discovery evidence",
+        ):
+            client.register_model_discovery(
+                evidence=second_evidence,
+                manifest=second_manifest,
+            )
+    finally:
+        asyncio.run(http_client.aclose())
+
+    assert client._reasoning_discoveries[first_evidence.exact_model_id] is original
 
 
 @pytest.mark.asyncio

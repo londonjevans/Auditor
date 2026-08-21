@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable
-from itertools import combinations
 from pathlib import Path
 
 import pytest
@@ -24,6 +23,7 @@ from mmaudit.models.candidate_selection import (
 )
 from mmaudit.models.discovery import DiscoveryCandidateRoute
 from mmaudit.models.public_lineage_authority import (
+    PublicModelLineageAuthorityError,
     require_independent_public_model_lineage,
     require_verified_public_model_lineage,
     resolve_verified_public_model_lineage,
@@ -142,7 +142,7 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
     plan = load_candidate_selection_plan(ROOT / "config" / "models.selection-plan.json")
     guide = (ROOT / "docs" / "models" / "model_selection.md").read_text(encoding="utf-8")
 
-    assert plan.plan_sha256 == "8899739a0a4a36bacacb17592df8263f57f94c65b96a63b69ab61ab67e455761"
+    assert plan.plan_sha256 == "f7d8df3c4bdc584c33a9ed80e6aab49c66180f198185b8f8ccff5150467af115"
     assert plan.plan_sha256 in guide
     assert len(plan.entries) == 11
     assert plan.authenticated_runner_selection is not None
@@ -150,13 +150,23 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
     assert plan.authenticated_runner_selection.candidate_model_id == (
         "deepseek/deepseek-v4-pro-0813"
     )
-    assert plan.authenticated_runner_selection.primary_judge_model_id == "minimax/minimax-m3"
+    assert plan.authenticated_runner_selection.primary_judge_model_id == "tencent/hy3"
+    assert plan.authenticated_runner_selection.role_assignment_sha256 == (
+        "a1ac14a47c49b9776631edc0cd39520b6dd68fa91a8787968c02f741fbfdee45"
+    )
     assert plan.authenticated_runner_selection.replay_judge_model_id == "moonshotai/kimi-k3"
     entries = {entry.exact_model_id: entry for entry in plan.entries}
     assert entries["deepseek/deepseek-v4-pro-0813"].allowed_provider_endpoints == ("novita/fp8",)
     assert entries["minimax/minimax-m3"].allowed_provider_endpoints == ("coreweave/fp4",)
+    assert entries["minimax/minimax-m3"].entry_sha256 == (
+        "caf35cf7507cb1f7299dcdcfbc06e405f10d855361f13a4d8dd21c844bc15176"
+    )
     assert entries["qwen/qwen3.8-max"].allowed_provider_endpoints == ("alibaba",)
     assert entries["moonshotai/kimi-k3"].allowed_provider_endpoints == ("together",)
+    assert entries["tencent/hy3"].allowed_provider_endpoints == ("tencent/fp8",)
+    assert entries["tencent/hy3"].entry_sha256 == (
+        "cdcc7cc650c2d54bf91bc2f01dd9f8e496769f6697c31ca5f7994cb0653bcf1d"
+    )
     assert all(entry.availability == "UNVERIFIED" for entry in plan.entries)
     assert all(entry.documentary_lineage == "UNCONFIRMED" for entry in plan.entries)
 
@@ -188,12 +198,12 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
             approved_provider_endpoint="novita/fp8",
         ),
         DiscoveryCandidateRoute(
-            exact_model_id="minimax/minimax-m3",
-            approved_provider_endpoint="coreweave/fp4",
-        ),
-        DiscoveryCandidateRoute(
             exact_model_id="moonshotai/kimi-k3",
             approved_provider_endpoint="together",
+        ),
+        DiscoveryCandidateRoute(
+            exact_model_id="tencent/hy3",
+            approved_provider_endpoint="tencent/fp8",
         ),
     )
 
@@ -201,7 +211,8 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
     for model_id, stale_endpoint in (
         ("deepseek/deepseek-v4-pro-0813", "novita"),
         ("deepseek/deepseek-v4-pro-0813", "together"),
-        ("minimax/minimax-m3", "amazon-bedrock"),
+        ("tencent/hy3", "deepinfra/fp8"),
+        ("tencent/hy3", "novita"),
         ("moonshotai/kimi-k3", "deepinfra/bf16"),
     ):
         with pytest.raises(CandidateSelectionError, match="unlisted endpoint"):
@@ -216,28 +227,26 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
             )
 
 
-def test_committed_runner_selection_has_three_confirmed_distinct_lineages() -> None:
+def test_committed_runner_selection_remains_blocked_on_tencent_lineage() -> None:
     plan = load_candidate_selection_plan(ROOT / "config" / "models.selection-plan.json")
     selection = plan.authenticated_runner_selection
     assert selection is not None
     capability = resolve_verified_public_model_lineage()
 
-    selected_ids = (
+    confirmed_pair = require_independent_public_model_lineage(
+        capability,
         selection.candidate_model_id,
-        selection.primary_judge_model_id,
         selection.replay_judge_model_id,
     )
-    bindings = tuple(
-        require_verified_public_model_lineage(capability, exact_model_id)
-        for exact_model_id in selected_ids
-    )
-    assert bindings[1].root_lineage == (
-        "sha256:e251821340d79fe40fba647e729f9dd8feea7b988efad1a61936bf62b3b38161"
-    )
-    assert len({binding.root_lineage for binding in bindings}) == 3
-    for left, right in combinations(selected_ids, 2):
-        projection = require_independent_public_model_lineage(capability, left, right)
-        assert projection.independent is True
+    assert confirmed_pair.independent is True
+    with pytest.raises(PublicModelLineageAuthorityError, match="lacks confirmed"):
+        require_verified_public_model_lineage(capability, selection.primary_judge_model_id)
+    with pytest.raises(PublicModelLineageAuthorityError, match="lacks confirmed"):
+        require_independent_public_model_lineage(
+            capability,
+            selection.candidate_model_id,
+            selection.primary_judge_model_id,
+        )
 
 
 def test_selection_plan_rejects_one_source_relabelled_as_two() -> None:

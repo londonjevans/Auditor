@@ -19,18 +19,21 @@ own frozen metadata snapshots.
 
 `config/models.selection-plan.json` is a canonical, self-hashed, explicitly
 `NONAUTHORIZING` replacement seed for the obsolete roster. Its plan SHA-256 is
-`8899739a0a4a36bacacb17592df8263f57f94c65b96a63b69ab61ab67e455761`. It binds the exact bytes of the
+`f7d8df3c4bdc584c33a9ed80e6aab49c66180f198185b8f8ccff5150467af115`. It binds the exact bytes of the
 operator-staged `model-ranking.py` and `V3-LINEAGE-001-operator-review.md`, but it does not
 claim that the ranker ran, that any proposed ID or route currently exists, that an advisory
 lineage label is correct, or that any model is qualified. Its endpoint lists are policy
 constraints only. Every discovery, lineage, qualification, runner, benchmark, seal, and
 release authority field is literally false.
 
-The proposed AUTHRUNNER roles are also only planning data: DeepSeek V4 candidate, MiniMax M3
-primary judge, and Kimi K3 replay judge. The current documentary public-lineage manifest now has
-`CONFIRMED` exact-ID decisions for all three and independently replays their pairwise-distinct
-DeepSeek, MiniMax, and Moonshot roots. This proves only documentary identity/root separation; it
-does not qualify a model or authorize a runner, provider call, benchmark, seal, audit, or release.
+The proposed AUTHRUNNER roles are also only planning data: DeepSeek V4 candidate, Tencent Hy3
+primary judge, and Kimi K3 replay judge. The Tencent entry is restricted to the singleton
+`tencent/fp8` route; its entry SHA-256 is
+`cdcc7cc650c2d54bf91bc2f01dd9f8e496769f6697c31ca5f7994cb0653bcf1d`, and the role-assignment
+SHA-256 is `a1ac14a47c49b9776631edc0cd39520b6dd68fa91a8787968c02f741fbfdee45`.
+MiniMax M3 remains byte-for-byte unchanged as an unselected candidate entry. The plan still records
+`distinct_root_lineages_verified = false`; it does not qualify a model or authorize a runner,
+provider call, benchmark, seal, audit, or release.
 
 The operator ran the three singleton metadata-only commands. DeepSeek succeeded on `novita/fp8`
 with operator-reported frozen-registry SHA-256
@@ -44,7 +47,7 @@ requested, and the operator reports that the ledger remains untouched at `$0`. T
 record operator-reported results only; the private artifacts and ledger were not read or promoted
 by Codex. The exact operator-supplied log is retained at
 [`operator_results.md`](../remediation/v3/operator_results.md), raw SHA-256
-`3c8fc79c24615fae4f80dbbed6c86a9ddbb4b61cd0b1441ac83d2b020a1b60fd`, and is
+`3af4473feac473c3ef5b7ecd553ed67dc141d6f174647e29bd2c1dc485bc609e`, and is
 `OPERATOR_SUPPLIED_UNVERIFIED`: it grants no repository authority.
 
 The subsequent Claude Opus 5 `amazon-bedrock` PRIMARY r3 attempt also failed closed before registry
@@ -55,15 +58,13 @@ pricing, or capability evidence from an unapproved sibling route. Under the curr
 reported Claude ZDR route can satisfy this invariant; route substitution alone cannot repair r3.
 No completion was requested and the operator reports no ledger spend.
 
-The replacement PRIMARY r4 `minimax/minimax-m3=coreweave/fp4` metadata discovery succeeded. The
+The historical PRIMARY r4 `minimax/minimax-m3=coreweave/fp4` metadata discovery succeeded. The
 operator reports frozen registry SHA-256
 `eaed67e745d448299e3aa5d58b406de065fae09813b3c6ff1c646403ca8023a1`, discovery manifest
 SHA-256 `3921c5682bedf1f938236a5268fcf6d5a9138d1646726df00147705cba0b8969`, no completion, and no
-ledger spend. Of the technically discoverable replacements, MiniMax M3 is the only exact ID already
-`CONFIRMED` by the compiled public-lineage manifest. The plan restricts each selected role to one
-route: DeepSeek to successful `novita/fp8`, MiniMax to successful `coreweave/fp4`, and Kimi to
-successful `together`. All three registries now exist, remain rootless/role-empty/`PENDING`, and are
-nonauthorizing. Do not rerun or overwrite any discovery path.
+ledger spend. That r4 registry remains historical and must not be overwritten. Later frozen
+reasoning evidence showed that MiniMax publishes neither a supported-effort inventory nor a
+default-enabled state, so no exact reasoning mode can admit it. It is no longer selected.
 
 The operator ran the exact provider-free r2/r4/r2 preflight twice. Both runs accepted every
 registry, discovery bundle, policy, corpus, provenance, ledger, and output-path input, then failed
@@ -89,8 +90,8 @@ SHA-256 `de2192a2eaede4a54e1b24216d5c3c51cebd63086131c20367e166dfa672a388`. It b
 files totaling `411,429` bytes, 14 exact aliases, 16 exact nonoverlapping claims, 10 confirmed
 identities across nine roots, four unchanged `UNCONFIRMED` identities, and six conservative
 non-independence constraints. The two new constraints prevent DeepSeek V3/V4/Cogito and Kimi
-K2/K3 variants from being credited as independent roots. The active DeepSeek V4, MiniMax M3, and
-Kimi K3 triple replays pairwise independent. Verification is anchored at
+K2/K3 variants from being credited as independent roots. The then-selected historical DeepSeek V4,
+MiniMax M3, and Kimi K3 triple replays pairwise independent. Verification is anchored at
 `2026-08-21T05:26:00Z` and expires at `2027-02-17T05:26:00Z`.
 
 If the cumulative ledger does not already exist, initialize it exactly once. Never replace an
@@ -124,30 +125,80 @@ external request-price contract. New or changed pricing components still fail be
 authority, reservation, or POST.
 
 The follow-up is checkpointed at
-`fd1459b519ea0ce28a2d123ddeb57653dd2f7918` (`Bound OpenRouter prompt-cache pricing`). Run the
-following unchanged provider-free command only after that checkpoint and this documentation-only
-reconciliation are pushed and verified on `origin/agent/v3-wip-checkpoint`. On those committed
-runtime bytes, the implementation must emit two distinct, exact 24-request candidate-plan hashes
-and their retry-inclusive derived caps. Judge admission must remain
-`PENDING_REAL_CANDIDATE_OUTPUTS`, and the full campaign cost must remain unavailable, because exact
-judge prompts require genuine candidate outputs. The locally verified preflight contract returns
-before secret selection, provider access, ledger mutation, or durable output publication; transient
-private write probes are created and removed during fail-closed path preflight. The three `$1.00`
-values remain only additional operator tripwires and are not pricing evidence or substitutes for the
-derived request bounds.
+`fd1459b519ea0ce28a2d123ddeb57653dd2f7918` (`Bound OpenRouter prompt-cache pricing`) and is
+verified on `origin/agent/v3-wip-checkpoint`. The operator then ran its committed-byte provider-free
+preflight: the cache-pricing gate cleared, but candidate cost-plan derivation failed later because
+the configured `max_tokens = 4096` reasoning control lacked exact frozen support. The rejection
+occurred before secret selection, provider egress, reservation, ledger mutation, or durable output;
+the operator again reported `$0` campaign spend.
+
+The same-ticket reasoning correction selects `effort = "high"` while retaining a 4,096-token atomic
+reasoning reserve. Compatibility uses an endpoint's exact supported-effort inventory whenever it is
+present and falls back to the exact frozen model-catalog inventory only when the endpoint inventory
+is absent; discovery continues to reject endpoint/model contradictions. This repairs the field-source
+asymmetry without inferring support from a model name or default behavior. DeepSeek V4 and Kimi K3
+advertise `high` in their frozen catalog inventories. MiniMax M3 advertises no usable reasoning
+metadata, so changing the validation rule cannot admit it.
+
+Tencent Hy3 was chosen as the replacement planning seed because the operator-reported shortlist
+records `high` support and identifies `tencent/fp8` as the distinct-provider route satisfying the
+existing ZDR, operational-status, and display-name constraints. Those reports are advisory and do
+not substitute for fresh evidence. The following new private destinations are reserved but do not
+yet exist as validated artifacts:
+
+| Planned r5 artifact | Exact destination |
+| --- | --- |
+| PRIMARY discovery run | `$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r5` |
+| PRIMARY registry (`--primary-judge-registry`) | `$HOME/.mmaudit/private/authrunner/primary-judge-registry-r5.json` |
+| PRIMARY campaign journal | `$HOME/.mmaudit/private/authrunner/primary-campaign-20260821-r5` |
+| PRIMARY portfolio | `$HOME/.mmaudit/private/authrunner/primary-portfolio-20260821-r5` |
+| REPLAY campaign journal | `$HOME/.mmaudit/private/authrunner/replay-campaign-20260821-r5` |
+| REPLAY portfolio | `$HOME/.mmaudit/private/authrunner/replay-portfolio-20260821-r5` |
+| Durable runner output | `$HOME/.mmaudit/private/authrunner/authenticated-runner-evidence-20260821-r5.json` |
+
+The existing candidate and replay inputs remain the successful, immutable r2 pairs and must not be
+rerun or overwritten: candidate registry `candidate-registry-r2.json` with discovery directory
+`authrunner-candidate-20260820-r2`, and replay registry `replay-judge-registry-r2.json` with discovery
+directory `authrunner-replay-judge-20260820-r2`. Their evidence remains usable only with its exact
+original bundle; it does not grant authority to the pending Tencent role. A future preflight can
+therefore use an r2/r5/r2 input composition only after the r5 pair and new lineage bundle validate.
+
+Fresh r5 metadata-only discovery for `tencent/hy3=tencent/fp8` is pending. Tencent Hy3 is also absent
+from the sealed public-lineage bundle. The operator has pre-fetched a first-party card at immutable
+revision `a960ebc3da325ba167f069f76c41eb62c9280d22`; its reported 10,325 bytes have SHA-256
+`dbdfc5920bf548fb484b5ec1837032f6c85e1886f2930aa5bee629c1f9620e8b`. Those bytes remain
+nonauthorizing seed evidence. The repository capture specification now pins that exact publisher
+source, but one coherent full-source capture, exact claim-span binding, root decision, manifest
+reseal, and independent replay remain pending. No pairwise-independent active triple is currently
+proved.
+
+Run the following two prerequisite commands only after the checkpoint containing plan
+`f7d8df3c4bdc584c33a9ed80e6aab49c66180f198185b8f8ccff5150467af115`, the reasoning correction,
+the Tencent capture specification, and this guide is committed, pushed, and verified at
+`origin/agent/v3-wip-checkpoint`. Do not run either command from uncommitted local bytes. The first
+creates one fresh public-document staging bundle and requests no model completion:
 
 ```shell
-env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models authenticated-runner --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r2.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260820-r2" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r4.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r4" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2" --qualification-policy config/models.maximum-assurance.toml --primary-campaign-journal "$HOME/.mmaudit/private/authrunner/primary-campaign-20260821-r4" --primary-portfolio "$HOME/.mmaudit/private/authrunner/primary-portfolio-20260821-r4" --replay-campaign-journal "$HOME/.mmaudit/private/authrunner/replay-campaign-20260821-r4" --replay-portfolio "$HOME/.mmaudit/private/authrunner/replay-portfolio-20260821-r4" --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-evidence-20260821-r4.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --ground-truth-provenance benchmarks/model_corpus/provenance.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --allow-code-egress --preflight-only --no-color
+.venv/bin/python scripts/capture_public_model_lineage.py --output-dir /private/tmp/mmaudit-public-lineage-20260821-r2
 ```
 
-This post-fix committed-byte rerun is pending and will validate only the current campaign contract; it grants
-no runner, qualification, provider-call, AUTHSEAL, benchmark, audit, or release authority. Exact
-candidate caps are derived provider-free. In any separately authorized live process, both candidate
-runs must complete first; then both judge routes must be refreshed, both exact judge plans derived,
-and their aggregate remaining cost admitted before the first judge POST. The operator's cost
-estimates and statement that no known gate remains are advisory evidence, not authority. Any later
-live command requires a separate operator action, exact fresh path custody, and a new provider-free
-preflight if its inputs or destinations change.
+The second performs only the exact Tencent r5 metadata discovery selected by the plan. It must fail
+closed rather than substituting a route, and it must not overwrite any prior registry or discovery
+directory:
+
+```shell
+MMAUDIT_SECRETS_ENV_FILE="$HOME/.mmaudit/secrets.env" MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models discover --candidate tencent/hy3=tencent/fp8 --config config/openrouter-qualification.toml --secrets-env-file "$HOME/.mmaudit/secrets.env" --output-dir "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r5" --candidate-selection-plan config/models.selection-plan.json --candidate-selection-ranking-source /Users/generalcuster/Documents/dev/CODEX_HANDOFF_v3-unblock-2026-08-17/model-ranking.py --candidate-selection-lineage-review-source /Users/generalcuster/Documents/dev/CODEX_HANDOFF_v3-unblock-2026-08-17/V3-LINEAGE-001-operator-review.md --candidate-registry-output "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r5.json" --no-color
+```
+
+There is therefore no current AUTHRUNNER preflight command to execute. The old r2/r4/r2 command is
+historical and must not be reused. Only after the fresh r5 registry/discovery pair and the full
+lineage-r2 capture result are reconciled, claim-bound, resealed, and independently replayed may a new
+provider-free r2/r5/r2 preflight be sealed and emitted.
+That future preflight must still leave judge admission `PENDING_REAL_CANDIDATE_OUTPUTS`; in any
+separately authorized live process, both candidate runs must complete first, then both judge routes
+must be refreshed, both exact judge plans derived, and their aggregate remaining cost admitted before
+the first judge POST. No runner, qualification, provider-call, AUTHSEAL, benchmark, audit, or release
+authority is granted here.
 
 ## Queue-derived model-work status
 

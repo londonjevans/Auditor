@@ -3,9 +3,9 @@
   "authenticated_runner_selection": {
     "candidate_model_id": "deepseek/deepseek-v4-pro-0813",
     "distinct_root_lineages_verified": false,
-    "primary_judge_model_id": "minimax/minimax-m3",
+    "primary_judge_model_id": "tencent/hy3",
     "replay_judge_model_id": "moonshotai/kimi-k3",
-    "role_assignment_sha256": "7f9b3850869ca789643f4e154a683d1ae8a2196d143b10ca602dccd6af6e7ef2"
+    "role_assignment_sha256": "a1ac14a47c49b9776631edc0cd39520b6dd68fa91a8787968c02f741fbfdee45"
   },
   "benchmark_authorized": false,
   "cached_ranking_payload_present": false,
@@ -136,16 +136,13 @@
     {
       "advisory_lineage_group": "Tencent-Hunyuan",
       "allowed_provider_endpoints": [
-        "deepinfra",
-        "google-vertex",
-        "novita",
-        "together"
+        "tencent/fp8"
       ],
       "approved_roles": [],
       "availability": "UNVERIFIED",
       "documentary_lineage": "UNCONFIRMED",
       "entry_authority": false,
-      "entry_sha256": "dc0bfdaeb842b8af7c475cf8177a3c5ecfc5bb842dd98206437057efb3732c9c",
+      "entry_sha256": "cdcc7cc650c2d54bf91bc2f01dd9f8e496769f6697c31ca5f7994cb0653bcf1d",
       "exact_model_id": "tencent/hy3",
       "lineage_group_seed_sha256": "94d9d5398632e20d982d35d15d5946f15fe07f29fcc2a3b557de3bf223c4dc68",
       "priority_rank": 10
@@ -186,7 +183,7 @@
     }
   ],
   "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
-  "plan_sha256": "8899739a0a4a36bacacb17592df8263f57f94c65b96a63b69ab61ab67e455761",
+  "plan_sha256": "f7d8df3c4bdc584c33a9ed80e6aab49c66180f198185b8f8ccff5150467af115",
   "production_selection_authorized": false,
   "provider_call_authorized": false,
   "provider_metadata_present": false,

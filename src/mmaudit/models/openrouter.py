@@ -3578,7 +3578,7 @@ def preview_openrouter_structured_request_cost(
         privacy=sealed_privacy,
     )
     control = sealed_reasoning_policy.control_for_request(role)
-    sealed_evidence.reasoning_capability.require_compatible_profile(control)
+    sealed_evidence.require_compatible_reasoning_profile(control)
     reasoning_plan = ReasoningRequestPlanEvidence.build(
         request_role=role,
         policy=sealed_reasoning_policy,
@@ -4323,6 +4323,7 @@ class OpenRouterClient:
             str,
             OpenRouterReasoningCapabilityEvidence,
         ] = {}
+        self._reasoning_discoveries: dict[str, OpenRouterModelDiscoveryPayload] = {}
         qualification_model_ids = tuple(binding.exact_model_id for binding in qualification_routing)
         if qualification_model_ids != tuple(sorted(set(qualification_model_ids))):
             raise OpenRouterQualificationError(
@@ -5574,7 +5575,21 @@ class OpenRouterClient:
         reasoning_capability = OpenRouterReasoningCapabilityEvidence.model_validate(
             evidence.reasoning_capability.model_dump(mode="python")
         )
+        reasoning_discovery = OpenRouterModelDiscoveryPayload.model_validate(
+            evidence.model_dump(
+                mode="python",
+                exclude={"provenance", "discovery_evidence_sha256"},
+            )
+        )
         existing_reasoning_capability = self._reasoning_capabilities.get(evidence.exact_model_id)
+        existing_reasoning_discovery = self._reasoning_discoveries.get(evidence.exact_model_id)
+        if (
+            existing_reasoning_discovery is not None
+            and existing_reasoning_discovery != reasoning_discovery
+        ):
+            raise OpenRouterProviderPolicyError(
+                "conflicting reasoning discovery evidence cannot replace a binding"
+            )
         if (
             existing_reasoning_capability is not None
             and existing_reasoning_capability != reasoning_capability
@@ -5626,6 +5641,7 @@ class OpenRouterClient:
             output_capability_sha256=evidence.output_capability_sha256,
         )
         self._reasoning_capabilities[evidence.exact_model_id] = reasoning_capability
+        self._reasoning_discoveries[evidence.exact_model_id] = reasoning_discovery
         self._model_identities[evidence.exact_model_id] = identity
 
     def registered_model_identity_snapshot(
@@ -6081,7 +6097,15 @@ class OpenRouterClient:
                 raise OpenRouterProviderPolicyError(
                     "reasoning capability differs from the exact requested model"
                 )
-            capability.require_compatible_profile(control)
+            discovery = self._reasoning_discoveries.get(model)
+            if discovery is None:
+                capability.require_compatible_profile(control)
+            else:
+                if discovery.reasoning_capability != capability:
+                    raise OpenRouterProviderPolicyError(
+                        "reasoning discovery differs from the registered capability"
+                    )
+                discovery.require_compatible_reasoning_profile(control)
         return ReasoningRequestPlanEvidence.build(
             request_role=role,
             policy=self.reasoning_policy,

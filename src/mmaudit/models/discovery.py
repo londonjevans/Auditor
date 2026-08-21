@@ -52,7 +52,11 @@ from mmaudit.models.output_modes import (
 from mmaudit.models.output_modes import (
     structured_output_parameters as derive_structured_output_parameters,
 )
-from mmaudit.models.reasoning import REASONING_EFFORT_ORDER, ReasoningEffort
+from mmaudit.models.reasoning import (
+    REASONING_EFFORT_ORDER,
+    ReasoningControlProfile,
+    ReasoningEffort,
+)
 from mmaudit.models.schemas import ExecutionEvidenceKind
 from mmaudit.privacy import (
     EffectivePrivacyPolicyEvidence,
@@ -465,13 +469,20 @@ class OpenRouterModelDiscoveryPayload(BaseModel):
         ):
             raise ValueError("endpoint reasoning efforts exceed model metadata")
 
+        capability = self.reasoning_capability
+        if (
+            capability.reasoning_metadata_available is False
+            and self.model_supported_reasoning_efforts is not None
+        ):
+            raise ValueError(
+                "unavailable model reasoning metadata cannot claim a supported-effort inventory"
+            )
         expected_metadata_hash = _canonical_sha256(_model_metadata_projection(self))
         if self.model_metadata_snapshot_sha256 != expected_metadata_hash:
             raise ValueError("model metadata projection hash is inconsistent")
         expected_reasoning_support: ReasoningParameterSupport = (
             "supported" if self.reasoning_supported else "unsupported"
         )
-        capability = self.reasoning_capability
         if (
             capability.exact_model_id,
             capability.provider_endpoint,
@@ -494,9 +505,30 @@ class OpenRouterModelDiscoveryPayload(BaseModel):
             endpoint.max_completion_tokens,
         ):
             raise ValueError("reasoning capability is not bound to the exact model endpoint")
+        if capability.supported_reasoning_efforts != endpoint.supported_reasoning_efforts:
+            raise ValueError(
+                "reasoning capability effort inventory is not bound to the exact endpoint"
+            )
         if self.output_capability_sha256 != _discovery_output_capability_sha256(self):
             raise ValueError("discovery output-capability hash is inconsistent")
         return self
+
+    def require_compatible_reasoning_profile(
+        self,
+        profile: ReasoningControlProfile,
+    ) -> None:
+        """Require the narrowest frozen endpoint-or-model reasoning inventory."""
+
+        endpoint_efforts = self.endpoint_snapshot.endpoints[0].supported_reasoning_efforts
+        effective_efforts = (
+            endpoint_efforts
+            if endpoint_efforts is not None
+            else self.model_supported_reasoning_efforts
+        )
+        self.reasoning_capability._require_compatible_profile_with_efforts(
+            profile,
+            supported_reasoning_efforts=effective_efforts,
+        )
 
 
 class OpenRouterModelDiscoveryEvidence(OpenRouterModelDiscoveryPayload):

@@ -994,7 +994,7 @@ async def _refresh_and_register_judge_discovery(
     )
     reasoning_control = build_reasoning_policy(config).control_for_request("model_benchmark")
     try:
-        current_model.reasoning_capability.require_compatible_profile(reasoning_control)
+        current_model.require_compatible_reasoning_profile(reasoning_control)
     except ValueError:
         raise AuthenticatedRunnerOpenRouterError(
             "current judge reasoning metadata is incompatible with the launch policy"

@@ -23,7 +23,7 @@ OBJECTIVE_RELATIVE_PATH = "docs/remediation/v3/product_completion_goal.txt"
 OBJECTIVE_SHA256 = "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15"
 PRODUCT_VISION_RELATIVE_PATH = "product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.md"
 PRODUCT_VISION_SHA256 = "8b878b665e636b3b48500fefe2967394b2abdd69ce2ebfa0033d04542d2965e1"
-OPERATOR_RESULTS_SHA256 = "3c8fc79c24615fae4f80dbbed6c86a9ddbb4b61cd0b1441ac83d2b020a1b60fd"
+OPERATOR_RESULTS_SHA256 = "3af4473feac473c3ef5b7ecd553ed67dc141d6f174647e29bd2c1dc485bc609e"
 PRODUCT_VISION_GIT_ATTRIBUTES = f"{PRODUCT_VISION_RELATIVE_PATH} -text"
 POLICY_ELIGIBILITY_TICKET = "V3-POLICYELIG-001"
 POLICY_ELIGIBILITY_QUEUE_HEADING = (
@@ -380,6 +380,25 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     runtime_status = json.loads(RUNTIME_STATUS_PATH.read_text(encoding="utf-8"))
     preflight_status = runtime_status["authrunner_provider_free_preflight"]
     local_contract = preflight_status["local_preflight_contract"]
+    lineage_r2_command = (
+        ".venv/bin/python scripts/capture_public_model_lineage.py --output-dir "
+        "/private/tmp/mmaudit-public-lineage-20260821-r2"
+    )
+    tencent_r5_command = (
+        'MMAUDIT_SECRETS_ENV_FILE="$HOME/.mmaudit/secrets.env" MMAUDIT_BUDGET_USD=250 '
+        'MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" '
+        ".venv/bin/mmaudit models discover --candidate tencent/hy3=tencent/fp8 "
+        "--config config/openrouter-qualification.toml --secrets-env-file "
+        '"$HOME/.mmaudit/secrets.env" --output-dir '
+        '"$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r5" '
+        "--candidate-selection-plan config/models.selection-plan.json "
+        "--candidate-selection-ranking-source "
+        "/Users/generalcuster/Documents/dev/CODEX_HANDOFF_v3-unblock-2026-08-17/"
+        "model-ranking.py --candidate-selection-lineage-review-source "
+        "/Users/generalcuster/Documents/dev/CODEX_HANDOFF_v3-unblock-2026-08-17/"
+        "V3-LINEAGE-001-operator-review.md --candidate-registry-output "
+        '"$HOME/.mmaudit/private/authrunner/primary-judge-registry-r5.json" --no-color'
+    )
 
     assert "docs/remediation/v3/operator_results.md" in agents
     assert "Before ending any turn that issued, reissued, or depended on an operator command" in (
@@ -389,8 +408,32 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert hashlib.sha256(operator_result_bytes).hexdigest() == OPERATOR_RESULTS_SHA256
     assert OPERATOR_RESULTS_SHA256 in model_selection
     assert all(OPERATOR_RESULTS_SHA256 in queue for queue in queues)
-    assert "--primary-judge-registry" in model_selection
-    assert "primary-judge-registry-r4.json" in model_selection
+    assert "f7d8df3c4bdc584c33a9ed80e6aab49c66180f198185b8f8ccff5150467af115" in (model_selection)
+    assert '`effort = "high"`' in model_selection
+    assert "4,096-token atomic reasoning reserve" in normalized_model_selection
+    assert "falls back to the exact frozen model-catalog inventory only when" in (
+        normalized_model_selection
+    )
+    assert "MiniMax M3" in model_selection
+    assert "It is no longer selected." in model_selection
+    assert model_selection.count(lineage_r2_command) == 1
+    assert model_selection.count(tencent_r5_command) == 1
+    assert "only after the checkpoint" in normalized_model_selection
+    assert "committed, pushed, and verified" in normalized_model_selection
+    assert "candidate-registry-r2.json" in model_selection
+    assert "authrunner-candidate-20260820-r2" in model_selection
+    assert "primary-judge-registry-r5.json" in model_selection
+    assert "authrunner-primary-judge-20260821-r5" in model_selection
+    assert "replay-judge-registry-r2.json" in model_selection
+    assert "authrunner-replay-judge-20260820-r2" in model_selection
+    assert "There is therefore no current AUTHRUNNER preflight command to execute." in (
+        model_selection
+    )
+    assert ".venv/bin/mmaudit models authenticated-runner" not in model_selection
+    assert "--preflight-only" not in model_selection
+    assert "old r2/r4/r2 command is historical and must not be reused" in (
+        normalized_model_selection
+    )
     assert "--candidate anthropic/claude-opus-5=amazon-bedrock" not in model_selection
     assert "PRIMARY r4 (`minimax/minimax-m3=coreweave/fp4`) — SUCCESS" in operator_results
     assert "runner public lineage does not prove three distinct roots" in operator_results
@@ -398,20 +441,17 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "AUTHRUNNER PREFLIGHT — **VALID**" in operator_results
     assert "FAILED on unenforceable variable pricing" in operator_results
     assert "variable endpoint pricing component cannot be provider-capped" in operator_results
+    assert "cache gate CLEARED; fails later on reasoning capability" in operator_results
+    assert "Lineage prerequisites for BOTH replacement candidates" in operator_results
     assert "VALID / NONAUTHORIZING / NO PROVIDER EGRESS" in operator_results
     assert "f0ff2d76017dfcd075c6758f0da7256c98dd45ca749a42b81ca1ce8c95a93f9e" in (operator_results)
     assert "848b1dfda5b60c6793089ed3916073d86e3a734da9dbc5a824302bec7f4b37da" in (operator_results)
     assert "capture_public_model_lineage.py --output-dir" in model_selection
     assert "6f46b3c779262cf11b0ec58b1a2fe88947cd71d7ab788734abb36cd9f96374e4" in (model_selection)
-    assert "primary-judge-registry-r4.json" in model_selection
-    assert "replay-judge-registry-r2.json" in model_selection
     assert "did not exercise the current exact-cost admission implementation" in (
         normalized_model_selection
     )
-    assert "Judge admission must remain `PENDING_REAL_CANDIDATE_OUTPUTS`" in (
-        normalized_model_selection
-    )
-    assert "This post-fix committed-byte rerun is pending" in normalized_model_selection
+    assert "judge admission `PENDING_REAL_CANDIDATE_OUTPUTS`" in (normalized_model_selection)
     assert "both exact judge plans derived" in normalized_model_selection
     assert "f6acf206f2c55eeb57b1a11fcf58cc4694a41208" in model_selection
     assert "That checkpoint is historical and must not be rerun" in normalized_model_selection

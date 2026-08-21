@@ -70,6 +70,7 @@ from mmaudit.models.discovery import (
     OpenRouterModelDiscoveryEvidence,
     OpenRouterModelDiscoveryRunManifest,
 )
+from mmaudit.models.endpoint_snapshots import EndpointSnapshotValidationError
 from mmaudit.models.generation_evidence import (
     GenerationVerificationRequest,
     OpenRouterGenerationEvidence,
@@ -883,6 +884,7 @@ def _preflight_execution(
     judge_evidence_hashes: list[str] = []
     paths: list[Path] = []
     maximum_interval_cost = Decimal(0)
+    judge_reasoning_control = build_reasoning_policy(config).control_for_request("model_benchmark")
     for plan in run_plans:
         if type(plan) is not AuthenticatedRunnerRunPlan or type(plan.run_kind) is not (
             CrossLineageAdjudicationRunKind
@@ -929,6 +931,12 @@ def _preflight_execution(
             )
         if judge.exact_model_id == candidate.exact_model_id:
             raise AuthenticatedRunnerExecutionError("runner candidate cannot judge itself")
+        try:
+            judge_evidence.require_compatible_reasoning_profile(judge_reasoning_control)
+        except EndpointSnapshotValidationError:
+            raise AuthenticatedRunnerExecutionError(
+                "runner judge reasoning profile is incompatible with frozen launch evidence"
+            ) from None
         judges.append(judge)
         for path in (plan.campaign_path, plan.portfolio_path):
             _preflight_private_output_leaf(path)
@@ -1017,6 +1025,10 @@ def _preflight_execution(
             )
             for plan in run_plans
         )
+    except EndpointSnapshotValidationError:
+        raise AuthenticatedRunnerExecutionError(
+            "runner candidate reasoning profile is incompatible with frozen launch evidence"
+        ) from None
     except (TypeError, ValueError):
         raise AuthenticatedRunnerExecutionError(
             "runner candidate request costs cannot be derived from frozen launch evidence"

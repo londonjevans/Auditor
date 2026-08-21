@@ -50,6 +50,19 @@ def _disabled_reasoning_policy() -> ReasoningPolicyArtifact:
     )
 
 
+def _high_effort_reasoning_policy() -> ReasoningPolicyArtifact:
+    return ReasoningPolicyArtifact.build(
+        controls_by_role={
+            role: ReasoningControlProfile.build(
+                mode="effort",
+                effort="high",
+                reserved_reasoning_tokens=4_096,
+            )
+            for role in CANONICAL_REASONING_POLICY_ROLES
+        }
+    )
+
+
 def _preview(
     *,
     config: Any,
@@ -137,6 +150,104 @@ def test_provider_free_request_cost_preview_is_exact_stable_and_nonauthorizing(
     assert not first.authorizes_provider_transport
     assert not first.grants_review_credit
     assert not first.grants_completion_credit
+
+
+@pytest.mark.asyncio
+async def test_catalog_effort_fallback_dispatches_the_exact_previewed_reasoning_shape(
+    config_factory: Any,
+    tmp_path: Path,
+) -> None:
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return _completion_response(
+            '{"answer":"ok"}',
+            selected_model="alpha/atlas-secure-20260727",
+            provider="Approved Provider",
+            reasoning_tokens=3,
+        )
+
+    config = config_factory()
+    manifest, evidence = _model_discovery_run(
+        tmp_path,
+        model_supported_parameters=(
+            "max_tokens",
+            "reasoning",
+            "response_format",
+            "temperature",
+        ),
+        endpoint_supported_parameters=(
+            "max_tokens",
+            "reasoning",
+            "response_format",
+            "temperature",
+        ),
+        model_reasoning={
+            "default_enabled": None,
+            "supported_efforts": ["low", "high", "max"],
+        },
+        endpoint_pricing=_PROMPT_DOMINATED_CACHE_READ_PRICING,
+    )
+
+    policy = OpenRouterProviderPolicy(
+        only=("approved-provider",),
+        certification=True,
+    )
+    reasoning_policy = _high_effort_reasoning_policy()
+    preview = _preview(
+        config=config,
+        manifest=manifest,
+        evidence=evidence,
+        policy=policy,
+        reasoning_policy=reasoning_policy,
+    )
+    budget = BudgetManager(
+        total_usd=config.execution.budget_usd,
+        max_output_tokens=config.execution.max_output_tokens_per_request,
+        conservative_usd_per_million_tokens=(config.execution.conservative_usd_per_million_tokens),
+        max_requests_per_agent=config.execution.max_requests_per_agent,
+        global_input_token_budget=config.token_budgets.global_input_token_budget,
+        global_output_token_budget=config.token_budgets.global_output_token_budget,
+        atomic_ledger=AtomicCostLedger.initialize(
+            tmp_path / "catalog-effort-preview-ledger.json",
+            cap_usd=Decimal(str(config.execution.budget_usd)),
+        ),
+        require_endpoint_cost_bound=True,
+    )
+    client, http_client, usage = _client(
+        config,
+        handler,
+        provider_policy=policy,
+        reasoning_policy=reasoning_policy,
+        qualification_routing=(),
+        budget=budget,
+    )
+    client.register_model_discovery(evidence=evidence, manifest=manifest)
+    try:
+        result = await client.complete_with_evidence(
+            role="model_benchmark",
+            models=["alpha/atlas-secure"],
+            system_prompt="bounded synthetic system prompt",
+            user_prompt="synthetic provider-free request",
+            response_model=Answer,
+            schema_name="answer",
+            logical_request_id="authrunner-candidate-case-001",
+            expected_request_cost_preview=preview,
+        )
+    finally:
+        await http_client.aclose()
+
+    assert evidence.reasoning_capability.supported_reasoning_efforts is None
+    assert evidence.model_supported_reasoning_efforts == ("low", "high", "max")
+    assert preview.reserved_reasoning_tokens == 4_096
+    assert len(observed) == 1
+    assert json.loads(observed[0].content)["reasoning"] == {
+        "effort": "high",
+        "exclude": False,
+    }
+    assert result.usage_record.routing["request_cost_preview_sha256"] == preview.preview_sha256
+    assert usage.records == [result.usage_record]
 
 
 @pytest.mark.parametrize("cache_bound", ["0.0000001", "0.000001000000000001"])

@@ -364,6 +364,22 @@ PUBLIC_LINEAGE_SOURCE_SPECS = (
         required_markers=("Hunyuan-A13B-Instruct",),
     ),
     PublicLineageSourceSpec(
+        source_id="tencent-hy3-card",
+        requested_url=(
+            "https://huggingface.co/tencent/Hy3/resolve/"
+            "a960ebc3da325ba167f069f76c41eb62c9280d22/README.md"
+        ),
+        publisher_id="tencent",
+        independence_key="tencent",
+        immutable_revision="a960ebc3da325ba167f069f76c41eb62c9280d22",
+        repository_path="tencent/Hy3",
+        relative_path="sources/tencent-hy3-card.md",
+        required_markers=(
+            "**Hy3** is a 295B-parameter Mixture-of-Experts (MoE) model",
+            "developed by the Tencent Hy Team",
+        ),
+    ),
+    PublicLineageSourceSpec(
         source_id="z-ai-glm-4-7-card",
         requested_url=(
             "https://huggingface.co/zai-org/GLM-4.7/resolve/"

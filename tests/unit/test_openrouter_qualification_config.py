@@ -54,8 +54,8 @@ def test_qualification_runtime_config_loads_without_secrets_or_claims() -> None:
     assert config.models.provider_policy.only == ()
     assert config.models.provider_policy.order == ()
     assert config.models.provider_policy.allow_fallbacks is False
-    assert config.models.reasoning.effort is None
-    assert config.models.reasoning.max_tokens == 4_096
+    assert config.models.reasoning.effort == "high"
+    assert config.models.reasoning.max_tokens is None
     assert config.models.reasoning.reserved_tokens == 4_096
     assert config.models.reasoning.exclude is False
 

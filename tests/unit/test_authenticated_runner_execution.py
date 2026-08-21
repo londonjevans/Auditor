@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from decimal import Decimal
@@ -48,6 +49,7 @@ from mmaudit.models.discovery import (
     OpenRouterModelDiscoveryEvidence,
     OpenRouterModelDiscoveryRunManifest,
 )
+from mmaudit.models.endpoint_snapshots import EndpointSnapshotValidationError
 from mmaudit.models.generation_evidence import (
     GenerationVerificationRequest,
     OpenRouterGenerationEvidence,
@@ -991,6 +993,82 @@ async def test_preflight_rejects_plan_order_and_cost_cap_before_dispatch(
         await _execute(cap_harness)
     assert cap_harness.candidate_executor.calls == []
     assert cap_harness.judge_route_preparation_executor.calls == []
+
+
+@pytest.mark.asyncio
+async def test_preflight_preserves_sanitized_reasoning_incompatibility_category(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = await _harness(tmp_path, config_factory)
+
+    def incompatible_reasoning(**_kwargs: object) -> AuthenticatedRunnerStagedCostPlan:
+        raise EndpointSnapshotValidationError("SENSITIVE_SENTINEL")
+
+    monkeypatch.setattr(
+        authenticated_runner_execution_module,
+        "_candidate_staged_cost_plan",
+        incompatible_reasoning,
+    )
+
+    with pytest.raises(AuthenticatedRunnerExecutionError) as caught:
+        await _execute(harness)
+
+    assert str(caught.value) == (
+        "runner candidate reasoning profile is incompatible with frozen launch evidence"
+    )
+    assert caught.value.__cause__ is None
+    assert "SENSITIVE_SENTINEL" not in "".join(traceback.format_exception(caught.value))
+    assert harness.candidate_executor.calls == []
+    assert harness.judge_route_preparation_executor.calls == []
+    assert harness.judge_executor.calls == []
+    assert harness.generation_executor.calls == []
+    assert harness.budget.atomic_ledger is not None
+    assert harness.budget.atomic_ledger.snapshot().entries == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("judge_index", [0, 1])
+async def test_preflight_rejects_either_incompatible_judge_reasoning_before_dispatch(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+    monkeypatch: pytest.MonkeyPatch,
+    judge_index: int,
+) -> None:
+    harness = await _harness(tmp_path, config_factory)
+    incompatible_model = harness.plans[judge_index].judge.exact_model_id
+    original = OpenRouterModelDiscoveryEvidence.require_compatible_reasoning_profile
+
+    def require_compatible_reasoning_profile(
+        self: OpenRouterModelDiscoveryEvidence,
+        profile: Any,
+    ) -> None:
+        if self.exact_model_id == incompatible_model:
+            raise EndpointSnapshotValidationError("SENSITIVE_SENTINEL")
+        original(self, profile)
+
+    monkeypatch.setattr(
+        OpenRouterModelDiscoveryEvidence,
+        "require_compatible_reasoning_profile",
+        require_compatible_reasoning_profile,
+    )
+
+    with pytest.raises(AuthenticatedRunnerExecutionError) as caught:
+        await _execute(harness)
+
+    assert str(caught.value) == (
+        "runner judge reasoning profile is incompatible with frozen launch evidence"
+    )
+    assert caught.value.__cause__ is None
+    assert "SENSITIVE_SENTINEL" not in "".join(traceback.format_exception(caught.value))
+    assert harness.candidate_executor.calls == []
+    assert harness.judge_route_preparation_executor.calls == []
+    assert harness.judge_executor.calls == []
+    assert harness.generation_executor.calls == []
+    assert harness.usage.records == []
+    assert harness.budget.atomic_ledger is not None
+    assert harness.budget.atomic_ledger.snapshot().entries == ()
 
 
 @pytest.mark.asyncio

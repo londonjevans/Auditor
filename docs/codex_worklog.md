@@ -7,11 +7,57 @@ credentials, RPC URLs, or operational attack instructions.
 AUTORUN_STATUS: BLOCKED_SAFETY
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001
-NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Push and verify `fd1459b519ea0ce28a2d123ddeb57653dd2f7918` (or a final governance successor containing only documentation changes), then rerun the exact same provider-free r2/r4/r2 preflight. Only after an exact nonauthorizing success may the operator separately authorize one one-shot REAL candidates-first campaign; both live judge route refreshes and aggregate exact judge admission must precede any judge POST. AUTHSEAL publication, real audits, benchmarks, and release remain queued.
-LAST_VALIDATION_COMMAND: Root-independent and owner 406-test affected matrices; 47-test durable/CLI matrix; 71-test execution/candidate/release matrix; schema verification; Ruff; strict mypy over 203 source files; 12 product-documentation/objective tests; strict runtime/review JSON parsing; `git diff --check`; independent 16-test red-team review; terminal frozen post-fix `.venv/bin/pytest -q` under required local loopback/Unix-socket permission. Cache-fix checkpoint is `fd1459b519ea0ce28a2d123ddeb57653dd2f7918`; post-fix provider-free preflight remains PENDING.
-LAST_VALIDATION_RESULT: PASS / PARTIAL — root-independent affected validation passed 406 tests in 110.81s; owner affected validation passed 406/406; durable/CLI passed 47/47; execution/candidate/release passed 71/71; schema verification, Ruff, strict mypy over 203 source files, 12 product-documentation/objective tests in 0.07s, strict governance JSON, and diff integrity passed; independent red-team review passed 16 focused tests with no blocker/HIGH; the terminal frozen post-fix suite exited 0 with 6,230 passed, 21 skipped, and 2 warnings in 4,599.65s (1:16:39) under required local loopback/Unix-socket permission. The skips are explicit unavailable rootless, Foundry, scanner, and paid-provider prerequisites; the warnings are `os.fork` deprecations in two existing tests. The prior `f6acf206f2c55eeb57b1a11fcf58cc4694a41208` committed-byte preflight failed safely before secret selection, provider egress, or reservation; the operator reports the campaign ledger remained `$0`. The cache-fix is checkpointed at `fd1459b519ea0ce28a2d123ddeb57653dd2f7918`; its post-fix preflight remains PENDING.
-LAST_CHECKPOINT_COMMIT: fd1459b519ea0ce28a2d123ddeb57653dd2f7918 — `Bound OpenRouter prompt-cache pricing`; cache-dominance fix checkpointed, post-fix committed-byte preflight PENDING.
-REMAINING_ACTIONABLE_TICKETS: The provider-free cache-dominance fix is checkpointed at `fd1459b519ea0ce28a2d123ddeb57653dd2f7918`; push/verification and post-fix preflight reconciliation remain actionable. Credentialed execution remains `BLOCKED_SAFETY`; external authority-log publication and all benchmark/release work remain queued behind genuine REAL runner evidence.
+NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Commit, push, and verify `PENDING_CURRENT_REASONING_SELECTION_CAPTURE_CHECKPOINT`; then run only exact fresh PRIMARY r5 metadata discovery for `tencent/hy3=tencent/fp8` and the full coherent 16-source r2 public-document capture. Reconcile both results, bind and replay Tencent documentary lineage plus the negative-only Tencent/Hunyuan organizational constraint, and reseal before emitting any r2/r5/r2 provider-free preflight. No current preflight, REAL campaign, AUTHSEAL publication, real audit, benchmark, or release action is authorized yet.
+LAST_VALIDATION_COMMAND: Owner reasoning matrices with 419 and 134 tests; independent 15-test reasoning red-team; 10-test candidate-selection matrix; 25-test capture-preparation matrix; root combined matrices with 166 and 57 tests; 12 product-documentation/objective tests; schema verification; Ruff; strict mypy; JSON parsing; `git diff --check`. No terminal full suite was run for the current reasoning/selection/capture-preparation bytes.
+LAST_VALIDATION_RESULT: PASS / PARTIAL — owner reasoning matrices passed 419/419 and 134/134; independent reasoning red-team passed 15/15; candidate-selection passed 10/10; capture preparation passed 25/25; root combined matrices passed 166/166 and 57/57; 12 product-documentation/objective tests passed in 0.07s; schema verification, Ruff, strict mypy, strict governance JSON, and diff integrity passed. The operator-reported preflight on `fd1459b519ea0ce28a2d123ddeb57653dd2f7918` cleared the cache-price gate and failed safely before secret selection, provider egress, or reservation because configured max-token reasoning lacked exact frozen support; its dedicated ledger remained `$0`. No terminal full-suite result is claimed for the new bytes, and no authority or counter changed.
+LAST_CHECKPOINT_COMMIT: 5f35436e1ffdb2a5c8d229e79e7f4637abbb3279 — `Record prompt-cache pricing checkpoint`; latest durable pushed checkpoint. Current implementation checkpoint: `PENDING_CURRENT_REASONING_SELECTION_CAPTURE_CHECKPOINT`.
+REMAINING_ACTIONABLE_TICKETS: Commit/push the current reasoning/selection/capture-preparation slice, run exact fresh PRIMARY r5 metadata discovery and the full coherent 16-source r2 capture, then reconcile, bind, and reseal before emitting a new provider-free preflight. Credentialed execution remains `BLOCKED_SAFETY`; external authority-log publication and all benchmark/release work remain queued behind genuine REAL runner evidence.
+
+## 2026-08-21T11:19:34Z — AUTHRUNNER reasoning compatibility and PRIMARY r5 preparation validated
+
+- **Status:** `V3-AUTHRUNNER-001` remains `PARTIAL` / `BLOCKED_SAFETY`. The current implementation
+  checkpoint is `PENDING_CURRENT_REASONING_SELECTION_CAPTURE_CHECKPOINT`; the latest durable pushed
+  checkpoint remains `5f35436e1ffdb2a5c8d229e79e7f4637abbb3279`.
+- **Operator result custody:** The current 24,059-byte operator-supplied log has raw SHA-256
+  `3af4473feac473c3ef5b7ecd553ed67dc141d6f174647e29bd2c1dc485bc609e`. It records the
+  preflight on `fd1459b519ea0ce28a2d123ddeb57653dd2f7918` clearing the cache-price gate and
+  then failing safely during candidate cost-plan derivation because configured max-token reasoning
+  lacked exact frozen support. The failure preceded secret selection, provider egress, and reservation;
+  the operator reports the dedicated campaign ledger remained `$0`.
+- **Reasoning correction:** The configured max-token control was replaced with `effort = "high"`
+  while retaining the 4,096-token reserve. Exact endpoint supported-effort inventory takes precedence when present; the frozen model
+  catalog is fallback evidence only when endpoint inventory is absent. Explicit empty endpoint
+  inventory vetoes fallback, while absent model-and-endpoint evidence, endpoint parameter absence,
+  endpoint/model contradiction, and unsupported configured effort all fail closed. The
+  operator-reported frozen catalog inventories contain `high` for DeepSeek V4 and Kimi K3; MiniMax M3
+  has no usable reasoning mode and is removed from the active plan.
+- **Selection and capture preparation:** The nonauthorizing plan is resealed as
+  `f7d8df3c4bdc584c33a9ed80e6aab49c66180f198185b8f8ccff5150467af115` with Tencent Hy3 on
+  singleton `tencent/fp8` as PRIMARY r5. Fresh r5 metadata does not yet exist. The capture inventory
+  now specifies 16 sources, including exact immutable Tencent Hy3 card revision
+  `a960ebc3da325ba167f069f76c41eb62c9280d22`; the existing 15-source bundle and its 411,429-byte,
+  14-alias, 16-claim, 10-confirmed, 9-root, 4-unconfirmed, 6-constraint counters remain unchanged.
+  Tencent is not yet confirmed. A later reseal must add only a conservative negative organizational
+  constraint across Tencent Hy3 and Hunyuan; that constraint cannot confirm Hunyuan or grant either
+  identity a positive root.
+- **Validation:** Owner reasoning matrices passed 419/419 and 134/134; independent reasoning red-team
+  passed 15/15; candidate-selection passed 10/10; capture preparation passed 25/25; root combined
+  matrices passed 166/166 and 57/57. Twelve product-documentation/objective tests passed in 0.07s;
+  schema verification, Ruff, strict mypy, strict governance JSON, and diff integrity passed. No
+  terminal full-suite result is claimed for these new bytes.
+- **Authority and counters:** Governed REAL calls remain 11 attempted / 1 succeeded / 10 rejected;
+  used cost remains USD `0.0034764325`, reserved cost remains USD `0.00`, and completed real audits
+  remain `0`. Metadata discovery remains 6 attempted / 3 succeeded / 3 rejected, with zero provider
+  completions and `$0` dedicated campaign spend. No lineage, qualification, runner, AUTHSEAL,
+  benchmark, audit, or release authority or counter changed.
+- **Files changed:** Reasoning admission and tests, the high-effort configuration, Tencent selection
+  and capture preparation, model-selection documentation, and the six governance mirrors. No private
+  artifact was opened and no provider operation was performed by Codex.
+- **Next exact action:** Commit, push, and verify the pending current checkpoint. Then run only the
+  exact fresh PRIMARY r5 metadata discovery and complete coherent 16-source r2 capture, reconcile both
+  operator results, bind/replay Tencent documentary evidence and the negative-only Tencent/Hunyuan
+  constraint, and reseal. Do not emit a provider-free r2/r5/r2 preflight before both inputs are
+  reconciled and resealed; do not begin any REAL campaign.
 
 ## 2026-08-21T09:05:36Z — AUTHRUNNER f6 preflight failure reconciled; cache dominance validated
 
@@ -44,15 +90,15 @@ REMAINING_ACTIONABLE_TICKETS: The provider-free cache-dominance fix is checkpoin
   counter changed.
 - **Checkpoint and next action:** The cache-dominance fix is checkpointed at
   `fd1459b519ea0ce28a2d123ddeb57653dd2f7918` (`Bound OpenRouter prompt-cache pricing`); its
-  committed-byte provider-free preflight remains `PENDING`. Push and verify that checkpoint (or a
-  final governance successor containing only documentation changes), then rerun the exact same
-  r2/r4/r2 preflight and reconcile its result before any separately authorized REAL campaign.
+  committed-byte provider-free preflight was `PENDING` at this recorded boundary. That historical
+  next action was completed: the later run cleared the cache-price gate and failed safely on exact
+  reasoning support; see the current entry above.
 
 ## 2026-08-21T08:19:01Z — AUTHRUNNER exact-cost admission validated and governance reconciled
 
-- **Status:** `V3-AUTHRUNNER-001` remains `PARTIAL` / `BLOCKED_SAFETY`. This slice records the
-  current exact-cost implementation without claiming a provider run or runner authority; the
-  committed-byte preflight remains pending.
+- **Status:** `V3-AUTHRUNNER-001` remains `PARTIAL` / `BLOCKED_SAFETY`. This slice recorded the
+  then-current exact-cost implementation without claiming a provider run or runner authority; the
+  committed-byte preflight was pending at this validation boundary.
 - **Provider-free candidate admission:** Preflight now derives two exact self-hashed 24-request
   candidate plans from the retained singleton discovery/pricing evidence and exact request, token,
   reasoning, output, and retry shapes. It reports the two plan hashes plus retry-inclusive exact

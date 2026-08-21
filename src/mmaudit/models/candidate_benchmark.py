@@ -1083,9 +1083,7 @@ async def _execute_candidate(
             if current_model_evidence != frozen_model_evidence:
                 raise ValueError("current model metadata differs from frozen discovery evidence")
             benchmark_reasoning_profile = reasoning_policy.control_for_request(target.request_role)
-            current_model_evidence.reasoning_capability.require_compatible_profile(
-                benchmark_reasoning_profile
-            )
+            current_model_evidence.require_compatible_reasoning_profile(benchmark_reasoning_profile)
             if (
                 current_model_evidence.reasoning_capability
                 != endpoint_evidence.reasoning_capability

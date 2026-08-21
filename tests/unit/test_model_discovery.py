@@ -33,11 +33,13 @@ from mmaudit.models.discovery import (
     write_model_discovery_run,
 )
 from mmaudit.models.endpoint_snapshots import (
+    EndpointSnapshotValidationError,
     OpenRouterEndpointSnapshotEvidence,
     validate_openrouter_endpoint_snapshot,
 )
 from mmaudit.models.openrouter import OpenRouterClient, OpenRouterPrivacyError
 from mmaudit.models.output_modes import StructuredOutputMode
+from mmaudit.models.reasoning import ReasoningControlProfile
 from mmaudit.models.usage import UsageLedger
 from mmaudit.orchestration.budgets import BudgetManager
 from mmaudit.privacy import (
@@ -500,7 +502,7 @@ def test_catalog_accepts_max_default_effort_and_canonicalizes_inventory() -> Non
     )
 
 
-def test_discovery_freezes_only_exact_endpoint_reasoning_effort_inventory() -> None:
+def test_discovery_prefers_exact_endpoint_reasoning_effort_inventory() -> None:
     model = _model()
 
     payload = _discover(
@@ -523,6 +525,179 @@ def test_discovery_freezes_only_exact_endpoint_reasoning_effort_inventory() -> N
     )
     assert unknown_payload.reasoning_supported is True
     assert unknown_payload.reasoning_capability.supported_reasoning_efforts is None
+    unknown_payload.require_compatible_reasoning_profile(
+        ReasoningControlProfile.build(
+            mode="effort",
+            effort="max",
+            reserved_reasoning_tokens=4_096,
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("exact_model_id", "default_enabled"),
+    [
+        ("deepseek/deepseek-v4-pro-0813", None),
+        ("moonshotai/kimi-k3", True),
+    ],
+)
+def test_operator_observed_catalog_efforts_fill_absent_endpoint_inventory(
+    exact_model_id: str,
+    default_enabled: bool | None,
+) -> None:
+    model = _model(
+        model=exact_model_id,
+        canonical_slug=exact_model_id,
+    )
+    model["reasoning"] = {
+        "default_enabled": default_enabled,
+        "supported_efforts": ["low", "high", "max"],
+    }
+    payload = _discover(
+        models=[model],
+        endpoint_snapshot=_endpoint_snapshot(
+            model=exact_model_id,
+            supported_reasoning_efforts=None,
+        ),
+        exact_model_id=exact_model_id,
+    )
+    profile = ReasoningControlProfile.build(
+        mode="effort",
+        effort="max",
+        reserved_reasoning_tokens=4_096,
+    )
+
+    assert payload.model_supported_reasoning_efforts == ("low", "high", "max")
+    assert payload.reasoning_capability.supported_reasoning_efforts is None
+    payload.require_compatible_reasoning_profile(profile)
+    with pytest.raises(EndpointSnapshotValidationError, match="supported-effort inventory"):
+        payload.reasoning_capability.require_compatible_profile(profile)
+
+
+def test_explicit_endpoint_inventory_vetoes_broader_catalog_efforts() -> None:
+    model = _model()
+    model["reasoning"]["supported_efforts"] = ["low", "high", "max"]
+    profile = ReasoningControlProfile.build(
+        mode="effort",
+        effort="max",
+        reserved_reasoning_tokens=4_096,
+    )
+
+    narrower = _discover(
+        models=[model],
+        endpoint_snapshot=_endpoint_snapshot(
+            supported_reasoning_efforts=("low", "high"),
+        ),
+    )
+    with pytest.raises(EndpointSnapshotValidationError, match="absent from"):
+        narrower.require_compatible_reasoning_profile(profile)
+
+    explicitly_empty = _discover(
+        models=[model],
+        endpoint_snapshot=_endpoint_snapshot(supported_reasoning_efforts=()),
+    )
+    with pytest.raises(EndpointSnapshotValidationError, match="absent from"):
+        explicitly_empty.require_compatible_reasoning_profile(profile)
+
+
+def test_absent_model_and_endpoint_effort_metadata_remains_incompatible() -> None:
+    model = _model(
+        model="minimax/minimax-m3",
+        canonical_slug="minimax/minimax-m3",
+    )
+    model.pop("reasoning")
+    payload = _discover(
+        models=[model],
+        endpoint_snapshot=_endpoint_snapshot(
+            model="minimax/minimax-m3",
+            supported_reasoning_efforts=None,
+        ),
+        exact_model_id="minimax/minimax-m3",
+    )
+
+    with pytest.raises(EndpointSnapshotValidationError, match="frozen metadata"):
+        payload.require_compatible_reasoning_profile(
+            ReasoningControlProfile.build(
+                mode="effort",
+                effort="high",
+                reserved_reasoning_tokens=4_096,
+            )
+        )
+
+
+def test_empty_catalog_effort_inventory_does_not_claim_effort_support() -> None:
+    model = _model()
+    model["reasoning"]["supported_efforts"] = []
+    payload = _discover(
+        models=[model],
+        endpoint_snapshot=_endpoint_snapshot(supported_reasoning_efforts=None),
+    )
+
+    assert payload.model_supported_reasoning_efforts == ()
+    with pytest.raises(EndpointSnapshotValidationError, match="absent from"):
+        payload.require_compatible_reasoning_profile(
+            ReasoningControlProfile.build(
+                mode="effort",
+                effort="high",
+                reserved_reasoning_tokens=4_096,
+            )
+        )
+
+
+def test_catalog_effort_fallback_still_requires_endpoint_reasoning_parameter() -> None:
+    model = _model()
+    model["reasoning"]["supported_efforts"] = ["high"]
+    endpoint = _endpoint(supported_reasoning_efforts=None)
+    endpoint["supported_parameters"].remove("reasoning")
+    snapshot = validate_openrouter_endpoint_snapshot(
+        exact_model_id="alpha/atlas-secure",
+        configured_provider_endpoints=("approved-provider/fp8",),
+        provider_policy_mode="only",
+        endpoint_payload={
+            "data": {
+                "id": "alpha/atlas-secure",
+                "endpoints": [{key: value for key, value in endpoint.items() if key != "model_id"}],
+            }
+        },
+        require_zdr=True,
+        zdr_payload={"data": [endpoint]},
+        reasoning_requested=False,
+    )
+    payload = _discover(models=[model], endpoint_snapshot=snapshot)
+
+    with pytest.raises(EndpointSnapshotValidationError, match="explicit endpoint"):
+        payload.require_compatible_reasoning_profile(
+            ReasoningControlProfile.build(
+                mode="effort",
+                effort="high",
+                reserved_reasoning_tokens=4_096,
+            )
+        )
+
+
+def test_resealed_unavailable_metadata_cannot_gain_catalog_effort_fallback() -> None:
+    payload = _discover(
+        endpoint_snapshot=_endpoint_snapshot(supported_reasoning_efforts=None),
+    ).model_dump(mode="json")
+    capability = payload["reasoning_capability"]
+    capability["reasoning_metadata_available"] = False
+    capability["reasoning_mandatory"] = None
+    capability["reasoning_default_enabled"] = None
+    capability["reasoning_supports_max_tokens"] = None
+    capability["max_reasoning_tokens"] = None
+    capability["capability_sha256"] = hashlib.sha256(
+        json.dumps(
+            {key: value for key, value in capability.items() if key != "capability_sha256"},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+    with pytest.raises(
+        ValidationError,
+        match="unavailable model reasoning metadata cannot claim",
+    ):
+        OpenRouterModelDiscoveryPayload.model_validate(payload)
 
 
 def test_endpoint_reasoning_effort_inventory_cannot_exceed_model_metadata() -> None:

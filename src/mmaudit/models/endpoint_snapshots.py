@@ -336,6 +336,19 @@ class OpenRouterReasoningCapabilityEvidence(BaseModel):
     def require_compatible_profile(self, profile: ReasoningControlProfile) -> None:
         """Require endpoint compatibility without granting benchmark qualification."""
 
+        self._require_compatible_profile_with_efforts(
+            profile,
+            supported_reasoning_efforts=self.supported_reasoning_efforts,
+        )
+
+    def _require_compatible_profile_with_efforts(
+        self,
+        profile: ReasoningControlProfile,
+        *,
+        supported_reasoning_efforts: tuple[ReasoningEffort, ...] | None,
+    ) -> None:
+        """Validate a profile with an inventory selected by sealed outer evidence."""
+
         try:
             sealed_profile = ReasoningControlProfile.model_validate(profile)
         except ValueError as exc:
@@ -382,11 +395,11 @@ class OpenRouterReasoningCapabilityEvidence(BaseModel):
             return
         if sealed_profile.mode == "effort":
             assert sealed_profile.effort is not None
-            if self.supported_reasoning_efforts is None:
+            if supported_reasoning_efforts is None:
                 raise EndpointSnapshotValidationError(
                     "active reasoning effort lacks an exact frozen supported-effort inventory"
                 )
-            if sealed_profile.effort not in self.supported_reasoning_efforts:
+            if sealed_profile.effort not in supported_reasoning_efforts:
                 raise EndpointSnapshotValidationError(
                     "requested reasoning effort is absent from the exact frozen inventory"
                 )

@@ -2000,8 +2000,9 @@ are invisible to source review by construction.
   `6f46b3c779262cf11b0ec58b1a2fe88947cd71d7ab788734abb36cd9f96374e4` (semantic bundle
   `de2192a2eaede4a54e1b24216d5c3c51cebd63086131c20367e166dfa672a388`). Exact replay derives
   ten confirmed identities across nine roots and continues to exclude Hunyuan, Mistral, GPT-OSS,
-  and Z.AI as `UNCONFIRMED`; all six constraints remain negative-only. DeepSeek V4, MiniMax M3,
-  and Kimi K3 replay as three pairwise-independent roots, while DeepSeek-family and Kimi-generation
+  and Z.AI as `UNCONFIRMED`; all six constraints remain negative-only. The DeepSeek V4,
+  then-selected MiniMax M3, and Kimi K3 triple replays as three pairwise-independent roots, while
+  DeepSeek-family and Kimi-generation
   variants cannot receive false independence credit. The opaque capability and non-authorizing
   config-ready projection fail closed on stale, synthetic, serialized, caller-root, module-retarget,
   clock, and output-constructor substitution.
@@ -2171,12 +2172,38 @@ are invisible to source review by construction.
   (`.venv/bin/pytest -q`) exited 0 with 6,230 passed, 21 skipped, and 2 warnings in 4,599.65s
   (1:16:39) under required local loopback/Unix-socket permission. The skips are explicit unavailable
   rootless, Foundry, scanner, and paid-provider prerequisites; the warnings are `os.fork`
-  deprecations in two existing tests. The cache-fix is checkpointed at
-  `fd1459b519ea0ce28a2d123ddeb57653dd2f7918` (`Bound OpenRouter prompt-cache pricing`); its post-fix
-  committed-byte preflight remains pending. No model-call, governed spend, audit, runner-authority,
-  AUTHSEAL, benchmark, or release counter/state changed.
+  deprecations in two existing tests. The cache implementation is checkpointed at
+  `fd1459b519ea0ce28a2d123ddeb57653dd2f7918` (`Bound OpenRouter prompt-cache pricing`) and its
+  pushed governance successor is `5f35436e1ffdb2a5c8d229e79e7f4637abbb3279`; at that recorded
+  validation boundary the committed-byte preflight was still pending. No model-call, governed spend,
+  audit, runner-authority, AUTHSEAL, benchmark, or release counter/state changed.
+- **Reasoning-profile and PRIMARY r5 preparation 2026-08-21:** The current 24,059-byte
+  operator-supplied log at raw SHA-256
+  `3af4473feac473c3ef5b7ecd553ed67dc141d6f174647e29bd2c1dc485bc609e` records that the
+  `fd1459b519ea0ce28a2d123ddeb57653dd2f7918` preflight cleared the cache-price gate and then
+  failed safely during candidate cost-plan derivation because configured max-token reasoning lacked
+  exact frozen support. The operator reports the dedicated campaign ledger remained `$0`. The local
+  correction selects `effort = "high"` with a 4,096-token reserve, prefers an exact endpoint effort
+  inventory when present, and uses the frozen model-catalog inventory only when the endpoint inventory
+  is absent; explicit empty inventories, missing model and endpoint evidence, parameter absence, and
+  endpoint/model contradictions still fail closed. The operator-reported frozen catalog inventories
+  contain `high` for DeepSeek V4 and Kimi K3; MiniMax M3 has no usable reasoning mode and is no longer
+  selected. The nonauthorizing selection plan is resealed
+  as `f7d8df3c4bdc584c33a9ed80e6aab49c66180f198185b8f8ccff5150467af115` with Tencent Hy3 on
+  singleton `tencent/fp8` as PRIMARY r5; fresh r5 metadata is not yet present. The 16-source capture
+  specification adds exact immutable Tencent card revision
+  `a960ebc3da325ba167f069f76c41eb62c9280d22`, but the existing 15-source lineage bundle remains
+  unchanged and Tencent is not yet confirmed. Owner matrices passed 419 and 134 tests, independent
+  red-team passed 15, candidate-selection passed 10, capture preparation passed 25, and root combined
+  matrices passed 166 and 57; 12 product-documentation/objective tests, schema verification, Ruff,
+  strict mypy, strict governance JSON, and diff integrity passed. No terminal full-suite result is
+  claimed for these new bytes. The current implementation checkpoint is
+  `PENDING_CURRENT_REASONING_SELECTION_CAPTURE_CHECKPOINT`; no authority or counter changed.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
-  and non-crediting. Genuine production-issued lifecycle proof is absent; provider-free fixtures
+  and non-crediting. The historical PRIMARY r4 registry is unusable for the current plan, the fresh
+  Tencent r5 registry does not exist, and the sealed lineage bundle does not contain Tencent Hy3.
+  Consequently there is no current AUTHRUNNER preflight command. Genuine production-issued lifecycle
+  proof is absent; provider-free fixtures
   cannot mint owned-REAL origin, and the current repository rules prohibit reading real credentials
   or accessing the provider. Judge request bytes and exact caps cannot exist before both genuine
   candidate outputs, so the provider-free result intentionally supplies candidate-only admission,
@@ -2184,13 +2211,13 @@ are invisible to source review by construction.
   issue-consume-revoke-reject lifecycle assay remain absent. Campaign/generation revocation beyond
   the top-level runner lease is not independently demonstrated. External-log publication and every
   benchmark run remain queued.
-- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Push and verify
-  `fd1459b519ea0ce28a2d123ddeb57653dd2f7918` (or a final governance successor containing only
-  documentation changes), then rerun the exact same provider-free r2/r4/r2 preflight and retain its
-  exact nonauthorizing result. Only then
-  may the operator separately authorize one one-shot REAL candidates-first campaign; require both
-  live judge route refreshes and aggregate exact judge admission before any judge POST. AUTHSEAL
-  publication, real audits, benchmarks, and release remain queued.
+- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Commit, push, and
+  verify the reasoning/selection/capture-preparation checkpoint. Then run only fresh PRIMARY r5
+  metadata discovery for `tencent/hy3=tencent/fp8` and the complete coherent 16-source r2 documentary
+  capture. Reconcile both operator results, bind the exact Tencent claim span and a negative-only
+  Tencent/Hunyuan organizational constraint, reseal and replay the lineage bundle, and only then seal
+  and emit a new provider-free r2/r5/r2 preflight. No REAL campaign, AUTHSEAL publication, audit,
+  benchmark, or release action is authorized yet.
 
 ## V3-TARGETSPEC-001 — Reconcile the product vision with the objective and correct the README
 

@@ -3,6 +3,133 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-08-21T10:55Z — Lineage prerequisites for BOTH replacement candidates (pre-fetched)
+
+Whichever primary judge is chosen, it needs a new lineage capture: **neither is in the sealed bundle.**
+Confirmed IDs currently are `deepseek/deepseek-v4-pro-0813`, `minimax/minimax-m3`, `moonshotai/kimi-k3`
+plus the seven older entries — `tencent/hy3` and `z-ai/glm-5.2` are both **absent**.
+
+Both have public first-party HuggingFace cards, verified reachable and ungated. Add whichever is
+selected to `scripts/capture_public_model_lineage.py` and I will re-run the capture.
+
+| OpenRouter ID | HF repo | immutable revision | bytes | sha256 |
+|---|---|---|---|---|
+| `tencent/hy3` | `tencent/Hy3` | `a960ebc3da325ba167f069f76c41eb62c9280d22` | 10325 | `dbdfc5920bf548fb484b5ec1837032f6c85e1886f2930aa5bee629c1f9620e8b` |
+| `z-ai/glm-5.2` | `zai-org/GLM-5.2` | `b4734de4facf877f85769a911abafc5283eab3d9` | 10905 | `ed5aca8ce3dc5f8de626c87e488444343e43b1dcbdeb0e643dc72fea63ab06e8` |
+
+Suggested `independence_key` / `publisher_id`: `tencent` and `zai-org`, matching existing convention.
+Note `tencent/Hy3` is case-sensitive on HuggingFace (`HY3` and `Hunyuan-3` do not resolve).
+
+Decisive claim spans located in each:
+
+- **`tencent/Hy3`**, line 63: *"**Hy3** is a 295B-parameter Mixture-of-Experts (MoE) model with 21B
+  active parameters and 3.8B MTP layer parameters, developed by the Tencent Hy Team. Following the Hy3
+  Preview launch..."*
+- **`zai-org/GLM-5.2`**, line 32: *"We're introducing GLM-5.2, our latest flagship model for
+  long-horizon tasks. It marks a substantial leap in long-horizon task capability over its predecessor
+  GLM-5.1..."*
+
+Both cite a predecessor within their own publisher — the same shape as DeepSeek V4-Pro citing V4-Pro
+Preview, which sealed successfully.
+
+Recommendation unchanged: **`tencent/hy3` on `tencent/fp8`**, keeping three distinct serving providers
+(Novita / Tencent / Together). `z-ai/glm-5.2` is an equally valid fallback but its operational ZDR set
+overlaps `together`, so avoid `together` for that role if it is chosen.
+
+## 2026-08-21T10:50Z — PREFLIGHT after `fd1459b` — cache gate CLEARED; fails later on reasoning capability
+
+Cache-pricing fix works: the run now reaches cost-plan derivation. New failure:
+
+```
+mmaudit failed safely: runner candidate request costs cannot be derived from frozen launch evidence
+```
+
+`authenticated_runner_execution.py:1018-1022` catches `(TypeError, ValueError)` and re-raises
+`from None`, discarding the cause. Surfaced by wrapping `_candidate_staged_cost_plan` externally (no
+repo source modified). **Real underlying error:**
+
+```
+mmaudit.models.endpoint_snapshots.EndpointSnapshotValidationError: max-token reasoning lacks exact frozen support
+  endpoint_snapshots.py:400  <- require_compatible_profile
+  openrouter.py:3581         <- preview_openrouter_structured_request_cost
+  authenticated_runner_execution.py:316
+```
+
+Suggest dropping the `from None` here — it hid a completely unrelated root cause behind a cost message.
+
+Ledger unchanged — **$0 spent**.
+
+### Finding 1 (bug): `effort` reasoning mode cannot validate for ANY OpenRouter model
+
+`config/openrouter-qualification.toml:51-53` requests max-token mode:
+
+```toml
+[models.reasoning]
+max_tokens = 4096
+```
+
+`supports_max_tokens` is advertised by only **10 of 419** catalogue models. None of the triple has it.
+So max-token mode is near-unusable by design — but `effort` mode cannot substitute, because of a
+field-sourcing asymmetry:
+
+- `discovery.py:768` `reasoning_default_enabled` <- **catalog** `reasoning.default_enabled`
+- `discovery.py:769` `reasoning_supports_max_tokens` <- **catalog** `reasoning.supports_max_tokens`
+- `discovery.py:785` `model_supported_reasoning_efforts` <- **catalog** `reasoning.supported_efforts`
+- but `require_compatible_profile` (`endpoint_snapshots.py:389`) checks
+  `self.supported_reasoning_efforts` — the **endpoint-level** field.
+
+Sampled 204 endpoints across 60 models: **0 populated, 204 empty**. OpenRouter never fills the
+endpoint-level `reasoning` block, so `supported_reasoning_efforts` is always `None` and effort mode can
+never validate. The catalog inventory is captured but never consulted at profile-check time.
+
+Suggested fix: have `require_compatible_profile` fall back to the model-level effort inventory when the
+endpoint-level one is absent — consistent with how `default_enabled` and `supports_max_tokens` are
+already sourced from the catalog.
+
+### Finding 2 (selection): `minimax/minimax-m3` is unusable and must be replaced
+
+Sealed reasoning evidence per role:
+
+| role | model | param_support | default_enabled | supports_max_tokens | endpoint efforts | model efforts |
+|---|---|---|---|---|---|---|
+| candidate | `deepseek-v4-pro-0813` | supported | None | None | None | `[low,high,max]` |
+| primary | `minimax-m3` | supported | **None** | None | None | **None** |
+| replay | `kimi-k3` | supported | True | None | None | `[low,high,max]` |
+
+Mode viability today: `max_tokens` fails on all three; `effort` fails on all three (Finding 1);
+`default` requires non-None `default_enabled`, so only `kimi-k3` passes; `disabled` requires
+`default_enabled is False`, so none pass.
+
+`minimax/minimax-m3` carries **no reasoning metadata at all** — no effort inventory and no
+default-enabled state. It has **no viable mode under any of the four**, and no code fix changes that.
+It must be replaced as primary judge.
+
+Note `deepseek-v4-pro-0813` also has `default_enabled = None`, so the candidate depends on the
+Finding 1 fix; it is fine under effort mode once that lands, and needs no replacement.
+
+### Corrected primary-judge shortlist — now filtered on reasoning too
+
+My earlier shortlist filtered on ZDR, operational status, display-name uniqueness, and lineage, but
+**not** on reasoning capability. That omission is why `minimax-m3` was selected and then failed here.
+Re-filtered:
+
+| model | lineage | efforts | default_enabled | viable modes |
+|---|---|---|---|---|
+| `tencent/hy3` | Tencent | `[high,low,none]` | True | effort (after fix), default |
+| `z-ai/glm-5.2` | Zhipu | `[xhigh,high]` | True | effort (after fix), default |
+| `minimax/minimax-m3` | MiniMax | none | None | **NONE** |
+
+Both survivors also passed the earlier four constraints. **Recommend `tencent/hy3` on `tencent/fp8`** —
+own infrastructure, so the three roles keep three distinct serving providers (Novita / Tencent /
+Together) and three distinct lineages.
+
+Also worth noting: `anthropic/claude-opus-5`, `openai/gpt-5.6-sol`, `google/gemini-3.7-flash`, and
+`x-ai/grok-4.6` all have full reasoning metadata (`default_enabled=True` plus effort inventories). They
+remain excluded only by the display-name uniqueness rule flagged earlier — reinforcing that this rule
+deserves an explicit decision, since it is now excluding the models with the best capability metadata.
+
+**Advisory analysis, not evidence.** All rule changes, selection decisions, and resealing are codex's.
+
 ## 2026-08-21T08:33Z — PREFLIGHT after `f6acf20` — FAILED on unenforceable variable pricing
 
 ```

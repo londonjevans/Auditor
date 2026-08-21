@@ -81,12 +81,12 @@ def _redirect_url(spec: PublicLineageSourceSpec) -> str:
 
 
 def test_fixed_source_inventory_is_exact_unique_and_immutable() -> None:
-    assert len(PUBLIC_LINEAGE_SOURCE_SPECS) == 15
+    assert len(PUBLIC_LINEAGE_SOURCE_SPECS) == 16
     assert tuple(spec.source_id for spec in PUBLIC_LINEAGE_SOURCE_SPECS) == tuple(
         sorted(spec.source_id for spec in PUBLIC_LINEAGE_SOURCE_SPECS)
     )
-    assert len({spec.requested_url for spec in PUBLIC_LINEAGE_SOURCE_SPECS}) == 15
-    assert len({spec.relative_path for spec in PUBLIC_LINEAGE_SOURCE_SPECS}) == 15
+    assert len({spec.requested_url for spec in PUBLIC_LINEAGE_SOURCE_SPECS}) == 16
+    assert len({spec.relative_path for spec in PUBLIC_LINEAGE_SOURCE_SPECS}) == 16
     assert all(len(spec.immutable_revision) == 40 for spec in PUBLIC_LINEAGE_SOURCE_SPECS)
     assert all(spec.required_markers for spec in PUBLIC_LINEAGE_SOURCE_SPECS)
     assert all(
@@ -100,6 +100,25 @@ def test_fixed_source_inventory_is_exact_unique_and_immutable() -> None:
         if spec.source_id == "openai-gpt-oss-120b-readme"
     )
     assert "/599476783c6f88508dab8577808b5ead5cbee8d2/" in openai_spec.requested_url
+    tencent_spec = next(
+        spec for spec in PUBLIC_LINEAGE_SOURCE_SPECS if spec.source_id == "tencent-hy3-card"
+    )
+    assert tencent_spec == PublicLineageSourceSpec(
+        source_id="tencent-hy3-card",
+        requested_url=(
+            "https://huggingface.co/tencent/Hy3/resolve/"
+            "a960ebc3da325ba167f069f76c41eb62c9280d22/README.md"
+        ),
+        publisher_id="tencent",
+        independence_key="tencent",
+        immutable_revision="a960ebc3da325ba167f069f76c41eb62c9280d22",
+        repository_path="tencent/Hy3",
+        relative_path="sources/tencent-hy3-card.md",
+        required_markers=(
+            "**Hy3** is a 295B-parameter Mixture-of-Experts (MoE) model",
+            "developed by the Tencent Hy Team",
+        ),
+    )
 
 
 @pytest.mark.parametrize(
@@ -165,8 +184,16 @@ def test_committed_capture_journal_replays_exact_source_bytes() -> None:
         (corpus_root / PUBLIC_LINEAGE_CAPTURE_OBSERVATIONS_FILENAME).read_bytes()
     )
 
+    specs_by_id = {spec.source_id: spec for spec in PUBLIC_LINEAGE_SOURCE_SPECS}
+    pending_fresh_capture_ids = {"tencent-hy3-card"}
+    historical_specs = tuple(
+        spec
+        for spec in PUBLIC_LINEAGE_SOURCE_SPECS
+        if spec.source_id not in pending_fresh_capture_ids
+    )
+    assert len(historical_specs) == 15
     assert tuple(source.source_id for source in journal.sources) == tuple(
-        spec.source_id for spec in PUBLIC_LINEAGE_SOURCE_SPECS
+        spec.source_id for spec in historical_specs
     )
     assert (
         journal.observation_set_sha256
@@ -178,7 +205,8 @@ def test_committed_capture_journal_replays_exact_source_bytes() -> None:
     assert journal.sources[-1].retrieved_at - journal.sources[0].retrieved_at == timedelta(
         seconds=3
     )
-    for source, spec in zip(journal.sources, PUBLIC_LINEAGE_SOURCE_SPECS, strict=True):
+    for source in journal.sources:
+        spec = specs_by_id[source.source_id]
         path = corpus_root / source.file_binding.path
         content = path.read_bytes()
         assert not path.is_symlink()

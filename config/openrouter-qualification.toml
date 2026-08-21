@@ -49,8 +49,8 @@ order = []
 allow_fallbacks = false
 
 [models.reasoning]
-# The max-token control is also the exact atomic reasoning reserve.
-max_tokens = 4096
+# Catalog effort support is required when an endpoint omits its narrower inventory.
+effort = "high"
 reserved_tokens = 4096
 exclude = false
 

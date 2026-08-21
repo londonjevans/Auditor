@@ -91,6 +91,7 @@ class _CandidateSpec:
     provider_endpoint: str
     provider_name: str
     reasoning_supported: bool = True
+    endpoint_reasoning_efforts_published: bool = True
     canonical_model_id: str | None = None
 
 
@@ -99,6 +100,8 @@ class _MockClientFactory:
     failing_models: set[str] = field(default_factory=set)
     authentication_failure_models: set[str] = field(default_factory=set)
     pricing_drift_models: set[str] = field(default_factory=set)
+    catalog_effort_drift_models: set[str] = field(default_factory=set)
+    endpoint_effort_omission_models: set[str] = field(default_factory=set)
     single_model_failure_modes: dict[str, str] = field(default_factory=dict)
     orphan_usage_models: set[str] = field(default_factory=set)
     clients: list[OpenRouterClient] = field(default_factory=list)
@@ -143,8 +146,23 @@ class _MockClientFactory:
             provider_endpoint=candidate.approved_provider_endpoint,
             provider_name=candidate.approved_provider_name,
             reasoning_supported=candidate.reasoning_supported,
+            endpoint_reasoning_efforts_published=(
+                candidate.exact_model_id not in self.endpoint_effort_omission_models
+            ),
             canonical_model_id=candidate.canonical_model_slug,
         )
+
+        def current_catalog_model() -> dict[str, Any]:
+            payload = _catalog_model(candidate_spec)
+            if candidate.exact_model_id in self.catalog_effort_drift_models:
+                reasoning = payload.get("reasoning")
+                assert isinstance(reasoning, dict)
+                supported_efforts = reasoning.get("supported_efforts")
+                assert isinstance(supported_efforts, list)
+                reasoning["supported_efforts"] = [
+                    effort for effort in supported_efforts if effort != "high"
+                ]
+            return payload
 
         def handler(request: httpx.Request) -> httpx.Response:
             if request.method == "GET":
@@ -171,7 +189,7 @@ class _MockClientFactory:
                 return httpx.Response(
                     200,
                     request=request,
-                    json={"data": [_catalog_model(candidate_spec)]},
+                    json={"data": [current_catalog_model()]},
                 )
             if request.method == "GET" and "/model/" in request.url.path:
                 expected_path = f"/api/v1/model/{candidate.exact_model_id}"
@@ -205,11 +223,7 @@ class _MockClientFactory:
                         request=request,
                         json={"data": mismatched},
                     )
-                return httpx.Response(
-                    200,
-                    request=request,
-                    json={"data": _catalog_model(candidate_spec)},
-                )
+                return httpx.Response(200, request=request, json={"data": current_catalog_model()})
             if request.method == "GET" and request.url.path.endswith("/endpoints"):
                 endpoint = _endpoint(candidate_spec)
                 if candidate.exact_model_id in self.pricing_drift_models:
@@ -279,7 +293,7 @@ def _endpoint(spec: _CandidateSpec) -> dict[str, Any]:
             "request": "0",
         },
     }
-    if spec.reasoning_supported:
+    if spec.reasoning_supported and spec.endpoint_reasoning_efforts_published:
         endpoint["reasoning"] = {
             "supported_efforts": [
                 "none",
@@ -1235,6 +1249,55 @@ async def test_unsupported_reasoning_fails_without_changing_mock_provenance(
     assert rejections[0].stage is CandidateBenchmarkFailureStage.ENDPOINT_REGISTRATION
     assert rejections[0].detail == "active reasoning requires explicit endpoint parameter support"
     assert all("reasoning" not in body for body in factory.request_bodies)
+
+
+@pytest.mark.asyncio
+async def test_catalog_effort_refresh_drift_rejects_before_completion_or_reservation(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = _config(config_factory)
+    manifest, evidence, registry = _discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(
+            _CandidateSpec(
+                model_id="alpha/atlas-secure",
+                provider_endpoint="provider-alpha",
+                provider_name="Provider Alpha",
+                endpoint_reasoning_efforts_published=False,
+            ),
+        ),
+    )
+    factory = _MockClientFactory(
+        catalog_effort_drift_models={"alpha/atlas-secure"},
+        endpoint_effort_omission_models={"alpha/atlas-secure"},
+    )
+    budget = _budget(tmp_path, config)
+    usage = UsageLedger()
+    try:
+        result = await run_candidate_registry_benchmarks(
+            config=config,
+            discovery_manifest=manifest,
+            discovery_evidence=evidence,
+            candidate_registry=registry,
+            benchmark_suite=load_model_benchmark_corpus(CORPUS_PATH),
+            budget=budget,
+            usage=usage,
+            operator_api_key="synthetic-key",
+            explicitly_allow_synthetic_egress=True,
+            client_factory=factory,
+        )
+    finally:
+        await factory.close()
+
+    assert result.diagnostics[0].failure_stage is (
+        CandidateBenchmarkFailureStage.ENDPOINT_REGISTRATION
+    )
+    assert factory.request_bodies == []
+    assert usage.records == []
+    assert budget.atomic_ledger is not None
+    assert budget.atomic_ledger.snapshot().entries == ()
 
 
 @pytest.mark.asyncio
