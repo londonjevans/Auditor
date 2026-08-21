@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-21T05:50:19Z",
+  "updated_at": "2026-08-21T08:19:01Z",
   "objective_path": "docs/remediation/v3/product_completion_goal.txt",
   "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
   "objective_supersession": {
@@ -13,11 +13,13 @@
     "authorized_at": "2026-08-17T20:06:41Z",
     "decision": "EXPLICIT_OPERATOR_TARGET_CHANGE"
   },
-  "candidate_commit": "83bad611a888a685e83b0ed442984fa05e755873",
+  "candidate_commit": "647de24d8af1bf287072733e7efeca22e2010a3f",
+  "candidate_commit_scope": "PRIOR_VALID_PREFLIGHT_CHECKPOINT; exact-cost admission checkpoint PENDING",
   "autorun_status": "BLOCKED_SAFETY",
   "current_milestone": "M1-DETERMINISTIC-PRODUCT (REACHED)",
   "current_ticket": "V3-AUTHRUNNER-001",
-  "last_checkpoint_commit": "83bad611a888a685e83b0ed442984fa05e755873",
+  "last_checkpoint_commit": "647de24d8af1bf287072733e7efeca22e2010a3f",
+  "last_checkpoint_commit_scope": "PRIOR_VALID_PREFLIGHT_CHECKPOINT; exact-cost admission checkpoint PENDING",
   "real_model_calls": {
     "attempted": 11,
     "succeeded": 1,
@@ -35,11 +37,15 @@
     "V3-LINEAGE-001": "The calibration-only signed authority contract is implemented, but ticket completion requires a successful current exact provider refresh and an actual authorized operator-signed decision over that exact candidate set. Runtime approvals remain empty.",
     "V3-CALIBRATE-001": "Provider-free empirical derivation and the exact two-campaign authority bridge are implemented, but statistically meaningful thresholds require a representative randomized independently adjudicated holdout plus current refreshed, signed, and real calibration evidence.",
     "V3-AUTHSEAL-001": "The provider-free frozen-ground-truth, exact scoring, frozen comparison verdict, and structural seal layers are implemented, but runtime authority remains unavailable until independently anchored public lineage, authenticated REAL cross-lineage runner evidence, and an independently verified external transparency-log inclusion receipt exist. The baseline and trusted evaluation clock remain explicitly unevaluable; no human signature or adjudication is requested.",
-    "V3-AUTHRUNNER-001": "Corrected documentary public lineage and the provider-free same-process runner path are implemented, including exact candidate/judge/generation/ledger custody, strict durable replay, egress and cost fail-stops, a one-way PID-local runner lease, post-replay recheck, exactly-once post-AUTHSEAL disposal, post-revoke self-check, and a detached capability-free return snapshot. Operator-reported metadata discovery produced exact rootless pending DeepSeek/novita-fp8, MiniMax/coreweave-fp4, and Kimi/together pairs without a completion or spend. A coherent 15-source public-document capture was adopted and resealed as exact DeepSeek V4, MiniMax M3, and Kimi K3 pairwise-independent documentary roots with all six negative-only non-independence constraints preserved. The operator subsequently reported the unchanged r2/r4/r2 preflight VALID / NONAUTHORIZING / NO PROVIDER EGRESS with an unchanged $0 ledger; the locally verified preflight contract returns before secret selection and durable output publication while using transient private write probes for path validation. Exact role/request-bound caps are not yet derived from retained pricing/capacity evidence; genuine REAL issuance and the positive issue-consume-revoke-reject lifecycle assay remain unperformed, and downstream external-log and benchmark work stay queued."
+    "V3-AUTHRUNNER-001": "V3-AUTHRUNNER-001 remains PARTIAL with autorun BLOCKED_SAFETY. Corrected documentary lineage and the provider-free same-process runner path are present. The exact-cost WIP derives two exact self-hashed candidate request-cost plans and retry-inclusive candidate preflight caps from retained singleton request, token, reasoning, route, pricing, retry, and discovery evidence. Judge admission is deliberately PENDING_REAL_CANDIDATE_OUTPUTS: both REAL candidate outputs must exist before the live path refreshes both judge routes, derives both exact judge plans, and admits their aggregate remaining cost before any judge POST. Manual per-attempt caps are extra operator tripwires, not pricing evidence or substitutes for exact derived caps. Current durable v1.1 evidence exact-joins both stage plans through reports, usage, request/token/reasoning and route/pricing hashes, attempt IDs, and ledger reservations; legacy v1.0 is historical/readable but is not labeled current VALID. The 486-test affected matrix, terminal 5,989-pass full unit gate, schema verification, lint over 539 files, strict mypy over 203 sources, 12 product-documentation/objective tests, strict governance JSON, diff integrity, and independent 14-test no-blocker/HIGH review passed. The initial sandboxed full-unit attempt had only 12 local-socket PermissionErrors and is an environment-permission result, not a code failure or pass. The new committed-byte preflight and checkpoint remain PENDING. No real-provider, operator-secret, or operator-private-ledger access and no authority or counter change occurred; genuine REAL issuance and downstream external-log and benchmark work remain blocked/queued."
   },
   "last_validation": {
-    "command": "Provider-free 194-test capture/manifest/lineage-authority/configuration/AUTHRUNNER/OpenRouter/candidate-selection/CLI/documentation/objective/release-schema matrix; release-schema generation/verification; 24-test release/objective subset; Ruff/format over 536 files; strict mypy over 202 source files; strict runtime/review JSON parsing; diff integrity",
-    "result": "PASS / PARTIAL: 194 affected tests passed in 37.22s and the release/objective subset passed 24 in 0.63s. Generated schemas were current; Ruff/format, strict mypy, both governance JSON documents, and diff integrity passed. Documentary identity/root resealing is green; the subsequent operator-reported provider-free preflight is recorded separately and remains nonauthorizing. Provider completion, secret access, ledger mutation, runner authority, and release authority remain unclaimed."
+    "status": "PASS_PARTIAL_EXACT_COST_FULL_UNIT_COMMITTED_PREFLIGHT_PENDING",
+    "command": "486-test exact-cost affected matrix in 122.47s, including 47 durable/CLI tests in 49.68s and schema/release tests; terminal full unit gate under required local loopback/Unix-socket permission; schema generation/verification; make lint; make type; 12 product-documentation/objective tests; strict runtime/review JSON parsing; git diff --check; independent red-team review with 14 focused tests",
+    "result": "PASS / PARTIAL: all 486 affected tests passed; the terminal full unit gate passed 5989 tests in 1175.51s (19m35s) with one deprecation warning under required local socket permission; its initial sandboxed invocation had only 12 local-socket PermissionErrors and is not counted as a code failure or pass. Schema generation/verification passed; 539 files were format/Ruff-clean; strict mypy passed over 203 source files; 12 product-documentation/objective tests and strict governance JSON passed; diff integrity passed; independent review found no blocker/HIGH and its 14 focused tests passed. The new committed-byte provider-free preflight and checkpoint remain PENDING.",
+    "real_provider_accessed": false,
+    "operator_secret_accessed": false,
+    "operator_private_ledger_accessed_or_mutated": false
   },
   "pause_state": {
     "requested_at": "2026-08-03T20:08:17Z",
@@ -193,7 +199,7 @@
     "next_action_after_v3_authrunner_provider_free": "Keep V3-AUTHRUNNER-001 IN_PROGRESS and make no live call under the current repository credential prohibition. External authority-log publication and benchmark execution remain queued.",
     "blocked_at_v3_authrunner": "2026-08-18T15:44:05Z",
     "result_v3_authrunner_blocked": "V3-AUTHRUNNER-001 is PARTIAL at the complete provider-free lifecycle boundary. The one-PID implementation now removes the exact runner lease after its sole AUTHSEAL attempt, rechecks negative custody, returns only detached durable reports, and preserves nonauthorizing historical evidence. The final affected matrix passed 216 tests, the broader CLI matrix passed 104, an independent 100-test audit found no blocker/HIGH, and static/schema/governance gates passed. Genuine REAL issuance cannot be executed under the governing prohibition on real credentials and public-provider access; model-call and cost counters are unchanged.",
-    "resume_action_v3_authrunner": "Resume only in a governing context permitting staged credential use. Execute the settled same-process SYNTHETIC_BENCHMARK path with fallback disabled and the USD 250 cap; require provider-bound REAL usage/generation, terminal closed-cost and generation/report/replay evidence, one internal AUTHSEAL consumption, exactly-once runner revocation, and post-revoke rejection. Confirm succeeded calls exceed 1 and used cost exceeds 0.0034764325, or retain the exact rejection verbatim. Do not begin external-log publication or benchmark work first.",
+    "resume_action_v3_authrunner": "After the root commits the exact-cost implementation and generated artifacts, rerun the unchanged secret-free r2/r4/r2 preflight on that commit and retain its exact nonauthorizing output. Only in a separately authorized governing context may one one-shot REAL SYNTHETIC_BENCHMARK campaign run candidates-first. Require both candidate outputs, both live judge route refreshes, aggregate exact judge cost admission before any judge POST, provider-bound REAL usage/generation, terminal exact closed-cost evidence, one internal AUTHSEAL consumption, exactly-once runner revocation, and post-revoke rejection. Do not begin external-log publication or benchmark work first.",
     "checkpointed_at_v3_priority1_durability": "2026-08-20T15:14:32Z",
     "result_v3_priority1_durability": "The audited 207-path WIP recovery checkpoint and bounded scheduler follow-ups are remotely preserved through c90a1531cad6f09866bc1309a3130b5e4673214b on origin/agent/v3-wip-checkpoint. All 6152 collected tests completed as 6128 passed and 24 expected skips; schema generation, Ruff over 533 files, strict mypy over 201 source files, 32 documentation/objective/schema tests, strict governance JSON parsing, and diff integrity passed. Model-call, cost, real-audit, AUTHSEAL, benchmark, and release state did not change.",
     "next_action_after_v3_priority1_durability": "Keep V3-AUTHRUNNER-001 PARTIAL and autorun BLOCKED_SAFETY. Rebuild config/models.candidates.toml provider-free from the operator-staged model-ranking.py and V3-LINEAGE-001-operator-review.md, remove obsolete IDs, preserve nonauthorizing evidence, and validate distinct candidate, primary, and replay-judge roots. Then freeze the fallback-disabled SYNTHETIC_BENCHMARK policy, synthetic/public corpus, exact ledger/call caps, and emit the exact operator command. Do not consume secrets or make provider calls; AUTHSEAL publication, real audits, benchmarks, and release remain queued.",
@@ -214,7 +220,12 @@
     "next_action_after_v3_authrunner_documentary_lineage_reseal": "Run the unchanged exact candidate-r2/primary-r4/replay-r2 provider-free AUTHRUNNER preflight in docs/models/model_selection.md and retain its exact operator result. Do not infer success from the lineage reseal; require VALID / NONAUTHORIZING / NO PROVIDER EGRESS before any separately authorized one-shot REAL launch.",
     "preflighted_at_v3_authrunner_provider_free": "2026-08-21T05:47:00Z",
     "result_v3_authrunner_provider_free_preflight": "The operator-supplied result log at raw SHA-256 41932dfe7cfa2a0dbc7f0f68d01c2fbf8bec2ad0276ac16a9837b6b9e66f2b69 records VALID / NONAUTHORIZING / NO PROVIDER EGRESS after checkpoint 83bad611a888a685e83b0ed442984fa05e755873. The inventory is 2 runs, 24 cases, 48 candidate plus 48 judge logical requests, 96 total logical requests, 2 attempts per logical request, at most 192 provider attempts, and 96 generation refetches under effective config f0ff2d76017dfcd075c6758f0da7256c98dd45ca749a42b81ca1ce8c95a93f9e. Initial spend and the operator-reported unchanged ledger are $0. The locally verified preflight contract returns before secret selection, completion, and durable output publication while using transient private write probes for path validation. The declared $192.00 interval/final cap is placeholder-tripwire arithmetic, not a derived live request cap, and the operator's no-known-gate statement grants no authority.",
-    "next_action_after_v3_authrunner_provider_free_preflight": "Derive and reconcile exact role/request-bound caps provider-free from retained pricing/capacity evidence. Do not invent caps or promote advisory estimates and placeholder tripwires. Only then emit a separately authorized one-shot REAL launch command; keep AUTHSEAL publication, audits, benchmarks, and release queued."
+    "next_action_after_v3_authrunner_provider_free_preflight": "Historical action superseded by the exact-cost admission WIP. After the root commits the implementation and generated artifacts, rerun the unchanged provider-free r2/r4/r2 preflight on that commit and retain exact candidate plan hashes/caps plus PENDING_REAL_CANDIDATE_OUTPUTS judge status. Only then may the operator separately authorize one one-shot REAL candidates-first campaign; both live judge route refreshes and aggregate judge admission must precede any judge POST.",
+    "reconciled_at_v3_authrunner_exact_cost_admission": "2026-08-21T08:19:01Z",
+    "result_v3_authrunner_exact_cost_admission": "Provider-free preflight derives two exact self-hashed 24-request candidate plans and their retry-inclusive interval/final caps without operator-secret selection, real-provider transport, operator-private-ledger mutation, or durable publication. Judge cost admission is deliberately PENDING_REAL_CANDIDATE_OUTPUTS because exact judge prompts depend on genuine candidate responses. The live order is both verified REAL candidates first, then both live singleton judge route refreshes, then both exact judge plans and aggregate remaining-budget admission, and only then any judge POST. Manual per-attempt caps remain additional operator tripwires. Durable schema v1.1 exact-joins candidate/judge plans to reports, usage, token/reasoning and route/pricing hashes, attempt IDs, and ledger reservations; legacy v1.0 remains historical/readable but cannot receive the current VALID CLI result. The 486-test affected matrix, terminal 5989-pass full unit gate, and all supplied static/review gates passed. The initial sandboxed full-unit invocation had only 12 local-socket PermissionErrors and is not counted as a code failure or pass. No real-provider, operator-secret, or operator-private-ledger access occurred and all authority/counters remain unchanged.",
+    "validation_v3_authrunner_exact_cost_admission": "PASS / PARTIAL: 486 affected tests in 122.47s; 47-test durable/CLI subset in 49.68s; terminal full unit gate 5989 passed in 1175.51s (19m35s) with one deprecation warning under required local socket permission; initial sandboxed attempt had only 12 local-socket PermissionErrors and is not a code failure/pass; schema generation/verification; lint over 539 files; strict mypy over 203 sources; 12 product-documentation/objective tests; strict governance JSON; diff integrity; independent no-blocker/HIGH review with 14 focused passes. Committed-byte preflight remains PENDING.",
+    "checkpoint_v3_authrunner_exact_cost_admission": "PENDING; prior checkpoint 647de24d8af1bf287072733e7efeca22e2010a3f records the preceding valid AUTHRUNNER preflight",
+    "next_action_after_v3_authrunner_exact_cost_admission": "After the root commits the exact-cost bytes, rerun the unchanged provider-free r2/r4/r2 preflight on that commit. Then require separate operator authorization for one one-shot REAL candidates-first campaign; do not permit any judge POST before both live judge route refreshes and aggregate exact judge admission."
   },
   "scheduler_assurance_validation": {
     "status": "PASS_COMPONENT_FULL_ASSURANCE",
@@ -357,6 +368,9 @@
   },
   "authrunner_provider_free_preflight": {
     "status": "VALID_NONAUTHORIZING_NO_PROVIDER_EGRESS",
+    "scope": "PRIOR_CHECKPOINT_BEFORE_EXACT_COST_ADMISSION_WIP",
+    "validates_current_exact_cost_bytes": false,
+    "current_exact_cost_preflight_rerun_status": "PENDING_COMMITTED_BYTES",
     "operator_reported_at": "2026-08-21T05:47:00Z",
     "checkpoint_commit": "83bad611a888a685e83b0ed442984fa05e755873",
     "operator_results_sha256": "41932dfe7cfa2a0dbc7f0f68d01c2fbf8bec2ad0276ac16a9837b6b9e66f2b69",
@@ -387,6 +401,67 @@
     "authority": false,
     "runner_authority": false,
     "release_authority": false
+  },
+  "authrunner_exact_cost_admission": {
+    "status": "IMPLEMENTED_PROVIDER_FREE_VALIDATED_COMMITTED_PREFLIGHT_PENDING",
+    "ticket_status": "PARTIAL",
+    "autorun_status": "BLOCKED_SAFETY",
+    "candidate_admission": {
+      "run_count": 2,
+      "logical_requests_per_run": 24,
+      "exact_self_hashed_plans_derived_provider_free": true,
+      "retry_inclusive_interval_and_final_caps_reported_by_preflight": true,
+      "plan_sha256s": "PENDING_COMMITTED_BYTES_PREFLIGHT",
+      "exact_cap_totals": "PENDING_COMMITTED_BYTES_PREFLIGHT"
+    },
+    "judge_admission": {
+      "preflight_status": "PENDING_REAL_CANDIDATE_OUTPUTS",
+      "requires_both_real_candidate_outputs": true,
+      "requires_both_live_route_refreshes_before_any_judge_post": true,
+      "requires_both_exact_judge_plans_before_any_judge_post": true,
+      "requires_aggregate_remaining_budget_admission_before_any_judge_post": true,
+      "full_campaign_cost_bound_available_provider_free": false
+    },
+    "manual_per_attempt_caps_are_additional_tripwires": true,
+    "manual_caps_are_pricing_evidence": false,
+    "manual_caps_replace_exact_derived_caps": false,
+    "current_durable_schema_version": "1.1",
+    "current_durable_exact_plan_report_usage_reservation_join": true,
+    "legacy_v1_0_readable_as_historical_evidence": true,
+    "legacy_v1_0_called_current_valid": false,
+    "validation_status": "PASS_PARTIAL_486_AFFECTED_5989_FULL_UNIT_SCHEMA_LINT_MYPY_DIFF_REDTEAM; COMMITTED_BYTE_PREFLIGHT_PENDING",
+    "validation": {
+      "affected_tests_passed": 486,
+      "affected_elapsed_seconds": "122.47",
+      "durable_cli_tests_passed": 47,
+      "durable_cli_elapsed_seconds": "49.68",
+      "terminal_full_unit_tests_passed": 5989,
+      "terminal_full_unit_elapsed_seconds": "1175.51",
+      "terminal_full_unit_elapsed_human": "19m35s",
+      "terminal_full_unit_deprecation_warnings": 1,
+      "terminal_full_unit_required_local_loopback_unix_socket_permission": true,
+      "initial_sandboxed_socket_permission_errors": 12,
+      "initial_sandboxed_result_is_code_failure": false,
+      "initial_sandboxed_result_receives_pass_credit": false,
+      "schema_generation_verification": "PASS",
+      "formatted_and_ruff_clean_files": 539,
+      "strict_mypy_source_files": 203,
+      "product_documentation_and_objective_tests_passed": 12,
+      "strict_governance_json": "PASS",
+      "diff_integrity": "PASS",
+      "independent_review": "NO_BLOCKER_OR_HIGH",
+      "independent_focused_tests_passed": 14
+    },
+    "checkpoint_status": "PENDING",
+    "prior_checkpoint_commit": "647de24d8af1bf287072733e7efeca22e2010a3f",
+    "prior_checkpoint_scope": "PRECEDING_VALID_AUTHRUNNER_PREFLIGHT",
+    "real_provider_accessed": false,
+    "operator_secret_accessed": false,
+    "operator_private_ledger_accessed_or_mutated": false,
+    "model_call_counters_changed": false,
+    "cost_counters_changed": false,
+    "authority_changed": false,
+    "next_action": "After the root commits the exact-cost bytes, rerun the unchanged provider-free r2/r4/r2 preflight on that commit; only after reconciling its exact nonauthorizing output may the operator separately authorize one one-shot REAL candidates-first campaign."
   },
   "release_status": "INCOMPLETE",
   "superiority_status": "NOT_DEMONSTRATED"

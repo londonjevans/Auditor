@@ -46,6 +46,10 @@ from mmaudit.models.authenticated_runner import (
     require_verified_cross_lineage_runner_custody,
     revoke_verified_cross_lineage_runner_custody,
 )
+from mmaudit.models.authenticated_runner_cost_plan import (
+    AuthenticatedRunnerCostPlanStage,
+    AuthenticatedRunnerStagedCostPlan,
+)
 from mmaudit.models.authenticated_runner_execution import (
     AuthenticatedRunnerExecutedRun,
     AuthenticatedRunnerExecutionInventory,
@@ -54,6 +58,7 @@ from mmaudit.models.authenticated_runner_execution import (
     AuthenticatedRunnerRunPlan,
     CandidateCampaignExecutor,
     CrossLineageJudgeExecutor,
+    JudgeRoutePreparationExecutor,
     RunnerGenerationVerificationExecutor,
     execute_authenticated_cross_lineage_runner,
 )
@@ -160,6 +165,8 @@ class AuthenticatedRunnerOpenRouterLaunch:
 class AuthenticatedRunnerOpenRouterRunSnapshot:
     """Durable report material copied free of PID-local capability custody."""
 
+    candidate_cost_plan: AuthenticatedRunnerStagedCostPlan
+    judge_cost_plan: AuthenticatedRunnerStagedCostPlan
     candidate_report: ModelBenchmarkReport
     prepared_adjudication: CrossLineageAdjudicationPreparedRun
     adjudication_report: CrossLineageAdjudicationReport
@@ -215,12 +222,15 @@ def _build_detached_durable_run_snapshot() -> Callable[
     trusted_executed_run_type = AuthenticatedRunnerExecutedRun
     trusted_custody_type = CrossLineageRunnerRunCustody
     trusted_model_report_type = ModelBenchmarkReport
+    trusted_cost_plan_type = AuthenticatedRunnerStagedCostPlan
     trusted_prepared_type = CrossLineageAdjudicationPreparedRun
     trusted_adjudication_report_type = CrossLineageAdjudicationReport
     trusted_snapshot_type = AuthenticatedRunnerOpenRouterRunSnapshot
     trusted_getattribute = object.__getattribute__
     trusted_model_dump = ModelBenchmarkReport.model_dump_json
     trusted_model_validate = ModelBenchmarkReport.model_validate_json
+    trusted_cost_plan_dump = AuthenticatedRunnerStagedCostPlan.model_dump_json
+    trusted_cost_plan_validate = AuthenticatedRunnerStagedCostPlan.model_validate_json
     trusted_prepared_dump = CrossLineageAdjudicationPreparedRun.model_dump_json
     trusted_prepared_validate = CrossLineageAdjudicationPreparedRun.model_validate_json
     trusted_adjudication_dump = CrossLineageAdjudicationReport.model_dump_json
@@ -235,24 +245,34 @@ def _build_detached_durable_run_snapshot() -> Callable[
         if type(custody) is not trusted_custody_type:
             raise trusted_error("authenticated runner retained custody has the wrong exact type")
         candidate = trusted_getattribute(custody, "candidate_report")
+        candidate_cost_plan = trusted_getattribute(item, "candidate_cost_plan")
+        judge_cost_plan = trusted_getattribute(item, "judge_cost_plan")
         prepared = trusted_getattribute(item, "prepared_adjudication")
         adjudication = trusted_getattribute(custody, "adjudication_report")
         if (
-            type(candidate) is not trusted_model_report_type
+            type(candidate_cost_plan) is not trusted_cost_plan_type
+            or type(judge_cost_plan) is not trusted_cost_plan_type
+            or type(candidate) is not trusted_model_report_type
             or type(prepared) is not trusted_prepared_type
             or type(adjudication) is not trusted_adjudication_report_type
         ):
             raise trusted_error(
                 "authenticated runner retained durable reports have the wrong exact type"
             )
+        candidate_cost_raw = trusted_cost_plan_dump(candidate_cost_plan)
+        judge_cost_raw = trusted_cost_plan_dump(judge_cost_plan)
         candidate_raw = trusted_model_dump(candidate)
         prepared_raw = trusted_prepared_dump(prepared)
         adjudication_raw = trusted_adjudication_dump(adjudication)
+        candidate_cost_copy = trusted_cost_plan_validate(candidate_cost_raw, strict=True)
+        judge_cost_copy = trusted_cost_plan_validate(judge_cost_raw, strict=True)
         candidate_copy = trusted_model_validate(candidate_raw)
         prepared_copy = trusted_prepared_validate(prepared_raw)
         adjudication_copy = trusted_adjudication_validate(adjudication_raw)
         if (
-            trusted_model_dump(candidate_copy) != candidate_raw
+            trusted_cost_plan_dump(candidate_cost_copy) != candidate_cost_raw
+            or trusted_cost_plan_dump(judge_cost_copy) != judge_cost_raw
+            or trusted_model_dump(candidate_copy) != candidate_raw
             or trusted_prepared_dump(prepared_copy) != prepared_raw
             or trusted_adjudication_dump(adjudication_copy) != adjudication_raw
         ):
@@ -260,6 +280,8 @@ def _build_detached_durable_run_snapshot() -> Callable[
                 "authenticated runner durable report copy changed retained evidence"
             )
         return trusted_snapshot_type(
+            candidate_cost_plan=candidate_cost_copy,
+            judge_cost_plan=judge_cost_copy,
             candidate_report=candidate_copy,
             prepared_adjudication=prepared_copy,
             adjudication_report=adjudication_copy,
@@ -281,6 +303,7 @@ class _OpenRouterExecutionAdapter:
         "_closed",
         "_generation_subjects",
         "_judge_clients",
+        "_judges_executed",
         "_launch",
         "_plans",
         "_secrets",
@@ -297,6 +320,7 @@ class _OpenRouterExecutionAdapter:
         self._plans = {plan.run_kind: plan for plan in launch.run_plans}
         self._candidate_reports: dict[CrossLineageAdjudicationRunKind, ModelBenchmarkReport] = {}
         self._judge_clients: dict[CrossLineageAdjudicationRunKind, OpenRouterClient] = {}
+        self._judges_executed: set[CrossLineageAdjudicationRunKind] = set()
         self._generation_subjects: set[
             tuple[CrossLineageAdjudicationRunKind, AuthenticatedRunnerGenerationSubject]
         ] = set()
@@ -315,6 +339,7 @@ class _OpenRouterExecutionAdapter:
         usage: UsageLedger,
         evidence_sink: CandidateBenchmarkCampaignJournal,
         qualification_policy: QualificationPolicy,
+        request_cost_plan: AuthenticatedRunnerStagedCostPlan,
     ) -> CandidateBenchmarkExecutionResult:
         """Run one exact singleton candidate campaign through the concrete transport."""
 
@@ -331,6 +356,9 @@ class _OpenRouterExecutionAdapter:
             or budget is not launch.budget
             or usage is not launch.usage
             or qualification_policy is not launch.qualification_policy
+            or type(request_cost_plan) is not AuthenticatedRunnerStagedCostPlan
+            or request_cost_plan.run_kind is not run_kind
+            or request_cost_plan.stage is not AuthenticatedRunnerCostPlanStage.CANDIDATE
         ):
             raise AuthenticatedRunnerOpenRouterError(
                 "candidate callback differs from the exact same-process launch"
@@ -348,6 +376,8 @@ class _OpenRouterExecutionAdapter:
             evidence_sink=evidence_sink,
             qualification_policy=qualification_policy,
             pre_dispatch_rejection_observer=_raise_candidate_pre_dispatch_rejection,
+            authenticated_runner_run_kind=run_kind.value,
+            expected_request_cost_previews=request_cost_plan.request_previews,
         )
         if type(result) is not CandidateBenchmarkExecutionResult or len(result.reports) != 1:
             raise AuthenticatedRunnerOpenRouterError(
@@ -355,6 +385,81 @@ class _OpenRouterExecutionAdapter:
             )
         self._candidate_reports[run_kind] = result.reports[0]
         return result
+
+    async def prepare_judge_routes(
+        self,
+        *,
+        config: AuditConfig,
+        prepared_runs: tuple[CrossLineageAdjudicationPreparedRun, ...],
+        judges: tuple[CandidateModel, ...],
+    ) -> None:
+        """Refresh and retain both exact judge routes before either paid judge POST."""
+
+        self._require_open()
+        launch = self._launch
+        if (
+            config is not launch.config
+            or type(prepared_runs) is not tuple
+            or type(judges) is not tuple
+            or len(prepared_runs) != len(launch.run_plans)
+            or len(judges) != len(launch.run_plans)
+            or self._judge_clients
+            or self._judges_executed
+            or tuple(item.run_kind for item in prepared_runs)
+            != tuple(item.run_kind for item in launch.run_plans)
+        ):
+            raise AuthenticatedRunnerOpenRouterError(
+                "judge route preparation differs from the exact same-process launch"
+            )
+        clients: dict[CrossLineageAdjudicationRunKind, OpenRouterClient] = {}
+        try:
+            for plan, prepared, judge in zip(
+                launch.run_plans,
+                prepared_runs,
+                judges,
+                strict=True,
+            ):
+                candidate_report = self._candidate_reports.get(plan.run_kind)
+                if (
+                    type(prepared) is not CrossLineageAdjudicationPreparedRun
+                    or type(judge) is not CandidateModel
+                    or judge != plan.judge
+                    or candidate_report is None
+                    or prepared.run_kind is not plan.run_kind
+                    or prepared.candidate_report_sha256 != candidate_report.report_sha256
+                    or prepared.run_kind in clients
+                ):
+                    raise AuthenticatedRunnerOpenRouterError(
+                        "judge route preparation differs from both exact prepared runs"
+                    )
+                client = self._new_client(
+                    model=judge,
+                    source_kind=AuthenticatedRunnerGenerationSubject.JUDGE,
+                    prepared=prepared,
+                    candidate_report=candidate_report,
+                )
+                clients[prepared.run_kind] = client
+                await _refresh_and_register_judge_discovery(
+                    client=client,
+                    config=config,
+                    judge=judge,
+                    evidence=plan.judge_discovery_evidence[0],
+                    manifest=plan.judge_discovery_manifest,
+                )
+        except BaseException:
+            for client in clients.values():
+                try:
+                    await client.close()
+                except BaseException:
+                    client.clear_credentials()
+            raise
+        if len(clients) != len(launch.run_plans):
+            for client in clients.values():
+                await client.close()
+            raise AuthenticatedRunnerOpenRouterError(
+                "judge route preparation did not retain both exact judge routes"
+            )
+        self._judge_clients.update(clients)
 
     async def judge_executor(
         self,
@@ -364,6 +469,7 @@ class _OpenRouterExecutionAdapter:
         judge: CandidateModel,
         budget: BudgetManager,
         usage: UsageLedger,
+        request_cost_plan: AuthenticatedRunnerStagedCostPlan,
     ) -> tuple[CrossLineageAdjudicationCaseResult, ...]:
         """Execute one prepared judge inventory on its registered singleton route."""
 
@@ -374,39 +480,31 @@ class _OpenRouterExecutionAdapter:
         if (
             plan is None
             or candidate_report is None
-            or prepared.run_kind in self._judge_clients
             or config is not launch.config
             or judge != plan.judge
             or budget is not launch.budget
             or usage is not launch.usage
             or prepared.candidate_report_sha256 != candidate_report.report_sha256
+            or type(request_cost_plan) is not AuthenticatedRunnerStagedCostPlan
+            or request_cost_plan.run_kind is not prepared.run_kind
+            or request_cost_plan.stage is not AuthenticatedRunnerCostPlanStage.JUDGE
+            or request_cost_plan.exact_model_id != judge.exact_model_id
+            or request_cost_plan.provider_endpoint != judge.approved_provider_endpoint
         ):
             raise AuthenticatedRunnerOpenRouterError(
                 "judge callback differs from the exact same-process launch"
             )
-        evidence = plan.judge_discovery_evidence[0]
-        client = self._new_client(
-            model=judge,
-            source_kind=AuthenticatedRunnerGenerationSubject.JUDGE,
+        client = self._judge_clients.get(prepared.run_kind)
+        if client is None or prepared.run_kind in self._judges_executed:
+            raise AuthenticatedRunnerOpenRouterError(
+                "judge callback lacks one previously admitted exact live route"
+            )
+        results = await execute_cross_lineage_adjudication_requests(
+            client=client,
             prepared=prepared,
-            candidate_report=candidate_report,
+            expected_request_cost_previews=request_cost_plan.request_previews,
         )
-        try:
-            await _refresh_and_register_judge_discovery(
-                client=client,
-                config=config,
-                judge=judge,
-                evidence=evidence,
-                manifest=plan.judge_discovery_manifest,
-            )
-            results = await execute_cross_lineage_adjudication_requests(
-                client=client,
-                prepared=prepared,
-            )
-        except BaseException:
-            await client.close()
-            raise
-        self._judge_clients[prepared.run_kind] = client
+        self._judges_executed.add(prepared.run_kind)
         return results
 
     async def generation_executor(
@@ -531,6 +629,7 @@ class _OpenRouterExecutionAdapter:
             api_key=self._required_api_key(),
             execution=launch.config.execution,
             privacy=launch.config.privacy,
+            token_budgets=launch.config.token_budgets,
             budget=launch.budget,
             usage=launch.usage,
             provider_policy=OpenRouterProviderPolicy(
@@ -591,6 +690,7 @@ async def execute_authenticated_openrouter_runner(
             usage=launch.usage,
             run_plans=launch.run_plans,
             candidate_executor=adapter.candidate_executor,
+            judge_route_preparation_executor=adapter.prepare_judge_routes,
             judge_executor=adapter.judge_executor,
             generation_executor=adapter.generation_executor,
         )
@@ -745,7 +845,7 @@ def preflight_authenticated_openrouter_launch(
             "authenticated runner provider-free preflight binding changed"
         )
     _require_launch_ground_truth(launch)
-    inventory, ledger, snapshot = _TRUSTED_EXECUTION_PREFLIGHT(
+    inventory, ledger, snapshot, candidate_cost_plans = _TRUSTED_EXECUTION_PREFLIGHT(
         config=launch.config,
         explicitly_allow_synthetic_egress=launch.explicitly_allow_synthetic_egress,
         public_lineage_capability=launch.public_lineage_capability,
@@ -759,6 +859,10 @@ def preflight_authenticated_openrouter_launch(
         usage=launch.usage,
         run_plans=launch.run_plans,
         candidate_executor=cast(CandidateCampaignExecutor, _provider_dispatch_forbidden),
+        judge_route_preparation_executor=cast(
+            JudgeRoutePreparationExecutor,
+            _provider_dispatch_forbidden,
+        ),
         judge_executor=cast(CrossLineageJudgeExecutor, _provider_dispatch_forbidden),
         generation_executor=cast(
             RunnerGenerationVerificationExecutor,
@@ -772,6 +876,11 @@ def preflight_authenticated_openrouter_launch(
     exact_ledger = cast(AtomicCostLedger, ledger)
     if (
         type(inventory) is not AuthenticatedRunnerExecutionInventory
+        or type(candidate_cost_plans) is not tuple
+        or len(candidate_cost_plans) != len(launch.run_plans)
+        or any(type(item) is not AuthenticatedRunnerStagedCostPlan for item in candidate_cost_plans)
+        or tuple(item.plan_sha256 for item in candidate_cost_plans)
+        != inventory.candidate_stage_plan_sha256s
         or launch.budget.atomic_ledger is not exact_ledger
         or exact_ledger.snapshot() != snapshot
         or vars(_runner_execution_module).get("_preflight_execution")
@@ -956,6 +1065,7 @@ __all__ = [
     "AuthenticatedRunnerOpenRouterExecutionSnapshot",
     "AuthenticatedRunnerOpenRouterLaunch",
     "AuthenticatedRunnerOpenRouterResult",
+    "AuthenticatedRunnerOpenRouterRunSnapshot",
     "execute_authenticated_openrouter_runner",
     "preflight_authenticated_openrouter_launch",
 ]

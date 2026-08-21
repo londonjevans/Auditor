@@ -370,6 +370,7 @@ def test_readme_and_model_work_markings_derive_from_queue_ticket_statuses() -> N
 def test_operator_command_results_have_a_persistent_reconciliation_contract() -> None:
     agents = AGENTS_PATH.read_text(encoding="utf-8")
     model_selection = MODEL_SELECTION_PATH.read_text(encoding="utf-8")
+    normalized_model_selection = " ".join(model_selection.split())
     operator_result_bytes = OPERATOR_RESULTS_PATH.read_bytes()
     operator_results = operator_result_bytes.decode("utf-8")
     queues = (
@@ -402,6 +403,14 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "6f46b3c779262cf11b0ec58b1a2fe88947cd71d7ab788734abb36cd9f96374e4" in (model_selection)
     assert "primary-judge-registry-r4.json" in model_selection
     assert "replay-judge-registry-r2.json" in model_selection
+    assert "did not exercise the current exact-cost admission implementation" in (
+        normalized_model_selection
+    )
+    assert "Judge admission must remain `PENDING_REAL_CANDIDATE_OUTPUTS`" in (
+        normalized_model_selection
+    )
+    assert "This committed-byte rerun is pending" in normalized_model_selection
+    assert "both exact judge plans derived" in normalized_model_selection
     assert "Written by the monitoring session; treat as operator-supplied evidence." in (
         operator_results
     )

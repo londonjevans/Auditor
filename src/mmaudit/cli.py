@@ -2167,9 +2167,24 @@ def models_authenticated_runner(
                 markup=False,
             )
             local_console.print(
-                f"Cost tripwire: initial_spent_usd={inventory.initial_spent_usd}; "
-                f"declared_interval_cap_usd={inventory.declared_interval_cost_cap_usd}; "
-                f"declared_final_spent_cap_usd={inventory.declared_final_spent_cap_usd}",
+                f"Operator cost tripwires: initial_spent_usd={inventory.initial_spent_usd}; "
+                f"operator_interval_cap_usd={inventory.declared_interval_cost_cap_usd}; "
+                f"operator_final_spent_cap_usd={inventory.declared_final_spent_cap_usd}",
+                markup=False,
+            )
+            local_console.print(
+                "Candidate exact admission: "
+                f"plan_sha256s={','.join(inventory.candidate_stage_plan_sha256s)}; "
+                "derived_interval_cap_usd="
+                f"{inventory.candidate_derived_interval_cost_cap_usd}; "
+                "derived_final_spent_cap_usd="
+                f"{inventory.candidate_derived_final_spent_cap_usd}",
+                markup=False,
+            )
+            local_console.print(
+                "Judge exact admission: "
+                f"status={inventory.judge_cost_admission_status}; "
+                "full_campaign_cost_bound=UNAVAILABLE_BEFORE_REAL_CANDIDATE_OUTPUTS",
                 markup=False,
             )
             local_console.print(
@@ -2226,6 +2241,11 @@ def models_verify_authenticated_runner(
 
     async def execute() -> None:
         bundle = load_authenticated_runner_durable_bundle(bundle_path)
+        if bundle.schema_version != "1.1":
+            raise ConfigError(
+                "authenticated runner durable evidence is legacy and lacks exact staged "
+                "request-cost admission"
+            )
         ledger = bundle.closed_ledger_evidence
         local_console = Console(no_color=no_color)
         local_console.print(
@@ -4900,6 +4920,8 @@ def _authenticated_runner_durable_output(
     try:
         return build_authenticated_runner_durable_bundle(
             runner_evidence=result.runner_evidence,
+            candidate_cost_plans=tuple(item.candidate_cost_plan for item in result.execution.runs),
+            judge_cost_plans=tuple(item.judge_cost_plan for item in result.execution.runs),
             candidate_reports=tuple(item.candidate_report for item in result.execution.runs),
             prepared_runs=tuple(item.prepared_adjudication for item in result.execution.runs),
             adjudication_reports=tuple(item.adjudication_report for item in result.execution.runs),

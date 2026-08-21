@@ -12,14 +12,17 @@ from typing import Literal, Protocol
 from pydantic import Field, field_validator, model_validator
 
 from mmaudit.benchmark.models import (
+    AuthenticatedRunnerModelBenchmarkRunKind,
     ModelBenchmarkProviderResult,
     ModelBenchmarkReport,
     ModelBenchmarkSuite,
     ModelBenchmarkTarget,
     OpenRouterModelBenchmarkProvider,
+    authenticated_runner_model_benchmark_request_descriptors,
     run_model_benchmark,
+    validate_authenticated_runner_model_benchmark_cost_previews,
 )
-from mmaudit.config import AuditConfig
+from mmaudit.config import AuditConfig, TokenBudgetConfig
 from mmaudit.models.discovery import (
     OpenRouterModelDiscoveryEvidence,
     OpenRouterModelDiscoveryPayload,
@@ -35,6 +38,8 @@ from mmaudit.models.identifiers import (
 from mmaudit.models.openrouter import (
     OpenRouterClient,
     OpenRouterProviderPolicy,
+    OpenRouterRequestCostPreviewError,
+    OpenRouterStructuredRequestCostPreview,
 )
 from mmaudit.models.qualification import (
     CandidateModel,
@@ -469,6 +474,7 @@ class CandidateBenchmarkClientFactory(Protocol):
         candidate: CandidateModel,
         provider_policy: OpenRouterProviderPolicy,
         reasoning_policy: ReasoningPolicyArtifact,
+        token_budgets: TokenBudgetConfig | None,
     ) -> OpenRouterClient: ...
 
 
@@ -720,6 +726,10 @@ async def run_candidate_registry_benchmarks(
     pre_dispatch_rejection_observer: (
         Callable[[CandidateBenchmarkPreDispatchError], None] | None
     ) = None,
+    authenticated_runner_run_kind: AuthenticatedRunnerModelBenchmarkRunKind | None = None,
+    expected_request_cost_previews: (
+        tuple[OpenRouterStructuredRequestCostPreview, ...] | None
+    ) = None,
 ) -> CandidateBenchmarkExecutionResult:
     """Benchmark every exact frozen candidate while preserving failed denominators."""
 
@@ -763,6 +773,45 @@ async def run_candidate_registry_benchmarks(
         run_manifest=discovery_manifest,
         evidence=discovery_evidence,
     )
+    preview_coordinates_supplied = (
+        authenticated_runner_run_kind is not None or expected_request_cost_previews is not None
+    )
+    sealed_request_cost_previews: tuple[OpenRouterStructuredRequestCostPreview, ...] | None = None
+    if preview_coordinates_supplied:
+        if (
+            authenticated_runner_run_kind is None
+            or expected_request_cost_previews is None
+            or len(candidate_registry.candidates) != 1
+        ):
+            raise ValueError(
+                "AUTHRUNNER candidate benchmark requires one candidate and exact cost previews"
+            )
+        candidate = candidate_registry.candidates[0]
+        target = ModelBenchmarkTarget(
+            model_id=candidate.exact_model_id,
+            root_lineage=candidate.root_lineage,
+        )
+        descriptors = authenticated_runner_model_benchmark_request_descriptors(
+            run_kind=authenticated_runner_run_kind,
+            suite=benchmark_suite,
+            target=target,
+        )
+        sealed_request_cost_previews = validate_authenticated_runner_model_benchmark_cost_previews(
+            descriptors=descriptors,
+            expected_request_cost_previews=expected_request_cost_previews,
+        )
+        evidence = discovery_evidence[0]
+        configured_attempts = config.execution.max_model_retries + 1
+        if any(
+            preview.provider_endpoint != candidate.approved_provider_endpoint
+            or preview.discovery_manifest_sha256 != discovery_manifest.manifest_sha256
+            or preview.discovery_evidence_sha256 != evidence.discovery_evidence_sha256
+            or preview.maximum_attempts != configured_attempts
+            for preview in sealed_request_cost_previews
+        ):
+            raise ValueError(
+                "AUTHRUNNER candidate cost previews differ from the frozen route or retry bound"
+            )
     if client_factory is None and evidence_sink is None:
         raise ValueError("real candidate benchmarks require a durable campaign evidence sink")
     evidence_by_model = {item.exact_model_id: item for item in discovery_evidence}
@@ -805,6 +854,8 @@ async def run_candidate_registry_benchmarks(
                 reasoning_policy=reasoning_policy,
                 factory=factory,
                 pre_dispatch_rejection_observer=pre_dispatch_rejection_observer,
+                authenticated_runner_run_kind=authenticated_runner_run_kind,
+                expected_request_cost_previews=sealed_request_cost_previews,
             )
             observed_usage = tuple(usage.records[usage_start:])
             raw_ledger_after = budget.atomic_ledger.snapshot()
@@ -858,6 +909,7 @@ def _build_concrete_client(
     candidate: CandidateModel,
     provider_policy: OpenRouterProviderPolicy,
     reasoning_policy: ReasoningPolicyArtifact,
+    token_budgets: TokenBudgetConfig | None,
 ) -> OpenRouterClient:
     del candidate
     return OpenRouterClient(
@@ -868,6 +920,7 @@ def _build_concrete_client(
         usage=usage,
         provider_policy=provider_policy,
         reasoning_policy=reasoning_policy,
+        token_budgets=token_budgets,
     )
 
 
@@ -916,6 +969,10 @@ async def _execute_candidate(
     pre_dispatch_rejection_observer: (
         Callable[[CandidateBenchmarkPreDispatchError], None] | None
     ) = None,
+    authenticated_runner_run_kind: AuthenticatedRunnerModelBenchmarkRunKind | None = None,
+    expected_request_cost_previews: (
+        tuple[OpenRouterStructuredRequestCostPreview, ...] | None
+    ) = None,
 ) -> tuple[ModelBenchmarkReport, CandidateBenchmarkFailureStage | None, int]:
     before_usage = len(usage.records)
     client: OpenRouterClient | None = None
@@ -943,6 +1000,9 @@ async def _execute_candidate(
                 candidate=candidate,
                 provider_policy=provider_policy,
                 reasoning_policy=reasoning_policy,
+                token_budgets=(
+                    config.token_budgets if expected_request_cost_previews is not None else None
+                ),
             )
             if type(created_client) is not OpenRouterClient:
                 raise TypeError("candidate benchmark client is not the concrete client")
@@ -1056,11 +1116,19 @@ async def _execute_candidate(
                 await run_model_benchmark(
                     corpus=benchmark_suite,
                     targets=[target],
-                    provider=OpenRouterModelBenchmarkProvider(client),
+                    provider=OpenRouterModelBenchmarkProvider(
+                        client,
+                        authenticated_runner_run_kind=authenticated_runner_run_kind,
+                        expected_request_cost_previews=expected_request_cost_previews,
+                    ),
+                    authenticated_runner_run_kind=authenticated_runner_run_kind,
+                    expected_request_cost_previews=expected_request_cost_previews,
                 ),
                 None,
                 len(usage.records) - before_usage,
             )
+        except OpenRouterRequestCostPreviewError:
+            raise
         except Exception:
             return (
                 await _unverified_failure_report(

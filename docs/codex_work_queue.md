@@ -464,17 +464,45 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   ledger. The locally verified preflight contract stops before secret selection, completion, or
   durable output publication; transient private write probes are created and removed during path
   preflight. No authority transition occurred.
+- **Exact-cost admission WIP 2026-08-21:** The current provider-free path derives two exact,
+  self-hashed 24-request candidate cost plans from the retained singleton route, request, token,
+  reasoning, pricing, retry, and discovery evidence. Preflight reports their plan hashes and exact
+  retry-inclusive candidate interval/final caps. Judge admission is deliberately
+  `PENDING_REAL_CANDIDATE_OUTPUTS`: both REAL candidate campaigns must complete before either
+  candidate response can be sealed into its judge requests. The live path then refreshes and
+  retains both judge routes, derives both exact 24-request judge plans, and admits their aggregate
+  remaining cost below the USD 250 ledger ceiling before any judge POST. Operator-supplied manual
+  per-attempt caps are additional tripwires that every exact plan must fit; they are not pricing
+  evidence or substitutes for derived caps. Current durable output is schema v1.1 and exact-joins
+  both stage plans through reports, usage, token/reasoning plans, route/pricing hashes, attempt IDs,
+  and per-attempt ledger reservations. Legacy v1.0 remains readable only as historical evidence;
+  the verifier refuses to label it current `VALID`. The consolidated affected matrix passed 486
+  tests in 122.47s, including a 47-test durable/CLI subset in 49.68s and schema verification/release
+  tests. Schema generation/verification, lint over 539 files, strict mypy over 203 source files,
+  12 product-documentation/objective tests, strict governance JSON, diff integrity, and an
+  independent 14-test no-blocker/HIGH review also passed. The terminal full unit gate then passed
+  5,989 tests in 1,175.51s (19m35s) under the required local loopback/Unix-socket permission, with
+  one deprecation warning. Its initial sandboxed invocation had only 12 local-socket
+  `PermissionError` setup errors; those were permission-denied environment results, not code
+  failures or test passes. A preflight on the new committed bytes and their checkpoint remain
+  pending. This governance slice made no real provider, operator-secret, or operator-private-ledger
+  access and changed no model-call, spend, audit, runner-authority, AUTHSEAL, benchmark, or release
+  counter/state.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
   and non-crediting. Genuine production-issued lifecycle proof is absent; provider-free fixtures
   cannot mint owned-REAL origin, and the current repository rules prohibit reading real credentials
-  or accessing the provider. Exact role/request-bound caps have not been derived from retained
-  pricing/capacity evidence. Campaign/generation revocation beyond the top-level runner lease is
-  not independently demonstrated. External-log publication and every benchmark run remain queued.
-- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Derive and
-  reconcile exact role/request-bound caps provider-free from retained pricing/capacity evidence;
-  do not adopt advisory estimates or the placeholder `$192.00` ceiling as final authority. Only
-  then emit a separately authorized one-shot REAL launch command. AUTHSEAL publication, real
-  audits, benchmarks, and release remain queued.
+  or accessing the provider. Judge request bytes and exact caps cannot exist before both genuine
+  candidate outputs, so the provider-free result intentionally supplies candidate-only admission,
+  not a fabricated full-campaign bound. Genuine v1.1 durable REAL evidence and the positive
+  issue-consume-revoke-reject lifecycle assay remain absent. Campaign/generation revocation beyond
+  the top-level runner lease is not independently demonstrated. External-log publication and every
+  benchmark run remain queued.
+- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. After the root
+  commits the exact-cost implementation and generated artifacts, rerun the unchanged provider-free
+  r2/r4/r2 preflight on those committed bytes and retain its exact nonauthorizing result. Only then
+  may the operator separately authorize one one-shot REAL candidates-first campaign; require both
+  live judge route refreshes and aggregate exact judge admission before any judge POST. AUTHSEAL
+  publication, real audits, benchmarks, and release remain queued.
 
 ### V3-MODELREFRESH-001 — Provider-free model-refresh runtime and pricing custody
 

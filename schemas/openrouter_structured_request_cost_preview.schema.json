@@ -1,0 +1,467 @@
+{
+  "$comment": "Runtime validation additionally replays exact discovery, route, output, reasoning, request-body, token-unit, pricing-component, retry, Decimal-cost, and self-hash joins. This preview grants no dispatch, reservation, transport, or review authority.",
+  "$defs": {
+    "OpenRouterRequestCostComponentPreview": {
+      "additionalProperties": false,
+      "description": "One exact endpoint price and request-specific unit ceiling.",
+      "properties": {
+        "maximum_units": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Maximum Units",
+          "type": "integer"
+        },
+        "pricing_field": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Pricing Field",
+          "type": "string"
+        },
+        "unit_price_usd_exact": {
+          "title": "Unit Price Usd Exact",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pricing_field",
+        "unit_price_usd_exact",
+        "maximum_units"
+      ],
+      "title": "OpenRouterRequestCostComponentPreview",
+      "type": "object"
+    },
+    "StructuredOutputMode": {
+      "description": "One exact request/validation protocol for model output.",
+      "enum": [
+        "NATIVE_JSON_SCHEMA",
+        "JSON_OBJECT",
+        "VALIDATED_TEXT_JSON"
+      ],
+      "title": "StructuredOutputMode",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/openrouter_structured_request_cost_preview.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Frozen, non-authorizing exact cost preview for one singleton request route.",
+  "properties": {
+    "artifact_kind": {
+      "const": "openrouter_structured_request_cost_preview",
+      "default": "openrouter_structured_request_cost_preview",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "authorizes_budget_reservation": {
+      "const": false,
+      "default": false,
+      "title": "Authorizes Budget Reservation",
+      "type": "boolean"
+    },
+    "authorizes_dispatch": {
+      "const": false,
+      "default": false,
+      "title": "Authorizes Dispatch",
+      "type": "boolean"
+    },
+    "authorizes_provider_transport": {
+      "const": false,
+      "default": false,
+      "title": "Authorizes Provider Transport",
+      "type": "boolean"
+    },
+    "catalog_identity_binding_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Catalog Identity Binding Sha256",
+      "type": "string"
+    },
+    "catalog_snapshot_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Catalog Snapshot Sha256",
+      "type": "string"
+    },
+    "context_request_evidence_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Context Request Evidence Sha256"
+    },
+    "cost_components": {
+      "items": {
+        "$ref": "#/$defs/OpenRouterRequestCostComponentPreview"
+      },
+      "maxItems": 8,
+      "minItems": 2,
+      "title": "Cost Components",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "discovery_evidence_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Discovery Evidence Sha256",
+      "type": "string"
+    },
+    "discovery_manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Discovery Manifest Sha256",
+      "type": "string"
+    },
+    "discovery_provenance_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Discovery Provenance Sha256",
+      "type": "string"
+    },
+    "endpoint_cost_bound_pricing_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Endpoint Cost Bound Pricing Sha256",
+      "type": "string"
+    },
+    "endpoint_cost_bound_projection_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Endpoint Cost Bound Projection Sha256",
+      "type": "string"
+    },
+    "endpoint_policy_pricing_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Endpoint Policy Pricing Sha256",
+      "type": "string"
+    },
+    "endpoint_policy_snapshot_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Endpoint Policy Snapshot Sha256",
+      "type": "string"
+    },
+    "endpoint_pricing_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Endpoint Pricing Sha256",
+      "type": "string"
+    },
+    "endpoint_record_snapshot_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Endpoint Record Snapshot Sha256",
+      "type": "string"
+    },
+    "exact_model_id": {
+      "maxLength": 384,
+      "minLength": 3,
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+      "title": "Exact Model Id",
+      "type": "string"
+    },
+    "execution_config_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Execution Config Sha256",
+      "type": "string"
+    },
+    "grants_completion_credit": {
+      "const": false,
+      "default": false,
+      "title": "Grants Completion Credit",
+      "type": "boolean"
+    },
+    "grants_review_credit": {
+      "const": false,
+      "default": false,
+      "title": "Grants Review Credit",
+      "type": "boolean"
+    },
+    "logical_request_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+      "title": "Logical Request Id",
+      "type": "string"
+    },
+    "maximum_attempts": {
+      "maximum": 32,
+      "minimum": 1,
+      "title": "Maximum Attempts",
+      "type": "integer"
+    },
+    "maximum_cost_usd_all_attempts_exact": {
+      "pattern": "^(?:0|[1-9][0-9]{0,49})(?:\\.[0-9]{1,48})?$",
+      "title": "Maximum Cost Usd All Attempts Exact",
+      "type": "string"
+    },
+    "maximum_cost_usd_per_attempt_exact": {
+      "pattern": "^(?:0|[1-9][0-9]{0,49})(?:\\.[0-9]{1,48})?$",
+      "title": "Maximum Cost Usd Per Attempt Exact",
+      "type": "string"
+    },
+    "maximum_priced_prompt_units": {
+      "exclusiveMinimum": 0,
+      "maximum": 9223372036854775807,
+      "title": "Maximum Priced Prompt Units",
+      "type": "integer"
+    },
+    "model_identity_snapshot_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Model Identity Snapshot Sha256",
+      "type": "string"
+    },
+    "model_metadata_snapshot_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Model Metadata Snapshot Sha256",
+      "type": "string"
+    },
+    "output_capability_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Output Capability Sha256",
+      "type": "string"
+    },
+    "output_request_shape_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Output Request Shape Sha256",
+      "type": "string"
+    },
+    "preview_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Preview Sha256",
+      "type": "string"
+    },
+    "privacy_config_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Privacy Config Sha256",
+      "type": "string"
+    },
+    "prompt_byte_upper_bound_tokens": {
+      "exclusiveMinimum": 0,
+      "maximum": 9223372036854775807,
+      "title": "Prompt Byte Upper Bound Tokens",
+      "type": "integer"
+    },
+    "prompt_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Prompt Sha256",
+      "type": "string"
+    },
+    "provider_endpoint": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$",
+      "title": "Provider Endpoint",
+      "type": "string"
+    },
+    "provider_policy_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Provider Policy Sha256",
+      "type": "string"
+    },
+    "reasoning_capability_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Reasoning Capability Sha256",
+      "type": "string"
+    },
+    "reasoning_plan_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Reasoning Plan Sha256",
+      "type": "string"
+    },
+    "reasoning_policy_role_binding_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Reasoning Policy Role Binding Sha256",
+      "type": "string"
+    },
+    "reasoning_policy_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Reasoning Policy Sha256",
+      "type": "string"
+    },
+    "reasoning_profile_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Reasoning Profile Sha256",
+      "type": "string"
+    },
+    "reasoning_qualification_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reasoning Qualification Sha256"
+    },
+    "reasoning_request_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reasoning Request Sha256"
+    },
+    "rendered_context_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Rendered Context Sha256"
+    },
+    "request_material_projection_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Request Material Projection Sha256",
+      "type": "string"
+    },
+    "request_material_projection_utf8_bytes": {
+      "exclusiveMinimum": 0,
+      "maximum": 9223372036854775807,
+      "title": "Request Material Projection Utf8 Bytes",
+      "type": "integer"
+    },
+    "request_token_plan_projection_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Request Token Plan Projection Sha256",
+      "type": "string"
+    },
+    "requested_completion_tokens": {
+      "exclusiveMinimum": 0,
+      "maximum": 9223372036854775807,
+      "title": "Requested Completion Tokens",
+      "type": "integer"
+    },
+    "required_provider_parameters_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Required Provider Parameters Sha256",
+      "type": "string"
+    },
+    "reserved_output_tokens": {
+      "exclusiveMinimum": 0,
+      "maximum": 9223372036854775807,
+      "title": "Reserved Output Tokens",
+      "type": "integer"
+    },
+    "reserved_reasoning_tokens": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "title": "Reserved Reasoning Tokens",
+      "type": "integer"
+    },
+    "response_schema_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Response Schema Sha256",
+      "type": "string"
+    },
+    "role": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Role",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "strict_output_protocol_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Strict Output Protocol Sha256"
+    },
+    "structured_output_mode": {
+      "$ref": "#/$defs/StructuredOutputMode"
+    },
+    "system_prompt_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "System Prompt Sha256",
+      "type": "string"
+    },
+    "token_budget_config_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Token Budget Config Sha256",
+      "type": "string"
+    },
+    "user_prompt_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "User Prompt Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "artifact_kind",
+    "authorizes_budget_reservation",
+    "authorizes_dispatch",
+    "authorizes_provider_transport",
+    "catalog_identity_binding_sha256",
+    "catalog_snapshot_sha256",
+    "cost_components",
+    "discovery_evidence_sha256",
+    "discovery_manifest_sha256",
+    "discovery_provenance_sha256",
+    "endpoint_cost_bound_pricing_sha256",
+    "endpoint_cost_bound_projection_sha256",
+    "endpoint_policy_pricing_sha256",
+    "endpoint_policy_snapshot_sha256",
+    "endpoint_pricing_sha256",
+    "endpoint_record_snapshot_sha256",
+    "exact_model_id",
+    "execution_config_sha256",
+    "grants_completion_credit",
+    "grants_review_credit",
+    "logical_request_id",
+    "maximum_attempts",
+    "maximum_cost_usd_all_attempts_exact",
+    "maximum_cost_usd_per_attempt_exact",
+    "maximum_priced_prompt_units",
+    "model_identity_snapshot_sha256",
+    "model_metadata_snapshot_sha256",
+    "output_capability_sha256",
+    "output_request_shape_sha256",
+    "preview_sha256",
+    "privacy_config_sha256",
+    "prompt_byte_upper_bound_tokens",
+    "prompt_sha256",
+    "provider_endpoint",
+    "provider_policy_sha256",
+    "reasoning_capability_sha256",
+    "reasoning_plan_sha256",
+    "reasoning_policy_role_binding_sha256",
+    "reasoning_policy_sha256",
+    "reasoning_profile_sha256",
+    "request_material_projection_sha256",
+    "request_material_projection_utf8_bytes",
+    "request_token_plan_projection_sha256",
+    "requested_completion_tokens",
+    "required_provider_parameters_sha256",
+    "reserved_output_tokens",
+    "reserved_reasoning_tokens",
+    "response_schema_sha256",
+    "role",
+    "schema_version",
+    "structured_output_mode",
+    "system_prompt_sha256",
+    "token_budget_config_sha256",
+    "user_prompt_sha256"
+  ],
+  "title": "mmaudit non-authorizing OpenRouter structured request cost preview",
+  "type": "object"
+}

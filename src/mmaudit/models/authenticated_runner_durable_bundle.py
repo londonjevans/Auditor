@@ -32,6 +32,10 @@ from mmaudit.models.authenticated_runner import (
     AuthenticatedCrossLineageRunnerEvidence,
     AuthenticatedCrossLineageRunnerRunEvidence,
 )
+from mmaudit.models.authenticated_runner_cost_plan import (
+    AuthenticatedRunnerCostPlanStage,
+    AuthenticatedRunnerStagedCostPlan,
+)
 from mmaudit.models.evidence_seal_authority import (
     EvidenceSealCollisionMap,
     EvidenceSealDecisionProjection,
@@ -39,6 +43,7 @@ from mmaudit.models.evidence_seal_authority import (
     EvidenceSealRunKind,
 )
 from mmaudit.models.schemas import ExecutionEvidenceKind
+from mmaudit.models.token_planning import RequestTokenPlan
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.release_io import read_json_evidence
 from mmaudit.reporting.json_report import stable_json_bytes
@@ -196,6 +201,9 @@ AUTHENTICATED_RUNNER_DURABLE_ROUTING_KEYS: Final[tuple[str, ...]] = tuple(
             "repair_request",
             "repair_used",
             "request_ended_at",
+            "request_cost_preview_maximum_cost_usd_all_attempts_exact",
+            "request_cost_preview_maximum_cost_usd_per_attempt_exact",
+            "request_cost_preview_sha256",
             "request_started_at",
             "request_token_plan",
             "request_token_plan_sha256",
@@ -249,8 +257,10 @@ class _StrictFrozenEvidence(BaseModel):
 class AuthenticatedRunnerDurableRunEvidence(_StrictFrozenEvidence):
     """One ordered prepared request inventory and its completed judge report."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     run_kind: CrossLineageAdjudicationRunKind
+    candidate_cost_plan: AuthenticatedRunnerStagedCostPlan | None = None
+    judge_cost_plan: AuthenticatedRunnerStagedCostPlan | None = None
     candidate_report: ModelBenchmarkReport
     prepared_run: CrossLineageAdjudicationPreparedRun
     adjudication_report: CrossLineageAdjudicationReport
@@ -274,6 +284,24 @@ class AuthenticatedRunnerDurableRunEvidence(_StrictFrozenEvidence):
             CrossLineageAdjudicationReport,
             label="adjudication report",
         )
+        candidate_cost_plan = self.candidate_cost_plan
+        judge_cost_plan = self.judge_cost_plan
+        if self.schema_version == "1.0":
+            if candidate_cost_plan is not None or judge_cost_plan is not None:
+                raise ValueError("durable AUTHRUNNER v1.0 cannot carry staged cost plans")
+        elif candidate_cost_plan is None or judge_cost_plan is None:
+            raise ValueError("durable AUTHRUNNER v1.1 requires both staged cost plans")
+        else:
+            candidate_cost_plan = _revalidate_model(
+                candidate_cost_plan,
+                AuthenticatedRunnerStagedCostPlan,
+                label="candidate staged cost plan",
+            )
+            judge_cost_plan = _revalidate_model(
+                judge_cost_plan,
+                AuthenticatedRunnerStagedCostPlan,
+                label="judge staged cost plan",
+            )
         if (
             prepared.run_kind is not self.run_kind
             or report.run_kind is not self.run_kind
@@ -290,6 +318,20 @@ class AuthenticatedRunnerDurableRunEvidence(_StrictFrozenEvidence):
             raise ValueError("durable adjudication report differs from its prepared run")
         _require_safe_candidate_report_routing(candidate_report)
         _require_safe_report_routing(report)
+        if candidate_cost_plan is not None and judge_cost_plan is not None:
+            if (
+                candidate_cost_plan.run_kind is not self.run_kind
+                or candidate_cost_plan.stage is not AuthenticatedRunnerCostPlanStage.CANDIDATE
+                or judge_cost_plan.run_kind is not self.run_kind
+                or judge_cost_plan.stage is not AuthenticatedRunnerCostPlanStage.JUDGE
+            ):
+                raise ValueError("durable staged cost plan differs from its run kind")
+            _require_exact_cost_plan_report_join(
+                candidate_cost_plan=candidate_cost_plan,
+                judge_cost_plan=judge_cost_plan,
+                candidate_report=candidate_report,
+                adjudication_report=report,
+            )
         expected = canonical_sha256(self.model_dump(mode="json", exclude={"run_bundle_sha256"}))
         if self.run_bundle_sha256 != expected:
             raise ValueError("durable AUTHRUNNER run-bundle hash is inconsistent")
@@ -397,7 +439,7 @@ AuthenticatedRunnerAuthsealComparison = Annotated[
 class AuthenticatedRunnerDurableEvidenceBundle(_StrictFrozenEvidence):
     """Complete offline AUTHRUNNER evidence that grants no serialized authority."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     runner_evidence: AuthenticatedCrossLineageRunnerEvidence
     runner_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
     closed_ledger_evidence: AuthenticatedCrossLineageLedgerIntervalEvidence
@@ -460,10 +502,15 @@ class AuthenticatedRunnerDurableEvidenceBundle(_StrictFrozenEvidence):
             CrossLineageAdjudicationRunKind.REPLAY,
         ):
             raise ValueError("durable bundle requires exact PRIMARY then REPLAY order")
+        expected_run_version = self.schema_version
+        if any(item.schema_version != expected_run_version for item in self.runs):
+            raise ValueError("durable bundle and run schema versions differ")
         _require_frozen_protocol_shape(evidence)
         for retained, run in zip(self.runs, evidence.runs, strict=True):
             _require_exact_run_join(retained=retained, run=run, evidence=evidence)
         _require_exact_ledger_join(evidence=evidence, ledger=ledger)
+        if self.schema_version == "1.1":
+            _require_exact_cost_plan_ledger_join(retained_runs=self.runs, ledger=ledger)
         _require_exact_authseal_join(
             comparison=self.authseal_comparison,
             evidence=evidence,
@@ -478,6 +525,8 @@ class AuthenticatedRunnerDurableEvidenceBundle(_StrictFrozenEvidence):
 def build_authenticated_runner_durable_bundle(
     *,
     runner_evidence: AuthenticatedCrossLineageRunnerEvidence,
+    candidate_cost_plans: tuple[AuthenticatedRunnerStagedCostPlan, ...],
+    judge_cost_plans: tuple[AuthenticatedRunnerStagedCostPlan, ...],
     candidate_reports: tuple[ModelBenchmarkReport, ...],
     prepared_runs: tuple[CrossLineageAdjudicationPreparedRun, ...],
     adjudication_reports: tuple[CrossLineageAdjudicationReport, ...],
@@ -488,7 +537,9 @@ def build_authenticated_runner_durable_bundle(
     """Build one exact two-run durable evidence bundle without runtime authority."""
 
     if (
-        type(candidate_reports) is not tuple
+        type(candidate_cost_plans) is not tuple
+        or type(judge_cost_plans) is not tuple
+        or type(candidate_reports) is not tuple
         or type(prepared_runs) is not tuple
         or type(adjudication_reports) is not tuple
     ):
@@ -496,7 +547,9 @@ def build_authenticated_runner_durable_bundle(
             "durable AUTHRUNNER inputs must be exact ordered tuples"
         )
     if (
-        len(candidate_reports) != AUTHENTICATED_RUNNER_DURABLE_RUN_COUNT
+        len(candidate_cost_plans) != AUTHENTICATED_RUNNER_DURABLE_RUN_COUNT
+        or len(judge_cost_plans) != AUTHENTICATED_RUNNER_DURABLE_RUN_COUNT
+        or len(candidate_reports) != AUTHENTICATED_RUNNER_DURABLE_RUN_COUNT
         or len(prepared_runs) != AUTHENTICATED_RUNNER_DURABLE_RUN_COUNT
         or len(adjudication_reports) != AUTHENTICATED_RUNNER_DURABLE_RUN_COUNT
     ):
@@ -512,12 +565,16 @@ def build_authenticated_runner_durable_bundle(
         _require_frozen_protocol_shape(evidence)
         retained_runs = tuple(
             _build_run_evidence(
+                candidate_cost_plan=candidate_cost_plan,
+                judge_cost_plan=judge_cost_plan,
                 candidate_report=candidate_report,
                 prepared=prepared,
                 report=report,
                 runner_run=runner_run,
             )
-            for candidate_report, prepared, report, runner_run in zip(
+            for candidate_cost_plan, judge_cost_plan, candidate_report, prepared, report, runner_run in zip(
+                candidate_cost_plans,
+                judge_cost_plans,
                 candidate_reports,
                 prepared_runs,
                 adjudication_reports,
@@ -532,7 +589,7 @@ def build_authenticated_runner_durable_bundle(
         )
         ledger = evidence.ledger_interval
         payload: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": "1.1",
             "runner_evidence": evidence,
             "runner_evidence_sha256": evidence.evidence_sha256,
             "closed_ledger_evidence": ledger,
@@ -676,11 +733,28 @@ def _file_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int, i
 
 def _build_run_evidence(
     *,
+    candidate_cost_plan: AuthenticatedRunnerStagedCostPlan | None,
+    judge_cost_plan: AuthenticatedRunnerStagedCostPlan | None,
     candidate_report: ModelBenchmarkReport,
     prepared: CrossLineageAdjudicationPreparedRun,
     report: CrossLineageAdjudicationReport,
     runner_run: AuthenticatedCrossLineageRunnerRunEvidence,
 ) -> AuthenticatedRunnerDurableRunEvidence:
+    if (candidate_cost_plan is None) != (judge_cost_plan is None):
+        raise AuthenticatedRunnerDurableBundleError(
+            "durable run requires both staged cost plans together"
+        )
+    if candidate_cost_plan is not None and judge_cost_plan is not None:
+        candidate_cost_plan = _revalidate_model(
+            candidate_cost_plan,
+            AuthenticatedRunnerStagedCostPlan,
+            label="candidate staged cost plan",
+        )
+        judge_cost_plan = _revalidate_model(
+            judge_cost_plan,
+            AuthenticatedRunnerStagedCostPlan,
+            label="judge staged cost plan",
+        )
     candidate_report = _revalidate_model(
         candidate_report,
         ModelBenchmarkReport,
@@ -706,8 +780,10 @@ def _build_run_evidence(
         label="runner run evidence",
     )
     payload: dict[str, Any] = {
-        "schema_version": "1.0",
+        "schema_version": "1.1" if candidate_cost_plan is not None else "1.0",
         "run_kind": prepared.run_kind,
+        "candidate_cost_plan": candidate_cost_plan,
+        "judge_cost_plan": judge_cost_plan,
         "candidate_report": candidate_report,
         "prepared_run": prepared,
         "adjudication_report": report,
@@ -885,6 +961,166 @@ def _require_exact_run_join(
             or usage.accounted_cost_usd_exact != judge.accounted_cost_usd
         ):
             raise ValueError("retained judge case differs from runner execution evidence")
+
+
+def _require_exact_cost_plan_report_join(
+    *,
+    candidate_cost_plan: AuthenticatedRunnerStagedCostPlan,
+    judge_cost_plan: AuthenticatedRunnerStagedCostPlan,
+    candidate_report: ModelBenchmarkReport,
+    adjudication_report: CrossLineageAdjudicationReport,
+) -> None:
+    if len(candidate_report.results) != 1:
+        raise ValueError("candidate cost plan lacks one exact report result")
+    candidate_cases = candidate_report.results[0].cases
+    judge_cases = adjudication_report.cases
+    if (
+        candidate_cost_plan.case_ids != tuple(item.case_id for item in candidate_cases)
+        or judge_cost_plan.case_ids != tuple(item.case_id for item in judge_cases)
+        or len(candidate_cost_plan.request_previews) != len(candidate_cases)
+        or len(judge_cost_plan.request_previews) != len(judge_cases)
+    ):
+        raise ValueError("staged cost plans differ from durable report case coverage")
+    for plan, usages in (
+        (
+            candidate_cost_plan,
+            tuple(item.usage_record for item in candidate_cases),
+        ),
+        (
+            judge_cost_plan,
+            tuple(item.usage_record for item in judge_cases),
+        ),
+    ):
+        if any(usage is None for usage in usages):
+            raise ValueError("staged cost plan lacks one exact durable usage record")
+        for preview, maybe_usage in zip(plan.request_previews, usages, strict=True):
+            if maybe_usage is None:
+                raise ValueError("staged cost plan lacks one exact durable usage record")
+            usage = maybe_usage
+            accounted = usage.accounted_cost_usd_exact
+            token_plan = _durable_request_token_plan(usage.routing)
+            reasoning_plan = token_plan.reasoning_plan
+            if (
+                usage.request_id != preview.logical_request_id
+                or usage.role != preview.role
+                or usage.requested_model != preview.exact_model_id
+                or tuple(usage.configured_provider_endpoints) != (preview.provider_endpoint,)
+                or usage.actual_provider_endpoint != preview.provider_endpoint
+                or usage.prompt_sha256 != preview.prompt_sha256
+                or usage.user_prompt_sha256 != preview.user_prompt_sha256
+                or usage.schema_sha256 != preview.response_schema_sha256
+                or not 1 <= usage.attempts <= preview.maximum_attempts
+                or usage.routing.get("selected_provider_endpoint") != preview.provider_endpoint
+                or usage.routing.get("discovery_evidence_sha256")
+                != preview.discovery_evidence_sha256
+                or usage.routing.get("discovery_provenance_sha256")
+                != preview.discovery_provenance_sha256
+                or usage.routing.get("catalog_snapshot_sha256") != preview.catalog_snapshot_sha256
+                or usage.routing.get("catalog_identity_binding_sha256")
+                != preview.catalog_identity_binding_sha256
+                or usage.routing.get("model_metadata_snapshot_sha256")
+                != preview.model_metadata_snapshot_sha256
+                or usage.routing.get("identity_snapshot_sha256")
+                != preview.model_identity_snapshot_sha256
+                or usage.routing.get("endpoint_snapshot_sha256")
+                != preview.endpoint_policy_snapshot_sha256
+                or usage.routing.get("endpoint_pricing_sha256") != preview.endpoint_pricing_sha256
+                or usage.routing.get("output_capability_sha256") != preview.output_capability_sha256
+                or usage.routing.get("structured_output_mode")
+                != preview.structured_output_mode.value
+                or usage.routing.get("structured_output_request_shape_sha256")
+                != preview.output_request_shape_sha256
+                or canonical_sha256(
+                    usage.routing.get("structured_output_required_provider_parameters")
+                )
+                != preview.required_provider_parameters_sha256
+                or usage.routing.get("structured_output_protocol_sha256")
+                != preview.strict_output_protocol_sha256
+                or usage.routing.get("structured_output_reasoning_request_sha256")
+                != preview.reasoning_request_sha256
+                or usage.routing.get("request_cost_preview_sha256") != preview.preview_sha256
+                or usage.routing.get("request_cost_preview_maximum_cost_usd_per_attempt_exact")
+                != preview.maximum_cost_usd_per_attempt_exact
+                or usage.routing.get("request_cost_preview_maximum_cost_usd_all_attempts_exact")
+                != preview.maximum_cost_usd_all_attempts_exact
+                or accounted is None
+                or token_plan.request_id != preview.logical_request_id
+                or token_plan.role != preview.role
+                or token_plan.prompt_byte_upper_bound_tokens
+                != preview.prompt_byte_upper_bound_tokens
+                or token_plan.requested_completion_tokens != preview.requested_completion_tokens
+                or token_plan.reserved_output_tokens != preview.reserved_output_tokens
+                or token_plan.reserved_reasoning_tokens != preview.reserved_reasoning_tokens
+                or reasoning_plan is None
+                or reasoning_plan.evidence_sha256 != preview.reasoning_plan_sha256
+                or reasoning_plan.policy_artifact_sha256 != preview.reasoning_policy_sha256
+                or reasoning_plan.policy_role_binding_sha256
+                != preview.reasoning_policy_role_binding_sha256
+                or reasoning_plan.control_profile.profile_sha256 != preview.reasoning_profile_sha256
+                or reasoning_plan.endpoint_capability_sha256 != preview.reasoning_capability_sha256
+                or reasoning_plan.qualification_binding_sha256
+                != preview.reasoning_qualification_sha256
+                or Decimal(accounted)
+                > Decimal(preview.maximum_cost_usd_per_attempt_exact) * Decimal(usage.attempts)
+            ):
+                raise ValueError("durable usage differs from its enforced request-cost preview")
+
+
+def _durable_request_token_plan(routing: Mapping[str, Any]) -> RequestTokenPlan:
+    raw = routing.get("request_token_plan")
+    if not isinstance(raw, Mapping):
+        raise ValueError("durable usage lacks its exact request token plan")
+    try:
+        plan = RequestTokenPlan.model_validate_json(
+            json.dumps(
+                raw,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            )
+        )
+    except (TypeError, ValueError, ValidationError):
+        raise ValueError("durable usage request token plan is invalid") from None
+    if routing.get("request_token_plan_sha256") != plan.plan_sha256:
+        raise ValueError("durable usage request token plan hash is inconsistent")
+    return plan
+
+
+def _require_exact_cost_plan_ledger_join(
+    *,
+    retained_runs: tuple[AuthenticatedRunnerDurableRunEvidence, ...],
+    ledger: AuthenticatedCrossLineageLedgerIntervalEvidence,
+) -> None:
+    entries = {item.request_id: item for item in ledger.entries}
+    for retained in retained_runs:
+        candidate_plan = retained.candidate_cost_plan
+        judge_plan = retained.judge_cost_plan
+        if candidate_plan is None or judge_plan is None:
+            raise ValueError("current durable AUTHRUNNER bundle lacks staged cost plans")
+        candidate_cases = retained.candidate_report.results[0].cases
+        judge_cases = retained.adjudication_report.cases
+        for plan, usages in (
+            (candidate_plan, tuple(item.usage_record for item in candidate_cases)),
+            (judge_plan, tuple(item.usage_record for item in judge_cases)),
+        ):
+            for preview, usage in zip(plan.request_previews, usages, strict=True):
+                if usage is None:
+                    raise ValueError("staged cost-plan ledger join lacks durable usage")
+                expected_reservation = preview.maximum_cost_usd_per_attempt_exact
+                attempt_ids = tuple(
+                    usage.request_id if index == 1 else f"{usage.request_id}:attempt:{index}"
+                    for index in range(1, usage.attempts + 1)
+                )
+                if any(
+                    (entry := entries.get(request_id)) is None
+                    or entry.reserved_usd != expected_reservation
+                    or Decimal(entry.actual_cost_usd) > Decimal(expected_reservation)
+                    for request_id in attempt_ids
+                ):
+                    raise ValueError(
+                        "durable ledger reservation differs from its enforced request-cost preview"
+                    )
 
 
 def _require_frozen_protocol_shape(evidence: AuthenticatedCrossLineageRunnerEvidence) -> None:

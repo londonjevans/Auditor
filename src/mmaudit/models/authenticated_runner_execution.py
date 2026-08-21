@@ -1,7 +1,7 @@
 """Same-process orchestration for authenticated cross-lineage runner custody.
 
 This module owns no credential and performs no transport itself.  Callers inject
-the three bounded async transport boundaries while this layer retains the opaque
+the four bounded async transport boundaries while this layer retains the opaque
 campaign, generation, lineage, ledger, and runner capabilities in one process.
 """
 
@@ -17,7 +17,7 @@ from decimal import Decimal, localcontext
 from enum import StrEnum
 from itertools import islice
 from pathlib import Path
-from typing import Never, Protocol, SupportsIndex
+from typing import Literal, Never, Protocol, SupportsIndex
 
 from mmaudit.benchmark.cross_lineage_adjudication import (
     CrossLineageAdjudicationCaseResult,
@@ -26,15 +26,23 @@ from mmaudit.benchmark.cross_lineage_adjudication import (
     CrossLineageAdjudicationRunKind,
     adjudication_generation_verification_requests,
     build_cross_lineage_adjudication_report,
+    cross_lineage_adjudication_request_cost_previews,
     prepare_cross_lineage_adjudication,
 )
 from mmaudit.benchmark.model_portfolio import (
     CandidateBenchmarkCampaignJournal,
+    ModelBenchmarkPortfolio,
+    TrustedCandidateBenchmarkCampaignVerification,
     create_candidate_benchmark_campaign,
     issue_trusted_candidate_benchmark_campaign_verification,
     seal_model_benchmark_portfolio_from_campaign,
 )
-from mmaudit.benchmark.models import ModelBenchmarkReport, ModelBenchmarkSuite
+from mmaudit.benchmark.models import (
+    ModelBenchmarkReport,
+    ModelBenchmarkSuite,
+    ModelBenchmarkTarget,
+    authenticated_runner_model_benchmark_request_descriptors,
+)
 from mmaudit.config import AuditConfig
 from mmaudit.models.authenticated_runner import (
     AuthenticatedCrossLineageRunnerEvidence,
@@ -46,6 +54,11 @@ from mmaudit.models.authenticated_runner import (
     close_cross_lineage_ledger_interval,
     issue_verified_cross_lineage_runner_custody,
     require_verified_cross_lineage_runner_custody,
+)
+from mmaudit.models.authenticated_runner_cost_plan import (
+    AuthenticatedRunnerCostPlanStage,
+    AuthenticatedRunnerStagedCostPlan,
+    build_authenticated_runner_staged_cost_plan,
 )
 from mmaudit.models.candidate_benchmark import (
     CandidateBenchmarkExecutionResult,
@@ -69,6 +82,10 @@ from mmaudit.models.ground_truth_authority import (
     VerifiedFrozenGroundTruth,
     VerifiedFrozenGroundTruthProjection,
 )
+from mmaudit.models.openrouter import (
+    OpenRouterProviderPolicy,
+    preview_openrouter_structured_request_cost,
+)
 from mmaudit.models.public_lineage_authority import (
     VerifiedIndependentPublicModelLineageProjection,
     VerifiedPublicModelLineage,
@@ -83,6 +100,7 @@ from mmaudit.models.qualification import (
 from mmaudit.models.qualification_workflow import (
     candidate_generation_verification_requests,
 )
+from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.models.schemas import ExecutionEvidenceKind, UsageRecord
 from mmaudit.models.usage import UsageLedger, is_creditable_usage_record
 from mmaudit.orchestration.budgets import (
@@ -156,12 +174,20 @@ class AuthenticatedRunnerExecutionInventory:
     initial_spent_usd: Decimal
     declared_interval_cost_cap_usd: Decimal
     declared_final_spent_cap_usd: Decimal
+    candidate_stage_plan_sha256s: tuple[str, ...] = ()
+    candidate_derived_interval_cost_cap_usd: Decimal = Decimal("0")
+    candidate_derived_final_spent_cap_usd: Decimal = Decimal("0")
+    judge_cost_admission_status: Literal["PENDING_REAL_CANDIDATE_OUTPUTS"] = (
+        "PENDING_REAL_CANDIDATE_OUTPUTS"
+    )
 
 
 @dataclass(frozen=True, slots=True)
 class AuthenticatedRunnerExecutedRun:
     """Retained prepared request and every live/durable input for one runner pass."""
 
+    candidate_cost_plan: AuthenticatedRunnerStagedCostPlan
+    judge_cost_plan: AuthenticatedRunnerStagedCostPlan
     prepared_adjudication: CrossLineageAdjudicationPreparedRun
     custody: CrossLineageRunnerRunCustody
 
@@ -200,6 +226,7 @@ class CandidateCampaignExecutor(Protocol):
         usage: UsageLedger,
         evidence_sink: CandidateBenchmarkCampaignJournal,
         qualification_policy: QualificationPolicy,
+        request_cost_plan: AuthenticatedRunnerStagedCostPlan,
     ) -> CandidateBenchmarkExecutionResult: ...
 
 
@@ -214,7 +241,20 @@ class CrossLineageJudgeExecutor(Protocol):
         judge: CandidateModel,
         budget: BudgetManager,
         usage: UsageLedger,
+        request_cost_plan: AuthenticatedRunnerStagedCostPlan,
     ) -> tuple[CrossLineageAdjudicationCaseResult, ...]: ...
+
+
+class JudgeRoutePreparationExecutor(Protocol):
+    """Credential-owning metadata refresh for both judges before either paid POST."""
+
+    async def __call__(
+        self,
+        *,
+        config: AuditConfig,
+        prepared_runs: tuple[CrossLineageAdjudicationPreparedRun, ...],
+        judges: tuple[CandidateModel, ...],
+    ) -> object: ...
 
 
 class RunnerGenerationVerificationExecutor(Protocol):
@@ -227,6 +267,101 @@ class RunnerGenerationVerificationExecutor(Protocol):
         subject: AuthenticatedRunnerGenerationSubject,
         requests: tuple[GenerationVerificationRequest, ...],
     ) -> TrustedGenerationVerification: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedCandidateRun:
+    """One fully verified candidate pass retained until aggregate judge admission."""
+
+    plan: AuthenticatedRunnerRunPlan
+    candidate_cost_plan: AuthenticatedRunnerStagedCostPlan
+    candidate_report: ModelBenchmarkReport
+    candidate_usage: tuple[UsageRecord, ...]
+    candidate_campaign_reports: tuple[ModelBenchmarkReport, ...]
+    candidate_portfolio: ModelBenchmarkPortfolio
+    candidate_campaign_verification: TrustedCandidateBenchmarkCampaignVerification
+    candidate_generation_verification: TrustedGenerationVerification
+    prepared_adjudication: CrossLineageAdjudicationPreparedRun
+
+
+def _candidate_staged_cost_plan(
+    *,
+    config: AuditConfig,
+    benchmark_suite: ModelBenchmarkSuite,
+    discovery_manifest: OpenRouterModelDiscoveryRunManifest,
+    discovery_evidence: OpenRouterModelDiscoveryEvidence,
+    candidate: CandidateModel,
+    run_kind: CrossLineageAdjudicationRunKind,
+) -> AuthenticatedRunnerStagedCostPlan:
+    """Build one exact provider-free candidate plan from frozen launch evidence."""
+
+    run_kind_text: Literal["PRIMARY", "REPLAY"] = (
+        "PRIMARY" if run_kind is CrossLineageAdjudicationRunKind.PRIMARY else "REPLAY"
+    )
+    target = ModelBenchmarkTarget(
+        model_id=candidate.exact_model_id,
+        root_lineage=candidate.root_lineage,
+    )
+    descriptors = authenticated_runner_model_benchmark_request_descriptors(
+        run_kind=run_kind_text,
+        suite=benchmark_suite,
+        target=target,
+    )
+    provider_policy = OpenRouterProviderPolicy(
+        certification=True,
+        only=(candidate.approved_provider_endpoint,),
+        allow_fallbacks=False,
+    )
+    reasoning_policy = build_reasoning_policy(config)
+    previews = tuple(
+        preview_openrouter_structured_request_cost(
+            execution=config.execution,
+            privacy=config.privacy,
+            token_budgets=config.token_budgets,
+            provider_policy=provider_policy,
+            reasoning_policy=reasoning_policy,
+            discovery_manifest=discovery_manifest,
+            discovery_evidence=discovery_evidence,
+            role=descriptor.request_role,
+            system_prompt=descriptor.system_prompt,
+            user_prompt=descriptor.user_prompt,
+            response_model=descriptor.response_model,
+            schema_name=descriptor.schema_name,
+            logical_request_id=descriptor.logical_request_id,
+            context_package=None,
+            maximum_attempts=config.execution.max_model_retries + 1,
+        )
+        for descriptor in descriptors
+    )
+    return build_authenticated_runner_staged_cost_plan(
+        run_kind=run_kind,
+        stage=AuthenticatedRunnerCostPlanStage.CANDIDATE,
+        case_ids=(descriptor.case_id for descriptor in descriptors),
+        request_previews=previews,
+    )
+
+
+def _judge_staged_cost_plan(
+    *,
+    config: AuditConfig,
+    prepared: CrossLineageAdjudicationPreparedRun,
+    plan: AuthenticatedRunnerRunPlan,
+) -> AuthenticatedRunnerStagedCostPlan:
+    """Build one exact provider-free judge plan after candidate evidence exists."""
+
+    previews = cross_lineage_adjudication_request_cost_previews(
+        config=config,
+        prepared=prepared,
+        discovery_manifest=plan.judge_discovery_manifest,
+        discovery_evidence=plan.judge_discovery_evidence[0],
+        maximum_attempts=config.execution.max_model_retries + 1,
+    )
+    return build_authenticated_runner_staged_cost_plan(
+        run_kind=plan.run_kind,
+        stage=AuthenticatedRunnerCostPlanStage.JUDGE,
+        case_ids=prepared.case_ids,
+        request_previews=previews,
+    )
 
 
 async def execute_authenticated_cross_lineage_runner(
@@ -244,6 +379,7 @@ async def execute_authenticated_cross_lineage_runner(
     usage: UsageLedger,
     run_plans: Iterable[AuthenticatedRunnerRunPlan],
     candidate_executor: CandidateCampaignExecutor,
+    judge_route_preparation_executor: JudgeRoutePreparationExecutor,
     judge_executor: CrossLineageJudgeExecutor,
     generation_executor: RunnerGenerationVerificationExecutor,
 ) -> AuthenticatedRunnerExecutionResult:
@@ -262,7 +398,7 @@ async def execute_authenticated_cross_lineage_runner(
         _MAX_DISCOVERY_EVIDENCE,
         label="discovery evidence",
     )
-    inventory, ledger, initial_snapshot = _preflight_execution(
+    inventory, ledger, initial_snapshot, candidate_cost_plans = _preflight_execution(
         config=config,
         explicitly_allow_synthetic_egress=explicitly_allow_synthetic_egress,
         public_lineage_capability=public_lineage_capability,
@@ -276,6 +412,7 @@ async def execute_authenticated_cross_lineage_runner(
         usage=usage,
         run_plans=plans,
         candidate_executor=candidate_executor,
+        judge_route_preparation_executor=judge_route_preparation_executor,
         judge_executor=judge_executor,
         generation_executor=generation_executor,
     )
@@ -292,8 +429,11 @@ async def execute_authenticated_cross_lineage_runner(
     interval = begin_cross_lineage_ledger_interval(ledger)
     executed: list[AuthenticatedRunnerExecutedRun] = []
     all_attempt_ids: list[str] = []
+    prepared_candidates: list[_PreparedCandidateRun] = []
 
-    for plan in plans:
+    # Complete and verify both candidate campaigns before deriving or dispatching
+    # either judge inventory.  This makes the remaining judge admission exact.
+    for plan, candidate_cost_plan in zip(plans, candidate_cost_plans, strict=True):
         campaign = create_candidate_benchmark_campaign(
             plan.campaign_path,
             candidate_registry=candidate_registry,
@@ -318,6 +458,7 @@ async def execute_authenticated_cross_lineage_runner(
                 usage=usage,
                 evidence_sink=campaign,
                 qualification_policy=qualification_policy,
+                request_cost_plan=candidate_cost_plan,
             )
         candidate_report, candidate_usage = _require_complete_candidate_execution(
             result=candidate_result,
@@ -327,6 +468,7 @@ async def execute_authenticated_cross_lineage_runner(
             benchmark_suite=benchmark_suite,
             observed_usage=tuple(usage.records[usage_start:]),
             plan=plan,
+            request_cost_plan=candidate_cost_plan,
             maximum_attempts=inventory.maximum_attempts_per_logical_request,
         )
         _require_exact_callback_ledger_delta(
@@ -363,11 +505,20 @@ async def execute_authenticated_cross_lineage_runner(
             benchmark_suite=benchmark_suite,
             expected_model_id=candidate_registry.candidates[0].exact_model_id,
         )
+        candidate_generation_ledger = ledger.snapshot()
+        usage_before_candidate_generation = tuple(usage.records)
         candidate_generation = await generation_executor(
             run_kind=plan.run_kind,
             subject=AuthenticatedRunnerGenerationSubject.CANDIDATE,
             requests=candidate_generation_requests,
         )
+        if (
+            ledger.snapshot() != candidate_generation_ledger
+            or tuple(usage.records) != usage_before_candidate_generation
+        ):
+            raise AuthenticatedRunnerExecutionError(
+                f"{plan.run_kind.value} candidate generation re-fetch changed cost custody"
+            )
         _require_generation_capability(
             candidate_generation,
             requests=candidate_generation_requests,
@@ -385,6 +536,92 @@ async def execute_authenticated_cross_lineage_runner(
             judge=plan.judge,
             run_kind=plan.run_kind,
         )
+        prepared_candidates.append(
+            _PreparedCandidateRun(
+                plan=plan,
+                candidate_cost_plan=candidate_cost_plan,
+                candidate_report=candidate_report,
+                candidate_usage=candidate_usage,
+                candidate_campaign_reports=candidate_result.reports,
+                candidate_portfolio=portfolio,
+                candidate_campaign_verification=campaign_verification,
+                candidate_generation_verification=candidate_generation,
+                prepared_adjudication=prepared,
+            )
+        )
+
+    if tuple(item.plan.run_kind for item in prepared_candidates) != (
+        CrossLineageAdjudicationRunKind.PRIMARY,
+        CrossLineageAdjudicationRunKind.REPLAY,
+    ):
+        raise AuthenticatedRunnerExecutionError(
+            "runner candidate preparation did not retain exact PRIMARY then REPLAY custody"
+        )
+    route_preparation_ledger = ledger.snapshot()
+    usage_before_route_preparation = tuple(usage.records)
+    route_preparation_result = await judge_route_preparation_executor(
+        config=config,
+        prepared_runs=tuple(item.prepared_adjudication for item in prepared_candidates),
+        judges=tuple(item.plan.judge for item in prepared_candidates),
+    )
+    if (
+        route_preparation_result is not None
+        or ledger.snapshot() != route_preparation_ledger
+        or tuple(usage.records) != usage_before_route_preparation
+    ):
+        raise AuthenticatedRunnerExecutionError(
+            "runner judge route preparation changed usage or cost custody"
+        )
+    judge_admission_snapshot = ledger.snapshot()
+    usage_before_judge_planning = tuple(usage.records)
+    try:
+        judge_cost_plans = tuple(
+            _judge_staged_cost_plan(
+                config=config,
+                prepared=item.prepared_adjudication,
+                plan=item.plan,
+            )
+            for item in prepared_candidates
+        )
+    except (TypeError, ValueError):
+        raise AuthenticatedRunnerExecutionError(
+            "runner judge request costs cannot be derived from both exact prepared runs"
+        ) from None
+    if (
+        ledger.snapshot() != judge_admission_snapshot
+        or tuple(usage.records) != usage_before_judge_planning
+        or tuple(item.run_kind for item in judge_cost_plans)
+        != tuple(item.plan.run_kind for item in prepared_candidates)
+        or any(
+            item.stage is not AuthenticatedRunnerCostPlanStage.JUDGE for item in judge_cost_plans
+        )
+        or len({item.plan_sha256 for item in judge_cost_plans}) != _RUN_COUNT
+    ):
+        raise AuthenticatedRunnerExecutionError(
+            "runner judge cost admission changed live custody or returned invalid plans"
+        )
+    with localcontext() as context:
+        context.prec = 160
+        judge_maximum_cost = sum(
+            (Decimal(item.maximum_cost_usd_exact) for item in judge_cost_plans),
+            start=Decimal(0),
+        )
+        judge_maximum_final_spent = judge_admission_snapshot.spent_usd + judge_maximum_cost
+    if judge_maximum_final_spent >= _LEDGER_CAP_USD:
+        raise AuthenticatedRunnerExecutionError(
+            "runner exact judge request-cost plans do not remain strictly below 250 USD"
+        )
+    for item, judge_cost_plan in zip(prepared_candidates, judge_cost_plans, strict=True):
+        if Decimal(judge_cost_plan.maximum_cost_usd_per_attempt_exact) > (
+            item.plan.judge_declared_cost_cap_usd_per_attempt
+        ):
+            raise AuthenticatedRunnerExecutionError(
+                "runner judge exact request cost exceeds its operator tripwire"
+            )
+
+    for item, judge_cost_plan in zip(prepared_candidates, judge_cost_plans, strict=True):
+        plan = item.plan
+        prepared = item.prepared_adjudication
         usage_start = len(usage.records)
         judge_ledger_start = ledger.snapshot()
         async with budget.active_request_cost_ceiling(plan.judge_declared_cost_cap_usd_per_attempt):
@@ -394,6 +631,7 @@ async def execute_authenticated_cross_lineage_runner(
                 judge=plan.judge,
                 budget=budget,
                 usage=usage,
+                request_cost_plan=judge_cost_plan,
             )
         adjudication, judge_usage = _require_complete_judge_execution(
             results=judge_results,
@@ -402,6 +640,7 @@ async def execute_authenticated_cross_lineage_runner(
             benchmark_suite=benchmark_suite,
             observed_usage=tuple(usage.records[usage_start:]),
             plan=plan,
+            request_cost_plan=judge_cost_plan,
             maximum_attempts=inventory.maximum_attempts_per_logical_request,
         )
         _require_exact_callback_ledger_delta(
@@ -419,11 +658,20 @@ async def execute_authenticated_cross_lineage_runner(
             benchmark_suite=benchmark_suite,
             expected_model_id=plan.judge.exact_model_id,
         )
+        judge_generation_ledger = ledger.snapshot()
+        usage_before_judge_generation = tuple(usage.records)
         judge_generation = await generation_executor(
             run_kind=plan.run_kind,
             subject=AuthenticatedRunnerGenerationSubject.JUDGE,
             requests=judge_generation_requests,
         )
+        if (
+            ledger.snapshot() != judge_generation_ledger
+            or tuple(usage.records) != usage_before_judge_generation
+        ):
+            raise AuthenticatedRunnerExecutionError(
+                f"{plan.run_kind.value} judge generation re-fetch changed cost custody"
+            )
         _require_generation_capability(
             judge_generation,
             requests=judge_generation_requests,
@@ -432,13 +680,13 @@ async def execute_authenticated_cross_lineage_runner(
 
         custody = CrossLineageRunnerRunCustody(
             run_kind=plan.run_kind,
-            candidate_report=candidate_report,
-            candidate_campaign_verification=campaign_verification,
-            candidate_portfolio=portfolio,
-            candidate_campaign_reports=candidate_result.reports,
+            candidate_report=item.candidate_report,
+            candidate_campaign_verification=item.candidate_campaign_verification,
+            candidate_portfolio=item.candidate_portfolio,
+            candidate_campaign_reports=item.candidate_campaign_reports,
             candidate_campaign_policy_sha256=qualification_policy.policy_sha256,
             candidate_campaign_effective_config_sha256=effective_config_sha256,
-            candidate_generation_verification=candidate_generation,
+            candidate_generation_verification=item.candidate_generation_verification,
             judge=plan.judge,
             prepared_adjudication=prepared,
             adjudication_report=adjudication,
@@ -446,11 +694,13 @@ async def execute_authenticated_cross_lineage_runner(
         )
         executed.append(
             AuthenticatedRunnerExecutedRun(
+                candidate_cost_plan=item.candidate_cost_plan,
+                judge_cost_plan=judge_cost_plan,
                 prepared_adjudication=prepared,
                 custody=custody,
             )
         )
-        all_attempt_ids.extend(_attempt_request_ids((*candidate_usage, *judge_usage)))
+        all_attempt_ids.extend(_attempt_request_ids((*item.candidate_usage, *judge_usage)))
 
     expected_attempt_ids = tuple(all_attempt_ids)
     if (
@@ -512,9 +762,15 @@ def _preflight_execution(
     usage: UsageLedger,
     run_plans: tuple[AuthenticatedRunnerRunPlan, ...],
     candidate_executor: CandidateCampaignExecutor,
+    judge_route_preparation_executor: JudgeRoutePreparationExecutor,
     judge_executor: CrossLineageJudgeExecutor,
     generation_executor: RunnerGenerationVerificationExecutor,
-) -> tuple[AuthenticatedRunnerExecutionInventory, AtomicCostLedger, CostLedgerSnapshot]:
+) -> tuple[
+    AuthenticatedRunnerExecutionInventory,
+    AtomicCostLedger,
+    CostLedgerSnapshot,
+    tuple[AuthenticatedRunnerStagedCostPlan, ...],
+]:
     for value, expected_type, label in (
         (config, AuditConfig, "configuration"),
         (public_lineage_capability, VerifiedPublicModelLineage, "public lineage capability"),
@@ -530,6 +786,7 @@ def _preflight_execution(
             raise AuthenticatedRunnerExecutionError(f"runner {label} has the wrong exact type")
     if (
         not callable(candidate_executor)
+        or not callable(judge_route_preparation_executor)
         or not callable(judge_executor)
         or not callable(generation_executor)
     ):
@@ -748,6 +1005,52 @@ def _preflight_execution(
         raise AuthenticatedRunnerExecutionError(
             "runner declared cost-tripwire does not remain strictly below 250 USD"
         )
+    try:
+        candidate_cost_plans = tuple(
+            _candidate_staged_cost_plan(
+                config=config,
+                benchmark_suite=benchmark_suite,
+                discovery_manifest=discovery_manifest,
+                discovery_evidence=discovery_evidence[0],
+                candidate=candidate,
+                run_kind=plan.run_kind,
+            )
+            for plan in run_plans
+        )
+    except (TypeError, ValueError):
+        raise AuthenticatedRunnerExecutionError(
+            "runner candidate request costs cannot be derived from frozen launch evidence"
+        ) from None
+    if (
+        tuple(item.run_kind for item in candidate_cost_plans)
+        != tuple(item.run_kind for item in run_plans)
+        or any(
+            item.stage is not AuthenticatedRunnerCostPlanStage.CANDIDATE
+            for item in candidate_cost_plans
+        )
+        or len({item.plan_sha256 for item in candidate_cost_plans}) != _RUN_COUNT
+    ):
+        raise AuthenticatedRunnerExecutionError(
+            "runner candidate staged cost plans are missing, reordered, or replayed"
+        )
+    with localcontext() as context:
+        context.prec = 160
+        candidate_derived_interval_cost = sum(
+            (Decimal(item.maximum_cost_usd_exact) for item in candidate_cost_plans),
+            start=Decimal(0),
+        )
+        candidate_derived_final_spent = initial.spent_usd + candidate_derived_interval_cost
+    if candidate_derived_final_spent >= _LEDGER_CAP_USD:
+        raise AuthenticatedRunnerExecutionError(
+            "runner candidate exact request-cost plans do not remain strictly below 250 USD"
+        )
+    for cost_plan, run_plan in zip(candidate_cost_plans, run_plans, strict=True):
+        if Decimal(cost_plan.maximum_cost_usd_per_attempt_exact) > (
+            run_plan.candidate_declared_cost_cap_usd_per_attempt
+        ):
+            raise AuthenticatedRunnerExecutionError(
+                "runner candidate exact request cost exceeds its operator tripwire"
+            )
     return (
         AuthenticatedRunnerExecutionInventory(
             run_count=_RUN_COUNT,
@@ -762,9 +1065,14 @@ def _preflight_execution(
             initial_spent_usd=initial.spent_usd,
             declared_interval_cost_cap_usd=maximum_interval_cost,
             declared_final_spent_cap_usd=maximum_final_spent,
+            candidate_stage_plan_sha256s=tuple(item.plan_sha256 for item in candidate_cost_plans),
+            candidate_derived_interval_cost_cap_usd=candidate_derived_interval_cost,
+            candidate_derived_final_spent_cap_usd=candidate_derived_final_spent,
+            judge_cost_admission_status="PENDING_REAL_CANDIDATE_OUTPUTS",
         ),
         ledger,
         initial,
+        candidate_cost_plans,
     )
 
 
@@ -880,6 +1188,7 @@ def _require_complete_candidate_execution(
     benchmark_suite: ModelBenchmarkSuite,
     observed_usage: tuple[UsageRecord, ...],
     plan: AuthenticatedRunnerRunPlan,
+    request_cost_plan: AuthenticatedRunnerStagedCostPlan,
     maximum_attempts: int,
 ) -> tuple[ModelBenchmarkReport, tuple[UsageRecord, ...]]:
     if type(result) is not CandidateBenchmarkExecutionResult:
@@ -927,6 +1236,9 @@ def _require_complete_candidate_execution(
         expected_model=candidate_registry.candidates[0],
         maximum_cost_per_attempt=plan.candidate_declared_cost_cap_usd_per_attempt,
         maximum_attempts=maximum_attempts,
+        request_cost_plan=request_cost_plan,
+        expected_stage=AuthenticatedRunnerCostPlanStage.CANDIDATE,
+        expected_run_kind=plan.run_kind,
         label="candidate",
     )
     return report, report_usage
@@ -940,6 +1252,7 @@ def _require_complete_judge_execution(
     benchmark_suite: ModelBenchmarkSuite,
     observed_usage: tuple[UsageRecord, ...],
     plan: AuthenticatedRunnerRunPlan,
+    request_cost_plan: AuthenticatedRunnerStagedCostPlan,
     maximum_attempts: int,
 ) -> tuple[CrossLineageAdjudicationReport, tuple[UsageRecord, ...]]:
     if (
@@ -976,6 +1289,9 @@ def _require_complete_judge_execution(
         expected_model=judge,
         maximum_cost_per_attempt=plan.judge_declared_cost_cap_usd_per_attempt,
         maximum_attempts=maximum_attempts,
+        request_cost_plan=request_cost_plan,
+        expected_stage=AuthenticatedRunnerCostPlanStage.JUDGE,
+        expected_run_kind=plan.run_kind,
         label="judge",
     )
     return report, report_usage
@@ -987,6 +1303,9 @@ def _require_exact_route_and_costs(
     expected_model: CandidateModel,
     maximum_cost_per_attempt: Decimal,
     maximum_attempts: int,
+    request_cost_plan: AuthenticatedRunnerStagedCostPlan,
+    expected_stage: AuthenticatedRunnerCostPlanStage,
+    expected_run_kind: CrossLineageAdjudicationRunKind,
     label: str,
 ) -> None:
     maximum_cost = _positive_exact_decimal(
@@ -997,6 +1316,21 @@ def _require_exact_route_and_costs(
     generation_ids = tuple(record.openrouter_generation_id for record in records)
     request_body_hashes = tuple(record.request_body_sha256 for record in records)
     if (
+        type(request_cost_plan) is not AuthenticatedRunnerStagedCostPlan
+        or request_cost_plan.stage is not expected_stage
+        or request_cost_plan.run_kind is not expected_run_kind
+        or request_cost_plan.exact_model_id != expected_model.exact_model_id
+        or request_cost_plan.provider_endpoint != expected_model.approved_provider_endpoint
+        or request_cost_plan.maximum_attempts_per_logical_request != maximum_attempts
+        or len(request_cost_plan.request_previews) != len(records)
+        or request_cost_plan.case_ids != tuple(sorted(request_cost_plan.case_ids))
+        or tuple(record.request_id for record in records)
+        != tuple(item.logical_request_id for item in request_cost_plan.request_previews)
+    ):
+        raise AuthenticatedRunnerExecutionError(
+            f"{label} execution differs from its exact staged cost plan"
+        )
+    if (
         len(set(request_ids)) != len(records)
         or None in generation_ids
         or len(set(generation_ids)) != len(records)
@@ -1004,7 +1338,7 @@ def _require_exact_route_and_costs(
         or len(set(request_body_hashes)) != len(records)
     ):
         raise AuthenticatedRunnerExecutionError(f"{label} execution identities are replayed")
-    for record in records:
+    for record, preview in zip(records, request_cost_plan.request_previews, strict=True):
         accounted = record.accounted_cost_usd_exact
         exact_model_id = expected_model.exact_model_id
         canonical_model_id = expected_model.canonical_model_slug
@@ -1036,9 +1370,12 @@ def _require_exact_route_and_costs(
             or record.routing.get("model_metadata_snapshot_sha256")
             != expected_model.model_metadata_snapshot_sha256
             or record.routing.get("provider_fallbacks_allowed") is not False
+            or record.routing.get("request_cost_preview_sha256") != preview.preview_sha256
             or not 1 <= record.attempts <= maximum_attempts
             or accounted is None
             or Decimal(accounted) > maximum_cost * Decimal(record.attempts)
+            or Decimal(accounted)
+            > Decimal(preview.maximum_cost_usd_per_attempt_exact) * Decimal(record.attempts)
         ):
             raise AuthenticatedRunnerExecutionError(
                 f"{label} execution violates its singleton route or cost cap"
@@ -1332,6 +1669,7 @@ __all__ = [
     "AuthenticatedRunnerRunPlan",
     "CandidateCampaignExecutor",
     "CrossLineageJudgeExecutor",
+    "JudgeRoutePreparationExecutor",
     "RunnerGenerationVerificationExecutor",
     "execute_authenticated_cross_lineage_runner",
 ]

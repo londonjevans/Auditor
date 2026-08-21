@@ -11,7 +11,10 @@ from typing import Any, cast
 import pytest
 
 import mmaudit.orchestration.authenticated_runner_openrouter as adapter_module
-from mmaudit.benchmark.cross_lineage_adjudication import CrossLineageAdjudicationRunKind
+from mmaudit.benchmark.cross_lineage_adjudication import (
+    CrossLineageAdjudicationRunKind,
+    prepare_cross_lineage_adjudication,
+)
 from mmaudit.benchmark.models import load_model_benchmark_corpus
 from mmaudit.config import AuditConfig
 from mmaudit.models.authenticated_runner import (
@@ -19,6 +22,7 @@ from mmaudit.models.authenticated_runner import (
     AuthenticatedCrossLineageRunnerEvidence,
     VerifiedCrossLineageRunnerCustody,
 )
+from mmaudit.models.authenticated_runner_cost_plan import AuthenticatedRunnerCostPlanStage
 from mmaudit.models.authenticated_runner_execution import (
     AuthenticatedRunnerExecutedRun,
     AuthenticatedRunnerExecutionError,
@@ -53,6 +57,7 @@ from mmaudit.orchestration.authenticated_runner_openrouter import (
     preflight_authenticated_openrouter_launch,
 )
 from tests.unit import test_authenticated_runner as runner_fixtures
+from tests.unit import test_authenticated_runner_cost_plan as cost_plan_fixtures
 from tests.unit import test_authenticated_runner_execution as execution_fixtures
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -104,10 +109,23 @@ def _completed_execution(
     )
     runs = tuple(
         AuthenticatedRunnerExecutedRun(
+            candidate_cost_plan=cost_plan_fixtures._build(
+                run_kind=run_kind,
+                stage=AuthenticatedRunnerCostPlanStage.CANDIDATE,
+            ),
+            judge_cost_plan=cost_plan_fixtures._build(
+                run_kind=run_kind,
+                stage=AuthenticatedRunnerCostPlanStage.JUDGE,
+            ),
             prepared_adjudication=cast(Any, f"prepared-{index}"),
             custody=cast(Any, SimpleNamespace(label=f"custody-{index}")),
         )
-        for index in range(2)
+        for index, run_kind in enumerate(
+            (
+                CrossLineageAdjudicationRunKind.PRIMARY,
+                CrossLineageAdjudicationRunKind.REPLAY,
+            )
+        )
     )
     return AuthenticatedRunnerExecutionResult(
         inventory=_execution_inventory(),
@@ -146,6 +164,8 @@ def _install_completed_runner(
 
     def detached(item: AuthenticatedRunnerExecutedRun) -> AuthenticatedRunnerOpenRouterRunSnapshot:
         return AuthenticatedRunnerOpenRouterRunSnapshot(
+            candidate_cost_plan=item.candidate_cost_plan,
+            judge_cost_plan=item.judge_cost_plan,
             candidate_report=cast(Any, f"candidate-{item.prepared_adjudication}"),
             prepared_adjudication=item.prepared_adjudication,
             adjudication_report=cast(Any, f"adjudication-{item.prepared_adjudication}"),
@@ -184,6 +204,12 @@ def test_detached_run_snapshot_copies_only_durable_report_models() -> None:
     inputs = cast(Callable[[], Any], runner_fixtures.live_inputs.__wrapped__)()
     custody = inputs.runs[0]
     executed = AuthenticatedRunnerExecutedRun(
+        candidate_cost_plan=cost_plan_fixtures._build(
+            stage=AuthenticatedRunnerCostPlanStage.CANDIDATE,
+        ),
+        judge_cost_plan=cost_plan_fixtures._build(
+            stage=AuthenticatedRunnerCostPlanStage.JUDGE,
+        ),
         prepared_adjudication=custody.prepared_adjudication,
         custody=custody,
     )
@@ -192,10 +218,16 @@ def test_detached_run_snapshot_copies_only_durable_report_models() -> None:
 
     assert type(snapshot) is AuthenticatedRunnerOpenRouterRunSnapshot
     assert tuple(item.name for item in fields(snapshot)) == (
+        "candidate_cost_plan",
+        "judge_cost_plan",
         "candidate_report",
         "prepared_adjudication",
         "adjudication_report",
     )
+    assert snapshot.candidate_cost_plan == executed.candidate_cost_plan
+    assert snapshot.candidate_cost_plan is not executed.candidate_cost_plan
+    assert snapshot.judge_cost_plan == executed.judge_cost_plan
+    assert snapshot.judge_cost_plan is not executed.judge_cost_plan
     assert snapshot.candidate_report == custody.candidate_report
     assert snapshot.candidate_report is not custody.candidate_report
     assert snapshot.prepared_adjudication == custody.prepared_adjudication
@@ -302,6 +334,7 @@ async def test_adapter_clears_secret_holder_when_runner_rejects_missing_real_ori
         "generation_executor",
         "ground_truth_capability",
         "judge_executor",
+        "judge_route_preparation_executor",
         "public_lineage_capability",
         "qualification_policy",
         "run_plans",
@@ -736,6 +769,76 @@ async def test_generation_subject_is_exactly_once_without_provider_dispatch() ->
     secrets.clear()
 
 
+@pytest.mark.asyncio
+async def test_judge_callback_rejects_before_candidate_execution_or_provider_dispatch(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = await execution_fixtures._harness(tmp_path, config_factory)
+    plan = harness.plans[0]
+    candidate_report = harness.candidate_executor.reports_by_kind[plan.run_kind]
+    prepared = prepare_cross_lineage_adjudication(
+        public_lineage_capability=harness.public_lineage,
+        suite=harness.suite,
+        candidate_report=candidate_report,
+        judge=plan.judge,
+        run_kind=plan.run_kind,
+    )
+    judge_cost_plan = (
+        execution_fixtures.authenticated_runner_execution_module._judge_staged_cost_plan(
+            config=harness.config,
+            prepared=prepared,
+            plan=plan,
+        )
+    )
+    launch = AuthenticatedRunnerOpenRouterLaunch(
+        config=harness.config,
+        explicitly_allow_synthetic_egress=True,
+        public_lineage_capability=harness.public_lineage,
+        ground_truth_capability=harness.ground_truth,
+        benchmark_suite=harness.suite,
+        candidate_discovery_manifest=harness.discovery_manifest,
+        candidate_discovery_evidence=harness.discovery_evidence,
+        candidate_registry=harness.registry,
+        qualification_policy=harness.policy,
+        budget=harness.budget,
+        usage=harness.usage,
+        run_plans=harness.plans,
+    )
+    secrets = OperatorSecrets({OPENROUTER_API_KEY_NAME: "synthetic-provider-free-unit-key"})
+    adapter = adapter_module._OpenRouterExecutionAdapter(launch=launch, secrets=secrets)
+    provider_calls: list[str] = []
+
+    def forbidden_client(*_args: object, **_kwargs: object) -> Any:
+        provider_calls.append("new-client")
+        raise AssertionError("judge admission must reject before provider setup")
+
+    monkeypatch.setattr(adapter_module._OpenRouterExecutionAdapter, "_new_client", forbidden_client)
+    assert harness.budget.atomic_ledger is not None
+    before = harness.budget.atomic_ledger.snapshot()
+    try:
+        with pytest.raises(
+            AuthenticatedRunnerOpenRouterError,
+            match="judge callback differs from the exact same-process launch",
+        ):
+            await adapter.judge_executor(
+                config=harness.config,
+                prepared=prepared,
+                judge=plan.judge,
+                budget=harness.budget,
+                usage=harness.usage,
+                request_cost_plan=judge_cost_plan,
+            )
+    finally:
+        await adapter.close()
+        secrets.clear()
+
+    assert provider_calls == []
+    assert harness.usage.records == []
+    assert harness.budget.atomic_ledger.snapshot() == before
+
+
 def test_ground_truth_method_retarget_is_rejected_before_authseal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -767,6 +870,66 @@ async def test_provider_free_preflight_returns_exact_inventory_without_dispatch(
     config_factory: Callable[..., AuditConfig],
 ) -> None:
     harness = await execution_fixtures._harness(tmp_path, config_factory)
+    run_plans = tuple(
+        replace(
+            plan,
+            candidate_declared_cost_cap_usd_per_attempt=Decimal("1"),
+            judge_declared_cost_cap_usd_per_attempt=Decimal("1"),
+        )
+        for plan in harness.plans
+    )
+    launch = AuthenticatedRunnerOpenRouterLaunch(
+        config=harness.config,
+        explicitly_allow_synthetic_egress=True,
+        public_lineage_capability=harness.public_lineage,
+        ground_truth_capability=harness.ground_truth,
+        benchmark_suite=harness.suite,
+        candidate_discovery_manifest=harness.discovery_manifest,
+        candidate_discovery_evidence=harness.discovery_evidence,
+        candidate_registry=harness.registry,
+        qualification_policy=harness.policy,
+        budget=harness.budget,
+        usage=harness.usage,
+        run_plans=run_plans,
+    )
+    assert harness.budget.atomic_ledger is not None
+    before = harness.budget.atomic_ledger.snapshot()
+
+    inventory = preflight_authenticated_openrouter_launch(launch)
+
+    assert inventory.run_count == 2
+    assert inventory.case_count == 24
+    assert inventory.logical_request_count == 96
+    assert inventory.generation_refetch_count == 96
+    assert len(inventory.candidate_stage_plan_sha256s) == 2
+    assert len(set(inventory.candidate_stage_plan_sha256s)) == 2
+    assert inventory.candidate_derived_interval_cost_cap_usd > Decimal(0)
+    assert inventory.candidate_derived_final_spent_cap_usd == (
+        before.spent_usd + inventory.candidate_derived_interval_cost_cap_usd
+    )
+    assert inventory.judge_cost_admission_status == "PENDING_REAL_CANDIDATE_OUTPUTS"
+    assert harness.usage.records == []
+    assert harness.budget.atomic_ledger.snapshot() == before
+    assert all(not plan.campaign_path.exists() for plan in run_plans)
+    assert all(not plan.portfolio_path.exists() for plan in run_plans)
+
+    with pytest.raises(
+        AuthenticatedRunnerExecutionError,
+        match="explicit synthetic-source egress authorization",
+    ):
+        preflight_authenticated_openrouter_launch(
+            replace(launch, explicitly_allow_synthetic_egress=False)
+        )
+    assert harness.usage.records == []
+    assert harness.budget.atomic_ledger.snapshot() == before
+
+
+@pytest.mark.asyncio
+async def test_authenticated_runner_clients_retain_exact_token_budget_configuration(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    harness = await execution_fixtures._harness(tmp_path, config_factory)
     launch = AuthenticatedRunnerOpenRouterLaunch(
         config=harness.config,
         explicitly_allow_synthetic_egress=True,
@@ -781,29 +944,20 @@ async def test_provider_free_preflight_returns_exact_inventory_without_dispatch(
         usage=harness.usage,
         run_plans=harness.plans,
     )
-    assert harness.budget.atomic_ledger is not None
-    before = harness.budget.atomic_ledger.snapshot()
-
-    inventory = preflight_authenticated_openrouter_launch(launch)
-
-    assert inventory.run_count == 2
-    assert inventory.case_count == 24
-    assert inventory.logical_request_count == 96
-    assert inventory.generation_refetch_count == 96
-    assert harness.usage.records == []
-    assert harness.budget.atomic_ledger.snapshot() == before
-    assert all(not plan.campaign_path.exists() for plan in harness.plans)
-    assert all(not plan.portfolio_path.exists() for plan in harness.plans)
-
-    with pytest.raises(
-        AuthenticatedRunnerExecutionError,
-        match="explicit synthetic-source egress authorization",
-    ):
-        preflight_authenticated_openrouter_launch(
-            replace(launch, explicitly_allow_synthetic_egress=False)
-        )
-    assert harness.usage.records == []
-    assert harness.budget.atomic_ledger.snapshot() == before
+    secrets = OperatorSecrets({OPENROUTER_API_KEY_NAME: "synthetic-provider-free-unit-key"})
+    adapter = adapter_module._OpenRouterExecutionAdapter(launch=launch, secrets=secrets)
+    client = adapter._new_client(
+        model=harness.registry.candidates[0],
+        source_kind=AuthenticatedRunnerGenerationSubject.CANDIDATE,
+        prepared=None,
+        candidate_report=None,
+    )
+    try:
+        assert client.token_budgets == harness.config.token_budgets
+    finally:
+        await client.close()
+        await adapter.close()
+        secrets.clear()
 
 
 @pytest.mark.asyncio
@@ -827,6 +981,7 @@ async def test_judge_refresh_observes_current_metadata_in_order_before_registrat
             allow_fallbacks=False,
         ),
         reasoning_policy=build_reasoning_policy(harness.config),
+        token_budgets=harness.config.token_budgets,
     )
     try:
         await adapter_module._refresh_and_register_judge_discovery(
@@ -874,6 +1029,7 @@ async def test_judge_refresh_rejects_pricing_drift_without_registration_or_compl
             allow_fallbacks=False,
         ),
         reasoning_policy=build_reasoning_policy(harness.config),
+        token_budgets=harness.config.token_budgets,
     )
     try:
         with pytest.raises(AuthenticatedRunnerOpenRouterError, match=r"pricing.*differs"):

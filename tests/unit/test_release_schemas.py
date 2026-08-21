@@ -7,6 +7,7 @@ from pathlib import Path
 from mmaudit.benchmark.cross_lineage_adjudication import CrossLineageAdjudicationReport
 from mmaudit.config import ModelLineageConfig
 from mmaudit.models.authenticated_runner import AuthenticatedCrossLineageRunnerEvidence
+from mmaudit.models.authenticated_runner_cost_plan import AuthenticatedRunnerStagedCostPlan
 from mmaudit.models.autonomous_benchmark_verdict import (
     EvidenceSealVerdictPolicy,
     EvidenceSealVerdictProjection,
@@ -18,6 +19,7 @@ from mmaudit.models.coverage_planning import (
 from mmaudit.models.evidence_seal_authority import EvidenceSealedAuthorityEvidence
 from mmaudit.models.frozen_lineage_authority import FrozenModelLineageProvenance
 from mmaudit.models.ground_truth_authority import FrozenGroundTruthProvenance
+from mmaudit.models.openrouter import OpenRouterStructuredRequestCostPreview
 from mmaudit.models.policy_eligibility import (
     ClientPolicyConstraints,
     ModelPolicyEligibilityArtifact,
@@ -67,6 +69,65 @@ def _assert_non_authorizing_model_schema(definition: dict[str, object]) -> None:
             "title": properties[field_name]["title"],
             "type": "boolean",
         }
+
+
+def test_authenticated_runner_cost_schemas_require_exact_nonauthorizing_boundaries() -> None:
+    preview_filename = "openrouter_structured_request_cost_preview.schema.json"
+    plan_filename = "authenticated_runner_staged_cost_plan.schema.json"
+    assert MODELS[preview_filename] is OpenRouterStructuredRequestCostPreview
+    assert MODELS[plan_filename] is AuthenticatedRunnerStagedCostPlan
+
+    preview = json.loads((ROOT / "schemas" / preview_filename).read_text(encoding="utf-8"))
+    plan = json.loads((ROOT / "schemas" / plan_filename).read_text(encoding="utf-8"))
+    authority_fields = {
+        "authorizes_dispatch",
+        "authorizes_budget_reservation",
+        "authorizes_provider_transport",
+        "grants_review_credit",
+        "grants_completion_credit",
+    }
+    assert {"artifact_kind", "schema_version", *authority_fields} <= set(preview["required"])
+    assert authority_fields | {"runner_custody_authorized", "release_authorized"} <= set(
+        plan["required"]
+    )
+    for field_name in authority_fields:
+        assert preview["properties"][field_name]["const"] is False
+        assert plan["properties"][field_name]["const"] is False
+    assert plan["properties"]["runner_custody_authorized"]["const"] is False
+    assert plan["properties"]["release_authorized"]["const"] is False
+    assert plan["properties"]["logical_request_count"]["const"] == 24
+    assert plan["properties"]["case_ids"]["minItems"] == 24
+    assert plan["properties"]["case_ids"]["maxItems"] == 24
+    assert plan["properties"]["case_ids"]["uniqueItems"] is True
+    assert plan["properties"]["request_previews"]["uniqueItems"] is True
+    assert plan["properties"]["provider_attempt_request_ids"]["uniqueItems"] is True
+    embedded_preview = plan["$defs"]["OpenRouterStructuredRequestCostPreview"]
+    assert set(preview["required"]) == set(embedded_preview["required"])
+
+    durable = json.loads(
+        (ROOT / "schemas" / "authenticated_runner_durable_evidence_bundle.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    durable_run = durable["$defs"]["AuthenticatedRunnerDurableRunEvidence"]
+    assert {"schema_version", "candidate_cost_plan", "judge_cost_plan"} <= set(
+        durable_run["required"]
+    )
+    assert len(durable_run["allOf"]) == 2
+    assert len(durable["allOf"]) == 2
+    ledger_entry = durable["$defs"]["AuthenticatedCrossLineageLedgerEntryEvidence"]
+    reserved_options = ledger_entry["properties"]["reserved_usd"]["anyOf"]
+    assert {option.get("type") for option in reserved_options} == {"string", "null"}
+    current_condition = next(
+        item
+        for item in durable["allOf"]
+        if item["if"]["properties"]["schema_version"] == {"const": "1.1"}
+    )
+    current_reserved = current_condition["then"]["properties"]["closed_ledger_evidence"][
+        "properties"
+    ]["entries"]["items"]
+    assert current_reserved["required"] == ["reserved_usd"]
+    assert current_reserved["properties"]["reserved_usd"]["type"] == "string"
 
 
 def test_model_surface_coverage_plan_schema_is_closed_bounded_and_non_authorizing() -> None:

@@ -144,13 +144,19 @@ class AuthenticatedCrossLineageLedgerEntryEvidence(_StrictFrozenEvidence):
 
     request_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
     entry_sha256: str = Field(pattern=_SHA256_PATTERN)
+    reserved_usd: str | None = Field(
+        default=None,
+        pattern=r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$",
+    )
     actual_cost_usd: str = Field(pattern=r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
 
-    @field_validator("actual_cost_usd")
+    @field_validator("reserved_usd", "actual_cost_usd")
     @classmethod
-    def cost_is_canonical(cls, value: str) -> str:
-        if _decimal_text(_parse_decimal(value, label="ledger entry actual cost")) != value:
-            raise ValueError("ledger entry actual cost is not canonical")
+    def cost_is_canonical(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if _decimal_text(_parse_decimal(value, label="ledger entry cost")) != value:
+            raise ValueError("ledger entry cost is not canonical")
         return value
 
 
@@ -195,6 +201,13 @@ class AuthenticatedCrossLineageLedgerIntervalEvidence(_StrictFrozenEvidence):
                 ),
                 start=Decimal(0),
             )
+        if any(
+            item.reserved_usd is not None
+            and _parse_decimal(item.actual_cost_usd, label="ledger entry actual cost")
+            > _parse_decimal(item.reserved_usd, label="ledger entry reserved cost")
+            for item in self.entries
+        ):
+            raise ValueError("cross-lineage ledger actual cost exceeds its reservation")
         if interval != entry_total or final != initial + interval:
             raise ValueError("cross-lineage ledger interval spend is inconsistent")
         if final >= _RUNNER_LEDGER_CAP_USD:
@@ -959,6 +972,7 @@ def _build_cross_lineage_ledger_interval_authority() -> tuple[
             AuthenticatedCrossLineageLedgerEntryEvidence(
                 request_id=item.request_id,
                 entry_sha256=_entry_sha256(item),
+                reserved_usd=_decimal_text(item.reserved_usd),
                 actual_cost_usd=_decimal_text(cast(Decimal, item.actual_cost_usd)),
             )
             for item in new_entries

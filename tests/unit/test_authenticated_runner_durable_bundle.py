@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from dataclasses import dataclass, replace
+from datetime import datetime
 from decimal import Decimal
 from functools import cache
 from pathlib import Path
@@ -14,6 +16,7 @@ import mmaudit.models.authenticated_runner_durable_bundle as durable_bundle_modu
 import mmaudit.models.evidence_seal_authority as evidence_seal_module
 from mmaudit.benchmark.cross_lineage_adjudication import (
     CrossLineageAdjudicationCaseResult,
+    CrossLineageAdjudicationPreparedRun,
     CrossLineageAdjudicationReport,
     CrossLineageAdjudicationRunKind,
     build_cross_lineage_adjudication_case_result,
@@ -27,11 +30,17 @@ from mmaudit.models.authenticated_runner import (
     AuthenticatedCrossLineageRunnerEvidence,
     AuthenticatedCrossLineageRunnerRunEvidence,
 )
+from mmaudit.models.authenticated_runner_cost_plan import (
+    AuthenticatedRunnerCostPlanStage,
+    AuthenticatedRunnerStagedCostPlan,
+    build_authenticated_runner_staged_cost_plan,
+)
 from mmaudit.models.authenticated_runner_durable_bundle import (
     AuthenticatedRunnerAuthsealComplete,
     AuthenticatedRunnerAuthsealRejected,
     AuthenticatedRunnerDurableBundleError,
     AuthenticatedRunnerDurableEvidenceBundle,
+    AuthenticatedRunnerDurableRunEvidence,
     authenticated_runner_durable_bundle_bytes,
     build_authenticated_runner_durable_bundle,
     load_authenticated_runner_durable_bundle,
@@ -50,12 +59,22 @@ from mmaudit.models.ground_truth_authority import (
     FROZEN_GROUND_TRUTH_SOURCE_REVISION,
     VerifiedFrozenGroundTruthProjection,
 )
+from mmaudit.models.openrouter import OpenRouterStructuredRequestCostPreview
+from mmaudit.models.reasoning import ReasoningExecutionEvidence, ReasoningRequestPlanEvidence
 from mmaudit.models.schemas import UsageRecord
+from mmaudit.models.token_planning import RequestTokenPlan
+from mmaudit.orchestration.budgets import EndpointRequestCostBound
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.release_io import JsonEvidenceObservation
 from scripts.generate_release_schemas import MODELS, rendered_schema
+from tests.identity_fixtures import (
+    bind_synthetic_usage_identity,
+    reattest_synthetic_real_usage,
+)
 from tests.unit import test_authenticated_runner as runner_fixtures
 from tests.unit.test_authenticated_runner import _LiveInputs
+from tests.unit.test_authenticated_runner_cost_plan import _preview as _cost_preview_fixture
+from tests.unit.test_openrouter_request_cost_preview import _disabled_reasoning_policy
 
 _LIVE_INPUTS_FACTORY = cast(Callable[[], _LiveInputs], runner_fixtures.live_inputs.__wrapped__)
 
@@ -63,6 +82,369 @@ _LIVE_INPUTS_FACTORY = cast(Callable[[], _LiveInputs], runner_fixtures.live_inpu
 @cache
 def _live_inputs() -> _LiveInputs:
     return _LIVE_INPUTS_FACTORY()
+
+
+def _routing_sha256(usage: UsageRecord, key: str, fallback: str) -> str:
+    value = usage.routing.get(key)
+    return value if isinstance(value, str) and len(value) == 64 else fallback
+
+
+def _decimal_text(value: Decimal) -> str:
+    rendered = format(value, "f")
+    return rendered.rstrip("0").rstrip(".") if "." in rendered else rendered
+
+
+def _v2_token_plan_for_usage(
+    usage: UsageRecord,
+    *,
+    endpoint_capability_sha256: str,
+) -> RequestTokenPlan:
+    original = durable_bundle_module._durable_request_token_plan(usage.routing)
+    if original.reasoning_plan is not None:
+        return original
+    reasoning_plan = ReasoningRequestPlanEvidence.build(
+        request_role=original.role,
+        policy=_disabled_reasoning_policy(),
+        endpoint_capability_sha256=endpoint_capability_sha256,
+    )
+    payload = original.model_dump(mode="json", exclude={"plan_sha256"})
+    payload.update(
+        {
+            "schema_version": "2.0",
+            "reasoning_plan": reasoning_plan.model_dump(mode="json"),
+        }
+    )
+    return RequestTokenPlan.model_validate_json(
+        json.dumps(
+            {**payload, "plan_sha256": canonical_sha256(payload)},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+
+
+def _usage_with_singleton_identity_and_reasoning(
+    usage: UsageRecord,
+    *,
+    started_at: datetime,
+    ended_at: datetime,
+    endpoint_capability_sha256: str,
+) -> UsageRecord:
+    reasoning_plan = ReasoningRequestPlanEvidence.build(
+        request_role=usage.role,
+        policy=_disabled_reasoning_policy(),
+        endpoint_capability_sha256=endpoint_capability_sha256,
+    )
+    payload = usage.model_dump(mode="python")
+    payload.update(
+        {
+            "timestamp": started_at,
+            "started_at": started_at,
+            "ended_at": ended_at,
+            "latency_ms": int((ended_at - started_at).total_seconds() * 1_000),
+            "reasoning_evidence": None,
+            "reasoning_tokens": 0,
+        }
+    )
+    routing = dict(payload["routing"])
+    routing.update(
+        {
+            "request_started_at": started_at.isoformat(),
+            "request_ended_at": ended_at.isoformat(),
+            "latency_ms": payload["latency_ms"],
+        }
+    )
+    for field in (
+        "request_token_plan",
+        "request_token_plan_sha256",
+        "atomic_token_reservation",
+        "atomic_token_reservation_sha256",
+        "atomic_token_reservations",
+        "atomic_token_reservation_sha256s",
+    ):
+        routing.pop(field, None)
+    payload["routing"] = routing
+    return bind_synthetic_usage_identity(
+        UsageRecord.model_validate(payload),
+        reasoning_plan=reasoning_plan,
+        observed_reasoning_tokens=0,
+    )
+
+
+def _cost_preview_for_usage(
+    usage: UsageRecord,
+    *,
+    index: int,
+    drift: str | None = None,
+) -> OpenRouterStructuredRequestCostPreview:
+    template = _cost_preview_fixture(index)
+    payload = template.model_dump(mode="json", exclude={"preview_sha256"})
+    token_plan = _v2_token_plan_for_usage(
+        usage,
+        endpoint_capability_sha256=template.reasoning_capability_sha256,
+    )
+    reasoning_plan = token_plan.reasoning_plan
+    assert reasoning_plan is not None
+    endpoint = usage.actual_provider_endpoint
+    user_prompt_sha256 = usage.user_prompt_sha256 or template.user_prompt_sha256
+    schema_sha256 = usage.schema_sha256 or template.response_schema_sha256
+    assert endpoint is not None
+    exact_model_id = usage.requested_model
+    prompt_sha256 = usage.prompt_sha256
+    if drift == "exact_model_id":
+        exact_model_id = "retargeted/model-v9"
+    elif drift == "provider_endpoint":
+        endpoint = "retargeted-provider/fp8"
+    elif drift == "prompt_sha256":
+        prompt_sha256 = canonical_sha256({"retargeted_prompt": usage.prompt_sha256})
+    elif drift == "response_schema_sha256":
+        schema_sha256 = "f" * 64
+    components = payload["cost_components"]
+    assert isinstance(components, list)
+    pricing = {
+        str(component["pricing_field"]): str(component["unit_price_usd_exact"])
+        for component in components
+    }
+    prompt_units = token_plan.prompt_byte_upper_bound_tokens
+    component_units = {
+        "completion": token_plan.requested_completion_tokens,
+        "image": 0,
+        "input_cache_read": prompt_units,
+        "input_cache_write": prompt_units,
+        "internal_reasoning": token_plan.reserved_reasoning_tokens,
+        "prompt": prompt_units,
+        "request": 1,
+        "web_search": 0,
+    }
+    for component in components:
+        component["maximum_units"] = component_units[str(component["pricing_field"])]
+    maximum_units = {
+        str(component["pricing_field"]): int(component["maximum_units"]) for component in components
+    }
+    bound = EndpointRequestCostBound.from_endpoint_pricing(
+        exact_model_id=exact_model_id,
+        provider_endpoint=endpoint,
+        request_material="mmaudit-provider-free-cost-preview",
+        pricing=pricing,
+        maximum_units=maximum_units,
+    )
+    maximum_cost_per_attempt = _decimal_text(bound.maximum_cost_usd)
+    maximum_cost_all_attempts = _decimal_text(
+        bound.maximum_cost_usd * int(payload["maximum_attempts"])
+    )
+    required_parameters = usage.routing.get("structured_output_required_provider_parameters")
+    assert isinstance(required_parameters, list)
+    payload.update(
+        {
+            "logical_request_id": usage.request_id,
+            "role": usage.role,
+            "exact_model_id": exact_model_id,
+            "provider_endpoint": endpoint,
+            "provider_policy_sha256": _routing_sha256(
+                usage,
+                "provider_policy_sha256",
+                template.provider_policy_sha256,
+            ),
+            "discovery_evidence_sha256": _routing_sha256(
+                usage,
+                "discovery_evidence_sha256",
+                template.discovery_evidence_sha256,
+            ),
+            "discovery_provenance_sha256": _routing_sha256(
+                usage,
+                "discovery_provenance_sha256",
+                template.discovery_provenance_sha256,
+            ),
+            "catalog_snapshot_sha256": _routing_sha256(
+                usage,
+                "catalog_snapshot_sha256",
+                template.catalog_snapshot_sha256,
+            ),
+            "catalog_identity_binding_sha256": _routing_sha256(
+                usage,
+                "catalog_identity_binding_sha256",
+                template.catalog_identity_binding_sha256,
+            ),
+            "model_metadata_snapshot_sha256": _routing_sha256(
+                usage,
+                "model_metadata_snapshot_sha256",
+                template.model_metadata_snapshot_sha256,
+            ),
+            "model_identity_snapshot_sha256": _routing_sha256(
+                usage,
+                "identity_snapshot_sha256",
+                template.model_identity_snapshot_sha256,
+            ),
+            "endpoint_policy_snapshot_sha256": _routing_sha256(
+                usage,
+                "endpoint_snapshot_sha256",
+                template.endpoint_policy_snapshot_sha256,
+            ),
+            "endpoint_record_snapshot_sha256": _routing_sha256(
+                usage,
+                "endpoint_snapshot_sha256",
+                template.endpoint_record_snapshot_sha256,
+            ),
+            "endpoint_pricing_sha256": _routing_sha256(
+                usage,
+                "endpoint_pricing_sha256",
+                template.endpoint_pricing_sha256,
+            ),
+            "output_capability_sha256": _routing_sha256(
+                usage,
+                "output_capability_sha256",
+                template.output_capability_sha256,
+            ),
+            "structured_output_mode": usage.routing["structured_output_mode"],
+            "prompt_sha256": prompt_sha256,
+            "user_prompt_sha256": user_prompt_sha256,
+            "response_schema_sha256": schema_sha256,
+            "output_request_shape_sha256": usage.routing["structured_output_request_shape_sha256"],
+            "required_provider_parameters_sha256": canonical_sha256(tuple(required_parameters)),
+            "strict_output_protocol_sha256": usage.routing.get("structured_output_protocol_sha256"),
+            "reasoning_request_sha256": usage.routing.get(
+                "structured_output_reasoning_request_sha256"
+            ),
+            "reasoning_plan_sha256": reasoning_plan.evidence_sha256,
+            "reasoning_policy_sha256": reasoning_plan.policy_artifact_sha256,
+            "reasoning_policy_role_binding_sha256": (reasoning_plan.policy_role_binding_sha256),
+            "reasoning_profile_sha256": reasoning_plan.control_profile.profile_sha256,
+            "reasoning_capability_sha256": reasoning_plan.endpoint_capability_sha256,
+            "reasoning_qualification_sha256": reasoning_plan.qualification_binding_sha256,
+            "request_token_plan_projection_sha256": token_plan.plan_sha256,
+            "request_material_projection_utf8_bytes": prompt_units,
+            "endpoint_cost_bound_pricing_sha256": bound.pricing_snapshot_sha256,
+            "prompt_byte_upper_bound_tokens": prompt_units,
+            "requested_completion_tokens": token_plan.requested_completion_tokens,
+            "reserved_output_tokens": token_plan.reserved_output_tokens,
+            "reserved_reasoning_tokens": token_plan.reserved_reasoning_tokens,
+            "maximum_priced_prompt_units": prompt_units,
+            "maximum_cost_usd_per_attempt_exact": maximum_cost_per_attempt,
+            "maximum_cost_usd_all_attempts_exact": maximum_cost_all_attempts,
+        }
+    )
+    return OpenRouterStructuredRequestCostPreview.model_validate_json(
+        json.dumps(
+            {**payload, "preview_sha256": canonical_sha256(payload)},
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        strict=True,
+    )
+
+
+def _cost_plan_for_usages(
+    *,
+    run_kind: CrossLineageAdjudicationRunKind,
+    stage: AuthenticatedRunnerCostPlanStage,
+    case_ids: tuple[str, ...],
+    usages: tuple[UsageRecord, ...],
+    drift: str | None = None,
+) -> AuthenticatedRunnerStagedCostPlan:
+    return build_authenticated_runner_staged_cost_plan(
+        run_kind=run_kind,
+        stage=stage,
+        case_ids=case_ids,
+        request_previews=tuple(
+            _cost_preview_for_usage(usage, index=index, drift=drift)
+            for index, usage in enumerate(usages)
+        ),
+    )
+
+
+def _usage_with_cost_preview(
+    usage: UsageRecord,
+    preview: OpenRouterStructuredRequestCostPreview,
+) -> UsageRecord:
+    payload = usage.model_dump(mode="python")
+    token_plan = _v2_token_plan_for_usage(
+        usage,
+        endpoint_capability_sha256=preview.reasoning_capability_sha256,
+    )
+    reasoning_plan = token_plan.reasoning_plan
+    request_body_sha256 = usage.request_body_sha256
+    assert reasoning_plan is not None
+    assert request_body_sha256 is not None
+    reasoning_evidence = ReasoningExecutionEvidence.build(
+        request_plan=reasoning_plan,
+        observed_reasoning_tokens=0,
+        provider_completion_tokens=usage.completion_tokens,
+        request_token_plan_sha256=token_plan.plan_sha256,
+        request_body_sha256=request_body_sha256,
+    )
+    payload["user_prompt_sha256"] = payload["user_prompt_sha256"] or preview.user_prompt_sha256
+    payload["schema_sha256"] = payload["schema_sha256"] or preview.response_schema_sha256
+    payload["reasoning_evidence"] = reasoning_evidence
+    payload["routing"] = {
+        **payload["routing"],
+        "selected_provider_endpoint": preview.provider_endpoint,
+        "discovery_evidence_sha256": preview.discovery_evidence_sha256,
+        "discovery_provenance_sha256": preview.discovery_provenance_sha256,
+        "catalog_snapshot_sha256": preview.catalog_snapshot_sha256,
+        "catalog_identity_binding_sha256": preview.catalog_identity_binding_sha256,
+        "model_metadata_snapshot_sha256": preview.model_metadata_snapshot_sha256,
+        "identity_snapshot_sha256": preview.model_identity_snapshot_sha256,
+        "endpoint_snapshot_sha256": preview.endpoint_policy_snapshot_sha256,
+        "endpoint_pricing_sha256": preview.endpoint_pricing_sha256,
+        "output_capability_sha256": preview.output_capability_sha256,
+        "structured_output_mode": preview.structured_output_mode.value,
+        "structured_output_request_shape_sha256": preview.output_request_shape_sha256,
+        "structured_output_protocol_sha256": preview.strict_output_protocol_sha256,
+        "structured_output_reasoning_request_sha256": preview.reasoning_request_sha256,
+        "request_token_plan": token_plan.model_dump(mode="json"),
+        "request_token_plan_sha256": token_plan.plan_sha256,
+        "request_cost_preview_sha256": preview.preview_sha256,
+        "request_cost_preview_maximum_cost_usd_per_attempt_exact": (
+            preview.maximum_cost_usd_per_attempt_exact
+        ),
+        "request_cost_preview_maximum_cost_usd_all_attempts_exact": (
+            preview.maximum_cost_usd_all_attempts_exact
+        ),
+    }
+    return reattest_synthetic_real_usage(UsageRecord.model_validate(payload))
+
+
+def _candidate_report_with_cost_plan(
+    report: ModelBenchmarkReport,
+    plan: AuthenticatedRunnerStagedCostPlan,
+    *,
+    revalidate: bool = True,
+) -> ModelBenchmarkReport:
+    result = report.results[0]
+    cases = [
+        case.model_copy(update={"usage_record": _usage_with_cost_preview(usage, preview)})
+        for case, preview in zip(result.cases, plan.request_previews, strict=True)
+        if (usage := case.usage_record) is not None
+    ]
+    assert len(cases) == len(result.cases)
+    if not revalidate:
+        return report.model_copy(update={"results": [result.model_copy(update={"cases": cases})]})
+    payload = report.model_dump(mode="json")
+    payload["results"][0]["cases"] = [item.model_dump(mode="json") for item in cases]
+    return runner_fixtures._reseal_report(payload)
+
+
+def _adjudication_report_with_cost_plan(
+    prepared: CrossLineageAdjudicationPreparedRun,
+    report: CrossLineageAdjudicationReport,
+    plan: AuthenticatedRunnerStagedCostPlan,
+) -> CrossLineageAdjudicationReport:
+    cases = tuple(
+        build_cross_lineage_adjudication_case_result(
+            request=request,
+            response=case.response,
+            usage_record=_usage_with_cost_preview(case.usage_record, preview),
+            generation_evidence=case.generation_evidence,
+        )
+        for request, case, preview in zip(
+            prepared.requests,
+            report.cases,
+            plan.request_previews,
+            strict=True,
+        )
+    )
+    assert prepared.prepared_run_sha256 == report.prepared_run_sha256
+    return build_cross_lineage_adjudication_report(prepared=prepared, results=cases)
 
 
 def _case_evidence(
@@ -106,15 +488,24 @@ def _runner_evidence(
     live: _LiveInputs,
     *,
     reports: tuple[CrossLineageAdjudicationReport, ...] | None = None,
+    candidate_cost_plans: tuple[AuthenticatedRunnerStagedCostPlan, ...] | None = None,
+    judge_cost_plans: tuple[AuthenticatedRunnerStagedCostPlan, ...] | None = None,
 ) -> AuthenticatedCrossLineageRunnerEvidence:
+    if (candidate_cost_plans is None) != (judge_cost_plans is None):
+        raise AssertionError("test fixture requires both cost-plan inventories together")
     adjudications = (
         tuple(run.adjudication_report for run in live.runs) if reports is None else reports
     )
     run_evidence: list[AuthenticatedCrossLineageRunnerRunEvidence] = []
     ledger_costs: dict[str, str] = {}
-    for custody, adjudication in zip(live.runs, adjudications, strict=True):
+    ledger_reservations: dict[str, str] = {}
+    for run_index, (custody, adjudication) in enumerate(zip(live.runs, adjudications, strict=True)):
+        candidate_plan = (
+            candidate_cost_plans[run_index] if candidate_cost_plans is not None else None
+        )
+        judge_plan = judge_cost_plans[run_index] if judge_cost_plans is not None else None
         candidate_cases = []
-        for case in custody.candidate_report.results[0].cases:
+        for case_index, case in enumerate(custody.candidate_report.results[0].cases):
             assert case.usage_record is not None
             assert case.generation_evidence is not None
             assert case.validated_response_sha256 is not None
@@ -129,8 +520,12 @@ def _runner_evidence(
             assert case.usage_record.accounted_cost_usd_exact is not None
             for request_id in candidate.attempt_request_ids:
                 ledger_costs[request_id] = case.usage_record.accounted_cost_usd_exact
+                if candidate_plan is not None:
+                    ledger_reservations[request_id] = candidate_plan.request_previews[
+                        case_index
+                    ].maximum_cost_usd_per_attempt_exact
         judge_cases = []
-        for case in adjudication.cases:
+        for case_index, case in enumerate(adjudication.cases):
             judge = _case_evidence(
                 case_id=case.case_id,
                 usage=case.usage_record,
@@ -142,6 +537,10 @@ def _runner_evidence(
             assert case.usage_record.accounted_cost_usd_exact is not None
             for request_id in judge.attempt_request_ids:
                 ledger_costs[request_id] = case.usage_record.accounted_cost_usd_exact
+                if judge_plan is not None:
+                    ledger_reservations[request_id] = judge_plan.request_previews[
+                        case_index
+                    ].maximum_cost_usd_per_attempt_exact
         target = adjudication.target
         run_evidence.append(
             AuthenticatedCrossLineageRunnerRunEvidence(
@@ -165,6 +564,7 @@ def _runner_evidence(
             entry_sha256=canonical_sha256(
                 {"request_id": request_id, "actual_cost_usd": actual_cost}
             ),
+            reserved_usd=ledger_reservations.get(request_id),
             actual_cost_usd=actual_cost,
         )
         for request_id, actual_cost in sorted(ledger_costs.items())
@@ -261,17 +661,164 @@ def _complete_authseal_inputs(
     return collision, decisions
 
 
+def _bound_stage_usages(usages: tuple[UsageRecord, ...]) -> tuple[UsageRecord, ...]:
+    anchor = usages[0]
+    assert anchor.started_at is not None
+    assert anchor.ended_at is not None
+    reasoning_capability_sha256 = _cost_preview_fixture(0).reasoning_capability_sha256
+    return tuple(
+        _usage_with_singleton_identity_and_reasoning(
+            usage,
+            started_at=anchor.started_at,
+            ended_at=anchor.ended_at,
+            endpoint_capability_sha256=reasoning_capability_sha256,
+        )
+        for usage in usages
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _V11Inputs:
+    live: _LiveInputs
+    candidate_cost_plans: tuple[AuthenticatedRunnerStagedCostPlan, ...]
+    judge_cost_plans: tuple[AuthenticatedRunnerStagedCostPlan, ...]
+    evidence: AuthenticatedCrossLineageRunnerEvidence
+
+
+@cache
+def _v11_inputs() -> _V11Inputs:
+    original = _live_inputs()
+    candidate_plans: list[AuthenticatedRunnerStagedCostPlan] = []
+    judge_plans: list[AuthenticatedRunnerStagedCostPlan] = []
+    retained_runs = []
+    for index, custody in enumerate(original.runs):
+        candidate_cases = tuple(custody.candidate_report.results[0].cases)
+        maybe_candidate_usages = tuple(case.usage_record for case in candidate_cases)
+        assert all(usage is not None for usage in maybe_candidate_usages)
+        candidate_usages = _bound_stage_usages(
+            cast(tuple[UsageRecord, ...], maybe_candidate_usages)
+        )
+        candidate_plan = _cost_plan_for_usages(
+            run_kind=custody.run_kind,
+            stage=AuthenticatedRunnerCostPlanStage.CANDIDATE,
+            case_ids=tuple(case.case_id for case in candidate_cases),
+            usages=candidate_usages,
+        )
+        candidate_seed = custody.candidate_report.model_copy(
+            update={
+                "results": [
+                    custody.candidate_report.results[0].model_copy(
+                        update={
+                            "cases": [
+                                case.model_copy(update={"usage_record": usage})
+                                for case, usage in zip(
+                                    candidate_cases,
+                                    candidate_usages,
+                                    strict=True,
+                                )
+                            ]
+                        }
+                    )
+                ]
+            }
+        )
+        candidate_report = _candidate_report_with_cost_plan(
+            candidate_seed,
+            candidate_plan,
+        )
+        prepared, provisional_adjudication = runner_fixtures._adjudication_report(
+            public_lineage=original.public_lineage,
+            suite=original.suite,
+            candidate_report=candidate_report,
+            judge=custody.judge,
+            run_kind=custody.run_kind,
+            request_offset=index * 1_000,
+        )
+        judge_usages = _bound_stage_usages(
+            tuple(case.usage_record for case in provisional_adjudication.cases)
+        )
+        judge_plan = _cost_plan_for_usages(
+            run_kind=custody.run_kind,
+            stage=AuthenticatedRunnerCostPlanStage.JUDGE,
+            case_ids=tuple(case.case_id for case in provisional_adjudication.cases),
+            usages=judge_usages,
+        )
+        adjudication_seed = provisional_adjudication.model_copy(
+            update={
+                "cases": tuple(
+                    case.model_copy(update={"usage_record": usage})
+                    for case, usage in zip(
+                        provisional_adjudication.cases,
+                        judge_usages,
+                        strict=True,
+                    )
+                )
+            }
+        )
+        adjudication = _adjudication_report_with_cost_plan(
+            prepared,
+            adjudication_seed,
+            judge_plan,
+        )
+        candidate_plans.append(candidate_plan)
+        judge_plans.append(judge_plan)
+        retained_runs.append(
+            replace(
+                custody,
+                candidate_report=candidate_report,
+                candidate_campaign_reports=(candidate_report,),
+                prepared_adjudication=prepared,
+                adjudication_report=adjudication,
+            )
+        )
+    live = replace(original, runs=tuple(retained_runs))
+    exact_candidate_plans = tuple(candidate_plans)
+    exact_judge_plans = tuple(judge_plans)
+    evidence = _runner_evidence(
+        live,
+        candidate_cost_plans=exact_candidate_plans,
+        judge_cost_plans=exact_judge_plans,
+    )
+    return _V11Inputs(
+        live=live,
+        candidate_cost_plans=exact_candidate_plans,
+        judge_cost_plans=exact_judge_plans,
+        evidence=evidence,
+    )
+
+
 def _rejected_bundle() -> AuthenticatedRunnerDurableEvidenceBundle:
-    live = _live_inputs()
-    evidence = _runner_evidence(live)
+    inputs = _v11_inputs()
+    live = inputs.live
     return build_authenticated_runner_durable_bundle(
-        runner_evidence=evidence,
+        runner_evidence=inputs.evidence,
+        candidate_cost_plans=inputs.candidate_cost_plans,
+        judge_cost_plans=inputs.judge_cost_plans,
         candidate_reports=tuple(item.candidate_report for item in live.runs),
         prepared_runs=tuple(item.prepared_adjudication for item in live.runs),
         adjudication_reports=tuple(item.adjudication_report for item in live.runs),
         authseal_collision_map=None,
         authseal_decision_projections=(),
         authseal_rejection_kind="EvidenceSealAuthorityError",
+    )
+
+
+@cache
+def _legacy_rejected_bundle() -> AuthenticatedRunnerDurableEvidenceBundle:
+    payload = _rejected_bundle().model_dump(mode="json")
+    payload["schema_version"] = "1.0"
+    for retained in payload["runs"]:
+        retained["schema_version"] = "1.0"
+        retained["candidate_cost_plan"] = None
+        retained["judge_cost_plan"] = None
+        retained["run_bundle_sha256"] = canonical_sha256(
+            {key: value for key, value in retained.items() if key != "run_bundle_sha256"}
+        )
+    payload["bundle_sha256"] = canonical_sha256(
+        {key: value for key, value in payload.items() if key != "bundle_sha256"}
+    )
+    return AuthenticatedRunnerDurableEvidenceBundle.model_validate_json(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"))
     )
 
 
@@ -356,16 +903,20 @@ def test_rejected_bundle_round_trips_canonically_without_authority() -> None:
     replay = revalidate_authenticated_runner_durable_bundle(raw)
 
     assert replay == bundle
+    assert replay.schema_version == "1.1"
+    assert all(item.schema_version == "1.1" for item in replay.runs)
+    assert all(item.candidate_cost_plan is not None for item in replay.runs)
+    assert all(item.judge_cost_plan is not None for item in replay.runs)
     assert isinstance(replay.authseal_comparison, AuthenticatedRunnerAuthsealRejected)
     assert tuple(item.run_kind for item in replay.runs) == (
         CrossLineageAdjudicationRunKind.PRIMARY,
         CrossLineageAdjudicationRunKind.REPLAY,
     )
     assert tuple(item.prepared_run for item in replay.runs) == tuple(
-        item.prepared_adjudication for item in _live_inputs().runs
+        item.prepared_adjudication for item in _v11_inputs().live.runs
     )
     assert tuple(item.adjudication_report for item in replay.runs) == tuple(
-        item.adjudication_report for item in _live_inputs().runs
+        item.adjudication_report for item in _v11_inputs().live.runs
     )
     assert replay.runner_evidence.ledger_interval == replay.closed_ledger_evidence
     assert replay.serialized_authority is False
@@ -374,12 +925,162 @@ def test_rejected_bundle_round_trips_canonically_without_authority() -> None:
     assert replay.release_authorized is False
 
 
+def test_legacy_v10_bundle_remains_loadable_but_has_no_cost_admission() -> None:
+    bundle = _legacy_rejected_bundle()
+
+    replay = revalidate_authenticated_runner_durable_bundle(
+        authenticated_runner_durable_bundle_bytes(bundle)
+    )
+
+    assert replay == bundle
+    assert replay.schema_version == "1.0"
+    assert all(item.schema_version == "1.0" for item in replay.runs)
+    assert all(item.candidate_cost_plan is None for item in replay.runs)
+    assert all(item.judge_cost_plan is None for item in replay.runs)
+
+
+def _run_cost_plan_join_fixture(
+    *,
+    candidate_drift: str | None = None,
+) -> tuple[
+    AuthenticatedRunnerStagedCostPlan,
+    AuthenticatedRunnerStagedCostPlan,
+    ModelBenchmarkReport,
+    CrossLineageAdjudicationReport,
+]:
+    run = _live_inputs().runs[0]
+    candidate_cases = tuple(run.candidate_report.results[0].cases)
+    raw_candidate_usages = tuple(item.usage_record for item in candidate_cases)
+    assert all(item is not None for item in raw_candidate_usages)
+    exact_raw_candidate_usages = cast(tuple[UsageRecord, ...], raw_candidate_usages)
+    candidate_anchor = exact_raw_candidate_usages[0]
+    reasoning_capability_sha256 = _cost_preview_fixture(0).reasoning_capability_sha256
+    candidate_usages = tuple(
+        _usage_with_singleton_identity_and_reasoning(
+            usage,
+            started_at=candidate_anchor.started_at,
+            ended_at=candidate_anchor.ended_at,
+            endpoint_capability_sha256=reasoning_capability_sha256,
+        )
+        for usage in exact_raw_candidate_usages
+    )
+    raw_judge_usages = tuple(item.usage_record for item in run.adjudication_report.cases)
+    judge_anchor = raw_judge_usages[0]
+    judge_usages = tuple(
+        _usage_with_singleton_identity_and_reasoning(
+            usage,
+            started_at=judge_anchor.started_at,
+            ended_at=judge_anchor.ended_at,
+            endpoint_capability_sha256=reasoning_capability_sha256,
+        )
+        for usage in raw_judge_usages
+    )
+    candidate_plan = _cost_plan_for_usages(
+        run_kind=run.run_kind,
+        stage=AuthenticatedRunnerCostPlanStage.CANDIDATE,
+        case_ids=tuple(item.case_id for item in candidate_cases),
+        usages=candidate_usages,
+        drift=candidate_drift,
+    )
+    judge_plan = _cost_plan_for_usages(
+        run_kind=run.run_kind,
+        stage=AuthenticatedRunnerCostPlanStage.JUDGE,
+        case_ids=tuple(item.case_id for item in run.adjudication_report.cases),
+        usages=judge_usages,
+    )
+    candidate_seed = run.candidate_report.model_copy(
+        update={
+            "results": [
+                run.candidate_report.results[0].model_copy(
+                    update={
+                        "cases": [
+                            case.model_copy(update={"usage_record": usage})
+                            for case, usage in zip(
+                                candidate_cases,
+                                candidate_usages,
+                                strict=True,
+                            )
+                        ]
+                    }
+                )
+            ]
+        }
+    )
+    adjudication_seed = run.adjudication_report.model_copy(
+        update={
+            "cases": tuple(
+                case.model_copy(update={"usage_record": usage})
+                for case, usage in zip(
+                    run.adjudication_report.cases,
+                    judge_usages,
+                    strict=True,
+                )
+            )
+        }
+    )
+    return (
+        candidate_plan,
+        judge_plan,
+        _candidate_report_with_cost_plan(
+            candidate_seed,
+            candidate_plan,
+            revalidate=candidate_drift is None,
+        ),
+        _adjudication_report_with_cost_plan(
+            run.prepared_adjudication,
+            adjudication_seed,
+            judge_plan,
+        ),
+    )
+
+
+def test_v11_cost_plans_exactly_join_durable_usage() -> None:
+    candidate_plan, judge_plan, candidate_report, adjudication_report = (
+        _run_cost_plan_join_fixture()
+    )
+
+    durable_bundle_module._require_exact_cost_plan_report_join(
+        candidate_cost_plan=candidate_plan,
+        judge_cost_plan=judge_plan,
+        candidate_report=candidate_report,
+        adjudication_report=adjudication_report,
+    )
+
+
+@pytest.mark.parametrize(
+    "drift",
+    (
+        "exact_model_id",
+        "provider_endpoint",
+        "prompt_sha256",
+        "response_schema_sha256",
+    ),
+)
+def test_v11_cost_plan_join_rejects_self_valid_routing_reseal_retarget(
+    drift: str,
+) -> None:
+    candidate_plan, judge_plan, candidate_report, adjudication_report = _run_cost_plan_join_fixture(
+        candidate_drift=drift
+    )
+
+    with pytest.raises(ValueError, match="request-cost preview"):
+        durable_bundle_module._require_exact_cost_plan_report_join(
+            candidate_cost_plan=candidate_plan,
+            judge_cost_plan=judge_plan,
+            candidate_report=candidate_report,
+            adjudication_report=adjudication_report,
+        )
+
+
 def test_complete_bundle_exactly_joins_authseal_inputs() -> None:
-    live = _live_inputs()
-    evidence = _runner_evidence(live)
+    inputs = _v11_inputs()
+    live = inputs.live
+    evidence = inputs.evidence
     collision, decisions = _complete_authseal_inputs(live, evidence)
     bundle = build_authenticated_runner_durable_bundle(
         runner_evidence=evidence,
+        candidate_cost_plans=inputs.candidate_cost_plans,
+        judge_cost_plans=inputs.judge_cost_plans,
         candidate_reports=tuple(item.candidate_report for item in live.runs),
         prepared_runs=tuple(item.prepared_adjudication for item in live.runs),
         adjudication_reports=tuple(item.adjudication_report for item in live.runs),
@@ -469,8 +1170,90 @@ def test_bundle_rejects_order_hash_ledger_and_noncanonical_tampering(
             revalidate_authenticated_runner_durable_bundle(b"x" * 101)
 
 
+def test_full_bundle_rejects_resealed_judge_cost_plan_execution_config_drift() -> None:
+    bundle = _rejected_bundle()
+    retained = bundle.runs[0]
+    judge_plan = retained.judge_cost_plan
+    assert judge_plan is not None
+    drifted_previews = []
+    for preview in judge_plan.request_previews:
+        preview_payload = preview.model_dump(mode="json", exclude={"preview_sha256"})
+        preview_payload["execution_config_sha256"] = "9" * 64
+        drifted_previews.append(
+            OpenRouterStructuredRequestCostPreview.model_validate_json(
+                json.dumps(
+                    {
+                        **preview_payload,
+                        "preview_sha256": canonical_sha256(preview_payload),
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                strict=True,
+            )
+        )
+    drifted_judge_plan = build_authenticated_runner_staged_cost_plan(
+        run_kind=judge_plan.run_kind,
+        stage=judge_plan.stage,
+        case_ids=judge_plan.case_ids,
+        request_previews=tuple(drifted_previews),
+    )
+    drifted_cases = tuple(
+        build_cross_lineage_adjudication_case_result(
+            request=request,
+            response=case.response,
+            usage_record=reattest_synthetic_real_usage(
+                case.usage_record.model_copy(
+                    update={
+                        "routing": {
+                            **case.usage_record.routing,
+                            "request_cost_preview_sha256": preview.preview_sha256,
+                        }
+                    }
+                )
+            ),
+            generation_evidence=case.generation_evidence,
+        )
+        for request, case, preview in zip(
+            retained.prepared_run.requests,
+            retained.adjudication_report.cases,
+            drifted_judge_plan.request_previews,
+            strict=True,
+        )
+    )
+    drifted_report = build_cross_lineage_adjudication_report(
+        prepared=retained.prepared_run,
+        results=drifted_cases,
+    )
+    run_payload: dict[str, object] = {
+        "schema_version": "1.1",
+        "run_kind": retained.run_kind,
+        "candidate_cost_plan": retained.candidate_cost_plan,
+        "judge_cost_plan": drifted_judge_plan,
+        "candidate_report": retained.candidate_report,
+        "prepared_run": retained.prepared_run,
+        "adjudication_report": drifted_report,
+        "runner_run_evidence_sha256": retained.runner_run_evidence_sha256,
+    }
+    drifted_retained = AuthenticatedRunnerDurableRunEvidence(
+        **run_payload,
+        run_bundle_sha256=canonical_sha256(durable_bundle_module._json_payload(run_payload)),
+    )
+    payload = bundle.model_dump(mode="json")
+    payload["runs"][0] = drifted_retained.model_dump(mode="json")
+    payload["bundle_sha256"] = canonical_sha256(
+        {key: value for key, value in payload.items() if key != "bundle_sha256"}
+    )
+
+    with pytest.raises(ValidationError, match="runner run hashes"):
+        AuthenticatedRunnerDurableEvidenceBundle.model_validate_json(
+            json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        )
+
+
 def test_bundle_rejects_sensitive_routing_even_when_report_is_resealed() -> None:
-    live = _live_inputs()
+    inputs = _v11_inputs()
+    live = inputs.live
     original = live.runs[0].adjudication_report
     first = original.cases[0]
     usage_payload = first.usage_record.model_dump(mode="python")
@@ -491,11 +1274,18 @@ def test_bundle_rejects_sensitive_routing_even_when_report_is_resealed() -> None
         results=cases,
     )
     reports = (resealed, live.runs[1].adjudication_report)
-    evidence = _runner_evidence(live, reports=reports)
+    evidence = _runner_evidence(
+        live,
+        reports=reports,
+        candidate_cost_plans=inputs.candidate_cost_plans,
+        judge_cost_plans=inputs.judge_cost_plans,
+    )
 
     with pytest.raises(AuthenticatedRunnerDurableBundleError, match="sensitive field name"):
         build_authenticated_runner_durable_bundle(
             runner_evidence=evidence,
+            candidate_cost_plans=inputs.candidate_cost_plans,
+            judge_cost_plans=inputs.judge_cost_plans,
             candidate_reports=tuple(item.candidate_report for item in live.runs),
             prepared_runs=tuple(item.prepared_adjudication for item in live.runs),
             adjudication_reports=reports,
@@ -506,8 +1296,9 @@ def test_bundle_rejects_sensitive_routing_even_when_report_is_resealed() -> None
 
 
 def test_bundle_rejects_access_token_in_candidate_routing() -> None:
-    live = _live_inputs()
-    evidence = _runner_evidence(live)
+    inputs = _v11_inputs()
+    live = inputs.live
+    evidence = inputs.evidence
     candidate_reports = (
         _candidate_report_with_sensitive_routing(live.runs[0].candidate_report),
         live.runs[1].candidate_report,
@@ -516,6 +1307,8 @@ def test_bundle_rejects_access_token_in_candidate_routing() -> None:
     with pytest.raises(AuthenticatedRunnerDurableBundleError, match="sensitive field name"):
         build_authenticated_runner_durable_bundle(
             runner_evidence=evidence,
+            candidate_cost_plans=inputs.candidate_cost_plans,
+            judge_cost_plans=inputs.judge_cost_plans,
             candidate_reports=candidate_reports,
             prepared_runs=tuple(item.prepared_adjudication for item in live.runs),
             adjudication_reports=tuple(item.adjudication_report for item in live.runs),
@@ -526,7 +1319,8 @@ def test_bundle_rejects_access_token_in_candidate_routing() -> None:
 
 
 def test_bundle_rejects_nested_access_token_in_judge_routing() -> None:
-    live = _live_inputs()
+    inputs = _v11_inputs()
+    live = inputs.live
     original = live.runs[0].adjudication_report
     first = original.cases[0]
     usage_payload = first.usage_record.model_dump(mode="python")
@@ -547,11 +1341,18 @@ def test_bundle_rejects_nested_access_token_in_judge_routing() -> None:
         results=(replacement, *original.cases[1:]),
     )
     reports = (resealed, live.runs[1].adjudication_report)
-    evidence = _runner_evidence(live, reports=reports)
+    evidence = _runner_evidence(
+        live,
+        reports=reports,
+        candidate_cost_plans=inputs.candidate_cost_plans,
+        judge_cost_plans=inputs.judge_cost_plans,
+    )
 
     with pytest.raises(AuthenticatedRunnerDurableBundleError, match="sensitive field name"):
         build_authenticated_runner_durable_bundle(
             runner_evidence=evidence,
+            candidate_cost_plans=inputs.candidate_cost_plans,
+            judge_cost_plans=inputs.judge_cost_plans,
             candidate_reports=tuple(item.candidate_report for item in live.runs),
             prepared_runs=tuple(item.prepared_adjudication for item in live.runs),
             adjudication_reports=reports,
@@ -562,14 +1363,17 @@ def test_bundle_rejects_nested_access_token_in_judge_routing() -> None:
 
 
 def test_bundle_rejects_runtime_shape_below_frozen_release_protocol() -> None:
-    live = _live_inputs()
-    evidence = _single_case_runner_evidence(_runner_evidence(live))
+    inputs = _v11_inputs()
+    live = inputs.live
+    evidence = _single_case_runner_evidence(inputs.evidence)
     assert len(evidence.case_ids) == 1
     assert len(evidence.ledger_interval.entries) == 4
 
     with pytest.raises(AuthenticatedRunnerDurableBundleError, match="two-run 24-case protocol"):
         build_authenticated_runner_durable_bundle(
             runner_evidence=evidence,
+            candidate_cost_plans=inputs.candidate_cost_plans,
+            judge_cost_plans=inputs.judge_cost_plans,
             candidate_reports=tuple(item.candidate_report for item in live.runs),
             prepared_runs=tuple(item.prepared_adjudication for item in live.runs),
             adjudication_reports=tuple(item.adjudication_report for item in live.runs),
@@ -580,8 +1384,9 @@ def test_bundle_rejects_runtime_shape_below_frozen_release_protocol() -> None:
 
 
 def test_complete_bundle_rejects_resealed_authseal_scoring_tamper() -> None:
-    live = _live_inputs()
-    evidence = _runner_evidence(live)
+    inputs = _v11_inputs()
+    live = inputs.live
+    evidence = inputs.evidence
     collision, decisions = _complete_authseal_inputs(live, evidence)
     original = decisions[0]
     payload = original.model_dump(mode="json", exclude={"projection_sha256"})
@@ -607,6 +1412,8 @@ def test_complete_bundle_rejects_resealed_authseal_scoring_tamper() -> None:
     with pytest.raises(AuthenticatedRunnerDurableBundleError, match="bundle is invalid"):
         build_authenticated_runner_durable_bundle(
             runner_evidence=evidence,
+            candidate_cost_plans=inputs.candidate_cost_plans,
+            judge_cost_plans=inputs.judge_cost_plans,
             candidate_reports=tuple(item.candidate_report for item in live.runs),
             prepared_runs=tuple(item.prepared_adjudication for item in live.runs),
             adjudication_reports=tuple(item.adjudication_report for item in live.runs),
@@ -617,10 +1424,13 @@ def test_complete_bundle_rejects_resealed_authseal_scoring_tamper() -> None:
 
 
 def test_authseal_rejection_is_bounded_type_only() -> None:
-    live = _live_inputs()
-    evidence = _runner_evidence(live)
+    inputs = _v11_inputs()
+    live = inputs.live
+    evidence = inputs.evidence
     common = {
         "runner_evidence": evidence,
+        "candidate_cost_plans": inputs.candidate_cost_plans,
+        "judge_cost_plans": inputs.judge_cost_plans,
         "candidate_reports": tuple(item.candidate_report for item in live.runs),
         "prepared_runs": tuple(item.prepared_adjudication for item in live.runs),
         "adjudication_reports": tuple(item.adjudication_report for item in live.runs),

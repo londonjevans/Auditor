@@ -29,6 +29,11 @@ from mmaudit.benchmark.models import (
     ModelBenchmarkResponse,
     ModelBenchmarkSuite,
 )
+from mmaudit.config import AuditConfig
+from mmaudit.models.discovery import (
+    OpenRouterModelDiscoveryEvidence,
+    OpenRouterModelDiscoveryRunManifest,
+)
 from mmaudit.models.generation_evidence import (
     GenerationEvidenceValidationError,
     GenerationVerificationRequest,
@@ -39,7 +44,9 @@ from mmaudit.models.identity import OpenRouterModelEndpointIdentitySnapshot
 from mmaudit.models.openrouter import (
     OpenRouterClient,
     OpenRouterProviderPolicy,
+    OpenRouterStructuredRequestCostPreview,
     StructuredCompletion,
+    preview_openrouter_structured_request_cost,
     strict_json_schema,
     structured_output_prompt_sha256,
 )
@@ -50,6 +57,7 @@ from mmaudit.models.public_lineage_authority import (
     require_independent_public_model_lineage,
 )
 from mmaudit.models.qualification import CandidateModel
+from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.models.schemas import ExecutionEvidenceKind, UsageRecord
 from mmaudit.models.usage import (
     UsageLedger,
@@ -690,6 +698,77 @@ def cross_lineage_adjudication_provider_request_commitment(
     )
 
 
+def cross_lineage_adjudication_request_cost_previews(
+    *,
+    config: AuditConfig,
+    prepared: CrossLineageAdjudicationPreparedRun,
+    discovery_manifest: OpenRouterModelDiscoveryRunManifest,
+    discovery_evidence: OpenRouterModelDiscoveryEvidence,
+    maximum_attempts: int | None = None,
+) -> tuple[OpenRouterStructuredRequestCostPreview, ...]:
+    """Derive the exact nonauthorizing cost inventory for one sealed judge run."""
+
+    if (
+        type(config) is not AuditConfig
+        or type(prepared) is not CrossLineageAdjudicationPreparedRun
+        or type(discovery_manifest) is not OpenRouterModelDiscoveryRunManifest
+        or type(discovery_evidence) is not OpenRouterModelDiscoveryEvidence
+    ):
+        raise TypeError("cross-lineage request-cost preview inputs have the wrong exact type")
+    target = prepared.target
+    if (
+        discovery_evidence.exact_model_id != target.judge_model_id
+        or discovery_evidence.canonical_slug != target.judge_canonical_model_id
+        or discovery_evidence.approved_provider_endpoint != target.judge_provider_endpoint
+        or discovery_evidence.provider_name != target.judge_provider_name
+        or discovery_evidence.discovery_evidence_sha256 != target.judge_discovery_evidence_sha256
+        or discovery_evidence.endpoint_snapshot_sha256 != target.judge_endpoint_snapshot_sha256
+        or discovery_evidence.model_metadata_snapshot_sha256
+        != target.judge_model_metadata_snapshot_sha256
+        or discovery_evidence.pricing_snapshot_sha256 != target.judge_pricing_snapshot_sha256
+        or discovery_evidence.structured_output_mode is not target.judge_structured_output_mode
+        or discovery_evidence.output_capability_sha256 != target.judge_output_capability_sha256
+        or discovery_evidence.catalog_identity_binding_sha256
+        != target.judge_catalog_identity_binding_sha256
+    ):
+        raise CrossLineageAdjudicationError(
+            "cross-lineage request-cost preview discovery differs from the prepared judge"
+        )
+    provider_policy = OpenRouterProviderPolicy(
+        certification=True,
+        only=(target.judge_provider_endpoint,),
+        allow_fallbacks=False,
+    )
+    reasoning_policy = build_reasoning_policy(config)
+    previews = tuple(
+        preview_openrouter_structured_request_cost(
+            execution=config.execution,
+            privacy=config.privacy,
+            token_budgets=config.token_budgets,
+            provider_policy=provider_policy,
+            reasoning_policy=reasoning_policy,
+            discovery_manifest=discovery_manifest,
+            discovery_evidence=discovery_evidence,
+            role="model_benchmark",
+            system_prompt=_SYSTEM_PROMPT,
+            user_prompt=request.provider_visible_user_prompt,
+            response_model=CrossLineageAdjudicationWireResponse,
+            schema_name=CROSS_LINEAGE_ADJUDICATION_SCHEMA_NAME,
+            logical_request_id=f"cross-lineage-{request.request_sha256}",
+            context_package=None,
+            maximum_attempts=maximum_attempts,
+        )
+        for request in prepared.requests
+    )
+    if len(previews) != len(prepared.requests) or len(
+        {item.logical_request_id for item in previews}
+    ) != len(previews):
+        raise CrossLineageAdjudicationError(
+            "cross-lineage request-cost preview inventory is missing or replayed"
+        )
+    return previews
+
+
 def cross_lineage_adjudication_response_schema_sha256() -> str:
     """Return the exact provider schema commitment for this adjudication slice."""
 
@@ -951,6 +1030,8 @@ class _CrossLineageAdjudicationExecutor(Protocol):
         *,
         client: OpenRouterClient,
         prepared: CrossLineageAdjudicationPreparedRun,
+        expected_request_cost_previews: tuple[OpenRouterStructuredRequestCostPreview, ...]
+        | None = None,
         generation_evidence_fetcher: CrossLineageGenerationEvidenceFetcher | None = None,
     ) -> tuple[CrossLineageAdjudicationCaseResult, ...]: ...
 
@@ -959,6 +1040,8 @@ async def _execute_cross_lineage_adjudication_requests_impl(
     *,
     client: OpenRouterClient,
     prepared: CrossLineageAdjudicationPreparedRun,
+    expected_request_cost_previews: tuple[OpenRouterStructuredRequestCostPreview, ...]
+    | None = None,
     generation_evidence_fetcher: CrossLineageGenerationEvidenceFetcher | None,
     usage: UsageLedger,
     complete_with_evidence: _CrossLineageCompleteWithEvidence,
@@ -968,6 +1051,9 @@ async def _execute_cross_lineage_adjudication_requests_impl(
     trusted_source_request: _CrossLineageTrustedSourceRequest,
     require_transport: _CrossLineageTransportRequirement,
     runtime_credit_predicate: _CrossLineageRuntimeCreditPredicate,
+    request_cost_preview_type: type[OpenRouterStructuredRequestCostPreview] = (
+        OpenRouterStructuredRequestCostPreview
+    ),
     require_pristine: Callable[[], None],
 ) -> tuple[CrossLineageAdjudicationCaseResult, ...]:
     """Execute one inventory through captured descriptors after boundary validation."""
@@ -997,21 +1083,67 @@ async def _execute_cross_lineage_adjudication_requests_impl(
     )
     require_pristine()
 
+    previews: tuple[OpenRouterStructuredRequestCostPreview | None, ...]
+    if expected_request_cost_previews is None:
+        previews = (None,) * len(sealed.requests)
+    else:
+        if (
+            type(expected_request_cost_previews) is not tuple
+            or len(expected_request_cost_previews) != len(sealed.requests)
+            or any(
+                type(item) is not request_cost_preview_type
+                for item in expected_request_cost_previews
+            )
+        ):
+            raise CrossLineageAdjudicationError(
+                "cross-lineage request-cost preview inventory has the wrong exact shape"
+            )
+        previews = expected_request_cost_previews
+        expected_ids = tuple(
+            f"cross-lineage-{request.request_sha256}" for request in sealed.requests
+        )
+        if (
+            tuple(item.logical_request_id for item in previews) != expected_ids
+            or any(item.role != "model_benchmark" for item in previews)
+            or any(item.exact_model_id != sealed.target.judge_model_id for item in previews)
+            or any(
+                item.provider_endpoint != sealed.target.judge_provider_endpoint for item in previews
+            )
+            or len({item.preview_sha256 for item in previews}) != len(previews)
+        ):
+            raise CrossLineageAdjudicationError(
+                "cross-lineage request-cost previews differ from the prepared request inventory"
+            )
+
     results: list[CrossLineageAdjudicationCaseResult] = []
-    for request in sealed.requests:
+    for request, expected_preview in zip(sealed.requests, previews, strict=True):
         require_pristine()
         before = tuple(usage.records)
-        completion = await complete_with_evidence(
-            client,
-            role="model_benchmark",
-            models=[sealed.target.judge_model_id],
-            system_prompt=_SYSTEM_PROMPT,
-            user_prompt=request.provider_visible_user_prompt,
-            context_package=None,
-            response_model=CrossLineageAdjudicationWireResponse,
-            schema_name=CROSS_LINEAGE_ADJUDICATION_SCHEMA_NAME,
-            logical_request_id=f"cross-lineage-{request.request_sha256}",
-        )
+        if expected_preview is None:
+            completion = await complete_with_evidence(
+                client,
+                role="model_benchmark",
+                models=[sealed.target.judge_model_id],
+                system_prompt=_SYSTEM_PROMPT,
+                user_prompt=request.provider_visible_user_prompt,
+                context_package=None,
+                response_model=CrossLineageAdjudicationWireResponse,
+                schema_name=CROSS_LINEAGE_ADJUDICATION_SCHEMA_NAME,
+                logical_request_id=f"cross-lineage-{request.request_sha256}",
+            )
+        else:
+            completion = await complete_with_evidence(
+                client,
+                role="model_benchmark",
+                models=[sealed.target.judge_model_id],
+                system_prompt=_SYSTEM_PROMPT,
+                user_prompt=request.provider_visible_user_prompt,
+                context_package=None,
+                response_model=CrossLineageAdjudicationWireResponse,
+                schema_name=CROSS_LINEAGE_ADJUDICATION_SCHEMA_NAME,
+                logical_request_id=f"cross-lineage-{request.request_sha256}",
+                expected_request_cost_preview=expected_preview,
+            )
         require_pristine()
         after = tuple(usage.records)
         if (
@@ -1262,6 +1394,7 @@ def _build_cross_lineage_adjudication_executor() -> _CrossLineageAdjudicationExe
     trusted_bind_response = bind_cross_lineage_adjudication_wire_response
     trusted_build_case_result = build_cross_lineage_adjudication_case_result
     trusted_source_hash = cross_lineage_adjudication_source_sha256
+    trusted_request_cost_preview_type = OpenRouterStructuredRequestCostPreview
     callable_names = frozenset(
         {
             "complete_with_evidence",
@@ -1286,6 +1419,7 @@ def _build_cross_lineage_adjudication_executor() -> _CrossLineageAdjudicationExe
         "CrossLineageAdjudicationPreparedRun": CrossLineageAdjudicationPreparedRun,
         "CrossLineageAdjudicationWireResponse": CrossLineageAdjudicationWireResponse,
         "OpenRouterModelEndpointIdentitySnapshot": OpenRouterModelEndpointIdentitySnapshot,
+        "OpenRouterStructuredRequestCostPreview": trusted_request_cost_preview_type,
         "StructuredCompletion": StructuredCompletion,
         "UsageRecord": UsageRecord,
     }
@@ -1320,6 +1454,8 @@ def _build_cross_lineage_adjudication_executor() -> _CrossLineageAdjudicationExe
         *,
         client: OpenRouterClient,
         prepared: CrossLineageAdjudicationPreparedRun,
+        expected_request_cost_previews: tuple[OpenRouterStructuredRequestCostPreview, ...]
+        | None = None,
         generation_evidence_fetcher: CrossLineageGenerationEvidenceFetcher | None = None,
     ) -> tuple[CrossLineageAdjudicationCaseResult, ...]:
         """Execute one exact inventory without dynamically resolving client callables."""
@@ -1346,6 +1482,7 @@ def _build_cross_lineage_adjudication_executor() -> _CrossLineageAdjudicationExe
         result = await trusted_impl(
             client=client,
             prepared=prepared,
+            expected_request_cost_previews=expected_request_cost_previews,
             generation_evidence_fetcher=generation_evidence_fetcher,
             usage=usage,
             complete_with_evidence=trusted_complete,
@@ -1355,6 +1492,7 @@ def _build_cross_lineage_adjudication_executor() -> _CrossLineageAdjudicationExe
             trusted_source_request=trusted_source_request,
             require_transport=trusted_require_transport,
             runtime_credit_predicate=trusted_credit_predicate,
+            request_cost_preview_type=trusted_request_cost_preview_type,
             require_pristine=require_client_pristine,
         )
         require_client_pristine()
@@ -2150,6 +2288,7 @@ __all__ = [
     "build_cross_lineage_adjudication_report",
     "build_cross_lineage_adjudication_response",
     "cross_lineage_adjudication_provider_request_commitment",
+    "cross_lineage_adjudication_request_cost_previews",
     "cross_lineage_adjudication_response_schema_sha256",
     "cross_lineage_adjudication_source_sha256",
     "cross_lineage_adjudication_system_prompt",

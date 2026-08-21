@@ -20,13 +20,13 @@ from decimal import Decimal, InvalidOperation, localcontext
 from functools import lru_cache
 from pathlib import Path
 from threading import Lock
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, Self, TypeVar, cast
 from urllib.parse import quote
 from weakref import WeakKeyDictionary
 
 import httpcore
 import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from pydantic_core import SchemaValidator
 
 from mmaudit.config import ExecutionConfig, PrivacyConfig, TokenBudgetConfig, model_family
@@ -208,6 +208,7 @@ from mmaudit.orchestration.budgets import (
     _require_trusted_budget_accounting_state,
     _trusted_endpoint_request_cost_bound_from_pricing,
     _trusted_endpoint_request_maximum_cost_usd,
+    _trusted_endpoint_request_maximum_units_for,
     _TrustedRequestLimitScope,
 )
 from mmaudit.orchestration.context_manifest import (
@@ -380,6 +381,7 @@ _QUALIFICATION_FUTURE_SKEW = timedelta(minutes=5)
 _QUALIFICATION_LINEAGE_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 _QUALIFICATION_ROLE_PATTERN = re.compile(r"^[a-z][a-z0-9_:.-]{0,127}$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_CANONICAL_COST_DECIMAL_PATTERN = re.compile(r"^(?:0|[1-9][0-9]{0,47})(?:\.[0-9]{1,48})?$")
 _PREQUALIFICATION_PROVIDER_ROLES = frozenset({"model_benchmark", "real_provider_smoke"})
 _BASE_ENDPOINT_REQUEST_PARAMETERS = frozenset({"max_tokens", "temperature"})
 _ROUTE_SENSITIVE_REQUEST_PARAMETERS = frozenset({"reasoning", "response_format"})
@@ -1476,6 +1478,7 @@ class _RegisteredModelIdentity:
     catalog_snapshot_sha256: str
     discovery_provenance_sha256: str
     discovery_evidence_sha256: str
+    discovery_manifest_sha256: str | None
     snapshot: OpenRouterModelEndpointIdentitySnapshot
 
     @property
@@ -1888,6 +1891,10 @@ class _OpenRouterGlobalTokenBudgetError(OpenRouterRequestLimitError):
 
 class OpenRouterCostControlError(OpenRouterError):
     pass
+
+
+class OpenRouterRequestCostPreviewError(OpenRouterCostControlError):
+    """An exact provider-free request-cost preview could not be proven or matched."""
 
 
 def _require_exact_openrouter_request_body(
@@ -2421,6 +2428,268 @@ class StructuredRequestHashes:
     schema_sha256: str
 
 
+def _canonical_cost_decimal_text(value: object, *, label: str) -> str:
+    """Return bounded, non-negative, non-exponent decimal evidence text."""
+
+    if type(value) is not str or _CANONICAL_COST_DECIMAL_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"{label} must be canonical non-negative decimal text")
+    try:
+        parsed = Decimal(value)
+    except InvalidOperation:
+        raise ValueError(f"{label} must be canonical non-negative decimal text") from None
+    if not parsed.is_finite() or parsed < 0:
+        raise ValueError(f"{label} must be finite and non-negative")
+    normalized = format(parsed, "f")
+    if "." in normalized:
+        normalized = normalized.rstrip("0").rstrip(".")
+    if value != (normalized or "0"):
+        raise ValueError(f"{label} must not contain redundant decimal notation")
+    return value
+
+
+def _format_cost_decimal(value: Decimal) -> str:
+    rendered = format(value, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return rendered or "0"
+
+
+def _multiply_cost_decimal(value: Decimal, multiplier: int) -> str:
+    with localcontext() as context:
+        context.prec = 160
+        return _format_cost_decimal(value * Decimal(multiplier))
+
+
+def _request_cost_preview_provider_policy_sha256(
+    provider_policy: OpenRouterProviderPolicy,
+) -> str:
+    return _canonical_sha256(
+        {
+            "certification": provider_policy.certification,
+            "only": provider_policy.only,
+            "order": provider_policy.order,
+            "allow_fallbacks": provider_policy.allow_fallbacks,
+        }
+    )
+
+
+class OpenRouterRequestCostComponentPreview(BaseModel):
+    """One exact endpoint price and request-specific unit ceiling."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        revalidate_instances="always",
+    )
+
+    pricing_field: str = Field(min_length=1, max_length=64)
+    unit_price_usd_exact: str
+    maximum_units: int = Field(ge=0, le=2**63 - 1)
+
+    @field_validator("pricing_field")
+    @classmethod
+    def pricing_field_is_supported(cls, value: str) -> str:
+        if value not in _SUPPORTED_TEXT_PRICING_FIELDS:
+            raise ValueError("request-cost preview pricing field is unsupported")
+        return value
+
+    @field_validator("unit_price_usd_exact")
+    @classmethod
+    def unit_price_is_canonical(cls, value: str) -> str:
+        return _canonical_cost_decimal_text(value, label="request-cost preview unit price")
+
+
+class OpenRouterStructuredRequestCostPreview(BaseModel):
+    """Frozen, non-authorizing exact cost preview for one singleton request route."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        revalidate_instances="always",
+    )
+
+    artifact_kind: Literal["openrouter_structured_request_cost_preview"] = (
+        "openrouter_structured_request_cost_preview"
+    )
+    schema_version: Literal["1.0"] = "1.0"
+    logical_request_id: str = Field(min_length=1, max_length=128)
+    role: str = Field(min_length=1, max_length=128)
+    exact_model_id: str = Field(min_length=3, max_length=384)
+    provider_endpoint: str = Field(min_length=1, max_length=256)
+    maximum_attempts: int = Field(ge=1, le=32)
+
+    execution_config_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    privacy_config_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    token_budget_config_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    provider_policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    discovery_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    discovery_evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    discovery_provenance_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    catalog_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    catalog_identity_binding_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    model_metadata_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    model_identity_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    endpoint_policy_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    endpoint_record_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    endpoint_policy_pricing_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    endpoint_pricing_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    output_capability_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reasoning_capability_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    structured_output_mode: StructuredOutputMode
+    prompt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    system_prompt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    user_prompt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    response_schema_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    output_request_shape_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    required_provider_parameters_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    strict_output_protocol_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    reasoning_request_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    reasoning_plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reasoning_policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reasoning_policy_role_binding_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reasoning_profile_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reasoning_qualification_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    context_request_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    rendered_context_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+    request_token_plan_projection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    request_material_projection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    request_material_projection_utf8_bytes: int = Field(gt=0, le=2**63 - 1)
+    endpoint_cost_bound_pricing_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    endpoint_cost_bound_projection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    cost_components: tuple[OpenRouterRequestCostComponentPreview, ...] = Field(
+        min_length=2,
+        max_length=len(_SUPPORTED_TEXT_PRICING_FIELDS),
+    )
+    prompt_byte_upper_bound_tokens: int = Field(gt=0, le=2**63 - 1)
+    requested_completion_tokens: int = Field(gt=0, le=2**63 - 1)
+    reserved_output_tokens: int = Field(gt=0, le=2**63 - 1)
+    reserved_reasoning_tokens: int = Field(ge=0, le=2**63 - 1)
+    maximum_priced_prompt_units: int = Field(gt=0, le=2**63 - 1)
+    maximum_cost_usd_per_attempt_exact: str
+    maximum_cost_usd_all_attempts_exact: str
+
+    authorizes_dispatch: Literal[False] = False
+    authorizes_budget_reservation: Literal[False] = False
+    authorizes_provider_transport: Literal[False] = False
+    grants_review_credit: Literal[False] = False
+    grants_completion_credit: Literal[False] = False
+    preview_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("logical_request_id")
+    @classmethod
+    def request_id_is_explicit_and_canonical(cls, value: str) -> str:
+        if _LOGICAL_REQUEST_ID_PATTERN.fullmatch(value) is None:
+            raise ValueError("request-cost preview requires a canonical logical request ID")
+        return value
+
+    @field_validator("role")
+    @classmethod
+    def role_is_canonical(cls, value: str) -> str:
+        if _QUALIFICATION_ROLE_PATTERN.fullmatch(value) is None:
+            raise ValueError("request-cost preview role is invalid")
+        return value
+
+    @field_validator("exact_model_id")
+    @classmethod
+    def model_is_exact(cls, value: str) -> str:
+        if not is_exact_openrouter_model_id(value):
+            raise ValueError("request-cost preview requires an exact model ID")
+        return value
+
+    @field_validator(
+        "maximum_cost_usd_per_attempt_exact",
+        "maximum_cost_usd_all_attempts_exact",
+    )
+    @classmethod
+    def costs_are_canonical(cls, value: str) -> str:
+        return _canonical_cost_decimal_text(value, label="request-cost preview maximum cost")
+
+    @model_validator(mode="after")
+    def exact_units_cost_and_hash_are_consistent(self) -> Self:
+        fields = tuple(component.pricing_field for component in self.cost_components)
+        if fields != tuple(sorted(fields)) or len(fields) != len(set(fields)):
+            raise ValueError("request-cost preview components must be unique and sorted")
+        if not {"prompt", "completion"}.issubset(fields):
+            raise ValueError("request-cost preview pricing is incomplete")
+        if self.requested_completion_tokens != (
+            self.reserved_output_tokens + self.reserved_reasoning_tokens
+        ):
+            raise ValueError("request-cost preview completion units do not conserve output")
+        expected_prompt_units = max(
+            self.request_material_projection_utf8_bytes,
+            self.prompt_byte_upper_bound_tokens,
+        )
+        if self.maximum_priced_prompt_units != expected_prompt_units:
+            raise ValueError("request-cost preview prompt pricing units are inconsistent")
+        expected_units = {
+            "completion": self.requested_completion_tokens,
+            "image": 0,
+            "input_cache_read": expected_prompt_units,
+            "input_cache_write": expected_prompt_units,
+            "internal_reasoning": self.reserved_reasoning_tokens,
+            "prompt": expected_prompt_units,
+            "request": 1,
+            "web_search": 0,
+        }
+        if any(
+            component.maximum_units != expected_units[component.pricing_field]
+            for component in self.cost_components
+        ):
+            raise ValueError("request-cost preview metered units differ from the request plan")
+        pricing = {
+            component.pricing_field: component.unit_price_usd_exact
+            for component in self.cost_components
+        }
+        maximum_units = {
+            component.pricing_field: component.maximum_units for component in self.cost_components
+        }
+        try:
+            rebuilt = _trusted_endpoint_request_cost_bound_from_pricing(
+                exact_model_id=self.exact_model_id,
+                provider_endpoint=self.provider_endpoint,
+                request_material="mmaudit-provider-free-cost-preview",
+                pricing=pricing,
+                maximum_units=maximum_units,
+            )
+            maximum_cost = _trusted_endpoint_request_maximum_cost_usd(rebuilt)
+        except (BudgetReservationStateError, TypeError, ValueError) as exc:
+            raise ValueError("request-cost preview components cannot prove an exact bound") from exc
+        maximum_cost_text = _canonical_cost_decimal_text(
+            _format_cost_decimal(maximum_cost),
+            label="request-cost preview maximum cost",
+        )
+        if (
+            rebuilt.pricing_snapshot_sha256 != self.endpoint_cost_bound_pricing_sha256
+            or maximum_cost_text != self.maximum_cost_usd_per_attempt_exact
+            or _multiply_cost_decimal(maximum_cost, self.maximum_attempts)
+            != self.maximum_cost_usd_all_attempts_exact
+        ):
+            raise ValueError("request-cost preview exact cost does not match its components")
+        if (self.context_request_evidence_sha256 is None) != (self.rendered_context_sha256 is None):
+            raise ValueError("request-cost preview context hashes must be present together")
+        if self.reasoning_qualification_sha256 is not None:
+            raise ValueError(
+                "provider-free request-cost preview cannot carry qualification authority"
+            )
+        expected_hash = _canonical_sha256(self.model_dump(mode="json", exclude={"preview_sha256"}))
+        if self.preview_sha256 != expected_hash:
+            raise ValueError("request-cost preview hash does not match its exact evidence")
+        return self
+
+
 @dataclass(frozen=True, slots=True, order=True)
 class DeliveredSourceDescriptor:
     """Exact provider-visible whole-file identity presented to the lifecycle observer."""
@@ -2784,6 +3053,830 @@ def _context_omissions(
     if context_package is None:
         return ()
     return tuple(context_package.omissions)
+
+
+def _reasoning_from_control_profile(
+    profile: ReasoningControlProfile,
+) -> OpenRouterReasoning | None:
+    if profile.mode == "disabled":
+        return None
+    return OpenRouterReasoning(
+        effort=profile.effort,
+        max_tokens=profile.max_tokens,
+        exclude=profile.exclude,
+    )
+
+
+def _structured_request_metadata(
+    *,
+    request_id: str,
+    role: str,
+    prompt_sha256: str,
+    user_prompt_sha256: str,
+    structured_output_plan: _StructuredOutputRequestPlan,
+    request_token_plan: RequestTokenPlan,
+    context_request_evidence: ContextRequestEvidence | None,
+    endpoint_policy: _RegisteredEndpointPolicy | None,
+    model_identity_snapshot_sha256: str | None,
+    additional_metadata: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Build the shared exact metadata surface for preview and provider dispatch."""
+
+    metadata = {
+        "mmaudit_request_id": request_id,
+        "mmaudit_role": role,
+        "mmaudit_prompt_sha256": prompt_sha256,
+        "mmaudit_user_prompt_sha256": user_prompt_sha256,
+        "mmaudit_schema_sha256": structured_output_plan.schema_sha256,
+        "mmaudit_output_mode": structured_output_plan.mode.value,
+        "mmaudit_output_request_shape_sha256": structured_output_plan.request_shape_sha256,
+        "mmaudit_required_provider_parameters_sha256": _canonical_sha256(
+            structured_output_plan.required_provider_parameters
+        ),
+        "mmaudit_token_plan_sha256": request_token_plan.plan_sha256,
+    }
+    if endpoint_policy is not None:
+        metadata.update(
+            {
+                "mmaudit_endpoint_snapshot_sha256": endpoint_policy.snapshot_sha256,
+                "mmaudit_endpoint_pricing_sha256": endpoint_policy.policy_pricing_sha256,
+                "mmaudit_output_capability_sha256": endpoint_policy.output_capability_sha256,
+            }
+        )
+    if model_identity_snapshot_sha256 is not None:
+        metadata["mmaudit_identity_snapshot_sha256"] = model_identity_snapshot_sha256
+    reasoning_plan = request_token_plan.reasoning_plan
+    if reasoning_plan is not None:
+        metadata.update(
+            {
+                "mmaudit_reasoning_plan_sha256": reasoning_plan.evidence_sha256,
+                "mmaudit_reasoning_policy_sha256": reasoning_plan.policy_artifact_sha256,
+                "mmaudit_reasoning_profile_sha256": (reasoning_plan.control_profile.profile_sha256),
+            }
+        )
+        if reasoning_plan.endpoint_capability_sha256 is not None:
+            metadata["mmaudit_reasoning_capability_sha256"] = (
+                reasoning_plan.endpoint_capability_sha256
+            )
+        if reasoning_plan.qualification_binding_sha256 is not None:
+            metadata["mmaudit_reasoning_qualification_sha256"] = (
+                reasoning_plan.qualification_binding_sha256
+            )
+    if context_request_evidence is not None:
+        metadata["mmaudit_context_request_evidence_sha256"] = (
+            context_request_evidence.evidence_sha256
+        )
+    if structured_output_plan.strict_protocol_sha256 is not None:
+        metadata["mmaudit_output_protocol_sha256"] = structured_output_plan.strict_protocol_sha256
+    for key, value in (additional_metadata or {}).items():
+        if key in metadata and metadata[key] != value:
+            raise OpenRouterRequestCostPreviewError(
+                "additional request metadata conflicts with an exact structured-request field"
+            )
+        metadata[key] = value
+    if any(not _is_safe_metadata_pair(key, value) for key, value in metadata.items()):
+        raise OpenRouterRequestLimitError("request metadata is invalid")
+    return metadata
+
+
+def _assemble_structured_request_body(
+    *,
+    model: str,
+    structured_output_plan: _StructuredOutputRequestPlan,
+    provider_policy: OpenRouterProviderPolicy,
+    require_zdr: bool,
+    requested_completion_tokens: int,
+    request_metadata: Mapping[str, str],
+    routing_max_price: Mapping[str, float] | None,
+) -> dict[str, Any]:
+    """Assemble the sole canonical structured request shape used by preview and dispatch."""
+
+    body: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": structured_output_plan.system_prompt},
+            {"role": "user", "content": structured_output_plan.user_prompt},
+        ],
+        "temperature": 0,
+        "max_tokens": requested_completion_tokens,
+        "stream": False,
+        "provider": provider_policy.as_request_payload(
+            require_zdr=require_zdr,
+            require_parameters=structured_output_plan.require_parameters,
+        ),
+    }
+    if structured_output_plan.response_format is not None:
+        body["response_format"] = structured_output_plan.response_format
+    provider = body["provider"]
+    assert isinstance(provider, dict)
+    if routing_max_price is not None:
+        provider["max_price"] = dict(routing_max_price)
+    if structured_output_plan.reasoning_payload is not None:
+        body["reasoning"] = structured_output_plan.reasoning_payload
+    if any(not _is_safe_metadata_pair(key, value) for key, value in request_metadata.items()):
+        raise OpenRouterRequestLimitError("request metadata is invalid")
+    if request_metadata:
+        body["metadata"] = dict(request_metadata)
+    return body
+
+
+def _serialized_structured_request_size(body: Mapping[str, Any]) -> int:
+    return len(json.dumps(body, sort_keys=True, ensure_ascii=True).encode("utf-8"))
+
+
+def _structured_request_pricing_unit_ceilings(
+    *,
+    request_material: str,
+    request_token_plan: RequestTokenPlan,
+) -> dict[str, int]:
+    request_bytes = max(1, len(request_material.encode("utf-8")))
+    prompt_pricing_units = max(
+        request_bytes,
+        request_token_plan.prompt_byte_upper_bound_tokens,
+    )
+    return {
+        "completion": request_token_plan.requested_completion_tokens,
+        "image": 0,
+        "input_cache_read": prompt_pricing_units,
+        "input_cache_write": prompt_pricing_units,
+        "internal_reasoning": request_token_plan.reserved_reasoning_tokens,
+        "prompt": prompt_pricing_units,
+        "request": 1,
+        "web_search": 0,
+    }
+
+
+def _provider_free_registered_endpoint_policy(
+    *,
+    evidence: OpenRouterModelDiscoveryEvidence,
+    provider_policy: OpenRouterProviderPolicy,
+    privacy: PrivacyConfig,
+) -> _RegisteredEndpointPolicy:
+    endpoint_snapshot = evidence.endpoint_snapshot
+    if (
+        endpoint_snapshot.exact_model_id != evidence.exact_model_id
+        or endpoint_snapshot.configured_provider_endpoints != (evidence.approved_provider_endpoint,)
+        or endpoint_snapshot.provider_policy_mode != "only"
+        or endpoint_snapshot.require_zdr is not privacy.require_zdr
+        or provider_policy.only != (evidence.approved_provider_endpoint,)
+        or provider_policy.order
+        or provider_policy.allow_fallbacks
+        or not provider_policy.certification
+    ):
+        raise OpenRouterRequestCostPreviewError(
+            "provider-free request-cost preview requires one exact certification route"
+        )
+    if len(endpoint_snapshot.endpoints) != 1:
+        raise OpenRouterRequestCostPreviewError(
+            "provider-free request-cost preview requires singleton endpoint evidence"
+        )
+    endpoint = endpoint_snapshot.endpoints[0]
+    pricing = dict(endpoint.pricing)
+    if not {"prompt", "completion"}.issubset(pricing) or not set(pricing).issubset(
+        _SUPPORTED_TEXT_PRICING_FIELDS
+    ):
+        raise OpenRouterRequestCostPreviewError(
+            "provider-free request-cost preview pricing is incomplete or unsupported"
+        )
+    provider_identities = tuple(
+        sorted(
+            {
+                identity
+                for identity in (
+                    endpoint.provider_endpoint,
+                    endpoint.endpoint_tag,
+                    endpoint.endpoint_slug,
+                    endpoint.provider_name,
+                )
+                if identity is not None
+            },
+            key=str.casefold,
+        )
+    )
+    registered = _RegisteredEndpointPricing(
+        provider_endpoint=endpoint.provider_endpoint,
+        provider_name=endpoint.provider_name,
+        provider_identities=provider_identities,
+        endpoint_tag=endpoint.endpoint_tag,
+        endpoint_slug=endpoint.endpoint_slug,
+        operational_status=endpoint.operational_status,
+        zdr_eligible=endpoint.zdr_eligible,
+        pricing=tuple(pricing.items()),
+        pricing_sha256=endpoint.pricing_sha256,
+        snapshot_sha256=endpoint.endpoint_snapshot_sha256,
+        context_length=endpoint.context_length,
+        max_prompt_tokens=endpoint.max_prompt_tokens,
+        max_prompt_tokens_source=endpoint.max_prompt_tokens_source,
+        max_completion_tokens=endpoint.max_completion_tokens,
+        max_completion_tokens_source=endpoint.max_completion_tokens_source,
+        supported_parameters=endpoint.supported_parameters,
+        required_request_parameters=endpoint.required_request_parameters,
+        structured_output_parameters=endpoint.structured_output_parameters,
+        supported_output_modes=endpoint.supported_output_modes,
+        structured_output_mode=endpoint.structured_output_mode,
+    )
+    selected = _registered_endpoints_for_output_mode(
+        (registered,),
+        evidence.structured_output_mode,
+        reasoning_requested=False,
+    )
+    routing_max_price = _routing_max_price(selected)
+    return _RegisteredEndpointPolicy(
+        snapshot_sha256=endpoint_snapshot.snapshot_sha256,
+        policy_pricing_sha256=_canonical_sha256(
+            {endpoint.provider_endpoint: endpoint.pricing_sha256}
+        ),
+        routing_max_price=tuple(routing_max_price.items()),
+        endpoints=selected,
+        structured_output_parameters=output_mode_capability_parameters(
+            evidence.structured_output_mode,
+            endpoint.structured_output_parameters,
+        ),
+        supported_output_modes=evidence.supported_output_modes,
+        structured_output_mode=evidence.structured_output_mode,
+        output_capability_sha256=evidence.output_capability_sha256,
+    )
+
+
+def _build_structured_request_cost_preview(
+    *,
+    execution: ExecutionConfig,
+    privacy: PrivacyConfig,
+    token_budgets: TokenBudgetConfig,
+    provider_policy: OpenRouterProviderPolicy,
+    discovery_manifest: OpenRouterModelDiscoveryRunManifest,
+    discovery_evidence: OpenRouterModelDiscoveryEvidence,
+    endpoint_policy: _RegisteredEndpointPolicy,
+    model_identity_snapshot_sha256: str,
+    structured_output_plan: _StructuredOutputRequestPlan,
+    request_token_plan: RequestTokenPlan,
+    context_request_evidence: ContextRequestEvidence | None,
+    request_material_projection: str,
+    request_material_projection_sha256: str,
+    request_token_plan_projection_sha256: str,
+    endpoint_cost_bound: EndpointRequestCostBound,
+    maximum_attempts: int,
+) -> OpenRouterStructuredRequestCostPreview:
+    reasoning_plan = request_token_plan.reasoning_plan
+    if reasoning_plan is None or reasoning_plan.endpoint_capability_sha256 is None:
+        raise OpenRouterRequestCostPreviewError(
+            "provider-free request-cost preview lacks capability-bound reasoning evidence"
+        )
+    endpoint = endpoint_policy.endpoint(endpoint_cost_bound.provider_endpoint)
+    if endpoint is None:
+        raise OpenRouterRequestCostPreviewError(
+            "provider-free request-cost preview lacks its exact endpoint pricing record"
+        )
+    maximum_cost = _trusted_endpoint_request_maximum_cost_usd(endpoint_cost_bound)
+    components = tuple(
+        OpenRouterRequestCostComponentPreview(
+            pricing_field=component.pricing_field,
+            unit_price_usd_exact=_format_cost_decimal(component.unit_price_usd),
+            maximum_units=component.maximum_units,
+        )
+        for component in endpoint_cost_bound.components
+    )
+    context_sha256 = (
+        context_request_evidence.evidence_sha256 if context_request_evidence is not None else None
+    )
+    rendered_context_sha256 = (
+        context_request_evidence.rendered_sha256 if context_request_evidence is not None else None
+    )
+    identity = _identity_snapshot_from_discovery(
+        discovery_evidence,
+        allow_fallbacks=False,
+        reasoning_requested=False,
+    )
+    values: dict[str, Any] = {
+        "artifact_kind": "openrouter_structured_request_cost_preview",
+        "schema_version": "1.0",
+        "logical_request_id": request_token_plan.request_id,
+        "role": request_token_plan.role,
+        "exact_model_id": discovery_evidence.exact_model_id,
+        "provider_endpoint": endpoint_cost_bound.provider_endpoint,
+        "maximum_attempts": maximum_attempts,
+        "execution_config_sha256": _canonical_sha256(execution.model_dump(mode="json")),
+        "privacy_config_sha256": _canonical_sha256(privacy.model_dump(mode="json")),
+        "token_budget_config_sha256": _canonical_sha256(token_budgets.model_dump(mode="json")),
+        "provider_policy_sha256": _request_cost_preview_provider_policy_sha256(provider_policy),
+        "discovery_manifest_sha256": discovery_manifest.manifest_sha256,
+        "discovery_evidence_sha256": discovery_evidence.discovery_evidence_sha256,
+        "discovery_provenance_sha256": discovery_evidence.provenance.provenance_sha256,
+        "catalog_snapshot_sha256": discovery_evidence.provenance.catalog_snapshot_sha256,
+        "catalog_identity_binding_sha256": discovery_evidence.catalog_identity_binding_sha256,
+        "model_metadata_snapshot_sha256": discovery_evidence.model_metadata_snapshot_sha256,
+        "model_identity_snapshot_sha256": model_identity_snapshot_sha256,
+        "endpoint_policy_snapshot_sha256": endpoint_policy.snapshot_sha256,
+        "endpoint_record_snapshot_sha256": endpoint.snapshot_sha256,
+        "endpoint_policy_pricing_sha256": endpoint_policy.policy_pricing_sha256,
+        "endpoint_pricing_sha256": endpoint.pricing_sha256,
+        "output_capability_sha256": endpoint_policy.output_capability_sha256,
+        "reasoning_capability_sha256": reasoning_plan.endpoint_capability_sha256,
+        "structured_output_mode": structured_output_plan.mode,
+        "prompt_sha256": _structured_output_prompt_sha256_from_plan(structured_output_plan),
+        "system_prompt_sha256": hashlib.sha256(
+            structured_output_plan.system_prompt.encode("utf-8")
+        ).hexdigest(),
+        "user_prompt_sha256": hashlib.sha256(
+            structured_output_plan.user_prompt.encode("utf-8")
+        ).hexdigest(),
+        "response_schema_sha256": structured_output_plan.schema_sha256,
+        "output_request_shape_sha256": structured_output_plan.request_shape_sha256,
+        "required_provider_parameters_sha256": _canonical_sha256(
+            structured_output_plan.required_provider_parameters
+        ),
+        "strict_output_protocol_sha256": structured_output_plan.strict_protocol_sha256,
+        "reasoning_request_sha256": structured_output_plan.reasoning_request_sha256,
+        "reasoning_plan_sha256": reasoning_plan.evidence_sha256,
+        "reasoning_policy_sha256": reasoning_plan.policy_artifact_sha256,
+        "reasoning_policy_role_binding_sha256": reasoning_plan.policy_role_binding_sha256,
+        "reasoning_profile_sha256": reasoning_plan.control_profile.profile_sha256,
+        "reasoning_qualification_sha256": reasoning_plan.qualification_binding_sha256,
+        "context_request_evidence_sha256": context_sha256,
+        "rendered_context_sha256": rendered_context_sha256,
+        "request_token_plan_projection_sha256": request_token_plan_projection_sha256,
+        "request_material_projection_sha256": request_material_projection_sha256,
+        "request_material_projection_utf8_bytes": len(request_material_projection.encode("utf-8")),
+        "endpoint_cost_bound_pricing_sha256": endpoint_cost_bound.pricing_snapshot_sha256,
+        "endpoint_cost_bound_projection_sha256": (
+            _endpoint_request_cost_bound_projection_sha256(
+                endpoint_cost_bound,
+                request_material_projection_sha256=request_material_projection_sha256,
+            )
+        ),
+        "cost_components": tuple(component.model_dump(mode="json") for component in components),
+        "prompt_byte_upper_bound_tokens": (request_token_plan.prompt_byte_upper_bound_tokens),
+        "requested_completion_tokens": request_token_plan.requested_completion_tokens,
+        "reserved_output_tokens": request_token_plan.reserved_output_tokens,
+        "reserved_reasoning_tokens": request_token_plan.reserved_reasoning_tokens,
+        "maximum_priced_prompt_units": _trusted_endpoint_request_maximum_units_for(
+            endpoint_cost_bound,
+            "prompt",
+        ),
+        "maximum_cost_usd_per_attempt_exact": _format_cost_decimal(maximum_cost),
+        "maximum_cost_usd_all_attempts_exact": _multiply_cost_decimal(
+            maximum_cost,
+            maximum_attempts,
+        ),
+        "authorizes_dispatch": False,
+        "authorizes_budget_reservation": False,
+        "authorizes_provider_transport": False,
+        "grants_review_credit": False,
+        "grants_completion_credit": False,
+    }
+    preview = OpenRouterStructuredRequestCostPreview.model_validate(
+        {**values, "preview_sha256": _canonical_sha256(values)},
+        strict=True,
+    )
+    if identity.snapshot_sha256 != model_identity_snapshot_sha256:
+        raise OpenRouterRequestCostPreviewError(
+            "provider-free request-cost preview model identity changed during construction"
+        )
+    return preview
+
+
+def preview_openrouter_structured_request_cost(
+    *,
+    execution: ExecutionConfig,
+    privacy: PrivacyConfig,
+    token_budgets: TokenBudgetConfig,
+    provider_policy: OpenRouterProviderPolicy,
+    reasoning_policy: ReasoningPolicyArtifact,
+    discovery_manifest: OpenRouterModelDiscoveryRunManifest,
+    discovery_evidence: OpenRouterModelDiscoveryEvidence,
+    role: str,
+    system_prompt: str,
+    user_prompt: str,
+    response_model: type[BaseModel],
+    schema_name: str,
+    logical_request_id: str,
+    context_package: ContextPackage | None = None,
+    maximum_attempts: int | None = None,
+) -> OpenRouterStructuredRequestCostPreview:
+    """Derive an exact singleton request-cost preview without secrets or provider state."""
+
+    if (
+        type(execution) is not ExecutionConfig
+        or type(privacy) is not PrivacyConfig
+        or type(token_budgets) is not TokenBudgetConfig
+        or type(provider_policy) is not OpenRouterProviderPolicy
+        or type(reasoning_policy) is not ReasoningPolicyArtifact
+        or type(discovery_manifest) is not OpenRouterModelDiscoveryRunManifest
+        or type(discovery_evidence) is not OpenRouterModelDiscoveryEvidence
+        or type(role) is not str
+        or type(system_prompt) is not str
+        or type(user_prompt) is not str
+        or type(schema_name) is not str
+        or type(logical_request_id) is not str
+        or not isinstance(response_model, type)
+        or not issubclass(response_model, BaseModel)
+        or (context_package is not None and type(context_package) is not ContextPackage)
+    ):
+        raise OpenRouterRequestCostPreviewError(
+            "provider-free request-cost preview inputs require exact public evidence types"
+        )
+    try:
+        sealed_execution = ExecutionConfig.model_validate_json(
+            execution.model_dump_json(),
+            strict=True,
+        )
+        sealed_privacy = PrivacyConfig.model_validate_json(
+            privacy.model_dump_json(),
+            strict=True,
+        )
+        sealed_token_budgets = TokenBudgetConfig.model_validate_json(
+            token_budgets.model_dump_json(),
+            strict=True,
+        )
+        sealed_reasoning_policy = ReasoningPolicyArtifact.model_validate_json(
+            reasoning_policy.model_dump_json(),
+            strict=True,
+        )
+        sealed_manifest = OpenRouterModelDiscoveryRunManifest.model_validate_json(
+            discovery_manifest.model_dump_json(),
+            strict=True,
+        )
+        sealed_evidence = OpenRouterModelDiscoveryEvidence.model_validate_json(
+            discovery_evidence.model_dump_json(),
+            strict=True,
+        )
+        sealed_provider_policy = OpenRouterProviderPolicy(
+            certification=provider_policy.certification,
+            only=provider_policy.only,
+            order=provider_policy.order,
+            allow_fallbacks=provider_policy.allow_fallbacks,
+        )
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise OpenRouterRequestCostPreviewError(
+            "provider-free request-cost preview inputs failed detached validation"
+        ) from exc
+    if (
+        sealed_execution != execution
+        or sealed_privacy != privacy
+        or sealed_token_budgets != token_budgets
+        or sealed_reasoning_policy != reasoning_policy
+        or sealed_manifest != discovery_manifest
+        or sealed_evidence != discovery_evidence
+        or sealed_provider_policy != provider_policy
+        or _LOGICAL_REQUEST_ID_PATTERN.fullmatch(logical_request_id) is None
+        or _QUALIFICATION_ROLE_PATTERN.fullmatch(role) is None
+    ):
+        raise OpenRouterRequestCostPreviewError(
+            "provider-free request-cost preview inputs changed across their boundary"
+        )
+    matching_artifacts = tuple(
+        artifact
+        for artifact in sealed_manifest.artifacts
+        if artifact.exact_model_id == sealed_evidence.exact_model_id
+        and artifact.approved_provider_endpoint == sealed_evidence.approved_provider_endpoint
+    )
+    expected_artifact_sha256 = hashlib.sha256(
+        stable_json(sealed_evidence).encode("utf-8")
+    ).hexdigest()
+    if (
+        sealed_manifest.run_provenance != sealed_evidence.provenance
+        or len(matching_artifacts) != 1
+        or matching_artifacts[0].discovery_evidence_sha256
+        != sealed_evidence.discovery_evidence_sha256
+        or matching_artifacts[0].artifact_sha256 != expected_artifact_sha256
+    ):
+        raise OpenRouterRequestCostPreviewError(
+            "provider-free request-cost preview discovery manifest does not bind the evidence"
+        )
+    configured_attempts = sealed_execution.max_model_retries + 1
+    attempt_limit = configured_attempts if maximum_attempts is None else maximum_attempts
+    if (
+        type(attempt_limit) is not int
+        or not 1 <= attempt_limit <= configured_attempts
+        or sealed_execution.max_requests_per_agent < attempt_limit
+    ):
+        raise OpenRouterRequestCostPreviewError(
+            "provider-free request-cost preview retry bound is invalid"
+        )
+    endpoint_policy = _provider_free_registered_endpoint_policy(
+        evidence=sealed_evidence,
+        provider_policy=sealed_provider_policy,
+        privacy=sealed_privacy,
+    )
+    control = sealed_reasoning_policy.control_for_request(role)
+    sealed_evidence.reasoning_capability.require_compatible_profile(control)
+    reasoning_plan = ReasoningRequestPlanEvidence.build(
+        request_role=role,
+        policy=sealed_reasoning_policy,
+        endpoint_capability_sha256=sealed_evidence.reasoning_capability.capability_sha256,
+    )
+    response_schema_generation = _pydantic_schema_generation(response_model)
+    structured_output_plan = _structured_output_request_plan(
+        mode=sealed_evidence.structured_output_mode,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        response_model=response_model,
+        schema_name=schema_name,
+        reasoning=_reasoning_from_control_profile(control),
+        schema_generation=response_schema_generation,
+    )
+    response_schema_generation.require_current(
+        response_model,
+        phase="during provider-free request-cost structured-output planning",
+    )
+    _require_matching_request_parameter_profile(
+        endpoint_policy,
+        structured_output_plan,
+        sealed_reasoning_plan=reasoning_plan,
+    )
+    endpoint = endpoint_policy.endpoints[0]
+    required_output_tokens = (
+        sealed_token_budgets.reserved_output_tokens
+        if sealed_token_budgets.reserved_output_tokens is not None
+        else sealed_execution.max_output_tokens_per_request
+    )
+    route_intersection = EndpointRouteIntersection.build(
+        (
+            EndpointRouteTokenCapacity.build(
+                exact_model_id=sealed_evidence.exact_model_id,
+                provider_endpoint=endpoint.provider_endpoint,
+                endpoint_snapshot_sha256=endpoint.snapshot_sha256,
+                context_tokens=endpoint.context_length,
+                max_prompt_tokens=endpoint.max_prompt_tokens,
+                max_prompt_tokens_source=endpoint.max_prompt_tokens_source,
+                max_completion_tokens=endpoint.max_completion_tokens,
+                max_completion_tokens_source=endpoint.max_completion_tokens_source,
+            ),
+        )
+    )
+    sealed_context = context_package
+    if sealed_context is not None:
+        from mmaudit.orchestration.context import revalidate_model_surface_context_package
+
+        sealed_context = revalidate_model_surface_context_package(sealed_context)
+    allocations = _prompt_token_allocations(
+        plan=structured_output_plan,
+        original_system_prompt=system_prompt,
+        response_model=response_model,
+        schema_name=schema_name,
+        context_package=sealed_context,
+    )
+    context_request_evidence = (
+        _context_request_evidence(
+            request_id=logical_request_id,
+            request_role=role,
+            context_package=sealed_context,
+        )
+        if sealed_context is not None
+        else None
+    )
+    request_token_plan = build_request_token_plan(
+        request_id=logical_request_id,
+        role=role,
+        route_intersection=route_intersection,
+        allocations=allocations,
+        required_output_tokens=required_output_tokens,
+        reserved_reasoning_tokens=control.reserved_reasoning_tokens,
+        reasoning_plan=reasoning_plan,
+        global_input_token_budget=sealed_token_budgets.global_input_token_budget,
+        global_output_token_budget=sealed_token_budgets.global_output_token_budget,
+        input_tokens_reserved_before=0,
+        output_tokens_reserved_before=0,
+        context_utilization=Decimal(str(sealed_token_budgets.usable_input_fraction)),
+        configured_reserved_system_tokens=sealed_token_budgets.reserved_system_tokens,
+        configured_reserved_schema_tokens=sealed_token_budgets.reserved_schema_tokens,
+        configured_reserved_protocol_tokens=sealed_token_budgets.reserved_protocol_tokens,
+        configured_reserved_workflow_tokens=sealed_token_budgets.reserved_workflow_tokens,
+        maximum_source_tokens_per_request=(sealed_token_budgets.maximum_source_tokens_per_request),
+        context_package_source_byte_ceiling=(
+            sealed_context.effective_source_byte_ceiling if sealed_context is not None else None
+        ),
+        requested_surface_count=(
+            len(sealed_context.requested_model_surfaces) if sealed_context is not None else 0
+        ),
+        context_omissions=_context_omissions(sealed_context),
+        prompt_envelope_byte_upper_bound_tokens=(
+            _prompt_envelope_byte_upper_bound_tokens(structured_output_plan)
+        ),
+    )
+    identity = _identity_snapshot_from_discovery(
+        sealed_evidence,
+        allow_fallbacks=False,
+        reasoning_requested=False,
+    )
+    prompt_sha256 = _structured_output_prompt_sha256_from_plan(structured_output_plan)
+    user_prompt_sha256 = hashlib.sha256(user_prompt.encode("utf-8")).hexdigest()
+    request_metadata = _structured_request_metadata(
+        request_id=logical_request_id,
+        role=role,
+        prompt_sha256=prompt_sha256,
+        user_prompt_sha256=user_prompt_sha256,
+        structured_output_plan=structured_output_plan,
+        request_token_plan=request_token_plan,
+        context_request_evidence=context_request_evidence,
+        endpoint_policy=endpoint_policy,
+        model_identity_snapshot_sha256=identity.snapshot_sha256,
+    )
+    body = _assemble_structured_request_body(
+        model=sealed_evidence.exact_model_id,
+        structured_output_plan=structured_output_plan,
+        provider_policy=sealed_provider_policy,
+        require_zdr=sealed_privacy.require_zdr,
+        requested_completion_tokens=request_token_plan.requested_completion_tokens,
+        request_metadata=request_metadata,
+        routing_max_price=dict(endpoint_policy.routing_max_price),
+    )
+    if _serialized_structured_request_size(body) > sealed_execution.max_request_bytes:
+        raise OpenRouterRequestLimitError(
+            f"serialized model request exceeds {sealed_execution.max_request_bytes} byte limit"
+        )
+    request_body_sha256 = _require_exact_openrouter_request_body(
+        body,
+        model=sealed_evidence.exact_model_id,
+        structured_output_plan=structured_output_plan,
+        provider_policy=sealed_provider_policy,
+        require_zdr=sealed_privacy.require_zdr,
+        request_token_plan=request_token_plan,
+        request_metadata=request_metadata,
+        endpoint_policy=endpoint_policy,
+        refresh_pricing_control=None,
+    )
+    response_schema_generation.require_current(
+        response_model,
+        phase="during provider-free request-cost request hashing",
+    )
+    request_material = _CANDIDATE_REVIEW_CANONICAL_JSON_DUMPS(body)
+    (
+        request_token_plan_projection_sha256,
+        request_material_projection,
+        request_material_projection_sha256,
+    ) = _candidate_review_request_material_projection(
+        body,
+        request_token_plan=request_token_plan,
+    )
+    ceilings = _structured_request_pricing_unit_ceilings(
+        request_material=request_material,
+        request_token_plan=request_token_plan,
+    )
+    endpoint_cost_bound = _trusted_endpoint_request_cost_bound_from_pricing(
+        exact_model_id=sealed_evidence.exact_model_id,
+        provider_endpoint=endpoint.provider_endpoint,
+        request_material=request_material,
+        pricing=dict(endpoint.pricing),
+        maximum_units={field: ceilings[field] for field, _value in endpoint.pricing},
+    )
+    if endpoint_cost_bound.request_material_sha256 != request_body_sha256:
+        raise OpenRouterRequestCostPreviewError(
+            "provider-free request-cost preview request material changed during construction"
+        )
+    return _build_structured_request_cost_preview(
+        execution=sealed_execution,
+        privacy=sealed_privacy,
+        token_budgets=sealed_token_budgets,
+        provider_policy=sealed_provider_policy,
+        discovery_manifest=sealed_manifest,
+        discovery_evidence=sealed_evidence,
+        endpoint_policy=endpoint_policy,
+        model_identity_snapshot_sha256=identity.snapshot_sha256,
+        structured_output_plan=structured_output_plan,
+        request_token_plan=request_token_plan,
+        context_request_evidence=context_request_evidence,
+        request_material_projection=request_material_projection,
+        request_material_projection_sha256=request_material_projection_sha256,
+        request_token_plan_projection_sha256=request_token_plan_projection_sha256,
+        endpoint_cost_bound=endpoint_cost_bound,
+        maximum_attempts=attempt_limit,
+    )
+
+
+def _require_matching_structured_request_cost_preview(
+    *,
+    expected: OpenRouterStructuredRequestCostPreview,
+    execution: ExecutionConfig,
+    privacy: PrivacyConfig,
+    token_budgets: TokenBudgetConfig | None,
+    provider_policy: OpenRouterProviderPolicy,
+    model_identity: _RegisteredModelIdentity | None,
+    endpoint_policy: _RegisteredEndpointPolicy | None,
+    structured_output_plan: _StructuredOutputRequestPlan,
+    request_token_plan: RequestTokenPlan,
+    context_request_evidence: ContextRequestEvidence | None,
+    request_material_projection: str,
+    request_material_projection_sha256: str,
+    request_token_plan_projection_sha256: str,
+    endpoint_cost_bound: EndpointRequestCostBound | None,
+    maximum_attempts: int,
+) -> None:
+    """Reject any dispatch material that differs from its provider-free exact preview."""
+
+    reasoning_plan = request_token_plan.reasoning_plan
+    if (
+        token_budgets is None
+        or model_identity is None
+        or model_identity.discovery_manifest_sha256 is None
+        or endpoint_policy is None
+        or endpoint_cost_bound is None
+        or reasoning_plan is None
+        or reasoning_plan.endpoint_capability_sha256 is None
+        or reasoning_plan.qualification_binding_sha256 is not None
+    ):
+        raise OpenRouterRequestCostPreviewError(
+            "provider dispatch lacks the frozen evidence required by its cost preview"
+        )
+    endpoint = endpoint_policy.endpoint(endpoint_cost_bound.provider_endpoint)
+    if endpoint is None:
+        raise OpenRouterRequestCostPreviewError(
+            "provider dispatch lacks the exact endpoint bound by its cost preview"
+        )
+    maximum_cost = _trusted_endpoint_request_maximum_cost_usd(endpoint_cost_bound)
+    context_sha256 = (
+        context_request_evidence.evidence_sha256 if context_request_evidence is not None else None
+    )
+    rendered_context_sha256 = (
+        context_request_evidence.rendered_sha256 if context_request_evidence is not None else None
+    )
+    actual_fields: dict[str, object] = {
+        "logical_request_id": request_token_plan.request_id,
+        "role": request_token_plan.role,
+        "exact_model_id": endpoint_cost_bound.exact_model_id,
+        "provider_endpoint": endpoint_cost_bound.provider_endpoint,
+        "maximum_attempts": maximum_attempts,
+        "execution_config_sha256": _canonical_sha256(execution.model_dump(mode="json")),
+        "privacy_config_sha256": _canonical_sha256(privacy.model_dump(mode="json")),
+        "token_budget_config_sha256": _canonical_sha256(token_budgets.model_dump(mode="json")),
+        "provider_policy_sha256": _request_cost_preview_provider_policy_sha256(provider_policy),
+        "discovery_manifest_sha256": model_identity.discovery_manifest_sha256,
+        "discovery_evidence_sha256": model_identity.discovery_evidence_sha256,
+        "discovery_provenance_sha256": model_identity.discovery_provenance_sha256,
+        "catalog_snapshot_sha256": model_identity.catalog_snapshot_sha256,
+        "catalog_identity_binding_sha256": model_identity.catalog_identity_binding_sha256,
+        "model_metadata_snapshot_sha256": model_identity.model_metadata_snapshot_sha256,
+        "model_identity_snapshot_sha256": model_identity.snapshot.snapshot_sha256,
+        "endpoint_policy_snapshot_sha256": endpoint_policy.snapshot_sha256,
+        "endpoint_record_snapshot_sha256": endpoint.snapshot_sha256,
+        "endpoint_policy_pricing_sha256": endpoint_policy.policy_pricing_sha256,
+        "endpoint_pricing_sha256": endpoint.pricing_sha256,
+        "output_capability_sha256": endpoint_policy.output_capability_sha256,
+        "reasoning_capability_sha256": reasoning_plan.endpoint_capability_sha256,
+        "structured_output_mode": structured_output_plan.mode,
+        "prompt_sha256": _structured_output_prompt_sha256_from_plan(structured_output_plan),
+        "system_prompt_sha256": hashlib.sha256(
+            structured_output_plan.system_prompt.encode("utf-8")
+        ).hexdigest(),
+        "user_prompt_sha256": hashlib.sha256(
+            structured_output_plan.user_prompt.encode("utf-8")
+        ).hexdigest(),
+        "response_schema_sha256": structured_output_plan.schema_sha256,
+        "output_request_shape_sha256": structured_output_plan.request_shape_sha256,
+        "required_provider_parameters_sha256": _canonical_sha256(
+            structured_output_plan.required_provider_parameters
+        ),
+        "strict_output_protocol_sha256": structured_output_plan.strict_protocol_sha256,
+        "reasoning_request_sha256": structured_output_plan.reasoning_request_sha256,
+        "reasoning_plan_sha256": reasoning_plan.evidence_sha256,
+        "reasoning_policy_sha256": reasoning_plan.policy_artifact_sha256,
+        "reasoning_policy_role_binding_sha256": (reasoning_plan.policy_role_binding_sha256),
+        "reasoning_profile_sha256": reasoning_plan.control_profile.profile_sha256,
+        "reasoning_qualification_sha256": reasoning_plan.qualification_binding_sha256,
+        "context_request_evidence_sha256": context_sha256,
+        "rendered_context_sha256": rendered_context_sha256,
+        "request_token_plan_projection_sha256": request_token_plan_projection_sha256,
+        "request_material_projection_sha256": request_material_projection_sha256,
+        "request_material_projection_utf8_bytes": len(request_material_projection.encode("utf-8")),
+        "endpoint_cost_bound_pricing_sha256": (endpoint_cost_bound.pricing_snapshot_sha256),
+        "endpoint_cost_bound_projection_sha256": (
+            _endpoint_request_cost_bound_projection_sha256(
+                endpoint_cost_bound,
+                request_material_projection_sha256=request_material_projection_sha256,
+            )
+        ),
+        "prompt_byte_upper_bound_tokens": (request_token_plan.prompt_byte_upper_bound_tokens),
+        "requested_completion_tokens": request_token_plan.requested_completion_tokens,
+        "reserved_output_tokens": request_token_plan.reserved_output_tokens,
+        "reserved_reasoning_tokens": request_token_plan.reserved_reasoning_tokens,
+        "maximum_priced_prompt_units": _trusted_endpoint_request_maximum_units_for(
+            endpoint_cost_bound,
+            "prompt",
+        ),
+        "maximum_cost_usd_per_attempt_exact": _format_cost_decimal(maximum_cost),
+        "maximum_cost_usd_all_attempts_exact": _multiply_cost_decimal(
+            maximum_cost,
+            maximum_attempts,
+        ),
+    }
+    mismatched_fields = tuple(
+        field for field, actual in actual_fields.items() if getattr(expected, field) != actual
+    )
+    actual_components = tuple(
+        OpenRouterRequestCostComponentPreview(
+            pricing_field=component.pricing_field,
+            unit_price_usd_exact=_format_cost_decimal(component.unit_price_usd),
+            maximum_units=component.maximum_units,
+        )
+        for component in endpoint_cost_bound.components
+    )
+    if expected.cost_components != actual_components:
+        mismatched_fields = (*mismatched_fields, "cost_components")
+    if mismatched_fields:
+        raise OpenRouterRequestCostPreviewError(
+            "provider request changed after exact cost preview: "
+            + ", ".join(sorted(mismatched_fields))
+        )
 
 
 def _validate_provider_token_usage(
@@ -4472,6 +5565,7 @@ class OpenRouterClient:
             catalog_snapshot_sha256=evidence.provenance.catalog_snapshot_sha256,
             discovery_provenance_sha256=evidence.provenance.provenance_sha256,
             discovery_evidence_sha256=evidence.discovery_evidence_sha256,
+            discovery_manifest_sha256=(manifest.manifest_sha256 if manifest is not None else None),
             snapshot=_identity_snapshot_from_discovery(
                 evidence,
                 allow_fallbacks=self.provider_policy.allow_fallbacks,
@@ -4924,13 +6018,7 @@ class OpenRouterClient:
         profile = self._reasoning_profile_for_role(role)
         if profile is None:
             return self.reasoning
-        if profile.mode == "disabled":
-            return None
-        return OpenRouterReasoning(
-            effort=profile.effort,
-            max_tokens=profile.max_tokens,
-            exclude=profile.exclude,
-        )
+        return _reasoning_from_control_profile(profile)
 
     def _reserved_reasoning_tokens(
         self,
@@ -6939,22 +8027,7 @@ class OpenRouterClient:
             if request_token_plan is not None
             else self.execution.max_output_tokens_per_request
         )
-        body: dict[str, Any] = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": request_plan.system_prompt},
-                {"role": "user", "content": request_plan.user_prompt},
-            ],
-            "temperature": 0,
-            "max_tokens": maximum_tokens,
-            "stream": False,
-            "provider": effective_provider_policy.as_request_payload(
-                require_zdr=self.privacy.require_zdr,
-                require_parameters=request_plan.require_parameters,
-            ),
-        }
-        if request_plan.response_format is not None:
-            body["response_format"] = request_plan.response_format
+        routing_max_price: Mapping[str, float] | None = None
         if refresh_pricing_control is not None:
             if (
                 refresh_pricing_control.exact_model_id != model
@@ -6986,24 +8059,18 @@ class OpenRouterClient:
                 raise OpenRouterModelRefreshPricingError(
                     "sealed refresh pricing control differs from the exact request route"
                 )
-            provider = body["provider"]
-            assert isinstance(provider, dict)
-            provider["max_price"] = dict(refresh_pricing_control.routing_max_price)
+            routing_max_price = dict(refresh_pricing_control.routing_max_price)
         elif endpoint_policy is not None:
-            provider = body["provider"]
-            assert isinstance(provider, dict)
-            provider["max_price"] = dict(endpoint_policy.routing_max_price)
-        if request_plan.reasoning_payload is not None:
-            body["reasoning"] = request_plan.reasoning_payload
-        if request_metadata:
-            body["metadata"] = {
-                key: value
-                for key, value in request_metadata.items()
-                if _is_safe_metadata_pair(key, value)
-            }
-            if len(body["metadata"]) != len(request_metadata):
-                raise OpenRouterRequestLimitError("request metadata is invalid")
-        return body
+            routing_max_price = dict(endpoint_policy.routing_max_price)
+        return _assemble_structured_request_body(
+            model=model,
+            structured_output_plan=request_plan,
+            provider_policy=effective_provider_policy,
+            require_zdr=self.privacy.require_zdr,
+            requested_completion_tokens=maximum_tokens,
+            request_metadata=request_metadata or {},
+            routing_max_price=routing_max_price,
+        )
 
     def preview_candidate_review_task_resources(
         self,
@@ -7673,6 +8740,7 @@ class OpenRouterClient:
         response_model: type[ResponseT],
         schema_name: str,
         logical_request_id: str | None = None,
+        expected_request_cost_preview: OpenRouterStructuredRequestCostPreview | None = None,
     ) -> ResponseT:
         """Compatibility wrapper returning only the validated structured value."""
 
@@ -7685,6 +8753,7 @@ class OpenRouterClient:
             response_model=response_model,
             schema_name=schema_name,
             logical_request_id=logical_request_id,
+            expected_request_cost_preview=expected_request_cost_preview,
         )
         if _is_concluded_unbound_completion(completion):
             raise OpenRouterUnboundIdentityError(completion)
@@ -7899,11 +8968,49 @@ class OpenRouterClient:
         response_model: type[ResponseT],
         schema_name: str,
         logical_request_id: str | None = None,
+        expected_request_cost_preview: OpenRouterStructuredRequestCostPreview | None = None,
         _maximum_attempts: int | None = None,
         _expected_resource_preview: ModelSurfaceTaskResourcePreview | None = None,
     ) -> StructuredCompletion[ResponseT]:
         """Call only the explicitly supplied models, in order."""
 
+        if expected_request_cost_preview is not None and _expected_resource_preview is not None:
+            raise OpenRouterRequestCostPreviewError(
+                "provider dispatch cannot combine independent request-resource previews"
+            )
+        if expected_request_cost_preview is not None:
+            if (
+                type(expected_request_cost_preview) is not OpenRouterStructuredRequestCostPreview
+                or type(models) is not list
+                or len(models) != 1
+                or type(role) is not str
+                or type(logical_request_id) is not str
+                or self.token_budgets is None
+            ):
+                raise OpenRouterRequestCostPreviewError(
+                    "exact request-cost preview requires one deterministic provider route"
+                )
+            try:
+                sealed_expected_cost_preview = (
+                    OpenRouterStructuredRequestCostPreview.model_validate_json(
+                        expected_request_cost_preview.model_dump_json(),
+                        strict=True,
+                    )
+                )
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise OpenRouterRequestCostPreviewError(
+                    "request-cost preview failed detached validation"
+                ) from exc
+            if (
+                sealed_expected_cost_preview != expected_request_cost_preview
+                or logical_request_id != sealed_expected_cost_preview.logical_request_id
+                or role != sealed_expected_cost_preview.role
+                or models != [sealed_expected_cost_preview.exact_model_id]
+            ):
+                raise OpenRouterRequestCostPreviewError(
+                    "provider dispatch coordinates differ from the exact request-cost preview"
+                )
+            expected_request_cost_preview = sealed_expected_cost_preview
         if _expected_resource_preview is not None:
             from mmaudit.models.coverage_planning import ModelSurfaceTaskResourcePreview
 
@@ -7939,6 +9046,13 @@ class OpenRouterClient:
         if type(maximum_attempts) is not int or not 1 <= maximum_attempts <= configured_attempts:
             raise OpenRouterRequestLimitError(
                 "model attempt override must only tighten the configured retry bound"
+            )
+        if (
+            expected_request_cost_preview is not None
+            and maximum_attempts != expected_request_cost_preview.maximum_attempts
+        ):
+            raise OpenRouterRequestCostPreviewError(
+                "provider retry bound differs from the exact request-cost preview"
             )
         for model in models:
             _require_exact_model_id(model)
@@ -8287,6 +9401,7 @@ class OpenRouterClient:
                     ),
                     maximum_attempts=maximum_attempts,
                     expected_resource_preview=_expected_resource_preview,
+                    expected_request_cost_preview=expected_request_cost_preview,
                 )
             except (
                 OpenRouterTransientError,
@@ -8520,6 +9635,7 @@ class OpenRouterClient:
         qualification_bound_reasoning_plan: ReasoningRequestPlanEvidence | None = None,
         maximum_attempts: int | None = None,
         expected_resource_preview: ModelSurfaceTaskResourcePreview | None = None,
+        expected_request_cost_preview: OpenRouterStructuredRequestCostPreview | None = None,
     ) -> StructuredCompletion[ResponseT]:
         paid_controls_required = _trusted_paid_controls_required(self)
         configured_attempts = self.execution.max_model_retries + 1
@@ -8534,6 +9650,16 @@ class OpenRouterClient:
         ):
             raise OpenRouterCandidateReviewBoundaryError(
                 "candidate-review attempt plan differs from aggregate resource preflight"
+            )
+        if expected_request_cost_preview is not None and (
+            expected_resource_preview is not None
+            or attempt_limit != expected_request_cost_preview.maximum_attempts
+            or request_id != expected_request_cost_preview.logical_request_id
+            or role != expected_request_cost_preview.role
+            or model != expected_request_cost_preview.exact_model_id
+        ):
+            raise OpenRouterRequestCostPreviewError(
+                "provider request coordinates differ from the exact cost preview"
             )
         if response_model is _TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE and (
             not _candidate_review_protocol_boundary_is_pristine()
@@ -8915,62 +10041,20 @@ class OpenRouterClient:
                 error=exc,
             )
             raise
-        request_metadata = {
-            "mmaudit_request_id": request_id,
-            "mmaudit_role": role,
-            "mmaudit_prompt_sha256": prompt_hash,
-            "mmaudit_user_prompt_sha256": user_prompt_hash,
-            "mmaudit_schema_sha256": schema_hash,
-            "mmaudit_output_mode": structured_output_mode.value,
-            "mmaudit_output_request_shape_sha256": (structured_output_plan.request_shape_sha256),
-            "mmaudit_required_provider_parameters_sha256": _canonical_sha256(
-                structured_output_plan.required_provider_parameters
-            ),
-            "mmaudit_token_plan_sha256": request_token_plan.plan_sha256,
-        }
-        if request_token_plan.reasoning_plan is not None:
-            request_metadata.update(
-                {
-                    "mmaudit_reasoning_plan_sha256": (
-                        request_token_plan.reasoning_plan.evidence_sha256
-                    ),
-                    "mmaudit_reasoning_policy_sha256": (
-                        request_token_plan.reasoning_plan.policy_artifact_sha256
-                    ),
-                    "mmaudit_reasoning_profile_sha256": (
-                        request_token_plan.reasoning_plan.control_profile.profile_sha256
-                    ),
-                }
-            )
-            if request_token_plan.reasoning_plan.endpoint_capability_sha256 is not None:
-                request_metadata["mmaudit_reasoning_capability_sha256"] = (
-                    request_token_plan.reasoning_plan.endpoint_capability_sha256
-                )
-            if request_token_plan.reasoning_plan.qualification_binding_sha256 is not None:
-                request_metadata["mmaudit_reasoning_qualification_sha256"] = (
-                    request_token_plan.reasoning_plan.qualification_binding_sha256
-                )
-        if context_request_evidence is not None:
-            request_metadata["mmaudit_context_request_evidence_sha256"] = (
-                context_request_evidence.evidence_sha256
-            )
-        if structured_output_plan.strict_protocol_sha256 is not None:
-            request_metadata["mmaudit_output_protocol_sha256"] = (
-                structured_output_plan.strict_protocol_sha256
-            )
-        if endpoint_policy is not None:
-            request_metadata["mmaudit_endpoint_snapshot_sha256"] = endpoint_policy.snapshot_sha256
-            request_metadata["mmaudit_endpoint_pricing_sha256"] = (
-                endpoint_policy.policy_pricing_sha256
-            )
-            request_metadata["mmaudit_output_capability_sha256"] = (
-                endpoint_policy.output_capability_sha256
-            )
         model_identity = self._model_identities.get(model)
-        if model_identity is not None:
-            request_metadata["mmaudit_identity_snapshot_sha256"] = (
-                model_identity.snapshot.snapshot_sha256
-            )
+        request_metadata = _structured_request_metadata(
+            request_id=request_id,
+            role=role,
+            prompt_sha256=prompt_hash,
+            user_prompt_sha256=user_prompt_hash,
+            structured_output_plan=structured_output_plan,
+            request_token_plan=request_token_plan,
+            context_request_evidence=context_request_evidence,
+            endpoint_policy=endpoint_policy,
+            model_identity_snapshot_sha256=(
+                model_identity.snapshot.snapshot_sha256 if model_identity is not None else None
+            ),
+        )
         if qualification_binding is not None:
             request_metadata.update(qualification_binding.request_metadata())
         if audit_routing_evidence is not None:
@@ -9026,6 +10110,7 @@ class OpenRouterClient:
             request_material = (
                 _TRUSTED_CANDIDATE_REVIEW_CANONICAL_JSON_DUMPS(body)
                 if expected_resource_preview is not None
+                or expected_request_cost_preview is not None
                 else json.dumps(
                     body,
                     sort_keys=True,
@@ -9048,6 +10133,24 @@ class OpenRouterClient:
                 request_token_plan=request_token_plan,
                 refresh_pricing_control=refresh_pricing_control,
             )
+            if expected_request_cost_preview is not None:
+                _TRUSTED_REQUIRE_MATCHING_REQUEST_COST_PREVIEW(
+                    expected=expected_request_cost_preview,
+                    execution=self.execution,
+                    privacy=self.privacy,
+                    token_budgets=self.token_budgets,
+                    provider_policy=request_provider_policy,
+                    model_identity=self._model_identities.get(model),
+                    endpoint_policy=endpoint_policy,
+                    structured_output_plan=structured_output_plan,
+                    request_token_plan=request_token_plan,
+                    context_request_evidence=context_request_evidence,
+                    request_material_projection=request_material_projection,
+                    request_material_projection_sha256=request_material_projection_sha256,
+                    request_token_plan_projection_sha256=(_request_token_plan_projection_sha256),
+                    endpoint_cost_bound=endpoint_cost_bound,
+                    maximum_attempts=attempt_limit,
+                )
             if expected_resource_preview is not None:
                 maximum_cost_text = (
                     format(
@@ -9245,6 +10348,7 @@ class OpenRouterClient:
             locked_request_material = (
                 _TRUSTED_CANDIDATE_REVIEW_CANONICAL_JSON_DUMPS(body)
                 if expected_resource_preview is not None
+                or expected_request_cost_preview is not None
                 else json.dumps(
                     body,
                     sort_keys=True,
@@ -9980,6 +11084,20 @@ class OpenRouterClient:
                 refresh_pricing_reservation_checks=refresh_pricing_reservation_checks,
                 refresh_pricing_transport_checks=refresh_pricing_transport_checks,
             )
+            if expected_request_cost_preview is not None:
+                routing.update(
+                    {
+                        "request_cost_preview_sha256": (
+                            expected_request_cost_preview.preview_sha256
+                        ),
+                        "request_cost_preview_maximum_cost_usd_per_attempt_exact": (
+                            expected_request_cost_preview.maximum_cost_usd_per_attempt_exact
+                        ),
+                        "request_cost_preview_maximum_cost_usd_all_attempts_exact": (
+                            expected_request_cost_preview.maximum_cost_usd_all_attempts_exact
+                        ),
+                    }
+                )
             reasoning_execution_evidence = (
                 ReasoningExecutionEvidence.build(
                     request_plan=request_token_plan.reasoning_plan,
@@ -10432,23 +11550,11 @@ class OpenRouterClient:
             raise UnprovenCostBoundError("paid request lacks validated endpoint pricing")
         if request_token_plan.route_intersection.exact_model_ids != (model,):
             raise UnprovenCostBoundError("request token plan differs from the priced model")
-        request_bytes = max(1, len(request_material.encode("utf-8")))
-        prompt_pricing_units = max(
-            request_bytes,
-            request_token_plan.prompt_byte_upper_bound_tokens,
+        ceilings = _structured_request_pricing_unit_ceilings(
+            request_material=request_material,
+            request_token_plan=request_token_plan,
         )
         output_tokens = request_token_plan.requested_completion_tokens
-        reasoning_tokens = request_token_plan.reserved_reasoning_tokens
-        ceilings = {
-            "completion": output_tokens,
-            "image": 0,
-            "input_cache_read": prompt_pricing_units,
-            "input_cache_write": prompt_pricing_units,
-            "internal_reasoning": reasoning_tokens,
-            "prompt": prompt_pricing_units,
-            "request": 1,
-            "web_search": 0,
-        }
         registered_endpoints = registered_policy.endpoints
         if refresh_pricing_control is not None:
             if refresh_pricing_control.exact_model_id != model:
@@ -11570,8 +12676,7 @@ class OpenRouterClient:
 
     def _ensure_request_size(self, body: dict[str, Any]) -> None:
         _TRUSTED_ENSURE_NO_CREDENTIAL_IN_VALUE(self, body)
-        serialized = json.dumps(body, sort_keys=True, ensure_ascii=True)
-        size = len(serialized.encode("utf-8"))
+        size = _serialized_structured_request_size(body)
         if size > self.execution.max_request_bytes:
             raise OpenRouterRequestLimitError(
                 f"serialized model request exceeds {self.execution.max_request_bytes} byte limit"
@@ -11947,6 +13052,7 @@ _TRUSTED_COMPLETE_CANDIDATE_REVIEW_WITH_EVIDENCE = (
 )
 _TRUSTED_FAILURE_ROUTING_EVIDENCE = OpenRouterClient._failure_routing_evidence
 _TRUSTED_ENDPOINT_REQUEST_COST_BOUND = OpenRouterClient._endpoint_request_cost_bound
+_TRUSTED_REQUIRE_MATCHING_REQUEST_COST_PREVIEW = _require_matching_structured_request_cost_preview
 _TRUSTED_ENSURE_REQUEST_SIZE = OpenRouterClient._ensure_request_size
 _TRUSTED_STORE_DEBUG = OpenRouterClient._store_debug
 _TRUSTED_ENSURE_NO_CREDENTIAL_IN_VALUE = OpenRouterClient._ensure_no_credential_in_value
@@ -12125,6 +13231,10 @@ def _openrouter_client_callables_are_pristine() -> bool:
         )
         and OpenRouterClient._failure_routing_evidence is _TRUSTED_FAILURE_ROUTING_EVIDENCE
         and (OpenRouterClient._endpoint_request_cost_bound is _TRUSTED_ENDPOINT_REQUEST_COST_BOUND)
+        and (
+            _require_matching_structured_request_cost_preview
+            is _TRUSTED_REQUIRE_MATCHING_REQUEST_COST_PREVIEW
+        )
         and OpenRouterClient._ensure_request_size is _TRUSTED_ENSURE_REQUEST_SIZE
         and OpenRouterClient._store_debug is _TRUSTED_STORE_DEBUG
         and (

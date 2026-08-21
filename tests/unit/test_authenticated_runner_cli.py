@@ -122,6 +122,8 @@ def _result() -> AuthenticatedRunnerOpenRouterResult:
     )
     runs = tuple(
         AuthenticatedRunnerOpenRouterRunSnapshot(
+            candidate_cost_plan=cast(Any, f"candidate-cost-plan-{index}"),
+            judge_cost_plan=cast(Any, f"judge-cost-plan-{index}"),
             candidate_report=cast(Any, f"candidate-report-{index}"),
             prepared_adjudication=cast(Any, f"prepared-{index}"),
             adjudication_report=cast(Any, f"adjudication-report-{index}"),
@@ -143,7 +145,7 @@ def _result() -> AuthenticatedRunnerOpenRouterResult:
 
 def _durable_bundle() -> AuthenticatedRunnerDurableEvidenceBundle:
     return AuthenticatedRunnerDurableEvidenceBundle.model_construct(
-        schema_version="1.0",
+        schema_version="1.1",
         runner_evidence_sha256="f" * 64,
         closed_ledger_evidence=SimpleNamespace(
             entries=(object(), object()),
@@ -162,6 +164,10 @@ def _durable_bundle() -> AuthenticatedRunnerDurableEvidenceBundle:
         release_authorized=False,
         bundle_sha256="e" * 64,
     )
+
+
+def _legacy_durable_bundle() -> AuthenticatedRunnerDurableEvidenceBundle:
+    return _durable_bundle().model_copy(update={"schema_version": "1.0"})
 
 
 def test_verify_authenticated_runner_help_exposes_offline_bundle_input() -> None:
@@ -213,6 +219,34 @@ def test_verify_authenticated_runner_is_offline_and_nonauthorizing(
     assert f"Runner SHA-256: {bundle.runner_evidence_sha256}" in result.stdout
     assert "entries=2; final_spent_usd=0.125" in result.stdout
     assert "AUTHSEAL comparison: REJECTED" in result.stdout
+
+
+def test_verify_authenticated_runner_rejects_legacy_v10_without_calling_it_valid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = _legacy_durable_bundle()
+    monkeypatch.setattr(
+        cli_module,
+        "load_authenticated_runner_durable_bundle",
+        lambda _path: bundle,
+    )
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        [
+            "models",
+            "verify-authenticated-runner",
+            "--bundle",
+            str(tmp_path / "legacy-v10.json"),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "legacy" in result.stdout.lower()
+    assert "lacks exact staged request-cost admission" in " ".join(result.stdout.split())
+    assert "VALID / NONAUTHORIZING" not in result.stdout
 
 
 def test_verify_authenticated_runner_replays_real_private_file(tmp_path: Path) -> None:
@@ -391,6 +425,10 @@ def test_authenticated_runner_preflight_only_never_selects_secrets_or_mutates_ou
         initial_spent_usd=Decimal("0.0034764325"),
         declared_interval_cost_cap_usd=Decimal("192.00"),
         declared_final_spent_cap_usd=Decimal("192.0034764325"),
+        candidate_stage_plan_sha256s=("b" * 64, "c" * 64),
+        candidate_derived_interval_cost_cap_usd=Decimal("1.25"),
+        candidate_derived_final_spent_cap_usd=Decimal("1.2534764325"),
+        judge_cost_admission_status="PENDING_REAL_CANDIDATE_OUTPUTS",
     )
     monkeypatch.setattr(
         cli_module,
@@ -413,15 +451,23 @@ def test_authenticated_runner_preflight_only_never_selects_secrets_or_mutates_ou
     result = RUNNER.invoke(
         cli_module.app,
         _required_arguments(tmp_path, preflight_only=True),
-        env={"MMAUDIT_SECRETS_ENV_FILE": str(tmp_path / "different-secret.env")},
+        env={
+            "COLUMNS": "400",
+            "MMAUDIT_SECRETS_ENV_FILE": str(tmp_path / "different-secret.env"),
+        },
     )
 
     assert result.exit_code == 0, result.stdout
     assert "VALID / NONAUTHORIZING / NO PROVIDER EGRESS" in result.stdout
     assert "logical_requests=96" in result.stdout
     assert "maximum_provider_attempts=192" in result.stdout
-    assert "declared_interval_cap_usd=192.00" in result.stdout
-    assert "declared_final_spent_cap_usd=192.0034764325" in result.stdout
+    assert "operator_interval_cap_usd=192.00" in result.stdout
+    assert "operator_final_spent_cap_usd=192.0034764325" in result.stdout
+    assert f"plan_sha256s={'b' * 64},{'c' * 64}" in result.stdout
+    assert "derived_interval_cap_usd=1.25" in result.stdout
+    assert "derived_final_spent_cap_usd=1.2534764325" in result.stdout
+    assert "status=PENDING_REAL_CANDIDATE_OUTPUTS" in result.stdout
+    assert "full_campaign_cost_bound=UNAVAILABLE_BEFORE_REAL_CANDIDATE_OUTPUTS" in result.stdout
     source_paths = cast(tuple[Path, ...], captured["source_paths"])
     assert tmp_path / "operator-secrets.env" not in source_paths
     assert tmp_path / "different-secret.env" not in source_paths
@@ -598,6 +644,8 @@ def test_authenticated_runner_preflights_before_secret_and_writes_only_durable_i
     bundle_inputs = cast(dict[str, object], captured["bundle_inputs"])
     assert set(bundle_inputs) == {
         "runner_evidence",
+        "candidate_cost_plans",
+        "judge_cost_plans",
         "candidate_reports",
         "prepared_runs",
         "adjudication_reports",
@@ -861,6 +909,14 @@ def test_authenticated_runner_durable_output_delegates_exact_retained_runs(
 
     assert output is expected
     assert observed["runner_evidence"] is result.runner_evidence
+    assert observed["candidate_cost_plans"] == (
+        "candidate-cost-plan-0",
+        "candidate-cost-plan-1",
+    )
+    assert observed["judge_cost_plans"] == (
+        "judge-cost-plan-0",
+        "judge-cost-plan-1",
+    )
     assert observed["candidate_reports"] == (
         "candidate-report-0",
         "candidate-report-1",

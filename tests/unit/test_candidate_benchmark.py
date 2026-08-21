@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 import pytest
@@ -19,11 +19,13 @@ from mmaudit.benchmark.models import (
     ModelBenchmarkModelResult,
     ModelBenchmarkReport,
     ModelBenchmarkResponse,
+    ModelBenchmarkTarget,
+    authenticated_runner_model_benchmark_request_descriptors,
     blinded_model_benchmark_request,
     load_model_benchmark_corpus,
     model_benchmark_system_prompt,
 )
-from mmaudit.config import AuditConfig, model_lineage_index
+from mmaudit.config import AuditConfig, TokenBudgetConfig, model_lineage_index
 from mmaudit.models.candidate_benchmark import (
     CandidateBenchmarkFailureStage,
     CandidateBenchmarkPreDispatchError,
@@ -50,6 +52,8 @@ from mmaudit.models.endpoint_snapshots import validate_openrouter_endpoint_snaps
 from mmaudit.models.openrouter import (
     OpenRouterClient,
     OpenRouterProviderPolicy,
+    OpenRouterStructuredRequestCostPreview,
+    preview_openrouter_structured_request_cost,
 )
 from mmaudit.models.qualification import (
     CandidateModel,
@@ -62,6 +66,7 @@ from mmaudit.models.qualification import (
     seal_qualification_policy,
 )
 from mmaudit.models.reasoning import ReasoningPolicyArtifact
+from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     ModelRequestValidationStatus,
@@ -114,6 +119,7 @@ class _MockClientFactory:
         candidate: CandidateModel,
         provider_policy: OpenRouterProviderPolicy,
         reasoning_policy: ReasoningPolicyArtifact,
+        token_budgets: TokenBudgetConfig | None,
     ) -> OpenRouterClient:
         self.calls.append((candidate.exact_model_id, provider_policy, reasoning_policy))
         if candidate.exact_model_id in self.orphan_usage_models:
@@ -242,6 +248,7 @@ class _MockClientFactory:
             base_url="https://fake.test/api/v1/",
             provider_policy=provider_policy,
             reasoning_policy=reasoning_policy,
+            token_budgets=token_budgets,
             test_only_mock_handler=handler,
         )
         self.clients.append(client)
@@ -489,6 +496,8 @@ def _budget(tmp_path: Path, config: AuditConfig) -> BudgetManager:
         max_requests_per_agent=config.execution.max_requests_per_agent,
         atomic_ledger=ledger,
         require_endpoint_cost_bound=True,
+        global_input_token_budget=config.token_budgets.global_input_token_budget,
+        global_output_token_budget=config.token_budgets.global_output_token_budget,
     )
 
 
@@ -497,6 +506,51 @@ def _config(config_factory: Callable[..., AuditConfig]) -> AuditConfig:
         execution={"max_requests_per_agent": 512},
         privacy={"profile": PrivacyProfile.SYNTHETIC_BENCHMARK},
         models={"reasoning": {"effort": "high", "reserved_tokens": 4_096}},
+    )
+
+
+def _authenticated_runner_cost_previews(
+    *,
+    run_kind: Literal["PRIMARY", "REPLAY"],
+    config: AuditConfig,
+    manifest: Any,
+    evidence: tuple[OpenRouterModelDiscoveryEvidence, ...],
+    registry: Any,
+    suite: Any,
+) -> tuple[OpenRouterStructuredRequestCostPreview, ...]:
+    candidate = registry.candidates[0]
+    target = ModelBenchmarkTarget(
+        model_id=candidate.exact_model_id,
+        root_lineage=candidate.root_lineage,
+    )
+    descriptors = authenticated_runner_model_benchmark_request_descriptors(
+        run_kind=run_kind,
+        suite=suite,
+        target=target,
+    )
+    provider_policy = OpenRouterProviderPolicy(
+        certification=True,
+        only=(candidate.approved_provider_endpoint,),
+        allow_fallbacks=False,
+    )
+    return tuple(
+        preview_openrouter_structured_request_cost(
+            execution=config.execution,
+            privacy=config.privacy,
+            token_budgets=config.token_budgets,
+            provider_policy=provider_policy,
+            reasoning_policy=build_reasoning_policy(config),
+            discovery_manifest=manifest,
+            discovery_evidence=evidence[0],
+            role=descriptor.request_role,
+            system_prompt=descriptor.system_prompt,
+            user_prompt=descriptor.user_prompt,
+            response_model=descriptor.response_model,
+            schema_name=descriptor.schema_name,
+            logical_request_id=descriptor.logical_request_id,
+            context_package=None,
+        )
+        for descriptor in descriptors
     )
 
 
@@ -848,6 +902,163 @@ async def test_candidate_benchmark_uses_exact_mock_certification_route(
         assert case.usage_record.routing["privacy_source_sha256"] == suite.corpus_sha256
     assert all(not client._credential for client in factory.clients)
     assert canary not in result.model_dump_json()
+
+
+def test_authenticated_runner_candidate_request_descriptors_are_closed_and_deterministic(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    del config_factory
+    suite = load_model_benchmark_corpus(CORPUS_PATH)
+    target = ModelBenchmarkTarget(
+        model_id="alpha/atlas-secure",
+        root_lineage="sha256:" + ("a" * 64),
+    )
+
+    primary = authenticated_runner_model_benchmark_request_descriptors(
+        run_kind="PRIMARY",
+        suite=suite,
+        target=target,
+    )
+    replay = authenticated_runner_model_benchmark_request_descriptors(
+        run_kind="REPLAY",
+        suite=suite,
+        target=target,
+    )
+
+    assert len(primary) == len(replay) == 24
+    assert tuple(item.case_id for item in primary) == tuple(case.case_id for case in suite.cases)
+    assert tuple(item.logical_request_id for item in primary) == tuple(
+        f"authrunner.candidate.primary:{case.case_id}" for case in suite.cases
+    )
+    assert tuple(item.logical_request_id for item in replay) == tuple(
+        f"authrunner.candidate.replay:{case.case_id}" for case in suite.cases
+    )
+    assert all(item.response_model is ModelBenchmarkResponse for item in primary)
+    assert all(item.schema_name == MODEL_BENCHMARK_SCHEMA_NAME for item in primary)
+    assert all(item.system_prompt == model_benchmark_system_prompt() for item in primary)
+    assert tuple(item.user_prompt for item in primary) == tuple(
+        blinded_model_benchmark_request(case) for case in suite.cases
+    )
+
+
+@pytest.mark.asyncio
+async def test_authenticated_runner_candidate_consumes_exact_cost_preview_inventory(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = _config(config_factory)
+    spec = _CandidateSpec(
+        model_id="alpha/atlas-secure",
+        provider_endpoint="provider-alpha",
+        provider_name="Provider Alpha",
+        canonical_model_id="alpha/atlas-secure-20260727",
+    )
+    manifest, evidence, registry = _discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(spec,),
+    )
+    suite = load_model_benchmark_corpus(CORPUS_PATH)
+    previews = _authenticated_runner_cost_previews(
+        run_kind="PRIMARY",
+        config=config,
+        manifest=manifest,
+        evidence=evidence,
+        registry=registry,
+        suite=suite,
+    )
+    factory = _MockClientFactory()
+    try:
+        result = await run_candidate_registry_benchmarks(
+            config=config,
+            discovery_manifest=manifest,
+            discovery_evidence=evidence,
+            candidate_registry=registry,
+            benchmark_suite=suite,
+            budget=_budget(tmp_path / "budget", config),
+            usage=UsageLedger(),
+            operator_api_key="synthetic-key",
+            explicitly_allow_synthetic_egress=True,
+            client_factory=factory,
+            authenticated_runner_run_kind="PRIMARY",
+            expected_request_cost_previews=previews,
+        )
+    finally:
+        await factory.close()
+
+    usage_records = tuple(
+        case.usage_record
+        for case in result.reports[0].results[0].cases
+        if case.usage_record is not None
+    )
+    assert tuple(item.request_id for item in usage_records) == tuple(
+        item.logical_request_id for item in previews
+    )
+    assert factory.request_bodies
+
+
+@pytest.mark.asyncio
+async def test_authenticated_runner_candidate_rejects_preview_drift_before_client_creation(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = _config(config_factory)
+    manifest, evidence, registry = _discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(
+            _CandidateSpec(
+                model_id="alpha/atlas-secure",
+                provider_endpoint="provider-alpha",
+                provider_name="Provider Alpha",
+            ),
+        ),
+    )
+    suite = load_model_benchmark_corpus(CORPUS_PATH)
+    previews = _authenticated_runner_cost_previews(
+        run_kind="PRIMARY",
+        config=config,
+        manifest=manifest,
+        evidence=evidence,
+        registry=registry,
+        suite=suite,
+    )
+    drifted = (previews[1], previews[0], *previews[2:])
+    factory = _MockClientFactory()
+
+    with pytest.raises(ValueError, match="one candidate and exact cost previews"):
+        await run_candidate_registry_benchmarks(
+            config=config,
+            discovery_manifest=manifest,
+            discovery_evidence=evidence,
+            candidate_registry=registry,
+            benchmark_suite=suite,
+            budget=_budget(tmp_path / "missing-budget", config),
+            usage=UsageLedger(),
+            operator_api_key="synthetic-key",
+            explicitly_allow_synthetic_egress=True,
+            client_factory=factory,
+            authenticated_runner_run_kind="PRIMARY",
+        )
+
+    with pytest.raises(ValueError, match="differs from its exact request"):
+        await run_candidate_registry_benchmarks(
+            config=config,
+            discovery_manifest=manifest,
+            discovery_evidence=evidence,
+            candidate_registry=registry,
+            benchmark_suite=suite,
+            budget=_budget(tmp_path / "drift-budget", config),
+            usage=UsageLedger(),
+            operator_api_key="synthetic-key",
+            explicitly_allow_synthetic_egress=True,
+            client_factory=factory,
+            authenticated_runner_run_kind="PRIMARY",
+            expected_request_cost_previews=drifted,
+        )
+
+    assert factory.calls == []
+    assert factory.request_bodies == []
 
 
 @pytest.mark.asyncio

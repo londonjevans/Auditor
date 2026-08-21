@@ -100,27 +100,35 @@ existing ledger; its historical prefix is part of later AUTHRUNNER custody.
 MMAUDIT_BUDGET_USD=250 .venv/bin/mmaudit models init-cost-ledger --config config/openrouter-qualification.toml --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --no-color
 ```
 
-The following exact provider-free r2/r4/r2 preflight has now been rerun against the resealed
-manifest. The operator reports `VALID / NONAUTHORIZING / NO PROVIDER EGRESS`, two runs, 24 cases,
-96 logical requests, at most 192 provider attempts, 96 generation refetches, effective-config
-SHA-256 `f0ff2d76017dfcd075c6758f0da7256c98dd45ca749a42b81ca1ce8c95a93f9e`, and an unchanged
-`$0` campaign ledger. The locally verified preflight contract returns before secret selection,
-provider access, ledger mutation, or durable output publication; transient private write probes
-are created and removed during fail-closed path preflight. The declared `$192.00` interval/final
-ceiling comes only from the three placeholder `$1.00` per-attempt tripwires; it is not a derived
-live campaign cap or a pricing claim.
+The prior provider-free r2/r4/r2 preflight against the resealed manifest is historical. The
+operator reported `VALID / NONAUTHORIZING / NO PROVIDER EGRESS`, two runs, 24 cases, 96 logical
+requests, at most 192 provider attempts, 96 generation refetches, effective-config SHA-256
+`f0ff2d76017dfcd075c6758f0da7256c98dd45ca749a42b81ca1ce8c95a93f9e`, and an unchanged `$0`
+campaign ledger. That run used three placeholder `$1.00` per-attempt tripwires and therefore
+reported a nonauthoritative `$192.00` interval/final ceiling; it did not exercise the current
+exact-cost admission implementation.
+
+After the exact-cost checkpoint is committed, rerun the following unchanged provider-free command.
+The current implementation must emit two distinct, exact 24-request candidate-plan hashes and their
+retry-inclusive derived caps. Judge admission must remain `PENDING_REAL_CANDIDATE_OUTPUTS`, and the
+full campaign cost must remain unavailable, because exact judge prompts require genuine candidate
+outputs. The locally verified preflight contract returns before secret selection, provider access,
+ledger mutation, or durable output publication; transient private write probes are created and
+removed during fail-closed path preflight. The three `$1.00` values remain only additional operator
+tripwires and are not pricing evidence or substitutes for the derived request bounds.
 
 ```shell
 env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models authenticated-runner --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r2.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260820-r2" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r4.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r4" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2" --qualification-policy config/models.maximum-assurance.toml --primary-campaign-journal "$HOME/.mmaudit/private/authrunner/primary-campaign-20260821-r4" --primary-portfolio "$HOME/.mmaudit/private/authrunner/primary-portfolio-20260821-r4" --replay-campaign-journal "$HOME/.mmaudit/private/authrunner/replay-campaign-20260821-r4" --replay-portfolio "$HOME/.mmaudit/private/authrunner/replay-portfolio-20260821-r4" --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-evidence-20260821-r4.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --ground-truth-provenance benchmarks/model_corpus/provenance.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --allow-code-egress --preflight-only --no-color
 ```
 
-This provider-free result validates only the current campaign contract; it grants no runner,
-qualification, provider-call, AUTHSEAL, benchmark, audit, or release authority. Before emitting any
-separately authorized one-shot REAL command, derive and reconcile exact role/request-bound caps from
-the retained pricing and capacity evidence. The operator's cost estimates and statement that no
-known gate remains are advisory evidence, not authority, and must not be substituted for that
-derivation. Any later live command requires a separate operator action, exact fresh path custody,
-and a new provider-free preflight if its inputs or destinations change.
+This committed-byte rerun is pending and will validate only the current campaign contract; it grants
+no runner, qualification, provider-call, AUTHSEAL, benchmark, audit, or release authority. Exact
+candidate caps are derived provider-free. In any separately authorized live process, both candidate
+runs must complete first; then both judge routes must be refreshed, both exact judge plans derived,
+and their aggregate remaining cost admitted before the first judge POST. The operator's cost
+estimates and statement that no known gate remains are advisory evidence, not authority. Any later
+live command requires a separate operator action, exact fresh path custody, and a new provider-free
+preflight if its inputs or destinations change.
 
 ## Queue-derived model-work status
 

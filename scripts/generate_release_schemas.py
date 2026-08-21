@@ -14,6 +14,7 @@ from mmaudit.benchmark.engine import BenchmarkReport
 from mmaudit.config import ModelsConfig
 from mmaudit.forensic_export import ForensicDeliveryDescriptor
 from mmaudit.models.authenticated_runner import AuthenticatedCrossLineageRunnerEvidence
+from mmaudit.models.authenticated_runner_cost_plan import AuthenticatedRunnerStagedCostPlan
 from mmaudit.models.authenticated_runner_durable_bundle import (
     AUTHENTICATED_RUNNER_DURABLE_CASE_COUNT,
     AUTHENTICATED_RUNNER_DURABLE_MAX_ATTEMPTS,
@@ -40,6 +41,7 @@ from mmaudit.models.lineage_authority import (
     ModelLineageTrustAnchor,
 )
 from mmaudit.models.lineage_review import ModelLineageReviewArtifact
+from mmaudit.models.openrouter import OpenRouterStructuredRequestCostPreview
 from mmaudit.models.policy_eligibility import (
     ClientPolicyConstraints,
     ModelPolicyEligibilityArtifact,
@@ -132,6 +134,7 @@ MODELS: dict[str, type[BaseModel]] = {
     "authenticated_runner_durable_evidence_bundle.schema.json": (
         AuthenticatedRunnerDurableEvidenceBundle
     ),
+    "authenticated_runner_staged_cost_plan.schema.json": AuthenticatedRunnerStagedCostPlan,
     "audit_model_refresh_evidence.schema.json": AuditModelRefreshEvidence,
     "audit_model_refresh_pricing_attempt_evidence.schema.json": (
         AuditModelRefreshPricingAttemptEvidence
@@ -173,6 +176,9 @@ MODELS: dict[str, type[BaseModel]] = {
     "models_config.schema.json": ModelsConfig,
     "model_qualification.schema.json": ModelQualificationArtifact,
     "model_qualification_policy.schema.json": QualificationPolicy,
+    "openrouter_structured_request_cost_preview.schema.json": (
+        OpenRouterStructuredRequestCostPreview
+    ),
     "model_refresh_attempt.schema.json": ModelRefreshAttempt,
     "model_refresh_diff.schema.json": ModelRefreshDiff,
     "model_refresh_freshness.schema.json": ModelRefreshFreshness,
@@ -207,6 +213,9 @@ TITLE_OVERRIDES = {
     ),
     "authenticated_runner_durable_evidence_bundle.schema.json": (
         "mmaudit non-authorizing durable authenticated runner evidence bundle"
+    ),
+    "authenticated_runner_staged_cost_plan.schema.json": (
+        "mmaudit non-authorizing staged authenticated runner cost plan"
     ),
     "audit_model_refresh_evidence.schema.json": "mmaudit audit-scoped model refresh evidence",
     "audit_model_refresh_pricing_attempt_evidence.schema.json": (
@@ -266,6 +275,9 @@ TITLE_OVERRIDES = {
     "models_config.schema.json": "mmaudit models configuration",
     "model_qualification.schema.json": "mmaudit model qualification artifact",
     "model_qualification_policy.schema.json": "mmaudit model qualification policy",
+    "openrouter_structured_request_cost_preview.schema.json": (
+        "mmaudit non-authorizing OpenRouter structured request cost preview"
+    ),
     "model_refresh_attempt.schema.json": "mmaudit model refresh attempt",
     "model_refresh_diff.schema.json": "mmaudit model refresh diff",
     "model_refresh_freshness.schema.json": "mmaudit model refresh freshness",
@@ -1016,6 +1028,86 @@ def _authenticated_runner_safe_routing_value() -> dict[str, Any]:
     }
 
 
+def _strengthen_openrouter_request_cost_preview_contract(schema: dict[str, Any]) -> None:
+    """Publish the exact bounded, nonauthorizing structured-request preview shape."""
+
+    properties = schema["properties"]
+    authority_fields = (
+        "authorizes_dispatch",
+        "authorizes_budget_reservation",
+        "authorizes_provider_transport",
+        "grants_review_credit",
+        "grants_completion_credit",
+    )
+    schema["required"] = sorted(
+        {
+            *schema.get("required", []),
+            "artifact_kind",
+            "schema_version",
+            *authority_fields,
+        }
+    )
+    properties["logical_request_id"]["pattern"] = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    properties["exact_model_id"]["pattern"] = EXACT_MODEL_ID_PATTERN
+    properties["provider_endpoint"]["pattern"] = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$"
+    canonical_cost = r"^(?:0|[1-9][0-9]{0,49})(?:\.[0-9]{1,48})?$"
+    for field_name in (
+        "maximum_cost_usd_per_attempt_exact",
+        "maximum_cost_usd_all_attempts_exact",
+    ):
+        properties[field_name]["pattern"] = canonical_cost
+    properties["cost_components"]["uniqueItems"] = True
+    schema["$comment"] = (
+        "Runtime validation additionally replays exact discovery, route, output, reasoning, "
+        "request-body, token-unit, pricing-component, retry, Decimal-cost, and self-hash joins. "
+        "This preview grants no dispatch, reservation, transport, or review authority."
+    )
+
+
+def _strengthen_authenticated_runner_cost_plan_contract(schema: dict[str, Any]) -> None:
+    """Publish the exact 24-request nonauthorizing staged cost-plan shape."""
+
+    properties = schema["properties"]
+    authority_fields = (
+        "authorizes_dispatch",
+        "authorizes_budget_reservation",
+        "authorizes_provider_transport",
+        "grants_review_credit",
+        "grants_completion_credit",
+        "runner_custody_authorized",
+        "release_authorized",
+    )
+    schema["required"] = sorted(
+        {
+            *schema.get("required", []),
+            "artifact_kind",
+            "schema_version",
+            "logical_request_count",
+            *authority_fields,
+        }
+    )
+    properties["exact_model_id"]["pattern"] = EXACT_MODEL_ID_PATTERN
+    properties["provider_endpoint"]["pattern"] = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$"
+    canonical_cost = r"^(?:0|[1-9][0-9]{0,49})(?:\.[0-9]{1,48})?$"
+    for field_name in (
+        "maximum_cost_usd_per_attempt_exact",
+        "maximum_cost_usd_per_logical_request_exact",
+        "maximum_cost_usd_exact",
+    ):
+        properties[field_name]["pattern"] = canonical_cost
+    properties["case_ids"]["items"] = {
+        "pattern": r"^case-[0-9a-f]{16}$",
+        "type": "string",
+    }
+    for field_name in ("case_ids", "request_previews", "provider_attempt_request_ids"):
+        properties[field_name]["uniqueItems"] = True
+    schema["$comment"] = (
+        "Runtime validation additionally replays the exact ordered 24-request preview set, "
+        "singleton route/config/discovery/pricing/output/reasoning joins, retry-expanded request "
+        "identities, Decimal aggregate, and self-hash. This plan grants no runtime authority."
+    )
+
+
 def _strengthen_authenticated_runner_contract(
     schema: dict[str, Any],
     *,
@@ -1025,6 +1117,12 @@ def _strengthen_authenticated_runner_contract(
 
     definitions = schema["$defs"]
     if filename == "authenticated_runner_durable_evidence_bundle.schema.json":
+        _strengthen_openrouter_request_cost_preview_contract(
+            definitions["OpenRouterStructuredRequestCostPreview"]
+        )
+        _strengthen_authenticated_runner_cost_plan_contract(
+            definitions["AuthenticatedRunnerStagedCostPlan"]
+        )
         _strengthen_authenticated_runner_contract(
             {
                 "$defs": definitions,
@@ -1060,6 +1158,84 @@ def _strengthen_authenticated_runner_contract(
         candidate_result = definitions["ModelBenchmarkModelResult"]
         _exact_authenticated_runner_case_inventory(candidate_result["properties"]["cases"])
         candidate_result["properties"]["cases"]["uniqueItems"] = True
+        durable_run = definitions["AuthenticatedRunnerDurableRunEvidence"]
+        durable_run["required"] = sorted(
+            {
+                *durable_run.get("required", []),
+                "schema_version",
+                "candidate_cost_plan",
+                "judge_cost_plan",
+            }
+        )
+        durable_run["allOf"] = [
+            {
+                "if": {
+                    "properties": {"schema_version": {"const": "1.0"}},
+                    "required": ["schema_version"],
+                },
+                "then": {
+                    "properties": {
+                        "candidate_cost_plan": {"type": "null"},
+                        "judge_cost_plan": {"type": "null"},
+                    }
+                },
+            },
+            {
+                "if": {
+                    "properties": {"schema_version": {"const": "1.1"}},
+                    "required": ["schema_version"],
+                },
+                "then": {
+                    "properties": {
+                        field_name: {"$ref": "#/$defs/AuthenticatedRunnerStagedCostPlan"}
+                        for field_name in ("candidate_cost_plan", "judge_cost_plan")
+                    }
+                },
+            },
+        ]
+        schema["required"] = sorted({*schema.get("required", []), "schema_version"})
+        for version in ("1.0", "1.1"):
+            version_properties: dict[str, Any] = {
+                "runs": {
+                    "prefixItems": [
+                        {
+                            "allOf": [
+                                {"$ref": "#/$defs/AuthenticatedRunnerDurableRunEvidence"},
+                                {
+                                    "properties": {"schema_version": {"const": version}},
+                                    "required": ["schema_version"],
+                                },
+                            ]
+                        }
+                        for _run_kind in ("PRIMARY", "REPLAY")
+                    ]
+                }
+            }
+            if version == "1.1":
+                version_properties["closed_ledger_evidence"] = {
+                    "properties": {
+                        "entries": {
+                            "items": {
+                                "properties": {
+                                    "reserved_usd": {
+                                        "pattern": r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$",
+                                        "type": "string",
+                                    }
+                                },
+                                "required": ["reserved_usd"],
+                            }
+                        }
+                    }
+                }
+            schema.setdefault("allOf", []).append(
+                {
+                    "if": {
+                        "properties": {"schema_version": {"const": version}},
+                        "required": ["schema_version"],
+                    },
+                    "then": {"properties": version_properties},
+                }
+            )
         runs = schema["properties"]["runs"]
         runs["minItems"] = AUTHENTICATED_RUNNER_DURABLE_RUN_COUNT
         runs["maxItems"] = AUTHENTICATED_RUNNER_DURABLE_RUN_COUNT
@@ -1324,6 +1500,13 @@ def rendered_schema(filename: str, model: type[BaseModel]) -> str:
         "cross_lineage_adjudication_report.schema.json",
     }:
         _strengthen_authenticated_runner_contract(schema, filename=filename)
+    if filename == "openrouter_structured_request_cost_preview.schema.json":
+        _strengthen_openrouter_request_cost_preview_contract(schema)
+    if filename == "authenticated_runner_staged_cost_plan.schema.json":
+        _strengthen_openrouter_request_cost_preview_contract(
+            schema["$defs"]["OpenRouterStructuredRequestCostPreview"]
+        )
+        _strengthen_authenticated_runner_cost_plan_contract(schema)
     if filename == "audit_model_selection_evidence.schema.json":
         schema["required"] = sorted({*schema.get("required", []), "technical_evidence_mode"})
     if filename == "model_execution_artifact.schema.json":

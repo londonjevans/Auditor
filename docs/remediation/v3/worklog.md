@@ -8,9 +8,9 @@ AUTORUN_STATUS: BLOCKED_SAFETY
 CURRENT_MILESTONE: M1-DETERMINISTIC-PRODUCT (REACHED)
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001 (COMPLETE)
-NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Derive and reconcile exact role/request-bound caps provider-free from retained pricing/capacity evidence without adopting advisory estimates or the placeholder `$192.00` ceiling as authority. Then emit a separately authorized one-shot REAL launch command. AUTHSEAL publication, real audits, benchmarks, and release remain queued.
-LAST_COMMAND: Provider-free 194-test capture/manifest/lineage-authority/configuration/AUTHRUNNER/OpenRouter/candidate-selection/CLI/documentation/objective/release-schema matrix; `.venv/bin/python scripts/generate_release_schemas.py`; 24-test release/objective subset; `make PYTHON=.venv/bin/python lint`; `make PYTHON=.venv/bin/python type`; strict runtime/review JSON parsing; diff integrity.
-LAST_RESULT: PASS / PARTIAL — 194 affected tests passed in 37.22s and the release/objective subset passed 24 in 0.63s. Generated schemas were current; 536 files were already formatted and Ruff-clean; strict mypy passed over 202 source files; both governance JSON documents and diff integrity passed. The documentary lineage reseal is green; the subsequent operator-reported provider-free preflight is recorded separately and remains nonauthorizing. Codex made no secret, provider, or ledger access.
+NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. After the root commits the exact-cost implementation and generated artifacts, rerun the unchanged provider-free r2/r4/r2 preflight on that commit. Only after that exact nonauthorizing result may the operator separately authorize one one-shot REAL candidates-first campaign; both live judge route refreshes and aggregate exact judge admission must precede any judge POST. AUTHSEAL publication, real audits, benchmarks, and release remain queued.
+LAST_COMMAND: Exact-cost consolidated affected matrix and durable/CLI subset (including schema/release tests); terminal full unit gate under required local loopback/Unix-socket permission; schema generation/verification; `make lint`; `make type`; 12 product-documentation/objective tests; strict runtime/review JSON parsing; `git diff --check`; independent focused red-team review. Committed-byte provider-free preflight remains PENDING.
+LAST_RESULT: PASS / PARTIAL — 486 affected tests passed in 122.47s; the included durable/CLI subset passed 47 tests in 49.68s; the terminal full unit gate passed 5,989 tests in 1,175.51s (19m35s) with one deprecation warning under required local socket permission. Its initial sandboxed invocation had only 12 local-socket `PermissionError` setup errors and is not counted as a code failure or pass. Schema generation/verification passed; 539 files were format/Ruff-clean; strict mypy passed over 203 source files; 12 product-documentation/objective tests and strict governance JSON passed; diff integrity passed; independent red-team review found no blocker/HIGH and its 14 focused tests passed. The new committed-byte preflight and checkpoint remain PENDING. This governance reconciliation made no real-provider, operator-secret, or operator-private-ledger access.
 REAL_MODEL_CALLS_ATTEMPTED: 11
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 10
@@ -20,7 +20,53 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9965235675
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 83bad611a888a685e83b0ed442984fa05e755873 (`Reseal AUTHRUNNER public lineage`)
+LAST_CHECKPOINT_COMMIT: PRIOR checkpoint 647de24d8af1bf287072733e7efeca22e2010a3f (`Record valid AUTHRUNNER preflight`); exact-cost admission checkpoint PENDING
+
+## 2026-08-21T08:19:01Z — AUTHRUNNER exact-cost admission validated and governance reconciled
+
+- Status: `V3-AUTHRUNNER-001` remains `PARTIAL` / `BLOCKED_SAFETY`. This slice records the current
+  exact-cost implementation without claiming a provider run or runner authority; the committed-byte
+  preflight remains pending.
+- Provider-free candidate admission: preflight now derives two exact self-hashed 24-request
+  candidate plans from the retained singleton discovery/pricing evidence and exact request, token,
+  reasoning, output, and retry shapes. It reports the two plan hashes plus retry-inclusive exact
+  candidate interval and final-spend caps. Those plans grant no dispatch, reservation, transport,
+  review, runner, or release authority.
+- Deliberately staged judges: judge status remains `PENDING_REAL_CANDIDATE_OUTPUTS` during
+  provider-free preflight because each exact judge prompt must include its genuine candidate
+  response. The live flow completes and verifies both REAL candidate campaigns first, prepares both
+  adjudication inventories, refreshes and retains both singleton judge routes, derives both exact
+  24-request judge plans, and admits their aggregate remaining cost below the USD 250 ledger ceiling
+  before permitting the first judge POST. A failure anywhere in that preparation admits no judge
+  completion POST.
+- Tripwire and durable boundary: manual candidate/primary/replay per-attempt caps remain extra
+  operator tripwires; every derived request maximum must fit its tripwire, but the manual values are
+  neither pricing evidence nor the exact reservation basis. New durable output is schema v1.1 and
+  joins candidate and judge plans through exact reports, usage, request/token/reasoning and route/
+  pricing hashes, attempt IDs, and each ledger reservation. Legacy schema v1.0 stays readable as
+  historical evidence, but the offline CLI rejects it rather than printing current
+  `VALID / NONAUTHORIZING`.
+- Validation and checkpoint: the consolidated affected matrix passed 486 tests in 122.47s and the
+  durable/CLI subset passed 47 tests in 49.68s; schema verification/release tests were included.
+  Schema generation/verification, lint over 539 files, strict mypy over 203 source files, diff
+  integrity, 12 product-documentation/objective tests, strict governance JSON, and an independent
+  no-blocker/HIGH review with 14 focused passes also succeeded. The terminal full unit gate then
+  passed 5,989 tests in 1,175.51s (19m35s) under the required local loopback/Unix-socket permission,
+  with one deprecation warning. The initial sandboxed full-unit attempt had only 12 local-socket
+  `PermissionError` setup errors; it is recorded as an environment-permission result, not a code
+  failure or pass. Committed-byte preflight plan hashes/caps and a new checkpoint remain `PENDING`.
+  Prior checkpoint
+  `647de24d8af1bf287072733e7efeca22e2010a3f` predates this WIP and is not attributed to it.
+- Authority and counters: no real-provider, operator-secret, or operator-private-ledger access
+  occurred. Governed REAL calls remain 11 attempted / 1 succeeded / 10 rejected, used cost remains
+  USD `0.0034764325`, reserved cost remains USD `0.00`, and completed real audits remain `0`. No
+  lineage, qualification, runner, AUTHSEAL, benchmark, audit, or release authority/state changed.
+- Files changed: governance only: `docs/codex_work_queue.md`, `docs/codex_worklog.md`, their
+  remediation v3 mirrors, `runtime_status.json`, and `review_traceability.json`.
+- Next exact action: after the root commits the exact-cost bytes, rerun the unchanged provider-free
+  r2/r4/r2 preflight on that commit and retain its exact nonauthorizing output. Then require separate
+  operator authorization for one one-shot REAL candidates-first campaign; do not begin judge POSTs,
+  AUTHSEAL publication, audits, benchmarks, or release early.
 
 ## 2026-08-21T05:47:00Z — AUTHRUNNER provider-free preflight valid and nonauthorizing
 
