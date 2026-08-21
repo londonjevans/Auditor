@@ -7,13 +7,34 @@ credentials, RPC URLs, or operational attack instructions.
 AUTORUN_STATUS: BLOCKED_SAFETY
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001
-NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have only the operator authorize and run the emitted exact one-case smoke REAL command, then run the emitted provider-free offline verifier after successful publication and reconcile both records. Keep the full 24-case REAL command absent and withheld. Codex must not execute a provider command.
-LAST_VALIDATION_COMMAND: Operator-run exact provider-free smoke preflight at guide checkpoint `f0a0f39`; documentation/objective tests; Ruff format/check; strict governance JSON; `git diff --check`.
-LAST_VALIDATION_RESULT: PASS / PARTIAL — the operator reports the corrected one-case preflight `VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS`, `$0` spend, four logical requests, at most eight attempts, candidate cap USD `0.21890352`, and judge admission `PENDING_REAL_CANDIDATE_OUTPUTS`. The guide emits only the smoke REAL command and its offline verifier; the full command remains absent. No authority or governed counter changed.
-LAST_CHECKPOINT_COMMIT: f0a0f39ee275bc774709bd0fbff411cfa7ecac04 — `Document provider-free smoke preflight`; latest durable pushed guide checkpoint over implementation checkpoint `7e9db03145b4afc1834dd47e9f4f97800e1edffb`.
-REMAINING_ACTIONABLE_TICKETS: Obtain and reconcile the operator-run one-case REAL smoke and, only after successful publication, its provider-free offline verification. Full 24-case REAL, external authority-log publication, and all benchmark/release work remain withheld. Codex must not execute provider calls.
+NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Fix and regress the noncrediting owned-REAL origin proof-kind mismatch, checkpoint it, then emit only a new provider-free preflight. Smoke and full REAL commands remain absent. Codex must not execute a provider command.
+LAST_VALIDATION_COMMAND: `.venv/bin/pytest -q tests/unit/test_product_documentation.py tests/unit/test_product_objective.py`; strict governance JSON; Ruff documentation-test check; `git diff --check`.
+LAST_VALIDATION_RESULT: PARTIAL / BLOCKED_SAFETY — JSON, Ruff, and diff checks pass. Documentation/objective tests are 11 passed and 1 expected scoped failure because the product-test checksum still pins the historical `33d06db3...18e62` operator bytes while the current operator record is `612943ec...ebfb9`; the guide/test pair is excluded from this six-file slice and the documentation test receives no pass credit. Historical checkpoint `f5afb2bff074254ee5c4a484386ee4c416b17a88` would charge before rejecting its noncrediting proof kind; checkpoint `ca63b924f244cc9bcee2d2405d20b000ce0bb9d6` withdraws both smoke commands. Code fix, guide/test checksum reconciliation, and a new provider-free preflight remain pending.
+LAST_CHECKPOINT_COMMIT: ca63b924f244cc9bcee2d2405d20b000ce0bb9d6 — `Withdraw unsafe smoke launch`; current pushed safety checkpoint. Historical unsafe launch checkpoint: `f5afb2bff074254ee5c4a484386ee4c416b17a88`.
+REMAINING_ACTIONABLE_TICKETS: Repair the exact noncrediting owned-REAL origin-custody seam, add post-response regressions, checkpoint, and re-run provider-free preflight before any paid command is re-emitted. Full REAL, external authority-log publication, and all benchmark/release work remain withheld.
 
-## 2026-08-21T14:33:00Z — Corrected smoke preflight VALID; paid smoke command emitted
+## 2026-08-21 — Unsafe paid smoke launch withdrawn before operator execution
+
+- **Status:** `V3-AUTHRUNNER-001` is `PARTIAL / BLOCKED_SAFETY`; both REAL commands are absent.
+- **Defect:** The owned-REAL origin issuer admits only `RELEASE_PINNED_MODEL_BENCHMARK` and
+  `RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION`. Smoke requests carry
+  `PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK` or
+  `PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION`. The issuer runs after a charged, bound
+  provider response, so the first completion would spend and then fail origin custody before durable
+  smoke evidence completes.
+- **Checkpoint custody:** `f5afb2bff074254ee5c4a484386ee4c416b17a88` is historical and unsafe.
+  `ca63b924f244cc9bcee2d2405d20b000ce0bb9d6` withdraws the smoke REAL and verifier commands.
+- **Operator reconciliation:** The current 35,771-byte log at SHA-256
+  `612943ec6e7f138d7a85ce7f4439a5054127b385f008fb1d1af25134890ebfb9` independently confirms the
+  source mismatch and withdrawal before execution. No paid smoke ran; no provider completion or spend
+  occurred; the dedicated ledger remains `$0` and governed counters are unchanged.
+- **Validation:** Strict governance JSON, Ruff, and diff integrity pass. Documentation/objective tests
+  are 11 passed and 1 expected scoped checksum failure because the excluded product test still pins
+  the historical operator bytes; this does not receive documentation-test pass credit.
+- **Next safe action:** Implement and validate the narrow noncrediting origin-custody fix, checkpoint
+  it, and emit only a new provider-free preflight. Do not restore either historical paid command.
+
+## 2026-08-21T14:33:00Z — Historical command emission, superseded by safety blocker above
 
 - **Status:** `V3-AUTHRUNNER-001` remains `PARTIAL`; autorun remains `BLOCKED_SAFETY`.
 - **Operator result custody:** The current 33,621-byte operator-supplied log has raw SHA-256
@@ -26,14 +47,13 @@ REMAINING_ACTIONABLE_TICKETS: Obtain and reconcile the operator-run one-case REA
   `b281a184b96ee208284f57de5c17adf59a9a61a72788bfb1fb5b9ac80e25dd3d` derive exact interval/final
   caps of USD `0.21890352`; the arithmetic operator interval/final tripwires are USD `8.00`. Judge
   admission is `PENDING_REAL_CANDIDATE_OUTPUTS`.
-- **Guide and limitations:** The preflight is historical. The guide emits the exact one-shot smoke
-  REAL command and provider-free offline verifier with the same non-secret overrides; the full
-  24-case command remains absent. Both runners remain nonresumable and cannot adopt or refund paid
+- **Guide and limitations at that superseded boundary:** Historical `f5afb2b` emitted the one-shot
+  smoke REAL and verifier commands; current `ca63b92` removes both. The full 24-case command was and
+  remains absent. Both runners remain nonresumable and cannot adopt or refund paid
   candidate work. Judge aggregate admission, per-request tripwires, and atomic reservations remain
   enforced. Whole-inventory `provider_name` uniqueness remains an explicit selection-quality limit.
 - **Authority and counters:** No provider call, spend, authority, or governed counter changed.
-- **Exact next safe action:** Have only the operator authorize and run the emitted smoke REAL command,
-  then run its emitted offline verifier only after successful publication and reconcile both records.
+- **Historical next action:** Superseded. Do not run or restore either command from this boundary.
 
 ## 2026-08-21T14:24:33Z — Smoke null-root correction checkpointed
 

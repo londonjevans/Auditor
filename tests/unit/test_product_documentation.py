@@ -23,7 +23,7 @@ OBJECTIVE_RELATIVE_PATH = "docs/remediation/v3/product_completion_goal.txt"
 OBJECTIVE_SHA256 = "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15"
 PRODUCT_VISION_RELATIVE_PATH = "product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.md"
 PRODUCT_VISION_SHA256 = "8b878b665e636b3b48500fefe2967394b2abdd69ce2ebfa0033d04542d2965e1"
-OPERATOR_RESULTS_SHA256 = "33d06db3bde140204843282dda56c91704d58a054f02532ea68cfa830f618e62"
+OPERATOR_RESULTS_SHA256 = "612943ec6e7f138d7a85ce7f4439a5054127b385f008fb1d1af25134890ebfb9"
 PRODUCT_VISION_GIT_ATTRIBUTES = f"{PRODUCT_VISION_RELATIVE_PATH} -text"
 POLICY_ELIGIBILITY_TICKET = "V3-POLICYELIG-001"
 POLICY_ELIGIBILITY_QUEUE_HEADING = (
@@ -513,7 +513,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "No smoke REAL command and no offline-verifier command is emitted" in (
         normalized_model_selection
     )
-    assert "contains no paid smoke attempt, provider completion, or spend" in (
+    assert "no paid smoke attempt, provider completion, or spend occurred" in (
         normalized_model_selection
     )
     assert "only for a `PENDING` review with a null registry root" in (normalized_model_selection)
@@ -578,6 +578,8 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "b281a184b96ee208284f57de5c17adf59a9a61a72788bfb1fb5b9ac80e25dd3d" in (model_selection)
     assert "0.21890352" in model_selection
     assert "33,621-byte operator record" in normalized_model_selection
+    assert "35,771-byte operator record" in normalized_model_selection
+    assert "withdrawn before execution" in normalized_model_selection
     assert "The smoke path fails for any real registry set." in operator_results
     assert "Not yet run:** the smoke REAL launch" in operator_results
     assert "f0f367605dd75674b08c8974bf69570190e4137be46a47619c1b5b9d85c83b57" in (model_selection)

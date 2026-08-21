@@ -3,6 +3,39 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-08-21T15:00Z — Paid smoke launch WITHDRAWN by codex before execution — independently verified
+
+Checkpoint `f5afb2b` emitted a paid smoke launch; `ca63b92` withdrew it 14 minutes later after a local
+paid-path audit. **The command was never run. No paid attempt, no provider completion, no spend.**
+Ledger remains `{"cap_usd":"250","entries":{},"schema_version":1}` — **$0**.
+
+Codex's reasoning was checked independently against the source and is correct:
+
+- `usage.py:1352-1355` — the owned-REAL usage-origin issuer requires `privacy_source_proof_kind` to be
+  one of `RELEASE_PINNED_MODEL_BENCHMARK` or `RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION`, else raises
+  `AUTHRUNNER usage origin requires owned REAL bound-success evidence`.
+- The smoke path deliberately routes `PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK` and
+  `PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION` — confirmed present in source, and **not** in
+  that allowlist.
+- `openrouter.py:5892` calls `_attest_authrunner_owned_real_usage_origin(concluded_usage)` on
+  *concluded* usage — after the provider response is charged and bound. Failure at
+  `openrouter.py:5895` (`REAL bound usage lacks AUTHRUNNER transport-origin custody`) therefore occurs
+  **post-charge**.
+
+Consequence had it run: the first paid candidate completion would have spent money and then failed
+before any smoke evidence could be sealed — money out, no artifact, no diagnostic bundle.
+
+**Provider-free preflight cannot catch this.** It never receives a provider response, so the
+post-response issuer boundary is structurally unreachable. This is the first defect found today that
+the preflight layer could not have surfaced at any cost.
+
+`V3-AUTHRUNNER-001` remains `BLOCKED_SAFETY`. Per codex, the fix must admit only the exact noncrediting
+smoke proof kinds without granting release, qualification, calibration, benchmark, audit, AUTHSEAL, or
+production authority, plus focused post-response regressions and a new provider-free checkpoint. No
+paid command may be restored from `f5afb2b`.
+
+Operator position: nothing to authorize. Awaiting a re-emitted provider-free preflight first.
+
 ## 2026-08-21T14:33Z — SMOKE PREFLIGHT at checkpoint `f0a0f39` — **VALID**
 
 Ran the exact command emitted at line 306 of the operator guide, verbatim. Provider-free.

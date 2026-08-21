@@ -47,7 +47,7 @@ requested, and the operator reports that the ledger remains untouched at `$0`. T
 record operator-reported results only; the private artifacts and ledger were not read or promoted
 by Codex. The exact operator-supplied log is retained at
 [`operator_results.md`](../remediation/v3/operator_results.md), raw SHA-256
-`33d06db3bde140204843282dda56c91704d58a054f02532ea68cfa830f618e62`, and is
+`612943ec6e7f138d7a85ce7f4439a5054127b385f008fb1d1af25134890ebfb9`, and is
 `OPERATOR_SUPPLIED_UNVERIFIED`: it grants no repository authority.
 
 The subsequent Claude Opus 5 `amazon-bedrock` PRIMARY r3 attempt also failed closed before registry
@@ -304,7 +304,7 @@ strict mypy, and diff integrity. It is committed, pushed, and remote-resolved at
 The provider-free preflight command was frozen in guide checkpoint
 `f0a0f39ee275bc774709bd0fbff411cfa7ecac04` (`Document provider-free smoke preflight`) over
 implementation checkpoint `7e9db03145b4afc1834dd47e9f4f97800e1edffb`. The operator ran it
-verbatim. It is now historical and must not be rerun. The current 33,621-byte operator record at raw
+verbatim. It is now historical and must not be rerun. The then-current 33,621-byte operator record at raw
 SHA-256 `33d06db3bde140204843282dda56c91704d58a054f02532ea68cfa830f618e62`
 reports `VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS`, an unchanged `$0` ledger, two
 runs, one case, four logical requests, at most eight attempts, and four generation refetches. Its
@@ -330,9 +330,12 @@ transport-origin custody`. The first paid candidate completion could therefore s
 fail before smoke evidence can be completed. Provider-free preflight cannot exercise this
 post-response issuer boundary.
 
-No smoke REAL command and no offline-verifier command is emitted. The operator record contains no paid
-smoke attempt, provider completion, or spend; it remains the green provider-free preflight with an
-unchanged `$0` dedicated ledger. `V3-AUTHRUNNER-001` is `BLOCKED_SAFETY` until a narrow origin-custody
+No smoke REAL command and no offline-verifier command is emitted. The current 35,771-byte operator
+record at raw SHA-256
+`612943ec6e7f138d7a85ce7f4439a5054127b385f008fb1d1af25134890ebfb9` independently confirms that
+the command was withdrawn before execution: no paid smoke attempt, provider completion, or spend
+occurred, and the dedicated ledger remains `$0`. `V3-AUTHRUNNER-001` is `BLOCKED_SAFETY` until a
+narrow origin-custody
 fix admits only the exact noncrediting smoke proof kinds without granting release, qualification,
 calibration, benchmark, audit, AUTHSEAL, or production authority, and focused post-response
 regressions plus a new provider-free checkpoint pass. Codex must then re-emit provider-free preflight

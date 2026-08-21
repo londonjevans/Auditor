@@ -595,7 +595,7 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   mypy, and diff integrity. Checkpoint `7e9db03145b4afc1834dd47e9f4f97800e1edffb` (`Fix smoke null
   lineage projection`) is pushed and remote-resolved. Guide checkpoint
   `f0a0f39ee275bc774709bd0fbff411cfa7ecac04` then froze its exact provider-free preflight.
-- **Corrected smoke preflight VALID 2026-08-21:** The current 33,621-byte operator-supplied log at raw
+- **Corrected smoke preflight VALID 2026-08-21:** The then-current 33,621-byte operator-supplied log at raw
   SHA-256 `33d06db3bde140204843282dda56c91704d58a054f02532ea68cfa830f618e62`
   records that exact preflight as `VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS`, with
   `$0` spend, two runs, one case, four logical requests, at most eight attempts, four generation
@@ -603,8 +603,18 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `944343e272b05b9925a0d4c618946ffbd4742f861e792c83be423531af07ea19` and
   `b281a184b96ee208284f57de5c17adf59a9a61a72788bfb1fb5b9ac80e25dd3d` derive exact candidate
   interval/final caps of USD `0.21890352`. Judge admission remains
-  `PENDING_REAL_CANDIDATE_OUTPUTS`; the smoke REAL command and its provider-free offline verifier are
-  now emitted for separate operator authorization, while the full 24-case command remains absent.
+  `PENDING_REAL_CANDIDATE_OUTPUTS`; this remains provider-free evidence only.
+- **Paid-path origin-custody blocker 2026-08-21:** Historical checkpoint
+  `f5afb2bff074254ee5c4a484386ee4c416b17a88` emitted a smoke launch that a deeper local audit proved
+  unsafe to run. The owned-REAL origin issuer accepts only the two `RELEASE_PINNED_*` proof kinds,
+  while smoke deliberately uses the two `PINNED_NONCREDITING_SMOKE_*` kinds. After a provider response
+  is charged and bound, the first completion would fail origin attestation before durable smoke
+  evidence completes. No operator paid command ran; the dedicated ledger remains `$0`. Safety
+  withdrawal checkpoint `ca63b924f244cc9bcee2d2405d20b000ce0bb9d6` removes both smoke commands.
+  The current 35,771-byte operator record at SHA-256
+  `612943ec6e7f138d7a85ce7f4439a5054127b385f008fb1d1af25134890ebfb9` independently confirms the
+  source mismatch, withdrawal-before-execution, zero provider completions, and `$0` ledger. Smoke and
+  full REAL commands are absent; the ticket remains `PARTIAL / BLOCKED_SAFETY`.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
   and non-crediting. The current provider-free preflight is valid and nonauthorizing, but exact judge
   admission and the full-campaign cost bound cannot exist before both genuine candidate outputs.
@@ -620,11 +630,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   issue-consume-revoke-reject lifecycle assay remain absent. Campaign/generation revocation beyond
   the top-level runner lease is not independently demonstrated. External-log publication and every
   benchmark run remain queued.
-- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` with autorun `BLOCKED_SAFETY`. Have only the
-  operator authorize and run the exact one-case smoke REAL command emitted in the guide, then run the
-  emitted provider-free offline verifier only after successful publication and reconcile both
-  terminal records. Keep the full 24-case REAL command absent and withheld; AUTHSEAL publication,
-  audits, benchmarks, and release remain unauthorized.
+- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` with autorun `BLOCKED_SAFETY`. Implement and
+  validate the narrow noncrediting owned-REAL origin-custody fix, checkpoint it, then emit only a new
+  provider-free preflight. Keep smoke and full REAL commands absent and withheld; AUTHSEAL
+  publication, audits, benchmarks, and release remain unauthorized.
 
 ### V3-MODELREFRESH-001 — Provider-free model-refresh runtime and pricing custody
 
