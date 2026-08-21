@@ -123,10 +123,12 @@ the provider's documented
 external request-price contract. New or changed pricing components still fail before runtime
 authority, reservation, or POST.
 
-The post-fix checkpoint is pending. Do not execute the following unchanged provider-free command
-until this paragraph binds its exact commit. On those committed bytes, the implementation must emit
-two distinct, exact 24-request candidate-plan hashes and their retry-inclusive derived caps. Judge
-admission must remain
+The follow-up is checkpointed at
+`fd1459b519ea0ce28a2d123ddeb57653dd2f7918` (`Bound OpenRouter prompt-cache pricing`). Run the
+following unchanged provider-free command only after that checkpoint and this documentation-only
+reconciliation are pushed and verified on `origin/agent/v3-wip-checkpoint`. On those committed
+runtime bytes, the implementation must emit two distinct, exact 24-request candidate-plan hashes
+and their retry-inclusive derived caps. Judge admission must remain
 `PENDING_REAL_CANDIDATE_OUTPUTS`, and the full campaign cost must remain unavailable, because exact
 judge prompts require genuine candidate outputs. The locally verified preflight contract returns
 before secret selection, provider access, ledger mutation, or durable output publication; transient

@@ -8,9 +8,9 @@ AUTORUN_STATUS: BLOCKED_SAFETY
 CURRENT_MILESTONE: M1-DETERMINISTIC-PRODUCT (REACHED)
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001 (COMPLETE)
-NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Commit and push the validated cache-dominance fix, then rerun the exact same provider-free r2/r4/r2 preflight on that new checkpoint. Only after an exact nonauthorizing success may the operator separately authorize one one-shot REAL candidates-first campaign; both live judge route refreshes and aggregate exact judge admission must precede any judge POST. AUTHSEAL publication, real audits, benchmarks, and release remain queued.
-LAST_COMMAND: Root-independent and owner 406-test affected matrices; 47-test durable/CLI matrix; 71-test execution/candidate/release matrix; schema verification; Ruff; strict mypy over 203 source files; 12 product-documentation/objective tests; strict runtime/review JSON parsing; `git diff --check`; independent 16-test red-team review; terminal frozen post-fix `.venv/bin/pytest -q` under required local loopback/Unix-socket permission. Cache-fix checkpoint and post-fix provider-free preflight remain PENDING.
-LAST_RESULT: PASS / PARTIAL — root-independent affected validation passed 406 tests in 110.81s; owner affected validation passed 406/406; durable/CLI passed 47/47; execution/candidate/release passed 71/71; schema verification, Ruff, strict mypy over 203 source files, 12 product-documentation/objective tests in 0.07s, strict governance JSON, and diff integrity passed; independent red-team review passed 16 focused tests with no blocker/HIGH; the terminal frozen post-fix suite exited 0 with 6,230 passed, 21 skipped, and 2 warnings in 4,599.65s (1:16:39) under required local loopback/Unix-socket permission. The skips are explicit unavailable rootless, Foundry, scanner, and paid-provider prerequisites; the warnings are `os.fork` deprecations in two existing tests. The prior `f6acf206f2c55eeb57b1a11fcf58cc4694a41208` committed-byte preflight failed safely before secret selection, provider egress, or reservation; the operator reports the campaign ledger remained `$0`. The cache-fix checkpoint and post-fix preflight remain PENDING.
+NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Push and verify `fd1459b519ea0ce28a2d123ddeb57653dd2f7918` (or a final governance successor containing only documentation changes), then rerun the exact same provider-free r2/r4/r2 preflight. Only after an exact nonauthorizing success may the operator separately authorize one one-shot REAL candidates-first campaign; both live judge route refreshes and aggregate exact judge admission must precede any judge POST. AUTHSEAL publication, real audits, benchmarks, and release remain queued.
+LAST_COMMAND: Root-independent and owner 406-test affected matrices; 47-test durable/CLI matrix; 71-test execution/candidate/release matrix; schema verification; Ruff; strict mypy over 203 source files; 12 product-documentation/objective tests; strict runtime/review JSON parsing; `git diff --check`; independent 16-test red-team review; terminal frozen post-fix `.venv/bin/pytest -q` under required local loopback/Unix-socket permission. Cache-fix checkpoint is `fd1459b519ea0ce28a2d123ddeb57653dd2f7918`; post-fix provider-free preflight remains PENDING.
+LAST_RESULT: PASS / PARTIAL — root-independent affected validation passed 406 tests in 110.81s; owner affected validation passed 406/406; durable/CLI passed 47/47; execution/candidate/release passed 71/71; schema verification, Ruff, strict mypy over 203 source files, 12 product-documentation/objective tests in 0.07s, strict governance JSON, and diff integrity passed; independent red-team review passed 16 focused tests with no blocker/HIGH; the terminal frozen post-fix suite exited 0 with 6,230 passed, 21 skipped, and 2 warnings in 4,599.65s (1:16:39) under required local loopback/Unix-socket permission. The skips are explicit unavailable rootless, Foundry, scanner, and paid-provider prerequisites; the warnings are `os.fork` deprecations in two existing tests. The prior `f6acf206f2c55eeb57b1a11fcf58cc4694a41208` committed-byte preflight failed safely before secret selection, provider egress, or reservation; the operator reports the campaign ledger remained `$0`. The cache-fix is checkpointed at `fd1459b519ea0ce28a2d123ddeb57653dd2f7918`; its post-fix preflight remains PENDING.
 REAL_MODEL_CALLS_ATTEMPTED: 11
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 10
@@ -20,7 +20,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9965235675
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: f6acf206f2c55eeb57b1a11fcf58cc4694a41208 (`Bind exact AUTHRUNNER request costs`); its committed-byte preflight failed safely and the cache-dominance fix checkpoint is PENDING
+LAST_CHECKPOINT_COMMIT: fd1459b519ea0ce28a2d123ddeb57653dd2f7918 (`Bound OpenRouter prompt-cache pricing`); cache-dominance fix checkpointed, post-fix committed-byte preflight PENDING
 
 ## 2026-08-21T09:05:36Z — AUTHRUNNER f6 preflight failure reconciled; cache dominance validated
 
@@ -51,9 +51,11 @@ LAST_CHECKPOINT_COMMIT: f6acf206f2c55eeb57b1a11fcf58cc4694a41208 (`Bind exact AU
   cost remains USD `0.0034764325`, reserved cost remains USD `0.00`, and completed real audits remain
   `0`. No lineage, qualification, runner, AUTHSEAL, benchmark, audit, or release authority or counter
   changed.
-- Checkpoint and next action: the cache-dominance fix checkpoint and its committed-byte provider-free
-  preflight remain `PENDING`. Commit and push the validated fix, then rerun the exact same r2/r4/r2
-  preflight and reconcile its result before any separately authorized REAL campaign.
+- Checkpoint and next action: the cache-dominance fix is checkpointed at
+  `fd1459b519ea0ce28a2d123ddeb57653dd2f7918` (`Bound OpenRouter prompt-cache pricing`); its
+  committed-byte provider-free preflight remains `PENDING`. Push and verify that checkpoint (or a
+  final governance successor containing only documentation changes), then rerun the exact same
+  r2/r4/r2 preflight and reconcile its result before any separately authorized REAL campaign.
 
 ## 2026-08-21T08:19:01Z — AUTHRUNNER exact-cost admission validated and governance reconciled
 

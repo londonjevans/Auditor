@@ -415,7 +415,9 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "both exact judge plans derived" in normalized_model_selection
     assert "f6acf206f2c55eeb57b1a11fcf58cc4694a41208" in model_selection
     assert "That checkpoint is historical and must not be rerun" in normalized_model_selection
-    assert "The post-fix checkpoint is pending" in normalized_model_selection
+    assert "fd1459b519ea0ce28a2d123ddeb57653dd2f7918" in model_selection
+    assert "Bound OpenRouter prompt-cache pricing" in model_selection
+    assert "origin/agent/v3-wip-checkpoint" in model_selection
     assert "input_cache_read" in model_selection
     assert "provider.max_price.prompt" in model_selection
     assert "Written by the monitoring session; treat as operator-supplied evidence." in (

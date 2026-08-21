@@ -497,9 +497,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   (`.venv/bin/pytest -q`) exited 0 with 6,230 passed, 21 skipped, and 2 warnings in 4,599.65s
   (1:16:39) under required local loopback/Unix-socket permission. The skips are explicit unavailable
   rootless, Foundry, scanner, and paid-provider prerequisites; the warnings are `os.fork`
-  deprecations in two existing tests. The cache-fix checkpoint and post-fix committed-byte preflight
-  remain pending. No model-call, governed spend, audit, runner-authority, AUTHSEAL, benchmark, or
-  release counter/state changed.
+  deprecations in two existing tests. The cache-fix is checkpointed at
+  `fd1459b519ea0ce28a2d123ddeb57653dd2f7918` (`Bound OpenRouter prompt-cache pricing`); its post-fix
+  committed-byte preflight remains pending. No model-call, governed spend, audit, runner-authority,
+  AUTHSEAL, benchmark, or release counter/state changed.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
   and non-crediting. Genuine production-issued lifecycle proof is absent; provider-free fixtures
   cannot mint owned-REAL origin, and the current repository rules prohibit reading real credentials
@@ -509,9 +510,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   issue-consume-revoke-reject lifecycle assay remain absent. Campaign/generation revocation beyond
   the top-level runner lease is not independently demonstrated. External-log publication and every
   benchmark run remain queued.
-- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Commit and push
-  the validated cache-dominance fix, then rerun the exact same provider-free r2/r4/r2 preflight on
-  that new checkpoint and retain its exact nonauthorizing result. Only then
+- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Push and verify
+  `fd1459b519ea0ce28a2d123ddeb57653dd2f7918` (or a final governance successor containing only
+  documentation changes), then rerun the exact same provider-free r2/r4/r2 preflight and retain its
+  exact nonauthorizing result. Only then
   may the operator separately authorize one one-shot REAL candidates-first campaign; require both
   live judge route refreshes and aggregate exact judge admission before any judge POST. AUTHSEAL
   publication, real audits, benchmarks, and release remain queued.
