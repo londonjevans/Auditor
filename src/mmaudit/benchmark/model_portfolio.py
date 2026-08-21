@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import stat
+import sys
 import tempfile
 import threading
 import weakref
@@ -128,11 +129,13 @@ def _build_campaign_runtime_authority() -> tuple[
         ],
         None,
     ],
+    Callable[[TrustedCandidateBenchmarkCampaignVerification], None],
 ]:
     """Create process-local journal and capability registries hidden from data models."""
 
     @dataclass(frozen=True, slots=True)
     class TrustedCampaignCapabilityState:
+        process_id: int
         portfolio_sha256: str
         journal_sha256: str
         policy_sha256: str
@@ -142,7 +145,7 @@ def _build_campaign_runtime_authority() -> tuple[
 
     journal_registry: dict[
         int,
-        tuple[weakref.ReferenceType[object], list[str]],
+        tuple[weakref.ReferenceType[object], int, list[str]],
     ] = {}
     capability_registry: dict[
         int,
@@ -152,9 +155,13 @@ def _build_campaign_runtime_authority() -> tuple[
         ],
     ] = {}
     lock = threading.RLock()
+    trusted_capability_type = TrustedCandidateBenchmarkCampaignVerification
+    trusted_getpid = os.getpid
+    trusted_id = id
+    trusted_type = type
 
     def register_fresh_journal(journal: object) -> Callable[[int, str], None]:
-        key = id(journal)
+        key = trusted_id(journal)
 
         def discard(reference: weakref.ReferenceType[object]) -> None:
             with lock:
@@ -164,14 +171,16 @@ def _build_campaign_runtime_authority() -> tuple[
 
         reference = weakref.ref(journal, discard)
         with lock:
-            journal_registry[key] = (reference, [])
+            journal_registry[key] = (reference, trusted_getpid(), [])
 
         def record_live_binding(expected_prior_count: int, binding: str) -> None:
             with lock:
                 registered = journal_registry.get(key)
                 if registered is None:
                     return
-                registered_reference, bindings = registered
+                registered_reference, process_id, bindings = registered
+                if process_id != trusted_getpid():
+                    raise ValueError("fresh campaign runtime authority belongs to another process")
                 if registered_reference() is not journal or len(bindings) != expected_prior_count:
                     journal_registry.pop(key, None)
                     raise ValueError("fresh campaign runtime authority became inconsistent")
@@ -181,10 +190,12 @@ def _build_campaign_runtime_authority() -> tuple[
 
     def live_bindings(journal: object) -> tuple[str, ...] | None:
         with lock:
-            registered = journal_registry.get(id(journal))
+            registered = journal_registry.get(trusted_id(journal))
             if registered is None or registered[0]() is not journal:
                 return None
-            return tuple(registered[1])
+            if registered[1] != trusted_getpid():
+                raise ValueError("fresh campaign runtime authority belongs to another process")
+            return tuple(registered[2])
 
     def create_campaign(
         path: Path,
@@ -212,8 +223,13 @@ def _build_campaign_runtime_authority() -> tuple[
         portfolio: ModelBenchmarkPortfolio,
         reports: tuple[ModelBenchmarkReport, ...],
     ) -> TrustedCandidateBenchmarkCampaignVerification:
-        if type(campaign) is not CandidateBenchmarkCampaignJournal:
+        if trusted_type(campaign) is not CandidateBenchmarkCampaignJournal:
             raise ValueError("trusted campaign verification requires the original campaign")
+        current_live_bindings = live_bindings(campaign)
+        if current_live_bindings is None:
+            raise ValueError(
+                "trusted campaign verification requires every original runtime-attested report"
+            )
         campaign.require_complete()
         validated_reports = tuple(
             ModelBenchmarkReport.model_validate(report.model_dump(mode="json"))
@@ -232,13 +248,13 @@ def _build_campaign_runtime_authority() -> tuple[
         expected_bindings = tuple(
             binding for _model_id, binding in _report_content_bindings(validated_reports)
         )
-        current_live_bindings = live_bindings(campaign)
-        if current_live_bindings is None or current_live_bindings != expected_bindings:
+        if current_live_bindings != expected_bindings:
             raise ValueError(
                 "trusted campaign verification requires every original runtime-attested report"
             )
-        capability = object.__new__(TrustedCandidateBenchmarkCampaignVerification)
+        capability = object.__new__(trusted_capability_type)
         state = TrustedCampaignCapabilityState(
+            process_id=trusted_getpid(),
             portfolio_sha256=portfolio.portfolio_sha256,
             journal_sha256=campaign.journal_sha256,
             policy_sha256=campaign.manifest.qualification_policy_sha256,
@@ -246,7 +262,7 @@ def _build_campaign_runtime_authority() -> tuple[
             cost_ledger_path_sha256=campaign.manifest.cost_ledger_path_sha256,
             report_content_bindings=_report_content_bindings(validated_reports),
         )
-        key = id(capability)
+        key = trusted_id(capability)
 
         def discard(
             reference: weakref.ReferenceType[TrustedCandidateBenchmarkCampaignVerification],
@@ -268,25 +284,61 @@ def _build_campaign_runtime_authority() -> tuple[
         policy_sha256: str,
         effective_config_sha256: str,
     ) -> None:
+        if trusted_type(capability) is not trusted_capability_type:
+            raise ValueError(
+                "trusted campaign verification does not bind qualification inputs: "
+                "capability is absent, mismatched, or revoked"
+            )
         with lock:
-            registered = capability_registry.get(id(capability))
-        state = registered[1] if registered is not None and registered[0]() is capability else None
+            registered = capability_registry.get(trusted_id(capability))
+        if registered is None or registered[0]() is not capability:
+            raise ValueError(
+                "trusted campaign verification does not bind qualification inputs: "
+                "capability is absent, mismatched, or revoked"
+            )
+        state = registered[1]
+        if state.process_id != trusted_getpid():
+            raise ValueError("trusted campaign verification belongs to another process")
+        report_content_bindings = _report_content_bindings(reports)
+        with lock:
+            current = capability_registry.get(trusted_id(capability))
+        if current is not registered or current[0]() is not capability:
+            raise ValueError(
+                "trusted campaign verification changed or was revoked during validation"
+            )
         if (
-            type(capability) is not TrustedCandidateBenchmarkCampaignVerification
-            or state is None
-            or state.portfolio_sha256 != portfolio_sha256
+            state.portfolio_sha256 != portfolio_sha256
             or state.policy_sha256 != policy_sha256
             or state.effective_config_sha256 != effective_config_sha256
             or not state.cost_ledger_path_sha256
             or not state.journal_sha256
-            or state.report_content_bindings != _report_content_bindings(reports)
+            or state.report_content_bindings != report_content_bindings
         ):
             raise ValueError("trusted campaign verification does not bind qualification inputs")
+
+    def revoke_capability(
+        capability: TrustedCandidateBenchmarkCampaignVerification,
+    ) -> None:
+        """Permanently invalidate one exact current-process campaign verification."""
+
+        if trusted_type(capability) is not trusted_capability_type:
+            raise ValueError("trusted campaign verification is absent, mismatched, or revoked")
+        key = trusted_id(capability)
+        with lock:
+            registered = capability_registry.get(key)
+            if registered is None or registered[0]() is not capability:
+                raise ValueError("trusted campaign verification is absent, mismatched, or revoked")
+            if registered[1].process_id != trusted_getpid():
+                raise ValueError("trusted campaign verification belongs to another process")
+            removed = capability_registry.pop(key)
+        if removed is not registered:
+            raise ValueError("trusted campaign verification changed during revocation")
 
     return (
         create_campaign,
         issue_capability,
         require_capability,
+        revoke_capability,
     )
 
 
@@ -294,6 +346,7 @@ def _build_campaign_runtime_authority() -> tuple[
     create_candidate_benchmark_campaign,
     issue_trusted_candidate_benchmark_campaign_verification,
     _require_trusted_campaign_capability_positional,
+    _revoke_trusted_campaign_capability,
 ) = _build_campaign_runtime_authority()
 
 
@@ -2284,6 +2337,63 @@ def _report_content_bindings(
             )
         )
     return tuple(bindings)
+
+
+def _build_campaign_revocation_authority() -> Callable[
+    [TrustedCandidateBenchmarkCampaignVerification], None
+]:
+    """Capture fail-safe removal and reject campaign-authority binding drift."""
+
+    namespace = globals()
+    trusted_sys = sys
+    trusted_os = os
+    trusted_getpid = trusted_os.getpid
+    trusted_self_module = trusted_sys.modules[__name__]
+    trusted_capability_type = TrustedCandidateBenchmarkCampaignVerification
+    trusted_capability_require = trusted_capability_type.require_for
+    trusted_core_revoke = _revoke_trusted_campaign_capability
+    trusted_require = _require_trusted_campaign_capability
+    trusted_require_positional = _require_trusted_campaign_capability_positional
+    trusted_report_bindings = _report_content_bindings
+    public_bindings: dict[str, object] = {
+        "create_candidate_benchmark_campaign": create_candidate_benchmark_campaign,
+        "issue_trusted_candidate_benchmark_campaign_verification": (
+            issue_trusted_candidate_benchmark_campaign_verification
+        ),
+    }
+
+    def require_pristine() -> None:
+        if (
+            namespace.get("sys") is not trusted_sys
+            or namespace.get("os") is not trusted_os
+            or getattr(trusted_os, "getpid", None) is not trusted_getpid
+            or trusted_sys.modules.get(__name__) is not trusted_self_module
+            or namespace.get("TrustedCandidateBenchmarkCampaignVerification")
+            is not trusted_capability_type
+            or trusted_capability_type.require_for is not trusted_capability_require
+            or namespace.get("_revoke_trusted_campaign_capability") is not trusted_core_revoke
+            or namespace.get("_require_trusted_campaign_capability") is not trusted_require
+            or namespace.get("_require_trusted_campaign_capability_positional")
+            is not trusted_require_positional
+            or namespace.get("_report_content_bindings") is not trusted_report_bindings
+            or any(namespace.get(name) is not value for name, value in public_bindings.items())
+        ):
+            raise ValueError("trusted campaign verification revocation runtime is not pristine")
+
+    def revoke(capability: TrustedCandidateBenchmarkCampaignVerification) -> None:
+        """Permanently invalidate one exact current-PID campaign capability."""
+
+        # The captured core closure removes custody before mutable module bindings
+        # are inspected, so retargeting can be reported but cannot preserve a lease.
+        trusted_core_revoke(capability)
+        require_pristine()
+
+    public_bindings["revoke_trusted_candidate_benchmark_campaign_verification"] = revoke
+    return revoke
+
+
+revoke_trusted_candidate_benchmark_campaign_verification = _build_campaign_revocation_authority()
+del _build_campaign_revocation_authority
 
 
 def _live_report_content_binding(

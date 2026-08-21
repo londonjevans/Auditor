@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import sys
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -16,10 +18,13 @@ from mmaudit.benchmark.cross_lineage_adjudication import (
     CrossLineageAdjudicationDisposition,
     CrossLineageAdjudicationPreparedRun,
     CrossLineageAdjudicationRunKind,
+    adjudication_generation_verification_requests,
     build_cross_lineage_adjudication_case_result,
     build_cross_lineage_adjudication_response,
 )
-from mmaudit.benchmark.model_portfolio import CandidateBenchmarkCampaignJournal
+from mmaudit.benchmark.model_portfolio import (
+    CandidateBenchmarkCampaignJournal,
+)
 from mmaudit.benchmark.models import (
     ModelBenchmarkCaseResult,
     ModelBenchmarkReport,
@@ -27,7 +32,10 @@ from mmaudit.benchmark.models import (
     ModelBenchmarkTarget,
 )
 from mmaudit.config import AuditConfig
-from mmaudit.models.authenticated_runner import AuthenticatedCrossLineageRunnerError
+from mmaudit.models.authenticated_runner import (
+    AuthenticatedCrossLineageRunnerError,
+    VerifiedCrossLineageRunnerCustody,
+)
 from mmaudit.models.authenticated_runner_cost_plan import (
     AuthenticatedRunnerCostPlanStage,
     AuthenticatedRunnerStagedCostPlan,
@@ -51,6 +59,7 @@ from mmaudit.models.discovery import (
 )
 from mmaudit.models.endpoint_snapshots import EndpointSnapshotValidationError
 from mmaudit.models.generation_evidence import (
+    GenerationEvidenceValidationError,
     GenerationVerificationRequest,
     OpenRouterGenerationEvidence,
     TrustedGenerationVerification,
@@ -71,6 +80,9 @@ from mmaudit.models.qualification import (
     QualificationDimensionThreshold,
     QualificationPolicy,
     seal_qualification_policy,
+)
+from mmaudit.models.qualification_workflow import (
+    candidate_generation_verification_requests,
 )
 from mmaudit.models.schemas import UsageRecord
 from mmaudit.models.usage import UsageLedger
@@ -179,6 +191,9 @@ class _FakeGenerationExecutor:
     atomic_ledger: AtomicCostLedger | None = None
     usage: UsageLedger | None = None
     fault: tuple[AuthenticatedRunnerGenerationSubject, str] | None = None
+    issued_capabilities: (
+        list[tuple[TrustedGenerationVerification, tuple[GenerationVerificationRequest, ...]]] | None
+    ) = None
 
     @classmethod
     def from_candidate_reports(
@@ -201,6 +216,7 @@ class _FakeGenerationExecutor:
             atomic_ledger=atomic_ledger,
             usage=usage,
             fault=fault,
+            issued_capabilities=[],
         )
 
     def register_judge_results(
@@ -251,11 +267,14 @@ class _FakeGenerationExecutor:
                 )
                 reservation = self.atomic_ledger.reserve(mutation_id, Decimal("0.01"))
                 self.atomic_ledger.reconcile(reservation, Decimal("0.01"))
-        return generation_evidence_module._issue_trusted_generation_verification(
+        capability = generation_evidence_module._issue_trusted_generation_verification(
             requests=requests,
             attestations=attestations,
             verification_started_at=min(item.retrieved_at for item in attestations),
         )
+        assert self.issued_capabilities is not None
+        self.issued_capabilities.append((capability, requests))
+        return capability
 
 
 @dataclass(slots=True)
@@ -786,6 +805,226 @@ def _assert_exact_preview_bindings(harness: _Harness) -> None:
 
 
 @pytest.mark.asyncio
+async def test_public_executor_captures_impl_and_child_custody_factory(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = await _harness(tmp_path, config_factory)
+    invocations: list[str] = []
+
+    async def forged_impl(**_kwargs: object) -> AuthenticatedRunnerExecutionResult:
+        invocations.append("impl")
+        raise AssertionError("retargeted runner implementation was invoked")
+
+    def forged_factory() -> object:
+        invocations.append("factory")
+        raise AssertionError("retargeted child-custody factory was invoked")
+
+    def forged_result_factory(**_kwargs: object) -> AuthenticatedRunnerExecutionResult:
+        invocations.append("result")
+        raise AssertionError("retargeted execution-result factory was invoked")
+
+    monkeypatch.setattr(
+        authenticated_runner_execution_module,
+        "_execute_authenticated_cross_lineage_runner_impl",
+        forged_impl,
+    )
+    monkeypatch.setattr(
+        authenticated_runner_execution_module,
+        "_new_runner_child_capability_custody",
+        forged_factory,
+    )
+    monkeypatch.setattr(
+        authenticated_runner_execution_module,
+        "_new_authenticated_runner_execution_result",
+        forged_result_factory,
+    )
+
+    with pytest.raises(
+        AuthenticatedRunnerExecutionError,
+        match="explicit synthetic-source egress authorization",
+    ):
+        await _execute(harness, explicitly_allow_synthetic_egress=False)
+
+    assert invocations == []
+    assert harness.candidate_executor.calls == []
+    assert harness.generation_executor.calls == []
+
+
+def test_execution_result_factory_captures_original_dataclass_initializer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    factory = cast(
+        Callable[..., AuthenticatedRunnerExecutionResult],
+        cast(Any, authenticated_runner_execution_module)._new_authenticated_runner_execution_result,
+    )
+    forged_calls: list[str] = []
+
+    def forged_init(self: object, **_kwargs: object) -> None:
+        forged_calls.append(type(self).__name__)
+
+    monkeypatch.setattr(AuthenticatedRunnerExecutionResult, "__init__", forged_init)
+    inventory = cast(Any, object())
+    interval = cast(Any, object())
+    capability = cast(Any, object())
+    evidence = cast(Any, object())
+    projection = cast(Any, object())
+
+    result = factory(
+        inventory=inventory,
+        runs=(),
+        closed_ledger_interval=interval,
+        runner_capability=capability,
+        runner_evidence=evidence,
+        runner_projection=projection,
+    )
+
+    assert type(result) is AuthenticatedRunnerExecutionResult
+    assert result.inventory is inventory
+    assert result.closed_ledger_interval is interval
+    assert result.runner_capability is capability
+    assert result.runner_evidence is evidence
+    assert result.runner_projection is projection
+    assert forged_calls == []
+
+
+def test_execution_result_factory_rejects_slot_descriptor_retarget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    factory = cast(
+        Callable[..., AuthenticatedRunnerExecutionResult],
+        cast(Any, authenticated_runner_execution_module)._new_authenticated_runner_execution_result,
+    )
+    sink_calls: list[str] = []
+
+    class SinkDescriptor:
+        def __get__(self, _instance: object, _owner: object) -> object:
+            sink_calls.append("get")
+            return object()
+
+        def __set__(self, _instance: object, _value: object) -> None:
+            sink_calls.append("set")
+
+    monkeypatch.setattr(
+        AuthenticatedRunnerExecutionResult,
+        "runner_capability",
+        SinkDescriptor(),
+    )
+
+    with pytest.raises(
+        AuthenticatedRunnerExecutionError,
+        match="execution result custody descriptors changed",
+    ):
+        factory(
+            inventory=cast(Any, object()),
+            runs=(),
+            closed_ledger_interval=cast(Any, object()),
+            runner_capability=cast(Any, object()),
+            runner_evidence=cast(Any, object()),
+            runner_projection=cast(Any, object()),
+        )
+
+    assert sink_calls == []
+
+
+def test_execution_result_factory_rejects_split_getattribute_descriptor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    factory = cast(
+        Callable[..., AuthenticatedRunnerExecutionResult],
+        cast(Any, authenticated_runner_execution_module)._new_authenticated_runner_execution_result,
+    )
+    descriptor_calls: list[str] = []
+    trusted_getattribute = AuthenticatedRunnerExecutionResult.__getattribute__
+
+    class SplitDescriptor:
+        def __get__(self, instance: object | None, _owner: object) -> object:
+            descriptor_calls.append("class" if instance is None else "instance")
+            if instance is None:
+                return trusted_getattribute
+            return lambda _name: object()
+
+    monkeypatch.setattr(
+        AuthenticatedRunnerExecutionResult,
+        "__getattribute__",
+        SplitDescriptor(),
+    )
+
+    with pytest.raises(
+        AuthenticatedRunnerExecutionError,
+        match="execution result custody descriptors changed",
+    ):
+        factory(
+            inventory=cast(Any, object()),
+            runs=(),
+            closed_ledger_interval=cast(Any, object()),
+            runner_capability=cast(Any, object()),
+            runner_evidence=cast(Any, object()),
+            runner_projection=cast(Any, object()),
+        )
+
+    assert descriptor_calls == []
+
+
+def test_child_custody_falls_back_when_adopted_parent_is_unregistered() -> None:
+    inputs = cast(Callable[[], Any], runner_fixtures.live_inputs.__wrapped__)()
+    (
+        retain_campaign,
+        retain_generation,
+        adopt_parent,
+        _release,
+        revoke,
+    ) = cast(Any, authenticated_runner_execution_module)._new_runner_child_capability_custody()
+    registry = runner_fixtures._candidate_registry((runner_fixtures.CANDIDATE_ID,))
+
+    for run in inputs.runs:
+        retain_campaign(run.candidate_campaign_verification)
+        retain_generation(run.candidate_generation_verification)
+        retain_generation(run.judge_generation_verification)
+    adopt_parent(object.__new__(VerifiedCrossLineageRunnerCustody))
+    _release()
+
+    with pytest.raises(
+        AuthenticatedRunnerExecutionError,
+        match="runner live capability cleanup was incomplete",
+    ):
+        revoke()
+
+    for run in inputs.runs:
+        with pytest.raises(ValueError, match="absent, mismatched, or revoked"):
+            run.candidate_campaign_verification.require_for(
+                portfolio_sha256=run.candidate_portfolio.portfolio_sha256,
+                reports=run.candidate_campaign_reports,
+                policy_sha256=run.candidate_campaign_policy_sha256,
+                effective_config_sha256=run.candidate_campaign_effective_config_sha256,
+            )
+        candidate_request = candidate_generation_verification_requests(
+            registry=registry,
+            benchmark_reports=(run.candidate_report,),
+        )[0]
+        judge_request = adjudication_generation_verification_requests(
+            report=run.adjudication_report,
+            judge=run.judge,
+        )[0]
+        for capability, request in (
+            (run.candidate_generation_verification, candidate_request),
+            (run.judge_generation_verification, judge_request),
+        ):
+            with pytest.raises(GenerationEvidenceValidationError, match="not trusted"):
+                capability.attestation_for(
+                    benchmark_report_sha256=request.benchmark_report_sha256,
+                    case_id=request.case_id,
+                    exact_model_id=request.exact_model_id,
+                    canonical_model_id=request.canonical_model_id,
+                    catalog_identity_binding_sha256=request.catalog_identity_binding_sha256,
+                    discovery_evidence_sha256=request.discovery_evidence_sha256,
+                    usage_record=request.usage_record,
+                    expected_provider_name=request.expected_provider_name,
+                )
+
+
+@pytest.mark.asyncio
 async def test_fake_full_orchestration_cannot_issue_runner_custody(
     tmp_path: Path,
     config_factory: Callable[..., AuditConfig],
@@ -822,6 +1061,280 @@ async def test_fake_full_orchestration_cannot_issue_runner_custody(
         AuthenticatedRunnerGenerationSubject.JUDGE,
         AuthenticatedRunnerGenerationSubject.JUDGE,
     ]
+    assert harness.generation_executor.issued_capabilities is not None
+    assert len(harness.generation_executor.issued_capabilities) == 4
+    for generation_capability, requests in harness.generation_executor.issued_capabilities:
+        request = requests[0]
+        with pytest.raises(GenerationEvidenceValidationError, match="not trusted"):
+            generation_capability.attestation_for(
+                benchmark_report_sha256=request.benchmark_report_sha256,
+                case_id=request.case_id,
+                exact_model_id=request.exact_model_id,
+                canonical_model_id=request.canonical_model_id,
+                catalog_identity_binding_sha256=request.catalog_identity_binding_sha256,
+                discovery_evidence_sha256=request.discovery_evidence_sha256,
+                usage_record=request.usage_record,
+                expected_provider_name=request.expected_provider_name,
+            )
+
+
+class _HandoffTraceInterruption(BaseException):
+    pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "handoff",
+    ("campaign", "candidate_generation", "judge_generation"),
+)
+async def test_traceback_recovered_child_capability_is_revoked_during_handoff(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+    handoff: str,
+) -> None:
+    harness = await _harness(tmp_path / handoff, config_factory)
+    recovered: list[tuple[object, object]] = []
+    implementation_code = cast(
+        Any, authenticated_runner_execution_module
+    )._execute_authenticated_cross_lineage_runner_impl.__code__
+
+    def interrupt(frame: Any, event: str, _arg: object) -> object:
+        if frame.f_code is implementation_code and event == "line":
+            local = frame.f_locals
+            capability_name = {
+                "campaign": "campaign_verification",
+                "candidate_generation": "candidate_generation",
+                "judge_generation": "judge_generation",
+            }[handoff]
+            retained_name = {
+                "campaign": "campaign_retained",
+                "candidate_generation": "candidate_generation_retained",
+                "judge_generation": "judge_generation_retained",
+            }[handoff]
+            capability = local.get(capability_name)
+            if capability is not None and local.get(retained_name) is False:
+                if handoff == "campaign":
+                    binding: object = (
+                        local["portfolio"],
+                        local["candidate_result"].reports,
+                        local["qualification_policy"].policy_sha256,
+                        local["effective_config_sha256"],
+                    )
+                else:
+                    requests_name = (
+                        "candidate_generation_requests"
+                        if handoff == "candidate_generation"
+                        else "judge_generation_requests"
+                    )
+                    binding = local[requests_name][0]
+                recovered.append((capability, binding))
+                raise _HandoffTraceInterruption(handoff)
+        return interrupt
+
+    sys.settrace(interrupt)
+    try:
+        with pytest.raises(_HandoffTraceInterruption, match=handoff):
+            await _execute(harness)
+    finally:
+        sys.settrace(None)
+
+    assert len(recovered) == 1
+    capability, binding = recovered[0]
+    if handoff == "campaign":
+        portfolio, reports, policy_sha256, effective_config_sha256 = cast(Any, binding)
+        with pytest.raises(ValueError, match="absent, mismatched, or revoked"):
+            cast(Any, capability).require_for(
+                portfolio_sha256=portfolio.portfolio_sha256,
+                reports=reports,
+                policy_sha256=policy_sha256,
+                effective_config_sha256=effective_config_sha256,
+            )
+    else:
+        request = cast(Any, binding)
+        with pytest.raises(GenerationEvidenceValidationError, match="not trusted"):
+            cast(Any, capability).attestation_for(
+                benchmark_report_sha256=request.benchmark_report_sha256,
+                case_id=request.case_id,
+                exact_model_id=request.exact_model_id,
+                canonical_model_id=request.canonical_model_id,
+                catalog_identity_binding_sha256=request.catalog_identity_binding_sha256,
+                discovery_evidence_sha256=request.discovery_evidence_sha256,
+                usage_record=request.usage_record,
+                expected_provider_name=request.expected_provider_name,
+            )
+
+
+@pytest.mark.asyncio
+async def test_traceback_recovered_parent_and_children_are_revoked_during_handoff(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    harness = await _harness(tmp_path / "parent", config_factory)
+    implementation = cast(
+        Any,
+        authenticated_runner_execution_module,
+    )._execute_authenticated_cross_lineage_runner_impl
+    implementation_code = implementation.__code__
+    parent_live: set[int] = set()
+    recovered_parent: list[tuple[VerifiedCrossLineageRunnerCustody, object]] = []
+    campaign_bindings: list[tuple[object, object, tuple[Any, ...], str, str]] = []
+    original_campaign_issue = cast(
+        Any,
+        authenticated_runner_execution_module,
+    ).issue_trusted_candidate_benchmark_campaign_verification
+
+    def issue_campaign(**kwargs: Any) -> object:
+        capability = original_campaign_issue(**kwargs)
+        campaign = kwargs["campaign"]
+        campaign_bindings.append(
+            (
+                capability,
+                kwargs["portfolio"],
+                kwargs["reports"],
+                campaign.manifest.qualification_policy_sha256,
+                campaign.manifest.effective_config_sha256,
+            )
+        )
+        return capability
+
+    def issue_parent(**kwargs: Any) -> tuple[VerifiedCrossLineageRunnerCustody, object]:
+        capability = object.__new__(VerifiedCrossLineageRunnerCustody)
+        parent_live.add(id(capability))
+        runs = tuple(kwargs["runs"])
+        records = tuple(
+            record
+            for run in runs
+            for record in (
+                *(
+                    case.usage_record
+                    for case in run.candidate_report.results[0].cases
+                    if case.usage_record is not None
+                ),
+                *(case.usage_record for case in run.adjudication_report.cases),
+            )
+        )
+        projection = SimpleNamespace(
+            ledger_request_ids=tuple(
+                sorted(
+                    cast(Any, authenticated_runner_execution_module)._attempt_request_ids(records)
+                )
+            ),
+            runs=tuple(
+                SimpleNamespace(
+                    adjudication_report_sha256=run.adjudication_report.report_sha256,
+                )
+                for run in runs
+            ),
+        )
+        return capability, SimpleNamespace(projection=projection)
+
+    def require_parent(
+        capability: VerifiedCrossLineageRunnerCustody,
+        *,
+        evidence: Any,
+    ) -> object:
+        if id(capability) not in parent_live:
+            raise AuthenticatedRunnerExecutionError("parent capability is revoked")
+        return evidence.projection
+
+    def revoke_parent(capability: VerifiedCrossLineageRunnerCustody) -> None:
+        try:
+            parent_live.remove(id(capability))
+        except KeyError:
+            raise AuthenticatedRunnerExecutionError("parent capability is revoked") from None
+
+    (
+        retain_campaign,
+        retain_generation,
+        adopt_parent,
+        _release,
+        revoke_children,
+    ) = cast(Any, authenticated_runner_execution_module)._new_runner_child_capability_custody()
+
+    def interrupt(frame: Any, event: str, _arg: object) -> object:
+        if frame.f_code is implementation_code and event == "line":
+            capability = frame.f_locals.get("runner_capability")
+            evidence = frame.f_locals.get("runner_evidence")
+            if capability is not None and frame.f_locals.get("parent_adopted") is False:
+                recovered_parent.append((capability, evidence))
+                raise _HandoffTraceInterruption("parent")
+        return interrupt
+
+    sys.settrace(interrupt)
+    try:
+        with pytest.raises(_HandoffTraceInterruption, match="parent"):
+            try:
+                await implementation(
+                    config=harness.config,
+                    explicitly_allow_synthetic_egress=True,
+                    public_lineage_capability=harness.public_lineage,
+                    ground_truth_capability=harness.ground_truth,
+                    benchmark_suite=harness.suite,
+                    discovery_manifest=harness.discovery_manifest,
+                    discovery_evidence=harness.discovery_evidence,
+                    candidate_registry=harness.registry,
+                    qualification_policy=harness.policy,
+                    budget=harness.budget,
+                    usage=harness.usage,
+                    run_plans=harness.plans,
+                    candidate_executor=harness.candidate_executor,
+                    judge_route_preparation_executor=(harness.judge_route_preparation_executor),
+                    judge_executor=harness.judge_executor,
+                    generation_executor=harness.generation_executor,
+                    issue_campaign_capability=issue_campaign,
+                    revoke_campaign_capability=cast(
+                        Any,
+                        authenticated_runner_execution_module,
+                    ).revoke_trusted_candidate_benchmark_campaign_verification,
+                    issue_runner_custody=issue_parent,
+                    require_runner_custody=require_parent,
+                    revoke_runner_custody=revoke_parent,
+                    revoke_generation_capability=cast(
+                        Any,
+                        authenticated_runner_execution_module,
+                    ).revoke_trusted_generation_verification,
+                    build_execution_result=cast(
+                        Any,
+                        authenticated_runner_execution_module,
+                    )._new_authenticated_runner_execution_result,
+                    retain_campaign_capability=retain_campaign,
+                    retain_generation_capability=retain_generation,
+                    adopt_parent_capability=adopt_parent,
+                )
+            except BaseException:
+                revoke_children()
+                raise
+    finally:
+        sys.settrace(None)
+
+    assert len(recovered_parent) == 1
+    capability, evidence = recovered_parent[0]
+    with pytest.raises(AuthenticatedRunnerExecutionError, match="parent capability is revoked"):
+        require_parent(capability, evidence=evidence)
+    assert len(campaign_bindings) == 2
+    for campaign, portfolio, reports, policy_sha256, effective_config_sha256 in campaign_bindings:
+        with pytest.raises(ValueError, match="absent, mismatched, or revoked"):
+            cast(Any, campaign).require_for(
+                portfolio_sha256=portfolio.portfolio_sha256,
+                reports=reports,
+                policy_sha256=policy_sha256,
+                effective_config_sha256=effective_config_sha256,
+            )
+    assert harness.generation_executor.issued_capabilities is not None
+    assert len(harness.generation_executor.issued_capabilities) == 4
+    for generation, requests in harness.generation_executor.issued_capabilities:
+        request = requests[0]
+        with pytest.raises(GenerationEvidenceValidationError, match="not trusted"):
+            generation.attestation_for(
+                benchmark_report_sha256=request.benchmark_report_sha256,
+                case_id=request.case_id,
+                exact_model_id=request.exact_model_id,
+                canonical_model_id=request.canonical_model_id,
+                catalog_identity_binding_sha256=request.catalog_identity_binding_sha256,
+                discovery_evidence_sha256=request.discovery_evidence_sha256,
+                usage_record=request.usage_record,
+                expected_provider_name=request.expected_provider_name,
+            )
 
 
 @pytest.mark.asyncio

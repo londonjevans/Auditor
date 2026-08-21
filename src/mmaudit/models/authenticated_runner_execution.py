@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import secrets
 import stat
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from contextlib import suppress
 from dataclasses import dataclass
 from decimal import Decimal, localcontext
@@ -35,6 +35,7 @@ from mmaudit.benchmark.model_portfolio import (
     TrustedCandidateBenchmarkCampaignVerification,
     create_candidate_benchmark_campaign,
     issue_trusted_candidate_benchmark_campaign_verification,
+    revoke_trusted_candidate_benchmark_campaign_verification,
     seal_model_benchmark_portfolio_from_campaign,
 )
 from mmaudit.benchmark.models import (
@@ -50,10 +51,12 @@ from mmaudit.models.authenticated_runner import (
     CrossLineageRunnerRunCustody,
     VerifiedCrossLineageRunnerCustody,
     VerifiedCrossLineageRunnerProjection,
+    _revoke_runner_child_capability_inventory,
     begin_cross_lineage_ledger_interval,
     close_cross_lineage_ledger_interval,
     issue_verified_cross_lineage_runner_custody,
     require_verified_cross_lineage_runner_custody,
+    revoke_verified_cross_lineage_runner_custody,
 )
 from mmaudit.models.authenticated_runner_cost_plan import (
     AuthenticatedRunnerCostPlanStage,
@@ -75,6 +78,7 @@ from mmaudit.models.generation_evidence import (
     GenerationVerificationRequest,
     OpenRouterGenerationEvidence,
     TrustedGenerationVerification,
+    revoke_trusted_generation_verification,
 )
 from mmaudit.models.ground_truth_authority import (
     FROZEN_GROUND_TRUTH_OBJECTIVE_SHA256,
@@ -211,6 +215,117 @@ class AuthenticatedRunnerExecutionResult:
         raise TypeError("authenticated runner execution result cannot be serialized")
 
 
+class _AuthenticatedRunnerExecutionResultFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        inventory: AuthenticatedRunnerExecutionInventory,
+        runs: tuple[AuthenticatedRunnerExecutedRun, ...],
+        closed_ledger_interval: ClosedCrossLineageLedgerInterval,
+        runner_capability: VerifiedCrossLineageRunnerCustody,
+        runner_evidence: AuthenticatedCrossLineageRunnerEvidence,
+        runner_projection: VerifiedCrossLineageRunnerProjection,
+    ) -> AuthenticatedRunnerExecutionResult: ...
+
+
+def _build_authenticated_runner_execution_result_factory() -> (
+    _AuthenticatedRunnerExecutionResultFactory
+):
+    """Capture exact result slot custody outside mutable class descriptors."""
+
+    trusted_result_type = AuthenticatedRunnerExecutionResult
+    trusted_result_new = object.__new__
+    trusted_type_getattribute = type.__getattribute__
+    trusted_mro = trusted_type_getattribute(trusted_result_type, "__mro__")
+    trusted_instance_getattribute = trusted_type_getattribute(
+        trusted_result_type,
+        "__getattribute__",
+    )
+    trusted_instance_setattr = trusted_type_getattribute(
+        trusted_result_type,
+        "__setattr__",
+    )
+    field_names = (
+        "inventory",
+        "runs",
+        "closed_ledger_interval",
+        "runner_capability",
+        "runner_evidence",
+        "runner_projection",
+    )
+    result_namespace = trusted_type_getattribute(trusted_result_type, "__dict__")
+    absent = object()
+    trusted_getattribute_binding = result_namespace.get("__getattribute__", absent)
+    trusted_setattr_binding = result_namespace.get("__setattr__", absent)
+    field_descriptors = tuple(result_namespace[name] for name in field_names)
+    descriptor_type = type(field_descriptors[0])
+    if any(type(descriptor) is not descriptor_type for descriptor in field_descriptors):
+        raise RuntimeError("authenticated runner execution result slots are inconsistent")
+    trusted_descriptor_set = descriptor_type.__set__
+    trusted_descriptor_get = descriptor_type.__get__
+
+    def require_pristine() -> None:
+        current_namespace = trusted_type_getattribute(trusted_result_type, "__dict__")
+        current_mro = trusted_type_getattribute(trusted_result_type, "__mro__")
+        if (
+            len(current_mro) != len(trusted_mro)
+            or any(
+                current is not expected
+                for current, expected in zip(current_mro, trusted_mro, strict=True)
+            )
+            or current_namespace.get("__getattribute__", absent) is not trusted_getattribute_binding
+            or current_namespace.get("__setattr__", absent) is not trusted_setattr_binding
+            or trusted_type_getattribute(trusted_result_type, "__getattribute__")
+            is not trusted_instance_getattribute
+            or trusted_type_getattribute(trusted_result_type, "__setattr__")
+            is not trusted_instance_setattr
+            or any(
+                current_namespace.get(name) is not descriptor
+                for name, descriptor in zip(field_names, field_descriptors, strict=True)
+            )
+        ):
+            raise AuthenticatedRunnerExecutionError(
+                "runner execution result custody descriptors changed"
+            )
+
+    def create(
+        *,
+        inventory: AuthenticatedRunnerExecutionInventory,
+        runs: tuple[AuthenticatedRunnerExecutedRun, ...],
+        closed_ledger_interval: ClosedCrossLineageLedgerInterval,
+        runner_capability: VerifiedCrossLineageRunnerCustody,
+        runner_evidence: AuthenticatedCrossLineageRunnerEvidence,
+        runner_projection: VerifiedCrossLineageRunnerProjection,
+    ) -> AuthenticatedRunnerExecutionResult:
+        require_pristine()
+        result = trusted_result_new(trusted_result_type)
+        values = (
+            inventory,
+            runs,
+            closed_ledger_interval,
+            runner_capability,
+            runner_evidence,
+            runner_projection,
+        )
+        for descriptor, value in zip(field_descriptors, values, strict=True):
+            trusted_descriptor_set(descriptor, result, value)
+        require_pristine()
+        if any(
+            trusted_descriptor_get(descriptor, result, trusted_result_type) is not value
+            for descriptor, value in zip(field_descriptors, values, strict=True)
+        ):
+            raise AuthenticatedRunnerExecutionError(
+                "runner execution result custody slots differ from exact inputs"
+            )
+        return result
+
+    return create
+
+
+_new_authenticated_runner_execution_result = _build_authenticated_runner_execution_result_factory()
+del _build_authenticated_runner_execution_result_factory
+
+
 class CandidateCampaignExecutor(Protocol):
     """Credential-owning injected boundary for one already-created campaign journal."""
 
@@ -283,6 +398,121 @@ class _PreparedCandidateRun:
     candidate_campaign_verification: TrustedCandidateBenchmarkCampaignVerification
     candidate_generation_verification: TrustedGenerationVerification
     prepared_adjudication: CrossLineageAdjudicationPreparedRun
+
+
+type _RunnerChildCapabilityCustody = tuple[
+    Callable[[TrustedCandidateBenchmarkCampaignVerification], None],
+    Callable[[TrustedGenerationVerification], None],
+    Callable[[VerifiedCrossLineageRunnerCustody], None],
+    Callable[[], None],
+    Callable[[], None],
+]
+
+
+def _build_runner_child_capability_custody_factory() -> Callable[[], _RunnerChildCapabilityCustody]:
+    """Capture exact child types and revokers outside retargetable module lookups."""
+
+    trusted_campaign_type = TrustedCandidateBenchmarkCampaignVerification
+    trusted_generation_type = TrustedGenerationVerification
+    trusted_parent_type = VerifiedCrossLineageRunnerCustody
+    trusted_child_inventory_revoke = _revoke_runner_child_capability_inventory
+    trusted_parent_revoke = revoke_verified_cross_lineage_runner_custody
+    trusted_run_count = _RUN_COUNT
+
+    def create() -> _RunnerChildCapabilityCustody:
+        campaigns: list[TrustedCandidateBenchmarkCampaignVerification] = []
+        generations: list[TrustedGenerationVerification] = []
+        parent: VerifiedCrossLineageRunnerCustody | None = None
+
+        def retain_campaign(
+            capability: TrustedCandidateBenchmarkCampaignVerification,
+        ) -> None:
+            if (
+                parent is not None
+                or type(capability) is not trusted_campaign_type
+                or any(item is capability for item in campaigns)
+            ):
+                raise AuthenticatedRunnerExecutionError(
+                    "runner campaign capability custody is invalid or replayed"
+                )
+            campaigns.append(capability)
+
+        def retain_generation(capability: TrustedGenerationVerification) -> None:
+            if (
+                parent is not None
+                or type(capability) is not trusted_generation_type
+                or any(item is capability for item in generations)
+            ):
+                raise AuthenticatedRunnerExecutionError(
+                    "runner generation capability custody is invalid or replayed"
+                )
+            generations.append(capability)
+
+        def adopt_parent(capability: VerifiedCrossLineageRunnerCustody) -> None:
+            nonlocal parent
+            if parent is not None or type(capability) is not trusted_parent_type:
+                raise AuthenticatedRunnerExecutionError(
+                    "runner parent custody does not own the exact child capability inventory"
+                )
+            # Retain the parent before checking counts so a count failure still
+            # enters parent-first cascade cleanup.
+            parent = capability
+            if len(campaigns) != trusted_run_count or len(generations) != trusted_run_count * 2:
+                raise AuthenticatedRunnerExecutionError(
+                    "runner parent custody does not own the exact child capability inventory"
+                )
+
+        def release() -> None:
+            if (
+                parent is None
+                or len(campaigns) != trusted_run_count
+                or len(generations) != trusted_run_count * 2
+            ):
+                raise AuthenticatedRunnerExecutionError(
+                    "runner child capability custody cannot be released"
+                )
+
+        def revoke() -> None:
+            nonlocal parent
+            retained_parent = parent
+            retained_campaigns = tuple(campaigns)
+            retained_generations = tuple(generations)
+            parent = None
+            campaigns.clear()
+            generations.clear()
+            failure: BaseException | None = None
+            try:
+                if retained_parent is not None:
+                    trusted_parent_revoke(retained_parent)
+                else:
+                    trusted_child_inventory_revoke(
+                        campaigns=retained_campaigns,
+                        generations=retained_generations,
+                        expected_campaign_count=None,
+                    )
+            except BaseException as exc:
+                failure = exc
+            if retained_parent is not None and failure is not None:
+                with suppress(BaseException):
+                    trusted_child_inventory_revoke(
+                        campaigns=retained_campaigns,
+                        generations=retained_generations,
+                        expected_campaign_count=None,
+                    )
+            if failure is not None:
+                if not isinstance(failure, Exception):
+                    raise failure
+                raise AuthenticatedRunnerExecutionError(
+                    "runner live capability cleanup was incomplete"
+                ) from None
+
+        return retain_campaign, retain_generation, adopt_parent, release, revoke
+
+    return create
+
+
+_new_runner_child_capability_custody = _build_runner_child_capability_custody_factory()
+del _build_runner_child_capability_custody_factory
 
 
 def _candidate_staged_cost_plan(
@@ -365,7 +595,7 @@ def _judge_staged_cost_plan(
     )
 
 
-async def execute_authenticated_cross_lineage_runner(
+async def _execute_authenticated_cross_lineage_runner_impl(
     *,
     config: AuditConfig,
     explicitly_allow_synthetic_egress: bool,
@@ -383,6 +613,28 @@ async def execute_authenticated_cross_lineage_runner(
     judge_route_preparation_executor: JudgeRoutePreparationExecutor,
     judge_executor: CrossLineageJudgeExecutor,
     generation_executor: RunnerGenerationVerificationExecutor,
+    issue_campaign_capability: Callable[
+        ...,
+        TrustedCandidateBenchmarkCampaignVerification,
+    ],
+    revoke_campaign_capability: Callable[
+        [TrustedCandidateBenchmarkCampaignVerification],
+        None,
+    ],
+    issue_runner_custody: Callable[
+        ...,
+        tuple[
+            VerifiedCrossLineageRunnerCustody,
+            AuthenticatedCrossLineageRunnerEvidence,
+        ],
+    ],
+    require_runner_custody: Callable[..., VerifiedCrossLineageRunnerProjection],
+    revoke_runner_custody: Callable[[VerifiedCrossLineageRunnerCustody], None],
+    revoke_generation_capability: Callable[[TrustedGenerationVerification], None],
+    build_execution_result: _AuthenticatedRunnerExecutionResultFactory,
+    retain_campaign_capability: Callable[[TrustedCandidateBenchmarkCampaignVerification], None],
+    retain_generation_capability: Callable[[TrustedGenerationVerification], None],
+    adopt_parent_capability: Callable[[VerifiedCrossLineageRunnerCustody], None],
 ) -> AuthenticatedRunnerExecutionResult:
     """Execute exactly two full-corpus passes and issue retained runner custody.
 
@@ -485,11 +737,27 @@ async def execute_authenticated_cross_lineage_runner(
         )
         # Issue immediately while the original journal still retains its live report
         # bindings and before the judge can append another ledger entry.
-        campaign_verification = issue_trusted_candidate_benchmark_campaign_verification(
-            campaign=campaign,
-            portfolio=portfolio,
-            reports=candidate_result.reports,
-        )
+        campaign_verification: TrustedCandidateBenchmarkCampaignVerification | None = None
+        campaign_retained = False
+        try:
+            campaign_verification = issue_campaign_capability(
+                campaign=campaign,
+                portfolio=portfolio,
+                reports=candidate_result.reports,
+            )
+            retain_campaign_capability(campaign_verification)
+            campaign_retained = True
+        except BaseException:
+            if campaign_verification is not None and not campaign_retained:
+                try:
+                    revoke_campaign_capability(campaign_verification)
+                except BaseException as cleanup_failure:
+                    if not isinstance(cleanup_failure, Exception):
+                        raise cleanup_failure
+                    raise AuthenticatedRunnerExecutionError(
+                        "runner campaign capability handoff cleanup was incomplete"
+                    ) from None
+            raise
         campaign_verification.require_for(
             portfolio_sha256=portfolio.portfolio_sha256,
             reports=candidate_result.reports,
@@ -508,11 +776,27 @@ async def execute_authenticated_cross_lineage_runner(
         )
         candidate_generation_ledger = ledger.snapshot()
         usage_before_candidate_generation = tuple(usage.records)
-        candidate_generation = await generation_executor(
-            run_kind=plan.run_kind,
-            subject=AuthenticatedRunnerGenerationSubject.CANDIDATE,
-            requests=candidate_generation_requests,
-        )
+        candidate_generation: TrustedGenerationVerification | None = None
+        candidate_generation_retained = False
+        try:
+            candidate_generation = await generation_executor(
+                run_kind=plan.run_kind,
+                subject=AuthenticatedRunnerGenerationSubject.CANDIDATE,
+                requests=candidate_generation_requests,
+            )
+            retain_generation_capability(candidate_generation)
+            candidate_generation_retained = True
+        except BaseException:
+            if candidate_generation is not None and not candidate_generation_retained:
+                try:
+                    revoke_generation_capability(candidate_generation)
+                except BaseException as cleanup_failure:
+                    if not isinstance(cleanup_failure, Exception):
+                        raise cleanup_failure
+                    raise AuthenticatedRunnerExecutionError(
+                        "runner candidate generation handoff cleanup was incomplete"
+                    ) from None
+            raise
         if (
             ledger.snapshot() != candidate_generation_ledger
             or tuple(usage.records) != usage_before_candidate_generation
@@ -661,11 +945,27 @@ async def execute_authenticated_cross_lineage_runner(
         )
         judge_generation_ledger = ledger.snapshot()
         usage_before_judge_generation = tuple(usage.records)
-        judge_generation = await generation_executor(
-            run_kind=plan.run_kind,
-            subject=AuthenticatedRunnerGenerationSubject.JUDGE,
-            requests=judge_generation_requests,
-        )
+        judge_generation: TrustedGenerationVerification | None = None
+        judge_generation_retained = False
+        try:
+            judge_generation = await generation_executor(
+                run_kind=plan.run_kind,
+                subject=AuthenticatedRunnerGenerationSubject.JUDGE,
+                requests=judge_generation_requests,
+            )
+            retain_generation_capability(judge_generation)
+            judge_generation_retained = True
+        except BaseException:
+            if judge_generation is not None and not judge_generation_retained:
+                try:
+                    revoke_generation_capability(judge_generation)
+                except BaseException as cleanup_failure:
+                    if not isinstance(cleanup_failure, Exception):
+                        raise cleanup_failure
+                    raise AuthenticatedRunnerExecutionError(
+                        "runner judge generation handoff cleanup was incomplete"
+                    ) from None
+            raise
         if (
             ledger.snapshot() != judge_generation_ledger
             or tuple(usage.records) != usage_before_judge_generation
@@ -717,14 +1017,33 @@ async def execute_authenticated_cross_lineage_runner(
         expected_request_ids=expected_attempt_ids,
     )
     run_custody = tuple(item.custody for item in executed)
-    runner_capability, runner_evidence = issue_verified_cross_lineage_runner_custody(
-        public_lineage_capability=public_lineage_capability,
-        ground_truth_capability=ground_truth_capability,
-        benchmark_suite=benchmark_suite,
-        runs=run_custody,
-        closed_ledger_interval=closed_interval,
-    )
-    runner_projection = require_verified_cross_lineage_runner_custody(
+    runner_capability: VerifiedCrossLineageRunnerCustody | None = None
+    runner_evidence: AuthenticatedCrossLineageRunnerEvidence | None = None
+    parent_adopted = False
+    try:
+        runner_capability, runner_evidence = issue_runner_custody(
+            public_lineage_capability=public_lineage_capability,
+            ground_truth_capability=ground_truth_capability,
+            benchmark_suite=benchmark_suite,
+            runs=run_custody,
+            closed_ledger_interval=closed_interval,
+        )
+        adopt_parent_capability(runner_capability)
+        parent_adopted = True
+    except BaseException:
+        if runner_capability is not None and not parent_adopted:
+            try:
+                revoke_runner_custody(runner_capability)
+            except BaseException as cleanup_failure:
+                if not isinstance(cleanup_failure, Exception):
+                    raise cleanup_failure
+                raise AuthenticatedRunnerExecutionError(
+                    "runner parent capability handoff cleanup was incomplete"
+                ) from None
+        raise
+    if runner_evidence is None:
+        raise AuthenticatedRunnerExecutionError("runner parent custody lacks exact evidence")
+    runner_projection = require_runner_custody(
         runner_capability,
         evidence=runner_evidence,
     )
@@ -738,7 +1057,7 @@ async def execute_authenticated_cross_lineage_runner(
         raise AuthenticatedRunnerExecutionError(
             "issued runner projection differs from the exact executed inventory"
         )
-    return AuthenticatedRunnerExecutionResult(
+    return build_execution_result(
         inventory=inventory,
         runs=tuple(executed),
         closed_ledger_interval=closed_interval,
@@ -746,6 +1065,92 @@ async def execute_authenticated_cross_lineage_runner(
         runner_evidence=runner_evidence,
         runner_projection=runner_projection,
     )
+
+
+def _build_authenticated_cross_lineage_runner_executor() -> Callable[
+    ...,
+    Awaitable[AuthenticatedRunnerExecutionResult],
+]:
+    """Capture the implementation and child-custody callbacks against retargeting."""
+
+    trusted_impl = _execute_authenticated_cross_lineage_runner_impl
+    trusted_new_child_custody = _new_runner_child_capability_custody
+    trusted_issue_runner_custody = issue_verified_cross_lineage_runner_custody
+    trusted_issue_campaign_capability = issue_trusted_candidate_benchmark_campaign_verification
+    trusted_revoke_campaign_capability = revoke_trusted_candidate_benchmark_campaign_verification
+    trusted_require_runner_custody = require_verified_cross_lineage_runner_custody
+    trusted_revoke_runner_custody = revoke_verified_cross_lineage_runner_custody
+    trusted_revoke_generation_capability = revoke_trusted_generation_verification
+    trusted_build_execution_result = _new_authenticated_runner_execution_result
+
+    async def execute(
+        *,
+        config: AuditConfig,
+        explicitly_allow_synthetic_egress: bool,
+        public_lineage_capability: VerifiedPublicModelLineage,
+        ground_truth_capability: VerifiedFrozenGroundTruth,
+        benchmark_suite: ModelBenchmarkSuite,
+        discovery_manifest: OpenRouterModelDiscoveryRunManifest,
+        discovery_evidence: Iterable[OpenRouterModelDiscoveryEvidence],
+        candidate_registry: CandidateRegistry,
+        qualification_policy: QualificationPolicy,
+        budget: BudgetManager,
+        usage: UsageLedger,
+        run_plans: Iterable[AuthenticatedRunnerRunPlan],
+        candidate_executor: CandidateCampaignExecutor,
+        judge_route_preparation_executor: JudgeRoutePreparationExecutor,
+        judge_executor: CrossLineageJudgeExecutor,
+        generation_executor: RunnerGenerationVerificationExecutor,
+    ) -> AuthenticatedRunnerExecutionResult:
+        """Execute with fail-safe cleanup until parent custody owns every child."""
+
+        (
+            retain_campaign,
+            retain_generation,
+            adopt_parent,
+            release,
+            revoke,
+        ) = trusted_new_child_custody()
+        try:
+            result = await trusted_impl(
+                config=config,
+                explicitly_allow_synthetic_egress=explicitly_allow_synthetic_egress,
+                public_lineage_capability=public_lineage_capability,
+                ground_truth_capability=ground_truth_capability,
+                benchmark_suite=benchmark_suite,
+                discovery_manifest=discovery_manifest,
+                discovery_evidence=discovery_evidence,
+                candidate_registry=candidate_registry,
+                qualification_policy=qualification_policy,
+                budget=budget,
+                usage=usage,
+                run_plans=run_plans,
+                candidate_executor=candidate_executor,
+                judge_route_preparation_executor=judge_route_preparation_executor,
+                judge_executor=judge_executor,
+                generation_executor=generation_executor,
+                issue_campaign_capability=trusted_issue_campaign_capability,
+                revoke_campaign_capability=trusted_revoke_campaign_capability,
+                issue_runner_custody=trusted_issue_runner_custody,
+                require_runner_custody=trusted_require_runner_custody,
+                revoke_runner_custody=trusted_revoke_runner_custody,
+                revoke_generation_capability=trusted_revoke_generation_capability,
+                build_execution_result=trusted_build_execution_result,
+                retain_campaign_capability=retain_campaign,
+                retain_generation_capability=retain_generation,
+                adopt_parent_capability=adopt_parent,
+            )
+            release()
+            return result
+        except BaseException:
+            revoke()
+            raise
+
+    return execute
+
+
+execute_authenticated_cross_lineage_runner = _build_authenticated_cross_lineage_runner_executor()
+del _build_authenticated_cross_lineage_runner_executor
 
 
 def _preflight_execution(

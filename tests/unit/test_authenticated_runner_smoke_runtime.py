@@ -14,6 +14,7 @@ import pytest
 import mmaudit.benchmark.cross_lineage_adjudication as adjudication_module
 import mmaudit.cli as cli_module
 import mmaudit.models.authenticated_runner_smoke as smoke_evidence_module
+import mmaudit.models.generation_evidence as generation_evidence_module
 import mmaudit.orchestration.authenticated_runner_smoke_openrouter as smoke_runtime_module
 from mmaudit.benchmark.cross_lineage_adjudication import (
     CrossLineageAdjudicationDisposition,
@@ -33,7 +34,11 @@ from mmaudit.models.authenticated_runner_smoke_corpus import (
     load_authenticated_runner_smoke_corpus_bundle,
 )
 from mmaudit.models.discovery import OpenRouterLiveDiscoveryMismatchCategory
-from mmaudit.models.generation_evidence import OpenRouterGenerationEvidence
+from mmaudit.models.generation_evidence import (
+    GenerationEvidenceValidationError,
+    OpenRouterGenerationEvidence,
+    TrustedGenerationVerification,
+)
 from mmaudit.models.openrouter import OpenRouterModelError
 from mmaudit.models.public_lineage_authority import (
     VerifiedIndependentPublicModelLineageProjection,
@@ -1317,6 +1322,244 @@ async def test_smoke_cli_budget_constructs_live_client_without_egress_or_budget_
         assert budget.atomic_ledger.snapshot() == before
     finally:
         await client.close()
+        await adapter.close()
+        secrets.clear()
+
+
+@pytest.mark.asyncio
+async def test_smoke_candidate_revokes_generation_capability_after_detached_refetch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    launch = _launch(config=_smoke_config(config_factory), tmp_path=tmp_path)
+    report = await asyncio.to_thread(
+        _smoke_report,
+        launch.benchmark_suite,
+        model_id=CANDIDATE_ID,
+    )
+    usage = report.result.usage_record
+    assert usage is not None
+    request = generation_evidence_module.GenerationVerificationRequest(
+        benchmark_report_sha256=report.report_sha256,
+        case_id=report.result.case_id,
+        exact_model_id=usage.requested_model,
+        canonical_model_id=cast(str, usage.routing["canonical_model"]),
+        catalog_identity_binding_sha256=cast(
+            str,
+            usage.routing["catalog_identity_binding_sha256"],
+        ),
+        discovery_evidence_sha256=cast(str, usage.routing["discovery_evidence_sha256"]),
+        expected_provider_name=cast(str, usage.routing["selected_provider_name"]),
+        usage_record=usage,
+    )
+    issued: list[tuple[TrustedGenerationVerification, tuple[Any, ...]]] = []
+
+    class _FakeClient:
+        closed = False
+
+        async def create_trusted_generation_verification(
+            self,
+            requests: tuple[Any, ...],
+        ) -> TrustedGenerationVerification:
+            generation = report.result.generation_evidence
+            assert generation is not None
+            capability = generation_evidence_module._issue_trusted_generation_verification(
+                requests=requests,
+                attestations=(generation,),
+                verification_started_at=generation.retrieved_at,
+            )
+            issued.append((capability, requests))
+            return capability
+
+        async def close(self) -> None:
+            self.closed = True
+
+    client = _FakeClient()
+
+    async def refresh(**_kwargs: object) -> None:
+        return None
+
+    async def execute_smoke(**_kwargs: object) -> Any:
+        return report
+
+    monkeypatch.setattr(
+        smoke_runtime_module._SmokeOpenRouterAdapter,
+        "_new_candidate_client",
+        lambda *_args, **_kwargs: client,
+    )
+    monkeypatch.setattr(smoke_runtime_module, "_refresh_and_register_exact_route", refresh)
+    monkeypatch.setattr(
+        smoke_runtime_module,
+        "_generation_request",
+        lambda **_kwargs: request,
+    )
+    monkeypatch.setattr(
+        smoke_runtime_module,
+        "execute_noncrediting_model_benchmark_smoke",
+        execute_smoke,
+    )
+    secrets = OperatorSecrets({OPENROUTER_API_KEY_NAME: "synthetic-smoke-revoke-test"})
+    adapter = smoke_runtime_module._SmokeOpenRouterAdapter(launch=launch, secrets=secrets)
+    try:
+        returned, refetch = await adapter.candidate(
+            plan=launch.run_plans[0],
+            cost_plan=cast(Any, SimpleNamespace(request_preview=object())),
+        )
+        assert returned is report
+        assert refetch == report.result.generation_evidence
+        assert client.closed
+        assert len(issued) == 1
+        capability, requests = issued[0]
+        request = requests[0]
+        with pytest.raises(GenerationEvidenceValidationError, match="not trusted"):
+            capability.attestation_for(
+                benchmark_report_sha256=request.benchmark_report_sha256,
+                case_id=request.case_id,
+                exact_model_id=request.exact_model_id,
+                canonical_model_id=request.canonical_model_id,
+                catalog_identity_binding_sha256=request.catalog_identity_binding_sha256,
+                discovery_evidence_sha256=request.discovery_evidence_sha256,
+                usage_record=request.usage_record,
+                expected_provider_name=request.expected_provider_name,
+            )
+    finally:
+        await adapter.close()
+        secrets.clear()
+
+
+@pytest.mark.asyncio
+async def test_smoke_judge_revokes_generation_capability_after_detached_refetch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    launch = _launch(config=_smoke_config(config_factory), tmp_path=tmp_path)
+    candidate_report = await asyncio.to_thread(
+        _smoke_report,
+        launch.benchmark_suite,
+        model_id=CANDIDATE_ID,
+    )
+    plan = launch.run_plans[0]
+    case = launch.benchmark_suite.cases[0]
+    truth = launch.benchmark_suite.ground_truth_case(case.case_id)
+    prepared_adjudication = prepare_noncrediting_cross_lineage_adjudication_smoke(
+        public_lineage_capability=resolve_verified_public_model_lineage(),
+        suite=launch.benchmark_suite,
+        selected_case=case,
+        selected_ground_truth=truth,
+        selection_sha256=SELECTION_SHA256,
+        candidate_report=candidate_report,
+        judge=plan.judge,
+        run_kind=plan.run_kind,
+    )
+    request = prepared_adjudication.requests[0]
+    response = build_cross_lineage_adjudication_response(
+        request=request,
+        dimension_outcomes=request.expected_dimension_outcomes,
+        disposition=CrossLineageAdjudicationDisposition.CONFIRMED,
+        rationale="Synthetic smoke judge generation-revocation regression.",
+    )
+    usage, generation = _judge_usage_and_generation(
+        case_index=0,
+        request=request,
+        response=response,
+        judge=plan.judge,
+    )
+    smoke_request_id = adjudication_module._cross_lineage_adjudication_smoke_logical_request_id(
+        request
+    )
+    usage_payload = usage.model_dump(mode="python")
+    usage_payload["request_id"] = smoke_request_id
+    routing = dict(usage_payload["routing"])
+    for field in _TOKEN_ROUTING_FIELDS:
+        routing.pop(field, None)
+    routing["privacy_source_proof_kind"] = "PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION"
+    usage_payload["routing"] = routing
+    smoke_usage = bind_synthetic_usage_identity(
+        rebind_synthetic_token_plan(UsageRecord.model_validate(usage_payload))
+    )
+    generation_payload = generation.model_dump(mode="json", exclude={"evidence_sha256"})
+    generation_payload["request_id"] = smoke_request_id
+    smoke_generation = OpenRouterGenerationEvidence.model_validate(
+        {
+            **generation_payload,
+            "evidence_sha256": canonical_sha256(generation_payload),
+        }
+    )
+    result = build_cross_lineage_adjudication_case_result(
+        request=request,
+        response=response,
+        usage_record=smoke_usage,
+        generation_evidence=smoke_generation,
+    )
+    issued: list[tuple[TrustedGenerationVerification, tuple[Any, ...]]] = []
+
+    class _FakeClient:
+        closed = False
+
+        async def create_trusted_generation_verification(
+            self,
+            requests: tuple[Any, ...],
+        ) -> TrustedGenerationVerification:
+            capability = generation_evidence_module._issue_trusted_generation_verification(
+                requests=requests,
+                attestations=(smoke_generation,),
+                verification_started_at=smoke_generation.retrieved_at,
+            )
+            issued.append((capability, requests))
+            return capability
+
+        async def close(self) -> None:
+            self.closed = True
+
+    async def execute_judge(**_kwargs: object) -> tuple[Any, ...]:
+        return (result,)
+
+    client = _FakeClient()
+    monkeypatch.setattr(
+        smoke_runtime_module,
+        "execute_noncrediting_cross_lineage_adjudication_smoke_requests",
+        execute_judge,
+    )
+    secrets = OperatorSecrets({OPENROUTER_API_KEY_NAME: "synthetic-smoke-revoke-test"})
+    adapter = smoke_runtime_module._SmokeOpenRouterAdapter(launch=launch, secrets=secrets)
+    cast(Any, adapter)._judge_clients[plan.run_kind] = client
+    prepared = smoke_runtime_module._PreparedSmokeRun(
+        plan=plan,
+        candidate_cost_plan=cast(Any, object()),
+        candidate_report=candidate_report,
+        candidate_generation_refetch=cast(
+            OpenRouterGenerationEvidence,
+            candidate_report.result.generation_evidence,
+        ),
+        prepared_adjudication=prepared_adjudication,
+    )
+    try:
+        report, refetch = await adapter.judge(
+            prepared=prepared,
+            cost_plan=cast(Any, SimpleNamespace(request_preview=object())),
+        )
+        assert report.cases == (result,)
+        assert refetch == smoke_generation
+        assert client.closed
+        assert len(issued) == 1
+        capability, requests = issued[0]
+        verification_request = requests[0]
+        with pytest.raises(GenerationEvidenceValidationError, match="not trusted"):
+            capability.attestation_for(
+                benchmark_report_sha256=verification_request.benchmark_report_sha256,
+                case_id=verification_request.case_id,
+                exact_model_id=verification_request.exact_model_id,
+                canonical_model_id=verification_request.canonical_model_id,
+                catalog_identity_binding_sha256=(
+                    verification_request.catalog_identity_binding_sha256
+                ),
+                discovery_evidence_sha256=verification_request.discovery_evidence_sha256,
+                usage_record=verification_request.usage_record,
+                expected_provider_name=verification_request.expected_provider_name,
+            )
+    finally:
         await adapter.close()
         secrets.clear()
 

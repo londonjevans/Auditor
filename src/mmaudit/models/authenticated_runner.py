@@ -40,12 +40,14 @@ from mmaudit.benchmark.cross_lineage_adjudication import (
 from mmaudit.benchmark.model_portfolio import (
     ModelBenchmarkPortfolio,
     TrustedCandidateBenchmarkCampaignVerification,
+    revoke_trusted_candidate_benchmark_campaign_verification,
 )
 from mmaudit.benchmark.models import ModelBenchmarkReport, ModelBenchmarkSuite
 from mmaudit.models.generation_evidence import (
     OpenRouterGenerationEvidence,
     TrustedGenerationVerification,
     _has_authrunner_generation_origin,
+    revoke_trusted_generation_verification,
 )
 from mmaudit.models.ground_truth_authority import (
     FROZEN_GROUND_TRUTH_OBJECTIVE_SHA256,
@@ -1071,6 +1073,81 @@ def _build_cross_lineage_ledger_interval_authority() -> tuple[
 del _build_cross_lineage_ledger_interval_authority
 
 
+def _build_runner_child_capability_inventory_revoker() -> Callable[..., None]:
+    """Capture fail-safe invalidation for retained campaign and generation leases."""
+
+    trusted_campaign_type = TrustedCandidateBenchmarkCampaignVerification
+    trusted_generation_type = TrustedGenerationVerification
+    trusted_campaign_revoke = revoke_trusted_candidate_benchmark_campaign_verification
+    trusted_generation_revoke = revoke_trusted_generation_verification
+    trusted_max_runs = _MAX_RUNS
+
+    def revoke(
+        *,
+        campaigns: tuple[TrustedCandidateBenchmarkCampaignVerification, ...],
+        generations: tuple[TrustedGenerationVerification, ...],
+        expected_campaign_count: int | None,
+    ) -> None:
+        campaign_inventory_valid = type(campaigns) is tuple and all(
+            type(item) is trusted_campaign_type for item in campaigns
+        )
+        generation_inventory_valid = type(generations) is tuple and all(
+            type(item) is trusted_generation_type for item in generations
+        )
+        unique_campaigns = tuple({id(item): item for item in campaigns}.values())
+        unique_generations = tuple({id(item): item for item in generations}.values())
+        inventory_valid = (
+            campaign_inventory_valid
+            and generation_inventory_valid
+            and len(unique_campaigns) == len(campaigns)
+            and len(unique_generations) == len(generations)
+            and (
+                expected_campaign_count is None
+                or (
+                    type(expected_campaign_count) is int
+                    and 2 <= expected_campaign_count <= trusted_max_runs
+                    and len(campaigns) == expected_campaign_count
+                    and len(generations) == expected_campaign_count * 2
+                )
+            )
+        )
+        failure: BaseException | None = (
+            None
+            if inventory_valid
+            else AuthenticatedCrossLineageRunnerError(
+                "authenticated runner child capability inventory is invalid"
+            )
+        )
+        for campaign in unique_campaigns:
+            if type(campaign) is not trusted_campaign_type:
+                continue
+            try:
+                trusted_campaign_revoke(campaign)
+            except BaseException as exc:
+                if failure is None:
+                    failure = exc
+        for generation in unique_generations:
+            if type(generation) is not trusted_generation_type:
+                continue
+            try:
+                trusted_generation_revoke(generation)
+            except BaseException as exc:
+                if failure is None:
+                    failure = exc
+        if failure is not None:
+            if not isinstance(failure, Exception):
+                raise failure
+            raise AuthenticatedCrossLineageRunnerError(
+                "authenticated runner child capability revocation was incomplete"
+            ) from None
+
+    return revoke
+
+
+_revoke_runner_child_capability_inventory = _build_runner_child_capability_inventory_revoker()
+del _build_runner_child_capability_inventory_revoker
+
+
 def _build_authenticated_cross_lineage_runner_authority() -> tuple[
     Callable[
         ...,
@@ -1084,10 +1161,13 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
     @dataclass(frozen=True, slots=True)
     class RunnerState:
         process_id: int
+        run_count: int
         public_lineage_capability: VerifiedPublicModelLineage
         ground_truth_capability: VerifiedFrozenGroundTruth
         benchmark_suite: ModelBenchmarkSuite
         runs: tuple[CrossLineageRunnerRunCustody, ...]
+        campaign_capabilities: tuple[TrustedCandidateBenchmarkCampaignVerification, ...]
+        generation_capabilities: tuple[TrustedGenerationVerification, ...]
         closed_ledger_interval: ClosedCrossLineageLedgerInterval
         evidence: AuthenticatedCrossLineageRunnerEvidence
 
@@ -1113,6 +1193,9 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
         "_manifest_module": trusted_manifest_module,
     }
     trusted_getpid = os.getpid
+    trusted_max_runs = _MAX_RUNS
+    trusted_runner_capability_type = VerifiedCrossLineageRunnerCustody
+    trusted_object_new = object.__new__
     registry: _PidLocalOneWayLeaseRegistry[
         VerifiedCrossLineageRunnerCustody,
         RunnerState,
@@ -1136,8 +1219,27 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
     trusted_case_result_getattribute = CrossLineageAdjudicationCaseResult.__getattribute__
     trusted_ground_require = VerifiedFrozenGroundTruth.require_for
     trusted_campaign_require = TrustedCandidateBenchmarkCampaignVerification.require_for
+    trusted_campaign_revoke = revoke_trusted_candidate_benchmark_campaign_verification
     trusted_generation_attestation = TrustedGenerationVerification.attestation_for
     trusted_generation_origin = _has_authrunner_generation_origin
+    trusted_generation_revoke = revoke_trusted_generation_verification
+    trusted_child_inventory_revoke = _revoke_runner_child_capability_inventory
+    trusted_run_getattribute = CrossLineageRunnerRunCustody.__getattribute__
+    trusted_run_child_descriptors = {
+        name: vars(CrossLineageRunnerRunCustody)[name]
+        for name in (
+            "candidate_campaign_verification",
+            "candidate_generation_verification",
+            "judge_generation_verification",
+        )
+    }
+
+    def run_child_capability(run: CrossLineageRunnerRunCustody, name: str) -> object:
+        return cast(Any, trusted_run_child_descriptors[name]).__get__(
+            run,
+            CrossLineageRunnerRunCustody,
+        )
+
     trusted_usage_origin = _has_authrunner_owned_real_usage_origin
     trusted_types = {
         "BaseModel": BaseModel,
@@ -1180,6 +1282,9 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
         "_require_pristine_cross_lineage_ledger_runtime": trusted_ledger_pristine,
         "_has_authrunner_generation_origin": trusted_generation_origin,
         "_has_authrunner_owned_real_usage_origin": trusted_usage_origin,
+        "revoke_trusted_candidate_benchmark_campaign_verification": (trusted_campaign_revoke),
+        "revoke_trusted_generation_verification": trusted_generation_revoke,
+        "_revoke_runner_child_capability_inventory": trusted_child_inventory_revoke,
     }
     trusted_adjudication_callables = {
         name: getattr(trusted_adjudication_module, name)
@@ -1201,6 +1306,7 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
             "_require_trusted_campaign_capability",
             "_require_trusted_campaign_capability_positional",
             "canonical_sha256",
+            "revoke_trusted_candidate_benchmark_campaign_verification",
         )
     }
     trusted_benchmark_callables = {
@@ -1218,10 +1324,13 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
         name: getattr(trusted_generation_evidence_module, name)
         for name in (
             "_reconcile_generation_evidence_structural",
+            "_recheck_trusted_generation_capability",
+            "_snapshot_trusted_generation_capability",
             "_trusted_generation_binding_for",
             "_usage_record_sha256",
             "_validated_usage_copy_preserving_owned_attestation",
             "_has_authrunner_generation_origin",
+            "revoke_trusted_generation_verification",
         )
     }
     trusted_usage_callables = {
@@ -1237,6 +1346,7 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
         trusted_ledger_pristine()
         if (
             namespace.get("sys") is not trusted_sys_module
+            or namespace.get("_MAX_RUNS") != trusted_max_runs
             or any(namespace.get(name) is not module for name, module in trusted_modules.items())
             or trusted_sys_module.modules.get(__name__) is not trusted_self_module
             or any(
@@ -1274,6 +1384,11 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
             is not CrossLineageAdjudicationCaseResult
             or CrossLineageAdjudicationCaseResult.__getattribute__
             is not trusted_case_result_getattribute
+            or CrossLineageRunnerRunCustody.__getattribute__ is not trusted_run_getattribute
+            or any(
+                vars(CrossLineageRunnerRunCustody).get(name) is not descriptor
+                for name, descriptor in trusted_run_child_descriptors.items()
+            )
             or trusted_adjudication_module.CrossLineageAdjudicationPreparedRun
             is not CrossLineageAdjudicationPreparedRun
             or trusted_adjudication_module.CrossLineageAdjudicationRunKind
@@ -1388,9 +1503,9 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
     def preflight_runs(
         values: Iterable[CrossLineageRunnerRunCustody],
     ) -> tuple[CrossLineageRunnerRunCustody, ...]:
-        bounded = tuple(islice(iter(values), _MAX_RUNS + 1))
+        bounded = tuple(islice(iter(values), trusted_max_runs + 1))
         require_pristine()
-        if len(bounded) < 2 or len(bounded) > _MAX_RUNS:
+        if len(bounded) < 2 or len(bounded) > trusted_max_runs:
             raise AuthenticatedCrossLineageRunnerError(
                 "authenticated runner requires between two and sixteen bounded runs"
             )
@@ -1426,10 +1541,12 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
                 label="prepared adjudication",
             )
             if (
-                type(run.candidate_campaign_verification)
+                type(run_child_capability(run, "candidate_campaign_verification"))
                 is not TrustedCandidateBenchmarkCampaignVerification
-                or type(run.candidate_generation_verification) is not TrustedGenerationVerification
-                or type(run.judge_generation_verification) is not TrustedGenerationVerification
+                or type(run_child_capability(run, "candidate_generation_verification"))
+                is not TrustedGenerationVerification
+                or type(run_child_capability(run, "judge_generation_verification"))
+                is not TrustedGenerationVerification
                 or re.fullmatch(_SHA256_PATTERN, run.candidate_campaign_policy_sha256) is None
                 or re.fullmatch(
                     _SHA256_PATTERN,
@@ -1451,13 +1568,15 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
         candidate_report_hashes = tuple(item.candidate_report.report_sha256 for item in bounded)
         portfolio_hashes = tuple(item.candidate_portfolio.portfolio_sha256 for item in bounded)
         adjudication_hashes = tuple(item.adjudication_report.report_sha256 for item in bounded)
-        campaign_capabilities = tuple(id(item.candidate_campaign_verification) for item in bounded)
+        campaign_capabilities = tuple(
+            id(run_child_capability(item, "candidate_campaign_verification")) for item in bounded
+        )
         generation_capabilities = tuple(
             capability
             for item in bounded
             for capability in (
-                item.candidate_generation_verification,
-                item.judge_generation_verification,
+                run_child_capability(item, "candidate_generation_verification"),
+                run_child_capability(item, "judge_generation_verification"),
             )
         )
         if (
@@ -1725,7 +1844,10 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
         require_pristine()
         try:
             trusted_campaign_require(
-                run.candidate_campaign_verification,
+                cast(
+                    TrustedCandidateBenchmarkCampaignVerification,
+                    run_child_capability(run, "candidate_campaign_verification"),
+                ),
                 portfolio_sha256=run.candidate_portfolio.portfolio_sha256,
                 reports=run.candidate_campaign_reports,
                 policy_sha256=run.candidate_campaign_policy_sha256,
@@ -1785,7 +1907,10 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
             require_usage_origin(candidate_usage, atomic_ledger)
             require_usage_origin(judge_case.usage_record, atomic_ledger)
             candidate_attestation = require_generation_attestation(
-                run.candidate_generation_verification,
+                cast(
+                    TrustedGenerationVerification,
+                    run_child_capability(run, "candidate_generation_verification"),
+                ),
                 atomic_ledger=atomic_ledger,
                 report_sha256=candidate_report.report_sha256,
                 case_id=expected_case_id,
@@ -1806,7 +1931,10 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
                 ),
             )
             judge_attestation = require_generation_attestation(
-                run.judge_generation_verification,
+                cast(
+                    TrustedGenerationVerification,
+                    run_child_capability(run, "judge_generation_verification"),
+                ),
                 atomic_ledger=atomic_ledger,
                 report_sha256=adjudication.report_sha256,
                 case_id=expected_case_id,
@@ -2026,23 +2154,79 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
             runs=retained_runs,
             ledger_view=ledger_view,
         )
+        campaign_capabilities = tuple(
+            cast(
+                TrustedCandidateBenchmarkCampaignVerification,
+                run_child_capability(run, "candidate_campaign_verification"),
+            )
+            for run in retained_runs
+        )
+        generation_capabilities = tuple(
+            cast(TrustedGenerationVerification, child_capability)
+            for run in retained_runs
+            for child_capability in (
+                run_child_capability(run, "candidate_generation_verification"),
+                run_child_capability(run, "judge_generation_verification"),
+            )
+        )
+        if (
+            len(campaign_capabilities) != len(retained_runs)
+            or len(generation_capabilities) != len(retained_runs) * 2
+            or len({id(item) for item in campaign_capabilities}) != len(campaign_capabilities)
+            or len({id(item) for item in generation_capabilities}) != len(generation_capabilities)
+        ):
+            raise AuthenticatedCrossLineageRunnerError(
+                "authenticated runner child capability inventory is invalid"
+            )
+        require_pristine()
         claimed = trusted_claim_ledger(closed_ledger_interval)
         if claimed != ledger_view:
             raise AuthenticatedCrossLineageRunnerError(
                 "closed ledger interval changed while runner custody issued"
             )
-        capability = object.__new__(VerifiedCrossLineageRunnerCustody)
+        capability = trusted_object_new(trusted_runner_capability_type)
         state = RunnerState(
             process_id=trusted_getpid(),
+            run_count=len(retained_runs),
             public_lineage_capability=public_lineage_capability,
             ground_truth_capability=ground_truth_capability,
             benchmark_suite=benchmark_suite,
             runs=retained_runs,
+            campaign_capabilities=campaign_capabilities,
+            generation_capabilities=generation_capabilities,
             closed_ledger_interval=closed_ledger_interval,
             evidence=evidence,
         )
-        trusted_lease_register(registry, capability, state)
-        require_pristine()
+        registered = False
+        try:
+            trusted_lease_register(registry, capability, state)
+            registered = True
+            require_pristine()
+        except BaseException as original:
+            cleanup_failure: BaseException | None = None
+            try:
+                trusted_lease_revoke(registry, capability)
+            except AuthenticatedCrossLineageRunnerError as exc:
+                if registered:
+                    cleanup_failure = exc
+            except BaseException as exc:
+                cleanup_failure = exc
+            try:
+                trusted_child_inventory_revoke(
+                    campaigns=state.campaign_capabilities,
+                    generations=state.generation_capabilities,
+                    expected_campaign_count=state.run_count,
+                )
+            except BaseException as exc:
+                if cleanup_failure is None:
+                    cleanup_failure = exc
+            if cleanup_failure is not None:
+                if not isinstance(cleanup_failure, Exception):
+                    raise cleanup_failure from None
+                raise AuthenticatedCrossLineageRunnerError(
+                    "authenticated runner issuance cleanup was incomplete"
+                ) from None
+            raise original
         return capability, evidence
 
     def require(
@@ -2088,13 +2272,39 @@ def _build_authenticated_cross_lineage_runner_authority() -> tuple[
         return result
 
     def revoke(capability: VerifiedCrossLineageRunnerCustody) -> None:
-        """Permanently invalidate one exact current-PID runner lease."""
+        """Permanently invalidate one runner lease and every retained child lease."""
 
         # Disposal is fail-safe: a mutated public binding must be reported, but it
-        # must not keep an already-issued lease alive.  The captured registry
-        # descriptor validates the exact capability and PID before removing it.
-        trusted_lease_revoke(registry, capability)
-        require_pristine()
+        # must not keep an already-issued lease alive.  Snapshot the exact retained
+        # runs, remove the parent first, then attempt every unique child revocation
+        # even when an earlier child reports a failure.
+        lease_snapshot = trusted_lease_snapshot(registry, capability)
+        state = lease_snapshot.state
+        failure: BaseException | None = None
+        try:
+            trusted_lease_revoke(registry, capability)
+        except BaseException as exc:
+            failure = exc
+        try:
+            trusted_child_inventory_revoke(
+                campaigns=state.campaign_capabilities,
+                generations=state.generation_capabilities,
+                expected_campaign_count=state.run_count,
+            )
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+        try:
+            require_pristine()
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+        if failure is not None:
+            if not isinstance(failure, Exception):
+                raise failure
+            raise AuthenticatedCrossLineageRunnerError(
+                "authenticated runner child capability revocation was incomplete"
+            ) from None
 
     public_bindings.update(
         {

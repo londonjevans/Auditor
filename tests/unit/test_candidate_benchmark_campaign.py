@@ -1,23 +1,27 @@
 from __future__ import annotations
 
 import json
+import os
+import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Never
+from typing import Any, Never, cast
 
 import pytest
 
 import mmaudit.benchmark.model_portfolio as model_portfolio_module
 from mmaudit.benchmark.model_portfolio import (
+    TrustedCandidateBenchmarkCampaignVerification,
     create_candidate_benchmark_campaign,
     issue_trusted_candidate_benchmark_campaign_verification,
     load_model_benchmark_portfolio,
     resume_candidate_benchmark_campaign,
+    revoke_trusted_candidate_benchmark_campaign_verification,
     seal_model_benchmark_portfolio_from_campaign,
 )
-from mmaudit.benchmark.models import load_model_benchmark_corpus
+from mmaudit.benchmark.models import ModelBenchmarkReport, load_model_benchmark_corpus
 from mmaudit.config import AuditConfig
 from mmaudit.models.candidate_benchmark import (
     CandidateBenchmarkRunState,
@@ -68,6 +72,7 @@ def _policy_sha256() -> str:
 async def test_usage_then_raise_is_atomically_retained_with_retry_accounting(
     tmp_path: Path,
     config_factory: Callable[..., AuditConfig],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = _config(config_factory)
     model_id = "alpha/atlas-secure"
@@ -166,6 +171,184 @@ async def test_usage_then_raise_is_atomically_retained_with_retry_accounting(
         policy_sha256=_policy_sha256(),
         effective_config_sha256=_config_sha256(config),
     )
+
+    forged = object.__new__(TrustedCandidateBenchmarkCampaignVerification)
+    with pytest.raises(ValueError, match="absent, mismatched, or revoked"):
+        revoke_trusted_candidate_benchmark_campaign_verification(forged)
+    with pytest.raises(ValueError, match="absent, mismatched, or revoked"):
+        revoke_trusted_candidate_benchmark_campaign_verification(
+            cast(TrustedCandidateBenchmarkCampaignVerification, object())
+        )
+    capability.require_for(
+        portfolio_sha256=portfolio.portfolio_sha256,
+        reports=result.reports,
+        policy_sha256=_policy_sha256(),
+        effective_config_sha256=_config_sha256(config),
+    )
+
+    pristine_capability = issue_trusted_candidate_benchmark_campaign_verification(
+        campaign=journal,
+        portfolio=portfolio,
+        reports=result.reports,
+    )
+    revoke_for_result = cast(
+        Callable[[TrustedCandidateBenchmarkCampaignVerification], object],
+        revoke_trusted_candidate_benchmark_campaign_verification,
+    )
+    assert revoke_for_result(pristine_capability) is None
+    with pytest.raises(ValueError, match="absent, mismatched, or revoked"):
+        pristine_capability.require_for(
+            portfolio_sha256=portfolio.portfolio_sha256,
+            reports=result.reports,
+            policy_sha256=_policy_sha256(),
+            effective_config_sha256=_config_sha256(config),
+        )
+
+    trusted_revoke = revoke_trusted_candidate_benchmark_campaign_verification
+    for binding_name in (
+        "TrustedCandidateBenchmarkCampaignVerification",
+        "_revoke_trusted_campaign_capability",
+        "_require_trusted_campaign_capability",
+        "_require_trusted_campaign_capability_positional",
+        "_report_content_bindings",
+        "create_candidate_benchmark_campaign",
+        "issue_trusted_candidate_benchmark_campaign_verification",
+        "revoke_trusted_candidate_benchmark_campaign_verification",
+    ):
+        retargeted = issue_trusted_candidate_benchmark_campaign_verification(
+            campaign=journal,
+            portfolio=portfolio,
+            reports=result.reports,
+        )
+        retained = retargeted
+        with monkeypatch.context() as binding_patch:
+            binding_patch.setattr(model_portfolio_module, binding_name, object())
+            with pytest.raises(ValueError, match="revocation runtime is not pristine"):
+                trusted_revoke(retargeted)
+        assert retained is retargeted
+        with pytest.raises(ValueError, match="absent, mismatched, or revoked"):
+            retained.require_for(
+                portfolio_sha256=portfolio.portfolio_sha256,
+                reports=result.reports,
+                policy_sha256=_policy_sha256(),
+                effective_config_sha256=_config_sha256(config),
+            )
+
+    method_retargeted = issue_trusted_candidate_benchmark_campaign_verification(
+        campaign=journal,
+        portfolio=portfolio,
+        reports=result.reports,
+    )
+    with monkeypatch.context() as binding_patch:
+        binding_patch.setattr(
+            TrustedCandidateBenchmarkCampaignVerification,
+            "require_for",
+            lambda *_args, **_kwargs: None,
+        )
+        with pytest.raises(ValueError, match="revocation runtime is not pristine"):
+            trusted_revoke(method_retargeted)
+    with pytest.raises(ValueError, match="absent, mismatched, or revoked"):
+        method_retargeted.require_for(
+            portfolio_sha256=portfolio.portfolio_sha256,
+            reports=result.reports,
+            policy_sha256=_policy_sha256(),
+            effective_config_sha256=_config_sha256(config),
+        )
+
+    if hasattr(os, "fork"):
+        child_pid = os.fork()
+        if child_pid == 0:
+            child_status = 1
+            try:
+                with pytest.raises(ValueError, match="belongs to another process"):
+                    capability.require_for(
+                        portfolio_sha256=portfolio.portfolio_sha256,
+                        reports=result.reports,
+                        policy_sha256=_policy_sha256(),
+                        effective_config_sha256=_config_sha256(config),
+                    )
+                with pytest.raises(ValueError, match="belongs to another process"):
+                    revoke_trusted_candidate_benchmark_campaign_verification(capability)
+                with pytest.raises(ValueError, match="belongs to another process"):
+                    issue_trusted_candidate_benchmark_campaign_verification(
+                        campaign=journal,
+                        portfolio=portfolio,
+                        reports=result.reports,
+                    )
+                child_status = 0
+            finally:
+                os._exit(child_status)
+        waited_pid, wait_status = os.waitpid(child_pid, 0)
+        assert waited_pid == child_pid
+        assert os.waitstatus_to_exitcode(wait_status) == 0
+    capability.require_for(
+        portfolio_sha256=portfolio.portfolio_sha256,
+        reports=result.reports,
+        policy_sha256=_policy_sha256(),
+        effective_config_sha256=_config_sha256(config),
+    )
+
+    validation_started = threading.Event()
+    continue_validation = threading.Event()
+    validation_failures: list[str] = []
+    actual_report_bindings = model_portfolio_module._report_content_bindings
+
+    def delayed_report_bindings(
+        reports: tuple[ModelBenchmarkReport, ...],
+    ) -> tuple[tuple[str, str], ...]:
+        validation_started.set()
+        if not continue_validation.wait(timeout=5):
+            raise RuntimeError("campaign verification race test timed out")
+        return actual_report_bindings(reports)
+
+    monkeypatch.setattr(
+        model_portfolio_module,
+        "_report_content_bindings",
+        delayed_report_bindings,
+    )
+
+    def finish_validation() -> None:
+        try:
+            capability.require_for(
+                portfolio_sha256=portfolio.portfolio_sha256,
+                reports=result.reports,
+                policy_sha256=_policy_sha256(),
+                effective_config_sha256=_config_sha256(config),
+            )
+        except ValueError as exc:
+            validation_failures.append(str(exc))
+
+    validation = threading.Thread(target=finish_validation)
+    validation.start()
+    assert validation_started.wait(timeout=5)
+    revoke = cast(
+        Callable[[TrustedCandidateBenchmarkCampaignVerification], object],
+        revoke_trusted_candidate_benchmark_campaign_verification,
+    )
+    with pytest.raises(ValueError, match="revocation runtime is not pristine"):
+        revoke(capability)
+    continue_validation.set()
+    validation.join(timeout=5)
+    monkeypatch.setattr(
+        model_portfolio_module,
+        "_report_content_bindings",
+        actual_report_bindings,
+    )
+
+    assert not validation.is_alive()
+    assert validation_failures == [
+        "trusted campaign verification changed or was revoked during validation"
+    ]
+    with pytest.raises(ValueError, match="absent, mismatched, or revoked"):
+        capability.require_for(
+            portfolio_sha256=portfolio.portfolio_sha256,
+            reports=result.reports,
+            policy_sha256=_policy_sha256(),
+            effective_config_sha256=_config_sha256(config),
+        )
+    with pytest.raises(ValueError, match="absent, mismatched, or revoked"):
+        revoke_trusted_candidate_benchmark_campaign_verification(capability)
+
     resumed = resume_candidate_benchmark_campaign(
         journal.path,
         candidate_registry=registry,

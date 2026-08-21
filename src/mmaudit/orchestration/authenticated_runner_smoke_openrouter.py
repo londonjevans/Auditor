@@ -8,6 +8,7 @@ AUTHSEAL issuers.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, localcontext
@@ -69,6 +70,8 @@ from mmaudit.models.endpoint_snapshots import (
 from mmaudit.models.generation_evidence import (
     GenerationVerificationRequest,
     OpenRouterGenerationEvidence,
+    TrustedGenerationVerification,
+    revoke_trusted_generation_verification,
 )
 from mmaudit.models.openrouter import (
     OpenRouterClient,
@@ -318,16 +321,20 @@ class _PreparedSmokeRun:
 
 
 class _SmokeOpenRouterAdapter:
-    __slots__ = ("_closed", "_judge_clients", "_launch", "_secrets")
+    __slots__ = ("_closed", "_generation_revoke", "_judge_clients", "_launch", "_secrets")
 
     def __init__(
         self,
         *,
         launch: AuthenticatedRunnerSmokeOpenRouterLaunch,
         secrets: OperatorSecrets,
+        _generation_revoke: Callable[
+            [TrustedGenerationVerification], None
+        ] = revoke_trusted_generation_verification,
     ) -> None:
         self._launch = launch
         self._secrets = secrets
+        self._generation_revoke = _generation_revoke
         self._judge_clients: dict[CrossLineageAdjudicationRunKind, OpenRouterClient] = {}
         self._closed = False
 
@@ -370,17 +377,22 @@ class _SmokeOpenRouterAdapter:
                 model=candidate,
                 usage=report.result.usage_record,
             )
-            verification = await client.create_trusted_generation_verification((request,))
-            refetch = verification.attestation_for(
-                benchmark_report_sha256=request.benchmark_report_sha256,
-                case_id=request.case_id,
-                exact_model_id=request.exact_model_id,
-                canonical_model_id=request.canonical_model_id,
-                catalog_identity_binding_sha256=request.catalog_identity_binding_sha256,
-                discovery_evidence_sha256=request.discovery_evidence_sha256,
-                usage_record=request.usage_record,
-                expected_provider_name=request.expected_provider_name,
-            )
+            verification: TrustedGenerationVerification | None = None
+            try:
+                verification = await client.create_trusted_generation_verification((request,))
+                refetch = verification.attestation_for(
+                    benchmark_report_sha256=request.benchmark_report_sha256,
+                    case_id=request.case_id,
+                    exact_model_id=request.exact_model_id,
+                    canonical_model_id=request.canonical_model_id,
+                    catalog_identity_binding_sha256=request.catalog_identity_binding_sha256,
+                    discovery_evidence_sha256=request.discovery_evidence_sha256,
+                    usage_record=request.usage_record,
+                    expected_provider_name=request.expected_provider_name,
+                )
+            finally:
+                if verification is not None:
+                    self._generation_revoke(verification)
             return report, refetch
         finally:
             await client.close()
@@ -457,17 +469,22 @@ class _SmokeOpenRouterAdapter:
                     "smoke judge report produced a different generation inventory"
                 )
             request = requests[0]
-            verification = await client.create_trusted_generation_verification(requests)
-            refetch = verification.attestation_for(
-                benchmark_report_sha256=request.benchmark_report_sha256,
-                case_id=request.case_id,
-                exact_model_id=request.exact_model_id,
-                canonical_model_id=request.canonical_model_id,
-                catalog_identity_binding_sha256=request.catalog_identity_binding_sha256,
-                discovery_evidence_sha256=request.discovery_evidence_sha256,
-                usage_record=request.usage_record,
-                expected_provider_name=request.expected_provider_name,
-            )
+            verification: TrustedGenerationVerification | None = None
+            try:
+                verification = await client.create_trusted_generation_verification(requests)
+                refetch = verification.attestation_for(
+                    benchmark_report_sha256=request.benchmark_report_sha256,
+                    case_id=request.case_id,
+                    exact_model_id=request.exact_model_id,
+                    canonical_model_id=request.canonical_model_id,
+                    catalog_identity_binding_sha256=request.catalog_identity_binding_sha256,
+                    discovery_evidence_sha256=request.discovery_evidence_sha256,
+                    usage_record=request.usage_record,
+                    expected_provider_name=request.expected_provider_name,
+                )
+            finally:
+                if verification is not None:
+                    self._generation_revoke(verification)
             return report, refetch
         finally:
             await client.close()

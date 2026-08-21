@@ -4,6 +4,8 @@ import asyncio
 import copy
 import hashlib
 import json
+import os
+import threading
 from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime
 from typing import Any
@@ -12,6 +14,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+import mmaudit.models.generation_evidence as generation_evidence_module
 import mmaudit.models.openrouter as openrouter_module
 from mmaudit.constants import OPENROUTER_DEFAULT_BASE_URL
 from mmaudit.models.generation_evidence import (
@@ -22,7 +25,10 @@ from mmaudit.models.generation_evidence import (
     GenerationVerificationRequest,
     OpenRouterGenerationEvidence,
     TrustedGenerationVerification,
+    _has_authrunner_generation_origin,
+    _issue_trusted_generation_verification,
     reconcile_generation_evidence,
+    revoke_trusted_generation_verification,
     validate_openrouter_generation_payload,
 )
 from mmaudit.models.openrouter import (
@@ -335,6 +341,37 @@ def _evidence(
         requested_generation_id=requested_generation_id,
         retrieved_at=datetime(2026, 7, 27, 8, 1, tzinfo=UTC),
         execution_evidence=execution_evidence,
+    )
+
+
+def _trusted_generation_capability() -> tuple[
+    TrustedGenerationVerification,
+    GenerationVerificationRequest,
+    OpenRouterGenerationEvidence,
+]:
+    request = _verification_request(_GENERATION_ID, index=0)
+    evidence = _evidence()
+    capability = _issue_trusted_generation_verification(
+        requests=(request,),
+        attestations=(evidence,),
+        verification_started_at=_STARTED,
+    )
+    return capability, request, evidence
+
+
+def _resolve_trusted_generation(
+    capability: TrustedGenerationVerification,
+    request: GenerationVerificationRequest,
+) -> OpenRouterGenerationEvidence:
+    return capability.attestation_for(
+        benchmark_report_sha256=request.benchmark_report_sha256,
+        case_id=request.case_id,
+        exact_model_id=request.exact_model_id,
+        canonical_model_id=request.canonical_model_id,
+        catalog_identity_binding_sha256=request.catalog_identity_binding_sha256,
+        discovery_evidence_sha256=request.discovery_evidence_sha256,
+        usage_record=request.usage_record,
+        expected_provider_name=request.expected_provider_name,
     )
 
 
@@ -2331,3 +2368,168 @@ def test_trusted_generation_capability_cannot_be_constructed_or_serialized() -> 
         )
     assert not hasattr(TrustedGenerationVerification, "model_validate")
     assert not hasattr(TrustedGenerationVerification, "model_dump")
+
+
+def test_trusted_generation_revocation_invalidates_a_strongly_held_capability() -> None:
+    capability, request, evidence = _trusted_generation_capability()
+    retained = capability
+
+    assert _resolve_trusted_generation(capability, request) == evidence
+    assert revoke_trusted_generation_verification(capability) is None
+    assert retained is capability
+    assert not _has_authrunner_generation_origin(capability)
+
+    with pytest.raises(
+        GenerationEvidenceValidationError,
+        match="capability is not trusted",
+    ):
+        _resolve_trusted_generation(retained, request)
+    with pytest.raises(
+        GenerationEvidenceValidationError,
+        match="capability is not trusted",
+    ):
+        generation_evidence_module._trusted_generation_binding_for(
+            retained,
+            request.benchmark_report_sha256,
+            request.exact_model_id,
+            request.case_id,
+        )
+    with pytest.raises(
+        GenerationEvidenceValidationError,
+        match="absent, mismatched, or revoked",
+    ):
+        revoke_trusted_generation_verification(retained)
+
+
+def test_trusted_generation_revocation_rejects_a_forged_capability() -> None:
+    forged = object.__new__(TrustedGenerationVerification)
+
+    with pytest.raises(
+        GenerationEvidenceValidationError,
+        match="absent, mismatched, or revoked",
+    ):
+        revoke_trusted_generation_verification(forged)
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork process semantics")
+def test_trusted_generation_capability_is_pid_bound_across_fork() -> None:
+    capability, request, evidence = _trusted_generation_capability()
+    read_descriptor, write_descriptor = os.pipe()
+    process_id = os.fork()
+    if process_id == 0:
+        os.close(read_descriptor)
+        outcomes: list[str] = []
+        exit_status = 0
+        try:
+            _resolve_trusted_generation(capability, request)
+        except GenerationEvidenceValidationError as exc:
+            outcomes.append(f"resolve:{exc}")
+        except BaseException as exc:
+            outcomes.append(f"resolve:UNEXPECTED:{type(exc).__name__}")
+            exit_status = 2
+        else:
+            outcomes.append("resolve:LIVE")
+        try:
+            revoke_trusted_generation_verification(capability)
+        except GenerationEvidenceValidationError as exc:
+            outcomes.append(f"revoke:{exc}")
+        except BaseException as exc:
+            outcomes.append(f"revoke:UNEXPECTED:{type(exc).__name__}")
+            exit_status = 2
+        else:
+            outcomes.append("revoke:SUCCEEDED")
+        os.write(write_descriptor, "\n".join(outcomes).encode("utf-8"))
+        os.close(write_descriptor)
+        os._exit(exit_status)
+
+    os.close(write_descriptor)
+    child_result = os.read(read_descriptor, 4096).decode("utf-8")
+    os.close(read_descriptor)
+    waited_process_id, status = os.waitpid(process_id, 0)
+
+    assert waited_process_id == process_id
+    assert os.WIFEXITED(status)
+    assert os.WEXITSTATUS(status) == 0
+    assert child_result.count("belongs to another process") == 2
+    assert "LIVE" not in child_result
+    assert "SUCCEEDED" not in child_result
+    assert _resolve_trusted_generation(capability, request) == evidence
+    revoke_trusted_generation_verification(capability)
+
+
+def test_trusted_generation_revocation_wins_a_concurrent_attestation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capability, request, _evidence_value = _trusted_generation_capability()
+    reconciliation_started = threading.Event()
+    allow_reconciliation = threading.Event()
+    observed: list[BaseException | OpenRouterGenerationEvidence] = []
+    original_reconcile = generation_evidence_module._reconcile_generation_evidence_structural
+
+    def blocking_reconcile(*args: Any, **kwargs: Any) -> OpenRouterGenerationEvidence:
+        reconciliation_started.set()
+        if not allow_reconciliation.wait(timeout=2):
+            raise AssertionError("concurrent generation reconciliation did not resume")
+        return original_reconcile(*args, **kwargs)
+
+    def resolve() -> None:
+        try:
+            observed.append(_resolve_trusted_generation(capability, request))
+        except BaseException as exc:
+            observed.append(exc)
+
+    monkeypatch.setattr(
+        generation_evidence_module,
+        "_reconcile_generation_evidence_structural",
+        blocking_reconcile,
+    )
+    worker = threading.Thread(target=resolve)
+    worker.start()
+    try:
+        assert reconciliation_started.wait(timeout=2)
+        revoke_trusted_generation_verification(capability)
+    finally:
+        allow_reconciliation.set()
+        worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert len(observed) == 1
+    assert isinstance(observed[0], GenerationEvidenceValidationError)
+    assert "changed or was revoked during reconciliation" in str(observed[0])
+
+
+@pytest.mark.parametrize(
+    "binding_name",
+    (
+        "_revoke_trusted_generation_capability",
+        "_revoke_authrunner_generation_origin",
+        "_snapshot_trusted_generation_capability",
+        "_recheck_trusted_generation_capability",
+        "revoke_trusted_generation_verification",
+    ),
+)
+def test_trusted_generation_revocation_is_fail_safe_under_binding_retarget(
+    monkeypatch: pytest.MonkeyPatch,
+    binding_name: str,
+) -> None:
+    capability, request, _evidence_value = _trusted_generation_capability()
+    trusted_revoke = revoke_trusted_generation_verification
+    trusted_binding_for = generation_evidence_module._trusted_generation_binding_for
+    monkeypatch.setattr(generation_evidence_module, binding_name, lambda _capability: None)
+
+    with pytest.raises(
+        GenerationEvidenceValidationError,
+        match="revocation runtime is not pristine",
+    ):
+        trusted_revoke(capability)
+
+    with pytest.raises(
+        GenerationEvidenceValidationError,
+        match="capability is not trusted",
+    ):
+        trusted_binding_for(
+            capability,
+            request.benchmark_report_sha256,
+            request.exact_model_id,
+            request.case_id,
+        )

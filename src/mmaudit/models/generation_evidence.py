@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import sys
 import threading
@@ -14,6 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any, Literal, Never, SupportsIndex
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -216,6 +218,15 @@ class _TrustedGenerationBinding:
     attestation: OpenRouterGenerationEvidence
 
 
+@dataclass(frozen=True, slots=True)
+class _TrustedGenerationCapabilitySnapshot:
+    """Exact hidden generation lease observed before a potentially long reconciliation."""
+
+    process_id: int
+    bindings: Mapping[tuple[str, str, str], _TrustedGenerationBinding]
+    nonce: object
+
+
 class TrustedGenerationVerification:
     """Opaque in-memory proof that generation metadata was freshly re-fetched.
 
@@ -262,12 +273,8 @@ class TrustedGenerationVerification:
             raise GenerationEvidenceValidationError(
                 "generation verification usage is invalid"
             ) from None
-        binding = _trusted_generation_binding_for(
-            self,
-            benchmark_report_sha256,
-            exact_model_id,
-            case_id,
-        )
+        lease_snapshot = _snapshot_trusted_generation_capability(self)
+        binding = lease_snapshot.bindings.get((benchmark_report_sha256, exact_model_id, case_id))
         if (
             binding is None
             or binding.canonical_model_id != canonical_model_id
@@ -279,7 +286,7 @@ class TrustedGenerationVerification:
             raise GenerationEvidenceValidationError(
                 "generation verification capability does not bind this report case"
             )
-        return _reconcile_generation_evidence_structural(
+        result = _reconcile_generation_evidence_structural(
             binding.attestation,
             usage_record=validated_usage,
             expected_exact_model=exact_model_id,
@@ -288,6 +295,8 @@ class TrustedGenerationVerification:
             expected_discovery_evidence_sha256=discovery_evidence_sha256,
             expected_provider_name=expected_provider_name,
         )
+        _recheck_trusted_generation_capability(self, lease_snapshot)
+        return result
 
     def __copy__(self) -> None:
         raise TypeError("trusted generation verification cannot be copied")
@@ -311,17 +320,30 @@ def _build_generation_capability_authority() -> tuple[
         [TrustedGenerationVerification, str, str, str],
         _TrustedGenerationBinding | None,
     ],
+    Callable[
+        [TrustedGenerationVerification],
+        _TrustedGenerationCapabilitySnapshot,
+    ],
+    Callable[
+        [TrustedGenerationVerification, _TrustedGenerationCapabilitySnapshot],
+        None,
+    ],
+    Callable[[TrustedGenerationVerification], None],
 ]:
-    """Keep generation-capability bindings outside caller-mutable instances."""
+    """Keep PID-local generation bindings outside caller-mutable instances."""
 
     registry: dict[
         int,
         tuple[
             weakref.ReferenceType[TrustedGenerationVerification],
-            dict[tuple[str, str, str], _TrustedGenerationBinding],
+            int,
+            Mapping[tuple[str, str, str], _TrustedGenerationBinding],
+            object,
         ],
     ] = {}
     lock = threading.RLock()
+    trusted_capability_type = TrustedGenerationVerification
+    trusted_getpid = os.getpid
 
     def register(
         capability: TrustedGenerationVerification,
@@ -347,9 +369,69 @@ def _build_generation_capability_authority() -> tuple[
                 if current is not None and current[0] is reference:
                     registry.pop(key, None)
 
+        if type(capability) is not trusted_capability_type:
+            raise GenerationEvidenceValidationError(
+                "generation verification capability is not trusted"
+            )
         reference = weakref.ref(capability, discard)
         with lock:
-            registry[key] = (reference, indexed)
+            current = registry.get(key)
+            if current is not None and current[0]() is capability:
+                raise GenerationEvidenceValidationError(
+                    "generation verification capability is already registered"
+                )
+            registry[key] = (
+                reference,
+                trusted_getpid(),
+                MappingProxyType(indexed),
+                object(),
+            )
+
+    def snapshot(
+        capability: TrustedGenerationVerification,
+    ) -> _TrustedGenerationCapabilitySnapshot:
+        if type(capability) is not trusted_capability_type:
+            raise GenerationEvidenceValidationError(
+                "generation verification capability is not trusted"
+            )
+        with lock:
+            registered = registry.get(id(capability))
+        if registered is None or registered[0]() is not capability:
+            raise GenerationEvidenceValidationError(
+                "generation verification capability is not trusted"
+            )
+        if registered[1] != trusted_getpid():
+            raise GenerationEvidenceValidationError(
+                "generation verification capability belongs to another process"
+            )
+        return _TrustedGenerationCapabilitySnapshot(
+            process_id=registered[1],
+            bindings=registered[2],
+            nonce=registered[3],
+        )
+
+    def recheck(
+        capability: TrustedGenerationVerification,
+        lease_snapshot: _TrustedGenerationCapabilitySnapshot,
+    ) -> None:
+        if type(capability) is not trusted_capability_type:
+            raise GenerationEvidenceValidationError(
+                "generation verification capability changed or was revoked during reconciliation"
+            )
+        with lock:
+            registered = registry.get(id(capability))
+        if (
+            type(lease_snapshot) is not _TrustedGenerationCapabilitySnapshot
+            or registered is None
+            or registered[0]() is not capability
+            or registered[1] != trusted_getpid()
+            or registered[1] != lease_snapshot.process_id
+            or registered[2] is not lease_snapshot.bindings
+            or registered[3] is not lease_snapshot.nonce
+        ):
+            raise GenerationEvidenceValidationError(
+                "generation verification capability changed or was revoked during reconciliation"
+            )
 
     def binding_for(
         capability: TrustedGenerationVerification,
@@ -357,24 +439,43 @@ def _build_generation_capability_authority() -> tuple[
         exact_model_id: str,
         case_id: str,
     ) -> _TrustedGenerationBinding | None:
-        with lock:
-            registered = registry.get(id(capability))
-        if (
-            type(capability) is not TrustedGenerationVerification
-            or registered is None
-            or registered[0]() is not capability
-        ):
+        lease_snapshot = snapshot(capability)
+        return lease_snapshot.bindings.get((report_sha256, exact_model_id, case_id))
+
+    def revoke(capability: TrustedGenerationVerification) -> None:
+        """Remove one exact current-PID structural generation lease permanently."""
+
+        if type(capability) is not trusted_capability_type:
             raise GenerationEvidenceValidationError(
-                "generation verification capability is not trusted"
+                "generation verification capability is absent, mismatched, or revoked"
             )
-        return registered[1].get((report_sha256, exact_model_id, case_id))
+        key = id(capability)
+        with lock:
+            registered = registry.get(key)
+            if registered is None or registered[0]() is not capability:
+                raise GenerationEvidenceValidationError(
+                    "generation verification capability is absent, mismatched, or revoked"
+                )
+            if registered[1] != trusted_getpid():
+                raise GenerationEvidenceValidationError(
+                    "generation verification capability belongs to another process"
+                )
+            removed = registry.pop(key)
+        if removed is not registered:
+            raise GenerationEvidenceValidationError(
+                "generation verification capability changed during revocation"
+            )
 
-    return register, binding_for
+    return register, binding_for, snapshot, recheck, revoke
 
 
-_register_trusted_generation_capability, _trusted_generation_binding_for = (
-    _build_generation_capability_authority()
-)
+(
+    _register_trusted_generation_capability,
+    _trusted_generation_binding_for,
+    _snapshot_trusted_generation_capability,
+    _recheck_trusted_generation_capability,
+    _revoke_trusted_generation_capability,
+) = _build_generation_capability_authority()
 
 
 def _build_authrunner_generation_origin_authority() -> tuple[
@@ -384,6 +485,7 @@ def _build_authrunner_generation_origin_authority() -> tuple[
         TrustedGenerationVerification,
     ],
     Callable[..., bool],
+    Callable[[TrustedGenerationVerification], None],
 ]:
     """Keep fresh REAL re-fetch origin separate from structural test capabilities."""
 
@@ -402,6 +504,7 @@ def _build_authrunner_generation_origin_authority() -> tuple[
             weakref.ReferenceType[TrustedGenerationVerification],
             tuple[RequestBinding, ...],
             object,
+            int,
         ],
     ] = {}
     issuer: Issuer | None = None
@@ -413,7 +516,11 @@ def _build_authrunner_generation_origin_authority() -> tuple[
     trusted_sha256 = trusted_hashlib.sha256
     trusted_json_dumps = trusted_json.dumps
     trusted_binding_for = _trusted_generation_binding_for
+    trusted_snapshot = _snapshot_trusted_generation_capability
+    trusted_recheck = _recheck_trusted_generation_capability
     trusted_usage_origin = _has_authrunner_owned_real_usage_origin
+    trusted_capability_type = TrustedGenerationVerification
+    trusted_getpid = os.getpid
 
     def trusted_usage_sha256(record: UsageRecord) -> str:
         return trusted_sha256(
@@ -502,6 +609,10 @@ def _build_authrunner_generation_origin_authority() -> tuple[
             or trusted_sys.modules.get(__name__) is not trusted_self_module
             or getattr(trusted_self_module, "_trusted_generation_binding_for", None)
             is not trusted_binding_for
+            or getattr(trusted_self_module, "_snapshot_trusted_generation_capability", None)
+            is not trusted_snapshot
+            or getattr(trusted_self_module, "_recheck_trusted_generation_capability", None)
+            is not trusted_recheck
             or getattr(trusted_self_module, "_has_authrunner_owned_real_usage_origin", None)
             is not trusted_usage_origin
             or trusted_sys.modules.get(module_name) is not module
@@ -529,13 +640,14 @@ def _build_authrunner_generation_origin_authority() -> tuple[
             or object.__getattribute__(client, "_owns_client") is not True
             or object.__getattribute__(client, "_authentication_validated") is not True
             or atomic_ledger is None
-            or type(capability) is not TrustedGenerationVerification
+            or type(capability) is not trusted_capability_type
             or type(requests) is not tuple
             or not requests
         ):
             raise GenerationEvidenceValidationError(
                 "AUTHRUNNER generation origin requires an owned REAL fresh refetch"
             )
+        lease_snapshot = trusted_snapshot(capability)
         request_bindings: list[RequestBinding] = []
         for request in requests:
             if type(request) is not GenerationVerificationRequest or not trusted_usage_origin(
@@ -574,12 +686,28 @@ def _build_authrunner_generation_origin_authority() -> tuple[
                     registry.pop(key, None)
 
         reference = weakref.ref(capability, discard)
+        inserted = False
         with lock:
             if key in registry:
                 raise GenerationEvidenceValidationError(
                     "AUTHRUNNER generation origin is already registered"
                 )
-            registry[key] = (reference, frozen_bindings, atomic_ledger)
+            registry[key] = (
+                reference,
+                frozen_bindings,
+                atomic_ledger,
+                trusted_getpid(),
+            )
+            inserted = True
+        try:
+            trusted_recheck(capability, lease_snapshot)
+        except GenerationEvidenceValidationError:
+            if inserted:
+                with lock:
+                    current = registry.get(key)
+                    if current is not None and current[0] is reference:
+                        registry.pop(key, None)
+            raise
         return capability
 
     def contains(
@@ -587,7 +715,11 @@ def _build_authrunner_generation_origin_authority() -> tuple[
         *,
         atomic_ledger: object | None = None,
     ) -> bool:
-        if type(capability) is not TrustedGenerationVerification:
+        if type(capability) is not trusted_capability_type:
+            return False
+        try:
+            lease_snapshot = trusted_snapshot(capability)
+        except GenerationEvidenceValidationError:
             return False
         with lock:
             registered_issuer = issuer
@@ -610,6 +742,10 @@ def _build_authrunner_generation_origin_authority() -> tuple[
             or trusted_sys.modules.get(__name__) is not trusted_self_module
             or getattr(trusted_self_module, "_trusted_generation_binding_for", None)
             is not trusted_binding_for
+            or getattr(trusted_self_module, "_snapshot_trusted_generation_capability", None)
+            is not trusted_snapshot
+            or getattr(trusted_self_module, "_recheck_trusted_generation_capability", None)
+            is not trusted_recheck
             or getattr(trusted_self_module, "_has_authrunner_owned_real_usage_origin", None)
             is not trusted_usage_origin
             or trusted_sys.modules.get(module_name) is not module
@@ -627,35 +763,107 @@ def _build_authrunner_generation_origin_authority() -> tuple[
         if (
             registered is None
             or registered[0]() is not capability
+            or registered[3] != trusted_getpid()
             or (atomic_ledger is not None and registered[2] is not atomic_ledger)
         ):
             return False
         try:
-            return all(
-                (
-                    binding := trusted_binding_for(
-                        capability,
-                        report_sha256,
-                        exact_model_id,
-                        case_id,
-                    )
-                )
+            result = all(
+                (binding := lease_snapshot.bindings.get((report_sha256, exact_model_id, case_id)))
                 is not None
                 and binding.usage_record_sha256 == usage_sha256
                 for report_sha256, exact_model_id, case_id, usage_sha256 in registered[1]
             )
+            trusted_recheck(capability, lease_snapshot)
+            return result
         except GenerationEvidenceValidationError:
             return False
 
-    return register_issuer, mark, contains
+    def revoke(capability: TrustedGenerationVerification) -> None:
+        """Remove a current-PID AUTHRUNNER origin mark when one is present."""
+
+        if type(capability) is not trusted_capability_type:
+            return
+        key = id(capability)
+        with lock:
+            registered = registry.get(key)
+            if registered is None or registered[0]() is not capability:
+                return
+            if registered[3] != trusted_getpid():
+                raise GenerationEvidenceValidationError(
+                    "generation verification capability belongs to another process"
+                )
+            removed = registry.pop(key)
+        if removed is not registered:
+            raise GenerationEvidenceValidationError(
+                "generation verification AUTHRUNNER origin changed during revocation"
+            )
+
+    return register_issuer, mark, contains, revoke
 
 
 (
     _register_authrunner_generation_origin_issuer,
     _attest_authrunner_generation_origin,
     _has_authrunner_generation_origin,
+    _revoke_authrunner_generation_origin,
 ) = _build_authrunner_generation_origin_authority()
 del _build_authrunner_generation_origin_authority
+
+
+def _build_generation_revocation_authority() -> Callable[[TrustedGenerationVerification], None]:
+    """Capture fail-safe removal of both generation-capability registries."""
+
+    namespace = globals()
+    trusted_sys = sys
+    trusted_os = os
+    trusted_getpid = trusted_os.getpid
+    trusted_self_module = trusted_sys.modules[__name__]
+    trusted_capability_type = TrustedGenerationVerification
+    trusted_core_revoke = _revoke_trusted_generation_capability
+    trusted_origin_revoke = _revoke_authrunner_generation_origin
+    trusted_binding_for = _trusted_generation_binding_for
+    trusted_snapshot = _snapshot_trusted_generation_capability
+    trusted_recheck = _recheck_trusted_generation_capability
+    public_bindings: dict[str, object] = {}
+
+    def require_pristine() -> None:
+        if (
+            namespace.get("sys") is not trusted_sys
+            or namespace.get("os") is not trusted_os
+            or trusted_os.getpid is not trusted_getpid
+            or trusted_sys.modules.get(__name__) is not trusted_self_module
+            or namespace.get("TrustedGenerationVerification") is not trusted_capability_type
+            or namespace.get("_revoke_trusted_generation_capability") is not trusted_core_revoke
+            or namespace.get("_revoke_authrunner_generation_origin") is not trusted_origin_revoke
+            or namespace.get("_trusted_generation_binding_for") is not trusted_binding_for
+            or namespace.get("_snapshot_trusted_generation_capability") is not trusted_snapshot
+            or namespace.get("_recheck_trusted_generation_capability") is not trusted_recheck
+            or any(namespace.get(name) is not value for name, value in public_bindings.items())
+        ):
+            raise GenerationEvidenceValidationError(
+                "generation verification revocation runtime is not pristine"
+            )
+
+    def revoke(capability: TrustedGenerationVerification) -> None:
+        """Permanently invalidate one exact current-PID generation capability."""
+
+        # Clear a pre-existing origin first, invalidate the structural lease, then
+        # clear again to close a concurrent origin-mark race.  Each operation uses
+        # captured closures; mutated public bindings are reported only after removal.
+        trusted_origin_revoke(capability)
+        try:
+            trusted_core_revoke(capability)
+        finally:
+            trusted_origin_revoke(capability)
+        require_pristine()
+
+    public_bindings["revoke_trusted_generation_verification"] = revoke
+    return revoke
+
+
+revoke_trusted_generation_verification = _build_generation_revocation_authority()
+del _build_generation_revocation_authority
 
 
 class OpenRouterGenerationEvidence(BaseModel):

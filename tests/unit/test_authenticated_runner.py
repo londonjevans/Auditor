@@ -42,12 +42,14 @@ from mmaudit.models.authenticated_runner import (
     OpenCrossLineageLedgerInterval,
     VerifiedCrossLineageRunnerCustody,
     _PidLocalOneWayLeaseRegistry,
+    _revoke_runner_child_capability_inventory,
     begin_cross_lineage_ledger_interval,
     close_cross_lineage_ledger_interval,
     issue_verified_cross_lineage_runner_custody,
     revoke_verified_cross_lineage_runner_custody,
 )
 from mmaudit.models.generation_evidence import (
+    GenerationEvidenceValidationError,
     TrustedGenerationVerification,
     _attest_authrunner_generation_origin,
     _has_authrunner_generation_origin,
@@ -62,6 +64,7 @@ from mmaudit.models.public_lineage_authority import (
     resolve_verified_public_model_lineage,
 )
 from mmaudit.models.qualification import CandidateModel, QualificationPolicy
+from mmaudit.models.qualification_workflow import candidate_generation_verification_requests
 from mmaudit.models.schemas import UsageRecord
 from mmaudit.models.usage import (
     _attest_authrunner_owned_real_usage_origin,
@@ -580,6 +583,72 @@ def test_public_runner_revocation_attempts_disposal_before_reporting_binding_dri
     assert forged_calls == []
 
 
+def test_runner_child_inventory_revocation_invalidates_every_retained_consumer(
+    live_inputs: _LiveInputs,
+) -> None:
+    registry = _candidate_registry((CANDIDATE_ID,))
+    policy = cast(Callable[[], QualificationPolicy], qualification_fixtures._policy)()
+    campaign_bindings = []
+    generation_bindings = []
+
+    for run in (*live_inputs.runs, live_inputs.runs[0]):
+        portfolio, campaign = qualification_fixtures._portfolio_evidence(
+            registry=registry,
+            report=run.candidate_report,
+            policy=policy,
+        )
+        campaign_bindings.append((campaign, portfolio, run.candidate_report))
+
+        candidate_requests = candidate_generation_verification_requests(
+            registry=registry,
+            benchmark_reports=(run.candidate_report,),
+        )
+        candidate_generation = qualification_fixtures._trusted_generation_authority(
+            registry=registry,
+            primary=run.candidate_report,
+        )
+        generation_bindings.append((candidate_generation, candidate_requests[0]))
+
+        judge_requests = adjudication_generation_verification_requests(
+            report=run.adjudication_report,
+            judge=run.judge,
+        )
+        judge_generation = _judge_generation_capability(run.adjudication_report, run.judge)
+        generation_bindings.append((judge_generation, judge_requests[0]))
+
+    campaigns = tuple(item[0] for item in campaign_bindings)
+    generations = tuple(item[0] for item in generation_bindings)
+    assert len(campaigns) == 3
+    assert len(generations) == 6
+
+    _revoke_runner_child_capability_inventory(
+        campaigns=campaigns,
+        generations=generations,
+        expected_campaign_count=3,
+    )
+
+    for capability, portfolio, report in campaign_bindings:
+        with pytest.raises(ValueError, match="absent, mismatched, or revoked"):
+            capability.require_for(
+                portfolio_sha256=portfolio.portfolio_sha256,
+                reports=(report,),
+                policy_sha256=policy.policy_sha256,
+                effective_config_sha256="3" * 64,
+            )
+    for capability, request in generation_bindings:
+        with pytest.raises(GenerationEvidenceValidationError, match="not trusted"):
+            capability.attestation_for(
+                benchmark_report_sha256=request.benchmark_report_sha256,
+                case_id=request.case_id,
+                exact_model_id=request.exact_model_id,
+                canonical_model_id=request.canonical_model_id,
+                catalog_identity_binding_sha256=request.catalog_identity_binding_sha256,
+                discovery_evidence_sha256=request.discovery_evidence_sha256,
+                usage_record=request.usage_record,
+                expected_provider_name=request.expected_provider_name,
+            )
+
+
 def test_ledger_closure_rejects_nonexact_or_uncertain_intervals(tmp_path: Path) -> None:
     wrong_cap = AtomicCostLedger.initialize(tmp_path / "wrong-cap.json", cap_usd=Decimal("10"))
     with pytest.raises(AuthenticatedCrossLineageRunnerError, match="250 USD"):
@@ -831,6 +900,32 @@ def test_module_and_class_retargeting_fail_before_forged_invocation(
             authenticated_runner_module,
             "revoke_verified_cross_lineage_runner_custody",
             forged_runner_revoke,
+        )
+        with pytest.raises(AuthenticatedCrossLineageRunnerError, match="not pristine"):
+            _issue(live_inputs, interval)
+
+    def forged_child_revoke(*_args: object, **_kwargs: object) -> None:
+        invocations.append("child-revoke")
+        raise AssertionError("forged child revocation callable was invoked")
+
+    with monkeypatch.context() as context:
+        context.setattr(
+            authenticated_runner_module,
+            "_revoke_runner_child_capability_inventory",
+            forged_child_revoke,
+        )
+        with pytest.raises(AuthenticatedCrossLineageRunnerError, match="not pristine"):
+            _issue(live_inputs, interval)
+
+    def forged_child_slot(_self: object) -> object:
+        invocations.append("child-slot")
+        raise AssertionError("forged runner child slot was invoked")
+
+    with monkeypatch.context() as context:
+        context.setattr(
+            CrossLineageRunnerRunCustody,
+            "candidate_generation_verification",
+            property(forged_child_slot),
         )
         with pytest.raises(AuthenticatedCrossLineageRunnerError, match="not pristine"):
             _issue(live_inputs, interval)
