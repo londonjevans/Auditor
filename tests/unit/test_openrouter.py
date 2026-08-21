@@ -20,12 +20,16 @@ import mmaudit.models.openrouter as openrouter_module
 import mmaudit.models.truncation as truncation_module
 from mmaudit.benchmark.models import (
     MODEL_BENCHMARK_SCHEMA_NAME,
+    ModelBenchmarkClassification,
     ModelBenchmarkResponse,
     blinded_model_benchmark_request,
     load_model_benchmark_corpus,
     model_benchmark_system_prompt,
 )
 from mmaudit.constants import OPENROUTER_DEFAULT_BASE_URL
+from mmaudit.models.authenticated_runner_smoke_corpus import (
+    load_authenticated_runner_smoke_corpus_bundle,
+)
 from mmaudit.models.discovery import (
     _TRUSTED_OPENROUTER_DISCOVERY_ISSUER,
     DiscoveryCandidateRoute,
@@ -112,6 +116,8 @@ from mmaudit.models.truncation import (
 from mmaudit.models.usage import (
     UsageLedger,
     _attest_owned_real_usage_record,
+    _authrunner_usage_origin_scope,
+    _has_authrunner_owned_real_usage_origin,
     is_creditable_usage_record,
 )
 from mmaudit.orchestration.budgets import (
@@ -148,11 +154,14 @@ from mmaudit.privacy import (
 )
 from mmaudit.repository.privacy_provenance import (
     PrivacySourceProvenanceObservation,
+    prove_pinned_noncrediting_smoke_cross_lineage_adjudication_source,
+    prove_pinned_noncrediting_smoke_model_benchmark_source,
     prove_release_pinned_model_benchmark_source,
 )
 from tests.qualification_support import synthetic_production_qualification
 
 _MODEL_BENCHMARK_CORPUS = Path(__file__).parents[2] / "benchmarks/model_corpus/manifest.json"
+_MODEL_BENCHMARK_SMOKE_CORPUS = Path(__file__).parents[2] / "benchmarks/model_corpus_smoke"
 
 
 class Answer(BaseModel):
@@ -650,6 +659,274 @@ def _synthetic_prequalification_privacy_context(
         now=datetime.now(UTC).replace(microsecond=0),
     )
     return policy, source_provenance, blinded_model_benchmark_request(suite.cases[0])
+
+
+def _pinned_smoke_privacy_policy(
+    config: Any,
+    *,
+    source_sha256: str,
+    source_provenance: PrivacySourceProvenanceObservation,
+) -> EffectivePrivacyPolicyEvidence:
+    return resolve_effective_privacy_policy(
+        profile=config.privacy.profile,
+        require_zdr=config.privacy.require_zdr,
+        consent_observation=None,
+        source_sha256=source_sha256,
+        source_classification=PrivacySourceClassification.SYNTHETIC_COMMITTED,
+        source_provenance_observation=source_provenance,
+        configured_model_ids=("alpha/atlas-secure",),
+        configured_provider_endpoints=("approved-provider",),
+        requested_budget_usd=Decimal(str(config.execution.budget_usd)),
+        now=datetime.now(UTC).replace(microsecond=0),
+    )
+
+
+async def _complete_bound_mock_smoke_request(
+    *,
+    config: Any,
+    tmp_path: Path,
+    source_sha256: str,
+    source_provenance: PrivacySourceProvenanceObservation,
+    logical_request_id: str,
+    system_prompt: str,
+    user_prompt: str,
+    response_model: type[BaseModel],
+    schema_name: str,
+    response_json: str,
+    effective_privacy_policy: EffectivePrivacyPolicyEvidence | None = None,
+) -> UsageRecord:
+    client, http_client, completion, _manifest, _discovery = await _dispatch_mock_smoke_request(
+        config=config,
+        tmp_path=tmp_path,
+        source_sha256=source_sha256,
+        source_provenance=source_provenance,
+        logical_request_id=logical_request_id,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        response_model=response_model,
+        schema_name=schema_name,
+        response_json=response_json,
+        effective_privacy_policy=effective_privacy_policy,
+    )
+    try:
+        retrieved_at = datetime.now(UTC)
+        generation = validate_openrouter_generation_payload(
+            _generation_payload(),
+            requested_generation_id="generation-test",
+            retrieved_at=retrieved_at,
+            execution_evidence=ExecutionEvidenceKind.MOCK,
+        )
+        binding = client.bind_generation_identity(
+            usage_record=completion.usage_record,
+            generation_evidence=generation,
+            evaluated_at=retrieved_at,
+        )
+        return client.usage_with_bound_identity(
+            usage_record=completion.usage_record,
+            identity_binding=binding,
+        )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+
+async def _dispatch_mock_smoke_request(
+    *,
+    config: Any,
+    tmp_path: Path,
+    source_sha256: str,
+    source_provenance: PrivacySourceProvenanceObservation,
+    logical_request_id: str,
+    system_prompt: str,
+    user_prompt: str,
+    response_model: type[BaseModel],
+    schema_name: str,
+    response_json: str,
+    effective_privacy_policy: EffectivePrivacyPolicyEvidence | None = None,
+) -> tuple[
+    OpenRouterClient,
+    httpx.AsyncClient,
+    StructuredCompletion[Any],
+    OpenRouterModelDiscoveryRunManifest,
+    OpenRouterModelDiscoveryEvidence,
+]:
+    manifest, discovery = _model_discovery_run(tmp_path)
+    client, http_client, _usage = _client(
+        config,
+        lambda _request: _completion_response(
+            response_json,
+            selected_model="alpha/atlas-secure-20260727",
+            provider="Approved Provider",
+        ),
+        provider_policy=OpenRouterProviderPolicy(
+            only=("approved-provider",),
+            allow_fallbacks=False,
+        ),
+    )
+    policy = (
+        effective_privacy_policy
+        if effective_privacy_policy is not None
+        else _pinned_smoke_privacy_policy(
+            config,
+            source_sha256=source_sha256,
+            source_provenance=source_provenance,
+        )
+    )
+    client.bind_effective_privacy_context(
+        effective_privacy_policy=policy,
+        source_provenance_observation=source_provenance,
+        privacy_authorization=None,
+    )
+    client.register_model_discovery(evidence=discovery, manifest=manifest)
+    try:
+        completion = await client.complete_with_evidence(
+            role="model_benchmark",
+            models=["alpha/atlas-secure"],
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_model=response_model,
+            schema_name=schema_name,
+            logical_request_id=logical_request_id,
+        )
+    except BaseException:
+        await client.close()
+        await http_client.aclose()
+        raise
+    return client, http_client, completion, manifest, discovery
+
+
+def _install_real_generation_metadata_stub(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replace only metadata retrieval while preserving the sealed REAL binding stack."""
+
+    async def request_metadata(
+        _client: OpenRouterClient,
+        path: str,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert path == "/generation?id=generation-test"
+        return _generation_payload()
+
+    monkeypatch.setattr(OpenRouterClient, "_request_metadata", request_metadata)
+    monkeypatch.setattr(openrouter_module, "_TRUSTED_REQUEST_METADATA", request_metadata)
+    monkeypatch.setattr(
+        openrouter_module,
+        "_TRUSTED_OPENROUTER_CLIENT_DESCRIPTOR_SURFACE",
+        openrouter_module._provider_callable_descriptor_surface(OpenRouterClient),
+    )
+
+
+async def _complete_owned_real_smoke_request(
+    *,
+    config: Any,
+    tmp_path: Path,
+    source_sha256: str,
+    source_provenance: PrivacySourceProvenanceObservation,
+    logical_request_id: str,
+    system_prompt: str,
+    user_prompt: str,
+    response_model: type[BaseModel],
+    schema_name: str,
+    response_json: str,
+    monkeypatch: pytest.MonkeyPatch,
+    observed_prebound_records: list[UsageRecord] | None = None,
+    effective_privacy_policy: EffectivePrivacyPolicyEvidence | None = None,
+) -> UsageRecord:
+    mock_dir = tmp_path / "mock"
+    mock_dir.mkdir()
+    (
+        mock_client,
+        mock_http_client,
+        provisional,
+        manifest,
+        discovery,
+    ) = await _dispatch_mock_smoke_request(
+        config=config,
+        tmp_path=mock_dir,
+        source_sha256=source_sha256,
+        source_provenance=source_provenance,
+        logical_request_id=logical_request_id,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        response_model=response_model,
+        schema_name=schema_name,
+        response_json=response_json,
+        effective_privacy_policy=effective_privacy_policy,
+    )
+    await mock_client.close()
+    await mock_http_client.aclose()
+
+    real_record = UsageRecord.model_validate(
+        {
+            **provisional.usage_record.model_dump(mode="json"),
+            "execution_evidence": ExecutionEvidenceKind.REAL,
+        }
+    )
+    real_record = _attest_owned_real_usage_record(real_record)
+    if observed_prebound_records is not None:
+        observed_prebound_records.append(real_record)
+    real_usage = UsageLedger()
+    real_usage.add(real_record)
+    tmp_path.chmod(0o700)
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "real-cost-ledger.json",
+        cap_usd=Decimal("20"),
+    )
+    policy = (
+        effective_privacy_policy
+        if effective_privacy_policy is not None
+        else _pinned_smoke_privacy_policy(
+            config,
+            source_sha256=source_sha256,
+            source_provenance=source_provenance,
+        )
+    )
+    client = OpenRouterClient(
+        api_key="synthetic-key",
+        execution=config.execution,
+        privacy=config.privacy,
+        budget=BudgetManager(
+            total_usd=20,
+            max_output_tokens=config.execution.max_output_tokens_per_request,
+            conservative_usd_per_million_tokens=10,
+            max_requests_per_agent=2,
+            atomic_ledger=ledger,
+            require_endpoint_cost_bound=True,
+        ),
+        usage=real_usage,
+        base_url=OPENROUTER_DEFAULT_BASE_URL,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("approved-provider",),
+            allow_fallbacks=False,
+        ),
+        effective_privacy_policy=policy,
+        source_provenance_observation=source_provenance,
+    )
+    client.register_model_discovery(evidence=discovery, manifest=manifest)
+    client._authentication_validated = True
+    real_completion = StructuredCompletion(value=provisional.value, usage_record=real_record)
+
+    async def return_provisional(**kwargs: Any) -> StructuredCompletion[Any]:
+        assert kwargs["request_id"] == logical_request_id
+        return real_completion
+
+    try:
+        with monkeypatch.context() as context:
+            context.setattr(client, "_complete_one", return_provisional)
+            _install_real_generation_metadata_stub(context)
+            completion = await client.complete_with_evidence(
+                role="model_benchmark",
+                models=["alpha/atlas-secure"],
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                logical_request_id=logical_request_id,
+            )
+            return completion.usage_record
+    finally:
+        await client.close()
 
 
 def _model_discovery_run(
@@ -2947,6 +3224,332 @@ async def test_invalid_non_zdr_authorization_is_refused_before_transport(
     assert calls == 0
     assert budget.atomic_ledger is not None
     assert budget.atomic_ledger.snapshot().entries == ()
+
+
+@pytest.mark.asyncio
+async def test_mock_transport_binds_only_the_candidate_smoke_namespace_without_real_authority(
+    config_factory: Callable[..., Any],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = load_authenticated_runner_smoke_corpus_bundle(_MODEL_BENCHMARK_SMOKE_CORPUS)
+    source_provenance = prove_pinned_noncrediting_smoke_model_benchmark_source(
+        bundle,
+        now=datetime.now(UTC).replace(microsecond=0),
+    )
+    response = ModelBenchmarkResponse(
+        case_id=bundle.case.case_id,
+        classification=ModelBenchmarkClassification.SAFE,
+        locations=[],
+        invariant=None,
+        repository_instructions_followed=True,
+        assumptions=[],
+        unsupported_assumptions=[],
+        verifier_conclusion=None,
+        falsifier_conclusion=None,
+        rationale="Synthetic smoke transport response for namespace custody regression.",
+    )
+    config = config_factory(
+        privacy={
+            "profile": PrivacyProfile.SYNTHETIC_BENCHMARK,
+            "require_zdr": True,
+        },
+        execution={"max_json_repair_attempts": 0},
+    )
+    selection_sha256 = "a" * 64
+    candidate_request_id = f"authrunner.smoke.r1.candidate.primary:{selection_sha256}"
+    correct_dir = tmp_path / "candidate-correct"
+    correct_dir.mkdir()
+    bound = await _complete_bound_mock_smoke_request(
+        config=config,
+        tmp_path=correct_dir,
+        source_sha256=bundle.source_sha256,
+        source_provenance=source_provenance,
+        logical_request_id=candidate_request_id,
+        system_prompt=model_benchmark_system_prompt(),
+        user_prompt=blinded_model_benchmark_request(bundle.case),
+        response_model=ModelBenchmarkResponse,
+        schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
+        response_json=response.model_dump_json(),
+    )
+
+    assert bound.request_id == candidate_request_id
+    assert bound.routing["privacy_source_proof_kind"] == (
+        "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK"
+    )
+    assert _authrunner_usage_origin_scope(bound) == "NONCREDITING_SMOKE"
+    assert bound.execution_evidence is ExecutionEvidenceKind.MOCK
+    assert not _has_authrunner_owned_real_usage_origin(bound)
+    assert not is_creditable_usage_record(bound, require_real=True)
+
+    real_dir = tmp_path / "candidate-real-origin"
+    real_dir.mkdir()
+    real_bound = await _complete_owned_real_smoke_request(
+        config=config,
+        tmp_path=real_dir,
+        source_sha256=bundle.source_sha256,
+        source_provenance=source_provenance,
+        logical_request_id=candidate_request_id,
+        system_prompt=model_benchmark_system_prompt(),
+        user_prompt=blinded_model_benchmark_request(bundle.case),
+        response_model=ModelBenchmarkResponse,
+        schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
+        response_json=response.model_dump_json(),
+        monkeypatch=monkeypatch,
+    )
+    assert real_bound.execution_evidence is ExecutionEvidenceKind.REAL
+    assert _authrunner_usage_origin_scope(real_bound) == "NONCREDITING_SMOKE"
+    assert _has_authrunner_owned_real_usage_origin(real_bound)
+
+    wrong_dir = tmp_path / "candidate-wrong-namespace"
+    wrong_dir.mkdir()
+    with pytest.raises(OpenRouterPrivacyError, match="does not match its request namespace"):
+        await _complete_bound_mock_smoke_request(
+            config=config,
+            tmp_path=wrong_dir,
+            source_sha256=bundle.source_sha256,
+            source_provenance=source_provenance,
+            logical_request_id=f"authrunner.smoke.r1.judge.primary:{selection_sha256}",
+            system_prompt=model_benchmark_system_prompt(),
+            user_prompt=blinded_model_benchmark_request(bundle.case),
+            response_model=ModelBenchmarkResponse,
+            schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
+            response_json=response.model_dump_json(),
+        )
+
+    wrong_real_dir = tmp_path / "candidate-real-wrong-namespace"
+    wrong_real_dir.mkdir()
+    prebound: list[UsageRecord] = []
+    with pytest.raises(OpenRouterPrivacyError, match="does not match its request namespace"):
+        await _complete_owned_real_smoke_request(
+            config=config,
+            tmp_path=wrong_real_dir,
+            source_sha256=bundle.source_sha256,
+            source_provenance=source_provenance,
+            logical_request_id=f"authrunner.smoke.r1.judge.primary:{selection_sha256}",
+            system_prompt=model_benchmark_system_prompt(),
+            user_prompt=blinded_model_benchmark_request(bundle.case),
+            response_model=ModelBenchmarkResponse,
+            schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
+            response_json=response.model_dump_json(),
+            monkeypatch=monkeypatch,
+            observed_prebound_records=prebound,
+        )
+    assert len(prebound) == 1
+    assert not _has_authrunner_owned_real_usage_origin(prebound[0])
+
+
+@pytest.mark.asyncio
+async def test_mock_transport_binds_only_the_judge_smoke_namespace_without_real_authority(
+    config_factory: Callable[..., Any],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tests.unit.test_authenticated_runner_smoke_benchmark as smoke_fixtures
+    from mmaudit.benchmark.cross_lineage_adjudication import (
+        CROSS_LINEAGE_ADJUDICATION_SCHEMA_NAME,
+        CrossLineageAdjudicationDisposition,
+        CrossLineageAdjudicationRunKind,
+        CrossLineageAdjudicationWireResponse,
+        cross_lineage_adjudication_source_sha256,
+        cross_lineage_adjudication_system_prompt,
+        prepare_noncrediting_cross_lineage_adjudication_smoke,
+    )
+    from mmaudit.models.public_lineage_authority import resolve_verified_public_model_lineage
+
+    bundle = load_authenticated_runner_smoke_corpus_bundle(_MODEL_BENCHMARK_SMOKE_CORPUS)
+    suite = load_model_benchmark_corpus(_MODEL_BENCHMARK_CORPUS)
+    original_structural_real = smoke_fixtures._as_structural_real
+
+    def selected_structural_real(report: Any) -> Any:
+        source = original_structural_real(report)
+        model_result = source.results[0]
+        selected = next(item for item in model_result.cases if item.case_id == bundle.case.case_id)
+        reordered = [selected, *(item for item in model_result.cases if item is not selected)]
+        return source.model_copy(
+            update={"results": [model_result.model_copy(update={"cases": reordered})]}
+        )
+
+    monkeypatch.setattr(
+        smoke_fixtures,
+        "_selection",
+        lambda _suite: (bundle.case, bundle.ground_truth_case),
+    )
+    monkeypatch.setattr(smoke_fixtures, "_as_structural_real", selected_structural_real)
+    candidate_report = await asyncio.to_thread(smoke_fixtures._smoke_report, suite)
+    prepared = prepare_noncrediting_cross_lineage_adjudication_smoke(
+        public_lineage_capability=resolve_verified_public_model_lineage(),
+        suite=suite,
+        selected_case=bundle.case,
+        selected_ground_truth=bundle.ground_truth_case,
+        selection_sha256=smoke_fixtures.SELECTION_SHA256,
+        candidate_report=candidate_report,
+        judge=smoke_fixtures._judge(smoke_fixtures.JUDGE_ID),
+        run_kind=CrossLineageAdjudicationRunKind.PRIMARY,
+    )
+    request = prepared.requests[0]
+    response = CrossLineageAdjudicationWireResponse.model_validate(
+        {
+            "dimension_outcomes": tuple(
+                {
+                    "dimension": item.dimension,
+                    "passed": item.passed,
+                }
+                for item in request.expected_dimension_outcomes
+            ),
+            "disposition": CrossLineageAdjudicationDisposition.CONFIRMED,
+            "rationale": (
+                "Synthetic judge smoke transport response for namespace custody regression."
+            ),
+        }
+    )
+    source_provenance = prove_pinned_noncrediting_smoke_cross_lineage_adjudication_source(
+        bundle,
+        candidate_report.result,
+        prepared,
+        now=datetime.now(UTC).replace(microsecond=0),
+    )
+    config = config_factory(
+        privacy={
+            "profile": PrivacyProfile.SYNTHETIC_BENCHMARK,
+            "require_zdr": True,
+        },
+        execution={"max_json_repair_attempts": 0},
+    )
+    judge_request_id = f"authrunner.smoke.r1.judge.primary:{request.request_sha256}"
+    correct_dir = tmp_path / "judge-correct"
+    correct_dir.mkdir()
+    bound = await _complete_bound_mock_smoke_request(
+        config=config,
+        tmp_path=correct_dir,
+        source_sha256=cross_lineage_adjudication_source_sha256(prepared),
+        source_provenance=source_provenance,
+        logical_request_id=judge_request_id,
+        system_prompt=cross_lineage_adjudication_system_prompt(),
+        user_prompt=request.provider_visible_user_prompt,
+        response_model=CrossLineageAdjudicationWireResponse,
+        schema_name=CROSS_LINEAGE_ADJUDICATION_SCHEMA_NAME,
+        response_json=response.model_dump_json(),
+    )
+
+    assert bound.request_id == judge_request_id
+    assert bound.routing["privacy_source_proof_kind"] == (
+        "PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION"
+    )
+    assert _authrunner_usage_origin_scope(bound) == "NONCREDITING_SMOKE"
+    assert bound.execution_evidence is ExecutionEvidenceKind.MOCK
+    assert not _has_authrunner_owned_real_usage_origin(bound)
+    assert not is_creditable_usage_record(bound, require_real=True)
+
+    real_dir = tmp_path / "judge-real-origin"
+    real_dir.mkdir()
+    real_bound = await _complete_owned_real_smoke_request(
+        config=config,
+        tmp_path=real_dir,
+        source_sha256=cross_lineage_adjudication_source_sha256(prepared),
+        source_provenance=source_provenance,
+        logical_request_id=judge_request_id,
+        system_prompt=cross_lineage_adjudication_system_prompt(),
+        user_prompt=request.provider_visible_user_prompt,
+        response_model=CrossLineageAdjudicationWireResponse,
+        schema_name=CROSS_LINEAGE_ADJUDICATION_SCHEMA_NAME,
+        response_json=response.model_dump_json(),
+        monkeypatch=monkeypatch,
+    )
+    assert real_bound.execution_evidence is ExecutionEvidenceKind.REAL
+    assert _authrunner_usage_origin_scope(real_bound) == "NONCREDITING_SMOKE"
+    assert _has_authrunner_owned_real_usage_origin(real_bound)
+
+    wrong_dir = tmp_path / "judge-wrong-namespace"
+    wrong_dir.mkdir()
+    with pytest.raises(OpenRouterPrivacyError, match="does not match its request namespace"):
+        await _complete_bound_mock_smoke_request(
+            config=config,
+            tmp_path=wrong_dir,
+            source_sha256=cross_lineage_adjudication_source_sha256(prepared),
+            source_provenance=source_provenance,
+            logical_request_id=(f"authrunner.smoke.r1.candidate.primary:{request.request_sha256}"),
+            system_prompt=cross_lineage_adjudication_system_prompt(),
+            user_prompt=request.provider_visible_user_prompt,
+            response_model=CrossLineageAdjudicationWireResponse,
+            schema_name=CROSS_LINEAGE_ADJUDICATION_SCHEMA_NAME,
+            response_json=response.model_dump_json(),
+        )
+
+    wrong_real_dir = tmp_path / "judge-real-wrong-namespace"
+    wrong_real_dir.mkdir()
+    prebound: list[UsageRecord] = []
+    with pytest.raises(OpenRouterPrivacyError, match="does not match its request namespace"):
+        await _complete_owned_real_smoke_request(
+            config=config,
+            tmp_path=wrong_real_dir,
+            source_sha256=cross_lineage_adjudication_source_sha256(prepared),
+            source_provenance=source_provenance,
+            logical_request_id=(f"authrunner.smoke.r1.candidate.primary:{request.request_sha256}"),
+            system_prompt=cross_lineage_adjudication_system_prompt(),
+            user_prompt=request.provider_visible_user_prompt,
+            response_model=CrossLineageAdjudicationWireResponse,
+            schema_name=CROSS_LINEAGE_ADJUDICATION_SCHEMA_NAME,
+            response_json=response.model_dump_json(),
+            monkeypatch=monkeypatch,
+            observed_prebound_records=prebound,
+        )
+    assert len(prebound) == 1
+    assert not _has_authrunner_owned_real_usage_origin(prebound[0])
+
+
+@pytest.mark.asyncio
+async def test_owned_real_release_pinned_uuid_completion_preserves_authrunner_origin(
+    config_factory: Callable[..., Any],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = config_factory(
+        privacy={
+            "profile": PrivacyProfile.SYNTHETIC_BENCHMARK,
+            "require_zdr": True,
+        },
+        execution={"max_json_repair_attempts": 0},
+    )
+    policy, source_provenance, user_prompt = _synthetic_prequalification_privacy_context(
+        config,
+        monkeypatch,
+        requested_budget_usd=Decimal("20"),
+    )
+    case = load_model_benchmark_corpus(_MODEL_BENCHMARK_CORPUS).cases[0]
+    response = ModelBenchmarkResponse(
+        case_id=case.case_id,
+        classification=ModelBenchmarkClassification.SAFE,
+        locations=[],
+        invariant=None,
+        repository_instructions_followed=True,
+        assumptions=[],
+        unsupported_assumptions=[],
+        verifier_conclusion=None,
+        falsifier_conclusion=None,
+        rationale="Synthetic release-pinned standalone transport regression response.",
+    )
+    real_dir = tmp_path / "release-uuid-real-origin"
+    real_dir.mkdir()
+    bound = await _complete_owned_real_smoke_request(
+        config=config,
+        tmp_path=real_dir,
+        source_sha256=policy.source_sha256,
+        source_provenance=source_provenance,
+        logical_request_id="123e4567-e89b-42d3-a456-426614174000",
+        system_prompt=model_benchmark_system_prompt(),
+        user_prompt=user_prompt,
+        response_model=ModelBenchmarkResponse,
+        schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
+        response_json=response.model_dump_json(),
+        monkeypatch=monkeypatch,
+        effective_privacy_policy=policy,
+    )
+
+    assert bound.execution_evidence is ExecutionEvidenceKind.REAL
+    assert bound.routing["privacy_source_proof_kind"] == "RELEASE_PINNED_MODEL_BENCHMARK"
+    assert _authrunner_usage_origin_scope(bound) == "RELEASE"
+    assert _has_authrunner_owned_real_usage_origin(bound)
 
 
 @pytest.mark.asyncio

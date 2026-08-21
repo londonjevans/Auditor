@@ -190,6 +190,7 @@ from mmaudit.models.usage import (
     UsageLedger,
     _attest_authrunner_owned_real_usage_origin,
     _attest_owned_real_usage_record,
+    _authrunner_usage_origin_scope,
     _has_owned_real_usage_attestation,
     _register_authrunner_owned_real_usage_origin_issuer,
     _validated_usage_copy_preserving_owned_attestation,
@@ -5876,6 +5877,12 @@ class OpenRouterClient:
                 "identity_strength": binding.strength,
             }
         )
+        try:
+            _TRUSTED_AUTHRUNNER_USAGE_ORIGIN_SCOPE(concluded_usage)
+        except ValueError:
+            raise OpenRouterPrivacyError(
+                "AUTHRUNNER privacy proof kind does not match its request namespace"
+            ) from None
         if concluded_usage.execution_evidence is ExecutionEvidenceKind.REAL:
             concluded_usage = _attest_owned_real_usage_record(concluded_usage)
         try:
@@ -13071,6 +13078,7 @@ _TRUSTED_GET_GENERATION_EVIDENCE = OpenRouterClient.get_generation_evidence
 _TRUSTED_ISSUE_GENERATION_VERIFICATION = _issue_trusted_generation_verification
 _TRUSTED_ATTEST_AUTHRUNNER_GENERATION_ORIGIN = _attest_authrunner_generation_origin
 _TRUSTED_ATTEST_AUTHRUNNER_USAGE_ORIGIN = _attest_authrunner_owned_real_usage_origin
+_TRUSTED_AUTHRUNNER_USAGE_ORIGIN_SCOPE = _authrunner_usage_origin_scope
 _TRUSTED_VALIDATED_USAGE_COPY = _validated_usage_copy_preserving_owned_attestation
 _TRUSTED_CREATE_GENERATION_VERIFICATION = OpenRouterClient.create_trusted_generation_verification
 _TRUSTED_FETCH_GENERATION_ATTESTATIONS = (
@@ -13213,6 +13221,7 @@ def _openrouter_client_callables_are_pristine() -> bool:
         and _issue_trusted_generation_verification is _TRUSTED_ISSUE_GENERATION_VERIFICATION
         and (_attest_authrunner_generation_origin is _TRUSTED_ATTEST_AUTHRUNNER_GENERATION_ORIGIN)
         and (_attest_authrunner_owned_real_usage_origin is _TRUSTED_ATTEST_AUTHRUNNER_USAGE_ORIGIN)
+        and (_authrunner_usage_origin_scope is _TRUSTED_AUTHRUNNER_USAGE_ORIGIN_SCOPE)
         and _validated_usage_copy_preserving_owned_attestation is _TRUSTED_VALIDATED_USAGE_COPY
         and OpenRouterClient.validate_authentication is _TRUSTED_VALIDATE_AUTHENTICATION
         and OpenRouterClient.get_generation_evidence is _TRUSTED_GET_GENERATION_EVIDENCE

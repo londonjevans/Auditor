@@ -43,6 +43,68 @@ _MAX_RECOVERY_REQUEST_LIMIT_RESERVATIONS = 33
 _MAX_METERED_UNITS = 2**63 - 1
 
 
+def _build_authrunner_usage_origin_scope_validator() -> Callable[[UsageRecord], str | None]:
+    """Bind each closed AUTHRUNNER proof kind to its disjoint request namespace."""
+
+    routes = {
+        "RELEASE_PINNED_MODEL_BENCHMARK": (
+            "RELEASE",
+            re.compile(r"^authrunner\.candidate\.(?:primary|replay):case-[0-9a-f]{16}$"),
+        ),
+        "RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION": (
+            "RELEASE",
+            re.compile(r"^cross-lineage-[0-9a-f]{64}$"),
+        ),
+        "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK": (
+            "NONCREDITING_SMOKE",
+            re.compile(r"^authrunner\.smoke\.r1\.candidate\.(?:primary|replay):[0-9a-f]{64}$"),
+        ),
+        "PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION": (
+            "NONCREDITING_SMOKE",
+            re.compile(r"^authrunner\.smoke\.r1\.judge\.(?:primary|replay):[0-9a-f]{64}$"),
+        ),
+    }
+    namespaces = tuple(pattern for _scope, pattern in routes.values())
+
+    def validate(record: UsageRecord) -> str | None:
+        if type(record) is not UsageRecord:
+            return None
+        proof_kind = record.routing.get("privacy_source_proof_kind")
+        request_uses_closed_namespace = any(
+            pattern.fullmatch(record.request_id) is not None for pattern in namespaces
+        )
+        if not isinstance(proof_kind, str):
+            if request_uses_closed_namespace:
+                raise ValueError("AUTHRUNNER request namespace lacks its closed privacy proof kind")
+            return None
+        if not request_uses_closed_namespace:
+            if proof_kind in {
+                "RELEASE_PINNED_MODEL_BENCHMARK",
+                "RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION",
+            }:
+                return "RELEASE"
+            if proof_kind not in {
+                "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK",
+                "PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION",
+            }:
+                return None
+        route = routes.get(proof_kind)
+        if route is None:
+            raise ValueError("AUTHRUNNER request namespace lacks its closed privacy proof kind")
+        scope, request_pattern = route
+        if request_pattern.fullmatch(record.request_id) is None:
+            raise ValueError(
+                "AUTHRUNNER privacy proof kind does not match its closed request namespace"
+            )
+        return scope
+
+    return validate
+
+
+_authrunner_usage_origin_scope = _build_authrunner_usage_origin_scope_validator()
+del _build_authrunner_usage_origin_scope_validator
+
+
 def candidate_falsifier_role_prefix(candidate_id: str) -> str:
     """Return the host-controlled role prefix binding a review to one candidate."""
 
@@ -1195,7 +1257,7 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
         Callable[[object], ExecutionEvidenceKind],
     ]
 
-    registry: dict[int, tuple[weakref.ReferenceType[UsageRecord], str, object]] = {}
+    registry: dict[int, tuple[weakref.ReferenceType[UsageRecord], str, object, str]] = {}
     issuer: Issuer | None = None
     lock = threading.RLock()
     trusted_sys = sys
@@ -1203,6 +1265,7 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
     trusted_usage_sha256 = _usage_record_sha256
     trusted_generic_origin = _has_owned_real_usage_attestation
     trusted_bound_identity = _has_valid_bound_identity
+    trusted_origin_scope = _authrunner_usage_origin_scope
 
     def register_issuer(
         *,
@@ -1298,6 +1361,8 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
             is not trusted_generic_origin
             or getattr(trusted_self_module, "_has_valid_bound_identity", None)
             is not trusted_bound_identity
+            or getattr(trusted_self_module, "_authrunner_usage_origin_scope", None)
+            is not trusted_origin_scope
             or trusted_sys.modules.get(module_name) is not module
             or getattr(module, "OpenRouterClient", None) is not client_type
             or vars(client_type).get("complete_with_evidence") is not completion_method
@@ -1333,6 +1398,10 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
             atomic_ledger = object.__getattribute__(budget, "atomic_ledger")
         except (AttributeError, TypeError):
             atomic_ledger = None
+        try:
+            origin_scope = trusted_origin_scope(record)
+        except ValueError:
+            origin_scope = None
         if (
             not pristine_predicate()
             or execution_evidence_resolver(client) is not ExecutionEvidenceKind.REAL
@@ -1348,11 +1417,7 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
                 PrivacySourceClassification.SYNTHETIC_COMMITTED.value,
                 PrivacySourceClassification.PUBLIC_BENCHMARK.value,
             }
-            or record.routing.get("privacy_source_proof_kind")
-            not in {
-                "RELEASE_PINNED_MODEL_BENCHMARK",
-                "RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION",
-            }
+            or origin_scope is None
             or not trusted_generic_origin(record)
             or not trusted_bound_identity(record)
         ):
@@ -1370,7 +1435,7 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
         with lock:
             if key in registry:
                 raise ValueError("AUTHRUNNER usage origin is already registered")
-            registry[key] = (reference, digest, atomic_ledger)
+            registry[key] = (reference, digest, atomic_ledger, origin_scope)
         return record
 
     def contains(
@@ -1405,6 +1470,8 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
             is not trusted_generic_origin
             or getattr(trusted_self_module, "_has_valid_bound_identity", None)
             is not trusted_bound_identity
+            or getattr(trusted_self_module, "_authrunner_usage_origin_scope", None)
+            is not trusted_origin_scope
             or trusted_sys.modules.get(module_name) is not module
             or getattr(module, "OpenRouterClient", None) is not client_type
             or vars(client_type).get("complete_with_evidence") is not completion_method
@@ -1420,11 +1487,16 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
             return False
         with lock:
             registered = registry.get(id(record))
+        try:
+            current_scope = trusted_origin_scope(record)
+        except ValueError:
+            current_scope = None
         return bool(
             registered is not None
             and registered[0]() is record
             and registered[1] == trusted_usage_sha256(record)
             and (atomic_ledger is None or registered[2] is atomic_ledger)
+            and registered[3] == current_scope
         )
 
     def propagate(source: UsageRecord, normalized: UsageRecord) -> UsageRecord:
@@ -1452,7 +1524,12 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
         with lock:
             if key in registry:
                 raise ValueError("AUTHRUNNER usage origin is already registered")
-            registry[key] = (reference, digest, registry[id(source)][2])
+            registry[key] = (
+                reference,
+                digest,
+                registry[id(source)][2],
+                registry[id(source)][3],
+            )
         return normalized
 
     return register_issuer, mark, propagate, contains

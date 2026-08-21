@@ -32,6 +32,7 @@ from mmaudit.models.token_planning import (
     build_request_token_plan,
 )
 from mmaudit.models.usage import (
+    _authrunner_usage_origin_scope,
     _has_authrunner_owned_real_usage_origin,
     _issue_trusted_usage_recovery_scope,
     _recover_trusted_usage_records,
@@ -1244,6 +1245,124 @@ def test_private_real_usage_requires_policy_evidence_when_all_policy_keys_are_st
         PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE.value
     )
     assert usage_requires_audit_policy_evidence(stripped)
+
+
+_AUTHRUNNER_ORIGIN_ROUTES = (
+    (
+        "authrunner.candidate.primary:case-0123456789abcdef",
+        "RELEASE_PINNED_MODEL_BENCHMARK",
+        "RELEASE",
+    ),
+    (
+        f"cross-lineage-{'1' * 64}",
+        "RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION",
+        "RELEASE",
+    ),
+    (
+        f"authrunner.smoke.r1.candidate.replay:{'2' * 64}",
+        "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK",
+        "NONCREDITING_SMOKE",
+    ),
+    (
+        f"authrunner.smoke.r1.judge.primary:{'3' * 64}",
+        "PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION",
+        "NONCREDITING_SMOKE",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("request_id", "expected_proof_kind", "expected_scope"), _AUTHRUNNER_ORIGIN_ROUTES
+)
+@pytest.mark.parametrize(
+    "actual_proof_kind",
+    tuple(item[1] for item in _AUTHRUNNER_ORIGIN_ROUTES),
+)
+def test_authrunner_origin_scope_is_a_closed_four_way_namespace_map(
+    request_id: str,
+    expected_proof_kind: str,
+    expected_scope: str,
+    actual_proof_kind: str,
+) -> None:
+    source = _creditable_record(execution_evidence=ExecutionEvidenceKind.REAL)
+    record = source.model_copy(
+        update={
+            "request_id": request_id,
+            "role": "model_benchmark",
+            "routing": {
+                **source.routing,
+                "privacy_source_proof_kind": actual_proof_kind,
+            },
+        }
+    )
+
+    if actual_proof_kind == expected_proof_kind:
+        assert _authrunner_usage_origin_scope(record) == expected_scope
+    else:
+        with pytest.raises(ValueError, match="does not match its closed request namespace"):
+            _authrunner_usage_origin_scope(record)
+
+
+@pytest.mark.parametrize(
+    ("proof_kind", "expected_scope"),
+    (
+        ("RELEASE_PINNED_MODEL_BENCHMARK", "RELEASE"),
+        ("RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION", "RELEASE"),
+        ("PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK", "raises"),
+        ("PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION", "raises"),
+    ),
+)
+def test_nonclosed_uuid_only_preserves_legacy_release_proof_kinds(
+    proof_kind: str,
+    expected_scope: str,
+) -> None:
+    source = _creditable_record(execution_evidence=ExecutionEvidenceKind.REAL)
+    record = source.model_copy(
+        update={
+            "request_id": "123e4567-e89b-42d3-a456-426614174000",
+            "role": "model_benchmark",
+            "routing": {
+                **source.routing,
+                "privacy_source_proof_kind": proof_kind,
+            },
+        }
+    )
+
+    if expected_scope == "raises":
+        with pytest.raises(ValueError, match="does not match its closed request namespace"):
+            _authrunner_usage_origin_scope(record)
+    else:
+        assert _authrunner_usage_origin_scope(record) == expected_scope
+
+
+@pytest.mark.parametrize(
+    ("request_id", "raises"),
+    (
+        ("123e4567-e89b-42d3-a456-426614174000", False),
+        ("authrunner.candidate.primary:case-0123456789abcdef", True),
+    ),
+)
+def test_authrunner_origin_scope_handles_non_string_proof_kinds(
+    request_id: str,
+    raises: bool,
+) -> None:
+    source = _creditable_record(execution_evidence=ExecutionEvidenceKind.REAL)
+    record = source.model_copy(
+        update={
+            "request_id": request_id,
+            "role": "model_benchmark",
+            "routing": {
+                **source.routing,
+                "privacy_source_proof_kind": {},
+            },
+        }
+    )
+
+    if raises:
+        with pytest.raises(ValueError, match="lacks its closed privacy proof kind"):
+            _authrunner_usage_origin_scope(record)
+    else:
+        assert _authrunner_usage_origin_scope(record) is None
 
 
 @pytest.mark.parametrize(
