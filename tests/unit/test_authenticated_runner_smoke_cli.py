@@ -13,6 +13,12 @@ import mmaudit.cli as cli_module
 from mmaudit.config import ConfigError
 from mmaudit.constants import ExitCode
 from mmaudit.models.authenticated_runner_smoke import AuthenticatedRunnerSmokeEvidenceBundle
+from mmaudit.models.discovery import OpenRouterLiveDiscoveryMismatchCategory
+from mmaudit.orchestration.authenticated_runner_smoke_openrouter import (
+    AuthenticatedRunnerSmokeLiveRouteMismatch,
+    AuthenticatedRunnerSmokeLiveRouteMismatchError,
+    AuthenticatedRunnerSmokeLiveRouteRole,
+)
 from scripts.generate_release_schemas import MODELS, rendered_schema
 
 RUNNER = CliRunner()
@@ -410,6 +416,91 @@ def test_authenticated_runner_smoke_live_route_uses_metadata_egress_and_never_pu
     assert (
         "usage_records=0; budget=UNCHANGED; atomic_cost_ledger=UNCHANGED; output=NOT_PUBLISHED"
     ) in normalized
+
+
+def test_authenticated_runner_smoke_live_route_prints_only_bounded_aggregate_mismatches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tmp_path.chmod(0o700)
+    _patch_launch_inputs(monkeypatch, tmp_path)
+    calls: list[str] = []
+    inventory = _inventory()
+    secret_holder = _SecretPresenceOnly()
+    mismatch = AuthenticatedRunnerSmokeLiveRouteMismatchError(
+        (
+            AuthenticatedRunnerSmokeLiveRouteMismatch(
+                role=AuthenticatedRunnerSmokeLiveRouteRole.CANDIDATE,
+                category=OpenRouterLiveDiscoveryMismatchCategory.ENDPOINT_PRICING,
+            ),
+            AuthenticatedRunnerSmokeLiveRouteMismatch(
+                role=AuthenticatedRunnerSmokeLiveRouteRole.PRIMARY_JUDGE,
+                category=OpenRouterLiveDiscoveryMismatchCategory.ENDPOINT_OPERATIONAL_STATUS,
+            ),
+        )
+    )
+
+    def preflight(_launch: object) -> SimpleNamespace:
+        calls.append("metadata-preflight")
+        return inventory
+
+    def select(path: Path | None) -> Path:
+        calls.append("select-secret")
+        assert path is not None
+        return path
+
+    async def live_probe(**kwargs: object) -> None:
+        calls.append("live-route-probe")
+        assert kwargs["explicitly_allow_metadata_egress"] is True
+        raise mismatch
+
+    def forbidden(*_args: object, **_kwargs: object) -> Any:
+        raise AssertionError("failed live-route preflight must not complete or publish")
+
+    monkeypatch.setattr(
+        cli_module,
+        "preflight_authenticated_runner_smoke_live_route_launch",
+        preflight,
+    )
+    monkeypatch.setattr(cli_module, "select_operator_secret_file", select)
+    monkeypatch.setattr(
+        cli_module,
+        "load_operator_secrets",
+        lambda *_args, **_kwargs: secret_holder,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "preflight_authenticated_runner_smoke_live_routes",
+        live_probe,
+    )
+    for name in (
+        "execute_authenticated_runner_smoke_openrouter",
+        "execute_authenticated_openrouter_runner",
+        "_preflight_authenticated_runner_output",
+        "_write_authenticated_runner_smoke_output_fresh",
+    ):
+        monkeypatch.setattr(cli_module, name, forbidden)
+
+    output = tmp_path / "smoke-evidence.json"
+    before = tuple(tmp_path.iterdir())
+    result = RUNNER.invoke(
+        cli_module.app,
+        _required_arguments(tmp_path, live_route_preflight_only=True),
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert calls == ["metadata-preflight", "select-secret", "live-route-probe"]
+    assert secret_holder.cleared
+    assert tuple(tmp_path.iterdir()) == before
+    assert not output.exists()
+    normalized = " ".join(result.stdout.split())
+    assert (
+        "smoke live-route retained discovery mismatches: candidate=endpoint pricing; "
+        "PRIMARY judge=endpoint operational status"
+    ) in normalized
+    assert "candidate/model" not in normalized
+    assert "primary/judge" not in normalized
+    assert "output=NOT_PUBLISHED" not in normalized
 
 
 def test_authenticated_runner_smoke_real_path_preflights_before_secret_and_publishes_once(

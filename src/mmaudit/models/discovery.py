@@ -102,6 +102,38 @@ class ModelDiscoveryValidationError(ValueError):
     """Raised when public metadata cannot prove an exact production candidate."""
 
 
+class OpenRouterLiveDiscoveryMismatchCategory(StrEnum):
+    """Closed retained-field categories for canonical live/frozen inequality."""
+
+    CANONICAL_MODEL_IDENTITY = "canonical model identity"
+    ENDPOINT_ROUTE_POLICY = "endpoint route policy"
+    ENDPOINT_ROUTE_IDENTITY = "endpoint route identity"
+    ENDPOINT_OPERATIONAL_STATUS = "endpoint operational status"
+    ENDPOINT_PRICING = "endpoint pricing"
+    ENDPOINT_TOKEN_LIMITS = "endpoint token limits"
+    ENDPOINT_OUTPUT_OR_REASONING_CAPABILITIES = "endpoint output or reasoning capabilities"
+    ENDPOINT_ZDR_ELIGIBILITY = "endpoint ZDR eligibility"
+    ENDPOINT_EXACT_MODEL_IDENTITY_INVENTORY = "endpoint exact-model identity inventory"
+    ENDPOINT_PROJECTION = "endpoint projection"
+    MODEL_METADATA = "model metadata"
+    MODEL_REASONING_CAPABILITY = "model reasoning capability"
+    MODEL_OUTPUT_CAPABILITY = "model output capability"
+    MODEL_DATA_COLLECTION_DENIAL = "model data-collection denial"
+    MODEL_DISCOVERY_PROJECTION = "model discovery projection"
+
+
+class OpenRouterLiveDiscoveryMismatchError(ModelDiscoveryValidationError):
+    """A typed canonical mismatch containing no provider-controlled values."""
+
+    __slots__ = ("category",)
+
+    def __init__(self, category: OpenRouterLiveDiscoveryMismatchCategory) -> None:
+        if type(category) is not OpenRouterLiveDiscoveryMismatchCategory:
+            raise TypeError("live discovery mismatch category has the wrong exact type")
+        self.category = category
+        super().__init__(f"current OpenRouter {category.value} differs from frozen discovery")
+
+
 class DataCollectionDenyEvidenceSource(StrEnum):
     """Evidence source for exact-route request-policy or endpoint eligibility."""
 
@@ -891,8 +923,8 @@ def require_openrouter_live_discovery_equivalence(
         canonical_slug != current_model.canonical_slug
         or canonical_slug != frozen_evidence.canonical_slug
     ):
-        raise ModelDiscoveryValidationError(
-            "current OpenRouter canonical model identity differs from frozen discovery"
+        raise OpenRouterLiveDiscoveryMismatchError(
+            OpenRouterLiveDiscoveryMismatchCategory.CANONICAL_MODEL_IDENTITY
         )
     if current_endpoint != frozen_endpoint:
         if (
@@ -903,7 +935,7 @@ def require_openrouter_live_discovery_equivalence(
             or len(current_endpoint.endpoints) != 1
             or len(frozen_endpoint.endpoints) != 1
         ):
-            category = "route policy"
+            category = OpenRouterLiveDiscoveryMismatchCategory.ENDPOINT_ROUTE_POLICY
         else:
             current_route = current_endpoint.endpoints[0]
             frozen_route = frozen_endpoint.endpoints[0]
@@ -913,17 +945,17 @@ def require_openrouter_live_discovery_equivalence(
                 or current_route.endpoint_slug != frozen_route.endpoint_slug
                 or current_route.provider_name != frozen_route.provider_name
             ):
-                category = "route identity"
+                category = OpenRouterLiveDiscoveryMismatchCategory.ENDPOINT_ROUTE_IDENTITY
             elif (
                 current_route.operational != frozen_route.operational
                 or current_route.operational_status != frozen_route.operational_status
             ):
-                category = "operational status"
+                category = OpenRouterLiveDiscoveryMismatchCategory.ENDPOINT_OPERATIONAL_STATUS
             elif (
                 current_route.pricing != frozen_route.pricing
                 or current_route.pricing_sha256 != frozen_route.pricing_sha256
             ):
-                category = "pricing"
+                category = OpenRouterLiveDiscoveryMismatchCategory.ENDPOINT_PRICING
             elif (
                 current_route.context_length != frozen_route.context_length
                 or current_route.max_prompt_tokens != frozen_route.max_prompt_tokens
@@ -932,7 +964,7 @@ def require_openrouter_live_discovery_equivalence(
                 or current_route.max_completion_tokens_source
                 != frozen_route.max_completion_tokens_source
             ):
-                category = "token limits"
+                category = OpenRouterLiveDiscoveryMismatchCategory.ENDPOINT_TOKEN_LIMITS
             elif (
                 current_route.supported_parameters != frozen_route.supported_parameters
                 or current_route.supported_reasoning_efforts
@@ -949,7 +981,7 @@ def require_openrouter_live_discovery_equivalence(
                 or current_endpoint.output_capability_sha256
                 != frozen_endpoint.output_capability_sha256
             ):
-                category = "output or reasoning capabilities"
+                category = OpenRouterLiveDiscoveryMismatchCategory.ENDPOINT_OUTPUT_OR_REASONING_CAPABILITIES
             elif (
                 current_route.zdr_eligible != frozen_route.zdr_eligible
                 or current_route.zdr_endpoint_snapshot_sha256
@@ -957,26 +989,26 @@ def require_openrouter_live_discovery_equivalence(
                 or current_endpoint.require_zdr != frozen_endpoint.require_zdr
                 or current_endpoint.zdr_metadata_sha256 != frozen_endpoint.zdr_metadata_sha256
             ):
-                category = "ZDR eligibility"
+                category = OpenRouterLiveDiscoveryMismatchCategory.ENDPOINT_ZDR_ELIGIBILITY
             elif (
                 current_endpoint.endpoint_metadata_sha256
                 != frozen_endpoint.endpoint_metadata_sha256
             ):
-                category = "exact-model endpoint identity inventory"
+                category = (
+                    OpenRouterLiveDiscoveryMismatchCategory.ENDPOINT_EXACT_MODEL_IDENTITY_INVENTORY
+                )
             else:
-                category = "endpoint projection"
-        raise ModelDiscoveryValidationError(
-            f"current OpenRouter endpoint {category} differs from frozen discovery"
-        )
+                category = OpenRouterLiveDiscoveryMismatchCategory.ENDPOINT_PROJECTION
+        raise OpenRouterLiveDiscoveryMismatchError(category)
     if current_model != frozen_model:
         if current_model.model_metadata_snapshot_sha256 != (
             frozen_model.model_metadata_snapshot_sha256
         ):
-            category = "model metadata"
+            category = OpenRouterLiveDiscoveryMismatchCategory.MODEL_METADATA
         elif current_model.reasoning_capability != frozen_model.reasoning_capability:
-            category = "model reasoning capability"
+            category = OpenRouterLiveDiscoveryMismatchCategory.MODEL_REASONING_CAPABILITY
         elif current_model.output_capability_sha256 != frozen_model.output_capability_sha256:
-            category = "model output capability"
+            category = OpenRouterLiveDiscoveryMismatchCategory.MODEL_OUTPUT_CAPABILITY
         elif (
             current_model.data_collection_deny_eligible
             != frozen_model.data_collection_deny_eligible
@@ -989,12 +1021,10 @@ def require_openrouter_live_discovery_equivalence(
             or current_model.data_collection_deny_evidence_expires_at
             != frozen_model.data_collection_deny_evidence_expires_at
         ):
-            category = "data-collection denial"
+            category = OpenRouterLiveDiscoveryMismatchCategory.MODEL_DATA_COLLECTION_DENIAL
         else:
-            category = "model discovery projection"
-        raise ModelDiscoveryValidationError(
-            f"current OpenRouter {category} differs from frozen discovery"
-        )
+            category = OpenRouterLiveDiscoveryMismatchCategory.MODEL_DISCOVERY_PROJECTION
+        raise OpenRouterLiveDiscoveryMismatchError(category)
 
 
 def _policy_proves_data_collection_denial(

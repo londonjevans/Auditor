@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, localcontext
+from enum import StrEnum
 from typing import Never
 
 from mmaudit.benchmark.cross_lineage_adjudication import (
@@ -53,6 +54,8 @@ from mmaudit.models.authenticated_runner_smoke_corpus import (
 from mmaudit.models.candidate_benchmark import validate_candidate_benchmark_egress
 from mmaudit.models.discovery import (
     ModelDiscoveryValidationError,
+    OpenRouterLiveDiscoveryMismatchCategory,
+    OpenRouterLiveDiscoveryMismatchError,
     OpenRouterModelDiscoveryEvidence,
     OpenRouterModelDiscoveryRunManifest,
     openrouter_catalog_canonical_slug,
@@ -69,6 +72,7 @@ from mmaudit.models.generation_evidence import (
 )
 from mmaudit.models.openrouter import (
     OpenRouterClient,
+    OpenRouterError,
     OpenRouterProviderPolicy,
     preview_openrouter_structured_request_cost,
 )
@@ -107,7 +111,6 @@ from mmaudit.repository.privacy_provenance import (
 
 _LEDGER_CAP_USD = Decimal("250")
 _ROOT_LINEAGE_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
-_SMOKE_ROUTE_LABELS = ("candidate", "PRIMARY judge", "REPLAY judge")
 _LIVE_ROUTE_METADATA_GETS_PER_ROLE = 5
 _LIVE_ROUTE_METADATA_LOGICAL_GET_COUNT = 15
 _LIVE_ROUTE_METADATA_MAXIMUM_PROVIDER_ATTEMPTS = 30
@@ -115,6 +118,91 @@ _LIVE_ROUTE_METADATA_MAXIMUM_PROVIDER_ATTEMPTS = 30
 
 class AuthenticatedRunnerSmokeOpenRouterError(ValueError):
     """The one-shot smoke launch or its exact runtime evidence failed closed."""
+
+
+class AuthenticatedRunnerSmokeLiveRouteRole(StrEnum):
+    """Closed display order for the three metadata-only smoke routes."""
+
+    CANDIDATE = "candidate"
+    PRIMARY_JUDGE = "PRIMARY judge"
+    REPLAY_JUDGE = "REPLAY judge"
+
+
+_SMOKE_ROUTE_ORDER = (
+    AuthenticatedRunnerSmokeLiveRouteRole.CANDIDATE,
+    AuthenticatedRunnerSmokeLiveRouteRole.PRIMARY_JUDGE,
+    AuthenticatedRunnerSmokeLiveRouteRole.REPLAY_JUDGE,
+)
+_SMOKE_ROUTE_INDEX = {role: index for index, role in enumerate(_SMOKE_ROUTE_ORDER)}
+
+
+@dataclass(frozen=True, slots=True)
+class AuthenticatedRunnerSmokeLiveRouteMismatch:
+    """One bounded role/category mismatch without provider-controlled values."""
+
+    role: AuthenticatedRunnerSmokeLiveRouteRole
+    category: OpenRouterLiveDiscoveryMismatchCategory
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.role) is not AuthenticatedRunnerSmokeLiveRouteRole
+            or type(self.category) is not OpenRouterLiveDiscoveryMismatchCategory
+        ):
+            raise AuthenticatedRunnerSmokeOpenRouterError(
+                "smoke live-route mismatch has invalid typed material"
+            )
+
+
+class AuthenticatedRunnerSmokeLiveRouteMismatchError(AuthenticatedRunnerSmokeOpenRouterError):
+    """Aggregate canonical retained mismatches after all three safe metadata probes."""
+
+    __slots__ = ("mismatches",)
+
+    def __init__(
+        self,
+        mismatches: tuple[AuthenticatedRunnerSmokeLiveRouteMismatch, ...],
+    ) -> None:
+        if (
+            type(mismatches) is not tuple
+            or not 1 <= len(mismatches) <= 3
+            or any(
+                type(item) is not AuthenticatedRunnerSmokeLiveRouteMismatch for item in mismatches
+            )
+        ):
+            raise AuthenticatedRunnerSmokeOpenRouterError(
+                "smoke live-route mismatch aggregate is invalid"
+            )
+        roles = tuple(item.role for item in mismatches)
+        if (
+            len(set(roles)) != len(roles)
+            or tuple(sorted(roles, key=_SMOKE_ROUTE_INDEX.__getitem__)) != roles
+        ):
+            raise AuthenticatedRunnerSmokeOpenRouterError(
+                "smoke live-route mismatch aggregate order is invalid"
+            )
+        self.mismatches = mismatches
+        diagnostic = "; ".join(f"{item.role.value}={item.category.value}" for item in mismatches)
+        super().__init__(f"smoke live-route retained discovery mismatches: {diagnostic}")
+
+
+class _SmokeRouteDiscoveryMismatchError(AuthenticatedRunnerSmokeOpenRouterError):
+    """Internal typed signal that only the metadata-only adapter may accumulate."""
+
+    __slots__ = ("mismatch",)
+
+    def __init__(
+        self,
+        *,
+        role: AuthenticatedRunnerSmokeLiveRouteRole,
+        category: OpenRouterLiveDiscoveryMismatchCategory,
+    ) -> None:
+        self.mismatch = AuthenticatedRunnerSmokeLiveRouteMismatch(
+            role=role,
+            category=category,
+        )
+        super().__init__(
+            f"smoke {role.value} current OpenRouter {category.value} differs from frozen discovery"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,7 +352,7 @@ class _SmokeOpenRouterAdapter:
                 model=candidate,
                 evidence=launch.candidate_discovery_evidence[0],
                 manifest=launch.candidate_discovery_manifest,
-                route_label="candidate",
+                route_role=AuthenticatedRunnerSmokeLiveRouteRole.CANDIDATE,
             )
             report = await execute_noncrediting_model_benchmark_smoke(
                 suite=launch.benchmark_suite,
@@ -319,7 +407,11 @@ class _SmokeOpenRouterAdapter:
                     model=judge,
                     evidence=item.plan.judge_discovery_evidence[0],
                     manifest=item.plan.judge_discovery_manifest,
-                    route_label=f"{item.plan.run_kind.value} judge",
+                    route_role=(
+                        AuthenticatedRunnerSmokeLiveRouteRole.PRIMARY_JUDGE
+                        if item.plan.run_kind is CrossLineageAdjudicationRunKind.PRIMARY
+                        else AuthenticatedRunnerSmokeLiveRouteRole.REPLAY_JUDGE
+                    ),
                 )
         except BaseException:
             for client in clients.values():
@@ -494,39 +586,45 @@ class _SmokeLiveRouteProbeAdapter:
         launch = self._launch
         route_inputs = (
             (
-                "candidate",
+                AuthenticatedRunnerSmokeLiveRouteRole.CANDIDATE,
                 launch.candidate_registry.candidates[0],
                 launch.candidate_discovery_evidence[0],
                 launch.candidate_discovery_manifest,
             ),
             (
-                "PRIMARY judge",
+                AuthenticatedRunnerSmokeLiveRouteRole.PRIMARY_JUDGE,
                 launch.run_plans[0].judge,
                 launch.run_plans[0].judge_discovery_evidence[0],
                 launch.run_plans[0].judge_discovery_manifest,
             ),
             (
-                "REPLAY judge",
+                AuthenticatedRunnerSmokeLiveRouteRole.REPLAY_JUDGE,
                 launch.run_plans[1].judge,
                 launch.run_plans[1].judge_discovery_evidence[0],
                 launch.run_plans[1].judge_discovery_manifest,
             ),
         )
-        for _route_label, model, _evidence, _manifest in route_inputs:
+        for _route_role, model, _evidence, _manifest in route_inputs:
             self._clients.append(self._new_metadata_client(model))
-        for client, (route_label, model, evidence, manifest) in zip(
+        mismatches: list[AuthenticatedRunnerSmokeLiveRouteMismatch] = []
+        for client, (route_role, model, evidence, manifest) in zip(
             self._clients,
             route_inputs,
             strict=True,
         ):
-            await _refresh_and_register_exact_route(
-                client=client,
-                config=launch.config,
-                model=model,
-                evidence=evidence,
-                manifest=manifest,
-                route_label=route_label,
-            )
+            try:
+                await _refresh_and_register_exact_route(
+                    client=client,
+                    config=launch.config,
+                    model=model,
+                    evidence=evidence,
+                    manifest=manifest,
+                    route_role=route_role,
+                )
+            except _SmokeRouteDiscoveryMismatchError as exc:
+                mismatches.append(exc.mismatch)
+        if mismatches:
+            raise AuthenticatedRunnerSmokeLiveRouteMismatchError(tuple(mismatches))
         return (
             route_inputs[0][1].exact_model_id,
             route_inputs[1][1].exact_model_id,
@@ -1352,10 +1450,10 @@ async def _refresh_and_register_exact_route(
     model: CandidateModel,
     evidence: OpenRouterModelDiscoveryEvidence,
     manifest: OpenRouterModelDiscoveryRunManifest,
-    route_label: str,
+    route_role: AuthenticatedRunnerSmokeLiveRouteRole,
 ) -> None:
-    if route_label not in _SMOKE_ROUTE_LABELS:
-        raise AuthenticatedRunnerSmokeOpenRouterError("smoke route label is invalid")
+    if type(route_role) is not AuthenticatedRunnerSmokeLiveRouteRole:
+        raise AuthenticatedRunnerSmokeOpenRouterError("smoke route role is invalid")
     expected_policy = OpenRouterProviderPolicy(
         certification=True,
         only=(model.approved_provider_endpoint,),
@@ -1363,10 +1461,20 @@ async def _refresh_and_register_exact_route(
     )
     if client.provider_policy != expected_policy:
         raise AuthenticatedRunnerSmokeOpenRouterError(
-            f"smoke {route_label} client differs from its singleton route policy"
+            f"smoke {route_role.value} client differs from its singleton route policy"
         )
-    await client.validate_authentication()
-    models_payload = await client.get_certification_model_metadata()
+    try:
+        await client.validate_authentication()
+    except OpenRouterError:
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            f"smoke {route_role.value} authentication metadata request failed safely"
+        ) from None
+    try:
+        models_payload = await client.get_certification_model_metadata()
+    except OpenRouterError:
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            f"smoke {route_role.value} catalog metadata request failed safely"
+        ) from None
     try:
         canonical_slug = openrouter_catalog_canonical_slug(
             exact_model_id=model.exact_model_id,
@@ -1374,11 +1482,26 @@ async def _refresh_and_register_exact_route(
         )
     except (TypeError, ValueError):
         raise AuthenticatedRunnerSmokeOpenRouterError(
-            f"smoke {route_label} current canonical model metadata is incompatible"
+            f"smoke {route_role.value} current canonical model metadata is incompatible"
         ) from None
-    single_model_payload = await client.get_model_metadata(model.exact_model_id)
-    endpoint_payload = await client.get_model_endpoint_metadata(model.exact_model_id)
-    zdr_payload = await client.list_zdr_endpoints()
+    try:
+        single_model_payload = await client.get_model_metadata(model.exact_model_id)
+    except OpenRouterError:
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            f"smoke {route_role.value} exact-model metadata request failed safely"
+        ) from None
+    try:
+        endpoint_payload = await client.get_model_endpoint_metadata(model.exact_model_id)
+    except OpenRouterError:
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            f"smoke {route_role.value} endpoint metadata request failed safely"
+        ) from None
+    try:
+        zdr_payload = await client.list_zdr_endpoints()
+    except OpenRouterError:
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            f"smoke {route_role.value} ZDR metadata request failed safely"
+        ) from None
     try:
         current_endpoint = validate_openrouter_endpoint_snapshot(
             exact_model_id=model.exact_model_id,
@@ -1398,7 +1521,7 @@ async def _refresh_and_register_exact_route(
         )
     except (TypeError, ValueError):
         raise AuthenticatedRunnerSmokeOpenRouterError(
-            f"smoke {route_label} current model, route, ZDR, pricing, or output metadata "
+            f"smoke {route_role.value} current model, route, ZDR, pricing, or output metadata "
             "is incompatible"
         ) from None
     try:
@@ -1407,7 +1530,8 @@ async def _refresh_and_register_exact_route(
         )
     except ValueError:
         raise AuthenticatedRunnerSmokeOpenRouterError(
-            f"smoke {route_label} current reasoning metadata is incompatible with launch policy"
+            f"smoke {route_role.value} current reasoning metadata is incompatible "
+            "with launch policy"
         ) from None
     try:
         require_openrouter_live_discovery_equivalence(
@@ -1416,10 +1540,20 @@ async def _refresh_and_register_exact_route(
             current_model=current_model,
             frozen_evidence=evidence,
         )
+    except OpenRouterLiveDiscoveryMismatchError as exc:
+        raise _SmokeRouteDiscoveryMismatchError(
+            role=route_role,
+            category=exc.category,
+        ) from None
     except ModelDiscoveryValidationError as exc:
-        raise AuthenticatedRunnerSmokeOpenRouterError(f"smoke {route_label} {exc}") from None
-    client.register_certification_model_discovery(evidence=evidence, manifest=manifest)
-    registered = client.registered_model_identity_snapshot(model.exact_model_id)
+        raise AuthenticatedRunnerSmokeOpenRouterError(f"smoke {route_role.value} {exc}") from None
+    try:
+        client.register_certification_model_discovery(evidence=evidence, manifest=manifest)
+        registered = client.registered_model_identity_snapshot(model.exact_model_id)
+    except OpenRouterError:
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            f"smoke {route_role.value} discovery registration failed safely"
+        ) from None
     if (
         registered.requested_slug != model.exact_model_id
         or registered.canonical_slug != model.canonical_model_slug
@@ -1435,7 +1569,8 @@ async def _refresh_and_register_exact_route(
         or registered.provider_policy.configured_endpoints != (model.approved_provider_endpoint,)
     ):
         raise AuthenticatedRunnerSmokeOpenRouterError(
-            f"smoke {route_label} registered identity differs from same-session discovery refresh"
+            f"smoke {route_role.value} registered identity differs from same-session "
+            "discovery refresh"
         )
 
 
@@ -1619,7 +1754,10 @@ def _positive_cost(value: Decimal, *, label: str) -> Decimal:
 
 
 __all__ = [
+    "AuthenticatedRunnerSmokeLiveRouteMismatch",
+    "AuthenticatedRunnerSmokeLiveRouteMismatchError",
     "AuthenticatedRunnerSmokeLiveRoutePreflightResult",
+    "AuthenticatedRunnerSmokeLiveRouteRole",
     "AuthenticatedRunnerSmokeOpenRouterError",
     "AuthenticatedRunnerSmokeOpenRouterLaunch",
     "AuthenticatedRunnerSmokeOpenRouterResult",

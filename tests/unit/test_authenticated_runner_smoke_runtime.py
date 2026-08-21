@@ -32,7 +32,9 @@ from mmaudit.models.authenticated_runner_smoke import (
 from mmaudit.models.authenticated_runner_smoke_corpus import (
     load_authenticated_runner_smoke_corpus_bundle,
 )
+from mmaudit.models.discovery import OpenRouterLiveDiscoveryMismatchCategory
 from mmaudit.models.generation_evidence import OpenRouterGenerationEvidence
+from mmaudit.models.openrouter import OpenRouterModelError
 from mmaudit.models.public_lineage_authority import (
     VerifiedIndependentPublicModelLineageProjection,
     require_independent_public_model_lineage,
@@ -48,6 +50,8 @@ from mmaudit.models.schemas import UsageRecord
 from mmaudit.models.usage import UsageLedger
 from mmaudit.operator_secrets import OPENROUTER_API_KEY_NAME, OperatorSecrets
 from mmaudit.orchestration.authenticated_runner_smoke_openrouter import (
+    AuthenticatedRunnerSmokeLiveRouteMismatchError,
+    AuthenticatedRunnerSmokeLiveRouteRole,
     AuthenticatedRunnerSmokeOpenRouterError,
     AuthenticatedRunnerSmokeOpenRouterLaunch,
     AuthenticatedRunnerSmokePreflightInventory,
@@ -332,13 +336,21 @@ def _install_live_route_client_factory(
     monkeypatch: pytest.MonkeyPatch,
     launch: AuthenticatedRunnerSmokeOpenRouterLaunch,
     *,
+    authentication_failure_models: set[str] | None = None,
+    metadata_network_failure_models: set[str] | None = None,
     pricing_drift_models: set[str] | None = None,
+    endpoint_inventory_drift_models: set[str] | None = None,
     canonical_shape_models: set[str] | None = None,
+    single_model_failure_modes: dict[str, str] | None = None,
     client_wrapper: Callable[[Any], Any] | None = None,
 ) -> candidate_fixtures._MockClientFactory:
     factory = candidate_fixtures._MockClientFactory(
+        authentication_failure_models=set(authentication_failure_models or ()),
+        metadata_network_failure_models=set(metadata_network_failure_models or ()),
         pricing_drift_models=set(pricing_drift_models or ()),
+        endpoint_inventory_drift_models=set(endpoint_inventory_drift_models or ()),
         canonical_shape_models=set(canonical_shape_models or ()),
+        single_model_failure_modes=dict(single_model_failure_modes or {}),
     )
     models = (
         launch.candidate_registry.candidates[0],
@@ -1614,12 +1626,33 @@ async def test_live_route_preflight_rejects_registered_identity_drift_and_cleans
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("drift_role_index", (0, 1, 2))
-async def test_live_route_preflight_closes_every_client_on_any_route_drift(
+@pytest.mark.parametrize(
+    ("drift_role_indices", "expected_roles"),
+    (
+        ((0,), (AuthenticatedRunnerSmokeLiveRouteRole.CANDIDATE,)),
+        (
+            (0, 1),
+            (
+                AuthenticatedRunnerSmokeLiveRouteRole.CANDIDATE,
+                AuthenticatedRunnerSmokeLiveRouteRole.PRIMARY_JUDGE,
+            ),
+        ),
+        (
+            (0, 1, 2),
+            (
+                AuthenticatedRunnerSmokeLiveRouteRole.CANDIDATE,
+                AuthenticatedRunnerSmokeLiveRouteRole.PRIMARY_JUDGE,
+                AuthenticatedRunnerSmokeLiveRouteRole.REPLAY_JUDGE,
+            ),
+        ),
+    ),
+)
+async def test_live_route_preflight_aggregates_one_two_or_three_retained_route_drifts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     config_factory: Callable[..., AuditConfig],
-    drift_role_index: int,
+    drift_role_indices: tuple[int, ...],
+    expected_roles: tuple[AuthenticatedRunnerSmokeLiveRouteRole, ...],
 ) -> None:
     launch = await _live_route_launch(tmp_path=tmp_path, config_factory=config_factory)
     models = (
@@ -1630,7 +1663,78 @@ async def test_live_route_preflight_closes_every_client_on_any_route_drift(
     factory = _install_live_route_client_factory(
         monkeypatch,
         launch,
-        pricing_drift_models={models[drift_role_index].exact_model_id},
+        endpoint_inventory_drift_models={
+            models[index].exact_model_id for index in drift_role_indices
+        },
+    )
+    ledger = launch.budget.atomic_ledger
+    assert ledger is not None
+    before = ledger.snapshot()
+    secrets = OperatorSecrets({OPENROUTER_API_KEY_NAME: "synthetic-live-route-unit-key"})
+
+    try:
+        with pytest.raises(
+            AuthenticatedRunnerSmokeLiveRouteMismatchError,
+        ) as caught:
+            await preflight_authenticated_runner_smoke_live_routes(
+                launch=launch,
+                operator_secrets=secrets,
+                explicitly_allow_metadata_egress=True,
+            )
+        assert tuple(item.role for item in caught.value.mismatches) == expected_roles
+        assert tuple(item.category for item in caught.value.mismatches) == (
+            OpenRouterLiveDiscoveryMismatchCategory.ENDPOINT_EXACT_MODEL_IDENTITY_INVENTORY,
+        ) * len(expected_roles)
+        assert str(caught.value) == (
+            "smoke live-route retained discovery mismatches: "
+            + "; ".join(
+                f"{role.value}=endpoint exact-model identity inventory" for role in expected_roles
+            )
+        )
+        assert len(factory.clients) == 3
+        assert factory.request_bodies == []
+        assert factory.metadata_requests == [
+            path
+            for model in models
+            for path in (
+                "/api/v1/key",
+                "/api/v1/models",
+                f"/api/v1/model/{model.exact_model_id}",
+                f"/api/v1/models/{model.exact_model_id}/endpoints",
+                "/api/v1/endpoints/zdr",
+            )
+        ]
+        assert launch.usage.records == []
+        assert ledger.snapshot() == before
+        assert secrets.cleared
+        assert all(client._client.is_closed for client in factory.clients)
+        assert all(not client._credential and not client._headers for client in factory.clients)
+        for index in drift_role_indices:
+            with pytest.raises(OpenRouterModelError, match="not registered"):
+                factory.clients[index].registered_model_identity_snapshot(
+                    models[index].exact_model_id
+                )
+    finally:
+        await factory.close()
+
+
+@pytest.mark.asyncio
+async def test_live_route_preflight_mismatch_then_malformed_metadata_fails_immediately(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    launch = await _live_route_launch(tmp_path=tmp_path, config_factory=config_factory)
+    models = (
+        launch.candidate_registry.candidates[0],
+        launch.run_plans[0].judge,
+        launch.run_plans[1].judge,
+    )
+    factory = _install_live_route_client_factory(
+        monkeypatch,
+        launch,
+        pricing_drift_models={models[0].exact_model_id},
+        single_model_failure_modes={models[1].exact_model_id: "malformed"},
     )
     ledger = launch.budget.atomic_ledger
     assert ledger is not None
@@ -1640,13 +1744,78 @@ async def test_live_route_preflight_closes_every_client_on_any_route_drift(
     try:
         with pytest.raises(
             AuthenticatedRunnerSmokeOpenRouterError,
-            match="endpoint pricing differs",
-        ):
+            match="PRIMARY judge exact-model metadata request failed safely",
+        ) as caught:
             await preflight_authenticated_runner_smoke_live_routes(
                 launch=launch,
                 operator_secrets=secrets,
                 explicitly_allow_metadata_egress=True,
             )
+        assert type(caught.value) is AuthenticatedRunnerSmokeOpenRouterError
+        assert "retained discovery mismatches" not in str(caught.value)
+        assert len(factory.metadata_requests) == 8
+        assert f"/api/v1/model/{models[2].exact_model_id}" not in factory.metadata_requests
+        assert (
+            f"/api/v1/models/{models[2].exact_model_id}/endpoints" not in factory.metadata_requests
+        )
+        assert factory.request_bodies == []
+        assert launch.usage.records == []
+        assert ledger.snapshot() == before
+        assert secrets.cleared
+        assert all(client._client.is_closed for client in factory.clients)
+        assert all(not client._credential and not client._headers for client in factory.clients)
+    finally:
+        await factory.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("network_failure", "expected_metadata_request_count"),
+    ((False, 6), (True, 7)),
+)
+async def test_live_route_preflight_mismatch_then_auth_or_network_failure_is_immediate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+    network_failure: bool,
+    expected_metadata_request_count: int,
+) -> None:
+    launch = await _live_route_launch(tmp_path=tmp_path, config_factory=config_factory)
+    models = (
+        launch.candidate_registry.candidates[0],
+        launch.run_plans[0].judge,
+        launch.run_plans[1].judge,
+    )
+    failing_judge = {models[1].exact_model_id}
+    factory = _install_live_route_client_factory(
+        monkeypatch,
+        launch,
+        pricing_drift_models={models[0].exact_model_id},
+        authentication_failure_models=set() if network_failure else failing_judge,
+        metadata_network_failure_models=failing_judge if network_failure else set(),
+    )
+    ledger = launch.budget.atomic_ledger
+    assert ledger is not None
+    before = ledger.snapshot()
+    secrets = OperatorSecrets({OPENROUTER_API_KEY_NAME: "synthetic-live-route-unit-key"})
+
+    try:
+        with pytest.raises(
+            AuthenticatedRunnerSmokeOpenRouterError,
+            match="PRIMARY judge authentication metadata request failed safely",
+        ) as caught:
+            await preflight_authenticated_runner_smoke_live_routes(
+                launch=launch,
+                operator_secrets=secrets,
+                explicitly_allow_metadata_egress=True,
+            )
+        assert type(caught.value) is AuthenticatedRunnerSmokeOpenRouterError
+        assert "retained discovery mismatches" not in str(caught.value)
+        assert len(factory.metadata_requests) == expected_metadata_request_count
+        assert f"/api/v1/model/{models[2].exact_model_id}" not in factory.metadata_requests
+        assert (
+            f"/api/v1/models/{models[2].exact_model_id}/endpoints" not in factory.metadata_requests
+        )
         assert len(factory.clients) == 3
         assert factory.request_bodies == []
         assert launch.usage.records == []

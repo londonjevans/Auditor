@@ -99,7 +99,9 @@ class _CandidateSpec:
 class _MockClientFactory:
     failing_models: set[str] = field(default_factory=set)
     authentication_failure_models: set[str] = field(default_factory=set)
+    metadata_network_failure_models: set[str] = field(default_factory=set)
     pricing_drift_models: set[str] = field(default_factory=set)
+    endpoint_inventory_drift_models: set[str] = field(default_factory=set)
     canonical_shape_models: set[str] = field(default_factory=set)
     catalog_effort_drift_models: set[str] = field(default_factory=set)
     endpoint_effort_omission_models: set[str] = field(default_factory=set)
@@ -187,6 +189,11 @@ class _MockClientFactory:
             if request.method == "GET":
                 self.metadata_requests.append(request.url.path)
             if request.method == "GET" and request.url.path.endswith("/key"):
+                if candidate.exact_model_id in self.metadata_network_failure_models:
+                    raise httpx.ConnectError(
+                        "synthetic metadata transport failure",
+                        request=request,
+                    )
                 if candidate.exact_model_id in self.authentication_failure_models:
                     return httpx.Response(
                         401,
@@ -245,15 +252,22 @@ class _MockClientFactory:
                 return httpx.Response(200, request=request, json={"data": current_catalog_model()})
             if request.method == "GET" and request.url.path.endswith("/endpoints"):
                 endpoint = current_endpoint()
+                endpoints = [{key: value for key, value in endpoint.items() if key != "model_id"}]
+                if candidate.exact_model_id in self.endpoint_inventory_drift_models:
+                    endpoints.append(
+                        {
+                            **endpoints[0],
+                            "tag": f"{candidate.approved_provider_endpoint}-unselected",
+                            "provider_name": "Synthetic inventory-only provider",
+                        }
+                    )
                 return httpx.Response(
                     200,
                     request=request,
                     json={
                         "data": {
                             "id": candidate.exact_model_id,
-                            "endpoints": [
-                                {key: value for key, value in endpoint.items() if key != "model_id"}
-                            ],
+                            "endpoints": endpoints,
                         }
                     },
                 )
