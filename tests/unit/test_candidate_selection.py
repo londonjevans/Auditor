@@ -153,9 +153,9 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
     guide = (ROOT / "docs" / "models" / "model_selection.md").read_text(encoding="utf-8")
 
     assert plan.schema_version == "1.1"
-    assert plan.plan_sha256 == "3e5f8ffa98bd2e30726e3ef9e6e43721d26ea1816f62879a8c031f350ed9ce14"
+    assert plan.plan_sha256 == "41b5af9ae4def5ef535ae25a13c7c38b95d5819a878a5eef1c1c5bfb8386bf58"
     assert plan.plan_sha256 in guide
-    assert len(plan.entries) == 11
+    assert len(plan.entries) == 12
     assert plan.authenticated_runner_selection is not None
     assert plan.authenticated_runner_selection.distinct_root_lineages_verified is False
     assert plan.authenticated_runner_selection.required_output_mode.value == "NATIVE_JSON_SCHEMA"
@@ -165,9 +165,11 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
     assert plan.authenticated_runner_selection.candidate_model_id == (
         "deepseek/deepseek-v4-pro-0813"
     )
-    assert plan.authenticated_runner_selection.primary_judge_model_id == "tencent/hy3"
+    assert plan.authenticated_runner_selection.primary_judge_model_id == (
+        "google/gemma-4-26b-a4b-it"
+    )
     assert plan.authenticated_runner_selection.role_assignment_sha256 == (
-        "c56e829eae79d1e1187a7eb657d4535339e6302b691d2c233cb2c60953dfe794"
+        "f1c80252e94bf789d1b78f424a8b9c142f7e750e8ee0ba3bacfaae2a3330aa25"
     )
     assert plan.authenticated_runner_selection.replay_judge_model_id == "moonshotai/kimi-k3"
     entries = {entry.exact_model_id: entry for entry in plan.entries}
@@ -178,10 +180,15 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
     )
     assert entries["qwen/qwen3.8-max"].allowed_provider_endpoints == ("alibaba",)
     assert entries["moonshotai/kimi-k3"].allowed_provider_endpoints == ("together",)
+    assert entries["google/gemma-4-26b-a4b-it"].allowed_provider_endpoints == ("deepinfra/fp8",)
+    assert entries["google/gemma-4-26b-a4b-it"].entry_sha256 == (
+        "3fd5dce9d53e043546e3b519a82f497f94cc2cd8d34c2d07413f6c0a25ee8a74"
+    )
     assert entries["tencent/hy3"].allowed_provider_endpoints == ("novita",)
     assert entries["tencent/hy3"].entry_sha256 == (
         "5ca2c5e02454bf0fed2f25464a9ac5666bba684cb06291437a902b1ddfcb4652"
     )
+    assert any("14ece147138fb5bf" in item for item in plan.unresolved_requirements)
     assert all(entry.availability == "UNVERIFIED" for entry in plan.entries)
     assert all(entry.documentary_lineage == "UNCONFIRMED" for entry in plan.entries)
 
@@ -213,12 +220,12 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
             approved_provider_endpoint="fireworks",
         ),
         DiscoveryCandidateRoute(
-            exact_model_id="moonshotai/kimi-k3",
-            approved_provider_endpoint="together",
+            exact_model_id="google/gemma-4-26b-a4b-it",
+            approved_provider_endpoint="deepinfra/fp8",
         ),
         DiscoveryCandidateRoute(
-            exact_model_id="tencent/hy3",
-            approved_provider_endpoint="novita",
+            exact_model_id="moonshotai/kimi-k3",
+            approved_provider_endpoint="together",
         ),
     )
 
@@ -227,8 +234,8 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
         ("deepseek/deepseek-v4-pro-0813", "novita/fp8"),
         ("deepseek/deepseek-v4-pro-0813", "novita"),
         ("deepseek/deepseek-v4-pro-0813", "together"),
-        ("tencent/hy3", "deepinfra/fp8"),
-        ("tencent/hy3", "tencent/fp8"),
+        ("google/gemma-4-26b-a4b-it", "google-vertex/global"),
+        ("google/gemma-4-26b-a4b-it", "nextbit/bf16"),
         ("moonshotai/kimi-k3", "deepinfra/bf16"),
     ):
         with pytest.raises(CandidateSelectionError, match="unlisted endpoint"):
@@ -241,6 +248,19 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
                     ),
                 ),
             )
+
+    assert (
+        validate_candidate_selection_routes(
+            plan,
+            routes=(
+                DiscoveryCandidateRoute(
+                    exact_model_id="tencent/hy3",
+                    approved_provider_endpoint="novita",
+                ),
+            ),
+        )
+        == plan
+    )
 
 
 def test_committed_runner_selection_has_three_documented_independent_roots() -> None:

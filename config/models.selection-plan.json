@@ -3,13 +3,13 @@
   "authenticated_runner_selection": {
     "candidate_model_id": "deepseek/deepseek-v4-pro-0813",
     "distinct_root_lineages_verified": false,
-    "primary_judge_model_id": "tencent/hy3",
+    "primary_judge_model_id": "google/gemma-4-26b-a4b-it",
     "replay_judge_model_id": "moonshotai/kimi-k3",
     "required_output_mode": "NATIVE_JSON_SCHEMA",
     "required_supported_parameters": [
       "structured_outputs"
     ],
-    "role_assignment_sha256": "c56e829eae79d1e1187a7eb657d4535339e6302b691d2c233cb2c60953dfe794"
+    "role_assignment_sha256": "f1c80252e94bf789d1b78f424a8b9c142f7e750e8ee0ba3bacfaae2a3330aa25"
   },
   "benchmark_authorized": false,
   "cached_ranking_payload_present": false,
@@ -60,6 +60,20 @@
       "exact_model_id": "google/gemini-3.7-flash",
       "lineage_group_seed_sha256": "5b75c31ccc07e8bffd25033908287caab7ce1b2a0805f12549f47927ab329df2",
       "priority_rank": 3
+    },
+    {
+      "advisory_lineage_group": "Google",
+      "allowed_provider_endpoints": [
+        "deepinfra/fp8"
+      ],
+      "approved_roles": [],
+      "availability": "UNVERIFIED",
+      "documentary_lineage": "UNCONFIRMED",
+      "entry_authority": false,
+      "entry_sha256": "3fd5dce9d53e043546e3b519a82f497f94cc2cd8d34c2d07413f6c0a25ee8a74",
+      "exact_model_id": "google/gemma-4-26b-a4b-it",
+      "lineage_group_seed_sha256": "5b75c31ccc07e8bffd25033908287caab7ce1b2a0805f12549f47927ab329df2",
+      "priority_rank": 12
     },
     {
       "advisory_lineage_group": "Meta",
@@ -187,7 +201,7 @@
     }
   ],
   "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
-  "plan_sha256": "3e5f8ffa98bd2e30726e3ef9e6e43721d26ea1816f62879a8c031f350ed9ce14",
+  "plan_sha256": "41b5af9ae4def5ef535ae25a13c7c38b95d5819a878a5eef1c1c5bfb8386bf58",
   "production_selection_authorized": false,
   "provider_call_authorized": false,
   "provider_metadata_present": false,
@@ -221,10 +235,11 @@
   "unresolved_requirements": [
     "Current OpenRouter catalogue and ranking payload were not supplied and must be frozen by the operator.",
     "Endpoint allowlists are operator policy constraints, not observed per-model availability.",
+    "Every exact ID absent from the current confirmed public-lineage manifest requires fresh documentary capture before AUTHRUNNER.",
     "Every exact route, ZDR state, output capability, price, and capacity remains unverified.",
-    "Every new exact ID requires fresh documentary public-lineage capture before AUTHRUNNER.",
     "External ranking values are prioritization only and cannot grant qualification.",
     "Frontier retention-consent routes remain unusable unless exact ZDR eligibility is freshly proven.",
+    "Gemma smoke-judge rank 12 and deepinfra/fp8 are an unverified operator proposal from operator_results SHA-256 14ece147138fb5bf6f32d2737ca6b174817a923c5ca50269bc14337c60a3453c; fresh exact discovery is required.",
     "Meta Muse and Nemotron 3.5 ancestry remain unconfirmed.",
     "Mistral is excluded because the staged review supplies no exact current model ID.",
     "Zhipu GLM 5.2 is an unverified availability seed; the review names unroutable GLM 5.3."
