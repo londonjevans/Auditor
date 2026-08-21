@@ -458,61 +458,42 @@ command is withdrawn. Source implementation remains bound to pushed, remote-reso
 `9f5c94d97b3d79d51c10e250b99244591461e959`; the zero-command evidence reconciliation is
 checkpointed at `3bcac02da30bdad2c7e584d35c091ea5cb75ea7d`.
 
-The live-route gate and paid smoke are now a mandatory adjacent two-step operator sequence. The two
-commands below are the only current AUTHRUNNER commands. They are separate and must be authorized
-separately; do not chain them or paste them into one shell invocation. Before step A, the exact
-`r6/r6/r2` artifacts and hashes above must still match, the effective configuration must remain
-`42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54`, the dedicated ledger must be
-exactly empty and unchanged, the `s1` output must be absent, and its operator-owned parent directory
-must already exist with mode `0700`.
+Provider-free review found a blocking lifecycle gap: the exact top-level runner revoker removed only
+the runner lease while retained candidate-campaign and candidate/judge generation-verification
+capabilities remained independently registered. Pushed checkpoint
+`692eb173f002818b4434b746c8801b4cbeb852e2` closes that local gap with exact PID-bound campaign and
+generation revokers, parent-to-child cascade, traceback-safe execution handoff guards, and immediate
+candidate and judge generation-capability revocation in the smoke adapter. Negative downstream
+consumer tests cover ordinary, retargeted, failed-handoff, and concurrent cleanup boundaries.
+Root validation passed 229 focused and 266 adjacent tests. Repository Ruff, format over 510 tracked
+Python files, strict mypy over 206 source files, schema verification, and diff integrity passed;
+independent review reported `CLEAN` with no blocker/HIGH.
 
-Step A is metadata egress only. Its bounded inventory is 15 logical GETs with at most 30 attempts;
-an authentication, network, malformed-response, registration, or policy failure can stop earlier.
-All-three typed comparison is reached only if every route reaches its exact comparison. The command
-does not reserve ledger cost, dispatch a model completion, create a usage record, or publish output;
-external billing semantics for authenticated metadata GETs are not controlled by this repository.
-Step A also runs the shared static corpus, lineage, configuration, token/cost-budget, ledger, and
-candidate-plan admission before metadata transport. The historical post-`59f9f40` provider-free
-result covers only that mode branch, so inserting another normal preflight adds no safety gate and
-would only age the live metadata. Neither result proves post-response custody or adjudication.
+The metadata-only step A and paid smoke step B emitted at checkpoint
+`092a09ee94d528f67b43edb180860d45328f741f` were not authorized or executed and are withdrawn. There
+is no current normal preflight, live-route, paid smoke, verifier, construct-only, fresh-discovery, or
+full AUTHRUNNER command. The prior r6/r6/r2 live-route result remains valid nonauthorizing operator
+evidence about those then-current metadata routes; it does not close post-response custody,
+adjudication, or revocation.
 
-```shell
-env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models authenticated-runner-smoke --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r6.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260821-r6" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r6.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r6" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2" --smoke-corpus benchmarks/model_corpus_smoke --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260821-s1.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --secrets-env-file "$HOME/.mmaudit/secrets.env" --allow-metadata-egress --live-route-preflight-only --no-color
-```
-
-Step B may be separately authorized only after step A exits `0` and the operator inspects its
-complete terminal record. It must report the exact `VALID / NONCREDITING / NONAUTHORIZING / METADATA
-EGRESS ONLY / NO MODEL COMPLETION` result; exact displayed model IDs
-`deepseek/deepseek-v4-pro-0813`, `tencent/hy3`, and `moonshotai/kimi-k3`; `logical_gets=15` and
-`maximum_provider_attempts=30`; `usage_records=0`; unchanged budget and atomic ledger; output not
-published; and effective-config SHA-256
-`42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54`. Step B must begin
-immediately after that inspection and its separate authorization, with no intervening source,
-configuration, registry, discovery artifact, lineage/corpus artifact, ledger, output-path,
-secret-file, or shell-environment change. The unchanged command and frozen evidence must still bind
-those models to `novita/fp8`, `tencent/fp8`, and `together`, respectively; endpoint tags are not
-claimed as terminal-display fields. Reconfirm the exact empty ledger, absent `s1` output, and
-mode-`0700` parent immediately before authorization. Any delay, interruption, mismatch, ambiguous
-terminal result, or intervening change invalidates adjacency: do not run step B; obtain separate
-authorization and rerun step A. The paid smoke is one-shot and non-resumable; it can reserve and
-spend provider cost.
-
-```shell
-env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models authenticated-runner-smoke --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r6.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260821-r6" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r6.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r6" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2" --smoke-corpus benchmarks/model_corpus_smoke --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260821-s1.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --secrets-env-file "$HOME/.mmaudit/secrets.env" --allow-code-egress --no-color
-```
-
-Command emission is not execution authority. No normal provider-free preflight, verifier,
-construct-only, fresh-discovery, or full AUTHRUNNER command is emitted. `V3-AUTHRUNNER-001` remains
-`PARTIAL / BLOCKED_SAFETY`; `V3-AUTONOMY-001` Phase 0 remains queued and paused with no generated
-artifact adopted. No governed counter or authority changed.
+`V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`: the provider-free
+`REVOCATION_CASCADE_FIX` is complete and clean, but no genuine owned-REAL parent capability has been
+issued and positively exercised against an external provider. Every AUTHRUNNER runnable command
+remains absent at this checkpoint. The next action is to review, and only then emit if still exact, a
+fresh r6/r6/r2 metadata-only live-route gate; paid smoke, verifier, normal preflight, discovery,
+construct-only, and full commands remain absent. `V3-AUTONOMY-001` Phase 0 remains queued and paused
+with no generated artifact adopted. The local fix changed no provider result, ledger, governed
+counter, qualification, or authority.
 
 ### Full 24-case REAL command — withheld
 
-The full 24-case REAL command is deliberately withheld. It will be emitted only after the one-case
-REAL smoke succeeds, its durable evidence verifies offline, every defect observed during that run is
-fixed and checkpointed, and the operator separately requests the full launch. A successful smoke is
-diagnostic evidence only and does not itself authorize that later command. AUTHSEAL publication,
-qualification, calibration, benchmark, audit, the full run, and release remain blocked.
+The full 24-case REAL command is deliberately withheld. Before any later full-run review, the local
+revocation cascade must be implemented, negatively tested, checkpointed, and revalidated; the
+one-case REAL smoke must then succeed, its durable evidence must verify offline, every defect
+observed during that run must be fixed and checkpointed, and the operator must separately request
+the full launch. A successful smoke is diagnostic evidence only and does not itself authorize that
+later command. AUTHSEAL publication, qualification, calibration, benchmark, audit, the full run,
+and release remain blocked.
 
 ## Queue-derived model-work status
 

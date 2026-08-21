@@ -8,9 +8,9 @@ AUTORUN_STATUS: BLOCKED_SAFETY
 CURRENT_MILESTONE: M1-DETERMINISTIC-PRODUCT (REACHED)
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001 (COMPLETE)
-NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Await separate operator authorization for r6/r6/r2 metadata-only step A. Step B requires a second authorization and may begin only immediately after A exits `0` and its complete terminal result matches every pinned field, with no delay, interruption, or intervening state change; otherwise rerun A under separate authorization. Normal preflight, verifier, fresh discovery, construct-only, and full commands remain absent. `V3-AUTONOMY-001` Phase 0 remains queued and paused.
-LAST_COMMAND: Aggregate source checkpoint `9f5c94d` validation plus paired-guide product documentation/objective, Ruff/format, strict governance JSON, operator-custody, command-parity, and diff checks.
-LAST_RESULT: PASS / PARTIAL / BLOCKED_SAFETY — implementation checkpoint `9f5c94d97b3d79d51c10e250b99244591461e959` remains pushed and remote-resolved; zero-command evidence checkpoint `3bcac02da30bdad2c7e584d35c091ea5cb75ea7d` is committed. The current 50,211-byte, 906-line operator record at raw SHA-256 `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd` records fresh r6/r6/r2 live-route validation with no completion or usage, unchanged budget and ledger, no output, unchanged config, and `$0` reported spend. Exactly two adjacent commands are emitted for separate operator authorization; no execution, authority, or governed counter changed.
+NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY`. Review the exact r6/r6/r2 inputs against pushed checkpoint `692eb173f002818b4434b746c8801b4cbeb852e2`, then emit only a fresh metadata-only live-route gate if still exact. Normal preflight, paid smoke, verifier, fresh discovery, construct-only, and full commands remain absent. Positive owned-REAL parent external execution remains unvalidated. `V3-AUTONOMY-001` Phase 0 remains queued and paused.
+LAST_COMMAND: Root 229-test focused and 266-test adjacent matrices; repository Ruff; format over 510 tracked Python files; strict mypy over 206 source files; schema verification; independent review; `.venv/bin/pytest -q tests/unit/test_product_documentation.py tests/unit/test_product_objective.py`; Ruff check/format for the product-documentation contract; strict governance JSON parse; zero-current-command scan; operator-results custody; `git diff --check`.
+LAST_RESULT: PASS — provider-free revocation cascade is `CLEAN` with no blocker/HIGH at pushed checkpoint `692eb173f002818b4434b746c8801b4cbeb852e2`; 12 documentation/objective tests, documentation Ruff/format, both governance JSON documents, zero current AUTHRUNNER commands, operator record custody, and diff integrity also passed. This does not validate a positive owned-REAL parent against the external provider. Authority and governed counters are unchanged.
 REAL_MODEL_CALLS_ATTEMPTED: 11
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 10
@@ -20,7 +20,50 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9965235675
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 3bcac02da30bdad2c7e584d35c091ea5cb75ea7d — zero-command e7 evidence reconciliation. Current source implementation: 9f5c94d97b3d79d51c10e250b99244591461e959 (`Aggregate AUTHRUNNER route drift diagnostics`), pushed and remote-resolved. Historical live-route checkpoint: 5e94b779f2592a2a0a46e7535de3e346310285e2. Historical token-budget checkpoint: 59f9f40a97dce41a16fb3ab9243b4d8588bcf3cb
+LAST_CHECKPOINT_COMMIT: 692eb173f002818b4434b746c8801b4cbeb852e2 — pushed provider-free AUTHRUNNER revocation cascade. Historical adjacent sequence 092a09ee94d528f67b43edb180860d45328f741f remains withdrawn unexecuted; zero-command evidence checkpoint 3bcac02da30bdad2c7e584d35c091ea5cb75ea7d remains historical.
+
+## 2026-08-21T20:10:00Z — Provider-free revocation cascade clean; REAL remains blocked
+
+- Status: `V3-AUTHRUNNER-001` is `PARTIAL / BLOCKED_SAFETY`; the local
+  `REVOCATION_CASCADE_FIX` is complete at pushed checkpoint
+  `692eb173f002818b4434b746c8801b4cbeb852e2`.
+- Completed changes: exact PID-bound campaign and generation revokers; parent-to-child revocation
+  cascade; traceback-safe execution handoff cleanup; immediate smoke candidate and judge generation
+  capability revocation.
+- Validation: root passed 229 focused and 266 adjacent tests. Repository Ruff, format over 510
+  tracked Python files, strict mypy over 206 source files, schema verification, and diff integrity
+  passed. Independent review reported `CLEAN` with no blocker/HIGH. Reconciliation then passed 12
+  product-documentation/objective tests, documentation Ruff and format checks, strict parsing of both
+  governance JSON files, the zero-current-command gate, operator-record custody, and diff integrity.
+- Evidence boundary: the unchanged operator record remains 50,211 bytes and 906 lines at raw SHA-256
+  `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd`. It contains no positive
+  owned-REAL parent execution. Authority, qualification, release, and governed counters are
+  unchanged.
+- Command disposition: every runnable AUTHRUNNER command remains absent. The next review may emit
+  only a fresh r6/r6/r2 metadata-only live-route gate; paid smoke, verifier, normal preflight,
+  discovery, construct-only, and full commands remain absent.
+
+## 2026-08-21T18:58:00Z — Nested-capability revocation gap; smoke commands withdrawn
+
+- Status: `V3-AUTHRUNNER-001` is `IN_PROGRESS` only for a provider-free
+  `REVOCATION_CASCADE_FIX`; every REAL path and autorun remain `BLOCKED_SAFETY`.
+- Finding: the top-level runner revoker removes only its PID-local runner lease. The retained
+  candidate-campaign verification and candidate/judge generation-verification capabilities use
+  independent registries with no explicit cascade, so current code does not satisfy the acceptance
+  requirement that revocation invalidate every downstream consumer.
+- Command disposition: the metadata-only step A and paid smoke step B emitted at
+  `092a09ee94d528f67b43edb180860d45328f741f` were not authorized or executed and are withdrawn.
+  Normal preflight, live-route, paid smoke, verifier, fresh discovery, construct-only, and full
+  commands are all absent.
+- Evidence custody: the operator record is unchanged at 50,211 bytes, 906 lines, raw SHA-256
+  `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd`. It records the prior
+  r6/r6/r2 live-route validation, not execution of either withdrawn command.
+- Next safe action: add exact child-capability revokers, cascade top-level disposal, and prove
+  negative post-revoke rejection for campaign and generation consumers. Checkpoint and validate
+  provider-free before any new live gate is considered. `V3-AUTONOMY-001` remains queued and paused.
+- Validation: 9 product-documentation/objective tests passed; Ruff check and format check passed;
+  both governance JSON files parsed strictly; the current-command scan found zero runnable AUTHRUNNER
+  commands; operator-result custody remained exact; and `git diff --check` passed.
 
 ## 2026-08-21T18:27:00Z — Adjacent r6/r6/r2 operator sequence emitted
 
@@ -29,16 +72,17 @@ LAST_CHECKPOINT_COMMIT: 3bcac02da30bdad2c7e584d35c091ea5cb75ea7d — zero-comman
 - Checkpoint custody: source implementation is exact pushed checkpoint
   `9f5c94d97b3d79d51c10e250b99244591461e959`; preceding zero-command evidence reconciliation is
   exact committed checkpoint `3bcac02da30bdad2c7e584d35c091ea5cb75ea7d`.
-- Commands: the guide emits exactly two separate r6/r6/r2 commands with byte-identical shared
-  inputs: metadata-only live-route step A and paid one-case step B. No normal preflight, verifier,
-  fresh discovery, construct-only, or full command is emitted.
+- Historical commands: at that boundary the guide emitted exactly two separate r6/r6/r2 commands
+  with byte-identical shared inputs: metadata-only live-route step A and paid one-case step B. No
+  normal preflight, verifier, fresh discovery, construct-only, or full command was emitted.
 - Adjacency gate: B requires separate authorization immediately after A exits `0` and the full
   terminal record matches the exact three model IDs, 15 logical GETs, at most 30 attempts, zero
   usage, unchanged budget and ledger, absent output, and pinned config. Any delay, interruption, or
   intervening source/config/artifact/ledger/output/secret/shell change requires a separately
   authorized A rerun.
-- Evidence boundary: neither command has run. The current operator record remains 50,211 bytes, 906
-  lines, raw SHA-256 `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd`.
+- Evidence boundary: neither command ran; both were later withdrawn by the 18:58 revocation-gap
+  reconciliation above. The operator record remained 50,211 bytes, 906 lines, raw SHA-256
+  `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd`.
 
 ## 2026-08-21T18:07:00Z — Fresh r6/r6/r2 live-route preflight VALID
 
@@ -60,8 +104,8 @@ LAST_CHECKPOINT_COMMIT: 3bcac02da30bdad2c7e584d35c091ea5cb75ea7d — zero-comman
   PRIMARY drifted in under seven hours.
 - Command disposition: the old r2/r5/r2 probe is historical. Every current AUTHRUNNER command is
   absent.
-- Historical next action: superseded by the 18:27 adjacent-sequence decision and two-command
-  emission above.
+- Historical next action: superseded by the 18:58 revocation-gap finding and command withdrawal
+  above.
 
 ## 2026-08-21 — Aggregate live-route diagnostics checkpointed; one probe emitted
 

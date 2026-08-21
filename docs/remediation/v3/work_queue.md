@@ -2057,25 +2057,22 @@ are invisible to source review by construction.
 - **Dependencies:** Completed `V3-AUTHLINEAGE-PUBLIC-001`, authenticated generation refetch, and closed
   usage/report evidence.
 - **Status:** `PARTIAL`
-- **Current defect slice:** Token-budget parity remains fixed at `59f9f40`; live-route checkpoint
-  `5e94b77` proved genuine candidate endpoint-inventory drift at `$0`. Aggregate successor
-  `9f5c94d97b3d79d51c10e250b99244591461e959` is pushed and remote-resolved. The operator used it
-  to identify candidate and PRIMARY drift while REPLAY remained unchanged, independently re-froze
-  the two affected roles as r6/r6, and validated the r6/r6/r2 live metadata path. Zero-command
-  evidence checkpoint `3bcac02da30bdad2c7e584d35c091ea5cb75ea7d` is committed. Exactly two current
-  commands now encode a mandatory adjacent r6/r6/r2 sequence: a separately authorized metadata-only
-  live-route gate, then a separately authorized paid smoke only after complete exact-VALID review
-  and with no delay, interruption, or intervening state change. REAL remains `BLOCKED_SAFETY`; this
-  status and command emission grant no execution or runtime authority.
+- **Local revocation-cascade slice:** Pushed checkpoint
+  `692eb173f002818b4434b746c8801b4cbeb852e2` adds explicit PID-bound campaign and generation
+  revokers, parent-to-child cascade, traceback-safe execution handoff guards, and immediate smoke
+  candidate/judge generation revocation. Root passed 229 focused plus 266 adjacent tests;
+  repository Ruff, format over 510 tracked Python files, strict mypy over 206 sources, schema and
+  diff gates passed; independent review reported `CLEAN` with no blocker/HIGH. The unexecuted
+  commands from `092a09ee94d528f67b43edb180860d45328f741f` remain withdrawn. Every AUTHRUNNER
+  runnable command is absent and every REAL path remains `BLOCKED_SAFETY`.
 - **Result:** The provider-free same-process candidate/judge/generation/ledger and AUTHSEAL
   path, strict self-hashed nonauthorizing prepared-run/report/ledger bundle, explicit egress gate,
   pre-reservation per-attempt ceiling, callback-ledger fail-stop, and fresh-only publication are
   implemented and locally green. The durable bundle also has a bounded descriptor-safe offline
-  loader and `models verify-authenticated-runner` command. A one-way PID-local lease, concurrent
-  replay recheck, exactly-once post-AUTHSEAL revocation, negative post-revoke check, and detached
-  durable-only return snapshot prevent live runner, campaign, or generation capabilities from
-  escaping the adapter. Replay remains explicitly nonauthorizing and uses no config, secret,
-  provider, or ledger state.
+  loader and `models verify-authenticated-runner` command. A one-way PID-local runner lease,
+  concurrent replay recheck, cascading child revocation, top-level negative post-revoke checks, and
+  detached durable-only return snapshot are implemented. Replay remains explicitly nonauthorizing
+  and uses no config, secret, provider, or ledger state.
 - **Durability checkpoint 2026-08-20:** The 207-path WIP recovery checkpoint and its bounded
   scheduler follow-ups are preserved through
   `c90a1531cad6f09866bc1309a3130b5e4673214b` on
@@ -2408,15 +2405,13 @@ are invisible to source review by construction.
   906-line operator record has raw SHA-256
   `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd`. PRIMARY drifted in
   under seven hours, so discovery freshness is measured in hours.
-- **Adjacent operator sequence emitted 2026-08-21:** Checkpoint
+- **Historical adjacent operator sequence, withdrawn unexecuted 2026-08-21:** Checkpoint
   `3bcac02da30bdad2c7e584d35c091ea5cb75ea7d` freezes the preceding zero-command evidence state.
-  The guide now emits exactly two separate r6/r6/r2 commands: metadata-only live-route step A and
-  paid one-case step B. B is eligible for separate authorization only immediately after the complete
-  A result matches every exact route, 15/30 counts, zero usage, unchanged budget and ledger, absent
-  output, and the pinned effective config, with no delay, interruption, or intervening source,
-  configuration, artifact, ledger, output, secret-file, or shell-environment change. A must be rerun
-  under separate authorization otherwise. No normal preflight, verifier, discovery, construct-only,
-  or full command is emitted.
+  Checkpoint `092a09ee94d528f67b43edb180860d45328f741f` emitted separate r6/r6/r2 metadata-only
+  and paid-smoke commands under an immediate-adjacency rule. Neither command was authorized or run.
+  Provider-free revocation review superseded that sequence and both commands are withdrawn. No
+  normal preflight, live-route, paid smoke, verifier, discovery, construct-only, or full command is
+  currently emitted.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
   and non-crediting. Both the historical and post-fix provider-free smoke preflights were valid and
   nonauthorizing, but neither constructed the live client. The first paid attempt exposed a mismatch
@@ -2433,14 +2428,14 @@ are invisible to source review by construction.
   same-process launch; interrupted work cannot be resumed as valid campaign evidence. The retained
   whole-inventory provider-display-name uniqueness invariant conservatively excludes otherwise viable
   routes whose regional endpoints reuse a display name; this is an explicit selection-quality
-  limitation and is not relaxed for the current triple. Genuine v1.1 durable REAL evidence and the positive
-  issue-consume-revoke-reject lifecycle assay remain absent. Campaign/generation revocation beyond
-  the top-level runner lease is not independently demonstrated. External-log publication and every
-  benchmark run remain queued.
-- **Next action:** Await separate operator authorization and the complete step-A terminal record. Run
-  step B only under a second authorization immediately after exact VALID reconciliation with no delay,
-  interruption, or state change; otherwise rerun step A. Keep the normal preflight, verifier,
-  construct-only, fresh-discovery, and full commands absent. AUTHSEAL publication, audits,
+  limitation and is not relaxed for the current triple. Genuine v1.1 durable REAL evidence and a
+  positive owned-REAL parent issue-consume-revoke-reject assay against the external runtime remain
+  absent; the completed provider-free cascade does not substitute for that evidence. External-log
+  publication and every benchmark run remain queued.
+- **Next action:** Review the exact r6/r6/r2 inputs against pushed checkpoint
+  `692eb173f002818b4434b746c8801b4cbeb852e2`, then emit only a fresh metadata-only live-route gate
+  if the review remains exact. Keep normal preflight, paid smoke, verifier, construct-only,
+  fresh-discovery, and full commands absent at this checkpoint. AUTHSEAL publication, audits,
   benchmarks, and release remain unauthorized. `V3-AUTONOMY-001` Phase 0 remains queued and paused
   for this handoff.
 
