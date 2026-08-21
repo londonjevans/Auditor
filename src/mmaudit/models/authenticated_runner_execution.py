@@ -792,6 +792,55 @@ def _preflight_execution(
         or not callable(generation_executor)
     ):
         raise AuthenticatedRunnerExecutionError("runner injected executor is not callable")
+    if not _matches_exact_ledger_cap(config.execution.budget_usd):
+        raise AuthenticatedRunnerExecutionError(
+            "runner configured execution budget must equal 250 USD"
+        )
+    if not _matches_exact_ledger_cap(budget.total_usd):
+        raise AuthenticatedRunnerExecutionError(
+            "runner shared budget manager total must equal 250 USD"
+        )
+    if budget.max_output_tokens != config.execution.max_output_tokens_per_request:
+        raise AuthenticatedRunnerExecutionError(
+            "runner shared budget maximum output tokens differ from configuration"
+        )
+    if Decimal(str(budget.conservative_rate)) != Decimal(
+        str(config.execution.conservative_usd_per_million_tokens)
+    ):
+        raise AuthenticatedRunnerExecutionError(
+            "runner shared budget conservative rate differs from configuration"
+        )
+    if budget.max_requests_per_agent != config.execution.max_requests_per_agent:
+        raise AuthenticatedRunnerExecutionError(
+            "runner shared budget request cap differs from configuration"
+        )
+    if budget.require_endpoint_cost_bound is not True:
+        raise AuthenticatedRunnerExecutionError(
+            "runner shared budget must require endpoint cost binding"
+        )
+    if budget.global_input_token_budget != config.token_budgets.global_input_token_budget:
+        raise AuthenticatedRunnerExecutionError(
+            "runner shared budget global input token budget differs from configuration"
+        )
+    if budget.global_output_token_budget != config.token_budgets.global_output_token_budget:
+        raise AuthenticatedRunnerExecutionError(
+            "runner shared budget global output token budget differs from configuration"
+        )
+    configured_model_caps = {
+        model: Decimal(str(cap))
+        for model, cap in config.token_budgets.per_model_cost_budget_usd.items()
+    }
+    configured_role_caps = {
+        role: Decimal(str(cap))
+        for role, cap in config.token_budgets.per_role_cost_budget_usd.items()
+    }
+    if (
+        budget.per_model_usd_caps != configured_model_caps
+        or budget.per_role_usd_caps != configured_role_caps
+    ):
+        raise AuthenticatedRunnerExecutionError(
+            "runner shared budget scoped cost budgets differ from configuration"
+        )
     effective_config_sha256 = config.stable_hash()
     if len(benchmark_suite.cases) != _FROZEN_CASE_COUNT:
         raise AuthenticatedRunnerExecutionError("runner requires the exact frozen 24-case suite")
@@ -841,18 +890,6 @@ def _preflight_execution(
     ):
         raise AuthenticatedRunnerExecutionError(
             "runner ground-truth preflight returned invalid case custody"
-        )
-    if not _matches_exact_ledger_cap(config.execution.budget_usd):
-        raise AuthenticatedRunnerExecutionError(
-            "runner configured execution budget must equal 250 USD"
-        )
-    if not _matches_exact_ledger_cap(budget.total_usd):
-        raise AuthenticatedRunnerExecutionError(
-            "runner shared budget manager total must equal 250 USD"
-        )
-    if budget.require_endpoint_cost_bound is not True:
-        raise AuthenticatedRunnerExecutionError(
-            "runner shared budget must require endpoint cost binding"
         )
     if usage.records:
         raise AuthenticatedRunnerExecutionError("runner requires a fresh empty usage ledger")

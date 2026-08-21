@@ -10,6 +10,7 @@ from typing import Any, cast
 
 import pytest
 
+import mmaudit.cli as cli_module
 import mmaudit.orchestration.authenticated_runner_openrouter as adapter_module
 from mmaudit.benchmark.cross_lineage_adjudication import (
     CrossLineageAdjudicationRunKind,
@@ -930,6 +931,14 @@ async def test_authenticated_runner_clients_retain_exact_token_budget_configurat
     config_factory: Callable[..., AuditConfig],
 ) -> None:
     harness = await execution_fixtures._harness(tmp_path, config_factory)
+    assert harness.budget.atomic_ledger is not None
+    budget, usage = cli_module._budget_and_usage(
+        harness.config,
+        ledger_path=harness.budget.atomic_ledger.path,
+        require_endpoint_cost_bound=True,
+    )
+    assert budget.atomic_ledger is not None
+    before = budget.atomic_ledger.snapshot()
     launch = AuthenticatedRunnerOpenRouterLaunch(
         config=harness.config,
         explicitly_allow_synthetic_egress=True,
@@ -940,8 +949,8 @@ async def test_authenticated_runner_clients_retain_exact_token_budget_configurat
         candidate_discovery_evidence=harness.discovery_evidence,
         candidate_registry=harness.registry,
         qualification_policy=harness.policy,
-        budget=harness.budget,
-        usage=harness.usage,
+        budget=budget,
+        usage=usage,
         run_plans=harness.plans,
     )
     secrets = OperatorSecrets({OPENROUTER_API_KEY_NAME: "synthetic-provider-free-unit-key"})
@@ -954,6 +963,10 @@ async def test_authenticated_runner_clients_retain_exact_token_budget_configurat
     )
     try:
         assert client.token_budgets == harness.config.token_budgets
+        assert client.budget is budget
+        assert client.usage is usage
+        assert usage.records == []
+        assert budget.atomic_ledger.snapshot() == before
     finally:
         await client.close()
         await adapter.close()

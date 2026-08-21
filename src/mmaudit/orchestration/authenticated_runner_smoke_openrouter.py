@@ -449,6 +449,60 @@ def preflight_authenticated_runner_smoke_openrouter_launch(
         raise AuthenticatedRunnerSmokeOpenRouterError(
             "smoke corpus differs from one exact case in the frozen 24-case parent"
         )
+    budget = launch.budget
+    if type(budget) is not BudgetManager:
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            "smoke launch requires the exact shared budget manager"
+        )
+    if Decimal(str(config.execution.budget_usd)) != _LEDGER_CAP_USD:
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            "smoke configured execution budget must equal 250 USD"
+        )
+    if Decimal(str(budget.total_usd)) != Decimal(str(config.execution.budget_usd)):
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            "smoke shared budget manager total differs from configured execution budget"
+        )
+    if budget.max_output_tokens != config.execution.max_output_tokens_per_request:
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            "smoke shared budget maximum output tokens differ from configuration"
+        )
+    if Decimal(str(budget.conservative_rate)) != Decimal(
+        str(config.execution.conservative_usd_per_million_tokens)
+    ):
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            "smoke shared budget conservative rate differs from configuration"
+        )
+    if budget.max_requests_per_agent != config.execution.max_requests_per_agent:
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            "smoke shared budget request cap differs from configuration"
+        )
+    if budget.require_endpoint_cost_bound is not True:
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            "smoke shared budget must require endpoint cost binding"
+        )
+    if budget.global_input_token_budget != config.token_budgets.global_input_token_budget:
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            "smoke shared budget global input token budget differs from configuration"
+        )
+    if budget.global_output_token_budget != config.token_budgets.global_output_token_budget:
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            "smoke shared budget global output token budget differs from configuration"
+        )
+    configured_model_caps = {
+        model: Decimal(str(cap))
+        for model, cap in config.token_budgets.per_model_cost_budget_usd.items()
+    }
+    configured_role_caps = {
+        role: Decimal(str(cap))
+        for role, cap in config.token_budgets.per_role_cost_budget_usd.items()
+    }
+    if (
+        budget.per_model_usd_caps != configured_model_caps
+        or budget.per_role_usd_caps != configured_role_caps
+    ):
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            "smoke shared budget scoped cost budgets differ from configuration"
+        )
     if launch.explicitly_allow_synthetic_egress is not True:
         raise AuthenticatedRunnerSmokeOpenRouterError(
             "smoke launch requires explicit synthetic egress permission"
@@ -526,12 +580,10 @@ def preflight_authenticated_runner_smoke_openrouter_launch(
         candidate=candidate,
         judges=(judges[0], judges[1]),
     )
-    budget = launch.budget
     usage = launch.usage
     ledger = budget.atomic_ledger
     if (
-        type(budget) is not BudgetManager
-        or type(usage) is not UsageLedger
+        type(usage) is not UsageLedger
         or type(ledger) is not AtomicCostLedger
         or ledger.cap_usd != _LEDGER_CAP_USD
         or Decimal(str(budget.total_usd)) != _LEDGER_CAP_USD

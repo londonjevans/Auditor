@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,7 +11,7 @@ import typer
 from typer.testing import CliRunner
 
 import mmaudit.cli as cli_module
-from mmaudit.config import ConfigError
+from mmaudit.config import AuditConfig, ConfigError
 from mmaudit.constants import ExitCode
 from mmaudit.models.authenticated_runner import AuthenticatedCrossLineageRunnerEvidence
 from mmaudit.models.authenticated_runner_durable_bundle import (
@@ -18,7 +19,10 @@ from mmaudit.models.authenticated_runner_durable_bundle import (
     AuthenticatedRunnerDurableEvidenceBundle,
     authenticated_runner_durable_bundle_bytes,
 )
-from mmaudit.models.authenticated_runner_execution import AuthenticatedRunnerExecutionInventory
+from mmaudit.models.authenticated_runner_execution import (
+    AuthenticatedRunnerExecutionError,
+    AuthenticatedRunnerExecutionInventory,
+)
 from mmaudit.models.evidence_seal_authority import (
     EvidenceSealCollisionMap,
     EvidenceSealDecisionProjection,
@@ -29,6 +33,7 @@ from mmaudit.orchestration.authenticated_runner_openrouter import (
     AuthenticatedRunnerOpenRouterResult,
     AuthenticatedRunnerOpenRouterRunSnapshot,
 )
+from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from tests.unit.test_authenticated_runner_durable_bundle import _rejected_bundle
 
 RUNNER = CliRunner()
@@ -338,6 +343,50 @@ def test_authenticated_runner_help_exposes_explicit_operator_inputs() -> None:
         assert option in result.stdout
 
 
+def test_authenticated_runner_budget_factory_binds_exact_cost_and_token_configuration(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    tmp_path.chmod(0o700)
+    ledger_path = tmp_path / "cost-ledger.json"
+    AtomicCostLedger.initialize(ledger_path, cap_usd=Decimal("250"))
+    config = config_factory(
+        execution={
+            "budget_usd": 250.0,
+            "max_output_tokens_per_request": 4_096,
+            "max_requests_per_agent": 192,
+        },
+        token_budgets={
+            "reserved_output_tokens": 4_096,
+            "global_input_token_budget": 1_234_567,
+            "global_output_token_budget": 345_678,
+            "per_model_cost_budget_usd": {
+                "deepseek/deepseek-v4-pro-0813": 125.25,
+            },
+            "per_role_cost_budget_usd": {"model_benchmark": 225.5},
+        },
+    )
+
+    budget, usage = cli_module._budget_and_usage(
+        config,
+        ledger_path=ledger_path,
+        require_endpoint_cost_bound=True,
+    )
+
+    assert budget.total_usd == 250.0
+    assert budget.atomic_ledger is not None
+    assert budget.atomic_ledger.cap_usd == Decimal("250")
+    assert budget.require_endpoint_cost_bound is True
+    assert budget.max_output_tokens == config.execution.max_output_tokens_per_request
+    assert budget.conservative_rate == config.execution.conservative_usd_per_million_tokens
+    assert budget.max_requests_per_agent == config.execution.max_requests_per_agent
+    assert budget.global_input_token_budget == 1_234_567
+    assert budget.global_output_token_budget == 345_678
+    assert budget.per_model_usd_caps == {"deepseek/deepseek-v4-pro-0813": Decimal("125.25")}
+    assert budget.per_role_usd_caps == {"model_benchmark": Decimal("225.5")}
+    assert usage.records == []
+
+
 def test_authenticated_runner_requires_opt_in_before_loading_or_secret_access(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -577,6 +626,16 @@ def test_authenticated_runner_preflights_before_secret_and_writes_only_durable_i
 
     monkeypatch.setattr(cli_module, "preflight_authenticated_openrouter_launch", preflight)
 
+    def select_secret(path: Path | None) -> Path:
+        events.append("select-secret")
+        if explicit_secret:
+            assert path == tmp_path / "operator-secrets.env"
+        else:
+            assert path is None
+        return tmp_path / "operator-secrets.env"
+
+    monkeypatch.setattr(cli_module, "select_operator_secret_file", select_secret)
+
     def load_secrets(path: Path | None, *, required: bool) -> _SecretPresenceOnly:
         events.append("secret")
         assert path == tmp_path / "operator-secrets.env"
@@ -628,6 +687,8 @@ def test_authenticated_runner_preflights_before_secret_and_writes_only_durable_i
         "paths",
         "output-preflight",
         "launch-preflight",
+        "select-secret",
+        "paths",
         "secret",
         "execute",
         "bundle",
@@ -654,6 +715,96 @@ def test_authenticated_runner_preflights_before_secret_and_writes_only_durable_i
         "authseal_rejection_kind",
     }
     assert "EXECUTION-CAPABILITY-CANARY" not in repr(bundle_inputs)
+
+
+def test_authenticated_runner_budget_drift_rejects_before_secret_selection_or_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tmp_path.chmod(0o700)
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "cost-ledger.json",
+        cap_usd=Decimal("250"),
+    )
+    before = ledger.snapshot()
+    config = SimpleNamespace(
+        execution=SimpleNamespace(cost_ledger_path=None),
+        token_budgets=SimpleNamespace(global_input_token_budget=8_000_000),
+    )
+    budget = SimpleNamespace(
+        atomic_ledger=ledger,
+        global_input_token_budget=None,
+    )
+    events: list[str] = []
+
+    monkeypatch.setattr(cli_module, "load_config", lambda _path: config)
+    monkeypatch.setattr(cli_module, "load_model_benchmark_corpus", lambda _path: object())
+    monkeypatch.setattr(
+        cli_module,
+        "load_frozen_ground_truth_provenance",
+        lambda _path: object(),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "resolve_verified_frozen_ground_truth",
+        lambda **_kwargs: object(),
+    )
+    monkeypatch.setattr(cli_module, "resolve_verified_public_model_lineage", object)
+    monkeypatch.setattr(cli_module, "load_candidate_registry", lambda _path: object())
+    monkeypatch.setattr(
+        cli_module,
+        "load_model_discovery_run",
+        lambda _path: (object(), (object(),)),
+    )
+    monkeypatch.setattr(cli_module, "load_qualification_policy", lambda _path: object())
+    monkeypatch.setattr(cli_module, "_require_qualification_release_pins", lambda **_kw: None)
+    monkeypatch.setattr(
+        cli_module,
+        "_budget_and_usage",
+        lambda *_args, **_kwargs: (budget, object()),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_preflight_authenticated_runner_cli_paths",
+        lambda **_kwargs: events.append("paths"),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_preflight_authenticated_runner_output",
+        lambda _path: events.append("output-preflight"),
+    )
+
+    def reject_drift(launch: AuthenticatedRunnerOpenRouterLaunch) -> object:
+        events.append("launch-preflight")
+        assert launch.budget.global_input_token_budget is None
+        assert launch.config.token_budgets.global_input_token_budget == 8_000_000
+        assert ledger.snapshot() == before
+        raise AuthenticatedRunnerExecutionError(
+            "runner shared budget global input token budget differs from configuration"
+        )
+
+    monkeypatch.setattr(
+        cli_module,
+        "preflight_authenticated_openrouter_launch",
+        reject_drift,
+    )
+
+    def forbidden(*_args: object, **_kwargs: object) -> object:
+        events.append("forbidden")
+        raise AssertionError("budget drift must reject before secret selection or execution")
+
+    monkeypatch.setattr(cli_module, "select_operator_secret_file", forbidden)
+    monkeypatch.setattr(cli_module, "load_operator_secrets", forbidden)
+    monkeypatch.setattr(cli_module, "execute_authenticated_openrouter_runner", forbidden)
+
+    result = RUNNER.invoke(cli_module.app, _required_arguments(tmp_path))
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "runner shared budget global input token budget differs from configuration" in " ".join(
+        result.stdout.split()
+    )
+    assert events == ["paths", "output-preflight", "launch-preflight"]
+    assert ledger.snapshot() == before
 
 
 def test_authenticated_runner_cli_path_preflight_rejects_output_inside_source() -> None:

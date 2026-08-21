@@ -12,6 +12,7 @@ from typing import Any, cast
 import pytest
 
 import mmaudit.benchmark.cross_lineage_adjudication as adjudication_module
+import mmaudit.cli as cli_module
 import mmaudit.models.authenticated_runner_smoke as smoke_evidence_module
 import mmaudit.orchestration.authenticated_runner_smoke_openrouter as smoke_runtime_module
 from mmaudit.benchmark.cross_lineage_adjudication import (
@@ -232,6 +233,14 @@ def _launch(
         max_requests_per_agent=192,
         atomic_ledger=ledger,
         require_endpoint_cost_bound=True,
+        global_input_token_budget=config.token_budgets.global_input_token_budget,
+        global_output_token_budget=config.token_budgets.global_output_token_budget,
+        per_model_usd_caps={
+            model: str(cap) for model, cap in config.token_budgets.per_model_cost_budget_usd.items()
+        },
+        per_role_usd_caps={
+            role: str(cap) for role, cap in config.token_budgets.per_role_cost_budget_usd.items()
+        },
     )
     candidate_manifest = SimpleNamespace(
         manifest_sha256=canonical_sha256({"manifest": "candidate"})
@@ -1058,6 +1067,163 @@ def test_usage_preview_join_binds_full_token_reasoning_discovery_and_output_proj
     )
     with pytest.raises(ValueError, match="exact cost preview"):
         smoke_evidence_module._require_usage_preview_join(bound, drifted)
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("field", "expected"),
+    (
+        (
+            "global_input_token_budget",
+            "smoke shared budget global input token budget differs from configuration",
+        ),
+        (
+            "global_output_token_budget",
+            "smoke shared budget global output token budget differs from configuration",
+        ),
+    ),
+)
+def test_smoke_preflight_rejects_aggregate_token_budget_drift_before_cost_derivation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+    field: str,
+    expected: str,
+) -> None:
+    launch = _launch(config=_smoke_config(config_factory), tmp_path=tmp_path)
+    configured = getattr(launch.config.token_budgets, field)
+    setattr(launch.budget, field, configured + 1)
+    ledger = launch.budget.atomic_ledger
+    assert ledger is not None
+    before = ledger.snapshot()
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("token-budget drift must reject before cost or provider setup")
+
+    monkeypatch.setattr(smoke_runtime_module, "_require_singleton_registry", forbidden)
+    monkeypatch.setattr(smoke_runtime_module, "_candidate_cost_plan", forbidden)
+    monkeypatch.setattr(smoke_runtime_module, "OpenRouterClient", forbidden)
+
+    with pytest.raises(AuthenticatedRunnerSmokeOpenRouterError) as caught:
+        preflight_authenticated_runner_smoke_openrouter_launch(launch)
+
+    assert str(caught.value) == expected
+    assert ledger.snapshot() == before
+    assert launch.usage.records == []
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("field", "expected"),
+    (
+        (
+            "max_output_tokens",
+            "smoke shared budget maximum output tokens differ from configuration",
+        ),
+        (
+            "conservative_rate",
+            "smoke shared budget conservative rate differs from configuration",
+        ),
+        (
+            "max_requests_per_agent",
+            "smoke shared budget request cap differs from configuration",
+        ),
+        (
+            "require_endpoint_cost_bound",
+            "smoke shared budget must require endpoint cost binding",
+        ),
+    ),
+)
+def test_smoke_preflight_rejects_execution_budget_drift_before_cost_derivation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+    field: str,
+    expected: str,
+) -> None:
+    launch = _launch(config=_smoke_config(config_factory), tmp_path=tmp_path)
+    value = getattr(launch.budget, field)
+    setattr(launch.budget, field, False if field == "require_endpoint_cost_bound" else value + 1)
+    ledger = launch.budget.atomic_ledger
+    assert ledger is not None
+    before = ledger.snapshot()
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("budget drift must reject before cost or provider setup")
+
+    monkeypatch.setattr(smoke_runtime_module, "_require_singleton_registry", forbidden)
+    monkeypatch.setattr(smoke_runtime_module, "_candidate_cost_plan", forbidden)
+    monkeypatch.setattr(smoke_runtime_module, "OpenRouterClient", forbidden)
+
+    with pytest.raises(AuthenticatedRunnerSmokeOpenRouterError) as caught:
+        preflight_authenticated_runner_smoke_openrouter_launch(launch)
+
+    assert str(caught.value) == expected
+    assert ledger.snapshot() == before
+    assert launch.usage.records == []
+
+
+@pytest.mark.parametrize(  # type: ignore[untyped-decorator]
+    ("field", "value"),
+    (
+        ("per_model_usd_caps", {CANDIDATE_ID: Decimal("1")}),
+        ("per_role_usd_caps", {"model_benchmark": Decimal("1")}),
+    ),
+)
+def test_smoke_preflight_rejects_scoped_cost_budget_drift_before_cost_derivation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+    field: str,
+    value: dict[str, Decimal],
+) -> None:
+    launch = _launch(config=_smoke_config(config_factory), tmp_path=tmp_path)
+    setattr(launch.budget, field, value)
+    ledger = launch.budget.atomic_ledger
+    assert ledger is not None
+    before = ledger.snapshot()
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("scoped budget drift must reject before cost or provider setup")
+
+    monkeypatch.setattr(smoke_runtime_module, "_require_singleton_registry", forbidden)
+    monkeypatch.setattr(smoke_runtime_module, "_candidate_cost_plan", forbidden)
+    monkeypatch.setattr(smoke_runtime_module, "OpenRouterClient", forbidden)
+
+    with pytest.raises(AuthenticatedRunnerSmokeOpenRouterError) as caught:
+        preflight_authenticated_runner_smoke_openrouter_launch(launch)
+
+    assert str(caught.value) == "smoke shared budget scoped cost budgets differ from configuration"
+    assert ledger.snapshot() == before
+    assert launch.usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_smoke_cli_budget_constructs_live_client_without_egress_or_budget_mutation(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    base_launch = _launch(config=_smoke_config(config_factory), tmp_path=tmp_path)
+    assert base_launch.budget.atomic_ledger is not None
+    budget, usage = cli_module._budget_and_usage(
+        base_launch.config,
+        ledger_path=base_launch.budget.atomic_ledger.path,
+        require_endpoint_cost_bound=True,
+    )
+    launch = replace(base_launch, budget=budget, usage=usage)
+    assert budget.atomic_ledger is not None
+    before = budget.atomic_ledger.snapshot()
+    secrets = OperatorSecrets({OPENROUTER_API_KEY_NAME: "synthetic-provider-free-unit-key"})
+    adapter = smoke_runtime_module._SmokeOpenRouterAdapter(launch=launch, secrets=secrets)
+    client = adapter._new_candidate_client(launch.candidate_registry.candidates[0])
+    try:
+        assert client.token_budgets == launch.config.token_budgets
+        assert client.budget is budget
+        assert client.usage is usage
+        assert usage.records == []
+        assert budget.atomic_ledger.snapshot() == before
+    finally:
+        await client.close()
+        await adapter.close()
+        secrets.clear()
 
 
 @pytest.mark.parametrize(  # type: ignore[untyped-decorator]

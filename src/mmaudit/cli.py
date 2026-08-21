@@ -2146,6 +2146,12 @@ def models_authenticated_runner(
             ledger.path,
             ledger.lock_path,
         )
+        _preflight_authenticated_runner_cli_paths(
+            mutable_outputs=mutable_outputs,
+            source_paths=source_paths,
+        )
+        _preflight_authenticated_runner_output(output)
+        inventory = preflight_authenticated_openrouter_launch(launch)
         selected_secret_file: Path | None = None
         if not preflight_only:
             selected_secret_file = select_operator_secret_file(secrets_env_file)
@@ -2155,12 +2161,10 @@ def models_authenticated_runner(
                     "MMAUDIT_SECRETS_ENV_FILE"
                 )
             source_paths = (*source_paths, selected_secret_file)
-        _preflight_authenticated_runner_cli_paths(
-            mutable_outputs=mutable_outputs,
-            source_paths=source_paths,
-        )
-        _preflight_authenticated_runner_output(output)
-        inventory = preflight_authenticated_openrouter_launch(launch)
+            _preflight_authenticated_runner_cli_paths(
+                mutable_outputs=mutable_outputs,
+                source_paths=source_paths,
+            )
 
         if preflight_only:
             local_console = Console(no_color=no_color)
@@ -5699,6 +5703,16 @@ def _budget_and_usage(
                 else None
             ),
             require_endpoint_cost_bound=require_endpoint_cost_bound,
+            global_input_token_budget=config.token_budgets.global_input_token_budget,
+            global_output_token_budget=config.token_budgets.global_output_token_budget,
+            per_model_usd_caps={
+                model: str(cap)
+                for model, cap in config.token_budgets.per_model_cost_budget_usd.items()
+            },
+            per_role_usd_caps={
+                role: str(cap)
+                for role, cap in config.token_budgets.per_role_cost_budget_usd.items()
+            },
         ),
         UsageLedger(),
     )

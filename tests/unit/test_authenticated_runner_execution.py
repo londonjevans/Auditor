@@ -1272,6 +1272,27 @@ async def test_preflight_identifies_each_budget_control_before_dispatch(
         expected="runner shared budget must require endpoint cost binding",
     )
 
+    output_harness = await _harness(tmp_path / "output", config_factory)
+    output_harness.budget.max_output_tokens += 1
+    await _assert_preflight_rejection(
+        output_harness,
+        expected="runner shared budget maximum output tokens differ from configuration",
+    )
+
+    rate_harness = await _harness(tmp_path / "rate", config_factory)
+    rate_harness.budget.conservative_rate += 1.0
+    await _assert_preflight_rejection(
+        rate_harness,
+        expected="runner shared budget conservative rate differs from configuration",
+    )
+
+    request_harness = await _harness(tmp_path / "request", config_factory)
+    request_harness.budget.max_requests_per_agent += 1
+    await _assert_preflight_rejection(
+        request_harness,
+        expected="runner shared budget request cap differs from configuration",
+    )
+
     ledger_harness = await _harness(tmp_path / "ledger", config_factory)
     wrong_ledger_parent = tmp_path / "wrong-ledger"
     wrong_ledger_parent.mkdir(mode=0o700)
@@ -1288,10 +1309,70 @@ async def test_preflight_identifies_each_budget_control_before_dispatch(
         max_requests_per_agent=ledger_harness.config.execution.max_requests_per_agent,
         atomic_ledger=wrong_ledger,
         require_endpoint_cost_bound=True,
+        global_input_token_budget=(ledger_harness.config.token_budgets.global_input_token_budget),
+        global_output_token_budget=(ledger_harness.config.token_budgets.global_output_token_budget),
+        per_model_usd_caps={
+            model: str(cap)
+            for model, cap in ledger_harness.config.token_budgets.per_model_cost_budget_usd.items()
+        },
+        per_role_usd_caps={
+            role: str(cap)
+            for role, cap in ledger_harness.config.token_budgets.per_role_cost_budget_usd.items()
+        },
     )
     await _assert_preflight_rejection(
         replace(ledger_harness, budget=wrong_budget),
         expected="runner atomic cost ledger cap must equal 250 USD",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    (
+        (
+            "global_input_token_budget",
+            "runner shared budget global input token budget differs from configuration",
+        ),
+        (
+            "global_output_token_budget",
+            "runner shared budget global output token budget differs from configuration",
+        ),
+    ),
+)
+async def test_preflight_rejects_aggregate_token_budget_drift_before_dispatch(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+    field: str,
+    expected: str,
+) -> None:
+    harness = await _harness(tmp_path / field, config_factory)
+    configured = getattr(harness.config.token_budgets, field)
+    setattr(harness.budget, field, configured + 1)
+
+    await _assert_preflight_rejection(harness, expected=expected)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("per_model_usd_caps", {CANDIDATE_ID: Decimal("1")}),
+        ("per_role_usd_caps", {"model_benchmark": Decimal("1")}),
+    ),
+)
+async def test_preflight_rejects_scoped_cost_budget_drift_before_dispatch(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+    field: str,
+    value: dict[str, Decimal],
+) -> None:
+    harness = await _harness(tmp_path / field, config_factory)
+    setattr(harness.budget, field, value)
+
+    await _assert_preflight_rejection(
+        harness,
+        expected="runner shared budget scoped cost budgets differ from configuration",
     )
 
 
