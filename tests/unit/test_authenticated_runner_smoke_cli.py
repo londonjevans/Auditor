@@ -255,24 +255,35 @@ def test_authenticated_runner_smoke_preflight_is_provider_free_and_does_not_muta
     assert "full_smoke_cost_bound=UNAVAILABLE_BEFORE_REAL_CANDIDATE_OUTPUTS" in normalized
 
 
-def test_authenticated_runner_smoke_structured_output_rejection_precedes_secret_selection(
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    (
+        (
+            "smoke candidate route lacks required native structured_outputs support",
+            "native structured_outputs",
+        ),
+        (
+            "smoke candidate route lacks an explicit metadata completion limit",
+            "explicit metadata completion limit",
+        ),
+    ),
+)
+def test_authenticated_runner_smoke_route_eligibility_precedes_secret_selection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    message: str,
+    expected: str,
 ) -> None:
     tmp_path.chmod(0o700)
     _patch_launch_inputs(monkeypatch, tmp_path)
     monkeypatch.setattr(
         cli_module,
         "preflight_authenticated_runner_smoke_openrouter_launch",
-        lambda _launch: (_ for _ in ()).throw(
-            AuthenticatedRunnerSmokeOpenRouterError(
-                "smoke candidate route lacks required native structured_outputs support"
-            )
-        ),
+        lambda _launch: (_ for _ in ()).throw(AuthenticatedRunnerSmokeOpenRouterError(message)),
     )
 
     def forbidden(*_args: object, **_kwargs: object) -> Any:
-        raise AssertionError("structured-output rejection must precede secret selection")
+        raise AssertionError("route-eligibility rejection must precede secret selection")
 
     for name in (
         "select_operator_secret_file",
@@ -287,7 +298,7 @@ def test_authenticated_runner_smoke_structured_output_rejection_precedes_secret_
     result = RUNNER.invoke(cli_module.app, _required_arguments(tmp_path))
 
     assert result.exit_code == ExitCode.CONFIGURATION
-    assert "native structured_outputs" in " ".join(result.stdout.split())
+    assert expected in " ".join(result.stdout.split())
     assert not output.exists()
 
 

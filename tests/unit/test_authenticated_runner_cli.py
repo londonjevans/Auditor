@@ -530,9 +530,24 @@ def test_authenticated_runner_preflight_only_never_selects_secrets_or_mutates_ou
         assert not (tmp_path / name).exists()
 
 
-def test_authenticated_runner_structured_output_rejection_precedes_secret_selection(
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    (
+        (
+            "runner candidate route lacks required native structured_outputs support",
+            "native structured_outputs",
+        ),
+        (
+            "runner candidate route lacks an explicit metadata completion limit",
+            "explicit metadata completion limit",
+        ),
+    ),
+)
+def test_authenticated_runner_route_eligibility_rejection_precedes_secret_selection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    message: str,
+    expected: str,
 ) -> None:
     config = SimpleNamespace(execution=SimpleNamespace(cost_ledger_path=None))
     ledger = SimpleNamespace(
@@ -585,15 +600,11 @@ def test_authenticated_runner_structured_output_rejection_precedes_secret_select
     monkeypatch.setattr(
         cli_module,
         "preflight_authenticated_openrouter_launch",
-        lambda _launch: (_ for _ in ()).throw(
-            AuthenticatedRunnerExecutionError(
-                "runner candidate route lacks required native structured_outputs support"
-            )
-        ),
+        lambda _launch: (_ for _ in ()).throw(AuthenticatedRunnerExecutionError(message)),
     )
 
     def forbidden(*_args: object, **_kwargs: object) -> object:
-        raise AssertionError("structured-output rejection must precede secret selection")
+        raise AssertionError("route-eligibility rejection must precede secret selection")
 
     for name in (
         "select_operator_secret_file",
@@ -606,7 +617,7 @@ def test_authenticated_runner_structured_output_rejection_precedes_secret_select
     result = RUNNER.invoke(cli_module.app, _required_arguments(tmp_path))
 
     assert result.exit_code == ExitCode.CONFIGURATION
-    assert "native structured_outputs" in " ".join(result.stdout.split())
+    assert expected in " ".join(result.stdout.split())
     assert not (tmp_path / "runner-evidence.json").exists()
 
 

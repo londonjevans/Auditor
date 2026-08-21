@@ -741,11 +741,27 @@ def test_discover_selection_plan_publishes_rootless_registry_from_fresh_evidence
 
 
 @pytest.mark.parametrize(
-    ("native_parameter", "endpoint_reasoning_efforts", "expected"),
     (
-        (None, HIGH_REASONING_EFFORTS, "native structured_outputs"),
-        ("json_schema", HIGH_REASONING_EFFORTS, "native structured_outputs"),
-        ("structured_outputs", NON_HIGH_REASONING_EFFORTS, "reasoning effort=high"),
+        "native_parameter",
+        "endpoint_reasoning_efforts",
+        "completion_limit_published",
+        "expected",
+    ),
+    (
+        (None, HIGH_REASONING_EFFORTS, True, "native structured_outputs"),
+        ("json_schema", HIGH_REASONING_EFFORTS, True, "native structured_outputs"),
+        (
+            "structured_outputs",
+            NON_HIGH_REASONING_EFFORTS,
+            True,
+            "reasoning effort=high",
+        ),
+        (
+            "structured_outputs",
+            HIGH_REASONING_EFFORTS,
+            False,
+            "explicit metadata completion limit",
+        ),
     ),
 )
 def test_discover_selection_plan_rejects_ineligible_runner_route_before_publication(
@@ -754,6 +770,7 @@ def test_discover_selection_plan_rejects_ineligible_runner_route_before_publicat
     config_factory: Callable[..., AuditConfig],
     native_parameter: Literal["json_schema", "structured_outputs"] | None,
     endpoint_reasoning_efforts: tuple[ReasoningEffort, ...],
+    completion_limit_published: bool,
     expected: str,
 ) -> None:
     config = _config(config_factory)
@@ -764,6 +781,7 @@ def test_discover_selection_plan_rejects_ineligible_runner_route_before_publicat
         canonical_model_id="alpha/atlas-secure-20260820",
         native_structured_output_parameter=native_parameter,
         endpoint_reasoning_efforts=endpoint_reasoning_efforts,
+        endpoint_completion_limit_published=completion_limit_published,
     )
     plan_path, ranking_path, lineage_path = _selection_plan_paths(tmp_path / "selection")
     secret_file = tmp_path / "synthetic-secrets.env"

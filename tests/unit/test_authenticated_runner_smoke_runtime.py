@@ -1727,6 +1727,91 @@ async def test_smoke_preflight_rejects_non_native_structured_output_for_every_ro
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("role_index", [-1, 0, 1])
+async def test_smoke_preflight_rejects_context_fallback_limit_for_every_role(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+    role_index: int,
+) -> None:
+    launch = replace(
+        await _live_route_launch(
+            tmp_path=tmp_path / "completion-capacity",
+            config_factory=config_factory,
+        ),
+        explicitly_allow_synthetic_egress=True,
+    )
+    if role_index == -1:
+        model = launch.candidate_registry.candidates[0]
+    else:
+        model = launch.run_plans[role_index].judge
+    manifest, evidence, registry = candidate_fixtures._discovery_and_registry(
+        tmp_path=tmp_path / f"context-fallback-{role_index}",
+        config=launch.config,
+        specs=(
+            candidate_fixtures._CandidateSpec(
+                model_id=model.exact_model_id,
+                provider_endpoint=model.approved_provider_endpoint,
+                provider_name=model.approved_provider_name,
+                canonical_model_id=model.canonical_model_slug,
+                native_structured_output_parameter="structured_outputs",
+                endpoint_completion_limit_published=False,
+            ),
+        ),
+    )
+    if role_index == -1:
+        launch = replace(
+            launch,
+            candidate_discovery_manifest=manifest,
+            candidate_discovery_evidence=evidence,
+            candidate_registry=registry,
+        )
+        expected = "smoke candidate route lacks an explicit metadata completion limit"
+    else:
+        plans = list(launch.run_plans)
+        plans[role_index] = replace(
+            plans[role_index],
+            judge_discovery_manifest=manifest,
+            judge_discovery_evidence=evidence,
+            judge_registry=registry,
+        )
+        launch = replace(launch, run_plans=tuple(plans))
+        expected = "smoke judge route lacks an explicit metadata completion limit"
+    assert evidence[0].endpoint_snapshot.endpoints[0].max_completion_tokens_source == (
+        "context_limit"
+    )
+    ledger = launch.budget.atomic_ledger
+    assert ledger is not None
+    before = ledger.snapshot()
+    output = tmp_path / "smoke-capacity-output.json"
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("completion-capacity admission must reject before provider setup")
+
+    monkeypatch.setattr(smoke_runtime_module, "_candidate_cost_plan", forbidden)
+    monkeypatch.setattr(smoke_runtime_module, "_SmokeOpenRouterAdapter", forbidden)
+    secrets = OperatorSecrets({OPENROUTER_API_KEY_NAME: "synthetic-capacity-unit-key"})
+    try:
+        with pytest.raises(AuthenticatedRunnerSmokeOpenRouterError, match=expected):
+            await execute_authenticated_runner_smoke_openrouter(
+                launch=launch,
+                operator_secrets=secrets,
+            )
+        with pytest.raises(AuthenticatedRunnerSmokeOpenRouterError, match=expected):
+            preflight_authenticated_runner_smoke_live_route_launch(
+                replace(launch, explicitly_allow_synthetic_egress=False)
+            )
+
+        assert secrets.openrouter_api_key_present is True
+        assert secrets.cleared is False
+        assert launch.usage.records == []
+        assert ledger.snapshot() == before
+        assert not output.exists()
+    finally:
+        secrets.clear()
+
+
+@pytest.mark.asyncio
 async def test_live_route_preflight_requires_positive_metadata_egress_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

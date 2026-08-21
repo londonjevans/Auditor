@@ -5,12 +5,13 @@
     "distinct_root_lineages_verified": false,
     "primary_judge_model_id": "z-ai/glm-5.2",
     "replay_judge_model_id": "moonshotai/kimi-k3",
+    "required_completion_limit_source": "metadata",
     "required_output_mode": "NATIVE_JSON_SCHEMA",
     "required_reasoning_effort": "high",
     "required_supported_parameters": [
       "structured_outputs"
     ],
-    "role_assignment_sha256": "0a41b623527b07c14ee15601e1dd5a9fbb7d6284f9ee77e66c92678f92e089d8"
+    "role_assignment_sha256": "93a2487fceec4771749aa8c33d0870fba70941293bf57a2dd48e6c065e172421"
   },
   "benchmark_authorized": false,
   "cached_ranking_payload_present": false,
@@ -34,13 +35,13 @@
     {
       "advisory_lineage_group": "DeepSeek",
       "allowed_provider_endpoints": [
-        "fireworks"
+        "parasail/fp8"
       ],
       "approved_roles": [],
       "availability": "UNVERIFIED",
       "documentary_lineage": "UNCONFIRMED",
       "entry_authority": false,
-      "entry_sha256": "f4121383c7b35443c653ccb155640e08340fa450ff03d4ed6b35415f65c36b9a",
+      "entry_sha256": "da576e8d1835b41be94ea4dab6cd6329ae8c1483b830214d9e05acef44e8617b",
       "exact_model_id": "deepseek/deepseek-v4-pro-0813",
       "lineage_group_seed_sha256": "0a736ab443477cef4d0ee92b36ef4a18aadb36e8c54bab3b5654d03cc0fc2483",
       "priority_rank": 5
@@ -110,13 +111,13 @@
     {
       "advisory_lineage_group": "Moonshot-Kimi",
       "allowed_provider_endpoints": [
-        "together"
+        "wafer"
       ],
       "approved_roles": [],
       "availability": "UNVERIFIED",
       "documentary_lineage": "UNCONFIRMED",
       "entry_authority": false,
-      "entry_sha256": "4fe037c9c3c81829e0386036ae0460905cbcbcc4c7bf27076ac1a520ae0d2609",
+      "entry_sha256": "f0a9d880f6f02928ffb5ec67d962b9bc1def6ce896faf92c3800a7fa8456d589",
       "exact_model_id": "moonshotai/kimi-k3",
       "lineage_group_seed_sha256": "f46cb1c7d55406b73aebebce2386b927039759f3d24aa6930422f0d125551c34",
       "priority_rank": 7
@@ -199,7 +200,7 @@
     }
   ],
   "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
-  "plan_sha256": "120ef35de53a6c13b0d173a30b0e5e3f6310c3bf7032ce2a7ed92134a5099fbf",
+  "plan_sha256": "4e6c744559b1cc49c8ede590c868df103a10402d429d5e5d02cf4f429e0f3a66",
   "production_selection_authorized": false,
   "provider_call_authorized": false,
   "provider_metadata_present": false,
@@ -207,7 +208,7 @@
   "ranking_executed": false,
   "release_authorized": false,
   "runner_authority_authorized": false,
-  "schema_version": "1.2",
+  "schema_version": "1.3",
   "seal_publication_authorized": false,
   "serialized_authority": false,
   "source_bindings": [
@@ -241,6 +242,7 @@
     "Mistral is excluded because the staged review supplies no exact current model ID.",
     "Operator results SHA-256 00de61717cb6d61c003682abca12ae2c7e59613db03ef99558133b972c123516 records Gemma effort=high rejection and an unverified Z.AI GLM-5.2/sail-research-fp8 proposal; fresh documentary lineage capture and exact discovery are required.",
     "Operator results SHA-256 14ece147138fb5bf6f32d2737ca6b174817a923c5ca50269bc14337c60a3453c records the historical unverified Gemma rank-12/deepinfra-fp8 proposal; later reasoning evidence supersedes it.",
+    "Operator results SHA-256 5faa33fe1bd5b332e8dffa0b29ed5718886d0c8b22c65cb1dc67b306eba8d00f records the metadata-only r7/r8/r7 completion-capacity rejection and the nonauthorizing DeepSeek/parasail-fp8 and Kimi/Wafer successor routes; fresh exact discovery remains required.",
     "Zhipu GLM 5.2 is an unverified availability seed; the review names unroutable GLM 5.3."
   ]
 }

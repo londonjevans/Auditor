@@ -134,6 +134,7 @@ class AuthenticatedRunnerSelection(StrictModel):
         max_length=1,
     )
     required_reasoning_effort: Literal["high"]
+    required_completion_limit_source: Literal["metadata"]
     distinct_root_lineages_verified: Literal[False]
     role_assignment_sha256: str = Field(pattern=_SHA256_PATTERN)
 
@@ -165,6 +166,10 @@ class AuthenticatedRunnerSelection(StrictModel):
             raise ValueError("authenticated runner seed must require native JSON Schema")
         if self.required_reasoning_effort != "high":
             raise ValueError("authenticated runner seed must require reasoning effort=high")
+        if self.required_completion_limit_source != "metadata":
+            raise ValueError(
+                "authenticated runner seed must require an explicit metadata completion limit"
+            )
         expected = canonical_sha256(
             self.model_dump(mode="json", exclude={"role_assignment_sha256"})
         )
@@ -176,7 +181,7 @@ class AuthenticatedRunnerSelection(StrictModel):
 class CandidateSelectionPlan(StrictModel):
     """Self-hashed operator-staged seed with only literal-false authority flags."""
 
-    schema_version: Literal["1.2"]
+    schema_version: Literal["1.3"]
     artifact_kind: Literal["OPERATOR_STAGED_MODEL_SELECTION"]
     status: Literal["NONAUTHORIZING"]
     objective_sha256: Literal["e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15"]
@@ -310,6 +315,7 @@ def seal_authenticated_runner_selection(
         "required_output_mode": StructuredOutputMode.NATIVE_JSON_SCHEMA.value,
         "required_supported_parameters": ["structured_outputs"],
         "required_reasoning_effort": "high",
+        "required_completion_limit_source": "metadata",
         "distinct_root_lineages_verified": False,
     }
     values["role_assignment_sha256"] = canonical_sha256(values)
@@ -329,7 +335,7 @@ def seal_candidate_selection_plan(
     ordered_sources = tuple(sorted(source_bindings, key=lambda item: item.kind))
     ordered_entries = tuple(sorted(entries, key=lambda item: item.exact_model_id))
     values: dict[str, object] = {
-        "schema_version": "1.2",
+        "schema_version": "1.3",
         "artifact_kind": "OPERATOR_STAGED_MODEL_SELECTION",
         "status": "NONAUTHORIZING",
         "objective_sha256": OBJECTIVE_SHA256,
@@ -500,6 +506,31 @@ def require_authenticated_runner_reasoning_effort(
         )
 
 
+def require_authenticated_runner_metadata_completion_limit(
+    evidence: OpenRouterModelDiscoveryPayload | OpenRouterModelDiscoveryEvidence,
+    *,
+    required_source: Literal["metadata"],
+) -> None:
+    """Require an explicit endpoint completion limit rather than a context fallback."""
+
+    if type(evidence) not in {
+        OpenRouterModelDiscoveryPayload,
+        OpenRouterModelDiscoveryEvidence,
+    }:
+        raise CandidateSelectionError(
+            "authenticated runner completion-capacity evidence has the wrong exact type"
+        )
+    if required_source != "metadata":
+        raise CandidateSelectionError(
+            "authenticated runner selection has an unsupported completion-limit source"
+        )
+    endpoint = evidence.endpoint_snapshot.endpoint(evidence.approved_provider_endpoint)
+    if endpoint.max_completion_tokens_source != required_source:
+        raise CandidateSelectionError(
+            "authenticated runner route lacks an explicit metadata completion limit"
+        )
+
+
 def validate_candidate_selection_discovery_capability(
     plan: CandidateSelectionPlan,
     *,
@@ -521,6 +552,10 @@ def validate_candidate_selection_discovery_capability(
         require_authenticated_runner_reasoning_effort(
             evidence,
             required_effort=selection.required_reasoning_effort,
+        )
+        require_authenticated_runner_metadata_completion_limit(
+            evidence,
+            required_source=selection.required_completion_limit_source,
         )
     return canonical
 

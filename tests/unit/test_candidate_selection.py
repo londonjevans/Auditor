@@ -151,7 +151,7 @@ def test_selection_plan_is_deterministic_and_strictly_nonauthorizing() -> None:
         "serialized_authority",
     }.issubset(required)
     assert schema["properties"]["objective_sha256"]["const"] == OBJECTIVE_SHA256
-    assert schema["properties"]["schema_version"]["const"] == "1.2"
+    assert schema["properties"]["schema_version"]["const"] == "1.3"
     assignment_schema = schema["$defs"]["AuthenticatedRunnerSelection"]
     assert assignment_schema["properties"]["required_output_mode"]["const"] == (
         "NATIVE_JSON_SCHEMA"
@@ -159,6 +159,10 @@ def test_selection_plan_is_deterministic_and_strictly_nonauthorizing() -> None:
     assert assignment_schema["properties"]["required_supported_parameters"]["minItems"] == 1
     assert assignment_schema["properties"]["required_supported_parameters"]["maxItems"] == 1
     assert assignment_schema["properties"]["required_reasoning_effort"]["const"] == "high"
+    assert assignment_schema["properties"]["required_completion_limit_source"]["const"] == (
+        "metadata"
+    )
+    assert "required_completion_limit_source" in assignment_schema["required"]
     entry_schema = schema["$defs"]["CandidateSelectionEntry"]
     assert entry_schema["properties"]["exact_model_id"]["pattern"]
     assert "entry_authority" in entry_schema["required"]
@@ -168,8 +172,8 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
     plan = load_candidate_selection_plan(ROOT / "config" / "models.selection-plan.json")
     guide = (ROOT / "docs" / "models" / "model_selection.md").read_text(encoding="utf-8")
 
-    assert plan.schema_version == "1.2"
-    assert plan.plan_sha256 == "120ef35de53a6c13b0d173a30b0e5e3f6310c3bf7032ce2a7ed92134a5099fbf"
+    assert plan.schema_version == "1.3"
+    assert plan.plan_sha256 == "4e6c744559b1cc49c8ede590c868df103a10402d429d5e5d02cf4f429e0f3a66"
     assert plan.plan_sha256 in guide
     assert len(plan.entries) == 12
     assert plan.authenticated_runner_selection is not None
@@ -179,22 +183,29 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
         "structured_outputs",
     )
     assert plan.authenticated_runner_selection.required_reasoning_effort == "high"
+    assert plan.authenticated_runner_selection.required_completion_limit_source == "metadata"
     assert plan.authenticated_runner_selection.candidate_model_id == (
         "deepseek/deepseek-v4-pro-0813"
     )
     assert plan.authenticated_runner_selection.primary_judge_model_id == "z-ai/glm-5.2"
     assert plan.authenticated_runner_selection.role_assignment_sha256 == (
-        "0a41b623527b07c14ee15601e1dd5a9fbb7d6284f9ee77e66c92678f92e089d8"
+        "93a2487fceec4771749aa8c33d0870fba70941293bf57a2dd48e6c065e172421"
     )
     assert plan.authenticated_runner_selection.replay_judge_model_id == "moonshotai/kimi-k3"
     entries = {entry.exact_model_id: entry for entry in plan.entries}
-    assert entries["deepseek/deepseek-v4-pro-0813"].allowed_provider_endpoints == ("fireworks",)
+    assert entries["deepseek/deepseek-v4-pro-0813"].allowed_provider_endpoints == ("parasail/fp8",)
+    assert entries["deepseek/deepseek-v4-pro-0813"].entry_sha256 == (
+        "da576e8d1835b41be94ea4dab6cd6329ae8c1483b830214d9e05acef44e8617b"
+    )
     assert entries["minimax/minimax-m3"].allowed_provider_endpoints == ("coreweave/fp4",)
     assert entries["minimax/minimax-m3"].entry_sha256 == (
         "caf35cf7507cb1f7299dcdcfbc06e405f10d855361f13a4d8dd21c844bc15176"
     )
     assert entries["qwen/qwen3.8-max"].allowed_provider_endpoints == ("alibaba",)
-    assert entries["moonshotai/kimi-k3"].allowed_provider_endpoints == ("together",)
+    assert entries["moonshotai/kimi-k3"].allowed_provider_endpoints == ("wafer",)
+    assert entries["moonshotai/kimi-k3"].entry_sha256 == (
+        "f0a9d880f6f02928ffb5ec67d962b9bc1def6ce896faf92c3800a7fa8456d589"
+    )
     assert entries["google/gemma-4-26b-a4b-it"].allowed_provider_endpoints == ("deepinfra/fp8",)
     assert entries["google/gemma-4-26b-a4b-it"].entry_sha256 == (
         "3fd5dce9d53e043546e3b519a82f497f94cc2cd8d34c2d07413f6c0a25ee8a74"
@@ -209,6 +220,7 @@ def test_committed_selection_plan_is_canonical_and_nonauthorizing() -> None:
     )
     assert any("00de61717cb6d61c" in item for item in plan.unresolved_requirements)
     assert any("14ece147138fb5bf" in item for item in plan.unresolved_requirements)
+    assert any("5faa33fe1bd5b332" in item for item in plan.unresolved_requirements)
     assert all(entry.availability == "UNVERIFIED" for entry in plan.entries)
     assert all(entry.documentary_lineage == "UNCONFIRMED" for entry in plan.entries)
 
@@ -237,11 +249,11 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
     corrected = (
         DiscoveryCandidateRoute(
             exact_model_id="deepseek/deepseek-v4-pro-0813",
-            approved_provider_endpoint="fireworks",
+            approved_provider_endpoint="parasail/fp8",
         ),
         DiscoveryCandidateRoute(
             exact_model_id="moonshotai/kimi-k3",
-            approved_provider_endpoint="together",
+            approved_provider_endpoint="wafer",
         ),
         DiscoveryCandidateRoute(
             exact_model_id="z-ai/glm-5.2",
@@ -254,7 +266,9 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
         ("deepseek/deepseek-v4-pro-0813", "novita/fp8"),
         ("deepseek/deepseek-v4-pro-0813", "novita"),
         ("deepseek/deepseek-v4-pro-0813", "together"),
+        ("deepseek/deepseek-v4-pro-0813", "fireworks"),
         ("moonshotai/kimi-k3", "deepinfra/bf16"),
+        ("moonshotai/kimi-k3", "together"),
         ("z-ai/glm-5.2", "deepinfra/fp4"),
         ("z-ai/glm-5.2", "deepinfra"),
     ):
@@ -564,6 +578,42 @@ def test_selected_runner_route_requires_explicit_high_reasoning_effort(
         )
 
 
+@pytest.mark.parametrize(
+    ("model_id", "provider_endpoint"),
+    (
+        (MODEL_A, ENDPOINT_A),
+        (MODEL_B, ENDPOINT_B),
+        (MODEL_C, ENDPOINT_C),
+    ),
+)
+def test_selected_runner_route_requires_explicit_metadata_completion_limit(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+    model_id: str,
+    provider_endpoint: str,
+) -> None:
+    config = config_factory(privacy={"profile": PrivacyProfile.SYNTHETIC_BENCHMARK})
+    spec = fixtures._CandidateSpec(
+        model_id=model_id,
+        provider_endpoint=provider_endpoint,
+        provider_name="Provider Alpha",
+        native_structured_output_parameter="structured_outputs",
+        endpoint_completion_limit_published=False,
+    )
+    manifest, evidence, _legacy_registry = fixtures._discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(spec,),
+    )
+
+    with pytest.raises(CandidateSelectionError, match="explicit metadata completion limit"):
+        derive_pending_candidate_registry_from_selection_plan(
+            plan=_plan(),
+            run_manifest=manifest,
+            evidence=evidence,
+        )
+
+
 def test_non_runner_selection_entry_remains_capability_adaptive(
     tmp_path: Path,
     config_factory: Callable[..., AuditConfig],
@@ -591,6 +641,7 @@ def test_non_runner_selection_entry_remains_capability_adaptive(
                 provider_endpoint=ENDPOINT_D,
                 provider_name="Provider Delta",
                 reasoning_supported=False,
+                endpoint_completion_limit_published=False,
             ),
         ),
     )
@@ -604,3 +655,4 @@ def test_non_runner_selection_entry_remains_capability_adaptive(
     assert registry.candidates[0].exact_model_id == MODEL_D
     assert registry.candidates[0].structured_output_supported is True
     assert registry.candidates[0].reasoning_supported is False
+    assert registry.candidates[0].output_limit_source == "context_limit"

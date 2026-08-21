@@ -55,6 +55,7 @@ from mmaudit.models.authenticated_runner_smoke_corpus import (
 from mmaudit.models.candidate_benchmark import validate_candidate_benchmark_egress
 from mmaudit.models.candidate_selection import (
     CandidateSelectionError,
+    require_authenticated_runner_metadata_completion_limit,
     require_authenticated_runner_native_structured_output,
 )
 from mmaudit.models.discovery import (
@@ -1386,6 +1387,15 @@ def _require_singleton_registry(
     except CandidateSelectionError:
         raise AuthenticatedRunnerSmokeOpenRouterError(
             f"smoke {label} route lacks required native structured_outputs support"
+        ) from None
+    try:
+        require_authenticated_runner_metadata_completion_limit(
+            discovery,
+            required_source="metadata",
+        )
+    except CandidateSelectionError:
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            f"smoke {label} route lacks an explicit metadata completion limit"
         ) from None
     if (
         model.exact_model_id != discovery.exact_model_id

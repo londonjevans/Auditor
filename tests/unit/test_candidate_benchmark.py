@@ -104,6 +104,7 @@ class _CandidateSpec:
     endpoint_reasoning_efforts_published: bool = True
     model_reasoning_efforts: tuple[ReasoningEffort, ...] | None = _DEFAULT_REASONING_EFFORTS
     endpoint_reasoning_efforts: tuple[ReasoningEffort, ...] | None = _DEFAULT_REASONING_EFFORTS
+    endpoint_completion_limit_published: bool = True
     canonical_model_id: str | None = None
 
 
@@ -340,6 +341,8 @@ def _endpoint(spec: _CandidateSpec) -> dict[str, Any]:
             "request": "0",
         },
     }
+    if not spec.endpoint_completion_limit_published:
+        endpoint.pop("max_completion_tokens")
     if (
         spec.reasoning_supported
         and spec.endpoint_reasoning_efforts_published

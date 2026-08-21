@@ -71,6 +71,7 @@ from mmaudit.models.candidate_benchmark import (
 )
 from mmaudit.models.candidate_selection import (
     CandidateSelectionError,
+    require_authenticated_runner_metadata_completion_limit,
     require_authenticated_runner_native_structured_output,
 )
 from mmaudit.models.discovery import (
@@ -1273,6 +1274,15 @@ def _preflight_execution(
         raise AuthenticatedRunnerExecutionError(
             "runner candidate route lacks required native structured_outputs support"
         ) from None
+    try:
+        require_authenticated_runner_metadata_completion_limit(
+            discovery_evidence[0],
+            required_source="metadata",
+        )
+    except CandidateSelectionError:
+        raise AuthenticatedRunnerExecutionError(
+            "runner candidate route lacks an explicit metadata completion limit"
+        ) from None
     _require_exact_runner_egress_policy(
         config=config,
         benchmark_suite=benchmark_suite,
@@ -1369,6 +1379,15 @@ def _preflight_execution(
         except CandidateSelectionError:
             raise AuthenticatedRunnerExecutionError(
                 "runner judge route lacks required native structured_outputs support"
+            ) from None
+        try:
+            require_authenticated_runner_metadata_completion_limit(
+                judge_evidence,
+                required_source="metadata",
+            )
+        except CandidateSelectionError:
+            raise AuthenticatedRunnerExecutionError(
+                "runner judge route lacks an explicit metadata completion limit"
             ) from None
         judge_manifest_hashes.append(plan.judge_discovery_manifest.manifest_sha256)
         judge_evidence_hashes.append(judge_evidence.discovery_evidence_sha256)

@@ -1564,6 +1564,69 @@ async def test_preflight_rejects_non_native_structured_output_for_every_runner_r
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("role_index", [-1, 0, 1])
+async def test_preflight_rejects_context_fallback_completion_limit_for_every_runner_role(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+    role_index: int,
+) -> None:
+    harness = await _harness(tmp_path / "completion-capacity", config_factory)
+    model = harness.registry.candidates[0] if role_index == -1 else harness.plans[role_index].judge
+    manifest, evidence, registry = candidate_fixtures._discovery_and_registry(
+        tmp_path=tmp_path / f"context-fallback-{role_index}",
+        config=harness.config,
+        specs=(
+            candidate_fixtures._CandidateSpec(
+                model_id=model.exact_model_id,
+                provider_endpoint=model.approved_provider_endpoint,
+                provider_name=model.approved_provider_name,
+                canonical_model_id=model.canonical_model_slug,
+                native_structured_output_parameter="structured_outputs",
+                endpoint_completion_limit_published=False,
+            ),
+        ),
+    )
+    if role_index == -1:
+        harness = replace(
+            harness,
+            discovery_manifest=manifest,
+            discovery_evidence=evidence,
+            registry=registry,
+        )
+        expected = "candidate route lacks an explicit metadata completion limit"
+    else:
+        plans = list(harness.plans)
+        plans[role_index] = replace(
+            plans[role_index],
+            judge_discovery_manifest=manifest,
+            judge_discovery_evidence=evidence,
+            judge_registry=registry,
+        )
+        harness = replace(harness, plans=tuple(plans))
+        expected = "judge route lacks an explicit metadata completion limit"
+    assert evidence[0].endpoint_snapshot.endpoints[0].max_completion_tokens_source == (
+        "context_limit"
+    )
+    assert harness.budget.atomic_ledger is not None
+    before = harness.budget.atomic_ledger.snapshot()
+
+    with pytest.raises(AuthenticatedRunnerExecutionError, match=expected):
+        await _execute(harness)
+
+    assert harness.candidate_executor.calls == []
+    assert harness.judge_route_preparation_executor.calls == []
+    assert harness.judge_executor.calls == []
+    assert harness.generation_executor.calls == []
+    assert harness.usage.records == []
+    assert harness.budget.atomic_ledger.snapshot() == before
+    assert all(
+        not path.exists()
+        for plan in harness.plans
+        for path in (plan.campaign_path, plan.portfolio_path)
+    )
+
+
+@pytest.mark.asyncio
 async def test_preflight_preserves_sanitized_reasoning_incompatibility_category(
     tmp_path: Path,
     config_factory: Callable[..., AuditConfig],
