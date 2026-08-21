@@ -2064,7 +2064,9 @@ are invisible to source review by construction.
   repository Ruff, format over 510 tracked Python files, strict mypy over 206 sources, schema and
   diff gates passed; independent review reported `CLEAN` with no blocker/HIGH. Source checkpoint
   `692eb173f002818b4434b746c8801b4cbeb852e2` and pushed zero-command governance checkpoint
-  `02ed5bef89d094e0d0c4852e1bf73914d9960c6b` now bind the re-emitted adjacent A/B sequence.
+  `02ed5bef89d094e0d0c4852e1bf73914d9960c6b` remain the implementation and historical eligibility
+  bases; pushed, remote-resolved guide checkpoint
+  `4bebab16bb2e36d54665918dec64429602b4f4e6` freezes the exact re-emitted adjacent A/B sequence.
   Command emission grants no execution or authority; every REAL path remains `BLOCKED_SAFETY`.
 - **Result:** The provider-free same-process candidate/judge/generation/ledger and AUTHSEAL
   path, strict self-hashed nonauthorizing prepared-run/report/ledger bundle, explicit egress gate,
@@ -2408,8 +2410,10 @@ are invisible to source review by construction.
   under seven hours, so discovery freshness is measured in hours.
 - **Adjacent operator sequence re-emitted after cascade 2026-08-21:** The exact source base is
   `692eb173f002818b4434b746c8801b4cbeb852e2`; pushed zero-command checkpoint
-  `02ed5bef89d094e0d0c4852e1bf73914d9960c6b` is the immediately preceding governance state.
-  The guide emits exactly two separate commands from the historical r6/r6/r2 sequence at
+  `02ed5bef89d094e0d0c4852e1bf73914d9960c6b` is the historical eligibility state. Pushed,
+  remote-resolved command-emission guide checkpoint
+  `4bebab16bb2e36d54665918dec64429602b4f4e6` emits exactly two separate commands from the historical
+  r6/r6/r2 sequence at
   `092a09ee94d528f67b43edb180860d45328f741f`: metadata-only step A followed by paid one-case step B.
   They must not be chained and require separate authorization. Before A, inspect an exactly empty
   ledger, absent output, and mode-`0700` operator-owned output parent. B is eligible only immediately

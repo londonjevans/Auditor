@@ -476,9 +476,10 @@ The historical metadata-only step A and paid-smoke step B at checkpoint
 `092a09ee94d528f67b43edb180860d45328f741f` were never authorized or executed and remain historical.
 After the provider-free cascade correction, source checkpoint
 `692eb173f002818b4434b746c8801b4cbeb852e2` and pushed zero-command governance checkpoint
-`02ed5bef89d094e0d0c4852e1bf73914d9960c6b` are the exact eligibility base for the re-emitted
-sequence below. Command emission does not prove execution, positive owned-REAL parent custody,
-qualification, or authority.
+`02ed5bef89d094e0d0c4852e1bf73914d9960c6b` are the exact historical eligibility base for the
+re-emitted sequence below. Pushed, remote-resolved command-emission guide checkpoint
+`4bebab16bb2e36d54665918dec64429602b4f4e6` freezes that exact sequence. Command emission does not
+prove execution, positive owned-REAL parent custody, qualification, or authority.
 
 The live-route gate and paid smoke are a mandatory adjacent two-step operator sequence. These are the
 only current AUTHRUNNER commands. They are separate and require separate operator authorization; do

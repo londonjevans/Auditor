@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-21T20:24:00Z",
+  "updated_at": "2026-08-21T20:40:00Z",
   "objective_path": "docs/remediation/v3/product_completion_goal.txt",
   "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
   "objective_supersession": {
@@ -14,7 +14,7 @@
     "decision": "EXPLICIT_OPERATOR_TARGET_CHANGE"
   },
   "candidate_commit": "692eb173f002818b4434b746c8801b4cbeb852e2",
-  "candidate_commit_scope": "AUTHRUNNER_PROVIDER_FREE_REVOCATION_CASCADE_FIX; pushed and remote-resolved at 692eb173f002818b4434b746c8801b4cbeb852e2; zero-command governance checkpoint 02ed5bef89d094e0d0c4852e1bf73914d9960c6b pushed and remote-resolved; exactly two historical-byte adjacent r6/r6/r2 operator commands re-emitted nonauthorizing; REAL remains BLOCKED_SAFETY",
+  "candidate_commit_scope": "AUTHRUNNER_PROVIDER_FREE_REVOCATION_CASCADE_FIX; pushed and remote-resolved at 692eb173f002818b4434b746c8801b4cbeb852e2; zero-command historical eligibility checkpoint 02ed5bef89d094e0d0c4852e1bf73914d9960c6b; pushed and remote-resolved exact command-emission guide checkpoint 4bebab16bb2e36d54665918dec64429602b4f4e6; exactly two historical-byte adjacent r6/r6/r2 operator commands re-emitted nonauthorizing; REAL remains BLOCKED_SAFETY",
   "autorun_status": "BLOCKED_SAFETY",
   "current_milestone": "M1-DETERMINISTIC-PRODUCT (REACHED)",
   "current_ticket": "V3-AUTHRUNNER-001",
@@ -32,8 +32,8 @@
     "parked_ticket": "V3-AUTONOMY-001",
     "parked_ticket_status": "QUEUED_PHASE_0_PAUSED"
   },
-  "last_checkpoint_commit": "02ed5bef89d094e0d0c4852e1bf73914d9960c6b",
-  "last_checkpoint_commit_scope": "AUTHRUNNER_ZERO_COMMAND_GOVERNANCE_RECONCILIATION; source implementation remains 692eb173f002818b4434b746c8801b4cbeb852e2; exact historical-byte adjacent-command successor pending checkpoint; REAL remains BLOCKED_SAFETY",
+  "last_checkpoint_commit": "4bebab16bb2e36d54665918dec64429602b4f4e6",
+  "last_checkpoint_commit_scope": "AUTHRUNNER_EXACT_ADJACENT_R6_R6_R2_COMMAND_EMISSION_GUIDE; pushed and remote-resolved; source implementation remains 692eb173f002818b4434b746c8801b4cbeb852e2; zero-command checkpoint 02ed5bef89d094e0d0c4852e1bf73914d9960c6b remains historical eligibility evidence; REAL remains BLOCKED_SAFETY",
   "real_model_calls": {
     "attempted": 11,
     "succeeded": 1,
@@ -51,12 +51,23 @@
     "V3-LINEAGE-001": "The calibration-only signed authority contract is implemented, but ticket completion requires a successful current exact provider refresh and an actual authorized operator-signed decision over that exact candidate set. Runtime approvals remain empty.",
     "V3-CALIBRATE-001": "Provider-free empirical derivation and the exact two-campaign authority bridge are implemented, but statistically meaningful thresholds require a representative randomized independently adjudicated holdout plus current refreshed, signed, and real calibration evidence.",
     "V3-AUTHSEAL-001": "The provider-free frozen-ground-truth, exact scoring, frozen comparison verdict, and structural seal layers are implemented, but runtime authority remains unavailable until independently anchored public lineage, authenticated REAL cross-lineage runner evidence, and an independently verified external transparency-log inclusion receipt exist. The baseline and trusted evaluation clock remain explicitly unevaluable; no human signature or adjudication is requested.",
-    "V3-AUTHRUNNER-001": "V3-AUTHRUNNER-001 is PARTIAL / BLOCKED_SAFETY. Pushed source checkpoint 692eb173f002818b4434b746c8801b4cbeb852e2 completes the provider-free revocation cascade; pushed zero-command governance checkpoint 02ed5bef89d094e0d0c4852e1bf73914d9960c6b is the exact command-emission base. The current 50211-byte, 906-line operator record at raw SHA-256 e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd records fresh r6/r6/r2 live-route validation with zero completion and usage, unchanged budget and atomic ledger, no output, unchanged config, and operator-reported $0. Exactly two current commands are re-emitted from historical checkpoint 092a09ee94d528f67b43edb180860d45328f741f for separate operator authorization: metadata-only step A, then paid one-case step B only immediately after a complete exact-VALID A result with no delay or intervening state change. Both are emitted but not run. Normal preflight, verifier, discovery, construct-only, and full commands remain absent. No execution is authorized and no qualification, authority, or governed counter changed."
+    "V3-AUTHRUNNER-001": "V3-AUTHRUNNER-001 is PARTIAL / BLOCKED_SAFETY. Pushed source checkpoint 692eb173f002818b4434b746c8801b4cbeb852e2 completes the provider-free revocation cascade; pushed zero-command checkpoint 02ed5bef89d094e0d0c4852e1bf73914d9960c6b is historical eligibility evidence; pushed, remote-resolved guide checkpoint 4bebab16bb2e36d54665918dec64429602b4f4e6 freezes the exact command emission. The current 50211-byte, 906-line operator record at raw SHA-256 e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd records fresh r6/r6/r2 live-route validation with zero completion and usage, unchanged budget and atomic ledger, no output, unchanged config, and operator-reported $0. Exactly two current commands are re-emitted from historical checkpoint 092a09ee94d528f67b43edb180860d45328f741f for separate operator authorization: metadata-only step A, then paid one-case step B only immediately after a complete exact-VALID A result with no delay or intervening state change. Both are emitted but not run. Normal preflight, verifier, discovery, construct-only, and full commands remain absent. No execution is authorized and no qualification, authority, or governed counter changed."
   },
   "last_validation": {
     "status": "PASS_PARTIAL_BLOCKED_SAFETY_PAIRED_COMMANDS_REEMITTED_OPERATOR_AUTHORIZATION_REQUIRED",
-    "command": "Source checkpoint 692eb173f002818b4434b746c8801b4cbeb852e2 revocation-cascade validation plus paired-guide documentation/objective, exact command parity, Ruff/format, strict governance JSON, operator-custody, and diff gates from zero-command base 02ed5bef89d094e0d0c4852e1bf73914d9960c6b.",
-    "result": "PASS / PARTIAL / BLOCKED_SAFETY. Source checkpoint 692eb173f002818b4434b746c8801b4cbeb852e2 and pushed zero-command governance checkpoint 02ed5bef89d094e0d0c4852e1bf73914d9960c6b are bound. Exactly two historical-byte adjacent commands are re-emitted for separate operator authorization; step B is conditional on immediate complete exact-VALID step-A review with no delay or intervening state change. Neither command has run. The operator evidence remains unchanged at 50211 bytes, 906 lines, and raw SHA-256 e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd. No counter, qualification, release, or authority changed.",
+    "command": "Pushed guide checkpoint 4bebab16bb2e36d54665918dec64429602b4f4e6 successor reconciliation plus 12 documentation/objective tests, exact command hash/parity, Ruff/format, strict governance JSON, operator custody, and diff integrity; source 692eb173f002818b4434b746c8801b4cbeb852e2 and historical zero-command eligibility base 02ed5bef89d094e0d0c4852e1bf73914d9960c6b remain bound.",
+    "result": "PASS / PARTIAL / BLOCKED_SAFETY. Final 12 documentation/objective tests and every final static gate passed. Exactly two historical-byte adjacent commands are frozen at pushed, remote-resolved guide checkpoint 4bebab16bb2e36d54665918dec64429602b4f4e6 for separate operator authorization; step B is conditional on immediate complete exact-VALID step-A review with no delay or intervening state change. Neither command has run. The operator evidence remains unchanged at 50211 bytes, 906 lines, and raw SHA-256 e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd. No counter, qualification, release, or authority changed.",
+    "full_suite_attempt": {
+      "command": ".venv/bin/pytest -q",
+      "started_before_final_governance_bytes": true,
+      "status": "INTENTIONALLY_INTERRUPTED_NO_TERMINAL_PASS_CREDIT",
+      "displayed_progress_percent": 2,
+      "visible_skips": 6,
+      "interrupted_during_test": "test_scheduler_accepts_default_in_repository_private_output_exclusion",
+      "exit_code": 130,
+      "passed_test_count_printed": false,
+      "terminal_full_suite_pass_credit": false
+    },
     "real_provider_accessed": true,
     "operator_secret_accessed": true,
     "operator_private_ledger_accessed_or_mutated": true
@@ -266,7 +277,7 @@
     "checkpointed_at_v3_authrunner_noncrediting_smoke": "2026-08-21T14:03:05Z",
     "checkpoint_v3_authrunner_noncrediting_smoke": "af70559ddaf84178efffee1ec1bf7b99bf0b12df (Add noncrediting provider smoke path); PUSHED_AND_REMOTE_VERIFIED",
     "validation_v3_authrunner_noncrediting_smoke": "PASS / PARTIAL: 231 affected tests in 72.13s; 108 combined CLI/schema tests; independent red-team 18 focused plus 109 neighboring tests with no blocker/HIGH; repository-wide Ruff; format over 525 files; strict mypy over 206 sources; schema verification; documentation/JSON/diff gates. The interrupted full suite stopped after 50 passes and 15 skips and receives no pass credit.",
-    "result_v3_authrunner_noncrediting_smoke": "Exact parent C0015 remains sealed as NONCREDITING_SMOKE with every credit and authority field false. The operator independently re-froze candidate and PRIMARY as r6/r6, retained REPLAY r2, and validated all three exact live routes with zero completion, zero usage, unchanged budget and ledger, no output, and $0 reported spend. Pushed checkpoint 692eb173f002818b4434b746c8801b4cbeb852e2 completes the provider-free revocation cascade and pushed zero-command governance checkpoint 02ed5bef89d094e0d0c4852e1bf73914d9960c6b binds the re-emission base. Exactly two adjacent commands from historical checkpoint 092a09ee94d528f67b43edb180860d45328f741f are emitted but not run. AUTHRUNNER remains PARTIAL / BLOCKED_SAFETY pending separate A/B authorization and positive owned-REAL parent external validation.",
+    "result_v3_authrunner_noncrediting_smoke": "Exact parent C0015 remains sealed as NONCREDITING_SMOKE with every credit and authority field false. The operator independently re-froze candidate and PRIMARY as r6/r6, retained REPLAY r2, and validated all three exact live routes with zero completion, zero usage, unchanged budget and ledger, no output, and $0 reported spend. Pushed checkpoint 692eb173f002818b4434b746c8801b4cbeb852e2 completes the provider-free revocation cascade; pushed zero-command checkpoint 02ed5bef89d094e0d0c4852e1bf73914d9960c6b remains historical eligibility evidence; pushed guide checkpoint 4bebab16bb2e36d54665918dec64429602b4f4e6 freezes the exact re-emitted sequence. Exactly two adjacent commands from historical checkpoint 092a09ee94d528f67b43edb180860d45328f741f are emitted but not run. AUTHRUNNER remains PARTIAL / BLOCKED_SAFETY pending separate A/B authorization and positive owned-REAL parent external validation.",
     "failed_at_v3_authrunner_smoke_af70559_preflight": "2026-08-21T14:10:00Z",
     "result_v3_authrunner_smoke_af70559_preflight": "The 31643-byte operator log at raw SHA-256 4f71b2ebf33037317095a1f16c64d21b102bb6229be75ae58a55158c95454e0a records provider-free smoke preflight after af70559 failing safely with smoke public lineage returned a non-independent projection. All three real discovery registries carry root_lineage null, while the smoke adapter compared those values unconditionally with resolver-projected sealed roots. No secret selection, provider egress, completion, ledger spend, REAL smoke, authority, or governed counter change occurred.",
     "next_action_after_v3_authrunner_smoke_af70559_preflight": "Completed at checkpoint 7e9db03145b4afc1834dd47e9f4f97800e1edffb; its corrected provider-free preflight subsequently passed at guide checkpoint f0a0f39ee275bc774709bd0fbff411cfa7ecac04.",
@@ -702,6 +713,9 @@
     "current_live_route_preflight_all_three_routes_validated": true,
     "observed_primary_discovery_drift_under_hours": 7,
     "zero_command_evidence_checkpoint": "02ed5bef89d094e0d0c4852e1bf73914d9960c6b",
+    "current_command_guide_checkpoint": "4bebab16bb2e36d54665918dec64429602b4f4e6",
+    "current_command_guide_checkpoint_pushed": true,
+    "current_command_guide_checkpoint_remote_resolved": true,
     "historical_adjacent_sequence_emitted_then_withdrawn_unexecuted": true,
     "adjacent_sequence_required": true,
     "current_adjacent_command_count": 2,
@@ -1254,11 +1268,13 @@
     "origin_custody_fix_checkpoint_status": "CHECKPOINTED_PUSHED_REMOTE_VERIFIED_PREFLIGHT_VALID_NONAUTHORIZING",
     "origin_custody_fix_checkpoint_commit": "c9a8923064ef1bb606a67b14641c4c8df55bc9ea",
     "origin_custody_fix_checkpoint_subject": "Bind smoke REAL origin custody",
-    "last_durable_pushed_checkpoint": "692eb173f002818b4434b746c8801b4cbeb852e2",
+    "last_durable_pushed_checkpoint": "4bebab16bb2e36d54665918dec64429602b4f4e6",
     "current_implementation_checkpoint": "692eb173f002818b4434b746c8801b4cbeb852e2",
     "zero_command_evidence_checkpoint": "02ed5bef89d094e0d0c4852e1bf73914d9960c6b",
-    "current_guide_checkpoint": "PENDING_CURRENT_GOVERNANCE_CHECKPOINT",
+    "current_guide_checkpoint": "4bebab16bb2e36d54665918dec64429602b4f4e6",
     "current_guide_checkpoint_scope": "EXACTLY_TWO_HISTORICAL_BYTE_SEPARATE_ADJACENT_R6_R6_R2_COMMANDS_REEMITTED_AFTER_CASCADE: METADATA_ONLY_STEP_A THEN CONDITIONAL_PAID_STEP_B; ZERO_NORMAL_PREFLIGHT_VERIFIER_DISCOVERY_CONSTRUCT_ONLY_OR_FULL_COMMANDS",
+    "current_guide_checkpoint_pushed": true,
+    "current_guide_checkpoint_remote_resolved": true,
     "post_origin_fix_guide_state": "CHECKPOINTED_PUSHED_REMOTE_VERIFIED_PREFLIGHT_VALID_NONAUTHORIZING",
     "historical_unsafe_launch_checkpoint": "f5afb2bff074254ee5c4a484386ee4c416b17a88",
     "current_safety_withdrawal_checkpoint": "ca63b924f244cc9bcee2d2405d20b000ce0bb9d6",
@@ -1271,10 +1287,23 @@
     "model_call_counters_changed": false,
     "cost_counters_changed": false,
     "authority_changed": false,
-    "terminal_full_suite_status_for_current_reconciliation": "INTERRUPTED_CONCURRENT_OPERATOR_EVIDENCE_CHANGE_NO_CREDIT",
-    "terminal_full_suite_tests_passed_before_interruption": 82,
-    "terminal_full_suite_prerequisite_skips_before_interruption": 13,
-    "terminal_full_suite_elapsed_seconds_before_interruption": "1381.01",
+    "historical_source_full_suite_attempt": {
+      "status": "INTERRUPTED_CONCURRENT_OPERATOR_EVIDENCE_CHANGE_NO_CREDIT",
+      "tests_passed_before_interruption": 82,
+      "prerequisite_skips_before_interruption": 13,
+      "elapsed_seconds_before_interruption": "1381.01"
+    },
+    "command_guide_successor_full_suite_attempt": {
+      "command": ".venv/bin/pytest -q",
+      "started_before_final_governance_bytes": true,
+      "status": "INTENTIONALLY_INTERRUPTED_NO_TERMINAL_PASS_CREDIT",
+      "displayed_progress_percent": 2,
+      "visible_skips": 6,
+      "interrupted_during_test": "test_scheduler_accepts_default_in_repository_private_output_exclusion",
+      "exit_code": 130,
+      "passed_test_count_printed": false,
+      "terminal_full_suite_pass_credit": false
+    },
     "next_action": "Await separate operator authorization for r6/r6/r2 metadata-only step A. Step B requires a second authorization and may begin only immediately after A exits zero and its complete result matches exact model IDs, 15 logical GETs, at most 30 attempts, zero usage, unchanged budget and ledger, no output, and config 42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54, with no delay or intervening source, configuration, artifact, ledger, output, secret, or environment change; otherwise separately authorize and rerun A. Normal preflight, verifier, discovery, construct-only, and full commands remain absent. V3-AUTONOMY-001 Phase 0 remains queued and paused."
   },
   "release_status": "INCOMPLETE",

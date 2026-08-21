@@ -602,6 +602,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     )
     assert "692eb173f002818b4434b746c8801b4cbeb852e2" in model_selection
     assert "02ed5bef89d094e0d0c4852e1bf73914d9960c6b" in model_selection
+    assert "4bebab16bb2e36d54665918dec64429602b4f4e6" in model_selection
     assert "exact PID-bound campaign and generation revokers" in normalized_model_selection
     assert "parent-to-child cascade" in normalized_model_selection
     assert "traceback-safe execution handoff guards" in normalized_model_selection
@@ -636,7 +637,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "primary-judge-registry-r6.json" in model_selection
     assert "authrunner-primary-judge-20260821-r6" in model_selection
     assert runtime_status["candidate_commit"] == ("692eb173f002818b4434b746c8801b4cbeb852e2")
-    assert runtime_status["last_checkpoint_commit"] == ("02ed5bef89d094e0d0c4852e1bf73914d9960c6b")
+    assert runtime_status["last_checkpoint_commit"] == ("4bebab16bb2e36d54665918dec64429602b4f4e6")
     assert runtime_status["autorun_status"] == "BLOCKED_SAFETY"
     assert runtime_status["current_ticket"] == "V3-AUTHRUNNER-001"
     assert runtime_status["active_provider_free_work"] == {
@@ -701,6 +702,11 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert smoke_status["zero_command_evidence_checkpoint"] == (
         "02ed5bef89d094e0d0c4852e1bf73914d9960c6b"
     )
+    assert smoke_status["current_command_guide_checkpoint"] == (
+        "4bebab16bb2e36d54665918dec64429602b4f4e6"
+    )
+    assert smoke_status["current_command_guide_checkpoint_pushed"] is True
+    assert smoke_status["current_command_guide_checkpoint_remote_resolved"] is True
     assert smoke_status["historical_adjacent_sequence_emitted_then_withdrawn_unexecuted"] is True
     assert smoke_status["adjacent_sequence_required"] is True
     assert smoke_status["current_adjacent_command_count"] == 2
@@ -823,11 +829,31 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert exact_status["zero_command_evidence_checkpoint"] == (
         "02ed5bef89d094e0d0c4852e1bf73914d9960c6b"
     )
-    assert exact_status["current_guide_checkpoint"] == "PENDING_CURRENT_GOVERNANCE_CHECKPOINT"
+    assert exact_status["last_durable_pushed_checkpoint"] == (
+        "4bebab16bb2e36d54665918dec64429602b4f4e6"
+    )
+    assert exact_status["current_guide_checkpoint"] == ("4bebab16bb2e36d54665918dec64429602b4f4e6")
+    assert exact_status["current_guide_checkpoint_pushed"] is True
+    assert exact_status["current_guide_checkpoint_remote_resolved"] is True
     assert (
         "EXACTLY_TWO_HISTORICAL_BYTE_SEPARATE_ADJACENT_R6_R6_R2_COMMANDS"
         in exact_status["current_guide_checkpoint_scope"]
     )
+    full_suite_attempt = runtime_status["last_validation"]["full_suite_attempt"]
+    assert full_suite_attempt["command"] == ".venv/bin/pytest -q"
+    assert full_suite_attempt["started_before_final_governance_bytes"] is True
+    assert full_suite_attempt["status"] == ("INTENTIONALLY_INTERRUPTED_NO_TERMINAL_PASS_CREDIT")
+    assert full_suite_attempt["displayed_progress_percent"] == 2
+    assert full_suite_attempt["visible_skips"] == 6
+    assert full_suite_attempt["interrupted_during_test"] == (
+        "test_scheduler_accepts_default_in_repository_private_output_exclusion"
+    )
+    assert full_suite_attempt["exit_code"] == 130
+    assert full_suite_attempt["passed_test_count_printed"] is False
+    assert full_suite_attempt["terminal_full_suite_pass_credit"] is False
+    assert "passed_test_count" not in full_suite_attempt
+    guide_full_suite_attempt = exact_status["command_guide_successor_full_suite_attempt"]
+    assert guide_full_suite_attempt == full_suite_attempt
     assert smoke_status["post_token_budget_fix_preflight_operator_results_sha256"] == (
         "76eff45c95116dea28cdaad78115d3926c6da3674a6b322784203335bfef7465"
     )

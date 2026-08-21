@@ -9,8 +9,8 @@ CURRENT_MILESTONE: M1-DETERMINISTIC-PRODUCT (REACHED)
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001 (COMPLETE)
 NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY`. Await separate operator authorization for r6/r6/r2 metadata-only step A. Step B requires a second authorization and may begin only immediately after A exits `0` and its complete terminal record is exact-VALID, with no delay or intervening source/config/artifact/ledger/output/secret/environment change; otherwise separately authorize and rerun A. Normal preflight, verifier, discovery, construct-only, and full commands remain absent. `V3-AUTONOMY-001` Phase 0 remains queued and paused.
-LAST_COMMAND: Twelve product-documentation/objective tests; Ruff check and format check over both documentation-test files; strict duplicate-key parsing of both governance JSON files; exact two-line command parity against `092a09ee94d528f67b43edb180860d45328f741f`; operator-custody reread/hash; and diff integrity.
-LAST_RESULT: PASS / PARTIAL / BLOCKED_SAFETY — all 12 tests passed; Ruff, format, strict JSON, exact command parity, operator custody, and diff gates passed. Source checkpoint `692eb173f002818b4434b746c8801b4cbeb852e2` and zero-command governance checkpoint `02ed5bef89d094e0d0c4852e1bf73914d9960c6b` remain pushed and remote-resolved. Exactly two historical-byte r6/r6/r2 commands are re-emitted for separate authorization: metadata-only A, then conditional paid one-case B only under immediate exact-VALID adjacency. Neither command has run. The operator record remains 50,211 bytes, 906 lines, raw SHA-256 `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd`; authority and governed counters are unchanged.
+LAST_COMMAND: Pushed command-guide checkpoint `4bebab16bb2e36d54665918dec64429602b4f4e6` successor reconciliation; twelve product-documentation/objective tests; Ruff check and format check; strict duplicate-key governance JSON; exact two-line command hash/parity against `092a09ee94d528f67b43edb180860d45328f741f`; operator-custody reread/hash; and diff integrity.
+LAST_RESULT: PASS / PARTIAL / BLOCKED_SAFETY — all 12 final documentation/objective tests and every final static gate passed. A root full-suite attempt began before the final governance bytes existed and was intentionally interrupted at displayed 2% while in `test_scheduler_accepts_default_in_repository_private_output_exclusion`; six skips were visible, exit was 130, no passed-test count was printed, and the attempt receives no terminal full-suite pass credit. Source checkpoint `692eb173f002818b4434b746c8801b4cbeb852e2`, historical eligibility checkpoint `02ed5bef89d094e0d0c4852e1bf73914d9960c6b`, and exact pushed command-emission guide checkpoint `4bebab16bb2e36d54665918dec64429602b4f4e6` are bound. Neither command has run. The operator record remains 50,211 bytes, 906 lines, raw SHA-256 `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd`; authority and governed counters are unchanged.
 REAL_MODEL_CALLS_ATTEMPTED: 11
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 10
@@ -20,7 +20,25 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9965235675
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 02ed5bef89d094e0d0c4852e1bf73914d9960c6b — pushed zero-command governance reconciliation. Current source implementation: 692eb173f002818b4434b746c8801b4cbeb852e2 (`Cascade AUTHRUNNER child revocation`), pushed and remote-resolved. Historical command-byte source: 092a09ee94d528f67b43edb180860d45328f741f.
+LAST_CHECKPOINT_COMMIT: 4bebab16bb2e36d54665918dec64429602b4f4e6 — pushed, remote-resolved exact adjacent A/B command-emission guide. Current source implementation: 692eb173f002818b4434b746c8801b4cbeb852e2 (`Cascade AUTHRUNNER child revocation`). Historical zero-command eligibility base: 02ed5bef89d094e0d0c4852e1bf73914d9960c6b. Historical command-byte source: 092a09ee94d528f67b43edb180860d45328f741f.
+
+## 2026-08-21T20:40:00Z — Pushed command-emission guide identity reconciled
+
+- Checkpoint custody: pushed, remote-resolved guide checkpoint
+  `4bebab16bb2e36d54665918dec64429602b4f4e6` is the exact current command-emission checkpoint.
+  Source remains `692eb173f002818b4434b746c8801b4cbeb852e2`; pushed zero-command checkpoint
+  `02ed5bef89d094e0d0c4852e1bf73914d9960c6b` remains historical eligibility evidence; exact command
+  bytes remain sourced from `092a09ee94d528f67b43edb180860d45328f741f`.
+- Command boundary: the two command lines are unchanged. They remain emitted but not run, separately
+  authorized, unchained, and subject to immediate complete exact-VALID A-to-B adjacency. Normal
+  preflight, verifier, discovery, construct-only, and full commands remain absent.
+- Full-suite honesty: root started `.venv/bin/pytest -q` before the final governance bytes existed and
+  intentionally interrupted it at displayed 2%, with six skips visible, while in
+  `test_scheduler_accepts_default_in_repository_private_output_exclusion`. Exit was 130; no
+  passed-test count was printed and the attempt receives no terminal full-suite pass credit.
+- Validation: final governance bytes passed 12 documentation/objective tests, Ruff and format,
+  strict duplicate-key JSON, exact command-line hash/parity, operator custody, and diff integrity.
+  No provider execution, authority, qualification, release, or governed-counter change occurred.
 
 ## 2026-08-21T20:24:00Z — Adjacent r6/r6/r2 sequence re-emitted after cascade
 
