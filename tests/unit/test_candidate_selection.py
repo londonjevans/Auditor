@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable
+from itertools import combinations
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,7 @@ from mmaudit.models.candidate_selection import (
 )
 from mmaudit.models.discovery import DiscoveryCandidateRoute
 from mmaudit.models.public_lineage_authority import (
-    PublicModelLineageAuthorityError,
+    require_independent_public_model_lineage,
     require_verified_public_model_lineage,
     resolve_verified_public_model_lineage,
 )
@@ -215,25 +216,28 @@ def test_committed_selection_plan_accepts_only_corrected_authrunner_routes() -> 
             )
 
 
-def test_committed_primary_minimizes_remaining_exact_lineage_debt() -> None:
+def test_committed_runner_selection_has_three_confirmed_distinct_lineages() -> None:
     plan = load_candidate_selection_plan(ROOT / "config" / "models.selection-plan.json")
     selection = plan.authenticated_runner_selection
     assert selection is not None
     capability = resolve_verified_public_model_lineage()
 
-    primary = require_verified_public_model_lineage(
-        capability,
+    selected_ids = (
+        selection.candidate_model_id,
         selection.primary_judge_model_id,
+        selection.replay_judge_model_id,
     )
-    assert primary.root_lineage == (
+    bindings = tuple(
+        require_verified_public_model_lineage(capability, exact_model_id)
+        for exact_model_id in selected_ids
+    )
+    assert bindings[1].root_lineage == (
         "sha256:e251821340d79fe40fba647e729f9dd8feea7b988efad1a61936bf62b3b38161"
     )
-    for exact_model_id in (
-        selection.candidate_model_id,
-        selection.replay_judge_model_id,
-    ):
-        with pytest.raises(PublicModelLineageAuthorityError, match="lacks confirmed"):
-            require_verified_public_model_lineage(capability, exact_model_id)
+    assert len({binding.root_lineage for binding in bindings}) == 3
+    for left, right in combinations(selected_ids, 2):
+        projection = require_independent_public_model_lineage(capability, left, right)
+        assert projection.independent is True
 
 
 def test_selection_plan_rejects_one_source_relabelled_as_two() -> None:

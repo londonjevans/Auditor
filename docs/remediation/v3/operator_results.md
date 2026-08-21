@@ -3,6 +3,38 @@
 Results of operator-run credentialed commands. Codex: read this file before stopping a turn that
 requested an operator command. Written by the monitoring session; treat as operator-supplied evidence.
 
+## 2026-08-21T05:25Z — LINEAGE CAPTURE — SUCCESS, one coherent 15-source bundle
+
+```
+.venv/bin/python scripts/capture_public_model_lineage.py \
+  --output-dir /private/tmp/mmaudit-public-lineage-20260821-r1
+```
+
+Exit 0. 15 sources captured in a single coherent run, including both previously missing cards.
+No credentials involved; first-party publisher endpoints only; **$0 spent**.
+
+```
+output-dir:             /private/tmp/mmaudit-public-lineage-20260821-r1
+observation_set_sha256: 848b1dfda5b60c6793089ed3916073d86e3a734da9dbc5a824302bec7f4b37da
+bundle_sha256:          d9e46cb7c29792ab3d9b2d696bdb889a20f79338d72d628d267bb3705576f8f5
+```
+
+Complete HTTP capture observations for the two additions — the metadata the hand-staged bytes lacked:
+
+| source | size | sha256 | immutable_revision | publisher_id / independence_key | media_type | redirects |
+|---|---|---|---|---|---|---|
+| `sources/deepseek-deepseek-v4-pro-0813-card.md` | 7522 | `61755d88e95789fcd7a36f50892f97bba977a30fc99d0f2907ab787ed10b0e66` | `72e1d3230f6c080a530b0a1d46f8eb4602340597` | `deepseek-ai` | `text/plain` | 2 |
+| `sources/moonshot-kimi-k3-card.md` | 45261 | `57de265b5842dfa465c6e73b368b0e15a89b8793b5450528dad577da202cc6fe` | `a590ce090cb049c93a33dfe8c208ec652aa20503` | `moonshot-ai` | `text/plain` | 2 |
+
+**Independent reproducibility check:** these sha256 values are byte-identical to the separate manual
+fetch recorded further down this file, performed hours earlier against the same pinned revisions. Two
+independent retrievals produced identical bytes, corroborating that the pinned revisions are immutable
+as claimed. The hand-staged copies in `docs/remediation/v3/operator_captures/` are now redundant and
+can be deleted once the reseal lands.
+
+The lineage decision, claim-span binding, root assignment, and manifest reseal remain codex's to
+perform. This entry records a capture, not an authority.
+
 ## 2026-08-21T05:00Z — PREFLIGHT (codex's exact emitted command, line 85 of the operator guide) — FAILED at the lineage gate, as predicted
 
 ```

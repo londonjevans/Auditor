@@ -83,9 +83,9 @@ from tests.unit import test_qualification_workflow as qualification_fixtures
 ROOT = Path(__file__).resolve().parents[2]
 CORPUS_PATH = ROOT / "benchmarks" / "model_corpus" / "manifest.json"
 PROVENANCE_PATH = ROOT / "benchmarks" / "model_corpus" / "provenance.json"
-CANDIDATE_ID = "deepseek/deepseek-v3.2-exp"
-PRIMARY_JUDGE_ID = "google/gemma-4-26b-a4b-it"
-REPLAY_JUDGE_ID = "meta-llama/llama-4-maverick"
+CANDIDATE_ID = "deepseek/deepseek-v4-pro-0813"
+PRIMARY_JUDGE_ID = "minimax/minimax-m3"
+REPLAY_JUDGE_ID = "moonshotai/kimi-k3"
 
 
 def _config(config_factory: Callable[..., AuditConfig]) -> AuditConfig:

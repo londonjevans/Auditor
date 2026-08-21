@@ -27,10 +27,10 @@ constraints only. Every discovery, lineage, qualification, runner, benchmark, se
 release authority field is literally false.
 
 The proposed AUTHRUNNER roles are also only planning data: DeepSeek V4 candidate, MiniMax M3
-primary judge, and Kimi K3 replay judge. Their three-way independence is not verified. The current
-public-lineage manifest has a `CONFIRMED` exact-ID decision for MiniMax M3, but covers neither
-DeepSeek V4 nor Kimi K3. AUTHRUNNER must continue to reject the triple until both missing exact-ID
-documentary source captures are compiled and pairwise independence is independently replayed.
+primary judge, and Kimi K3 replay judge. The current documentary public-lineage manifest now has
+`CONFIRMED` exact-ID decisions for all three and independently replays their pairwise-distinct
+DeepSeek, MiniMax, and Moonshot roots. This proves only documentary identity/root separation; it
+does not qualify a model or authorize a runner, provider call, benchmark, seal, audit, or release.
 
 The operator ran the three singleton metadata-only commands. DeepSeek succeeded on `novita/fp8`
 with operator-reported frozen-registry SHA-256
@@ -44,7 +44,7 @@ requested, and the operator reports that the ledger remains untouched at `$0`. T
 record operator-reported results only; the private artifacts and ledger were not read or promoted
 by Codex. The exact operator-supplied log is retained at
 [`operator_results.md`](../remediation/v3/operator_results.md), raw SHA-256
-`1e4a6424c215b1c29b316f523e13623c080b2f6c5bc225e913ae6d6dcfbb81a4`, and is
+`e109e5808eb7179521fa2aa4d4670f2faaecc5d6256bf1b98f2083c50291aa92`, and is
 `OPERATOR_SUPPLIED_UNVERIFIED`: it grants no repository authority.
 
 The subsequent Claude Opus 5 `amazon-bedrock` PRIMARY r3 attempt also failed closed before registry
@@ -69,24 +69,29 @@ The operator ran the exact provider-free r2/r4/r2 preflight twice. Both runs acc
 registry, discovery bundle, policy, corpus, provenance, ledger, and output-path input, then failed
 closed only at `runner public lineage does not prove three distinct roots`; neither selected a
 secret, contacted a model provider, mutated the ledger, or published an output. The two staged
-publisher cards bind the missing immutable revisions and exact bytes, but remain nonauthorizing:
-they do not retain the exact final URL, redirect chain, media type, and retrieval timestamp required
-by the capture journal, and they cannot be merged into the Aug-18 journal without violating its
-ten-minute coherent-capture window. Claim preparation binds DeepSeek bytes `[1896, 2246)` as
-decisive `BUILD_ANCESTRY` and Kimi bytes `[42081, 42228)` as decisive
-`TRAINING_PROVENANCE`; no decision or production manifest pin has been changed.
+publisher cards were therefore not promoted from raw bytes alone.
 
-After the two new immutable source specifications are committed, run exactly one fresh full
-15-source documentary capture. This command reads no secret and calls no model/provider API; it
-contacts only the compiled first-party public-document URLs. The destination must be absent.
+The operator subsequently ran the following public-document capture with exit `0`. It read no
+secret, made no model completion, and reported `$0` spend. The adopted canonical journal has raw
+SHA-256 `db08339e6d2790faef033f5695e9217a16ddf340e3787eb51863565869034712`, observation-set
+SHA-256 `848b1dfda5b60c6793089ed3916073d86e3a734da9dbc5a824302bec7f4b37da`, and capture-bundle
+SHA-256 `d9e46cb7c29792ab3d9b2d696bdb889a20f79338d72d628d267bb3705576f8f5`.
+All 13 historical files reproduced byte-for-byte, both additions matched their separately staged
+hashes, and all 15 retrievals completed within one three-second window.
 
 ```shell
 .venv/bin/python scripts/capture_public_model_lineage.py --output-dir /private/tmp/mmaudit-public-lineage-20260821-r1
 ```
 
-Adopt nothing unless all 13 historical immutable files reproduce byte-for-byte and the two new
-files reproduce SHA-256 `61755d88e95789fcd7a36f50892f97bba977a30fc99d0f2907ab787ed10b0e66`
-and `57de265b5842dfa465c6e73b368b0e15a89b8793b5450528dad577da202cc6fe`.
+The resealed `53,960`-byte canonical manifest has raw SHA-256
+`6f46b3c779262cf11b0ec58b1a2fe88947cd71d7ab788734abb36cd9f96374e4` and semantic bundle
+SHA-256 `de2192a2eaede4a54e1b24216d5c3c51cebd63086131c20367e166dfa672a388`. It binds 15 source
+files totaling `411,429` bytes, 14 exact aliases, 16 exact nonoverlapping claims, 10 confirmed
+identities across nine roots, four unchanged `UNCONFIRMED` identities, and six conservative
+non-independence constraints. The two new constraints prevent DeepSeek V3/V4/Cogito and Kimi
+K2/K3 variants from being credited as independent roots. The active DeepSeek V4, MiniMax M3, and
+Kimi K3 triple replays pairwise independent. Verification is anchored at
+`2026-08-21T05:26:00Z` and expires at `2027-02-17T05:26:00Z`.
 
 If the cumulative ledger does not already exist, initialize it exactly once. Never replace an
 existing ledger; its historical prefix is part of later AUTHRUNNER custody.
@@ -95,14 +100,14 @@ existing ledger; its historical prefix is part of later AUTHRUNNER custody.
 MMAUDIT_BUDGET_USD=250 .venv/bin/mmaudit models init-cost-ledger --config config/openrouter-qualification.toml --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --no-color
 ```
 
-The following command remains the exact provider-free r2/r4/r2 blocker-probe preflight. It selects
-no secret, accesses no provider, does not mutate the ledger, and creates no output. Until DeepSeek
-V4 and Kimi K3 exact-ID documentary lineage is compiled, it must fail closed at the public-lineage
-gate and that rejection must not be promoted to launch authority. After the lineage bundle is
-rebuilt, rerun the same command to require the complete preflight. The `$1.00` values are restrictive
-policy tripwires, not claims about provider pricing. With one retry they cap 96 candidate-attempt
-slots plus 48 PRIMARY-judge and 48 REPLAY-judge slots at `$192.00`; any exact live request cost
-bound above `$1.00` will later reject before reservation or completion POST.
+The following command remains the exact provider-free r2/r4/r2 preflight. It selects no secret,
+accesses no provider, does not mutate the ledger, and creates no output. Its earlier lineage-gate
+rejections remain historical and nonauthorizing; it has not yet been rerun against the resealed
+manifest. Require an operator-recorded `VALID / NONAUTHORIZING / NO PROVIDER EGRESS` result before
+any one-shot launch. The `$1.00` values are restrictive policy tripwires, not claims about provider
+pricing. With one retry they cap 96 candidate-attempt slots plus 48 PRIMARY-judge and 48
+REPLAY-judge slots at `$192.00`; any exact live request cost bound above `$1.00` will later reject
+before reservation or completion POST.
 
 ```shell
 env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" .venv/bin/mmaudit models authenticated-runner --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r2.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260820-r2" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r4.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r4" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r2.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260820-r2" --qualification-policy config/models.maximum-assurance.toml --primary-campaign-journal "$HOME/.mmaudit/private/authrunner/primary-campaign-20260821-r4" --primary-portfolio "$HOME/.mmaudit/private/authrunner/primary-portfolio-20260821-r4" --replay-campaign-journal "$HOME/.mmaudit/private/authrunner/replay-campaign-20260821-r4" --replay-portfolio "$HOME/.mmaudit/private/authrunner/replay-portfolio-20260821-r4" --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-evidence-20260821-r4.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --ground-truth-provenance benchmarks/model_corpus/provenance.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --allow-code-egress --preflight-only --no-color

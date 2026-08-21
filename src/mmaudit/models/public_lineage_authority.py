@@ -65,17 +65,19 @@ PUBLIC_MODEL_LINEAGE_CAPTURE_OBSERVATIONS_FILENAME = "capture-observations.json"
 # Updated only after a strict builder has emitted and replayed the committed
 # manifest.  An all-zero value is intentionally non-authorizing.
 PUBLIC_MODEL_LINEAGE_MANIFEST_FILE_SHA256 = (
-    "6ca0ec6407d7006ac7b9d6c101a8140c2dfaa21449bdb8219ecb5758db199182"
+    "6f46b3c779262cf11b0ec58b1a2fe88947cd71d7ab788734abb36cd9f96374e4"
 )
 
 PUBLIC_MODEL_LINEAGE_EXACT_CANDIDATE_IDS = (
     "deepcogito/cogito-v2.1-671b",
     "deepseek/deepseek-v3.2-exp",
+    "deepseek/deepseek-v4-pro-0813",
     "google/gemma-4-26b-a4b-it",
     "meta-llama/llama-4-maverick",
     "minimax/minimax-m3",
     "mistralai/mistral-small-2603",
     "moonshotai/kimi-k2-thinking",
+    "moonshotai/kimi-k3",
     "nvidia/nemotron-3-super-120b-a12b",
     "openai/gpt-oss-120b",
     "qwen/qwen3.6-35b-a3b",
@@ -1468,6 +1470,14 @@ _COMPILED_SOURCE_PINS = (
         "sources/deepseek-deepseek-v3-2-exp-card.md",
     ),
     (
+        "deepseek-deepseek-v4-pro-0813-card",
+        "https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro-0813/resolve/72e1d3230f6c080a530b0a1d46f8eb4602340597/README.md",
+        "deepseek-ai",
+        "deepseek-ai",
+        "72e1d3230f6c080a530b0a1d46f8eb4602340597",
+        "sources/deepseek-deepseek-v4-pro-0813-card.md",
+    ),
+    (
         "google-gemma-4-26b-a4b-it-card",
         "https://huggingface.co/google/gemma-4-26B-A4B-it/resolve/b2a81a03d25f927590a91d84ba43f96e8ef7349f/README.md",
         "google-deepmind",
@@ -1506,6 +1516,14 @@ _COMPILED_SOURCE_PINS = (
         "moonshot-ai",
         "1b9dbb7b20fe8e92047f956b75f3bc49d69f8f73",
         "sources/moonshot-kimi-k2-thinking-card.md",
+    ),
+    (
+        "moonshot-kimi-k3-card",
+        "https://huggingface.co/moonshotai/Kimi-K3/resolve/a590ce090cb049c93a33dfe8c208ec652aa20503/README.md",
+        "moonshot-ai",
+        "moonshot-ai",
+        "a590ce090cb049c93a33dfe8c208ec652aa20503",
+        "sources/moonshot-kimi-k3-card.md",
     ),
     (
         "nvidia-nemotron-3-super-120b-a12b-base-card",
@@ -1558,9 +1576,21 @@ _COMPILED_SOURCE_PINS = (
 )
 _COMPILED_SOURCE_IDS = tuple(item[0] for item in _COMPILED_SOURCE_PINS)
 _COMPILED_CONSERVATIVE_CONSTRAINTS = (
-    ("constraint-cogito-deepseek", ("deepcogito/cogito-v2.1-671b", "deepseek/deepseek-v3.2-exp")),
+    (
+        "constraint-cogito-deepseek",
+        ("deepcogito/cogito-v2.1-671b", "deepseek/deepseek-v3.2-exp"),
+    ),
+    (
+        "constraint-deepseek-family",
+        (
+            "deepcogito/cogito-v2.1-671b",
+            "deepseek/deepseek-v3.2-exp",
+            "deepseek/deepseek-v4-pro-0813",
+        ),
+    ),
     ("constraint-gemma-gemini", ("google/gemini-3.7-flash", "google/gemma-4-26b-a4b-it")),
     ("constraint-gpt-oss-gpt-5-6", ("openai/gpt-5.6-sol", "openai/gpt-oss-120b")),
+    ("constraint-kimi-k2-k3", ("moonshotai/kimi-k2-thinking", "moonshotai/kimi-k3")),
     (
         "constraint-nemotron-meta",
         ("meta-llama/llama-4-maverick", "nvidia/nemotron-3-super-120b-a12b"),

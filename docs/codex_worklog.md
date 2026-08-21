@@ -7,11 +7,44 @@ credentials, RPC URLs, or operational attack instructions.
 AUTORUN_STATUS: BLOCKED_SAFETY
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001
-NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator run the exact fresh full 15-source documentary capture command in `docs/models/model_selection.md`. Accept only a coherent journal whose 13 historical sources reproduce byte-for-byte and whose two new hashes match the staged cards; then compile and reseal the two exact-ID roots with same-family negative constraints and rerun the unchanged provider-free preflight. AUTHSEAL publication, real audits, benchmarks, and release remain queued.
-LAST_VALIDATION_COMMAND: Provider-free 99-test public-lineage capture/manifest/authority/configuration/objective/documentation/release-schema matrix; `.venv/bin/python scripts/generate_release_schemas.py`; `make PYTHON=.venv/bin/python lint`; `make PYTHON=.venv/bin/python type`; strict governance JSON parsing; diff integrity.
-LAST_VALIDATION_RESULT: PASS / PARTIAL — 99 relevant tests passed; generated schemas were current; Ruff passed over 536 files; strict mypy passed over 202 source files; governance JSON and diff gates passed. Exact staged-card claims and the two immutable capture specs are bound, while the raw-only files remain nonauthorizing and the production manifest remains unchanged pending one coherent full capture. Codex made no secret, provider, or ledger access.
+NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator run the unchanged exact r2/r4/r2 provider-free preflight in `docs/models/model_selection.md` and retain its exact result. Do not infer success from the resealed documentary lineage. AUTHSEAL publication, real audits, benchmarks, and release remain queued.
+LAST_VALIDATION_COMMAND: Provider-free 194-test capture/manifest/lineage-authority/configuration/AUTHRUNNER/OpenRouter/candidate-selection/CLI/documentation/objective/release-schema matrix; `.venv/bin/python scripts/generate_release_schemas.py`; 24-test release/objective subset; `make PYTHON=.venv/bin/python lint`; `make PYTHON=.venv/bin/python type`; strict runtime/review JSON parsing; diff integrity.
+LAST_VALIDATION_RESULT: PASS / PARTIAL — 194 affected tests passed in 37.22s and the release/objective subset passed 24 in 0.63s. Generated schemas were current; 536 files were already formatted and Ruff-clean; strict mypy passed over 202 source files; both governance JSON documents and diff integrity passed. The documentary lineage reseal is green, while provider-free preflight success and every downstream authority remain unclaimed. Codex made no secret, provider, or ledger access.
 LAST_CHECKPOINT_COMMIT: 735aabc934fb8a428e1d1a16244035939c9bc5be — `Prepare AUTHRUNNER lineage recapture`.
 REMAINING_ACTIONABLE_TICKETS: The provider-free stale candidate-registry rebuild and exact AUTHRUNNER campaign preparation are actionable. Credentialed execution remains `BLOCKED_SAFETY`; external authority-log publication and all benchmark/release work remain queued behind genuine REAL runner evidence.
+
+## 2026-08-21T05:30:31Z — AUTHRUNNER documentary capture adopted and lineage resealed
+
+- **Status:** `V3-AUTHRUNNER-001` remains `PARTIAL` / `BLOCKED_SAFETY`. Documentary root
+  preparation is complete, but the provider-free preflight has not yet been rerun and no runner,
+  AUTHSEAL, audit, benchmark, or release authority is claimed.
+- **Operator evidence reconciled:** The operator-reported capture exited `0` with 15 sources,
+  observation-set SHA-256
+  `848b1dfda5b60c6793089ed3916073d86e3a734da9dbc5a824302bec7f4b37da`, and capture-bundle
+  SHA-256 `d9e46cb7c29792ab3d9b2d696bdb889a20f79338d72d628d267bb3705576f8f5`.
+  The current operator-supplied log is 12,027 bytes at raw SHA-256
+  `e109e5808eb7179521fa2aa4d4670f2faaecc5d6256bf1b98f2083c50291aa92`; it is evidence, not
+  authority, and reports no credentials, completion, or spend.
+- **Capture adoption:** Canonical journal SHA-256
+  `db08339e6d2790faef033f5695e9217a16ddf340e3787eb51863565869034712` binds one three-second
+  retrieval window. All 13 historical source files are byte-identical to the prior bundle and the
+  DeepSeek V4 and Kimi K3 additions exactly match their separately staged immutable-revision bytes.
+- **Lineage reseal:** The `53,960`-byte manifest has raw SHA-256
+  `6f46b3c779262cf11b0ec58b1a2fe88947cd71d7ab788734abb36cd9f96374e4` and semantic bundle
+  SHA-256 `de2192a2eaede4a54e1b24216d5c3c51cebd63086131c20367e166dfa672a388`. It binds 15
+  sources totaling 411,429 bytes, 14 aliases, 16 exact claims, 10 confirmed identities across nine
+  roots, four unchanged `UNCONFIRMED` identities, and six negative-only constraints. DeepSeek V4,
+  MiniMax M3, and Kimi K3 replay as pairwise independent; DeepSeek V3/V4/Cogito and Kimi K2/K3
+  remain conservatively non-independent.
+- **Validation:** The affected provider-free matrix passed 194 tests in 37.22s and the
+  release/objective subset passed 24 in 0.63s. Schema verification, Ruff/format over 536 files,
+  strict mypy over 202 source files, both governance JSON documents, and diff integrity passed.
+- **Counters and boundary:** Governed REAL model-call counters remain 11 attempted / 1 succeeded /
+  10 rejected, cost remains USD `0.0034764325`, and completed real audits remain `0`. The dedicated
+  operator campaign ledger is separately reported at `$0`; it is not merged into governed history.
+- **Next exact action:** Run the unchanged secret-free r2/r4/r2 `--preflight-only` command already
+  frozen in `docs/models/model_selection.md`. Require the exact operator result and reconcile it
+  before any separately authorized one-shot launch.
 
 ## 2026-08-21T05:07:32Z — AUTHRUNNER lineage-only preflight and capture preparation
 

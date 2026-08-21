@@ -162,13 +162,13 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   SHA-256; authority requires either two independent authoritative sources or one
   decisive primary-publisher source. The operator review is seed material only.
   Conflicts or insufficient corroboration produce `UNCONFIRMED`; those candidates are
-  excluded without blocking confirmed candidates. The four known same-root
-  collisions remain explicit. Provider route identity and a model-lineage
-  Sigstore/Rekor/TUF receipt are not requirements. Missing, stale, ambiguous,
+  excluded without blocking confirmed candidates. All six negative-only non-independence
+  constraints, including the four original constraints, remain explicit. Provider route identity
+  and a model-lineage Sigstore/Rekor/TUF receipt are not requirements. Missing, stale, ambiguous,
   conflicting, rewritten, or self-authored evidence fails closed; no private source,
   credential, or caller root override is accepted.
 - **Tests:** Exact public-evidence replay plus missing/source-swap/publisher/timestamp/
-  corroboration/alias/conflict/reseal/forgery negatives, four-collision preservation,
+  corroboration/alias/conflict/reseal/forgery negatives, six-constraint preservation,
   partial-candidate exclusion, schema drift, and static checks.
 - **Dependencies:** The mechanism-only result of `V3-AUTHLINEAGE-001` and independently
   available public publication evidence.
@@ -180,19 +180,19 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   Gemma revision `4d7ae4984b7db7de8f8457170b3f1a419ee76d52` identifies blob
   `742346e1fe57997c831b9065f4c54a9416021526`. The earlier route-receipt feasibility
   attempt issued no authority and is retained as historical evidence only.
-- **Result:** Captured 13 bounded first-party documents (`358,646` bytes) for all 12 exact
-  configured identities and compiled canonical manifest SHA-256
-  `6ca0ec6407d7006ac7b9d6c101a8140c2dfaa21449bdb8219ecb5758db199182` (semantic bundle
-  `92659a13c48223709eaca814c4a182b7ee7662fc8350fbced7b84955cd2ae7a4`). Exact replay derives
-  eight confirmed identities across seven roots and excludes Hunyuan, Mistral, GPT-OSS, and Z.AI
-  as `UNCONFIRMED`; all four conservative collision constraints remain negative-only. The opaque
-  capability and config-ready projection resist stale, synthetic, serialized, caller-root,
-  module-retarget, clock, and output-constructor substitution. Independent semantic and boundary
-  reviews found no remaining blocker/HIGH.
-- **Validation:** The final ticket matrix passed `83` tests and the lineage/policy compatibility
-  matrix passed `197`; schema generation, full repository Ruff format/check, strict mypy over
-  `194` source files plus the focused scripts/tests, strict governance JSON parsing, and diff
-  integrity passed.
+- **Result:** Captured 15 bounded first-party documents (`411,429` bytes) for all 14 exact
+  configured identities and compiled 16 exact nonoverlapping claims in canonical manifest SHA-256
+  `6f46b3c779262cf11b0ec58b1a2fe88947cd71d7ab788734abb36cd9f96374e4` (semantic bundle
+  `de2192a2eaede4a54e1b24216d5c3c51cebd63086131c20367e166dfa672a388`). Exact replay derives
+  ten confirmed identities across nine roots and continues to exclude Hunyuan, Mistral, GPT-OSS,
+  and Z.AI as `UNCONFIRMED`; all six conservative constraints remain negative-only. DeepSeek V4,
+  MiniMax M3, and Kimi K3 replay as three pairwise-independent roots, while DeepSeek-family and
+  Kimi-generation variants cannot receive false independence credit. The opaque capability and
+  config-ready projection resist stale, synthetic, serialized, caller-root, module-retarget,
+  clock, and output-constructor substitution.
+- **Validation:** The current affected provider-free matrix passed `194` tests; the release/objective
+  subset passed `24`. Schema generation/verification, Ruff/format over `536` files, strict mypy
+  over `202` source files, both governance JSON documents, and diff integrity passed.
 - **Remaining limitation:** This is documentary identity/root authority only. Four ambiguous
   candidates are intentionally excluded; the config-ready projection is not an `AuditConfig`, and
   no provider, runner, egress, qualification, selection, seal, release, or benchmark authority was
@@ -425,7 +425,7 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `origin/agent/v3-wip-checkpoint`. Exact-ID public lineage for all three remains absent.
 - **PRIMARY r3 disposition and r4 completion 2026-08-21:** The exact operator-supplied result log is
   retained verbatim at `docs/remediation/v3/operator_results.md`, raw SHA-256
-  `1e4a6424c215b1c29b316f523e13623c080b2f6c5bc225e913ae6d6dcfbb81a4`, as nonauthorizing
+  `e109e5808eb7179521fa2aa4d4670f2faaecc5d6256bf1b98f2083c50291aa92`, as nonauthorizing
   metadata. Claude Opus 5/`amazon-bedrock` failed closed before registry publication because its
   provider display name is duplicated across the exact-model endpoint inventory; the injective
   provider-identity invariant remains unchanged. Of the operator-reported viable replacements,
@@ -444,18 +444,28 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   and their Aug-21 bytes cannot be merged into the coherent Aug-18 journal. The compiled capture
   inventory now includes both immutable source specifications and tests bind the decisive claim
   spans. No manifest pin or lineage decision changed.
+- **Capture adoption and lineage reseal 2026-08-21:** One fresh three-second capture reproduced all
+  13 historical files and both staged hashes in a coherent 15-source journal. Its raw journal,
+  observation set, and capture-bundle SHA-256 values are respectively
+  `db08339e6d2790faef033f5695e9217a16ddf340e3787eb51863565869034712`,
+  `848b1dfda5b60c6793089ed3916073d86e3a734da9dbc5a824302bec7f4b37da`, and
+  `d9e46cb7c29792ab3d9b2d696bdb889a20f79338d72d628d267bb3705576f8f5`. The resealed manifest
+  `6f46b3c779262cf11b0ec58b1a2fe88947cd71d7ab788734abb36cd9f96374e4` and semantic bundle
+  `de2192a2eaede4a54e1b24216d5c3c51cebd63086131c20367e166dfa672a388` prove the active
+  DeepSeek/MiniMax/Moonshot triple pairwise independent while preserving all six negative-only
+  non-independence constraints. Only the DeepSeek-family and Kimi-generation groups are new. No
+  provider-free preflight success is claimed yet.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
   and non-crediting. Genuine production-issued lifecycle proof is absent; provider-free fixtures
   cannot mint owned-REAL origin, and the current repository rules prohibit reading real credentials
   or accessing the provider. Campaign/generation revocation beyond the top-level runner lease is
   not independently demonstrated. External-log publication and every benchmark run remain queued.
 - **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL` and autorun `BLOCKED_SAFETY`. Have the operator
-  run the exact fresh full 15-source capture command in `docs/models/model_selection.md`; accept
-  only a complete coherent journal whose 13 historical sources reproduce and whose two new hashes
-  match the staged cards. Then compile and reseal the two exact-ID roots with same-family negative
-  constraints, rerun the unchanged provider-free preflight, and derive final request-bound caps from retained
-  pricing/capacity evidence before any one-shot REAL launch. AUTHSEAL publication, real audits,
-  benchmarks, and release remain queued.
+  run the unchanged exact r2/r4/r2 provider-free preflight in `docs/models/model_selection.md` and
+  retain its exact result. Do not infer success from the resealed lineage alone. Only an
+  operator-recorded `VALID / NONAUTHORIZING / NO PROVIDER EGRESS` result may precede derivation of
+  final request-bound caps and a separately authorized one-shot REAL launch. AUTHSEAL publication,
+  real audits, benchmarks, and release remain queued.
 
 ### V3-MODELREFRESH-001 — Provider-free model-refresh runtime and pricing custody
 

@@ -22,7 +22,10 @@ from mmaudit.models.public_lineage_configuration import (
 )
 
 _COGITO = "deepcogito/cogito-v2.1-671b"
-_DEEPSEEK = "deepseek/deepseek-v3.2-exp"
+_DEEPSEEK_V3 = "deepseek/deepseek-v3.2-exp"
+_DEEPSEEK_V4 = "deepseek/deepseek-v4-pro-0813"
+_KIMI_K2 = "moonshotai/kimi-k2-thinking"
+_KIMI_K3 = "moonshotai/kimi-k3"
 _META = "meta-llama/llama-4-maverick"
 _NEMOTRON = "nvidia/nemotron-3-super-120b-a12b"
 _GPT_OSS = "openai/gpt-oss-120b"
@@ -34,12 +37,15 @@ _UNCONFIRMED = (
 )
 _EXPECTED_CONSTRAINT_IDS = (
     "constraint-cogito-deepseek",
+    "constraint-deepseek-family",
     "constraint-gemma-gemini",
     "constraint-gpt-oss-gpt-5-6",
+    "constraint-kimi-k2-k3",
     "constraint-nemotron-meta",
 )
 _EXPECTED_CONSTRAINT_MEMBERS = {
-    "constraint-cogito-deepseek": (_COGITO, _DEEPSEEK),
+    "constraint-cogito-deepseek": (_COGITO, _DEEPSEEK_V3),
+    "constraint-deepseek-family": (_COGITO, _DEEPSEEK_V3, _DEEPSEEK_V4),
     "constraint-gemma-gemini": (
         "google/gemini-3.7-flash",
         "google/gemma-4-26b-a4b-it",
@@ -48,6 +54,7 @@ _EXPECTED_CONSTRAINT_MEMBERS = {
         "openai/gpt-5.6-sol",
         "openai/gpt-oss-120b",
     ),
+    "constraint-kimi-k2-k3": (_KIMI_K2, _KIMI_K3),
     "constraint-nemotron-meta": (_META, _NEMOTRON),
 }
 
@@ -111,8 +118,8 @@ def test_projection_preserves_current_inclusion_and_all_negative_constraints() -
         tuple(item.constraint_id for item in projection.conservative_non_independence_constraints)
         == _EXPECTED_CONSTRAINT_IDS
     )
-    assert len(projection.eligible_exact_candidate_ids) == 8
-    assert len(projection.approved_model_lineages) == 7
+    assert len(projection.eligible_exact_candidate_ids) == 10
+    assert len(projection.approved_model_lineages) == 9
     assert projection.excluded_unconfirmed_exact_model_ids == _UNCONFIRMED
     assert not set(_UNCONFIRMED) & set(projection.eligible_exact_candidate_ids)
     assert _NEMOTRON in projection.eligible_exact_candidate_ids
@@ -133,7 +140,17 @@ def test_projection_preserves_current_inclusion_and_all_negative_constraints() -
         for item in projection.conservative_non_independence_constraints
     )
     with pytest.raises(ValueError, match=r"not independent|conservatively non-independent"):
-        require_independent_public_model_lineage(capability, _COGITO, _DEEPSEEK)
+        require_independent_public_model_lineage(capability, _COGITO, _DEEPSEEK_V3)
+    for left, right in (
+        (_COGITO, _DEEPSEEK_V4),
+        (_DEEPSEEK_V4, _COGITO),
+        (_DEEPSEEK_V3, _DEEPSEEK_V4),
+        (_DEEPSEEK_V4, _DEEPSEEK_V3),
+        (_KIMI_K2, _KIMI_K3),
+        (_KIMI_K3, _KIMI_K2),
+    ):
+        with pytest.raises(ValueError, match="conservatively non-independent"):
+            require_independent_public_model_lineage(capability, left, right)
     nemotron_binding = next(
         item for item in projection.confirmed_bindings if item.exact_model_id == _NEMOTRON
     )

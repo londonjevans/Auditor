@@ -31,7 +31,7 @@ from mmaudit.models.public_lineage_authority import (
 from mmaudit.orchestration.manifest import ManifestFileBinding, canonical_sha256
 from mmaudit.release_io import read_file_evidence, read_json_evidence, write_json_evidence
 
-VERIFIED_AT = datetime(2026, 8, 18, 9, 0, tzinfo=UTC)
+VERIFIED_AT = datetime(2026, 8, 21, 5, 26, tzinfo=UTC)
 VALID_UNTIL = VERIFIED_AT + timedelta(days=180)
 
 
@@ -77,6 +77,12 @@ _ALIASES = (
         ("deepseek-deepseek-v3-2-exp-card",),
     ),
     _AliasSpec(
+        "deepseek/deepseek-v4-pro-0813",
+        "deepseek-ai/DeepSeek-V4-Pro-0813",
+        "deepseek-ai",
+        ("deepseek-deepseek-v4-pro-0813-card",),
+    ),
+    _AliasSpec(
         "google/gemma-4-26b-a4b-it",
         "google/gemma-4-26B-A4B-it",
         "google-deepmind",
@@ -105,6 +111,12 @@ _ALIASES = (
         "moonshotai/Kimi-K2-Thinking",
         "moonshot-ai",
         ("moonshot-kimi-k2-thinking-card",),
+    ),
+    _AliasSpec(
+        "moonshotai/kimi-k3",
+        "moonshotai/Kimi-K3",
+        "moonshot-ai",
+        ("moonshot-kimi-k3-card",),
     ),
     _AliasSpec(
         "nvidia/nemotron-3-super-120b-a12b",
@@ -163,6 +175,22 @@ _CLAIMS = (
         True,
     ),
     _ClaimSpec(
+        "claim-deepseek-v4-anchor",
+        "deepseek/deepseek-v4-pro-0813",
+        PublicModelLineageClaimKind.ROOT_ANCHOR,
+        None,
+        "deepseek-deepseek-v4-pro-0813-card",
+        (
+            "**DeepSeek-V4-Pro-0813** is the official release of **DeepSeek-V4-Pro**, "
+            "superseding the preview version, with greatly enhanced agentic capabilities and "
+            "performance improvements that are especially pronounced in production environments. "
+            "It is built on the DeepSeek-V4-Pro (Preview) model structure, with a DSpark "
+            "speculative decoding module attached."
+        ),
+        "BUILD_ANCESTRY",
+        True,
+    ),
+    _ClaimSpec(
         "claim-gemma-anchor",
         "google/gemma-4-26b-a4b-it",
         PublicModelLineageClaimKind.ROOT_ANCHOR,
@@ -210,6 +238,19 @@ _CLAIMS = (
         "moonshot-kimi-k2-thinking-card",
         "Kimi K2 Thinking is the latest, most capable version of open-source thinking model. Starting with Kimi K2, we built it as a thinking agent that reasons step-by-step while dynamically invoking tools. It sets a new state-of-the-art on Humanity's Last Exam (HLE), BrowseComp, and other benchmarks by dramatically scaling multi-step reasoning depth and maintaining stable tool-use across 200\u2013300 sequential calls. At the same time, K2 Thinking is a native INT4 quantization model with 256k context window, achieving lossless reductions in inference latency and GPU memory usage.",
         "BUILD_ANCESTRY",
+        True,
+    ),
+    _ClaimSpec(
+        "claim-kimi-k3-anchor",
+        "moonshotai/kimi-k3",
+        PublicModelLineageClaimKind.ROOT_ANCHOR,
+        None,
+        "moonshot-kimi-k3-card",
+        (
+            "Kimi K3 applies quantization-aware training from the SFT stage onward, using MXFP4 "
+            "weights with MXFP8 activations for broad hardware compatibility."
+        ),
+        "TRAINING_PROVENANCE",
         True,
     ),
     _ClaimSpec(
@@ -427,6 +468,20 @@ def build_manifest(
             supporting_claim_ids=("claim-cogito-deepseek", "claim-deepseek-anchor"),
         ),
         _hashed_constraint(
+            constraint_id="constraint-deepseek-family",
+            constraint_kind=PublicModelLineageConstraintKind.CONSERVATIVE_ORGANIZATIONAL,
+            member_exact_model_ids=(
+                "deepcogito/cogito-v2.1-671b",
+                "deepseek/deepseek-v3.2-exp",
+                "deepseek/deepseek-v4-pro-0813",
+            ),
+            supporting_claim_ids=(
+                "claim-cogito-deepseek",
+                "claim-deepseek-anchor",
+                "claim-deepseek-v4-anchor",
+            ),
+        ),
+        _hashed_constraint(
             constraint_id="constraint-gemma-gemini",
             constraint_kind=PublicModelLineageConstraintKind.CONSERVATIVE_ORGANIZATIONAL,
             member_exact_model_ids=(
@@ -440,6 +495,15 @@ def build_manifest(
             constraint_kind=PublicModelLineageConstraintKind.CONSERVATIVE_ORGANIZATIONAL,
             member_exact_model_ids=("openai/gpt-5.6-sol", "openai/gpt-oss-120b"),
             supporting_claim_ids=("claim-gpt-oss-publisher-identity",),
+        ),
+        _hashed_constraint(
+            constraint_id="constraint-kimi-k2-k3",
+            constraint_kind=PublicModelLineageConstraintKind.CONSERVATIVE_ORGANIZATIONAL,
+            member_exact_model_ids=(
+                "moonshotai/kimi-k2-thinking",
+                "moonshotai/kimi-k3",
+            ),
+            supporting_claim_ids=("claim-kimi-anchor", "claim-kimi-k3-anchor"),
         ),
         _hashed_constraint(
             constraint_id="constraint-nemotron-meta",

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -159,22 +159,26 @@ def test_operator_staged_sources_bind_exact_compiled_claim_marker(
 
 def test_committed_capture_journal_replays_exact_source_bytes() -> None:
     corpus_root = REPOSITORY_ROOT / "config" / "public_model_lineage"
+    attributes = (REPOSITORY_ROOT / ".gitattributes").read_text(encoding="utf-8").splitlines()
+    assert "config/public_model_lineage/sources/*.md -text whitespace=-trailing-space" in attributes
     journal = PublicLineageCaptureObservations.model_validate_json(
         (corpus_root / PUBLIC_LINEAGE_CAPTURE_OBSERVATIONS_FILENAME).read_bytes()
     )
 
-    specs_by_id = {spec.source_id: spec for spec in PUBLIC_LINEAGE_SOURCE_SPECS}
-    pending_fresh_capture_ids = {
-        "deepseek-deepseek-v4-pro-0813-card",
-        "moonshot-kimi-k3-card",
-    }
     assert tuple(source.source_id for source in journal.sources) == tuple(
-        spec.source_id
-        for spec in PUBLIC_LINEAGE_SOURCE_SPECS
-        if spec.source_id not in pending_fresh_capture_ids
+        spec.source_id for spec in PUBLIC_LINEAGE_SOURCE_SPECS
     )
-    for source in journal.sources:
-        spec = specs_by_id[source.source_id]
+    assert (
+        journal.observation_set_sha256
+        == "848b1dfda5b60c6793089ed3916073d86e3a734da9dbc5a824302bec7f4b37da"
+    )
+    assert journal.bundle_sha256 == (
+        "d9e46cb7c29792ab3d9b2d696bdb889a20f79338d72d628d267bb3705576f8f5"
+    )
+    assert journal.sources[-1].retrieved_at - journal.sources[0].retrieved_at == timedelta(
+        seconds=3
+    )
+    for source, spec in zip(journal.sources, PUBLIC_LINEAGE_SOURCE_SPECS, strict=True):
         path = corpus_root / source.file_binding.path
         content = path.read_bytes()
         assert not path.is_symlink()
