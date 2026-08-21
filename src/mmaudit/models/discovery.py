@@ -850,6 +850,153 @@ def validate_openrouter_model_discovery(
     return OpenRouterModelDiscoveryPayload.model_validate(metadata_values)
 
 
+def require_openrouter_live_discovery_equivalence(
+    *,
+    canonical_slug: str,
+    current_endpoint: OpenRouterEndpointSnapshotEvidence,
+    current_model: OpenRouterModelDiscoveryPayload,
+    frozen_evidence: OpenRouterModelDiscoveryEvidence,
+) -> None:
+    """Require exact canonical live/frozen discovery equality with bounded diagnostics.
+
+    Provider response envelopes may contain untrusted or non-billable fields that the
+    validators deliberately omit.  This comparison therefore accepts only the two
+    already-canonical projections and never compares raw response objects.  Diagnostics
+    identify a bounded metadata category without weakening any retained identity,
+    pricing, capability, privacy, or operational-status field.
+    """
+
+    if (
+        type(canonical_slug) is not str
+        or type(current_endpoint) is not OpenRouterEndpointSnapshotEvidence
+        or type(current_model) is not OpenRouterModelDiscoveryPayload
+        or type(frozen_evidence) is not OpenRouterModelDiscoveryEvidence
+    ):
+        raise ModelDiscoveryValidationError(
+            "live discovery equivalence requires exact canonical evidence types"
+        )
+    frozen_endpoint = frozen_evidence.endpoint_snapshot
+    try:
+        frozen_model = OpenRouterModelDiscoveryPayload.model_validate(
+            frozen_evidence.model_dump(
+                mode="json",
+                exclude={"provenance", "discovery_evidence_sha256"},
+            )
+        )
+    except ValueError:
+        raise ModelDiscoveryValidationError(
+            "frozen OpenRouter model discovery projection is invalid"
+        ) from None
+    if (
+        canonical_slug != current_model.canonical_slug
+        or canonical_slug != frozen_evidence.canonical_slug
+    ):
+        raise ModelDiscoveryValidationError(
+            "current OpenRouter canonical model identity differs from frozen discovery"
+        )
+    if current_endpoint != frozen_endpoint:
+        if (
+            current_endpoint.exact_model_id != frozen_endpoint.exact_model_id
+            or current_endpoint.provider_policy_mode != frozen_endpoint.provider_policy_mode
+            or current_endpoint.configured_provider_endpoints
+            != frozen_endpoint.configured_provider_endpoints
+            or len(current_endpoint.endpoints) != 1
+            or len(frozen_endpoint.endpoints) != 1
+        ):
+            category = "route policy"
+        else:
+            current_route = current_endpoint.endpoints[0]
+            frozen_route = frozen_endpoint.endpoints[0]
+            if (
+                current_route.provider_endpoint != frozen_route.provider_endpoint
+                or current_route.endpoint_tag != frozen_route.endpoint_tag
+                or current_route.endpoint_slug != frozen_route.endpoint_slug
+                or current_route.provider_name != frozen_route.provider_name
+            ):
+                category = "route identity"
+            elif (
+                current_route.operational != frozen_route.operational
+                or current_route.operational_status != frozen_route.operational_status
+            ):
+                category = "operational status"
+            elif (
+                current_route.pricing != frozen_route.pricing
+                or current_route.pricing_sha256 != frozen_route.pricing_sha256
+            ):
+                category = "pricing"
+            elif (
+                current_route.context_length != frozen_route.context_length
+                or current_route.max_prompt_tokens != frozen_route.max_prompt_tokens
+                or current_route.max_prompt_tokens_source != frozen_route.max_prompt_tokens_source
+                or current_route.max_completion_tokens != frozen_route.max_completion_tokens
+                or current_route.max_completion_tokens_source
+                != frozen_route.max_completion_tokens_source
+            ):
+                category = "token limits"
+            elif (
+                current_route.supported_parameters != frozen_route.supported_parameters
+                or current_route.supported_reasoning_efforts
+                != frozen_route.supported_reasoning_efforts
+                or current_route.required_request_parameters
+                != frozen_route.required_request_parameters
+                or current_route.structured_output_parameters
+                != frozen_route.structured_output_parameters
+                or current_route.supported_output_modes != frozen_route.supported_output_modes
+                or current_route.structured_output_mode != frozen_route.structured_output_mode
+                or current_route.output_capability_sha256 != frozen_route.output_capability_sha256
+                or current_endpoint.supported_output_modes != frozen_endpoint.supported_output_modes
+                or current_endpoint.structured_output_mode != frozen_endpoint.structured_output_mode
+                or current_endpoint.output_capability_sha256
+                != frozen_endpoint.output_capability_sha256
+            ):
+                category = "output or reasoning capabilities"
+            elif (
+                current_route.zdr_eligible != frozen_route.zdr_eligible
+                or current_route.zdr_endpoint_snapshot_sha256
+                != frozen_route.zdr_endpoint_snapshot_sha256
+                or current_endpoint.require_zdr != frozen_endpoint.require_zdr
+                or current_endpoint.zdr_metadata_sha256 != frozen_endpoint.zdr_metadata_sha256
+            ):
+                category = "ZDR eligibility"
+            elif (
+                current_endpoint.endpoint_metadata_sha256
+                != frozen_endpoint.endpoint_metadata_sha256
+            ):
+                category = "exact-model endpoint identity inventory"
+            else:
+                category = "endpoint projection"
+        raise ModelDiscoveryValidationError(
+            f"current OpenRouter endpoint {category} differs from frozen discovery"
+        )
+    if current_model != frozen_model:
+        if current_model.model_metadata_snapshot_sha256 != (
+            frozen_model.model_metadata_snapshot_sha256
+        ):
+            category = "model metadata"
+        elif current_model.reasoning_capability != frozen_model.reasoning_capability:
+            category = "model reasoning capability"
+        elif current_model.output_capability_sha256 != frozen_model.output_capability_sha256:
+            category = "model output capability"
+        elif (
+            current_model.data_collection_deny_eligible
+            != frozen_model.data_collection_deny_eligible
+            or current_model.data_collection_deny_request_policy_enforced
+            != frozen_model.data_collection_deny_request_policy_enforced
+            or current_model.data_collection_deny_evidence_source
+            != frozen_model.data_collection_deny_evidence_source
+            or current_model.data_collection_deny_evidence_sha256
+            != frozen_model.data_collection_deny_evidence_sha256
+            or current_model.data_collection_deny_evidence_expires_at
+            != frozen_model.data_collection_deny_evidence_expires_at
+        ):
+            category = "data-collection denial"
+        else:
+            category = "model discovery projection"
+        raise ModelDiscoveryValidationError(
+            f"current OpenRouter {category} differs from frozen discovery"
+        )
+
+
 def _policy_proves_data_collection_denial(
     *,
     policy: EffectivePrivacyPolicyEvidence | None,

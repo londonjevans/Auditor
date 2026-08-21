@@ -68,10 +68,11 @@ from mmaudit.models.candidate_benchmark import (
     run_candidate_registry_benchmarks,
 )
 from mmaudit.models.discovery import (
+    ModelDiscoveryValidationError,
     OpenRouterModelDiscoveryEvidence,
-    OpenRouterModelDiscoveryPayload,
     OpenRouterModelDiscoveryRunManifest,
     openrouter_catalog_canonical_slug,
+    require_openrouter_live_discovery_equivalence,
     validate_openrouter_model_discovery,
 )
 from mmaudit.models.endpoint_snapshots import validate_openrouter_endpoint_snapshot
@@ -949,10 +950,15 @@ async def _refresh_and_register_judge_discovery(
         )
     await client.validate_authentication()
     models_payload = await client.get_certification_model_metadata()
-    canonical_slug = openrouter_catalog_canonical_slug(
-        exact_model_id=judge.exact_model_id,
-        models_payload=models_payload,
-    )
+    try:
+        canonical_slug = openrouter_catalog_canonical_slug(
+            exact_model_id=judge.exact_model_id,
+            models_payload=models_payload,
+        )
+    except (TypeError, ValueError):
+        raise AuthenticatedRunnerOpenRouterError(
+            "current judge canonical model metadata differs from discovery"
+        ) from None
     single_model_payload = await client.get_model_metadata(judge.exact_model_id)
     endpoint_payload = await client.get_model_endpoint_metadata(judge.exact_model_id)
     zdr_payload = await client.list_zdr_endpoints()
@@ -971,10 +977,6 @@ async def _refresh_and_register_judge_discovery(
         raise AuthenticatedRunnerOpenRouterError(
             "current judge endpoint, pricing, ZDR, or output metadata differs from discovery"
         ) from None
-    if current_endpoint != evidence.endpoint_snapshot:
-        raise AuthenticatedRunnerOpenRouterError(
-            "current judge endpoint, pricing, ZDR, or output metadata differs from discovery"
-        )
     try:
         current_model = validate_openrouter_model_discovery(
             exact_model_id=judge.exact_model_id,
@@ -986,12 +988,6 @@ async def _refresh_and_register_judge_discovery(
         raise AuthenticatedRunnerOpenRouterError(
             "current judge model, reasoning, or output metadata differs from discovery"
         ) from None
-    frozen_model = OpenRouterModelDiscoveryPayload.model_validate(
-        evidence.model_dump(
-            mode="json",
-            exclude={"provenance", "discovery_evidence_sha256"},
-        )
-    )
     reasoning_control = build_reasoning_policy(config).control_for_request("model_benchmark")
     try:
         current_model.require_compatible_reasoning_profile(reasoning_control)
@@ -999,16 +995,15 @@ async def _refresh_and_register_judge_discovery(
         raise AuthenticatedRunnerOpenRouterError(
             "current judge reasoning metadata is incompatible with the launch policy"
         ) from None
-    if (
-        canonical_slug != evidence.canonical_slug
-        or current_model != frozen_model
-        or current_model.reasoning_capability != evidence.reasoning_capability
-        or current_model.structured_output_mode != evidence.structured_output_mode
-        or current_model.output_capability_sha256 != evidence.output_capability_sha256
-    ):
-        raise AuthenticatedRunnerOpenRouterError(
-            "current judge model, reasoning, or output metadata differs from discovery"
+    try:
+        require_openrouter_live_discovery_equivalence(
+            canonical_slug=canonical_slug,
+            current_endpoint=current_endpoint,
+            current_model=current_model,
+            frozen_evidence=evidence,
         )
+    except ModelDiscoveryValidationError as exc:
+        raise AuthenticatedRunnerOpenRouterError(str(exc)) from None
     client.register_certification_model_discovery(evidence=evidence, manifest=manifest)
     registered = client.registered_model_identity_snapshot(judge.exact_model_id)
     if (

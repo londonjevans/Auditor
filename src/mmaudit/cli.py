@@ -243,6 +243,8 @@ from mmaudit.orchestration.authenticated_runner_smoke_openrouter import (
     AuthenticatedRunnerSmokeOpenRouterLaunch,
     AuthenticatedRunnerSmokeRunPlan,
     execute_authenticated_runner_smoke_openrouter,
+    preflight_authenticated_runner_smoke_live_route_launch,
+    preflight_authenticated_runner_smoke_live_routes,
     preflight_authenticated_runner_smoke_openrouter_launch,
 )
 from mmaudit.orchestration.budgets import BudgetManager
@@ -2389,6 +2391,16 @@ def models_authenticated_runner_smoke(
             help="Explicitly permit only the frozen synthetic smoke case to reach providers.",
         ),
     ] = False,
+    allow_metadata_egress: Annotated[
+        bool,
+        typer.Option(
+            "--allow-metadata-egress",
+            help=(
+                "Explicitly permit only authentication and public model-route metadata GETs "
+                "for --live-route-preflight-only."
+            ),
+        ),
+    ] = False,
     preflight_only: Annotated[
         bool,
         typer.Option(
@@ -2399,15 +2411,41 @@ def models_authenticated_runner_smoke(
             ),
         ),
     ] = False,
+    live_route_preflight_only: Annotated[
+        bool,
+        typer.Option(
+            "--live-route-preflight-only",
+            help=(
+                "Authenticate and refresh the exact candidate and judge metadata routes, "
+                "then stop without completions, ledger mutation, or output publication."
+            ),
+        ),
+    ] = False,
     no_color: Annotated[bool, typer.Option("--no-color")] = False,
 ) -> None:
     """Run one non-resumable, one-case REAL transport smoke without benchmark credit."""
 
     async def execute() -> None:
-        if not allow_code_egress:
+        if preflight_only and live_route_preflight_only:
             raise ConfigError(
-                "models authenticated-runner-smoke requires explicit --allow-code-egress"
+                "--preflight-only and --live-route-preflight-only are mutually exclusive"
             )
+        if live_route_preflight_only:
+            if allow_code_egress:
+                raise ConfigError(
+                    "--live-route-preflight-only rejects broader --allow-code-egress authority"
+                )
+            if not allow_metadata_egress:
+                raise ConfigError(
+                    "--live-route-preflight-only requires explicit --allow-metadata-egress"
+                )
+        else:
+            if allow_metadata_egress:
+                raise ConfigError("--allow-metadata-egress requires --live-route-preflight-only")
+            if not allow_code_egress:
+                raise ConfigError(
+                    "models authenticated-runner-smoke requires explicit --allow-code-egress"
+                )
         candidate_tripwire = _parse_authenticated_runner_cost_cap(
             candidate_cost_tripwire_usd_per_attempt,
             label="smoke candidate",
@@ -2448,7 +2486,9 @@ def models_authenticated_runner_smoke(
 
         launch = AuthenticatedRunnerSmokeOpenRouterLaunch(
             config=config,
-            explicitly_allow_synthetic_egress=allow_code_egress,
+            explicitly_allow_synthetic_egress=(
+                False if live_route_preflight_only else allow_code_egress
+            ),
             public_lineage_capability=public_lineage_capability,
             benchmark_suite=benchmark_suite,
             smoke_corpus=smoke_bundle,
@@ -2493,11 +2533,15 @@ def models_authenticated_runner_smoke(
             output=output,
             source_paths=source_paths,
         )
-        if preflight_only:
+        if preflight_only or live_route_preflight_only:
             _preflight_authenticated_runner_smoke_output_readonly(output)
         else:
             _preflight_authenticated_runner_output(output)
-        inventory = preflight_authenticated_runner_smoke_openrouter_launch(launch)
+        inventory = (
+            preflight_authenticated_runner_smoke_live_route_launch(launch)
+            if live_route_preflight_only
+            else preflight_authenticated_runner_smoke_openrouter_launch(launch)
+        )
 
         if preflight_only:
             local_console = Console(no_color=no_color)
@@ -2554,10 +2598,54 @@ def models_authenticated_runner_smoke(
         with load_operator_secrets(selected_secret_file, required=True) as operator_secrets:
             if not operator_secrets.openrouter_api_key_present:
                 raise ConfigError("OPENROUTER_API_KEY is missing from the operator secret file")
-            result = await execute_authenticated_runner_smoke_openrouter(
-                launch=launch,
-                operator_secrets=operator_secrets,
+            if live_route_preflight_only:
+                live_route_result = await preflight_authenticated_runner_smoke_live_routes(
+                    launch=launch,
+                    operator_secrets=operator_secrets,
+                    explicitly_allow_metadata_egress=allow_metadata_egress,
+                )
+            else:
+                result = await execute_authenticated_runner_smoke_openrouter(
+                    launch=launch,
+                    operator_secrets=operator_secrets,
+                )
+
+        if live_route_preflight_only:
+            if live_route_result.inventory != inventory:
+                raise ConfigError(
+                    "authenticated runner smoke live-route inventory changed after secret selection"
+                )
+            local_console = Console(no_color=no_color)
+            local_console.print(
+                "AUTHRUNNER smoke live-route preflight: VALID / NONCREDITING / "
+                "NONAUTHORIZING / METADATA EGRESS ONLY / NO MODEL COMPLETION",
+                markup=False,
             )
+            local_console.print(
+                "Validated exact routes: "
+                f"candidate={live_route_result.exact_model_ids[0]}; "
+                f"primary_judge={live_route_result.exact_model_ids[1]}; "
+                f"replay_judge={live_route_result.exact_model_ids[2]}",
+                markup=False,
+            )
+            local_console.print(
+                "Metadata request inventory: "
+                f"logical_gets={live_route_result.logical_metadata_get_count}; "
+                "maximum_provider_attempts="
+                f"{live_route_result.maximum_metadata_provider_attempt_count}",
+                markup=False,
+            )
+            local_console.print(
+                "Runtime state: usage_records=0; budget=UNCHANGED; "
+                "atomic_cost_ledger=UNCHANGED; "
+                "output=NOT_PUBLISHED",
+                markup=False,
+            )
+            local_console.print(
+                f"Effective config SHA-256: {inventory.effective_config_sha256}",
+                markup=False,
+            )
+            return
 
         _preflight_authenticated_runner_output(output)
         _write_authenticated_runner_smoke_output_fresh(output, result.bundle)

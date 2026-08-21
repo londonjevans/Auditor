@@ -144,10 +144,12 @@ def test_endpoint_snapshot_is_deterministic_for_semantically_identical_metadata(
     endpoint_b["supported_parameters"] = list(reversed(endpoint_b["supported_parameters"]))
     endpoint_b["pricing"] = {
         "completion": "0.0000150",
+        "discount": 0,
         "prompt": "0.000003",
         "image": "0.0",
         "request": "0.000",
     }
+    endpoint_b["quantization"] = "fp8"
     endpoint_a["untrusted_unknown_field"] = "not retained"
     first = _validate(
         endpoint_payload=_endpoint_payload(endpoint_a),
@@ -160,9 +162,32 @@ def test_endpoint_snapshot_is_deterministic_for_semantically_identical_metadata(
 
     assert first == second
     assert first.snapshot_sha256 == second.snapshot_sha256
+    assert OpenRouterEndpointSnapshotEvidence.model_validate_json(first.model_dump_json()) == second
     serialized = json.dumps(first.model_dump(mode="json"), sort_keys=True)
     assert "untrusted_unknown_field" not in serialized
+    assert "quantization" not in serialized
+    assert "discount" not in serialized
     assert '"name": "Provider-controlled display name"' not in serialized
+
+
+def test_retained_operational_status_change_is_not_canonicalized_away() -> None:
+    numeric_status = _endpoint()
+    text_status = copy.deepcopy(numeric_status)
+    text_status["status"] = "ACTIVE"
+
+    frozen = _validate(
+        endpoint_payload=_endpoint_payload(numeric_status),
+        zdr_payload=_zdr_payload(numeric_status),
+    )
+    live = _validate(
+        endpoint_payload=_endpoint_payload(text_status),
+        zdr_payload=_zdr_payload(text_status),
+    )
+
+    assert frozen.endpoints[0].operational_status == "0"
+    assert live.endpoints[0].operational_status == "active"
+    assert live != frozen
+    assert live.snapshot_sha256 != frozen.snapshot_sha256
 
 
 def test_output_capability_binding_includes_the_complete_parent_snapshot() -> None:

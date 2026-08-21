@@ -21,13 +21,21 @@ SCHEMA_NAME = "authenticated_runner_smoke_evidence_bundle.schema.json"
 
 
 class _SecretPresenceOnly:
-    openrouter_api_key_present = True
+    def __init__(self) -> None:
+        self.cleared = False
+
+    @property
+    def openrouter_api_key_present(self) -> bool:
+        return not self.cleared
 
     def __enter__(self) -> _SecretPresenceOnly:
         return self
 
     def __exit__(self, *_args: object) -> None:
-        return None
+        self.clear()
+
+    def clear(self) -> None:
+        self.cleared = True
 
 
 def _required_arguments(
@@ -35,6 +43,7 @@ def _required_arguments(
     *,
     allow_egress: bool = True,
     preflight_only: bool = False,
+    live_route_preflight_only: bool = False,
     include_secret: bool = True,
 ) -> list[str]:
     arguments = [
@@ -73,9 +82,13 @@ def _required_arguments(
     if include_secret:
         arguments.extend(("--secrets-env-file", str(tmp_path / "operator-secrets.env")))
     if allow_egress:
-        arguments.append("--allow-code-egress")
+        arguments.append(
+            "--allow-metadata-egress" if live_route_preflight_only else "--allow-code-egress"
+        )
     if preflight_only:
         arguments.append("--preflight-only")
+    if live_route_preflight_only:
+        arguments.append("--live-route-preflight-only")
     return arguments
 
 
@@ -153,7 +166,9 @@ def test_authenticated_runner_smoke_help_is_isolated_from_crediting_inputs() -> 
         "--cost-ledger",
         "--secrets-env-file",
         "--allow-code-egress",
+        "--allow-metadata-egress",
         "--preflight-only",
+        "--live-route-preflight-only",
     ):
         assert option in result.stdout
     for forbidden in (
@@ -231,6 +246,170 @@ def test_authenticated_runner_smoke_preflight_is_provider_free_and_does_not_muta
     assert "runs=2; cases=1; logical_requests=4" in normalized
     assert "maximum_provider_attempts=8; generation_refetches=4" in normalized
     assert "full_smoke_cost_bound=UNAVAILABLE_BEFORE_REAL_CANDIDATE_OUTPUTS" in normalized
+
+
+def test_authenticated_runner_smoke_preflight_modes_are_mutually_exclusive_before_loading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "load_config",
+        lambda _path: (_ for _ in ()).throw(AssertionError("must not load configuration")),
+    )
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        _required_arguments(
+            tmp_path,
+            preflight_only=True,
+            live_route_preflight_only=True,
+        ),
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "mutually exclusive" in " ".join(result.stdout.split())
+
+
+def test_authenticated_runner_smoke_live_route_rejects_code_egress_authority_before_loading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "load_config",
+        lambda _path: (_ for _ in ()).throw(AssertionError("must not load configuration")),
+    )
+    arguments = _required_arguments(tmp_path, live_route_preflight_only=True)
+    arguments.append("--allow-code-egress")
+
+    result = RUNNER.invoke(cli_module.app, arguments)
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "rejects broader --allow-code-egress" in " ".join(result.stdout.split())
+
+
+def test_authenticated_runner_smoke_live_route_requires_explicit_metadata_egress_before_loading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "load_config",
+        lambda _path: (_ for _ in ()).throw(AssertionError("must not load configuration")),
+    )
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        _required_arguments(
+            tmp_path,
+            allow_egress=False,
+            live_route_preflight_only=True,
+        ),
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "requires explicit --allow-metadata-egress" in " ".join(result.stdout.split())
+
+
+def test_authenticated_runner_smoke_metadata_egress_cannot_authorize_another_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "load_config",
+        lambda _path: (_ for _ in ()).throw(AssertionError("must not load configuration")),
+    )
+    arguments = _required_arguments(tmp_path, allow_egress=False)
+    arguments.append("--allow-metadata-egress")
+
+    result = RUNNER.invoke(cli_module.app, arguments)
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "requires --live-route-preflight-only" in " ".join(result.stdout.split())
+
+
+def test_authenticated_runner_smoke_live_route_uses_metadata_egress_and_never_publishes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tmp_path.chmod(0o700)
+    _patch_launch_inputs(monkeypatch, tmp_path)
+    calls: list[str] = []
+    inventory = _inventory()
+    live_result = SimpleNamespace(
+        inventory=inventory,
+        exact_model_ids=("candidate/model", "primary/judge", "replay/judge"),
+        logical_metadata_get_count=15,
+        maximum_metadata_provider_attempt_count=30,
+    )
+    secret_holder = _SecretPresenceOnly()
+
+    def preflight(_launch: object) -> SimpleNamespace:
+        calls.append("metadata-preflight")
+        return inventory
+
+    def select(path: Path | None) -> Path:
+        calls.append("select-secret")
+        assert path is not None
+        return path
+
+    async def live_probe(**kwargs: object) -> SimpleNamespace:
+        calls.append("live-route-probe")
+        assert not secret_holder.cleared
+        assert kwargs["explicitly_allow_metadata_egress"] is True
+        secret_holder.clear()
+        return live_result
+
+    def forbidden(*_args: object, **_kwargs: object) -> Any:
+        raise AssertionError("live-route preflight must not complete or publish")
+
+    monkeypatch.setattr(
+        cli_module,
+        "preflight_authenticated_runner_smoke_live_route_launch",
+        preflight,
+    )
+    monkeypatch.setattr(cli_module, "select_operator_secret_file", select)
+    monkeypatch.setattr(
+        cli_module,
+        "load_operator_secrets",
+        lambda *_args, **_kwargs: secret_holder,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "preflight_authenticated_runner_smoke_live_routes",
+        live_probe,
+    )
+    for name in (
+        "execute_authenticated_runner_smoke_openrouter",
+        "execute_authenticated_openrouter_runner",
+        "_preflight_authenticated_runner_output",
+        "_write_authenticated_runner_smoke_output_fresh",
+    ):
+        monkeypatch.setattr(cli_module, name, forbidden)
+
+    output = tmp_path / "smoke-evidence.json"
+    before = tuple(tmp_path.iterdir())
+    result = RUNNER.invoke(
+        cli_module.app,
+        _required_arguments(tmp_path, live_route_preflight_only=True),
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert calls == ["metadata-preflight", "select-secret", "live-route-probe"]
+    assert secret_holder.cleared
+    assert tuple(tmp_path.iterdir()) == before
+    assert not output.exists()
+    normalized = " ".join(result.stdout.split())
+    assert "METADATA EGRESS ONLY / NO MODEL COMPLETION" in normalized
+    assert "candidate=candidate/model" in normalized
+    assert "primary_judge=primary/judge" in normalized
+    assert "replay_judge=replay/judge" in normalized
+    assert "logical_gets=15; maximum_provider_attempts=30" in normalized
+    assert (
+        "usage_records=0; budget=UNCHANGED; atomic_cost_ledger=UNCHANGED; output=NOT_PUBLISHED"
+    ) in normalized
 
 
 def test_authenticated_runner_smoke_real_path_preflights_before_secret_and_publishes_once(

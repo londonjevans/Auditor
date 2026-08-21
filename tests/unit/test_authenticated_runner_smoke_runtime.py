@@ -55,6 +55,8 @@ from mmaudit.orchestration.authenticated_runner_smoke_openrouter import (
     _require_exact_smoke_callback_ledger_delta,
     _require_three_distinct_roots,
     execute_authenticated_runner_smoke_openrouter,
+    preflight_authenticated_runner_smoke_live_route_launch,
+    preflight_authenticated_runner_smoke_live_routes,
     preflight_authenticated_runner_smoke_openrouter_launch,
 )
 from mmaudit.orchestration.budgets import BudgetManager
@@ -67,6 +69,8 @@ from mmaudit.orchestration.cost_ledger import (
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.privacy import PrivacyProfile
 from tests.identity_fixtures import bind_synthetic_usage_identity, rebind_synthetic_token_plan
+from tests.unit import test_authenticated_runner_execution as execution_fixtures
+from tests.unit import test_candidate_benchmark as candidate_fixtures
 from tests.unit.test_authenticated_runner_cost_plan import _preview, _replace_preview
 from tests.unit.test_authenticated_runner_durable_bundle import (
     _cost_preview_for_usage,
@@ -281,6 +285,85 @@ def _launch(
         usage=UsageLedger(),
         run_plans=run_plans,
     )
+
+
+async def _live_route_launch(
+    *,
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+) -> AuthenticatedRunnerSmokeOpenRouterLaunch:
+    harness = await execution_fixtures._harness(tmp_path / "full-runner", config_factory)
+    return AuthenticatedRunnerSmokeOpenRouterLaunch(
+        config=harness.config,
+        explicitly_allow_synthetic_egress=False,
+        public_lineage_capability=harness.public_lineage,
+        benchmark_suite=harness.suite,
+        smoke_corpus=load_authenticated_runner_smoke_corpus_bundle(SMOKE_CORPUS_PATH),
+        candidate_discovery_manifest=type(harness.discovery_manifest).model_validate_json(
+            harness.discovery_manifest.model_dump_json()
+        ),
+        candidate_discovery_evidence=tuple(
+            type(item).model_validate_json(item.model_dump_json())
+            for item in harness.discovery_evidence
+        ),
+        candidate_registry=harness.registry,
+        budget=harness.budget,
+        usage=harness.usage,
+        run_plans=tuple(
+            AuthenticatedRunnerSmokeRunPlan(
+                run_kind=plan.run_kind,
+                judge_discovery_manifest=type(plan.judge_discovery_manifest).model_validate_json(
+                    plan.judge_discovery_manifest.model_dump_json()
+                ),
+                judge_discovery_evidence=tuple(
+                    type(item).model_validate_json(item.model_dump_json())
+                    for item in plan.judge_discovery_evidence
+                ),
+                judge_registry=plan.judge_registry,
+                candidate_cost_tripwire_usd_per_attempt=Decimal("1"),
+                judge_cost_tripwire_usd_per_attempt=Decimal("1"),
+            )
+            for plan in harness.plans
+        ),
+    )
+
+
+def _install_live_route_client_factory(
+    monkeypatch: pytest.MonkeyPatch,
+    launch: AuthenticatedRunnerSmokeOpenRouterLaunch,
+    *,
+    pricing_drift_models: set[str] | None = None,
+    canonical_shape_models: set[str] | None = None,
+    client_wrapper: Callable[[Any], Any] | None = None,
+) -> candidate_fixtures._MockClientFactory:
+    factory = candidate_fixtures._MockClientFactory(
+        pricing_drift_models=set(pricing_drift_models or ()),
+        canonical_shape_models=set(canonical_shape_models or ()),
+    )
+    models = (
+        launch.candidate_registry.candidates[0],
+        launch.run_plans[0].judge,
+        launch.run_plans[1].judge,
+    )
+    models_by_endpoint = {item.approved_provider_endpoint: item for item in models}
+
+    def build_client(**kwargs: Any) -> Any:
+        provider_policy = kwargs["provider_policy"]
+        endpoint = provider_policy.only[0]
+        client = factory(
+            api_key=kwargs["api_key"],
+            config=launch.config,
+            budget=kwargs["budget"],
+            usage=kwargs["usage"],
+            candidate=models_by_endpoint[endpoint],
+            provider_policy=provider_policy,
+            reasoning_policy=kwargs["reasoning_policy"],
+            token_budgets=kwargs["token_budgets"],
+        )
+        return client if client_wrapper is None else client_wrapper(client)
+
+    monkeypatch.setattr(smoke_runtime_module, "OpenRouterClient", build_client)
+    return factory
 
 
 def _fake_bundle_validator_subject() -> tuple[
@@ -1224,6 +1307,400 @@ async def test_smoke_cli_budget_constructs_live_client_without_egress_or_budget_
         await client.close()
         await adapter.close()
         secrets.clear()
+
+
+@pytest.mark.asyncio
+async def test_live_route_preflight_refreshes_all_roles_without_completion_or_state_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    launch = await _live_route_launch(tmp_path=tmp_path, config_factory=config_factory)
+    models = (
+        launch.candidate_registry.candidates[0],
+        launch.run_plans[0].judge,
+        launch.run_plans[1].judge,
+    )
+    factory = _install_live_route_client_factory(
+        monkeypatch,
+        launch,
+        canonical_shape_models={item.exact_model_id for item in models},
+    )
+
+    def forbidden_proof(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("metadata-only route probes must not issue request-source proof")
+
+    monkeypatch.setattr(
+        smoke_runtime_module,
+        "prove_pinned_noncrediting_smoke_model_benchmark_source",
+        forbidden_proof,
+    )
+    monkeypatch.setattr(
+        smoke_runtime_module,
+        "prove_pinned_noncrediting_smoke_cross_lineage_adjudication_source",
+        forbidden_proof,
+    )
+    ledger = launch.budget.atomic_ledger
+    assert ledger is not None
+    before = ledger.snapshot()
+    secrets = OperatorSecrets({OPENROUTER_API_KEY_NAME: "synthetic-live-route-unit-key"})
+
+    try:
+        result = await preflight_authenticated_runner_smoke_live_routes(
+            launch=launch,
+            operator_secrets=secrets,
+            explicitly_allow_metadata_egress=True,
+        )
+        assert result.exact_model_ids == tuple(item.exact_model_id for item in models)
+        assert result.logical_metadata_get_count == 15
+        assert result.maximum_metadata_provider_attempt_count == 30
+        assert len(factory.clients) == 3
+        assert factory.request_bodies == []
+        assert launch.usage.records == []
+        assert ledger.snapshot() == before
+        assert secrets.cleared
+        assert all(client._client.is_closed for client in factory.clients)
+        assert all(not client._credential and not client._headers for client in factory.clients)
+        assert [
+            client.registered_model_identity_snapshot(model.exact_model_id).requested_slug
+            for client, model in zip(factory.clients, models, strict=True)
+        ] == [item.exact_model_id for item in models]
+        assert factory.metadata_requests == [
+            path
+            for model in models
+            for path in (
+                "/api/v1/key",
+                "/api/v1/models",
+                f"/api/v1/model/{model.exact_model_id}",
+                f"/api/v1/models/{model.exact_model_id}/endpoints",
+                "/api/v1/endpoints/zdr",
+            )
+        ]
+    finally:
+        await factory.close()
+
+
+@pytest.mark.asyncio
+async def test_live_route_launch_preflight_retains_pure_synthetic_privacy_checks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    launch = await _live_route_launch(tmp_path=tmp_path, config_factory=config_factory)
+    observed: list[tuple[AuditConfig, object, bool]] = []
+    original = cast(Any, smoke_runtime_module).validate_candidate_benchmark_egress
+
+    def observe(**kwargs: Any) -> None:
+        observed.append(
+            (
+                kwargs["config"],
+                kwargs["benchmark_suite"],
+                kwargs["explicitly_allowed"],
+            )
+        )
+        original(**kwargs)
+
+    monkeypatch.setattr(smoke_runtime_module, "validate_candidate_benchmark_egress", observe)
+
+    inventory = preflight_authenticated_runner_smoke_live_route_launch(launch)
+
+    assert inventory.case_count == 1
+    assert launch.explicitly_allow_synthetic_egress is False
+    assert observed == [(launch.config, launch.benchmark_suite, True)]
+
+
+@pytest.mark.asyncio
+async def test_live_route_preflight_requires_positive_metadata_egress_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    launch = await _live_route_launch(tmp_path=tmp_path, config_factory=config_factory)
+    ledger = launch.budget.atomic_ledger
+    assert ledger is not None
+    before = ledger.snapshot()
+    secrets = OperatorSecrets({OPENROUTER_API_KEY_NAME: "synthetic-live-route-unit-key"})
+
+    def forbidden_client(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("missing metadata authority must not construct a provider client")
+
+    monkeypatch.setattr(smoke_runtime_module, "OpenRouterClient", forbidden_client)
+
+    with pytest.raises(
+        AuthenticatedRunnerSmokeOpenRouterError,
+        match="requires explicit metadata egress permission",
+    ):
+        await preflight_authenticated_runner_smoke_live_routes(
+            launch=launch,
+            operator_secrets=secrets,
+            explicitly_allow_metadata_egress=False,
+        )
+
+    assert secrets.cleared
+    assert launch.usage.records == []
+    assert ledger.snapshot() == before
+
+
+@pytest.mark.asyncio
+async def test_live_route_preflight_clears_secret_when_static_admission_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    launch = await _live_route_launch(tmp_path=tmp_path, config_factory=config_factory)
+    invalid_launch = replace(launch, explicitly_allow_synthetic_egress=True)
+    ledger = launch.budget.atomic_ledger
+    assert ledger is not None
+    before = ledger.snapshot()
+    secrets = OperatorSecrets({OPENROUTER_API_KEY_NAME: "synthetic-live-route-unit-key"})
+
+    def forbidden_client(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("failed static admission must not construct a provider client")
+
+    monkeypatch.setattr(smoke_runtime_module, "OpenRouterClient", forbidden_client)
+
+    with pytest.raises(
+        AuthenticatedRunnerSmokeOpenRouterError,
+        match="must not grant benchmark-code egress",
+    ):
+        await preflight_authenticated_runner_smoke_live_routes(
+            launch=invalid_launch,
+            operator_secrets=secrets,
+            explicitly_allow_metadata_egress=True,
+        )
+
+    assert secrets.cleared
+    assert launch.usage.records == []
+    assert ledger.snapshot() == before
+
+
+@pytest.mark.asyncio
+async def test_live_route_preflight_clears_secret_when_initial_ledger_snapshot_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    launch = await _live_route_launch(tmp_path=tmp_path, config_factory=config_factory)
+    ledger = launch.budget.atomic_ledger
+    assert ledger is not None
+    original_snapshot = AtomicCostLedger.snapshot
+    snapshot_calls = 0
+
+    def fail_second_snapshot(self: AtomicCostLedger) -> CostLedgerSnapshot:
+        nonlocal snapshot_calls
+        if self is ledger:
+            snapshot_calls += 1
+            if snapshot_calls == 2:
+                raise RuntimeError("synthetic initial live-route ledger snapshot failure")
+        return original_snapshot(self)
+
+    def forbidden_client(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("failed initial snapshot must not construct a provider client")
+
+    monkeypatch.setattr(AtomicCostLedger, "snapshot", fail_second_snapshot)
+    monkeypatch.setattr(smoke_runtime_module, "OpenRouterClient", forbidden_client)
+    secrets = OperatorSecrets({OPENROUTER_API_KEY_NAME: "synthetic-live-route-unit-key"})
+
+    with pytest.raises(RuntimeError, match="synthetic initial live-route ledger snapshot failure"):
+        await preflight_authenticated_runner_smoke_live_routes(
+            launch=launch,
+            operator_secrets=secrets,
+            explicitly_allow_metadata_egress=True,
+        )
+
+    assert snapshot_calls == 2
+    assert secrets.cleared
+    assert launch.usage.records == []
+    assert original_snapshot(ledger).entries == ()
+
+
+@pytest.mark.asyncio
+async def test_live_route_preflight_detects_process_local_budget_state_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    launch = await _live_route_launch(tmp_path=tmp_path, config_factory=config_factory)
+    factory = _install_live_route_client_factory(monkeypatch, launch)
+    original_probe = smoke_runtime_module._SmokeLiveRouteProbeAdapter.probe_exact_routes
+
+    async def probe_then_mutate(adapter: Any) -> tuple[str, str, str]:
+        exact_model_ids = await original_probe(adapter)
+        launch.budget._request_limit_counts[("logical", "synthetic-mutation")] = 1
+        return exact_model_ids
+
+    monkeypatch.setattr(
+        smoke_runtime_module._SmokeLiveRouteProbeAdapter,
+        "probe_exact_routes",
+        probe_then_mutate,
+    )
+    ledger = launch.budget.atomic_ledger
+    assert ledger is not None
+    before = ledger.snapshot()
+    secrets = OperatorSecrets({OPENROUTER_API_KEY_NAME: "synthetic-live-route-unit-key"})
+
+    try:
+        with pytest.raises(
+            AuthenticatedRunnerSmokeOpenRouterError,
+            match="changed usage, budget, or atomic cost-ledger state",
+        ):
+            await preflight_authenticated_runner_smoke_live_routes(
+                launch=launch,
+                operator_secrets=secrets,
+                explicitly_allow_metadata_egress=True,
+            )
+        assert len(factory.clients) == 3
+        assert factory.request_bodies == []
+        assert launch.usage.records == []
+        assert ledger.snapshot() == before
+        assert secrets.cleared
+        assert all(client._client.is_closed for client in factory.clients)
+        assert all(not client._credential and not client._headers for client in factory.clients)
+    finally:
+        await factory.close()
+
+
+@pytest.mark.asyncio
+async def test_live_route_preflight_rejects_registered_identity_drift_and_cleans_up(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    launch = await _live_route_launch(tmp_path=tmp_path, config_factory=config_factory)
+    exact_model_id = launch.run_plans[0].judge.exact_model_id
+
+    class RegisteredIdentityDriftClient:
+        def __init__(self, client: Any) -> None:
+            self._wrapped = client
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._wrapped, name)
+
+        def registered_model_identity_snapshot(self, requested_model_id: str) -> Any:
+            snapshot = self._wrapped.registered_model_identity_snapshot(requested_model_id)
+            if requested_model_id == exact_model_id:
+                return snapshot.model_copy(update={"provider_name": "synthetic-registration-drift"})
+            return snapshot
+
+    factory = _install_live_route_client_factory(
+        monkeypatch,
+        launch,
+        client_wrapper=RegisteredIdentityDriftClient,
+    )
+    ledger = launch.budget.atomic_ledger
+    assert ledger is not None
+    before = ledger.snapshot()
+    secrets = OperatorSecrets({OPENROUTER_API_KEY_NAME: "synthetic-live-route-unit-key"})
+
+    try:
+        with pytest.raises(
+            AuthenticatedRunnerSmokeOpenRouterError,
+            match="PRIMARY judge registered identity differs",
+        ):
+            await preflight_authenticated_runner_smoke_live_routes(
+                launch=launch,
+                operator_secrets=secrets,
+                explicitly_allow_metadata_egress=True,
+            )
+        assert len(factory.clients) == 3
+        assert factory.request_bodies == []
+        assert launch.usage.records == []
+        assert ledger.snapshot() == before
+        assert secrets.cleared
+        assert all(client._client.is_closed for client in factory.clients)
+        assert all(not client._credential and not client._headers for client in factory.clients)
+    finally:
+        await factory.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drift_role_index", (0, 1, 2))
+async def test_live_route_preflight_closes_every_client_on_any_route_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+    drift_role_index: int,
+) -> None:
+    launch = await _live_route_launch(tmp_path=tmp_path, config_factory=config_factory)
+    models = (
+        launch.candidate_registry.candidates[0],
+        launch.run_plans[0].judge,
+        launch.run_plans[1].judge,
+    )
+    factory = _install_live_route_client_factory(
+        monkeypatch,
+        launch,
+        pricing_drift_models={models[drift_role_index].exact_model_id},
+    )
+    ledger = launch.budget.atomic_ledger
+    assert ledger is not None
+    before = ledger.snapshot()
+    secrets = OperatorSecrets({OPENROUTER_API_KEY_NAME: "synthetic-live-route-unit-key"})
+
+    try:
+        with pytest.raises(
+            AuthenticatedRunnerSmokeOpenRouterError,
+            match="endpoint pricing differs",
+        ):
+            await preflight_authenticated_runner_smoke_live_routes(
+                launch=launch,
+                operator_secrets=secrets,
+                explicitly_allow_metadata_egress=True,
+            )
+        assert len(factory.clients) == 3
+        assert factory.request_bodies == []
+        assert launch.usage.records == []
+        assert ledger.snapshot() == before
+        assert secrets.cleared
+        assert all(client._client.is_closed for client in factory.clients)
+        assert all(not client._credential and not client._headers for client in factory.clients)
+    finally:
+        await factory.close()
+
+
+@pytest.mark.asyncio
+async def test_live_route_preflight_fails_closed_after_transport_close_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    launch = await _live_route_launch(tmp_path=tmp_path, config_factory=config_factory)
+    factory = _install_live_route_client_factory(monkeypatch, launch)
+    original_close = smoke_runtime_module._SmokeLiveRouteProbeAdapter.close
+
+    async def close_then_fail(adapter: Any) -> None:
+        await original_close(adapter)
+        raise RuntimeError("synthetic post-close failure")
+
+    monkeypatch.setattr(
+        smoke_runtime_module._SmokeLiveRouteProbeAdapter,
+        "close",
+        close_then_fail,
+    )
+    ledger = launch.budget.atomic_ledger
+    assert ledger is not None
+    before = ledger.snapshot()
+    secrets = OperatorSecrets({OPENROUTER_API_KEY_NAME: "synthetic-live-route-unit-key"})
+
+    try:
+        with pytest.raises(
+            AuthenticatedRunnerSmokeOpenRouterError,
+            match="did not close every metadata transport",
+        ):
+            await preflight_authenticated_runner_smoke_live_routes(
+                launch=launch,
+                operator_secrets=secrets,
+                explicitly_allow_metadata_egress=True,
+            )
+        assert len(factory.clients) == 3
+        assert factory.request_bodies == []
+        assert launch.usage.records == []
+        assert ledger.snapshot() == before
+        assert secrets.cleared
+        assert all(client._client.is_closed for client in factory.clients)
+        assert all(not client._credential and not client._headers for client in factory.clients)
+    finally:
+        await factory.close()
 
 
 @pytest.mark.parametrize(  # type: ignore[untyped-decorator]

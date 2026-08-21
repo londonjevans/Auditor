@@ -981,7 +981,9 @@ async def test_judge_refresh_observes_current_metadata_in_order_before_registrat
     harness = await execution_fixtures._harness(tmp_path, config_factory)
     plan = harness.plans[0]
     judge = plan.judge
-    factory = execution_fixtures.candidate_fixtures._MockClientFactory()
+    factory = execution_fixtures.candidate_fixtures._MockClientFactory(
+        canonical_shape_models={judge.exact_model_id},
+    )
     client = factory(
         api_key="synthetic-provider-free-unit-key",
         config=harness.config,

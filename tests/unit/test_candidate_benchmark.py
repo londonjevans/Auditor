@@ -100,6 +100,7 @@ class _MockClientFactory:
     failing_models: set[str] = field(default_factory=set)
     authentication_failure_models: set[str] = field(default_factory=set)
     pricing_drift_models: set[str] = field(default_factory=set)
+    canonical_shape_models: set[str] = field(default_factory=set)
     catalog_effort_drift_models: set[str] = field(default_factory=set)
     endpoint_effort_omission_models: set[str] = field(default_factory=set)
     single_model_failure_modes: dict[str, str] = field(default_factory=dict)
@@ -164,6 +165,24 @@ class _MockClientFactory:
                 ]
             return payload
 
+        def current_endpoint() -> dict[str, Any]:
+            endpoint = _endpoint(candidate_spec)
+            if candidate.exact_model_id in self.canonical_shape_models:
+                endpoint["supported_parameters"] = list(reversed(endpoint["supported_parameters"]))
+                endpoint["pricing"] = {
+                    "completion": "0.0000020",
+                    "discount": 0,
+                    "prompt": "0.0000010",
+                    "request": "0.0",
+                }
+                endpoint["quantization"] = "fp8"
+            if candidate.exact_model_id in self.pricing_drift_models:
+                endpoint["pricing"] = {
+                    **endpoint["pricing"],
+                    "completion": "0.000003",
+                }
+            return endpoint
+
         def handler(request: httpx.Request) -> httpx.Response:
             if request.method == "GET":
                 self.metadata_requests.append(request.url.path)
@@ -183,7 +202,7 @@ class _MockClientFactory:
                 return httpx.Response(
                     200,
                     request=request,
-                    json={"data": [_endpoint(candidate_spec)]},
+                    json={"data": [current_endpoint()]},
                 )
             if request.method == "GET" and request.url.path.endswith("/models"):
                 return httpx.Response(
@@ -225,12 +244,7 @@ class _MockClientFactory:
                     )
                 return httpx.Response(200, request=request, json={"data": current_catalog_model()})
             if request.method == "GET" and request.url.path.endswith("/endpoints"):
-                endpoint = _endpoint(candidate_spec)
-                if candidate.exact_model_id in self.pricing_drift_models:
-                    endpoint["pricing"] = {
-                        **endpoint["pricing"],
-                        "completion": "0.000003",
-                    }
+                endpoint = current_endpoint()
                 return httpx.Response(
                     200,
                     request=request,
@@ -825,7 +839,7 @@ async def test_candidate_benchmark_uses_exact_mock_certification_route(
         specs=(spec,),
     )
     suite = load_model_benchmark_corpus(CORPUS_PATH)
-    factory = _MockClientFactory()
+    factory = _MockClientFactory(canonical_shape_models={spec.model_id})
     canary = "SYNTHETIC_OPENROUTER_CANARY"
     try:
         result = await run_candidate_registry_benchmarks(

@@ -52,10 +52,11 @@ from mmaudit.models.authenticated_runner_smoke_corpus import (
 )
 from mmaudit.models.candidate_benchmark import validate_candidate_benchmark_egress
 from mmaudit.models.discovery import (
+    ModelDiscoveryValidationError,
     OpenRouterModelDiscoveryEvidence,
-    OpenRouterModelDiscoveryPayload,
     OpenRouterModelDiscoveryRunManifest,
     openrouter_catalog_canonical_slug,
+    require_openrouter_live_discovery_equivalence,
     validate_openrouter_model_discovery,
 )
 from mmaudit.models.endpoint_snapshots import (
@@ -86,7 +87,11 @@ from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.models.schemas import UsageRecord
 from mmaudit.models.usage import UsageLedger
 from mmaudit.operator_secrets import OperatorSecrets
-from mmaudit.orchestration.budgets import BudgetManager, _issue_trusted_budget_recovery_scope
+from mmaudit.orchestration.budgets import (
+    BudgetManager,
+    _issue_trusted_budget_recovery_scope,
+    _project_trusted_budget_accounting_state,
+)
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger, CostEntryStatus, CostLedgerSnapshot
 from mmaudit.orchestration.scheduler_runtime import build_scheduler_cost_ledger_baseline
 from mmaudit.privacy import (
@@ -102,6 +107,10 @@ from mmaudit.repository.privacy_provenance import (
 
 _LEDGER_CAP_USD = Decimal("250")
 _ROOT_LINEAGE_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
+_SMOKE_ROUTE_LABELS = ("candidate", "PRIMARY judge", "REPLAY judge")
+_LIVE_ROUTE_METADATA_GETS_PER_ROLE = 5
+_LIVE_ROUTE_METADATA_LOGICAL_GET_COUNT = 15
+_LIVE_ROUTE_METADATA_MAXIMUM_PROVIDER_ATTEMPTS = 30
 
 
 class AuthenticatedRunnerSmokeOpenRouterError(ValueError):
@@ -180,6 +189,38 @@ class AuthenticatedRunnerSmokeOpenRouterResult:
 
 
 @dataclass(frozen=True, slots=True)
+class AuthenticatedRunnerSmokeLiveRoutePreflightResult:
+    """In-memory result of metadata-only candidate and judge route validation."""
+
+    inventory: AuthenticatedRunnerSmokePreflightInventory
+    exact_model_ids: tuple[str, str, str]
+    logical_metadata_get_count: int
+    maximum_metadata_provider_attempt_count: int
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.inventory) is not AuthenticatedRunnerSmokePreflightInventory
+            or type(self.exact_model_ids) is not tuple
+            or len(self.exact_model_ids) != 3
+            or any(type(item) is not str or not item for item in self.exact_model_ids)
+            or type(self.logical_metadata_get_count) is not int
+            or self.logical_metadata_get_count != _LIVE_ROUTE_METADATA_LOGICAL_GET_COUNT
+            or type(self.maximum_metadata_provider_attempt_count) is not int
+            or self.maximum_metadata_provider_attempt_count
+            != _LIVE_ROUTE_METADATA_MAXIMUM_PROVIDER_ATTEMPTS
+        ):
+            raise AuthenticatedRunnerSmokeOpenRouterError(
+                "smoke live-route result metadata request inventory is invalid"
+            )
+
+    def __reduce__(self) -> Never:
+        raise TypeError("authenticated runner smoke live-route preflight cannot be serialized")
+
+    def __reduce_ex__(self, _protocol: object) -> Never:
+        raise TypeError("authenticated runner smoke live-route preflight cannot be serialized")
+
+
+@dataclass(frozen=True, slots=True)
 class _PreparedSmokeRun:
     plan: AuthenticatedRunnerSmokeRunPlan
     candidate_cost_plan: AuthenticatedRunnerSmokeCostPlan
@@ -223,6 +264,7 @@ class _SmokeOpenRouterAdapter:
                 model=candidate,
                 evidence=launch.candidate_discovery_evidence[0],
                 manifest=launch.candidate_discovery_manifest,
+                route_label="candidate",
             )
             report = await execute_noncrediting_model_benchmark_smoke(
                 suite=launch.benchmark_suite,
@@ -277,6 +319,7 @@ class _SmokeOpenRouterAdapter:
                     model=judge,
                     evidence=item.plan.judge_discovery_evidence[0],
                     manifest=item.plan.judge_discovery_manifest,
+                    route_label=f"{item.plan.run_kind.value} judge",
                 )
         except BaseException:
             for client in clients.values():
@@ -424,10 +467,154 @@ class _SmokeOpenRouterAdapter:
             raise AuthenticatedRunnerSmokeOpenRouterError("smoke OpenRouter adapter is closed")
 
 
+class _SmokeLiveRouteProbeAdapter:
+    """Own metadata-only clients that have no request-source proof or completion custody."""
+
+    __slots__ = ("_clients", "_closed", "_launch", "_secrets")
+
+    def __init__(
+        self,
+        *,
+        launch: AuthenticatedRunnerSmokeOpenRouterLaunch,
+        secrets: OperatorSecrets,
+    ) -> None:
+        self._launch = launch
+        self._secrets = secrets
+        self._clients: list[OpenRouterClient] = []
+        self._closed = False
+
+    async def probe_exact_routes(self) -> tuple[str, str, str]:
+        """Construct and refresh candidate, PRIMARY, and REPLAY metadata routes once."""
+
+        self._require_open()
+        if self._clients:
+            raise AuthenticatedRunnerSmokeOpenRouterError(
+                "smoke live-route probe clients were already constructed"
+            )
+        launch = self._launch
+        route_inputs = (
+            (
+                "candidate",
+                launch.candidate_registry.candidates[0],
+                launch.candidate_discovery_evidence[0],
+                launch.candidate_discovery_manifest,
+            ),
+            (
+                "PRIMARY judge",
+                launch.run_plans[0].judge,
+                launch.run_plans[0].judge_discovery_evidence[0],
+                launch.run_plans[0].judge_discovery_manifest,
+            ),
+            (
+                "REPLAY judge",
+                launch.run_plans[1].judge,
+                launch.run_plans[1].judge_discovery_evidence[0],
+                launch.run_plans[1].judge_discovery_manifest,
+            ),
+        )
+        for _route_label, model, _evidence, _manifest in route_inputs:
+            self._clients.append(self._new_metadata_client(model))
+        for client, (route_label, model, evidence, manifest) in zip(
+            self._clients,
+            route_inputs,
+            strict=True,
+        ):
+            await _refresh_and_register_exact_route(
+                client=client,
+                config=launch.config,
+                model=model,
+                evidence=evidence,
+                manifest=manifest,
+                route_label=route_label,
+            )
+        return (
+            route_inputs[0][1].exact_model_id,
+            route_inputs[1][1].exact_model_id,
+            route_inputs[2][1].exact_model_id,
+        )
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        clients = tuple(self._clients)
+        self._clients.clear()
+        failed = False
+        for client in clients:
+            try:
+                await client.close()
+            except BaseException:
+                failed = True
+                client.clear_credentials()
+        self._secrets.clear()
+        if failed:
+            raise AuthenticatedRunnerSmokeOpenRouterError(
+                "one or more smoke live-route metadata transports failed to close"
+            )
+
+    def _new_metadata_client(self, model: CandidateModel) -> OpenRouterClient:
+        """Build an exact paid-control client without any completion-source proof."""
+
+        return OpenRouterClient(
+            api_key=self._required_api_key(),
+            execution=self._launch.config.execution,
+            privacy=self._launch.config.privacy,
+            token_budgets=self._launch.config.token_budgets,
+            budget=self._launch.budget,
+            usage=self._launch.usage,
+            provider_policy=OpenRouterProviderPolicy(
+                certification=True,
+                only=(model.approved_provider_endpoint,),
+                allow_fallbacks=False,
+            ),
+            reasoning_policy=build_reasoning_policy(self._launch.config),
+        )
+
+    def _required_api_key(self) -> str:
+        if self._closed or self._secrets.cleared or not self._secrets.openrouter_api_key_present:
+            raise AuthenticatedRunnerSmokeOpenRouterError(
+                "smoke live-route OpenRouter credential is absent"
+            )
+        key: str = self._secrets.openrouter_api_key
+        if not key:
+            raise AuthenticatedRunnerSmokeOpenRouterError(
+                "smoke live-route OpenRouter credential is missing"
+            )
+        return key
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise AuthenticatedRunnerSmokeOpenRouterError("smoke live-route adapter is closed")
+
+
 def preflight_authenticated_runner_smoke_openrouter_launch(
     launch: AuthenticatedRunnerSmokeOpenRouterLaunch,
 ) -> AuthenticatedRunnerSmokePreflightInventory:
     """Validate exact frozen inputs and candidate costs without secrets or provider access."""
+
+    return _preflight_authenticated_runner_smoke_launch(
+        launch,
+        live_route_metadata_only=False,
+    )
+
+
+def preflight_authenticated_runner_smoke_live_route_launch(
+    launch: AuthenticatedRunnerSmokeOpenRouterLaunch,
+) -> AuthenticatedRunnerSmokePreflightInventory:
+    """Validate the metadata-only route probe without granting benchmark-code egress."""
+
+    return _preflight_authenticated_runner_smoke_launch(
+        launch,
+        live_route_metadata_only=True,
+    )
+
+
+def _preflight_authenticated_runner_smoke_launch(
+    launch: AuthenticatedRunnerSmokeOpenRouterLaunch,
+    *,
+    live_route_metadata_only: bool,
+) -> AuthenticatedRunnerSmokePreflightInventory:
+    """Run the common frozen, cost, lineage, usage, and ledger admission checks."""
 
     if type(launch) is not AuthenticatedRunnerSmokeOpenRouterLaunch:
         raise AuthenticatedRunnerSmokeOpenRouterError("smoke launch has the wrong exact type")
@@ -503,10 +690,16 @@ def preflight_authenticated_runner_smoke_openrouter_launch(
         raise AuthenticatedRunnerSmokeOpenRouterError(
             "smoke shared budget scoped cost budgets differ from configuration"
         )
-    if launch.explicitly_allow_synthetic_egress is not True:
-        raise AuthenticatedRunnerSmokeOpenRouterError(
-            "smoke launch requires explicit synthetic egress permission"
-        )
+    if live_route_metadata_only:
+        if launch.explicitly_allow_synthetic_egress is not False:
+            raise AuthenticatedRunnerSmokeOpenRouterError(
+                "smoke live-route launch must not grant benchmark-code egress"
+            )
+    else:
+        if launch.explicitly_allow_synthetic_egress is not True:
+            raise AuthenticatedRunnerSmokeOpenRouterError(
+                "smoke launch requires explicit synthetic egress permission"
+            )
     try:
         validate_candidate_benchmark_egress(
             config=config,
@@ -658,6 +851,86 @@ def preflight_authenticated_runner_smoke_openrouter_launch(
         candidate_derived_interval_cost_cap_usd=candidate_cap,
         candidate_derived_final_spent_cap_usd=candidate_final,
     )
+
+
+async def preflight_authenticated_runner_smoke_live_routes(
+    *,
+    launch: AuthenticatedRunnerSmokeOpenRouterLaunch,
+    operator_secrets: OperatorSecrets,
+    explicitly_allow_metadata_egress: bool,
+) -> AuthenticatedRunnerSmokeLiveRoutePreflightResult:
+    """Authenticate and refresh all three exact routes without any completion request."""
+
+    if type(operator_secrets) is not OperatorSecrets:
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            "smoke live-route preflight requires the existing operator secret holder"
+        )
+    try:
+        if explicitly_allow_metadata_egress is not True:
+            raise AuthenticatedRunnerSmokeOpenRouterError(
+                "smoke live-route preflight requires explicit metadata egress permission"
+            )
+        inventory = preflight_authenticated_runner_smoke_live_route_launch(launch)
+        ledger = launch.budget.atomic_ledger
+        if type(ledger) is not AtomicCostLedger:
+            raise AuthenticatedRunnerSmokeOpenRouterError(
+                "smoke live-route preflight lacks its atomic ledger"
+            )
+        initial_usage = tuple(launch.usage.records)
+        initial_budget = _budget_runtime_state(launch.budget)
+        initial_ledger = ledger.snapshot()
+        adapter = _SmokeLiveRouteProbeAdapter(launch=launch, secrets=operator_secrets)
+        exact_model_ids: tuple[str, str, str]
+        close_error: BaseException | None = None
+        try:
+            exact_model_ids = await adapter.probe_exact_routes()
+        finally:
+            try:
+                await adapter.close()
+            except BaseException as exc:
+                close_error = exc
+            if (
+                tuple(launch.usage.records) != initial_usage
+                or _budget_runtime_state(launch.budget) != initial_budget
+                or ledger.snapshot() != initial_ledger
+            ):
+                raise AuthenticatedRunnerSmokeOpenRouterError(
+                    "smoke live-route preflight changed usage, budget, or atomic cost-ledger state"
+                ) from None
+            if close_error is not None:
+                raise AuthenticatedRunnerSmokeOpenRouterError(
+                    "smoke live-route preflight did not close every metadata transport"
+                ) from close_error
+        return AuthenticatedRunnerSmokeLiveRoutePreflightResult(
+            inventory=inventory,
+            exact_model_ids=exact_model_ids,
+            logical_metadata_get_count=(len(exact_model_ids) * _LIVE_ROUTE_METADATA_GETS_PER_ROLE),
+            maximum_metadata_provider_attempt_count=(
+                len(exact_model_ids)
+                * _LIVE_ROUTE_METADATA_GETS_PER_ROLE
+                * (launch.config.execution.max_model_retries + 1)
+            ),
+        )
+    finally:
+        operator_secrets.clear()
+
+
+def _budget_runtime_state(
+    budget: BudgetManager,
+) -> tuple[tuple[int, ...], tuple[object, ...]]:
+    """Capture exact process-local accounting material without serializing authority."""
+
+    if type(budget) is not BudgetManager:
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            "smoke live-route preflight budget has the wrong exact type"
+        )
+    try:
+        projection = _project_trusted_budget_accounting_state(budget)
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            "smoke live-route preflight budget state is invalid"
+        ) from None
+    return tuple(id(item) for item in projection.containers), projection.material
 
 
 async def execute_authenticated_runner_smoke_openrouter(
@@ -1079,7 +1352,10 @@ async def _refresh_and_register_exact_route(
     model: CandidateModel,
     evidence: OpenRouterModelDiscoveryEvidence,
     manifest: OpenRouterModelDiscoveryRunManifest,
+    route_label: str,
 ) -> None:
+    if route_label not in _SMOKE_ROUTE_LABELS:
+        raise AuthenticatedRunnerSmokeOpenRouterError("smoke route label is invalid")
     expected_policy = OpenRouterProviderPolicy(
         certification=True,
         only=(model.approved_provider_endpoint,),
@@ -1087,14 +1363,19 @@ async def _refresh_and_register_exact_route(
     )
     if client.provider_policy != expected_policy:
         raise AuthenticatedRunnerSmokeOpenRouterError(
-            "smoke client differs from its singleton route policy"
+            f"smoke {route_label} client differs from its singleton route policy"
         )
     await client.validate_authentication()
     models_payload = await client.get_certification_model_metadata()
-    canonical_slug = openrouter_catalog_canonical_slug(
-        exact_model_id=model.exact_model_id,
-        models_payload=models_payload,
-    )
+    try:
+        canonical_slug = openrouter_catalog_canonical_slug(
+            exact_model_id=model.exact_model_id,
+            models_payload=models_payload,
+        )
+    except (TypeError, ValueError):
+        raise AuthenticatedRunnerSmokeOpenRouterError(
+            f"smoke {route_label} current canonical model metadata is incompatible"
+        ) from None
     single_model_payload = await client.get_model_metadata(model.exact_model_id)
     endpoint_payload = await client.get_model_endpoint_metadata(model.exact_model_id)
     zdr_payload = await client.list_zdr_endpoints()
@@ -1117,28 +1398,45 @@ async def _refresh_and_register_exact_route(
         )
     except (TypeError, ValueError):
         raise AuthenticatedRunnerSmokeOpenRouterError(
-            "smoke current model, route, ZDR, pricing, or output metadata is incompatible"
+            f"smoke {route_label} current model, route, ZDR, pricing, or output metadata "
+            "is incompatible"
         ) from None
-    frozen_model = OpenRouterModelDiscoveryPayload.model_validate(
-        evidence.model_dump(mode="json", exclude={"provenance", "discovery_evidence_sha256"})
-    )
     try:
         current_model.require_compatible_reasoning_profile(
             build_reasoning_policy(config).control_for_request("model_benchmark")
         )
     except ValueError:
         raise AuthenticatedRunnerSmokeOpenRouterError(
-            "smoke current reasoning metadata is incompatible with launch policy"
+            f"smoke {route_label} current reasoning metadata is incompatible with launch policy"
         ) from None
+    try:
+        require_openrouter_live_discovery_equivalence(
+            canonical_slug=canonical_slug,
+            current_endpoint=current_endpoint,
+            current_model=current_model,
+            frozen_evidence=evidence,
+        )
+    except ModelDiscoveryValidationError as exc:
+        raise AuthenticatedRunnerSmokeOpenRouterError(f"smoke {route_label} {exc}") from None
+    client.register_certification_model_discovery(evidence=evidence, manifest=manifest)
+    registered = client.registered_model_identity_snapshot(model.exact_model_id)
     if (
-        canonical_slug != evidence.canonical_slug
-        or current_endpoint != evidence.endpoint_snapshot
-        or current_model != frozen_model
+        registered.requested_slug != model.exact_model_id
+        or registered.canonical_slug != model.canonical_model_slug
+        or registered.approved_provider_endpoint != model.approved_provider_endpoint
+        or registered.provider_name != model.approved_provider_name
+        or registered.discovery_evidence_sha256 != model.discovery_evidence_sha256
+        or registered.endpoint_snapshot_sha256 != model.endpoint_snapshot_sha256
+        or registered.pricing_snapshot_sha256 != model.pricing_snapshot_sha256
+        or registered.model_metadata_snapshot_sha256 != model.model_metadata_snapshot_sha256
+        or registered.endpoint_capabilities.output_capability_sha256
+        != model.output_capability_sha256
+        or registered.provider_policy.allow_fallbacks is not False
+        or registered.provider_policy.configured_endpoints != (model.approved_provider_endpoint,)
     ):
         raise AuthenticatedRunnerSmokeOpenRouterError(
-            "smoke current discovery differs from its frozen exact route"
+            f"smoke {route_label} registered identity differs from same-session discovery refresh"
         )
-    client.register_certification_model_discovery(evidence=evidence, manifest=manifest)
 
 
 def _generation_request(
@@ -1321,11 +1619,14 @@ def _positive_cost(value: Decimal, *, label: str) -> Decimal:
 
 
 __all__ = [
+    "AuthenticatedRunnerSmokeLiveRoutePreflightResult",
     "AuthenticatedRunnerSmokeOpenRouterError",
     "AuthenticatedRunnerSmokeOpenRouterLaunch",
     "AuthenticatedRunnerSmokeOpenRouterResult",
     "AuthenticatedRunnerSmokePreflightInventory",
     "AuthenticatedRunnerSmokeRunPlan",
     "execute_authenticated_runner_smoke_openrouter",
+    "preflight_authenticated_runner_smoke_live_route_launch",
+    "preflight_authenticated_runner_smoke_live_routes",
     "preflight_authenticated_runner_smoke_openrouter_launch",
 ]
