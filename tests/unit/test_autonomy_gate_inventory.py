@@ -43,8 +43,8 @@ def inventory() -> AutonomyGateInventory:
 def test_inventory_freezes_the_exact_recursive_source_universe(
     inventory: AutonomyGateInventory,
 ) -> None:
-    assert inventory.source_count == 3627
-    assert inventory.source_occurrence_count == 3630
+    assert inventory.source_count == 3628
+    assert inventory.source_occurrence_count == 3631
     assert inventory.audit_config_leaf_locator_count == 505
     assert inventory.audit_config_leaf_occurrence_count == 508
     assert inventory.audit_config_shared_locator_count == 3
@@ -54,7 +54,7 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
     assert inventory.cli_run_parameter_count == 50
     assert inventory.pipeline_init_parameter_count == 25
     assert inventory.pipeline_run_parameter_count == 15
-    assert inventory.completion_entrypoint_parameter_count == 299
+    assert inventory.completion_entrypoint_parameter_count == 300
     assert {kind.value: count for kind, count in inventory.source_kind_counts.items()} == {
         "AUDIT_CONFIG_LEAF": 505,
         "AUDIT_RUN_OPTION_LEAF": 13,
@@ -63,7 +63,7 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         "CLI_RUN_PARAMETER": 50,
         "PIPELINE_INIT_PARAMETER": 25,
         "PIPELINE_RUN_PARAMETER": 15,
-        "COMPLETION_ENTRYPOINT_PARAMETER": 299,
+        "COMPLETION_ENTRYPOINT_PARAMETER": 300,
         "DIRECT_ENVIRONMENT_INPUT": 454,
         "ENTROPY_INPUT": 17,
         "AUDITED_MODULE_UNIVERSE": 230,
@@ -71,7 +71,7 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         "REQUIRED_MISSING_GATE": 14,
     }
     assert Counter(source.classification for source in inventory.source_coverage) == {
-        SourceCoverageClassification.GATE: 3584,
+        SourceCoverageClassification.GATE: 3585,
         SourceCoverageClassification.NON_GATING_CONTROL: 43,
     }
     assert {item.value for item in SourceCoverageClassification} == {
@@ -159,6 +159,12 @@ def test_inventory_has_exact_autonomous_dispositions_and_honest_phase_zero_state
         managed_toolchain.implementation_detail
     )
     sources = {source.source_id: source for source in inventory.source_coverage}
+    smoke_run_index = sources[
+        "completion-entrypoint:models_authenticated_runner_smoke:smoke_run_index"
+    ]
+    assert smoke_run_index.source_kind is CompletionInputSourceKind.COMPLETION_ENTRYPOINT_PARAMETER
+    assert smoke_run_index.classification is SourceCoverageClassification.GATE
+    assert smoke_run_index.logical_gate_id == "gate-authenticated-real-campaign"
     for source_id in (
         "audited-module:orchestration.managed_toolchain",
         "audited-module:resources.managed_toolchain_bundle.json",

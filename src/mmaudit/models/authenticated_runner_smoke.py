@@ -30,6 +30,10 @@ from mmaudit.models.openrouter import OpenRouterStructuredRequestCostPreview
 from mmaudit.models.qualification import CandidateModel, LineageReviewStatus
 from mmaudit.models.schemas import UsageRecord
 from mmaudit.models.token_planning import RequestTokenPlan
+from mmaudit.models.usage import (
+    MAX_AUTHENTICATED_RUNNER_SMOKE_RUN_INDEX,
+    require_authenticated_runner_smoke_run_index,
+)
 from mmaudit.reporting.json_report import stable_json_bytes
 
 AUTHENTICATED_RUNNER_SMOKE_CASE_COUNT = 1
@@ -68,8 +72,9 @@ class AuthenticatedRunnerSmokeCostPlan(_StrictSmokeModel):
     artifact_kind: Literal["authenticated_runner_smoke_cost_plan"] = (
         "authenticated_runner_smoke_cost_plan"
     )
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.1"] = "1.1"
     disposition: Literal["NONCREDITING_SMOKE"] = "NONCREDITING_SMOKE"
+    smoke_run_index: int = Field(ge=1, le=MAX_AUTHENTICATED_RUNNER_SMOKE_RUN_INDEX)
     run_kind: CrossLineageAdjudicationRunKind
     stage: Literal["CANDIDATE", "JUDGE"]
     case_id: str = Field(pattern=_CASE_ID_PATTERN)
@@ -118,13 +123,18 @@ class AuthenticatedRunnerSmokeCostPlan(_StrictSmokeModel):
             raise ValueError("authenticated runner smoke plans grant no authority or credit")
         return value
 
+    @field_validator("smoke_run_index", mode="before")
+    @classmethod
+    def smoke_run_index_is_strict(cls, value: object) -> object:
+        return require_authenticated_runner_smoke_run_index(value)
+
     @model_validator(mode="after")
     def request_is_exact_and_self_bound(self) -> Self:
         preview = self.request_preview
         expected_prefix = (
-            f"authrunner.smoke.r1.candidate.{self.run_kind.value.casefold()}:"
+            f"authrunner.smoke.r{self.smoke_run_index}.candidate.{self.run_kind.value.casefold()}:"
             if self.stage == "CANDIDATE"
-            else f"authrunner.smoke.r1.judge.{self.run_kind.value.casefold()}:"
+            else f"authrunner.smoke.r{self.smoke_run_index}.judge.{self.run_kind.value.casefold()}:"
         )
         expected_candidate_request_id = (
             f"{expected_prefix}{self.selection_sha256}" if self.stage == "CANDIDATE" else None
@@ -171,8 +181,9 @@ class AuthenticatedRunnerSmokeRunEvidence(_StrictSmokeModel):
     artifact_kind: Literal["authenticated_runner_smoke_run_evidence"] = (
         "authenticated_runner_smoke_run_evidence"
     )
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.1"] = "1.1"
     disposition: Literal["NONCREDITING_SMOKE"] = "NONCREDITING_SMOKE"
+    smoke_run_index: int = Field(ge=1, le=MAX_AUTHENTICATED_RUNNER_SMOKE_RUN_INDEX)
     run_kind: CrossLineageAdjudicationRunKind
     candidate: CandidateModel
     judge: CandidateModel
@@ -204,6 +215,11 @@ class AuthenticatedRunnerSmokeRunEvidence(_StrictSmokeModel):
             raise ValueError("authenticated runner smoke run grants no authority or credit")
         return value
 
+    @field_validator("smoke_run_index", mode="before")
+    @classmethod
+    def smoke_run_index_is_strict(cls, value: object) -> object:
+        return require_authenticated_runner_smoke_run_index(value)
+
     @model_validator(mode="after")
     def run_is_exact_and_self_bound(self) -> Self:
         candidate_usage = self.candidate_report.result.usage_record
@@ -224,8 +240,10 @@ class AuthenticatedRunnerSmokeRunEvidence(_StrictSmokeModel):
                 and self.judge.lineage_review.status is not LineageReviewStatus.PENDING
             )
             or self.candidate_cost_plan.run_kind is not self.run_kind
+            or self.candidate_cost_plan.smoke_run_index != self.smoke_run_index
             or self.candidate_cost_plan.stage != "CANDIDATE"
             or self.candidate_report.run_kind != self.run_kind.value
+            or self.candidate_report.smoke_run_index != self.smoke_run_index
             or self.candidate_report.selection_sha256 != self.candidate_cost_plan.selection_sha256
             or self.candidate_report.corpus_sha256 != _PARENT_CORPUS_SHA256
             or self.candidate_report.ground_truth_sha256 != _PARENT_GROUND_TRUTH_SHA256
@@ -263,10 +281,12 @@ class AuthenticatedRunnerSmokeRunEvidence(_StrictSmokeModel):
             or len(self.prepared_adjudication.requests) != 1
             or self.judge_cost_plan.request_preview.logical_request_id
             != (
-                f"authrunner.smoke.r1.judge.{self.run_kind.value.casefold()}:"
+                f"authrunner.smoke.r{self.smoke_run_index}.judge."
+                f"{self.run_kind.value.casefold()}:"
                 f"{self.prepared_adjudication.requests[0].request_sha256}"
             )
             or self.judge_cost_plan.run_kind is not self.run_kind
+            or self.judge_cost_plan.smoke_run_index != self.smoke_run_index
             or self.judge_cost_plan.stage != "JUDGE"
             or self.judge_cost_plan.selection_sha256 != self.candidate_cost_plan.selection_sha256
             or self.judge_cost_plan.case_id != self.candidate_cost_plan.case_id
@@ -327,11 +347,12 @@ class AuthenticatedRunnerSmokeEvidenceBundle(_StrictSmokeModel):
     artifact_kind: Literal["authenticated_runner_noncrediting_smoke_evidence"] = (
         "authenticated_runner_noncrediting_smoke_evidence"
     )
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.1"] = "1.1"
     purpose: Literal["NONCREDITING_SMOKE"] = "NONCREDITING_SMOKE"
     disposition: Literal["TRANSPORT_SCHEMA_IDENTITY_COST_VALID"] = (
         "TRANSPORT_SCHEMA_IDENTITY_COST_VALID"
     )
+    smoke_run_index: int = Field(ge=1, le=MAX_AUTHENTICATED_RUNNER_SMOKE_RUN_INDEX)
     smoke_corpus_bundle_sha256: Literal[
         "721f058726cf9509c07cb2aae662fb6ac23b5c30a363db40229faf8895034497"
     ]
@@ -401,6 +422,11 @@ class AuthenticatedRunnerSmokeEvidenceBundle(_StrictSmokeModel):
             raise ValueError("authenticated runner smoke evidence grants no authority or credit")
         return value
 
+    @field_validator("smoke_run_index", mode="before")
+    @classmethod
+    def smoke_run_index_is_strict(cls, value: object) -> object:
+        return require_authenticated_runner_smoke_run_index(value)
+
     @model_validator(mode="after")
     def protocol_is_exact_and_self_bound(self) -> Self:
         targets = tuple(item.prepared_adjudication.target for item in self.runs)
@@ -414,7 +440,11 @@ class AuthenticatedRunnerSmokeEvidenceBundle(_StrictSmokeModel):
             or len({item.judge.exact_model_id for item in self.runs}) != 2
             or len({item.candidate.exact_model_id for item in self.runs}) != 1
             or any(
-                item.candidate_cost_plan.case_id != self.selected_case_id
+                item.smoke_run_index != self.smoke_run_index
+                or item.candidate_report.smoke_run_index != self.smoke_run_index
+                or item.candidate_cost_plan.smoke_run_index != self.smoke_run_index
+                or item.judge_cost_plan.smoke_run_index != self.smoke_run_index
+                or item.candidate_cost_plan.case_id != self.selected_case_id
                 or item.candidate_cost_plan.selection_sha256 != self.smoke_corpus_bundle_sha256
                 for item in self.runs
             )
@@ -533,6 +563,7 @@ class AuthenticatedRunnerSmokeEvidenceBundle(_StrictSmokeModel):
 
 def build_authenticated_runner_smoke_cost_plan(
     *,
+    smoke_run_index: int,
     run_kind: CrossLineageAdjudicationRunKind,
     stage: Literal["CANDIDATE", "JUDGE"],
     case_id: str,
@@ -542,7 +573,8 @@ def build_authenticated_runner_smoke_cost_plan(
     """Seal one exact smoke request preview without creating dispatch authority."""
 
     if (
-        type(run_kind) is not CrossLineageAdjudicationRunKind
+        require_authenticated_runner_smoke_run_index(smoke_run_index) != smoke_run_index
+        or type(run_kind) is not CrossLineageAdjudicationRunKind
         or stage not in {"CANDIDATE", "JUDGE"}
         or type(request_preview) is not OpenRouterStructuredRequestCostPreview
     ):
@@ -563,8 +595,9 @@ def build_authenticated_runner_smoke_cost_plan(
     )
     values: dict[str, Any] = {
         "artifact_kind": "authenticated_runner_smoke_cost_plan",
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "disposition": "NONCREDITING_SMOKE",
+        "smoke_run_index": smoke_run_index,
         "run_kind": run_kind,
         "stage": stage,
         "case_id": case_id,
@@ -594,7 +627,7 @@ def seal_authenticated_runner_smoke_run_evidence(
     payload = {
         **values,
         "artifact_kind": "authenticated_runner_smoke_run_evidence",
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "disposition": "NONCREDITING_SMOKE",
         "serialized_authority": False,
         "grants_review_credit": False,
@@ -618,7 +651,7 @@ def seal_authenticated_runner_smoke_evidence_bundle(
     payload = {
         **values,
         "artifact_kind": "authenticated_runner_noncrediting_smoke_evidence",
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "purpose": "NONCREDITING_SMOKE",
         "disposition": "TRANSPORT_SCHEMA_IDENTITY_COST_VALID",
         **_false_bundle_authority_payload(),

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -42,7 +43,11 @@ from mmaudit.models.openrouter import (
 from mmaudit.models.public_lineage_authority import resolve_verified_public_model_lineage
 from mmaudit.models.qualification import CandidateModel
 from mmaudit.models.schemas import UsageRecord
-from mmaudit.models.usage import UsageLedger, _attest_owned_real_usage_record
+from mmaudit.models.usage import (
+    MAX_AUTHENTICATED_RUNNER_SMOKE_RUN_INDEX,
+    UsageLedger,
+    _attest_owned_real_usage_record,
+)
 from mmaudit.orchestration.manifest import canonical_sha256
 from tests.identity_fixtures import bind_synthetic_usage_identity, rebind_synthetic_token_plan
 from tests.unit.test_authenticated_runner_cost_plan import _preview, _replace_preview
@@ -70,6 +75,7 @@ def _selection(
 def _smoke_report(
     suite: ModelBenchmarkSuite,
     *,
+    smoke_run_index: int = 1,
     run_kind: str = "PRIMARY",
     model_id: str = CANDIDATE_ID,
 ) -> NoncreditingModelBenchmarkSmokeReport:
@@ -79,6 +85,7 @@ def _smoke_report(
     assert source_result.usage_record is not None
     assert source_result.generation_evidence is not None
     descriptor = authenticated_runner_smoke_model_benchmark_request_descriptor(
+        smoke_run_index=smoke_run_index,
         run_kind=run_kind,  # type: ignore[arg-type]
         selection_sha256=SELECTION_SHA256,
         case=case,
@@ -104,8 +111,9 @@ def _smoke_report(
     result = ModelBenchmarkCaseResult.model_validate(result_payload)
     values = {
         "artifact_kind": "noncrediting_model_benchmark_smoke_report",
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "disposition": "NONCREDITING_SMOKE",
+        "smoke_run_index": smoke_run_index,
         "run_kind": run_kind,
         "selection_sha256": SELECTION_SHA256,
         "corpus_name": suite.name,
@@ -162,12 +170,14 @@ def test_smoke_descriptor_uses_disjoint_bounded_namespace_without_relaxing_full_
     target = ModelBenchmarkTarget(model_id="fixture/model-v1")
 
     primary = authenticated_runner_smoke_model_benchmark_request_descriptor(
+        smoke_run_index=1,
         run_kind="PRIMARY",
         selection_sha256=SELECTION_SHA256,
         case=case,
         target=target,
     )
     replay = authenticated_runner_smoke_model_benchmark_request_descriptor(
+        smoke_run_index=1,
         run_kind="REPLAY",
         selection_sha256=SELECTION_SHA256,
         case=case,
@@ -192,11 +202,130 @@ def test_smoke_descriptor_uses_disjoint_bounded_namespace_without_relaxing_full_
     )
 
 
+def test_smoke_run_index_is_deterministic_within_a_run_and_distinct_across_runs() -> None:
+    suite = load_model_benchmark_corpus(CORPUS_PATH)
+    case, _truth = _selection(suite)
+    target = ModelBenchmarkTarget(model_id="fixture/model-v1")
+
+    def request_id(index: int) -> str:
+        return authenticated_runner_smoke_model_benchmark_request_descriptor(
+            smoke_run_index=index,
+            run_kind="PRIMARY",
+            selection_sha256=SELECTION_SHA256,
+            case=case,
+            target=target,
+        ).logical_request_id
+
+    assert request_id(1) == request_id(1)
+    assert request_id(1) != request_id(2)
+    assert request_id(2) == f"authrunner.smoke.r2.candidate.primary:{SELECTION_SHA256}"
+    maximum_request_id = request_id(MAX_AUTHENTICATED_RUNNER_SMOKE_RUN_INDEX)
+    assert maximum_request_id.startswith("authrunner.smoke.r999999999.candidate.primary:")
+    assert len(f"{maximum_request_id}:attempt:2") <= 128
+
+    candidate_r1 = {
+        request_id(1),
+        authenticated_runner_smoke_model_benchmark_request_descriptor(
+            smoke_run_index=1,
+            run_kind="REPLAY",
+            selection_sha256=SELECTION_SHA256,
+            case=case,
+            target=target,
+        ).logical_request_id,
+    }
+    candidate_r2 = {
+        request_id(2),
+        authenticated_runner_smoke_model_benchmark_request_descriptor(
+            smoke_run_index=2,
+            run_kind="REPLAY",
+            selection_sha256=SELECTION_SHA256,
+            case=case,
+            target=target,
+        ).logical_request_id,
+    }
+    judge_requests = (
+        SimpleNamespace(
+            run_kind=CrossLineageAdjudicationRunKind.PRIMARY,
+            request_sha256="a" * 64,
+        ),
+        SimpleNamespace(
+            run_kind=CrossLineageAdjudicationRunKind.REPLAY,
+            request_sha256="b" * 64,
+        ),
+    )
+    judge_r1 = {
+        adjudication._cross_lineage_adjudication_smoke_logical_request_id(item, 1)
+        for item in judge_requests
+    }
+    judge_r2 = {
+        adjudication._cross_lineage_adjudication_smoke_logical_request_id(item, 2)
+        for item in judge_requests
+    }
+    release = {
+        f"authrunner.candidate.primary:{case.case_id}",
+        f"authrunner.candidate.replay:{case.case_id}",
+        *(
+            adjudication._cross_lineage_adjudication_logical_request_id(item)
+            for item in judge_requests
+        ),
+    }
+    assert len(candidate_r2 | judge_r2) == 4
+    assert (candidate_r2 | judge_r2).isdisjoint(candidate_r1 | judge_r1 | release)
+
+
+@pytest.mark.parametrize(
+    "value",
+    (False, True, 0, -1, MAX_AUTHENTICATED_RUNNER_SMOKE_RUN_INDEX + 1, 1.0, "1"),
+)
+def test_smoke_descriptor_rejects_non_strict_or_out_of_range_run_index(value: object) -> None:
+    suite = load_model_benchmark_corpus(CORPUS_PATH)
+    case, _truth = _selection(suite)
+    with pytest.raises(ValueError, match="smoke run index"):
+        authenticated_runner_smoke_model_benchmark_request_descriptor(
+            smoke_run_index=value,  # type: ignore[arg-type]
+            run_kind="PRIMARY",
+            selection_sha256=SELECTION_SHA256,
+            case=case,
+            target=ModelBenchmarkTarget(model_id="fixture/model-v1"),
+        )
+
+
+@pytest.mark.parametrize(
+    "value",
+    (None, False, True, 0, -1, MAX_AUTHENTICATED_RUNNER_SMOKE_RUN_INDEX + 1, 1.0, "2"),
+)
+def test_smoke_judge_request_id_rejects_non_strict_or_out_of_range_run_index(
+    value: object,
+) -> None:
+    request = SimpleNamespace(
+        run_kind=CrossLineageAdjudicationRunKind.PRIMARY,
+        request_sha256="a" * 64,
+    )
+    with pytest.raises(CrossLineageAdjudicationError, match="smoke run index is invalid"):
+        adjudication._cross_lineage_adjudication_smoke_logical_request_id(
+            request,  # type: ignore[arg-type]
+            value,  # type: ignore[arg-type]
+        )
+
+
+def test_release_judge_request_id_rejects_a_smoke_run_index() -> None:
+    request = SimpleNamespace(
+        run_kind=CrossLineageAdjudicationRunKind.PRIMARY,
+        request_sha256="a" * 64,
+    )
+    with pytest.raises(CrossLineageAdjudicationError, match="cannot carry a smoke run index"):
+        adjudication._cross_lineage_adjudication_logical_request_id(
+            request,  # type: ignore[arg-type]
+            2,
+        )
+
+
 def test_smoke_cost_preview_binds_request_and_preserves_reasoning_plan() -> None:
     suite = load_model_benchmark_corpus(CORPUS_PATH)
     case, _truth = _selection(suite)
     target = ModelBenchmarkTarget(model_id="fixture/model-v1")
     descriptor = authenticated_runner_smoke_model_benchmark_request_descriptor(
+        smoke_run_index=1,
         run_kind="PRIMARY",
         selection_sha256=SELECTION_SHA256,
         case=case,
@@ -237,6 +366,7 @@ def test_smoke_execute_uses_one_cost_bound_request_and_refetches_generation(
     response = source.result.normalized_response
     generation = source.result.generation_evidence
     descriptor = authenticated_runner_smoke_model_benchmark_request_descriptor(
+        smoke_run_index=1,
         run_kind="PRIMARY",
         selection_sha256=SELECTION_SHA256,
         case=case,
@@ -268,6 +398,7 @@ def test_smoke_execute_uses_one_cost_bound_request_and_refetches_generation(
 
     report = asyncio.run(
         execute_noncrediting_model_benchmark_smoke(
+            smoke_run_index=1,
             suite=suite,
             selected_case=case,
             selected_ground_truth=truth,
@@ -345,7 +476,7 @@ def test_smoke_prepare_emits_one_existing_nonauthorizing_request_and_rejects_sam
     assert prepared.candidate_report_sha256 == report.report_sha256
     assert prepared.requests[0].candidate_report_sha256 == report.report_sha256
     smoke_request_id = adjudication._cross_lineage_adjudication_smoke_logical_request_id(
-        prepared.requests[0]
+        prepared.requests[0], 1
     )
     assert smoke_request_id == (
         f"authrunner.smoke.r1.judge.primary:{prepared.requests[0].request_sha256}"

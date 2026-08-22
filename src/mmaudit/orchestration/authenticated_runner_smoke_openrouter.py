@@ -98,7 +98,7 @@ from mmaudit.models.qualification import (
 )
 from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.models.schemas import UsageRecord
-from mmaudit.models.usage import UsageLedger
+from mmaudit.models.usage import UsageLedger, require_authenticated_runner_smoke_run_index
 from mmaudit.operator_secrets import OperatorSecrets
 from mmaudit.orchestration.budgets import (
     BudgetManager,
@@ -120,6 +120,10 @@ from mmaudit.repository.privacy_provenance import (
 
 _LEDGER_CAP_USD = Decimal("250")
 _ROOT_LINEAGE_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
+_SMOKE_LEDGER_REQUEST_ID_PATTERN = re.compile(
+    r"^authrunner\.smoke\.r([1-9][0-9]{0,8})\.(?:candidate|judge)\."
+    r"(?:primary|replay):[0-9a-f]{64}(?::attempt:[1-9][0-9]*)?$"
+)
 _LIVE_ROUTE_METADATA_GETS_PER_ROLE = 5
 _LIVE_ROUTE_METADATA_LOGICAL_GET_COUNT = 15
 _LIVE_ROUTE_METADATA_MAXIMUM_PROVIDER_ATTEMPTS = 30
@@ -238,6 +242,7 @@ class AuthenticatedRunnerSmokeRunPlan:
 class AuthenticatedRunnerSmokeOpenRouterLaunch:
     """Already-loaded provider-free inputs for one non-resumable smoke process."""
 
+    smoke_run_index: int
     config: AuditConfig
     explicitly_allow_synthetic_egress: bool
     public_lineage_capability: VerifiedPublicModelLineage
@@ -261,6 +266,7 @@ class AuthenticatedRunnerSmokeOpenRouterLaunch:
 class AuthenticatedRunnerSmokePreflightInventory:
     """Provider-free exact admission; judge costs remain deliberately pending."""
 
+    smoke_run_index: int
     run_count: int
     case_count: int
     logical_request_count: int
@@ -368,6 +374,7 @@ class _SmokeOpenRouterAdapter:
                 route_role=AuthenticatedRunnerSmokeLiveRouteRole.CANDIDATE,
             )
             report = await execute_noncrediting_model_benchmark_smoke(
+                smoke_run_index=launch.smoke_run_index,
                 suite=launch.benchmark_suite,
                 selected_case=launch.smoke_corpus.case,
                 selected_ground_truth=launch.smoke_corpus.ground_truth_case,
@@ -458,6 +465,7 @@ class _SmokeOpenRouterAdapter:
             ) from None
         try:
             results = await execute_noncrediting_cross_lineage_adjudication_smoke_requests(
+                smoke_run_index=self._launch.smoke_run_index,
                 client=client,
                 prepared=prepared.prepared_adjudication,
                 expected_request_cost_previews=(cost_plan.request_preview,),
@@ -739,6 +747,10 @@ def _preflight_authenticated_runner_smoke_launch(
 
     if type(launch) is not AuthenticatedRunnerSmokeOpenRouterLaunch:
         raise AuthenticatedRunnerSmokeOpenRouterError("smoke launch has the wrong exact type")
+    try:
+        smoke_run_index = require_authenticated_runner_smoke_run_index(launch.smoke_run_index)
+    except ValueError:
+        raise AuthenticatedRunnerSmokeOpenRouterError("smoke run index is invalid") from None
     config = launch.config
     suite = launch.benchmark_suite
     smoke = launch.smoke_corpus
@@ -909,6 +921,7 @@ def _preflight_authenticated_runner_smoke_launch(
         )
     initial = ledger.snapshot()
     _require_clean_snapshot(initial, final=False)
+    _require_unused_smoke_run_index(initial, smoke_run_index=smoke_run_index)
     maximum_attempts = config.execution.max_model_retries + 1
     if (
         maximum_attempts != 2
@@ -921,6 +934,7 @@ def _preflight_authenticated_runner_smoke_launch(
         )
     candidate_cost_plans = tuple(
         _candidate_cost_plan(
+            smoke_run_index=smoke_run_index,
             config=config,
             smoke=smoke,
             candidate=candidate,
@@ -958,6 +972,7 @@ def _preflight_authenticated_runner_smoke_launch(
             "smoke exact candidate admission or operator tripwire reaches 250 USD"
         )
     return AuthenticatedRunnerSmokePreflightInventory(
+        smoke_run_index=smoke_run_index,
         run_count=2,
         case_count=1,
         logical_request_count=4,
@@ -1169,6 +1184,7 @@ async def execute_authenticated_runner_smoke_openrouter(
             )
             final_runs.append(
                 seal_authenticated_runner_smoke_run_evidence(
+                    smoke_run_index=launch.smoke_run_index,
                     run_kind=prepared_item.plan.run_kind,
                     candidate=launch.candidate_registry.candidates[0],
                     judge=prepared_item.plan.judge,
@@ -1201,6 +1217,7 @@ async def execute_authenticated_runner_smoke_openrouter(
             strict=True,
         )
         bundle = seal_authenticated_runner_smoke_evidence_bundle(
+            smoke_run_index=launch.smoke_run_index,
             smoke_corpus_bundle_sha256=launch.smoke_corpus.bundle_sha256,
             parent_corpus_sha256=launch.smoke_corpus.manifest.parent.corpus_sha256,
             parent_ground_truth_sha256=launch.smoke_corpus.manifest.parent.ground_truth_sha256,
@@ -1231,6 +1248,7 @@ async def execute_authenticated_runner_smoke_openrouter(
 
 def _candidate_cost_plan(
     *,
+    smoke_run_index: int,
     config: AuditConfig,
     smoke: AuthenticatedRunnerSmokeCorpusBundle,
     candidate: CandidateModel,
@@ -1243,6 +1261,7 @@ def _candidate_cost_plan(
         root_lineage=candidate.root_lineage,
     )
     descriptor = authenticated_runner_smoke_model_benchmark_request_descriptor(
+        smoke_run_index=smoke_run_index,
         run_kind=run_kind.value,
         selection_sha256=smoke.bundle_sha256,
         case=smoke.case,
@@ -1274,6 +1293,7 @@ def _candidate_cost_plan(
         expected_request_cost_preview=preview,
     )
     return build_authenticated_runner_smoke_cost_plan(
+        smoke_run_index=smoke_run_index,
         run_kind=run_kind,
         stage="CANDIDATE",
         case_id=smoke.case.case_id,
@@ -1288,6 +1308,7 @@ def _judge_cost_plan(
     prepared: _PreparedSmokeRun,
 ) -> AuthenticatedRunnerSmokeCostPlan:
     previews = cross_lineage_adjudication_smoke_request_cost_previews(
+        smoke_run_index=prepared.candidate_cost_plan.smoke_run_index,
         config=config,
         prepared=prepared.prepared_adjudication,
         discovery_manifest=prepared.plan.judge_discovery_manifest,
@@ -1299,6 +1320,7 @@ def _judge_cost_plan(
             "smoke judge cost derivation returned a different request inventory"
         )
     return build_authenticated_runner_smoke_cost_plan(
+        smoke_run_index=prepared.candidate_cost_plan.smoke_run_index,
         run_kind=prepared.plan.run_kind,
         stage="JUDGE",
         case_id=prepared.candidate_cost_plan.case_id,
@@ -1783,6 +1805,22 @@ def _require_clean_snapshot(snapshot: CostLedgerSnapshot, *, final: bool) -> Non
         raise AuthenticatedRunnerSmokeOpenRouterError(
             "smoke requires a terminal non-overrun exact-250-USD ledger"
         )
+
+
+def _require_unused_smoke_run_index(
+    snapshot: CostLedgerSnapshot,
+    *,
+    smoke_run_index: int,
+) -> None:
+    """Reject a run namespace already occupied by any cumulative ledger entry."""
+
+    run_index = require_authenticated_runner_smoke_run_index(smoke_run_index)
+    for entry in snapshot.entries:
+        match = _SMOKE_LEDGER_REQUEST_ID_PATTERN.fullmatch(entry.request_id)
+        if match is not None and int(match.group(1)) == run_index:
+            raise AuthenticatedRunnerSmokeOpenRouterError(
+                f"smoke run index {run_index} is already present in the cumulative ledger"
+            )
 
 
 def _positive_cost(value: Decimal, *, label: str) -> Decimal:

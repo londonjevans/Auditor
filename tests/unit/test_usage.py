@@ -1268,6 +1268,21 @@ _AUTHRUNNER_ORIGIN_ROUTES = (
         "PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION",
         "NONCREDITING_SMOKE",
     ),
+    (
+        f"authrunner.smoke.r2.candidate.primary:{'4' * 64}",
+        "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK",
+        "NONCREDITING_SMOKE",
+    ),
+    (
+        f"authrunner.smoke.r10.judge.replay:{'5' * 64}",
+        "PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION",
+        "NONCREDITING_SMOKE",
+    ),
+    (
+        f"authrunner.smoke.r999999999.candidate.replay:{'6' * 64}",
+        "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK",
+        "NONCREDITING_SMOKE",
+    ),
 )
 
 
@@ -1301,6 +1316,26 @@ def test_authrunner_origin_scope_is_a_closed_four_way_namespace_map(
     else:
         with pytest.raises(ValueError, match="does not match its closed request namespace"):
             _authrunner_usage_origin_scope(record)
+
+
+@pytest.mark.parametrize("run_label", ("r0", "r01", "r1000000000"))
+def test_authrunner_smoke_origin_scope_rejects_out_of_range_or_noncanonical_run_index(
+    run_label: str,
+) -> None:
+    source = _creditable_record(execution_evidence=ExecutionEvidenceKind.REAL)
+    record = source.model_copy(
+        update={
+            "request_id": f"authrunner.smoke.{run_label}.candidate.primary:{'7' * 64}",
+            "role": "model_benchmark",
+            "routing": {
+                **source.routing,
+                "privacy_source_proof_kind": "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK",
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match="does not match its closed request namespace"):
+        _authrunner_usage_origin_scope(record)
 
 
 @pytest.mark.parametrize(

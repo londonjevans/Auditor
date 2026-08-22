@@ -14,6 +14,7 @@ from mmaudit.config import ConfigError
 from mmaudit.constants import ExitCode
 from mmaudit.models.authenticated_runner_smoke import AuthenticatedRunnerSmokeEvidenceBundle
 from mmaudit.models.discovery import OpenRouterLiveDiscoveryMismatchCategory
+from mmaudit.models.usage import MAX_AUTHENTICATED_RUNNER_SMOKE_RUN_INDEX
 from mmaudit.orchestration.authenticated_runner_smoke_openrouter import (
     AuthenticatedRunnerSmokeLiveRouteMismatch,
     AuthenticatedRunnerSmokeLiveRouteMismatchError,
@@ -48,6 +49,7 @@ class _SecretPresenceOnly:
 def _required_arguments(
     tmp_path: Path,
     *,
+    smoke_run_index: str = "2",
     allow_egress: bool = True,
     preflight_only: bool = False,
     live_route_preflight_only: bool = False,
@@ -70,6 +72,8 @@ def _required_arguments(
         str(tmp_path / "replay-judge-discovery"),
         "--smoke-corpus",
         str(tmp_path / "smoke-corpus"),
+        "--smoke-run-index",
+        smoke_run_index,
         "--output",
         str(tmp_path / "smoke-evidence.json"),
         "--candidate-cost-cap-usd-per-attempt",
@@ -101,6 +105,7 @@ def _required_arguments(
 
 def _inventory() -> SimpleNamespace:
     return SimpleNamespace(
+        smoke_run_index=2,
         run_count=2,
         case_count=1,
         logical_request_count=4,
@@ -169,6 +174,7 @@ def test_authenticated_runner_smoke_help_is_isolated_from_crediting_inputs() -> 
         "--replay-judge-registry",
         "--replay-judge-discovery-run",
         "--smoke-corpus",
+        "--smoke-run-index",
         "--corpus",
         "--cost-ledger",
         "--secrets-env-file",
@@ -190,6 +196,37 @@ def test_authenticated_runner_smoke_help_is_isolated_from_crediting_inputs() -> 
     assert "without benchmark credit" in result.stdout
 
 
+@pytest.mark.parametrize("value", ("0", "-1", "01", "+1", "1.0", "true", "1000000000"))
+def test_authenticated_runner_smoke_rejects_noncanonical_run_index_before_loading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+) -> None:
+    def forbidden(*_args: object, **_kwargs: object) -> Any:
+        raise AssertionError("invalid run index must precede every loaded or mutable surface")
+
+    for name in (
+        "load_config",
+        "select_operator_secret_file",
+        "load_operator_secrets",
+        "_budget_and_usage",
+        "preflight_authenticated_runner_smoke_openrouter_launch",
+        "preflight_authenticated_runner_smoke_live_routes",
+        "execute_authenticated_runner_smoke_openrouter",
+        "_write_authenticated_runner_smoke_output_fresh",
+    ):
+        monkeypatch.setattr(cli_module, name, forbidden)
+
+    result = RUNNER.invoke(
+        cli_module.app,
+        _required_arguments(tmp_path, smoke_run_index=value),
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "canonical positive decimal text" in " ".join(result.stdout.split())
+    assert not (tmp_path / "smoke-evidence.json").exists()
+
+
 def test_authenticated_runner_smoke_requires_egress_opt_in_before_loading(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -207,6 +244,25 @@ def test_authenticated_runner_smoke_requires_egress_opt_in_before_loading(
 
     assert result.exit_code == ExitCode.CONFIGURATION
     assert "requires explicit --allow-code-egress" in " ".join(result.stdout.split())
+
+
+def test_authenticated_runner_smoke_requires_explicit_run_index_before_loading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "load_config",
+        lambda _path: (_ for _ in ()).throw(AssertionError("must not load configuration")),
+    )
+    arguments = _required_arguments(tmp_path)
+    option_index = arguments.index("--smoke-run-index")
+    del arguments[option_index : option_index + 2]
+
+    result = RUNNER.invoke(cli_module.app, arguments)
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "--smoke-run-index" in f"{result.stdout}{result.stderr}"
 
 
 def test_authenticated_runner_smoke_preflight_is_provider_free_and_does_not_mutate_output(
@@ -561,6 +617,7 @@ def test_authenticated_runner_smoke_real_path_preflights_before_secret_and_publi
     inventory = _inventory()
     ledger_evidence = SimpleNamespace(entries=(object(),) * 4, final_spent_usd="0.18")
     bundle = SimpleNamespace(
+        smoke_run_index=2,
         bundle_sha256="d" * 64,
         closed_ledger_evidence=ledger_evidence,
     )
@@ -639,6 +696,7 @@ def test_verify_authenticated_runner_smoke_replays_exact_corpus_parent_and_confi
     )
     config = SimpleNamespace(stable_hash=lambda: "d" * 64)
     bundle = SimpleNamespace(
+        smoke_run_index=2,
         smoke_corpus_bundle_sha256=smoke.bundle_sha256,
         parent_corpus_sha256=parent.corpus_sha256,
         parent_ground_truth_sha256=parent.ground_truth_sha256,
@@ -727,6 +785,7 @@ def test_verify_authenticated_runner_smoke_replays_exact_corpus_parent_and_confi
         ("config", config_path),
     ]
     assert "VALID / NONCREDITING / NONAUTHORIZING" in result.stdout
+    assert "Smoke run index: 2" in result.stdout
     assert "runs=2; logical_requests=4" in result.stdout
 
 
@@ -878,6 +937,20 @@ def test_smoke_evidence_schema_is_generated_closed_and_non_authorizing() -> None
     assert schema["properties"]["run_count"]["const"] == 2
     assert schema["properties"]["logical_request_count"]["const"] == 4
     assert schema["properties"]["maximum_provider_attempt_count"]["const"] == 8
+    for definition in (
+        schema,
+        schema["$defs"]["AuthenticatedRunnerSmokeCostPlan"],
+        schema["$defs"]["AuthenticatedRunnerSmokeRunEvidence"],
+        schema["$defs"]["NoncreditingModelBenchmarkSmokeReport"],
+    ):
+        assert definition["properties"]["schema_version"]["const"] == "1.1"
+        assert definition["properties"]["smoke_run_index"] == {
+            "maximum": MAX_AUTHENTICATED_RUNNER_SMOKE_RUN_INDEX,
+            "minimum": 1,
+            "title": "Smoke Run Index",
+            "type": "integer",
+        }
+        assert "smoke_run_index" in definition["required"]
     sequence = schema["properties"]["execution_sequence_request_ids"]
     assert sequence["minItems"] == 4
     assert sequence["maxItems"] == 4

@@ -225,7 +225,7 @@ from mmaudit.models.schemas import (
     MaximumAssuranceStatus,
     Severity,
 )
-from mmaudit.models.usage import UsageLedger
+from mmaudit.models.usage import UsageLedger, parse_authenticated_runner_smoke_run_index
 from mmaudit.operator_secrets import (
     OperatorSecretError,
     OperatorSecrets,
@@ -2348,6 +2348,13 @@ def models_authenticated_runner_smoke(
             help="Exact four-file NONCREDITING smoke corpus directory.",
         ),
     ],
+    smoke_run_index: Annotated[
+        str,
+        typer.Option(
+            "--smoke-run-index",
+            help="Fresh canonical positive run index for the disjoint smoke ledger namespace.",
+        ),
+    ],
     output: Annotated[
         Path,
         typer.Option(
@@ -2431,6 +2438,12 @@ def models_authenticated_runner_smoke(
     """Run one non-resumable, one-case REAL transport smoke without benchmark credit."""
 
     async def execute() -> None:
+        try:
+            parsed_smoke_run_index = parse_authenticated_runner_smoke_run_index(smoke_run_index)
+        except ValueError:
+            raise ConfigError(
+                "--smoke-run-index must be canonical positive decimal text from 1 through 999999999"
+            ) from None
         if preflight_only and live_route_preflight_only:
             raise ConfigError(
                 "--preflight-only and --live-route-preflight-only are mutually exclusive"
@@ -2490,6 +2503,7 @@ def models_authenticated_runner_smoke(
             raise ConfigError("authenticated runner smoke cost ledger failed to open")
 
         launch = AuthenticatedRunnerSmokeOpenRouterLaunch(
+            smoke_run_index=parsed_smoke_run_index,
             config=config,
             explicitly_allow_synthetic_egress=(
                 False if live_route_preflight_only else allow_code_egress
@@ -2553,6 +2567,10 @@ def models_authenticated_runner_smoke(
             local_console.print(
                 "AUTHRUNNER smoke preflight: VALID / NONCREDITING / NONAUTHORIZING / "
                 "NO PROVIDER EGRESS",
+                markup=False,
+            )
+            local_console.print(
+                f"Smoke run index: {inventory.smoke_run_index}",
                 markup=False,
             )
             local_console.print(
@@ -2627,6 +2645,10 @@ def models_authenticated_runner_smoke(
                 markup=False,
             )
             local_console.print(
+                f"Smoke run index: {inventory.smoke_run_index}",
+                markup=False,
+            )
+            local_console.print(
                 "Validated exact routes: "
                 f"candidate={live_route_result.exact_model_ids[0]}; "
                 f"primary_judge={live_route_result.exact_model_ids[1]}; "
@@ -2659,6 +2681,7 @@ def models_authenticated_runner_smoke(
             "AUTHRUNNER smoke: COMPLETE / NONCREDITING / NONAUTHORIZING",
             markup=False,
         )
+        local_console.print(f"Smoke run index: {result.bundle.smoke_run_index}", markup=False)
         local_console.print(f"Bundle SHA-256: {result.bundle.bundle_sha256}", markup=False)
         local_console.print(
             f"Closed ledger: entries={len(result.bundle.closed_ledger_evidence.entries)}; "
@@ -2722,6 +2745,7 @@ def models_verify_authenticated_runner_smoke(
             "AUTHRUNNER smoke evidence: VALID / NONCREDITING / NONAUTHORIZING",
             markup=False,
         )
+        local_console.print(f"Smoke run index: {bundle.smoke_run_index}", markup=False)
         local_console.print(f"Bundle SHA-256: {bundle.bundle_sha256}", markup=False)
         local_console.print(
             f"Inventory: case={bundle.selected_case_id}; runs={bundle.run_count}; "

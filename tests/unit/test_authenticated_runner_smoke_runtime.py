@@ -74,6 +74,7 @@ from mmaudit.orchestration.cost_ledger import (
     CostEntry,
     CostEntryStatus,
     CostLedgerSnapshot,
+    ReleaseReason,
 )
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.privacy import PrivacyProfile
@@ -178,16 +179,19 @@ def _candidate_smoke_plan(
     case_id: str,
     index: int,
     prompt_price: str = "0.001",
+    smoke_run_index: int = 1,
 ) -> Any:
     preview = _preview(
         index,
         logical_request_id=(
-            f"authrunner.smoke.r1.candidate.{run_kind.value.casefold()}:{selection_sha256}"
+            f"authrunner.smoke.r{smoke_run_index}.candidate."
+            f"{run_kind.value.casefold()}:{selection_sha256}"
         ),
         maximum_attempts=2,
         prompt_price=prompt_price,
     )
     return build_authenticated_runner_smoke_cost_plan(
+        smoke_run_index=smoke_run_index,
         run_kind=run_kind,
         stage="CANDIDATE",
         case_id=case_id,
@@ -203,15 +207,18 @@ def _judge_smoke_plan(
     case_id: str,
     request_sha256: str,
     index: int,
+    smoke_run_index: int = 1,
 ) -> Any:
     preview = _preview(
         index,
         logical_request_id=(
-            f"authrunner.smoke.r1.judge.{run_kind.value.casefold()}:{request_sha256}"
+            f"authrunner.smoke.r{smoke_run_index}.judge."
+            f"{run_kind.value.casefold()}:{request_sha256}"
         ),
         maximum_attempts=2,
     )
     return build_authenticated_runner_smoke_cost_plan(
+        smoke_run_index=smoke_run_index,
         run_kind=run_kind,
         stage="JUDGE",
         case_id=case_id,
@@ -233,6 +240,7 @@ def _launch(
     tmp_path: Path,
     candidate_tripwires: tuple[Decimal, Decimal] = (Decimal("1"), Decimal("1")),
     judge_tripwires: tuple[Decimal, Decimal] = (Decimal("1"), Decimal("1")),
+    smoke_run_index: int = 1,
 ) -> AuthenticatedRunnerSmokeOpenRouterLaunch:
     tmp_path.chmod(0o700)
     ledger = AtomicCostLedger.initialize(
@@ -282,6 +290,7 @@ def _launch(
         ),
     )
     return AuthenticatedRunnerSmokeOpenRouterLaunch(
+        smoke_run_index=smoke_run_index,
         config=config,
         explicitly_allow_synthetic_egress=True,
         public_lineage_capability=resolve_verified_public_model_lineage(),
@@ -303,6 +312,7 @@ async def _live_route_launch(
 ) -> AuthenticatedRunnerSmokeOpenRouterLaunch:
     harness = await execution_fixtures._harness(tmp_path / "full-runner", config_factory)
     return AuthenticatedRunnerSmokeOpenRouterLaunch(
+        smoke_run_index=1,
         config=harness.config,
         explicitly_allow_synthetic_egress=False,
         public_lineage_capability=harness.public_lineage,
@@ -403,6 +413,7 @@ def _fake_bundle_validator_subject() -> tuple[
     ]
     plans = [
         SimpleNamespace(
+            smoke_run_index=1,
             request_preview=previews[index],
             maximum_attempts=2,
             maximum_cost_usd_per_attempt_exact="1",
@@ -439,24 +450,32 @@ def _fake_bundle_validator_subject() -> tuple[
         public_lineage_manifest_file_sha256="5" * 64,
     )
     primary = SimpleNamespace(
+        smoke_run_index=1,
         run_kind=CrossLineageAdjudicationRunKind.PRIMARY,
         run_sha256="7" * 64,
         candidate=candidate,
         judge=SimpleNamespace(exact_model_id=PRIMARY_JUDGE_ID),
         candidate_cost_plan=plans[0],
         judge_cost_plan=plans[1],
-        candidate_report=SimpleNamespace(result=SimpleNamespace(usage_record=usages[0])),
+        candidate_report=SimpleNamespace(
+            smoke_run_index=1,
+            result=SimpleNamespace(usage_record=usages[0]),
+        ),
         prepared_adjudication=SimpleNamespace(target=primary_lineage_target),
         adjudication_report=SimpleNamespace(cases=(SimpleNamespace(usage_record=usages[1]),)),
     )
     replay = SimpleNamespace(
+        smoke_run_index=1,
         run_kind=CrossLineageAdjudicationRunKind.REPLAY,
         run_sha256="8" * 64,
         candidate=candidate,
         judge=SimpleNamespace(exact_model_id=REPLAY_JUDGE_ID),
         candidate_cost_plan=plans[2],
         judge_cost_plan=plans[3],
-        candidate_report=SimpleNamespace(result=SimpleNamespace(usage_record=usages[2])),
+        candidate_report=SimpleNamespace(
+            smoke_run_index=1,
+            result=SimpleNamespace(usage_record=usages[2]),
+        ),
         prepared_adjudication=SimpleNamespace(target=replay_lineage_target),
         adjudication_report=SimpleNamespace(cases=(SimpleNamespace(usage_record=usages[3]),)),
     )
@@ -469,6 +488,7 @@ def _fake_bundle_validator_subject() -> tuple[
         for usage in usages
     ]
     bundle = SimpleNamespace(
+        smoke_run_index=1,
         runs=(primary, replay),
         selected_case_id="case-df79ea132113b863",
         smoke_corpus_bundle_sha256=(
@@ -534,6 +554,7 @@ def _fake_run_validator_subject(
     embedded_candidate = SimpleNamespace(retrieved_at=NOW)
     embedded_judge = SimpleNamespace(retrieved_at=NOW)
     candidate_report = SimpleNamespace(
+        smoke_run_index=1,
         run_kind="PRIMARY",
         selection_sha256="b" * 64,
         report_sha256="c" * 64,
@@ -552,6 +573,7 @@ def _fake_run_validator_subject(
         ),
     )
     candidate_plan = SimpleNamespace(
+        smoke_run_index=1,
         run_kind=CrossLineageAdjudicationRunKind.PRIMARY,
         stage="CANDIDATE",
         selection_sha256="b" * 64,
@@ -583,6 +605,7 @@ def _fake_run_validator_subject(
         ),
     )
     judge_plan = SimpleNamespace(
+        smoke_run_index=1,
         run_kind=CrossLineageAdjudicationRunKind.PRIMARY,
         stage="JUDGE",
         selection_sha256=candidate_plan.selection_sha256,
@@ -604,6 +627,7 @@ def _fake_run_validator_subject(
         ),
     )
     run = SimpleNamespace(
+        smoke_run_index=1,
         run_kind=CrossLineageAdjudicationRunKind.PRIMARY,
         candidate=candidate,
         judge=judge,
@@ -674,6 +698,7 @@ def _install_execution_order_harness(
         )
     )
     inventory = AuthenticatedRunnerSmokePreflightInventory(
+        smoke_run_index=launch.smoke_run_index,
         run_count=2,
         case_count=1,
         logical_request_count=4,
@@ -1467,7 +1492,7 @@ async def test_smoke_judge_revokes_generation_capability_after_detached_refetch(
         judge=plan.judge,
     )
     smoke_request_id = adjudication_module._cross_lineage_adjudication_smoke_logical_request_id(
-        request
+        request, 1
     )
     usage_payload = usage.model_dump(mode="python")
     usage_payload["request_id"] = smoke_request_id
@@ -1662,6 +1687,129 @@ async def test_live_route_launch_preflight_retains_pure_synthetic_privacy_checks
     assert inventory.case_count == 1
     assert launch.explicitly_allow_synthetic_egress is False
     assert observed == [(launch.config, launch.benchmark_suite, True)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_status", ("reconciled", "released_attempt"))
+async def test_preflight_rejects_an_occupied_smoke_run_namespace_before_live_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+    terminal_status: str,
+) -> None:
+    launch = await _live_route_launch(tmp_path=tmp_path, config_factory=config_factory)
+    ledger = launch.budget.atomic_ledger
+    assert ledger is not None
+    request_id = f"authrunner.smoke.r1.candidate.primary:{'a' * 64}"
+    if terminal_status == "released_attempt":
+        request_id = f"{request_id}:attempt:2"
+    reservation = ledger.reserve(request_id, Decimal("0.02"))
+    if terminal_status == "reconciled":
+        ledger.reconcile(reservation, Decimal("0.01680888"))
+    else:
+        ledger.release(reservation, reason=ReleaseReason.FAILED_BEFORE_SEND)
+    before = ledger.snapshot()
+
+    def forbidden(*_args: object, **_kwargs: object) -> Any:
+        raise AssertionError("occupied run index must reject before cost or live-route work")
+
+    monkeypatch.setattr(smoke_runtime_module, "_candidate_cost_plan", forbidden)
+    monkeypatch.setattr(smoke_runtime_module, "OpenRouterClient", forbidden)
+
+    with pytest.raises(
+        AuthenticatedRunnerSmokeOpenRouterError,
+        match="run index 1 is already present",
+    ):
+        preflight_authenticated_runner_smoke_live_route_launch(launch)
+
+    assert ledger.snapshot() == before
+    assert launch.usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_preflight_admits_r2_without_changing_the_reconciled_r1_entry(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    launch = await _live_route_launch(tmp_path=tmp_path, config_factory=config_factory)
+    ledger = launch.budget.atomic_ledger
+    assert ledger is not None
+    r1_request_id = f"authrunner.smoke.r1.candidate.primary:{'a' * 64}"
+    reservation = ledger.reserve(r1_request_id, Decimal("0.02"))
+    ledger.reconcile(reservation, Decimal("0.01680888"))
+    before = ledger.snapshot()
+
+    inventory = preflight_authenticated_runner_smoke_live_route_launch(
+        replace(launch, smoke_run_index=2)
+    )
+
+    assert inventory.smoke_run_index == 2
+    assert all(
+        ".r2." in plan.request_preview.logical_request_id for plan in inventory.candidate_cost_plans
+    )
+    assert ledger.snapshot() == before
+    assert ledger.snapshot().entries[0].request_id == r1_request_id
+    assert ledger.snapshot().entries[0].status is CostEntryStatus.RECONCILED
+    assert ledger.snapshot().entries[0].actual_cost_usd == Decimal("0.01680888")
+    assert launch.usage.records == []
+
+
+def test_r2_cost_plans_bind_both_provider_attempt_ids() -> None:
+    selection_sha256 = "b" * 64
+    request_sha256 = "c" * 64
+    candidate = _candidate_smoke_plan(
+        run_kind=CrossLineageAdjudicationRunKind.PRIMARY,
+        selection_sha256=selection_sha256,
+        case_id="case-df79ea132113b863",
+        index=0,
+        smoke_run_index=2,
+    )
+    judge = _judge_smoke_plan(
+        run_kind=CrossLineageAdjudicationRunKind.REPLAY,
+        selection_sha256=selection_sha256,
+        case_id="case-df79ea132113b863",
+        request_sha256=request_sha256,
+        index=1,
+        smoke_run_index=2,
+    )
+
+    assert candidate.provider_attempt_request_ids == (
+        f"authrunner.smoke.r2.candidate.primary:{selection_sha256}",
+        f"authrunner.smoke.r2.candidate.primary:{selection_sha256}:attempt:2",
+    )
+    assert judge.provider_attempt_request_ids == (
+        f"authrunner.smoke.r2.judge.replay:{request_sha256}",
+        f"authrunner.smoke.r2.judge.replay:{request_sha256}:attempt:2",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", (False, True, 0, -1, 1_000_000_000, 1.0, "2"))
+async def test_preflight_rejects_invalid_smoke_run_index_before_ledger_or_route_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+    value: object,
+) -> None:
+    launch = await _live_route_launch(tmp_path=tmp_path, config_factory=config_factory)
+    ledger = launch.budget.atomic_ledger
+    assert ledger is not None
+    before = ledger.snapshot()
+
+    def forbidden(*_args: object, **_kwargs: object) -> Any:
+        raise AssertionError("invalid run index must reject before provider-free admission work")
+
+    monkeypatch.setattr(smoke_runtime_module, "validate_candidate_benchmark_egress", forbidden)
+    monkeypatch.setattr(smoke_runtime_module, "_candidate_cost_plan", forbidden)
+    monkeypatch.setattr(smoke_runtime_module, "OpenRouterClient", forbidden)
+
+    with pytest.raises(AuthenticatedRunnerSmokeOpenRouterError, match="run index is invalid"):
+        preflight_authenticated_runner_smoke_live_route_launch(
+            replace(launch, smoke_run_index=cast(Any, value))
+        )
+
+    assert ledger.snapshot() == before
+    assert launch.usage.records == []
 
 
 @pytest.mark.asyncio
@@ -2409,7 +2557,10 @@ def test_execution_never_prepares_or_dispatches_judge_after_candidate_ledger_ano
     assert events == ["C:PRIMARY", "C:REPLAY", "ADAPTER:CLOSE"]
 
 
-def test_smoke_judge_namespace_requires_its_disjoint_smoke_proof_kind() -> None:
+@pytest.mark.parametrize("smoke_run_index", (1, 2, 10, 999_999_999))
+def test_smoke_judge_namespace_requires_its_disjoint_smoke_proof_kind(
+    smoke_run_index: int,
+) -> None:
     suite = load_model_benchmark_corpus(CORPUS_PATH)
     report = _smoke_report(suite)
     judge = _judge(JUDGE_ID)
@@ -2439,7 +2590,7 @@ def test_smoke_judge_namespace_requires_its_disjoint_smoke_proof_kind() -> None:
         judge=judge,
     )
     smoke_request_id = adjudication_module._cross_lineage_adjudication_smoke_logical_request_id(
-        request
+        request, smoke_run_index
     )
     release_request_id = adjudication_module._cross_lineage_adjudication_logical_request_id(request)
     assert smoke_request_id != release_request_id
@@ -2499,6 +2650,29 @@ def test_bundle_rejects_mixed_common_preview_config_hashes(
         _validate_fake_bundle(monkeypatch, bundle)
 
 
+@pytest.mark.parametrize(
+    "binding",
+    ("run", "candidate_report", "candidate_plan", "judge_plan"),
+)
+def test_bundle_rejects_every_mixed_smoke_run_index_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    binding: str,
+) -> None:
+    bundle, _previews, _usages, _entries = _fake_bundle_validator_subject()
+    run = bundle.runs[1]
+    if binding == "run":
+        run.smoke_run_index = 2
+    elif binding == "candidate_report":
+        run.candidate_report.smoke_run_index = 2
+    elif binding == "candidate_plan":
+        run.candidate_cost_plan.smoke_run_index = 2
+    else:
+        run.judge_cost_plan.smoke_run_index = 2
+
+    with pytest.raises(ValueError, match="different protocol inventory"):
+        _validate_fake_bundle(monkeypatch, bundle)
+
+
 @pytest.mark.parametrize(  # type: ignore[untyped-decorator]
     "field", ("openrouter_generation_id", "request_body_sha256")
 )
@@ -2532,6 +2706,23 @@ def test_run_requires_monotonic_generation_refetch_timestamps(
 
     run.judge_generation_refetch.retrieved_at = NOW - timedelta(seconds=1)
     with pytest.raises(ValueError, match="refetch is not fresh"):
+        _validate_fake_run(monkeypatch, run)
+
+
+@pytest.mark.parametrize("binding", ("candidate_report", "candidate_plan", "judge_plan"))
+def test_run_rejects_every_mixed_smoke_run_index_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    binding: str,
+) -> None:
+    run, _prepared, _candidate_report = _fake_run_validator_subject()
+    target = {
+        "candidate_report": run.candidate_report,
+        "candidate_plan": run.candidate_cost_plan,
+        "judge_plan": run.judge_cost_plan,
+    }[binding]
+    target.smoke_run_index = 2
+
+    with pytest.raises(ValueError, match="differs from its exact pair"):
         _validate_fake_run(monkeypatch, run)
 
 

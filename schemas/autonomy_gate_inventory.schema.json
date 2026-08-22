@@ -214,7 +214,7 @@
       "type": "integer"
     },
     "completion_entrypoint_parameter_count": {
-      "const": 299,
+      "const": 300,
       "title": "Completion Entrypoint Parameter Count",
       "type": "integer"
     },

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from enum import StrEnum
 from itertools import islice
@@ -66,6 +67,7 @@ from mmaudit.models.usage import (
     UsageLedger,
     _validated_usage_copy_preserving_owned_attestation,
     is_creditable_usage_record,
+    require_authenticated_runner_smoke_run_index,
 )
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.privacy import (
@@ -76,6 +78,10 @@ from mmaudit.privacy import (
 from mmaudit.reporting.json_report import stable_json
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
+_AUTHRUNNER_SMOKE_JUDGE_REQUEST_ID_PATTERN = re.compile(
+    r"^authrunner\.smoke\.r(?P<run_index>[1-9][0-9]{0,8})\.judge\."
+    r"(?P<run_kind>primary|replay):(?P<request_sha256>[0-9a-f]{64})$"
+)
 _CASE_ID_PATTERN = r"^case-[0-9a-f]{16}$"
 _ROOT_PATTERN = r"^sha256:[0-9a-f]{64}$"
 _MODEL_PATTERN = r"^[A-Za-z0-9._-]+/[A-Za-z0-9._:/-]+$"
@@ -502,12 +508,20 @@ class CrossLineageAdjudicationCaseResult(_NonAuthorizingEvidence):
         privacy_routing = self.usage_record.routing
         expected_request_id = f"cross-lineage-{request.request_sha256}"
         expected_proof_kind = "RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION"
-        smoke_request_id = (
-            f"authrunner.smoke.r1.judge.{request.run_kind.value.casefold()}:"
-            f"{request.request_sha256}"
+        smoke_match = _AUTHRUNNER_SMOKE_JUDGE_REQUEST_ID_PATTERN.fullmatch(
+            self.usage_record.request_id
         )
-        if self.usage_record.request_id == smoke_request_id:
-            expected_request_id = smoke_request_id
+        if smoke_match is not None:
+            try:
+                require_authenticated_runner_smoke_run_index(int(smoke_match.group("run_index")))
+            except ValueError:
+                raise ValueError("judge smoke usage has an invalid run index") from None
+            if (
+                smoke_match.group("run_kind") != request.run_kind.value.casefold()
+                or smoke_match.group("request_sha256") != request.request_sha256
+            ):
+                raise ValueError("judge smoke usage has different request coordinates")
+            expected_request_id = self.usage_record.request_id
             expected_proof_kind = "PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION"
         if (
             self.usage_record.request_id != expected_request_id
@@ -712,15 +726,26 @@ def cross_lineage_adjudication_provider_request_commitment(
 
 def _cross_lineage_adjudication_logical_request_id(
     request: CrossLineageAdjudicationCaseRequest,
+    smoke_run_index: int | None = None,
 ) -> str:
+    if smoke_run_index is not None:
+        raise CrossLineageAdjudicationError(
+            "release adjudication request cannot carry a smoke run index"
+        )
     return f"cross-lineage-{request.request_sha256}"
 
 
 def _cross_lineage_adjudication_smoke_logical_request_id(
     request: CrossLineageAdjudicationCaseRequest,
+    smoke_run_index: int | None = None,
 ) -> str:
+    try:
+        run_index = require_authenticated_runner_smoke_run_index(smoke_run_index)
+    except ValueError:
+        raise CrossLineageAdjudicationError("cross-lineage smoke run index is invalid") from None
     request_id = (
-        f"authrunner.smoke.r1.judge.{request.run_kind.value.casefold()}:{request.request_sha256}"
+        f"authrunner.smoke.r{run_index}.judge.{request.run_kind.value.casefold()}:"
+        f"{request.request_sha256}"
     )
     if len(request_id) > 128:
         raise CrossLineageAdjudicationError(
@@ -756,7 +781,8 @@ def _cross_lineage_adjudication_request_cost_previews(
     discovery_manifest: OpenRouterModelDiscoveryRunManifest,
     discovery_evidence: OpenRouterModelDiscoveryEvidence,
     maximum_attempts: int | None,
-    logical_request_id: Callable[[CrossLineageAdjudicationCaseRequest], str],
+    logical_request_id: Callable[[CrossLineageAdjudicationCaseRequest, int | None], str],
+    smoke_run_index: int | None = None,
 ) -> tuple[OpenRouterStructuredRequestCostPreview, ...]:
     """Share exact preview derivation while keeping request namespaces closed."""
 
@@ -806,7 +832,7 @@ def _cross_lineage_adjudication_request_cost_previews(
             user_prompt=request.provider_visible_user_prompt,
             response_model=CrossLineageAdjudicationWireResponse,
             schema_name=CROSS_LINEAGE_ADJUDICATION_SCHEMA_NAME,
-            logical_request_id=logical_request_id(request),
+            logical_request_id=logical_request_id(request, smoke_run_index),
             context_package=None,
             maximum_attempts=maximum_attempts,
         )
@@ -823,6 +849,7 @@ def _cross_lineage_adjudication_request_cost_previews(
 
 def cross_lineage_adjudication_smoke_request_cost_previews(
     *,
+    smoke_run_index: int,
     config: AuditConfig,
     prepared: CrossLineageAdjudicationPreparedRun,
     discovery_manifest: OpenRouterModelDiscoveryRunManifest,
@@ -842,6 +869,7 @@ def cross_lineage_adjudication_smoke_request_cost_previews(
         discovery_evidence=discovery_evidence,
         maximum_attempts=maximum_attempts,
         logical_request_id=_cross_lineage_adjudication_smoke_logical_request_id,
+        smoke_run_index=require_authenticated_runner_smoke_run_index(smoke_run_index),
     )
 
 
@@ -1109,6 +1137,7 @@ class _CrossLineageAdjudicationExecutor(Protocol):
         expected_request_cost_previews: tuple[OpenRouterStructuredRequestCostPreview, ...]
         | None = None,
         generation_evidence_fetcher: CrossLineageGenerationEvidenceFetcher | None = None,
+        smoke_run_index: int | None = None,
     ) -> tuple[CrossLineageAdjudicationCaseResult, ...]: ...
 
 
@@ -1132,8 +1161,9 @@ async def _execute_cross_lineage_adjudication_requests_impl(
     ),
     require_pristine: Callable[[], None],
     logical_request_id: Callable[
-        [CrossLineageAdjudicationCaseRequest], str
+        [CrossLineageAdjudicationCaseRequest, int | None], str
     ] = _cross_lineage_adjudication_logical_request_id,
+    smoke_run_index: int | None = None,
 ) -> tuple[CrossLineageAdjudicationCaseResult, ...]:
     """Execute one inventory through captured descriptors after boundary validation."""
 
@@ -1178,7 +1208,9 @@ async def _execute_cross_lineage_adjudication_requests_impl(
                 "cross-lineage request-cost preview inventory has the wrong exact shape"
             )
         previews = expected_request_cost_previews
-        expected_ids = tuple(logical_request_id(request) for request in sealed.requests)
+        expected_ids = tuple(
+            logical_request_id(request, smoke_run_index) for request in sealed.requests
+        )
         if (
             tuple(item.logical_request_id for item in previews) != expected_ids
             or any(item.role != "model_benchmark" for item in previews)
@@ -1206,7 +1238,7 @@ async def _execute_cross_lineage_adjudication_requests_impl(
                 context_package=None,
                 response_model=CrossLineageAdjudicationWireResponse,
                 schema_name=CROSS_LINEAGE_ADJUDICATION_SCHEMA_NAME,
-                logical_request_id=logical_request_id(request),
+                logical_request_id=logical_request_id(request, smoke_run_index),
             )
         else:
             completion = await complete_with_evidence(
@@ -1218,7 +1250,7 @@ async def _execute_cross_lineage_adjudication_requests_impl(
                 context_package=None,
                 response_model=CrossLineageAdjudicationWireResponse,
                 schema_name=CROSS_LINEAGE_ADJUDICATION_SCHEMA_NAME,
-                logical_request_id=logical_request_id(request),
+                logical_request_id=logical_request_id(request, smoke_run_index),
                 expected_request_cost_preview=expected_preview,
             )
         require_pristine()
@@ -1457,7 +1489,7 @@ def _require_exact_cross_lineage_transport(
 
 def _build_cross_lineage_adjudication_executor(
     *,
-    logical_request_id: Callable[[CrossLineageAdjudicationCaseRequest], str] = (
+    logical_request_id: Callable[[CrossLineageAdjudicationCaseRequest, int | None], str] = (
         _cross_lineage_adjudication_logical_request_id
     ),
     require_single_request: bool = False,
@@ -1488,6 +1520,7 @@ def _build_cross_lineage_adjudication_executor(
     trusted_source_hash = cross_lineage_adjudication_source_sha256
     trusted_request_cost_preview_type = OpenRouterStructuredRequestCostPreview
     trusted_logical_request_id = logical_request_id
+    trusted_smoke_index_validator = require_authenticated_runner_smoke_run_index
     trusted_expected_source_proof_kind = expected_source_proof_kind
     callable_names = frozenset(
         {
@@ -1516,6 +1549,7 @@ def _build_cross_lineage_adjudication_executor(
         "OpenRouterStructuredRequestCostPreview": trusted_request_cost_preview_type,
         "StructuredCompletion": StructuredCompletion,
         "UsageRecord": UsageRecord,
+        "require_authenticated_runner_smoke_run_index": trusted_smoke_index_validator,
     }
     public_binding: dict[str, object] = {}
 
@@ -1551,6 +1585,7 @@ def _build_cross_lineage_adjudication_executor(
         expected_request_cost_previews: tuple[OpenRouterStructuredRequestCostPreview, ...]
         | None = None,
         generation_evidence_fetcher: CrossLineageGenerationEvidenceFetcher | None = None,
+        smoke_run_index: int | None = None,
     ) -> tuple[CrossLineageAdjudicationCaseResult, ...]:
         """Execute one exact inventory without dynamically resolving client callables."""
 
@@ -1614,6 +1649,7 @@ def _build_cross_lineage_adjudication_executor(
             request_cost_preview_type=trusted_request_cost_preview_type,
             require_pristine=require_client_pristine,
             logical_request_id=trusted_logical_request_id,
+            smoke_run_index=smoke_run_index,
         )
         require_client_pristine()
         return result
@@ -1635,6 +1671,7 @@ del _build_cross_lineage_adjudication_executor
 
 async def execute_noncrediting_cross_lineage_adjudication_smoke_requests(
     *,
+    smoke_run_index: int,
     client: OpenRouterClient,
     prepared: CrossLineageAdjudicationPreparedRun,
     expected_request_cost_previews: tuple[OpenRouterStructuredRequestCostPreview, ...],
@@ -1643,7 +1680,8 @@ async def execute_noncrediting_cross_lineage_adjudication_smoke_requests(
     """Execute one cost-bound judge smoke request without issuing adjudication credit."""
 
     if (
-        type(expected_request_cost_previews) is not tuple
+        require_authenticated_runner_smoke_run_index(smoke_run_index) != smoke_run_index
+        or type(expected_request_cost_previews) is not tuple
         or len(expected_request_cost_previews) != 1
     ):
         raise CrossLineageAdjudicationError(
@@ -1654,6 +1692,7 @@ async def execute_noncrediting_cross_lineage_adjudication_smoke_requests(
         prepared=prepared,
         expected_request_cost_previews=expected_request_cost_previews,
         generation_evidence_fetcher=generation_evidence_fetcher,
+        smoke_run_index=smoke_run_index,
     )
 
 

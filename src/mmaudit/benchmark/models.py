@@ -37,9 +37,11 @@ from mmaudit.models.schemas import (
     UsageRecord,
 )
 from mmaudit.models.usage import (
+    MAX_AUTHENTICATED_RUNNER_SMOKE_RUN_INDEX,
     UsageLedger,
     _is_structurally_creditable_usage_record,
     is_creditable_usage_record,
+    require_authenticated_runner_smoke_run_index,
 )
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.reporting.json_report import stable_json
@@ -81,6 +83,7 @@ class ModelBenchmarkRequestDescriptor:
 class ModelBenchmarkSmokeRequestDescriptor:
     """One exact NONCREDITING smoke request in a disjoint ledger namespace."""
 
+    smoke_run_index: int
     run_kind: AuthenticatedRunnerModelBenchmarkRunKind
     selection_sha256: str
     case_id: str
@@ -684,6 +687,7 @@ def authenticated_runner_model_benchmark_request_descriptors(
 
 def authenticated_runner_smoke_model_benchmark_request_descriptor(
     *,
+    smoke_run_index: int,
     run_kind: AuthenticatedRunnerModelBenchmarkRunKind,
     selection_sha256: str,
     case: ModelBenchmarkCase,
@@ -692,7 +696,8 @@ def authenticated_runner_smoke_model_benchmark_request_descriptor(
     """Build one exact NONCREDITING smoke request without relaxing the 24-case API."""
 
     if (
-        type(run_kind) is not str
+        require_authenticated_runner_smoke_run_index(smoke_run_index) != smoke_run_index
+        or type(run_kind) is not str
         or run_kind not in {"PRIMARY", "REPLAY"}
         or not _is_sha256(selection_sha256)
         or type(case) is not ModelBenchmarkCase
@@ -705,10 +710,12 @@ def authenticated_runner_smoke_model_benchmark_request_descriptor(
         raise ValueError("authenticated runner smoke request inputs changed at the boundary")
     canonical_run_kind = cast(AuthenticatedRunnerModelBenchmarkRunKind, str(run_kind))
     return ModelBenchmarkSmokeRequestDescriptor(
+        smoke_run_index=smoke_run_index,
         run_kind=canonical_run_kind,
         selection_sha256=selection_sha256,
         case_id=sealed_case.case_id,
         logical_request_id=_authenticated_runner_smoke_candidate_logical_request_id(
+            smoke_run_index=smoke_run_index,
             run_kind=canonical_run_kind,
             selection_sha256=selection_sha256,
         ),
@@ -1156,8 +1163,9 @@ class NoncreditingModelBenchmarkSmokeReport(StrictModel):
     artifact_kind: Literal["noncrediting_model_benchmark_smoke_report"] = (
         "noncrediting_model_benchmark_smoke_report"
     )
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.1"] = "1.1"
     disposition: Literal["NONCREDITING_SMOKE"] = "NONCREDITING_SMOKE"
+    smoke_run_index: int = Field(ge=1, le=MAX_AUTHENTICATED_RUNNER_SMOKE_RUN_INDEX)
     run_kind: AuthenticatedRunnerModelBenchmarkRunKind
     selection_sha256: str = Field(pattern=_SHA256_PATTERN)
     corpus_name: str = Field(min_length=1, max_length=500)
@@ -1201,6 +1209,11 @@ class NoncreditingModelBenchmarkSmokeReport(StrictModel):
             raise ValueError("model benchmark smoke reports grant no authority or credit")
         return value
 
+    @field_validator("smoke_run_index", mode="before")
+    @classmethod
+    def smoke_run_index_is_strict(cls, value: object) -> object:
+        return require_authenticated_runner_smoke_run_index(value)
+
     @model_validator(mode="after")
     def one_successful_case_is_self_bound(self) -> Self:
         result = self.result
@@ -1223,6 +1236,7 @@ class NoncreditingModelBenchmarkSmokeReport(StrictModel):
                 "model benchmark smoke report requires one successful REAL-shaped case"
             )
         expected_request_id = _authenticated_runner_smoke_candidate_logical_request_id(
+            smoke_run_index=self.smoke_run_index,
             run_kind=self.run_kind,
             selection_sha256=self.selection_sha256,
         )
@@ -1534,6 +1548,7 @@ async def run_model_benchmark(
 
 async def execute_noncrediting_model_benchmark_smoke(
     *,
+    smoke_run_index: int,
     suite: ModelBenchmarkSuite,
     selected_case: ModelBenchmarkCase,
     selected_ground_truth: ModelBenchmarkGroundTruthCase,
@@ -1557,6 +1572,7 @@ async def execute_noncrediting_model_benchmark_smoke(
     if sealed_target != target:
         raise ValueError("model benchmark smoke target changed at the boundary")
     descriptor = authenticated_runner_smoke_model_benchmark_request_descriptor(
+        smoke_run_index=smoke_run_index,
         run_kind=run_kind,
         selection_sha256=selection_sha256,
         case=case,
@@ -1627,8 +1643,9 @@ async def execute_noncrediting_model_benchmark_smoke(
     )
     values: dict[str, Any] = {
         "artifact_kind": "noncrediting_model_benchmark_smoke_report",
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "disposition": "NONCREDITING_SMOKE",
+        "smoke_run_index": smoke_run_index,
         "run_kind": run_kind,
         "selection_sha256": selection_sha256,
         "corpus_name": sealed_suite.name,
@@ -1700,6 +1717,7 @@ def verify_noncrediting_model_benchmark_smoke_report(
     if response is None or usage is None or generation is None:
         raise ValueError("model benchmark smoke report omitted complete case evidence")
     descriptor = authenticated_runner_smoke_model_benchmark_request_descriptor(
+        smoke_run_index=sealed_report.smoke_run_index,
         run_kind=sealed_report.run_kind,
         selection_sha256=selection_sha256,
         case=case,
@@ -2368,12 +2386,19 @@ def _validated_authenticated_runner_smoke_selection(
 
 def _authenticated_runner_smoke_candidate_logical_request_id(
     *,
+    smoke_run_index: int,
     run_kind: AuthenticatedRunnerModelBenchmarkRunKind,
     selection_sha256: str,
 ) -> str:
-    if run_kind not in {"PRIMARY", "REPLAY"} or not _is_sha256(selection_sha256):
+    if (
+        require_authenticated_runner_smoke_run_index(smoke_run_index) != smoke_run_index
+        or run_kind not in {"PRIMARY", "REPLAY"}
+        or not _is_sha256(selection_sha256)
+    ):
         raise ValueError("authenticated runner smoke logical request coordinates are invalid")
-    request_id = f"authrunner.smoke.r1.candidate.{run_kind.casefold()}:{selection_sha256}"
+    request_id = (
+        f"authrunner.smoke.r{smoke_run_index}.candidate.{run_kind.casefold()}:{selection_sha256}"
+    )
     if len(request_id) > 128:
         raise ValueError("authenticated runner smoke logical request ID exceeds its bound")
     return request_id

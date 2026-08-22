@@ -63,7 +63,7 @@ _FROZEN_PIPELINE_RUN_PARAMETERS_SHA256 = (
     "9568fe158cae81dbd5c220f65cc3bbeb4d43ba529466c5597b783745cfe93957"
 )
 _FROZEN_COMPLETION_ENTRYPOINT_PARAMETERS_SHA256 = (
-    "02782ec6599a78e92a9b40177ff01509be6bd00232a49bbae88ac031f95b7b5f"
+    "9693cc6613f1a5ecbb5de2ae8cdde79ad7e5e1b96b99305107923a6dab8a1e9c"
 )
 _FROZEN_AUDITED_MODULE_PATHS_SHA256 = (
     "f87687d12e0fc37b1cebf2801558aad7db8b177599a3a694c12116ad29db1810"
@@ -234,7 +234,7 @@ class AutonomyGateInventory(StrictModel):
     cli_run_parameter_count: Literal[50]
     pipeline_init_parameter_count: Literal[25]
     pipeline_run_parameter_count: Literal[15]
-    completion_entrypoint_parameter_count: Literal[299]
+    completion_entrypoint_parameter_count: Literal[300]
     source_kind_counts: dict[CompletionInputSourceKind, int] = Field(
         min_length=len(CompletionInputSourceKind),
         max_length=len(CompletionInputSourceKind),
@@ -1586,6 +1586,8 @@ def _command_parameter_classification(
         "preflight_only",
         "live_route_preflight_only",
     }:
+        return SourceCoverageClassification.GATE, "gate-authenticated-real-campaign"
+    if command_name == "models_authenticated_runner_smoke" and parameter_name == "smoke_run_index":
         return SourceCoverageClassification.GATE, "gate-authenticated-real-campaign"
     if (
         command_name
@@ -3583,7 +3585,7 @@ def build_autonomy_gate_inventory(
         "cli_run_parameter_count": 50,
         "pipeline_init_parameter_count": 25,
         "pipeline_run_parameter_count": 15,
-        "completion_entrypoint_parameter_count": 299,
+        "completion_entrypoint_parameter_count": 300,
         "source_kind_counts": {
             kind.value: sum(item.source_kind is kind for item in source_coverage)
             for kind in CompletionInputSourceKind

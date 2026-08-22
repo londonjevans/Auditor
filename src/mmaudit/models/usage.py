@@ -41,6 +41,29 @@ _WHOLE_PROTOCOL_INDEXED_ROLE = re.compile(r"^whole_protocol_review:(?:0|[1-9][0-
 _REQUEST_LIMIT_SCOPE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _MAX_RECOVERY_REQUEST_LIMIT_RESERVATIONS = 33
 _MAX_METERED_UNITS = 2**63 - 1
+MAX_AUTHENTICATED_RUNNER_SMOKE_RUN_INDEX = 999_999_999
+_CANONICAL_SMOKE_RUN_INDEX_PATTERN = re.compile(r"^[1-9][0-9]{0,8}$")
+
+
+def require_authenticated_runner_smoke_run_index(value: object) -> int:
+    """Return one strict positive bounded index without accepting bools or coercion."""
+
+    if type(value) is not int or value < 1 or value > MAX_AUTHENTICATED_RUNNER_SMOKE_RUN_INDEX:
+        raise ValueError(
+            "authenticated runner smoke run index must be a strict integer from 1 through "
+            f"{MAX_AUTHENTICATED_RUNNER_SMOKE_RUN_INDEX}"
+        )
+    return value
+
+
+def parse_authenticated_runner_smoke_run_index(value: object) -> int:
+    """Parse only canonical positive decimal text into a bounded smoke run index."""
+
+    if type(value) is not str or _CANONICAL_SMOKE_RUN_INDEX_PATTERN.fullmatch(value) is None:
+        raise ValueError(
+            "authenticated runner smoke run index must be canonical positive decimal text"
+        )
+    return require_authenticated_runner_smoke_run_index(int(value))
 
 
 def _build_authrunner_usage_origin_scope_validator() -> Callable[[UsageRecord], str | None]:
@@ -57,11 +80,17 @@ def _build_authrunner_usage_origin_scope_validator() -> Callable[[UsageRecord], 
         ),
         "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK": (
             "NONCREDITING_SMOKE",
-            re.compile(r"^authrunner\.smoke\.r1\.candidate\.(?:primary|replay):[0-9a-f]{64}$"),
+            re.compile(
+                r"^authrunner\.smoke\.r(?:[1-9][0-9]{0,8})\.candidate\."
+                r"(?:primary|replay):[0-9a-f]{64}$"
+            ),
         ),
         "PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION": (
             "NONCREDITING_SMOKE",
-            re.compile(r"^authrunner\.smoke\.r1\.judge\.(?:primary|replay):[0-9a-f]{64}$"),
+            re.compile(
+                r"^authrunner\.smoke\.r(?:[1-9][0-9]{0,8})\.judge\."
+                r"(?:primary|replay):[0-9a-f]{64}$"
+            ),
         ),
     }
     namespaces = tuple(pattern for _scope, pattern in routes.values())

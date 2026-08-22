@@ -869,6 +869,7 @@ def test_transport_rejects_class_callable_retarget_before_provider_state(
         "_require_exact_cross_lineage_transport",
         "_require_usage_matches_live_judge_snapshot",
         "is_creditable_usage_record",
+        "require_authenticated_runner_smoke_run_index",
         "cross_lineage_adjudication_validated_response_sha256",
         "execute_cross_lineage_adjudication_requests",
     ),
@@ -896,6 +897,37 @@ def test_transport_rejects_module_retarget_before_provider_state(
         )
 
     assert side_effects == {"post": 0, "reserve": 0, "claim": 0}
+    assert client.usage.records == []
+
+
+def test_smoke_transport_rejects_run_index_validator_retarget_before_provider_state(
+    inputs: _Inputs,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared = _prepare(inputs)
+    client = _uninitialized_exact_client()
+    side_effects = {"validator": 0, "provider": 0}
+
+    def retargeted(_value: object) -> int:
+        side_effects["validator"] += 1
+        return 1
+
+    monkeypatch.setattr(
+        adjudication_module,
+        "require_authenticated_runner_smoke_run_index",
+        retargeted,
+    )
+    with pytest.raises(CrossLineageAdjudicationError, match="binding changed before provider work"):
+        asyncio.run(
+            adjudication_module._execute_cross_lineage_adjudication_smoke_requests(
+                client=client,
+                prepared=prepared,
+                expected_request_cost_previews=(),
+                smoke_run_index=1,
+            )
+        )
+
+    assert side_effects == {"validator": 0, "provider": 0}
     assert client.usage.records == []
 
 

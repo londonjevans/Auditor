@@ -219,8 +219,8 @@
           "type": "boolean"
         },
         "schema_version": {
-          "const": "1.0",
-          "default": "1.0",
+          "const": "1.1",
+          "default": "1.1",
           "title": "Schema Version",
           "type": "string"
         },
@@ -228,6 +228,12 @@
           "pattern": "^[0-9a-f]{64}$",
           "title": "Selection Sha256",
           "type": "string"
+        },
+        "smoke_run_index": {
+          "maximum": 999999999,
+          "minimum": 1,
+          "title": "Smoke Run Index",
+          "type": "integer"
         },
         "stage": {
           "enum": [
@@ -239,6 +245,7 @@
         }
       },
       "required": [
+        "smoke_run_index",
         "run_kind",
         "stage",
         "case_id",
@@ -329,8 +336,8 @@
           "type": "boolean"
         },
         "schema_version": {
-          "const": "1.0",
-          "default": "1.0",
+          "const": "1.1",
+          "default": "1.1",
           "title": "Schema Version",
           "type": "string"
         },
@@ -339,9 +346,16 @@
           "default": false,
           "title": "Serialized Authority",
           "type": "boolean"
+        },
+        "smoke_run_index": {
+          "maximum": 999999999,
+          "minimum": 1,
+          "title": "Smoke Run Index",
+          "type": "integer"
         }
       },
       "required": [
+        "smoke_run_index",
         "run_kind",
         "candidate",
         "judge",
@@ -2308,8 +2322,8 @@
           "type": "boolean"
         },
         "schema_version": {
-          "const": "1.0",
-          "default": "1.0",
+          "const": "1.1",
+          "default": "1.1",
           "title": "Schema Version",
           "type": "string"
         },
@@ -2340,11 +2354,18 @@
           "title": "Serialized Authority",
           "type": "boolean"
         },
+        "smoke_run_index": {
+          "maximum": 999999999,
+          "minimum": 1,
+          "title": "Smoke Run Index",
+          "type": "integer"
+        },
         "target": {
           "$ref": "#/$defs/ModelBenchmarkTarget"
         }
       },
       "required": [
+        "smoke_run_index",
         "run_kind",
         "selection_sha256",
         "corpus_name",
@@ -4030,8 +4051,8 @@
       "type": "array"
     },
     "schema_version": {
-      "const": "1.0",
-      "default": "1.0",
+      "const": "1.1",
+      "default": "1.1",
       "title": "Schema Version",
       "type": "string"
     },
@@ -4057,6 +4078,12 @@
       "title": "Smoke Corpus Bundle Sha256",
       "type": "string"
     },
+    "smoke_run_index": {
+      "maximum": 999999999,
+      "minimum": 1,
+      "title": "Smoke Run Index",
+      "type": "integer"
+    },
     "source_egress_authorized": {
       "const": false,
       "default": false,
@@ -4065,6 +4092,7 @@
     }
   },
   "required": [
+    "smoke_run_index",
     "smoke_corpus_bundle_sha256",
     "parent_corpus_sha256",
     "parent_ground_truth_sha256",
