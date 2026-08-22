@@ -106,6 +106,9 @@ PHASE_ONE_GOVERNANCE_SUCCESSOR_PATHS = frozenset(
         "tests/unit/test_product_objective.py",
     }
 )
+CURRENT_COMMAND_GOVERNANCE_SUCCESSOR_PATHS = PHASE_ONE_GOVERNANCE_SUCCESSOR_PATHS | {
+    "docs/models/model_selection.md"
+}
 PHASE_ONE_CORE_PATHS = PHASE_ONE_IMPLEMENTATION_PATHS - PHASE_ONE_GOVERNANCE_SUCCESSOR_PATHS
 OPERATOR_RESULTS_RELATIVE_PATH = "docs/remediation/v3/operator_results.md"
 HISTORICAL_INELIGIBLE_GEMMA_PLAN_SHA256 = (
@@ -508,8 +511,9 @@ def test_autonomy_checkpoints_have_exact_historical_and_successor_custody() -> N
     assert frozenset(changed.stdout.splitlines()) == PHASE_ONE_IMPLEMENTATION_PATHS
     assert OPERATOR_RESULTS_RELATIVE_PATH not in PHASE_ONE_IMPLEMENTATION_PATHS
     assert core_match.returncode == 0
-    assert frozenset(successors.stdout.splitlines()) - {OPERATOR_RESULTS_RELATIVE_PATH} == (
-        PHASE_ONE_GOVERNANCE_SUCCESSOR_PATHS
+    assert (
+        frozenset(successors.stdout.splitlines()) - {OPERATOR_RESULTS_RELATIVE_PATH}
+        == CURRENT_COMMAND_GOVERNANCE_SUCCESSOR_PATHS
     )
 
 
@@ -739,6 +743,37 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "--allow-code-egress --no-color",
         "--allow-metadata-egress --live-route-preflight-only --no-color",
     )
+    current_r8_smoke_real_command = (
+        "env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE "
+        'PYTHONPATH="$PWD/src" MMAUDIT_BUDGET_USD=250 '
+        'MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" '
+        "/Users/generalcuster/Documents/dev/Auditor/.venv/bin/mmaudit models "
+        "authenticated-runner-smoke --candidate-registry "
+        '"$HOME/.mmaudit/private/authrunner/candidate-registry-r8.json" '
+        '--candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/'
+        'authrunner-candidate-20260821-r8" --primary-judge-registry '
+        '"$HOME/.mmaudit/private/authrunner/primary-judge-registry-r8.json" '
+        '--primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/'
+        'authrunner-primary-judge-20260821-r8" --replay-judge-registry '
+        '"$HOME/.mmaudit/private/authrunner/replay-judge-registry-r8.json" '
+        '--replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/'
+        'authrunner-replay-judge-20260822-r8" '
+        "--smoke-corpus benchmarks/model_corpus_smoke "
+        '--output "$HOME/.mmaudit/private/authrunner/'
+        'authenticated-runner-smoke-evidence-20260822-s3.json" '
+        "--candidate-cost-cap-usd-per-attempt 1.00 "
+        "--primary-judge-cost-cap-usd-per-attempt 1.00 "
+        "--replay-judge-cost-cap-usd-per-attempt 1.00 "
+        "--config config/openrouter-qualification.toml "
+        "--corpus benchmarks/model_corpus/manifest.json "
+        '--cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" '
+        '--secrets-env-file "$HOME/.mmaudit/secrets.env" '
+        "--allow-code-egress --no-color"
+    )
+    current_r8_smoke_live_route_command = current_r8_smoke_real_command.replace(
+        "--allow-code-egress --no-color",
+        "--allow-metadata-egress --live-route-preflight-only --no-color",
+    )
     smoke_verify_command = (
         "env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE MMAUDIT_BUDGET_USD=250 "
         'MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" '
@@ -798,13 +833,32 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     )
     assert smoke_preflight_command not in model_selection
     assert smoke_verify_command not in model_selection
-    assert ".venv/bin/mmaudit models authenticated-runner-smoke" not in model_selection
+    assert model_selection.count(current_r8_smoke_live_route_command) == 1
+    assert model_selection.count(current_r8_smoke_real_command) == 1
+    assert model_selection.index(current_r8_smoke_live_route_command) < model_selection.index(
+        current_r8_smoke_real_command
+    )
+    assert (
+        current_r8_smoke_live_route_command.replace(
+            "--allow-metadata-egress --live-route-preflight-only --no-color",
+            "--allow-code-egress --no-color",
+        )
+        == current_r8_smoke_real_command
+    )
+    assert model_selection.count(".venv/bin/mmaudit models authenticated-runner-smoke") == 2
     assert ".venv/bin/mmaudit models verify-authenticated-runner-smoke" not in model_selection
     assert ".venv/bin/mmaudit models authenticated-runner --" not in model_selection
-    assert "--live-route-preflight-only" not in model_selection
-    assert "--allow-metadata-egress" not in model_selection
-    assert "--allow-code-egress" not in model_selection
-    assert "--preflight-only" not in model_selection
+    assert model_selection.count("--live-route-preflight-only") == 1
+    assert model_selection.count("--allow-metadata-egress") == 1
+    assert model_selection.count("--allow-code-egress") == 1
+    assert " --preflight-only " not in model_selection
+    assert "authrunner-candidate-20260821-r8" in model_selection
+    assert "authrunner-primary-judge-20260821-r8" in model_selection
+    assert "authrunner-replay-judge-20260822-r8" in model_selection
+    assert "authenticated-runner-smoke-evidence-20260822-s3.json" in model_selection
+    assert 'PYTHONPATH="$PWD/src"' in model_selection
+    assert "Step B still requires separate operator authorization" in model_selection
+    assert "paused Phase-2 working" in normalized_model_selection
     assert "PENDING_TENCENT_LINEAGE_RESEAL_CHECKPOINT" not in model_selection
     assert "a1ace778afcf308b57fe436271cdc16a2bb8e156" in model_selection
     assert "af70559ddaf84178efffee1ec1bf7b99bf0b12df" in model_selection
@@ -841,7 +895,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "Provider-free preflight cannot exercise that post-response issuer boundary" in (
         normalized_model_selection
     )
-    assert "Both the paid smoke and its conditional offline verifier are withdrawn" in (
+    assert "both the paid smoke and its conditional offline verifier were withdrawn" in (
         normalized_model_selection
     )
     assert "request and atomic global input token budgets differ" in normalized_model_selection
@@ -885,12 +939,10 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "blocking lifecycle gap" in normalized_model_selection
     assert "retained candidate-campaign" in normalized_model_selection
     assert "Negative downstream consumer tests cover" in normalized_model_selection
-    assert "Every previously emitted AUTHRUNNER command is now withdrawn" in (
+    assert "every previously emitted AUTHRUNNER command was withdrawn" in (
         normalized_model_selection
     )
-    assert "There is currently no runnable metadata, discovery, smoke, verifier" in (
-        normalized_model_selection
-    )
+    assert "no runnable metadata, discovery, smoke, verifier" in (normalized_model_selection)
     assert "full AUTHRUNNER command" in normalized_model_selection
     assert "9f5c94d97b3d79d51c10e250b99244591461e959" in model_selection
     assert "3bcac02da30bdad2c7e584d35c091ea5cb75ea7d" in model_selection
@@ -934,6 +986,10 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "exact 18-path Phase-1 result" in runtime_status["candidate_commit_scope"]
     assert "excludes operator_results" in runtime_status["candidate_commit_scope"]
     assert "historical Phase 0 only" in runtime_status["candidate_commit_scope"]
+    assert "exactly two r8/r8/r8 commands" in runtime_status["candidate_commit_scope"]
+    assert (
+        "conditionally preauthorized" not in runtime_status["blocked_tickets"]["V3-AUTHRUNNER-001"]
+    )
     assert runtime_status["historical_paid_diagnostic_base_commit"] == (
         HISTORICAL_PAID_DIAGNOSTIC_BASE_CHECKPOINT
     )
@@ -944,22 +1000,23 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     )
     assert "eight governance paths" in runtime_status["last_checkpoint_commit_scope"]
     assert "operator_results is excluded" in runtime_status["last_checkpoint_commit_scope"]
-    assert runtime_status["autorun_status"] == "RUNNING_PROVIDER_FREE"
-    assert runtime_status["current_ticket"] == "V3-AUTONOMY-001"
+    assert "exactly two r8/r8/r8 commands" in runtime_status["last_checkpoint_commit_scope"]
+    assert runtime_status["autorun_status"] == "PAUSED_FOR_OPERATOR_R8_ADJACENT_SEQUENCE"
+    assert runtime_status["current_ticket"] == "V3-AUTHRUNNER-001"
     assert runtime_status["active_provider_free_work"] == {
-        "ticket": "V3-AUTONOMY-001",
-        "slice": "PHASE_1_MANAGED_TOOLCHAIN_BUNDLE",
-        "status": "COMPLETE_NONAUTHORIZING_WITHIN_IN_PROGRESS_TICKET",
-        "next_slice": "PHASE_2_MANAGED_PROVISIONING_STATE",
+        "ticket": "V3-AUTHRUNNER-001",
+        "slice": "ADJACENT_R8_R8_R8_LIVE_ROUTE_GATE_AND_PAID_SMOKE",
+        "status": "PARTIAL_BLOCKED_SAFETY_COMMANDS_EMITTED_NOT_RUN",
+        "next_slice": "RECONCILE_OPERATOR_RESULT_THEN_RESUME_V3_AUTONOMY_PHASE_2",
         "provider_access_authorized": False,
         "secret_access_authorized": False,
         "private_operator_artifact_access_authorized": False,
         "runtime_authority_granted": False,
-        "operator_metadata_egress_command_emitted": False,
-        "operator_paid_smoke_command_emitted": False,
+        "operator_metadata_egress_command_emitted": True,
+        "operator_paid_smoke_command_emitted": True,
         "operator_command_execution_authorized": False,
-        "parked_ticket": "V3-AUTHRUNNER-001",
-        "parked_ticket_status": "PARTIAL_REAL_BLOCKED_SAFETY_NO_CURRENT_COMMAND",
+        "parked_ticket": "V3-AUTONOMY-001",
+        "parked_ticket_status": ("IN_PROGRESS_PHASE_2_PAUSED_FOR_TIME_SENSITIVE_EXTERNAL_SEQUENCE"),
     }
     phase_zero = runtime_status["autonomy_phase_zero_inventory"]
     assert phase_zero == {
@@ -1087,9 +1144,9 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert runtime_status["last_validation"]["operator_secret_accessed"] is False
     assert runtime_status["last_validation"]["operator_private_ledger_accessed_or_mutated"] is False
     resume_action = runtime_status["pause_state"]["resume_action_v3_authrunner"]
-    assert "Park V3-AUTHRUNNER-001 PARTIAL" in resume_action
-    assert "V3-AUTONOMY-001 Phase 0 and Phase 1 are complete nonauthorizing" in resume_action
-    assert "Phase 2 managed provisioning state is the next provider-free slice" in resume_action
+    assert "Run only the emitted r8/r8/r8 metadata-only step A" in resume_action
+    assert "separately authorizing step B" in resume_action
+    assert "V3-AUTONOMY-001 Phase 2 is paused" in resume_action
     assert smoke_status["implementation_checkpoint"] == ("692eb173f002818b4434b746c8801b4cbeb852e2")
     assert smoke_status["post_origin_fix_guide_checkpoint"] == (
         "c137f8bae9d27f5120e7e08eba2d9b5b384e1ca5"
@@ -1105,20 +1162,20 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "HISTORICAL_EXECUTED_VALID_DO_NOT_RERUN"
     )
     assert smoke_status["status"] == (
-        "PARTIAL_R8_LIVE_ROUTE_VALID_LOCAL_CHECKPOINT_NOT_PUSHED_REAL_BLOCKED_SAFETY"
+        "PARTIAL_ADJACENT_R8_R8_R8_GATE_AND_PAID_SMOKE_EMITTED_NOT_RUN_REAL_BLOCKED_SAFETY"
     )
     assert smoke_status["ticket_status"] == "PARTIAL"
     assert smoke_status["real_execution_status"] == (
         "FAILED_SAFE_AFTER_REAL_COMPLETION_SCHEMA_VALIDATION_FAILED_COST_RECONCILED_NO_BUNDLE"
     )
     assert smoke_status["real_command_emission_status"] == (
-        "ABSENT_WITHDRAWN_AFTER_EXECUTED_FAILED_SAFE"
+        "EMITTED_NOT_RUN_SEPARATE_AUTHORIZATION_REQUIRED_AFTER_IMMEDIATE_EXACT_VALID_STEP_A"
     )
     assert smoke_status["offline_verifier_command_emission_status"] == (
         "ABSENT_WITHHELD_NO_CURRENT_BUNDLE"
     )
     assert smoke_status["live_route_preflight_command_emission_status"] == (
-        "ABSENT_WITHDRAWN_HISTORICAL_R6_R6_R2_RESULT_RETAINED"
+        "EMITTED_NOT_RUN_ADJACENT_R8_R8_R8_STEP_A"
     )
     assert smoke_status["full_24_case_real_command_status"] == "ABSENT_WITHHELD_BLOCKED_SAFETY"
     assert smoke_status["current_operator_results_sha256"] == OPERATOR_RESULTS_SHA256
@@ -1196,13 +1253,33 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert smoke_status["historical_command_guide_checkpoint_remote_resolved"] is True
     assert smoke_status["historical_adjacent_pair_emitted_then_paid_executed_and_withdrawn"] is True
     assert smoke_status["adjacent_sequence_required"] is True
-    assert smoke_status["current_adjacent_command_count"] == 0
-    assert smoke_status["current_adjacent_commands_emitted_not_run"] is False
+    assert smoke_status["current_adjacent_command_count"] == 2
+    assert smoke_status["current_adjacent_commands_emitted_not_run"] is True
+    assert smoke_status["current_adjacent_composition"] == "r8/r8/r8"
+    assert smoke_status["current_candidate_registry"] == "candidate-registry-r8.json"
+    assert smoke_status["current_candidate_discovery_run"] == ("authrunner-candidate-20260821-r8")
+    assert smoke_status["current_primary_judge_registry"] == "primary-judge-registry-r8.json"
+    assert smoke_status["current_primary_judge_discovery_run"] == (
+        "authrunner-primary-judge-20260821-r8"
+    )
+    assert smoke_status["current_replay_judge_registry"] == "replay-judge-registry-r8.json"
+    assert smoke_status["current_replay_judge_discovery_run"] == (
+        "authrunner-replay-judge-20260822-r8"
+    )
+    assert smoke_status["current_smoke_output"] == (
+        "authenticated-runner-smoke-evidence-20260822-s3.json"
+    )
+    assert smoke_status["paused_phase2_working_bytes_may_be_used"] is False
+    assert smoke_status["executable_bytes_must_remain_unchanged_between_a_and_b"] is True
     assert smoke_status["paid_execution_adjacency_status"] == (
-        "UNPROVEN_NO_FRESH_IMMEDIATE_POST_B413_STEP_A_RESULT_RECORDED"
+        "PENDING_FRESH_IMMEDIATE_R8_R8_R8_STEP_A_EXACT_VALID_RESULT_AND_SEPARATE_AUTHORIZATION"
     )
     assert smoke_status["commands_must_not_be_chained"] is True
-    assert smoke_status["pre_a_ledger_exactly_empty_inspection_required"] is True
+    assert smoke_status["pre_a_ledger_exactly_empty_inspection_required"] is False
+    assert smoke_status["pre_a_ledger_exactly_one_reconciled_entry_inspection_required"] is True
+    assert smoke_status["pre_a_ledger_expected_used_usd"] == "0.01680888"
+    assert smoke_status["pre_a_ledger_expected_reserved_usd"] == "0"
+    assert smoke_status["pre_a_ledger_expected_remaining_usd"] == "249.98319112"
     assert smoke_status["pre_a_output_absent_inspection_required"] is True
     assert smoke_status["pre_a_output_parent_mode_0700_inspection_required"] is True
     assert smoke_status["pre_a_exact_artifact_and_config_inspection_required"] is True
@@ -1241,7 +1318,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "SELECTED_CANDIDATE_ROUTE_LACKS_NATIVE_STRUCTURED_OUTPUTS"
     )
     assert smoke_status["current_paid_smoke_authorization_status"] == (
-        "ABSENT_WITHDRAWN_AFTER_EXECUTED_FAILED_SAFE"
+        "EMITTED_NOT_RUN_SEPARATE_AUTHORIZATION_REQUIRED_AFTER_IMMEDIATE_EXACT_VALID_R8_STEP_A"
     )
     assert smoke_status["maximum_assurance_json_repair_attempts"] == 0
     assert smoke_status["certification_model_output_repair_allowed"] is False
@@ -1295,19 +1372,19 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert cascade_validation["strict_mypy_source_files"] == 206
     assert cascade_validation["independent_review"] == "CLEAN_NO_BLOCKER_OR_HIGH"
     assert exact_status["status"] == (
-        "PARTIAL_R8_LIVE_ROUTE_VALID_LOCAL_CHECKPOINT_NOT_PUSHED_REAL_BLOCKED_SAFETY"
+        "PARTIAL_ADJACENT_R8_R8_R8_GATE_AND_PAID_SMOKE_EMITTED_NOT_RUN_REAL_BLOCKED_SAFETY"
     )
     assert exact_status["ticket_status"] == "PARTIAL"
     assert exact_status["autorun_status"] == (
-        "BLOCKED_SAFETY_NO_CURRENT_OPERATOR_COMMANDS_REPLAY_ALLOWLIST_LOCAL_CHECKPOINT_NOT_PUSHED"
+        "BLOCKED_SAFETY_PAIRED_R8_COMMANDS_EMITTED_NOT_RUN_SEPARATE_PAID_AUTHORIZATION_REQUIRED"
     )
     assert exact_status["paid_smoke_real_command_status"] == (
-        "HISTORICAL_EXECUTED_FAILED_SAFE_SCHEMA_VALIDATION_COMMAND_WITHDRAWN"
+        "EMITTED_NOT_RUN_SEPARATE_AUTHORIZATION_REQUIRED_AFTER_IMMEDIATE_EXACT_VALID_R8_STEP_A"
     )
     assert exact_status["offline_smoke_verifier_command_status"] == (
         "ABSENT_WITHHELD_NO_CURRENT_BUNDLE"
     )
-    assert exact_status["real_command_emission_authorized_for_operator_review"] is False
+    assert exact_status["real_command_emission_authorized_for_operator_review"] is True
     revocation_fix = exact_status["revocation_cascade_fix"]
     assert revocation_fix["acceptance_requirement"] == (
         "REVOCATION_INVALIDATES_EVERY_DOWNSTREAM_CONSUMER"
@@ -1439,7 +1516,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert current_successor["replay_fresh_discovery_evidence_present"] is True
     assert current_successor["fresh_route_discovery_required"] is False
     assert current_successor["operationally_viable"] is True
-    assert current_successor["current_operator_command_emitted"] is False
+    assert current_successor["current_operator_command_emitted"] is True
     assert current_successor["authority"] is False
     assert "historical_full_r2_r5_r2_candidate_admission" in exact_status
     assert exact_status["zero_command_evidence_checkpoint"] == (
@@ -1495,7 +1572,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert completion_capacity["fails_before_secret_selection"] is True
     assert completion_capacity["fails_before_provider_dispatch"] is True
     assert completion_capacity["fails_before_ledger_reservation"] is True
-    assert completion_capacity["current_operator_command_emitted"] is False
+    assert completion_capacity["current_operator_command_emitted"] is True
     assert completion_capacity["authority"] is False
     replay_successor = exact_status["current_replay_route_allowlist_successor"]
     assert replay_successor["checkpoint_commit"] == CURRENT_AUTHRUNNER_SUCCESSOR_CHECKPOINT
@@ -1512,9 +1589,12 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "phala"
     )
     assert replay_successor["r8_r8_r8_live_route_gate_valid"] is True
-    assert replay_successor["current_operator_command_emitted"] is False
+    assert replay_successor["current_operator_command_emitted"] is True
     assert replay_successor["authority"] is False
     assert runtime_status["last_validation"]["terminal_full_suite_run"] is False
+    assert runtime_status["last_validation"]["status"] == (
+        "PASS_R8_R8_R8_COMMAND_ONLY_CHECKPOINT_COMMANDS_EMITTED_NOT_RUN"
+    )
     supplementary_full_suite_attempt = runtime_status["last_validation"][
         "supplementary_full_suite_attempt"
     ]

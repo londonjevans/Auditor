@@ -2126,8 +2126,11 @@ are invisible to source review by construction.
   `75451839c72020a5e34c2f21a433e420f79c6db3e7238adb808e1c382af348f8`, and validated r8/r8/r8
   through 15 logical GETs with at most 30 attempts, `$0`, no completion, and no output. Current
   operator custody is 71,771 bytes / 1,276 lines / SHA-256
-  `25ee5395a7e2360637f89d89cc0e89084a530c8921d0af395b06bc9b700b01e5`. Every command is
-  absent; REAL remains `BLOCKED_SAFETY` and the historical A-to-B adjacency contract is unproven.
+  `25ee5395a7e2360637f89d89cc0e89084a530c8921d0af395b06bc9b700b01e5`. The operator has now
+  explicitly requested one command-only checkpoint containing the adjacent r8/r8/r8 metadata-only
+  step A and paid-smoke step B. Both are emitted but not run; step B still requires separate
+  authorization after an immediate complete exact-VALID step A, and any drift or intervening change
+  requires starting again at step A. REAL remains `BLOCKED_SAFETY`; no authority changes.
 - **Local revocation-cascade slice:** Pushed checkpoint
   `692eb173f002818b4434b746c8801b4cbeb852e2` adds explicit PID-bound campaign and generation
   revokers, parent-to-child cascade, traceback-safe execution handoff guards, and immediate smoke
@@ -2493,8 +2496,8 @@ are invisible to source review by construction.
   delay or intervening source/config/artifact/ledger/output/secret/environment change; otherwise A
   must be separately reauthorized and rerun. At that boundary both commands were emitted and had not
   yet run. The later paid attempt is the schema-validation failure recorded above; no fresh immediately
-  adjacent step-A record exists. No current normal preflight, verifier, discovery, construct-only,
-  smoke, or full command is emitted.
+  adjacent step-A record exists. At that historical boundary no normal preflight, verifier,
+  discovery, construct-only, smoke, or full command was emitted.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
   and non-crediting. Both the historical and post-fix provider-free smoke preflights were valid and
   nonauthorizing, but neither constructed the live client. The first paid attempt exposed a mismatch
@@ -2503,8 +2506,9 @@ are invisible to source review by construction.
   proved constructor parity, and the later metadata-only live-route gate established genuine
   candidate endpoint-inventory drift. The latest paid candidate request reached transport, origin
   custody, and exact ledger reconciliation, then failed strict schema validation because the retained
-  candidate route lacks native `structured_outputs`; no judge request or bundle followed. No paid retry
-  is authorized.
+  candidate route lacks native `structured_outputs`; no judge request or bundle followed. The current
+  paid step B is emitted but remains unauthorized pending separate authorization after immediate
+  exact-VALID step A.
   Exact judge admission and the
   full-campaign cost bound cannot exist before both genuine candidate outputs. Current repository
   rules prohibit Codex from reading real credentials or accessing the provider. Judge request bytes
@@ -2518,11 +2522,13 @@ are invisible to source review by construction.
   positive owned-REAL parent issue-consume-revoke-reject assay against the external runtime remain
   absent; the completed provider-free cascade does not substitute for that evidence. External-log
   publication and every benchmark run remain queued.
-- **Next action:** Park `V3-AUTHRUNNER-001` as `PARTIAL / BLOCKED_SAFETY`; keep every metadata,
-  paid-smoke, verifier, normal-preflight, construct-only, and full command absent. Its remaining
-  positive judge/campaign/bundle proof is external and requires a separately authorized future
-  sequence. `V3-AUTONOMY-001` Phase 0 is the sole current provider-free work unit. AUTHSEAL
-  publication, audits, benchmarks, and release remain unauthorized.
+- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY`. Exactly two r8/r8/r8
+  commands are emitted but not run: metadata-only step A and paid step B. Run only A from the clean
+  command checkpoint; request separate B authorization only after its immediate complete exact-VALID
+  result, with no intervening state change. The verifier, normal preflight, discovery,
+  construct-only, and full commands remain absent. `V3-AUTONOMY-001` Phase 2 is paused until the
+  external result is reconciled. AUTHSEAL publication, audits, benchmarks, and release remain
+  unauthorized.
 
 ## V3-TARGETSPEC-001 — Reconcile the product vision with the objective and correct the README
 
@@ -3287,10 +3293,13 @@ are invisible to source review by construction.
   `runtime_authority=false` and `managed_run_ready=false`. The exact 28-role managed declaration
   pins three reviewed package resources and explicitly leaves 25 external roles unresolved.
   AUTHRUNNER's remaining REAL evidence still requires separately authorized external execution and
-  remains `PARTIAL / BLOCKED_SAFETY` with no command. Provisioning, installed/runtime verification,
-  intake, consent, target derivation, template enforcement, and the zero-input end-to-end run remain
-  later slices, so this ticket remains `IN_PROGRESS`. The next provider-free slice is Phase 2's
-  typed idempotent provisioning-state/refusal contract; it cannot grant runtime authority.
+  remains `PARTIAL / BLOCKED_SAFETY`. Exactly two adjacent r8/r8/r8 commands are emitted but not run;
+  the paid step still requires separate authorization after an immediate exact-VALID metadata-only
+  step. Phase 2 working bytes are paused and must not be used by that sequence. Provisioning,
+  installed/runtime verification, intake, consent, target derivation, template enforcement, and the
+  zero-input end-to-end run remain later slices, so this ticket remains `IN_PROGRESS`. After the
+  external result is reconciled, the next provider-free slice is Phase 2's typed idempotent
+  provisioning-state/refusal contract; it cannot grant runtime authority.
 
 ## Historical 46-step execution order (not current completion authority)
 

@@ -4,13 +4,13 @@ The objective source is `docs/remediation/v3/product_completion_goal.txt`, with 
 `e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: RUNNING_PROVIDER_FREE
+AUTORUN_STATUS: PAUSED_FOR_OPERATOR_R8_ADJACENT_SEQUENCE
 CURRENT_MILESTONE: M1-DETERMINISTIC-PRODUCT (REACHED)
-CURRENT_TICKET: V3-AUTONOMY-001
+CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001 (COMPLETE)
-NEXT_ACTION: Begin only a separately recorded `V3-AUTONOMY-001` Phase 2 provisioning-state slice after checkpoint `084add8778ef36a2e4c86fdbdea4082eb3a1b332`: define explicit idempotent provisioning/refusal evidence for the managed bundle without granting trust, installed-process verification, runtime authority, or managed-run readiness.
-LAST_COMMAND: Generated bundle/schema/inventory verification; 97 focused managed-toolchain/inventory/schema/wheel tests; 273 adjacent config/scanner/isolation/reproduction tests; 16 documentation/objective tests; Ruff; formatting; strict mypy over 208 source files.
-LAST_RESULT: PASS / PHASE_1_COMPLETE_NONAUTHORIZING — the exact 28-role declaration, fail-closed config projection, fixed package loader, generated schema, wheel resource, and reconciled Phase-0 inventory are green. The packaged bundle pins only three reviewed package resources; 25 external roles remain unresolved. Independent trust, provisioning, installed/runtime verification, generic image-side identities, fixed OS probe helpers, and managed readiness remain absent and every authority flag is false.
+NEXT_ACTION: From the clean exact command checkpoint, run only the r8/r8/r8 metadata-only step A and record its complete result. Request separate paid-step authorization only if A is exactly VALID and no state changed; otherwise rerun A after fresh review. Reconcile the operator result before resuming `V3-AUTONOMY-001` Phase 2.
+LAST_COMMAND: Exact command-parity and governance regression; strict JSON; Ruff; formatting; diff integrity. No AUTHRUNNER command was executed.
+LAST_RESULT: PASS / COMMANDS_EMITTED_NOT_RUN — exactly two separate r8/r8/r8 commands are current: metadata-only step A and paid-smoke step B. Step B remains unauthorized pending separate authorization after an immediate complete exact-VALID A. Every runtime, qualification, audit, benchmark, seal, and release authority remains false.
 REAL_MODEL_CALLS_ATTEMPTED: 12
 REAL_MODEL_CALLS_SUCCEEDED: 2
 REAL_MODEL_CALLS_REJECTED: 10
@@ -22,6 +22,22 @@ HISTORICAL_GOVERNED_LEDGER_USED_USD: 0.0034764325
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable. A private holdout and independently adjudicated professional comparison are not supplied, but those optional human/private tiers are objective-out-of-scope and are not current completion blockers.
 LAST_CHECKPOINT_COMMIT: 084add8778ef36a2e4c86fdbdea4082eb3a1b332 — local V3-AUTONOMY Phase-1 managed-toolchain implementation checkpoint; it is not pushed or remote-resolved and explicitly retains runtime_authority=false and managed_run_ready=false. Historical Phase-0 checkpoint: d0402d1c68f0f82d9ee4f8757f7967abda372ac6. Historical r8 governance base: 28ee5d77ed9c33fb72d0c00e02e93c91b9fde8c6. Historical paid diagnostic base: b4134c70641e33cbbff2b430b135910df903733b.
+
+## 2026-08-22T04:55:34Z — r8/r8/r8 adjacent command-only checkpoint
+
+- Evidence: fully reread and rehashed the operator-supplied 71,771-byte / 1,276-line record at
+  `25ee5395a7e2360637f89d89cc0e89084a530c8921d0af395b06bc9b700b01e5`. It binds candidate
+  `parasail/fp8`, PRIMARY `sail-research/fp8`, and REPLAY `modal/mxfp4` r8 evidence and records the
+  earlier VALID metadata gate at `$0`; it remains nonauthorizing.
+- Emission: the model guide now contains exactly two unchained commands over those r8 paths and
+  fresh absent output `authenticated-runner-smoke-evidence-20260822-s3.json`. No normal preflight,
+  discovery, verifier, construct-only, or full-runner command is current.
+- Boundary: execute only from the clean exact command checkpoint with `PYTHONPATH` bound to its
+  source. The paused Phase-2 working bytes are excluded. Step B requires separate authorization
+  after exact step A, and any delay or intervening state change requires restarting at A.
+- Result / next: commands emitted, not run; no counter, ledger, provider result, bundle, or authority
+  changed. Record step A before any paid authorization, then reconcile before resuming
+  `V3-AUTONOMY-001` Phase 2.
 
 ## 2026-08-22T03:34:19Z — V3-AUTONOMY Phase 1 completed nonauthorizing
 
@@ -123,9 +139,9 @@ LAST_CHECKPOINT_COMMIT: 084add8778ef36a2e4c86fdbdea4082eb3a1b332 — local V3-AU
   `dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d`.
 - Custody: aggregate live counters remain 12 attempted / 2 transport successes / 10 rejections; the
   single live ledger entry remains reconciled at `$0.01680888`, with `$249.98319112` remaining. No
-  current command or authority is emitted.
-- Next: separately review paid-smoke eligibility. Governance emits no command; any later emission
-  requires a fresh separately reviewed adjacency sequence.
+  command or authority was emitted at that recorded boundary.
+- Historical next at that boundary: separately review paid-smoke eligibility. That no-command state
+  is superseded by the current adjacent r8/r8/r8 command-only checkpoint.
 
 ## 2026-08-21T22:18:00Z — GLM-5.2 added only to the immutable capture inventory
 

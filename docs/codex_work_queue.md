@@ -433,8 +433,11 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `75451839c72020a5e34c2f21a433e420f79c6db3e7238adb808e1c382af348f8`, and validated r8/r8/r8
   through 15 logical GETs with at most 30 attempts, `$0`, no completion, and no output. Current
   operator custody is 71,771 bytes / 1,276 lines / SHA-256
-  `25ee5395a7e2360637f89d89cc0e89084a530c8921d0af395b06bc9b700b01e5`. All commands are
-  absent, REAL remains `BLOCKED_SAFETY`, and the historical A-to-B adjacency contract is unproven.
+  `25ee5395a7e2360637f89d89cc0e89084a530c8921d0af395b06bc9b700b01e5`. The operator has now
+  explicitly requested one command-only checkpoint containing the adjacent r8/r8/r8 metadata-only
+  step A and paid-smoke step B. Both are emitted but not run; step B still requires separate
+  authorization after an immediate complete exact-VALID step A, and any drift or intervening change
+  requires starting again at step A. REAL remains `BLOCKED_SAFETY`; no authority changes.
 - **Local revocation-cascade slice:** Pushed checkpoint
   `692eb173f002818b4434b746c8801b4cbeb852e2` adds explicit PID-bound campaign and generation
   revokers, parent-to-child cascade, traceback-safe execution handoff guards, and immediate smoke
@@ -800,8 +803,8 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   delay or intervening source/config/artifact/ledger/output/secret/environment change; otherwise A
   must be separately reauthorized and rerun. At that boundary both commands were emitted and had not
   yet run. The later paid attempt is the schema-validation failure recorded above; no fresh immediately
-  adjacent step-A record exists. No current normal preflight, verifier, discovery, construct-only,
-  smoke, or full command is emitted.
+  adjacent step-A record exists. At that historical boundary no normal preflight, verifier,
+  discovery, construct-only, smoke, or full command was emitted.
 - **Remaining limitation:** One prior REAL `SYNTHETIC_BENCHMARK` completion was identity-`UNBOUND`
   and non-crediting. Both the historical and post-fix provider-free smoke preflights were valid and
   nonauthorizing, but neither constructed the live client. The first paid attempt exposed a mismatch
@@ -810,8 +813,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   proved constructor parity, and the later metadata-only live-route gate established genuine
   candidate endpoint-inventory drift. The latest paid candidate request reached transport, origin
   custody, and exact ledger reconciliation, then failed strict schema validation because the retained
-  candidate route lacks native `structured_outputs`; no judge request or bundle followed. No paid retry
-  is authorized.
+  candidate route lacks native `structured_outputs`; no judge request or bundle followed. The current
+  paid step B is emitted but remains unauthorized pending separate authorization after immediate
+  exact-VALID step A.
   Exact judge admission and the
   full-campaign cost bound cannot exist before both genuine candidate outputs. Current repository
   rules prohibit Codex from reading real credentials or accessing the provider. Judge request bytes
@@ -825,11 +829,13 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   positive owned-REAL parent issue-consume-revoke-reject assay against the external runtime remain
   absent; the completed provider-free cascade does not substitute for that evidence. External-log
   publication and every benchmark run remain queued.
-- **Next action:** Park `V3-AUTHRUNNER-001` as `PARTIAL / BLOCKED_SAFETY`; keep every metadata,
-  paid-smoke, verifier, normal-preflight, construct-only, and full command absent. Its remaining
-  positive judge/campaign/bundle proof is external and requires a separately authorized future
-  sequence. `V3-AUTONOMY-001` Phase 0 is the sole current provider-free work unit. AUTHSEAL
-  publication, audits, benchmarks, and release remain unauthorized.
+- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY`. Exactly two r8/r8/r8
+  commands are emitted but not run: metadata-only step A and paid step B. Run only A from the clean
+  command checkpoint; request separate B authorization only after its immediate complete exact-VALID
+  result, with no intervening state change. The verifier, normal preflight, discovery,
+  construct-only, and full commands remain absent. `V3-AUTONOMY-001` Phase 2 is paused until the
+  external result is reconciled. AUTHSEAL publication, audits, benchmarks, and release remain
+  unauthorized.
 
 ### V3-MODELREFRESH-001 — Provider-free model-refresh runtime and pricing custody
 
@@ -1602,26 +1608,25 @@ and report serialization.
 
 ## Next action
 
-### V3-AUTONOMY-001 — Phase 2 managed provisioning state
+### V3-AUTHRUNNER-001 — adjacent r8/r8/r8 operator sequence
 
-- **Objective:** Define typed, idempotent provisioning-state and setup/refusal evidence for the
-  completed Phase-1 managed bundle. Incomplete, stale, or mismatched provisioning must remain an
-  explicit nonauthorizing refusal. The canonical full ticket remains in
-  `docs/remediation/v3/work_queue.md`.
-- **Dependencies:** Phase 0 completed at
-  `d0402d1c68f0f82d9ee4f8757f7967abda372ac6`; Phase 1 completed nonauthorizing at local checkpoint
-  `084add8778ef36a2e4c86fdbdea4082eb3a1b332`. The full ticket retains its recorded later
-  dependencies and remains nonauthorizing.
-- **Status:** `IN_PROGRESS`
-- **Boundary:** `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`; its provider-free client,
-  route, cost, and custody seams are exhausted, while genuine judge/campaign/bundle evidence requires
-  separately authorized external execution. No provider or operator command is emitted.
-- **Current evidence:** Phase 1 is complete nonauthorizing. The regenerated self-hashed inventory
-  covers 3,627 unique sources / 3,630 occurrences and joins 3,584 gate sources to 35 logical gates.
-  Twenty-nine gates remain unsatisfied and 15 remain current-manual; `runtime_authority=false` and
-  `managed_run_ready=false`. The exact 28-role bundle pins three reviewed package resources and
+- **Objective:** Preserve the time-sensitive r8/r8/r8 route state by emitting exactly one
+  metadata-only live-route command and one paid-smoke command in the same command-only checkpoint.
+- **Dependencies:** Exact current operator evidence
+  `25ee5395a7e2360637f89d89cc0e89084a530c8921d0af395b06bc9b700b01e5`, plan
+  `ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f`, and all three r8 frozen
+  registries.
+- **Status:** `PARTIAL / BLOCKED_SAFETY`
+- **Boundary:** Both commands are emitted but not run and must remain separate. Step B requires
+  separate authorization after step A returns the complete exact-VALID result; any delay or state
+  change requires a new step A. No verifier, full runner, qualification, seal, audit, benchmark, or
+  release command is emitted.
+- **Current evidence:** `V3-AUTONOMY-001` remains `IN_PROGRESS`, but its Phase 2 working bytes are
+  paused and excluded from the clean command worktree. After the operator result is reconciled,
+  resume the typed idempotent provisioning-state/refusal slice. The exact 28-role bundle pins three
+  reviewed package resources and
   explicitly leaves 25 external roles unresolved.
-- **Next action:** Define the minimal typed provisioning-state and idempotent setup/refusal contract.
-  Do not inspect or execute ambient tools in ordinary test paths,
-  and do not grant independent trust, installed-process verification, runtime authority, or managed
-  readiness.
+- **Next action:** From the clean exact command checkpoint, run only metadata step A and record its
+  complete result. Request separate authorization for paid step B only if A is exactly valid and no
+  source/config/artifact/ledger/output/secret/environment state changes. Then reconcile the result
+  before resuming Phase 2; do not grant runner or release authority from command emission.
