@@ -1609,7 +1609,8 @@ and report serialization.
   explicit nonauthorizing refusal. The canonical full ticket remains in
   `docs/remediation/v3/work_queue.md`.
 - **Dependencies:** Phase 0 completed at
-  `d0402d1c68f0f82d9ee4f8757f7967abda372ac6`; the full ticket retains its recorded later
+  `d0402d1c68f0f82d9ee4f8757f7967abda372ac6`; Phase 1 completed nonauthorizing at local checkpoint
+  `084add8778ef36a2e4c86fdbdea4082eb3a1b332`. The full ticket retains its recorded later
   dependencies and remains nonauthorizing.
 - **Status:** `IN_PROGRESS`
 - **Boundary:** `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`; its provider-free client,
@@ -1620,7 +1621,7 @@ and report serialization.
   Twenty-nine gates remain unsatisfied and 15 remain current-manual; `runtime_authority=false` and
   `managed_run_ready=false`. The exact 28-role bundle pins three reviewed package resources and
   explicitly leaves 25 external roles unresolved.
-- **Next action:** After the Phase-1 checkpoint, define the minimal typed provisioning-state and
-  idempotent setup/refusal contract. Do not inspect or execute ambient tools in ordinary test paths,
+- **Next action:** Define the minimal typed provisioning-state and idempotent setup/refusal contract.
+  Do not inspect or execute ambient tools in ordinary test paths,
   and do not grant independent trust, installed-process verification, runtime authority, or managed
   readiness.

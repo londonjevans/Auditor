@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-22T03:34:19Z",
+  "updated_at": "2026-08-22T03:54:20Z",
   "objective_path": "docs/remediation/v3/product_completion_goal.txt",
   "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
   "objective_supersession": {
@@ -13,9 +13,9 @@
     "authorized_at": "2026-08-17T20:06:41Z",
     "decision": "EXPLICIT_OPERATOR_TARGET_CHANGE"
   },
-  "candidate_commit": "d0402d1c68f0f82d9ee4f8757f7967abda372ac6",
-  "candidate_commit_scope": "HISTORICAL_V3_AUTONOMY_PHASE_0_CHECKPOINT; d0402d1c68f0f82d9ee4f8757f7967abda372ac6 predates the current Phase-1 worktree result; Phase 1 is COMPLETE_NONAUTHORIZING within the still-IN_PROGRESS V3-AUTONOMY-001 ticket; AUTHRUNNER remains PARTIAL/BLOCKED_SAFETY with no current command and no runtime authority",
-  "candidate_successor_commit": "d0402d1c68f0f82d9ee4f8757f7967abda372ac6",
+  "candidate_commit": "084add8778ef36a2e4c86fdbdea4082eb3a1b332",
+  "candidate_commit_scope": "CURRENT_LOCAL_V3_AUTONOMY_PHASE_1_IMPLEMENTATION_CHECKPOINT; 084add8778ef36a2e4c86fdbdea4082eb3a1b332 owns the exact 18-path Phase-1 result, is not pushed or remote-resolved, and excludes operator_results; Phase 1 is COMPLETE_NONAUTHORIZING within the still-IN_PROGRESS V3-AUTONOMY-001 ticket; d0402d1c68f0f82d9ee4f8757f7967abda372ac6 remains historical Phase 0 only; AUTHRUNNER remains PARTIAL/BLOCKED_SAFETY with no current command and no runtime authority",
+  "candidate_successor_commit": "084add8778ef36a2e4c86fdbdea4082eb3a1b332",
   "candidate_successor_status": "LOCAL_COMMIT_NOT_PUSHED_OR_REMOTE_RESOLVED",
   "candidate_commit_pushed": false,
   "candidate_commit_remote_resolved": false,
@@ -67,6 +67,13 @@
   },
   "managed_toolchain_phase_one": {
     "status": "COMPLETE_NONAUTHORIZING",
+    "implementation_commit": "084add8778ef36a2e4c86fdbdea4082eb3a1b332",
+    "implementation_commit_pushed": false,
+    "implementation_commit_remote_resolved": false,
+    "implementation_path_count": 18,
+    "implementation_core_path_count": 10,
+    "post_checkpoint_governance_successor_path_count": 8,
+    "operator_results_in_implementation_checkpoint": false,
     "bundle_path": "src/mmaudit/resources/managed_toolchain_bundle.json",
     "schema_path": "schemas/managed_toolchain_bundle.schema.json",
     "bundle_raw_sha256": "6d427e698d1074be2d20747211bcdd53816509e0e71b4225dff0401c32d6561a",
@@ -88,8 +95,8 @@
     "secret_material_read": false,
     "next_slice": "PHASE_2_MANAGED_PROVISIONING_STATE"
   },
-  "last_checkpoint_commit": "d0402d1c68f0f82d9ee4f8757f7967abda372ac6",
-  "last_checkpoint_commit_scope": "HISTORICAL_LOCAL_V3_AUTONOMY_PHASE_0_IMPLEMENTATION_CHECKPOINT_NOT_PUSHED_OR_REMOTE_RESOLVED; the current Phase-1 result is complete nonauthorizing in the worktree and not yet checkpointed; AUTHRUNNER REAL remains BLOCKED_SAFETY and no command exists",
+  "last_checkpoint_commit": "084add8778ef36a2e4c86fdbdea4082eb3a1b332",
+  "last_checkpoint_commit_scope": "CURRENT_LOCAL_V3_AUTONOMY_PHASE_1_IMPLEMENTATION_CHECKPOINT_NOT_PUSHED_OR_REMOTE_RESOLVED; the exact 10 core Phase-1 paths remain byte-identical while eight governance paths carry only post-checkpoint reconciliation; operator_results is excluded; d0402d1c68f0f82d9ee4f8757f7967abda372ac6 remains historical Phase 0 only; AUTHRUNNER REAL remains BLOCKED_SAFETY and no command exists",
   "real_model_calls": {
     "attempted": 12,
     "succeeded": 2,
@@ -295,7 +302,7 @@
     "next_action_after_v3_authrunner_provider_free": "Historical action superseded by local code-only checkpoint 68d774b2cee5fa69476b1cfea2f8172731a365c8. V3-AUTHRUNNER-001 is PARTIAL and REAL remains BLOCKED_SAFETY; no live call or current operator command is authorized.",
     "blocked_at_v3_authrunner": "2026-08-18T15:44:05Z",
     "result_v3_authrunner_blocked": "Historical provider-free boundary: the one-PID implementation removes the exact runner lease after its sole AUTHSEAL attempt, rechecks negative top-level custody, returns only detached durable reports, and preserves nonauthorizing historical evidence. The final affected matrix passed 216 tests, the broader CLI matrix passed 104, an independent 100-test audit found no blocker/HIGH, and static/schema/governance gates passed. Later read-only review superseded the complete-lifecycle claim: retained independently registered campaign and generation capabilities are not explicitly revoked by top-level runner disposal. Genuine REAL issuance remains blocked and model-call and cost counters are unchanged.",
-    "resume_action_v3_authrunner": "Park V3-AUTHRUNNER-001 PARTIAL with every REAL path BLOCKED_SAFETY. Source checkpoint dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d retains the completion-capacity gate and documentary reseal; plan-v1.3 ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f remains nonauthorizing. Candidate, PRIMARY, and explicitly selected replay modal/mxfp4 r8 discovery succeeded, and the r8/r8/r8 metadata-only gate is valid at $0. No current command is emitted. The remaining positive judge/campaign/bundle proof requires separately authorized external execution. V3-AUTONOMY-001 Phase 0 and Phase 1 are complete nonauthorizing; the ticket remains IN_PROGRESS, and Phase 2 managed provisioning state is the next provider-free slice after checkpointing Phase 1.",
+    "resume_action_v3_authrunner": "Park V3-AUTHRUNNER-001 PARTIAL with every REAL path BLOCKED_SAFETY. Source checkpoint dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d retains the completion-capacity gate and documentary reseal; plan-v1.3 ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f remains nonauthorizing. Candidate, PRIMARY, and explicitly selected replay modal/mxfp4 r8 discovery succeeded, and the r8/r8/r8 metadata-only gate is valid at $0. No current command is emitted. The remaining positive judge/campaign/bundle proof requires separately authorized external execution. V3-AUTONOMY-001 Phase 0 and Phase 1 are complete nonauthorizing; Phase 1 is checkpointed locally at 084add8778ef36a2e4c86fdbdea4082eb3a1b332, the ticket remains IN_PROGRESS, and Phase 2 managed provisioning state is the next provider-free slice.",
     "checkpointed_at_v3_priority1_durability": "2026-08-20T15:14:32Z",
     "result_v3_priority1_durability": "The audited 207-path WIP recovery checkpoint and bounded scheduler follow-ups are remotely preserved through c90a1531cad6f09866bc1309a3130b5e4673214b on origin/agent/v3-wip-checkpoint. All 6152 collected tests completed as 6128 passed and 24 expected skips; schema generation, Ruff over 533 files, strict mypy over 201 source files, 32 documentation/objective/schema tests, strict governance JSON parsing, and diff integrity passed. Model-call, cost, real-audit, AUTHSEAL, benchmark, and release state did not change.",
     "next_action_after_v3_priority1_durability": "Keep V3-AUTHRUNNER-001 PARTIAL and autorun BLOCKED_SAFETY. Rebuild config/models.candidates.toml provider-free from the operator-staged model-ranking.py and V3-LINEAGE-001-operator-review.md, remove obsolete IDs, preserve nonauthorizing evidence, and validate distinct candidate, primary, and replay-judge roots. Then freeze the fallback-disabled SYNTHETIC_BENCHMARK policy, synthetic/public corpus, exact ledger/call caps, and emit the exact operator command. Do not consume secrets or make provider calls; AUTHSEAL publication, real audits, benchmarks, and release remain queued.",
@@ -1750,7 +1757,7 @@
       "passed_test_count_printed": false,
       "terminal_full_suite_pass_credit": false
     },
-    "next_action": "Keep the AUTHRUNNER REAL remainder external BLOCKED_SAFETY with no current command. V3-AUTONOMY-001 Phase 0 and Phase 1 are complete nonauthorizing while the ticket remains IN_PROGRESS. After the Phase-1 checkpoint, begin only the Phase 2 typed provisioning-state and fail-closed setup/refusal contract; do not grant independent trust, installed-process verification, runtime authority, or managed readiness."
+    "next_action": "Keep the AUTHRUNNER REAL remainder external BLOCKED_SAFETY with no current command. V3-AUTONOMY-001 Phase 0 and Phase 1 are complete nonauthorizing while the ticket remains IN_PROGRESS; Phase 1 is checkpointed locally at 084add8778ef36a2e4c86fdbdea4082eb3a1b332. Begin only the Phase 2 typed provisioning-state and fail-closed setup/refusal contract; do not grant independent trust, installed-process verification, runtime authority, or managed readiness."
   },
   "release_status": "INCOMPLETE",
   "superiority_status": "NOT_DEMONSTRATED"

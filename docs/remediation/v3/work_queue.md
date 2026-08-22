@@ -3280,8 +3280,9 @@ are invisible to source review by construction.
   `V3-LINEAGE-001` path is objective-out-of-scope.
 - **Status:** `IN_PROGRESS`
 - **Current state:** Phase 0 completed at
-  `d0402d1c68f0f82d9ee4f8757f7967abda372ac6`; Phase 1 is now complete nonauthorizing. The current
-  self-hashed inventory covers 3,627 unique sources / 3,630 occurrences joined to 35 logical gates.
+  `d0402d1c68f0f82d9ee4f8757f7967abda372ac6`; Phase 1 is complete nonauthorizing at local checkpoint
+  `084add8778ef36a2e4c86fdbdea4082eb3a1b332`. The current self-hashed inventory covers 3,627 unique
+  sources / 3,630 occurrences joined to 35 logical gates.
   Twenty-nine gates remain unsatisfied and 15 remain current-manual; the artifact states
   `runtime_authority=false` and `managed_run_ready=false`. The exact 28-role managed declaration
   pins three reviewed package resources and explicitly leaves 25 external roles unresolved.

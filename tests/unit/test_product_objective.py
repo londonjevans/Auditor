@@ -108,7 +108,8 @@ def test_current_completion_authority_has_no_legacy_human_gate() -> None:
     assert "Phase 0 completed at `d0402d1c68f0f82d9ee4f8757f7967abda372ac6`" in (
         normalized_autonomy
     )
-    assert "Phase 1 is now complete nonauthorizing" in normalized_autonomy
+    assert "Phase 1 is complete nonauthorizing at local checkpoint" in normalized_autonomy
+    assert "`084add8778ef36a2e4c86fdbdea4082eb3a1b332`" in normalized_autonomy
     assert "exact 28-role managed declaration" in normalized_autonomy
     assert "25 external roles unresolved" in normalized_autonomy
     assert "next provider-free slice is Phase 2's" in normalized_autonomy
@@ -118,11 +119,21 @@ def test_current_completion_authority_has_no_legacy_human_gate() -> None:
     requirements = {item["id"]: item for item in traceability["requirements"]}
     autonomy_evidence = " ".join(requirements["U"]["evidence"])
     assert "Phase 1 is COMPLETE_NONAUTHORIZING" in autonomy_evidence
+    assert "084add8778ef36a2e4c86fdbdea4082eb3a1b332" in autonomy_evidence
+    assert "not pushed or remote-resolved" in autonomy_evidence
+    assert "owns exactly 18 Phase-1 paths" in autonomy_evidence
+    assert "exact 10 core" in autonomy_evidence
+    assert "other eight paths" in autonomy_evidence
+    assert "excludes operator_results" in autonomy_evidence
     assert "3627 unique completion inputs / 3630 occurrences" in autonomy_evidence
     assert "3584 gate sources" in autonomy_evidence
     assert "28-role packaged declaration" in autonomy_evidence
     assert "25 external roles remain unresolved" in autonomy_evidence
     assert "Phase 2" in requirements["U"]["remaining_proof"]
+    assert "Checkpoint the completed" not in requirements["U"]["remaining_proof"]
+    assert runtime_status["candidate_commit"] == "084add8778ef36a2e4c86fdbdea4082eb3a1b332"
+    assert runtime_status["candidate_commit_pushed"] is False
+    assert runtime_status["candidate_commit_remote_resolved"] is False
     assert "V3-LINEAGE-001" not in requirements["L"]["tickets"]
     assert "V3-AUTHLINEAGE-RECEIPT-001" not in requirements["L"]["tickets"]
     assert "V3-HUMANCMP-001" not in requirements["R"]["tickets"]

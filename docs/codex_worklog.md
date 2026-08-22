@@ -7,17 +7,18 @@ credentials, RPC URLs, or operational attack instructions.
 AUTORUN_STATUS: RUNNING_PROVIDER_FREE
 CURRENT_TICKET: V3-AUTONOMY-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001
-NEXT_ACTION: Checkpoint the completed nonauthorizing `V3-AUTONOMY-001` Phase 1 slice. Then begin only a separately recorded Phase 2 provisioning-state slice: define explicit idempotent provisioning/refusal evidence for the managed bundle without granting trust, installed-process verification, runtime authority, or managed-run readiness.
+NEXT_ACTION: Begin only a separately recorded `V3-AUTONOMY-001` Phase 2 provisioning-state slice after checkpoint `084add8778ef36a2e4c86fdbdea4082eb3a1b332`: define explicit idempotent provisioning/refusal evidence for the managed bundle without granting trust, installed-process verification, runtime authority, or managed-run readiness.
 LAST_VALIDATION_COMMAND: Generated bundle/schema/inventory verification; 97 focused managed-toolchain/inventory/schema/wheel tests; 273 adjacent config/scanner/isolation/reproduction tests; 16 documentation/objective tests; Ruff; formatting; strict mypy over 208 source files.
 LAST_VALIDATION_RESULT: PASS / PHASE_1_COMPLETE_NONAUTHORIZING — the exact 28-role declaration, fail-closed config projection, fixed package loader, generated schema, wheel resource, and reconciled Phase-0 inventory are green. The packaged bundle pins only three reviewed package resources; 25 external roles remain unresolved. Independent trust, provisioning, installed/runtime verification, generic image-side identities, fixed OS probe helpers, and managed readiness remain absent and every authority flag is false.
-LAST_CHECKPOINT_COMMIT: `d0402d1c68f0f82d9ee4f8757f7967abda372ac6` — local V3-AUTONOMY Phase-0 inventory implementation checkpoint; it is not pushed or remote-resolved and explicitly retains `runtime_authority=false` and `managed_run_ready=false`. Historical r8 governance base: `28ee5d77ed9c33fb72d0c00e02e93c91b9fde8c6`. Historical paid diagnostic base: `b4134c70641e33cbbff2b430b135910df903733b`.
+LAST_CHECKPOINT_COMMIT: `084add8778ef36a2e4c86fdbdea4082eb3a1b332` — local V3-AUTONOMY Phase-1 managed-toolchain implementation checkpoint; it is not pushed or remote-resolved and explicitly retains `runtime_authority=false` and `managed_run_ready=false`. Historical Phase-0 checkpoint: `d0402d1c68f0f82d9ee4f8757f7967abda372ac6`. Historical r8 governance base: `28ee5d77ed9c33fb72d0c00e02e93c91b9fde8c6`. Historical paid diagnostic base: `b4134c70641e33cbbff2b430b135910df903733b`.
 REMAINING_ACTIONABLE_TICKETS: The combined queues contain 43 unfinished tickets. `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`: no material provider-free seam remains, and positive judge/campaign/bundle evidence requires separately authorized external execution. `V3-AUTONOMY-001` Phases 0 and 1 are complete nonauthorizing; the ticket remains the sole `IN_PROGRESS` work unit for its later provider-free phases. Every provider, secret, capture, metadata, discovery, preflight, paid-smoke, verifier, runner, seal, audit, benchmark, and release authority remains absent.
 
 ## 2026-08-22T03:34:19Z — V3-AUTONOMY Phase 1 completed nonauthorizing
 
 - **Implementation:** Added a closed 28-role first-class toolchain catalog, exact consumer joins,
   immutable/self-hashed declarations and projections, one-snapshot config derivation, and strict
-  refusal for missing, mismatched, ambiguous-host, or unrepresented image-side identities.
+  refusal for missing, mismatched, ambiguous-host, or unrepresented image-side identities. Exact
+  implementation checkpoint: `084add8778ef36a2e4c86fdbdea4082eb3a1b332` (local, unpushed).
 - **Artifacts:** Added the canonical packaged partial bundle and generated release schema. The bundle
   raw SHA-256 is `6d427e698d1074be2d20747211bcdd53816509e0e71b4225dff0401c32d6561a`;
   its self-hash is `55c412fdb2dd56a2541c0e737d953b5d0e770ece42b4c1c11ebfb7e1c233498d`.

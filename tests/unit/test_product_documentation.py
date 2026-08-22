@@ -44,6 +44,7 @@ HISTORICAL_COMPLETION_CAPACITY_CHECKPOINT = "3975d2e12fd81a214b9faa1c3031c94506a
 CURRENT_SELECTION_SUCCESSOR_CHECKPOINT = "dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d"
 CURRENT_AUTHRUNNER_SUCCESSOR_CHECKPOINT = CURRENT_SELECTION_SUCCESSOR_CHECKPOINT
 HISTORICAL_PHASE_ZERO_CHECKPOINT = "d0402d1c68f0f82d9ee4f8757f7967abda372ac6"
+PHASE_ONE_IMPLEMENTATION_CHECKPOINT = "084add8778ef36a2e4c86fdbdea4082eb3a1b332"
 HISTORICAL_PHASE_ZERO_INVENTORY_RAW_SHA256 = (
     "6a3c54258dd1f0c25fc8861c8298cf51d187b33bd5528ec25b1549c0e0021980"
 )
@@ -71,6 +72,42 @@ AUTONOMY_PHASE_ZERO_PATHS = frozenset(
         "tests/unit/test_release_schemas.py",
     }
 )
+PHASE_ONE_IMPLEMENTATION_PATHS = frozenset(
+    {
+        "docs/codex_work_queue.md",
+        "docs/codex_worklog.md",
+        "docs/remediation/v3/autonomy_gate_inventory.json",
+        "docs/remediation/v3/review_traceability.json",
+        "docs/remediation/v3/runtime_status.json",
+        "docs/remediation/v3/work_queue.md",
+        "docs/remediation/v3/worklog.md",
+        "schemas/managed_toolchain_bundle.schema.json",
+        "scripts/generate_release_schemas.py",
+        "src/mmaudit/orchestration/autonomy_gate_inventory.py",
+        "src/mmaudit/orchestration/managed_toolchain.py",
+        "src/mmaudit/resources/managed_toolchain_bundle.json",
+        "tests/unit/test_autonomy_gate_inventory.py",
+        "tests/unit/test_managed_toolchain.py",
+        "tests/unit/test_packaged_scanner_resources.py",
+        "tests/unit/test_product_documentation.py",
+        "tests/unit/test_product_objective.py",
+        "tests/unit/test_release_schemas.py",
+    }
+)
+PHASE_ONE_GOVERNANCE_SUCCESSOR_PATHS = frozenset(
+    {
+        "docs/codex_work_queue.md",
+        "docs/codex_worklog.md",
+        "docs/remediation/v3/review_traceability.json",
+        "docs/remediation/v3/runtime_status.json",
+        "docs/remediation/v3/work_queue.md",
+        "docs/remediation/v3/worklog.md",
+        "tests/unit/test_product_documentation.py",
+        "tests/unit/test_product_objective.py",
+    }
+)
+PHASE_ONE_CORE_PATHS = PHASE_ONE_IMPLEMENTATION_PATHS - PHASE_ONE_GOVERNANCE_SUCCESSOR_PATHS
+OPERATOR_RESULTS_RELATIVE_PATH = "docs/remediation/v3/operator_results.md"
 HISTORICAL_INELIGIBLE_GEMMA_PLAN_SHA256 = (
     "41b5af9ae4def5ef535ae25a13c7c38b95d5819a878a5eef1c1c5bfb8386bf58"
 )
@@ -368,7 +405,7 @@ def test_queue_parser_rejects_duplicate_missing_and_invalid_statuses() -> None:
     )
 
 
-def test_phase_zero_checkpoint_resolves_and_owns_exact_inventory_paths() -> None:
+def test_autonomy_checkpoints_have_exact_historical_and_successor_custody() -> None:
     resolved = subprocess.run(
         ["git", "rev-parse", f"{HISTORICAL_PHASE_ZERO_CHECKPOINT}^{{commit}}"],
         cwd=ROOT,
@@ -421,6 +458,58 @@ def test_phase_zero_checkpoint_resolves_and_owns_exact_inventory_paths() -> None
     assert (
         hashlib.sha256(historical_inventory.stdout).hexdigest()
         == HISTORICAL_PHASE_ZERO_INVENTORY_RAW_SHA256
+    )
+
+    resolved = subprocess.run(
+        ["git", "rev-parse", f"{PHASE_ONE_IMPLEMENTATION_CHECKPOINT}^{{commit}}"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    changed = subprocess.run(
+        [
+            "git",
+            "diff-tree",
+            "--no-commit-id",
+            "--name-only",
+            "-r",
+            PHASE_ONE_IMPLEMENTATION_CHECKPOINT,
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    core_match = subprocess.run(
+        [
+            "git",
+            "diff",
+            "--quiet",
+            PHASE_ONE_IMPLEMENTATION_CHECKPOINT,
+            "--",
+            *sorted(PHASE_ONE_CORE_PATHS),
+        ],
+        cwd=ROOT,
+        check=False,
+    )
+    successors = subprocess.run(
+        ["git", "diff", "--name-only", PHASE_ONE_IMPLEMENTATION_CHECKPOINT, "--", "."],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert resolved.stdout.strip() == PHASE_ONE_IMPLEMENTATION_CHECKPOINT
+    assert len(PHASE_ONE_IMPLEMENTATION_PATHS) == 18
+    assert len(PHASE_ONE_CORE_PATHS) == 10
+    assert len(PHASE_ONE_GOVERNANCE_SUCCESSOR_PATHS) == 8
+    assert frozenset(changed.stdout.splitlines()) == PHASE_ONE_IMPLEMENTATION_PATHS
+    assert OPERATOR_RESULTS_RELATIVE_PATH not in PHASE_ONE_IMPLEMENTATION_PATHS
+    assert core_match.returncode == 0
+    assert frozenset(successors.stdout.splitlines()) - {OPERATOR_RESULTS_RELATIVE_PATH} == (
+        PHASE_ONE_GOVERNANCE_SUCCESSOR_PATHS
     )
 
 
@@ -835,17 +924,26 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "authrunner-candidate-20260821-r6" in model_selection
     assert "primary-judge-registry-r6.json" in model_selection
     assert "authrunner-primary-judge-20260821-r6" in model_selection
-    assert runtime_status["candidate_commit"] == HISTORICAL_PHASE_ZERO_CHECKPOINT
+    assert runtime_status["candidate_commit"] == PHASE_ONE_IMPLEMENTATION_CHECKPOINT
     assert runtime_status["candidate_commit_pushed"] is False
     assert runtime_status["candidate_commit_remote_resolved"] is False
-    assert runtime_status["candidate_successor_commit"] == HISTORICAL_PHASE_ZERO_CHECKPOINT
+    assert runtime_status["candidate_successor_commit"] == PHASE_ONE_IMPLEMENTATION_CHECKPOINT
     assert runtime_status["candidate_successor_status"] == (
         "LOCAL_COMMIT_NOT_PUSHED_OR_REMOTE_RESOLVED"
     )
+    assert "exact 18-path Phase-1 result" in runtime_status["candidate_commit_scope"]
+    assert "excludes operator_results" in runtime_status["candidate_commit_scope"]
+    assert "historical Phase 0 only" in runtime_status["candidate_commit_scope"]
     assert runtime_status["historical_paid_diagnostic_base_commit"] == (
         HISTORICAL_PAID_DIAGNOSTIC_BASE_CHECKPOINT
     )
-    assert runtime_status["last_checkpoint_commit"] == HISTORICAL_PHASE_ZERO_CHECKPOINT
+    assert runtime_status["last_checkpoint_commit"] == PHASE_ONE_IMPLEMENTATION_CHECKPOINT
+    assert (
+        "exact 10 core Phase-1 paths remain byte-identical"
+        in (runtime_status["last_checkpoint_commit_scope"])
+    )
+    assert "eight governance paths" in runtime_status["last_checkpoint_commit_scope"]
+    assert "operator_results is excluded" in runtime_status["last_checkpoint_commit_scope"]
     assert runtime_status["autorun_status"] == "RUNNING_PROVIDER_FREE"
     assert runtime_status["current_ticket"] == "V3-AUTONOMY-001"
     assert runtime_status["active_provider_free_work"] == {
@@ -892,6 +990,13 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     }
     assert runtime_status["managed_toolchain_phase_one"] == {
         "status": "COMPLETE_NONAUTHORIZING",
+        "implementation_commit": PHASE_ONE_IMPLEMENTATION_CHECKPOINT,
+        "implementation_commit_pushed": False,
+        "implementation_commit_remote_resolved": False,
+        "implementation_path_count": 18,
+        "implementation_core_path_count": 10,
+        "post_checkpoint_governance_successor_path_count": 8,
+        "operator_results_in_implementation_checkpoint": False,
         "bundle_path": "src/mmaudit/resources/managed_toolchain_bundle.json",
         "schema_path": "schemas/managed_toolchain_bundle.schema.json",
         "bundle_raw_sha256": MANAGED_TOOLCHAIN_RAW_SHA256,
