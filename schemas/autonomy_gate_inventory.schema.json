@@ -1,0 +1,417 @@
+{
+  "$defs": {
+    "AutonomousGateDisposition": {
+      "description": "The only objective-compatible desired dispositions.",
+      "enum": [
+        "AUTONOMOUS_EVIDENCE_SUBSTITUTE",
+        "PREPROVISIONED_NONHUMAN_INPUT",
+        "PRERUN_CLIENT_DECISION",
+        "OBJECTIVE_OUT_OF_SCOPE"
+      ],
+      "title": "AutonomousGateDisposition",
+      "type": "string"
+    },
+    "AutonomousLogicalGate": {
+      "additionalProperties": false,
+      "description": "One logical gate with desired disposition and honest current state.",
+      "properties": {
+        "desired_disposition": {
+          "$ref": "#/$defs/AutonomousGateDisposition"
+        },
+        "gate_id": {
+          "pattern": "^gate-[a-z0-9][a-z0-9-]{0,98}$",
+          "title": "Gate Id",
+          "type": "string"
+        },
+        "implementation_detail": {
+          "maxLength": 1500,
+          "minLength": 1,
+          "title": "Implementation Detail",
+          "type": "string"
+        },
+        "implementation_state": {
+          "$ref": "#/$defs/GateImplementationState"
+        },
+        "integrity_property": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Integrity Property",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "objective_citation": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Objective Citation",
+          "type": "string"
+        },
+        "source_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "minItems": 1,
+          "title": "Source Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "gate_id",
+        "name",
+        "integrity_property",
+        "objective_citation",
+        "desired_disposition",
+        "implementation_state",
+        "implementation_detail",
+        "source_ids"
+      ],
+      "title": "AutonomousLogicalGate",
+      "type": "object"
+    },
+    "CompletionInputSourceCoverage": {
+      "additionalProperties": false,
+      "description": "One exact discovered input source and its exhaustive classification.",
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/SourceCoverageClassification"
+        },
+        "logical_gate_id": {
+          "anyOf": [
+            {
+              "pattern": "^gate-[a-z0-9][a-z0-9-]{0,98}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Logical Gate Id"
+        },
+        "source_id": {
+          "pattern": "^[a-z][a-z0-9_.:*\\[\\]-]{0,299}$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_kind": {
+          "$ref": "#/$defs/CompletionInputSourceKind"
+        },
+        "source_occurrence_count": {
+          "maximum": 32,
+          "minimum": 1,
+          "title": "Source Occurrence Count",
+          "type": "integer"
+        },
+        "source_path": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Source Path",
+          "type": "string"
+        },
+        "source_semantics_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Semantics Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_kind",
+        "source_path",
+        "source_semantics_sha256",
+        "source_occurrence_count",
+        "classification"
+      ],
+      "title": "CompletionInputSourceCoverage",
+      "type": "object"
+    },
+    "CompletionInputSourceKind": {
+      "description": "Closed authoritative source families scanned by Phase 0.\n\n``DIRECT_ENVIRONMENT_INPUT`` retains the ticket vocabulary but covers the full\nambient runtime boundary: process variables, executable resolution, home/cwd/temp\nroots, host/platform/process identity, Python runtime identity, and clock\nobservations. ``ENTROPY_INPUT`` is the separately frozen finite set of random-value\nloci reviewed for completion-visible authority, resume, ledger, and replay effects.",
+      "enum": [
+        "AUDIT_CONFIG_LEAF",
+        "AUDIT_RUN_OPTION_LEAF",
+        "AUDIT_OVERRIDE_PATH",
+        "ENVIRONMENT_OVERRIDE",
+        "CLI_RUN_PARAMETER",
+        "PIPELINE_INIT_PARAMETER",
+        "PIPELINE_RUN_PARAMETER",
+        "COMPLETION_ENTRYPOINT_PARAMETER",
+        "DIRECT_ENVIRONMENT_INPUT",
+        "ENTROPY_INPUT",
+        "AUDITED_MODULE_UNIVERSE",
+        "EXPLICIT_NON_FIELD_GATE",
+        "REQUIRED_MISSING_GATE"
+      ],
+      "title": "CompletionInputSourceKind",
+      "type": "string"
+    },
+    "GateImplementationState": {
+      "description": "Current state, deliberately separate from desired disposition.",
+      "enum": [
+        "SATISFIED_AUTONOMOUS",
+        "SATISFIED_PREPROVISIONED",
+        "PARTIAL",
+        "CURRENT_MANUAL_INPUT",
+        "MISSING",
+        "OBJECTIVE_OUT_OF_SCOPE"
+      ],
+      "title": "GateImplementationState",
+      "type": "string"
+    },
+    "SourceCoverageClassification": {
+      "description": "Why one discovered source is or is not a completion gate.",
+      "enum": [
+        "GATE",
+        "NON_GATING_CONTROL"
+      ],
+      "title": "SourceCoverageClassification",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/autonomy_gate_inventory.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Self-hashed Phase-0 inventory; serialized bytes never grant authority.",
+  "properties": {
+    "artifact_kind": {
+      "const": "AUTONOMY_COMPLETION_INPUT_GATE_INVENTORY",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "audit_config_leaf_locator_count": {
+      "const": 505,
+      "title": "Audit Config Leaf Locator Count",
+      "type": "integer"
+    },
+    "audit_config_leaf_occurrence_count": {
+      "const": 508,
+      "title": "Audit Config Leaf Occurrence Count",
+      "type": "integer"
+    },
+    "audit_config_shared_locator_count": {
+      "const": 3,
+      "title": "Audit Config Shared Locator Count",
+      "type": "integer"
+    },
+    "audit_override_path_count": {
+      "const": 45,
+      "title": "Audit Override Path Count",
+      "type": "integer"
+    },
+    "audit_run_option_leaf_count": {
+      "const": 13,
+      "title": "Audit Run Option Leaf Count",
+      "type": "integer"
+    },
+    "cli_run_parameter_count": {
+      "const": 50,
+      "title": "Cli Run Parameter Count",
+      "type": "integer"
+    },
+    "completion_entrypoint_parameter_count": {
+      "const": 299,
+      "title": "Completion Entrypoint Parameter Count",
+      "type": "integer"
+    },
+    "completion_scope": {
+      "const": "SYNTHETIC_PUBLIC_ONLY",
+      "title": "Completion Scope",
+      "type": "string"
+    },
+    "current_manual_gate_count": {
+      "maximum": 128,
+      "minimum": 1,
+      "title": "Current Manual Gate Count",
+      "type": "integer"
+    },
+    "discovery_scope": {
+      "const": "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_OPAQUE_AUTHORITIES_EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES",
+      "title": "Discovery Scope",
+      "type": "string"
+    },
+    "environment_override_count": {
+      "const": 28,
+      "title": "Environment Override Count",
+      "type": "integer"
+    },
+    "gate_source_count": {
+      "maximum": 4096,
+      "minimum": 1,
+      "title": "Gate Source Count",
+      "type": "integer"
+    },
+    "inventory_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Inventory Sha256",
+      "type": "string"
+    },
+    "logical_gate_count": {
+      "maximum": 128,
+      "minimum": 1,
+      "title": "Logical Gate Count",
+      "type": "integer"
+    },
+    "logical_gates": {
+      "items": {
+        "$ref": "#/$defs/AutonomousLogicalGate"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "title": "Logical Gates",
+      "type": "array"
+    },
+    "managed_run_ready": {
+      "const": false,
+      "title": "Managed Run Ready",
+      "type": "boolean"
+    },
+    "objective_path": {
+      "const": "docs/remediation/v3/product_completion_goal.txt",
+      "title": "Objective Path",
+      "type": "string"
+    },
+    "objective_sha256": {
+      "const": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
+      "title": "Objective Sha256",
+      "type": "string"
+    },
+    "phase": {
+      "const": "PHASE_0_INVENTORY_ONLY",
+      "title": "Phase",
+      "type": "string"
+    },
+    "pipeline_init_parameter_count": {
+      "const": 25,
+      "title": "Pipeline Init Parameter Count",
+      "type": "integer"
+    },
+    "pipeline_run_parameter_count": {
+      "const": 15,
+      "title": "Pipeline Run Parameter Count",
+      "type": "integer"
+    },
+    "private_repository_completion_in_scope": {
+      "const": false,
+      "title": "Private Repository Completion In Scope",
+      "type": "boolean"
+    },
+    "provider_or_network_accessed": {
+      "const": false,
+      "title": "Provider Or Network Accessed",
+      "type": "boolean"
+    },
+    "runtime_authority": {
+      "const": false,
+      "title": "Runtime Authority",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "secret_material_read": {
+      "const": false,
+      "title": "Secret Material Read",
+      "type": "boolean"
+    },
+    "source_count": {
+      "maximum": 4096,
+      "minimum": 1,
+      "title": "Source Count",
+      "type": "integer"
+    },
+    "source_coverage": {
+      "items": {
+        "$ref": "#/$defs/CompletionInputSourceCoverage"
+      },
+      "maxItems": 4096,
+      "minItems": 1,
+      "title": "Source Coverage",
+      "type": "array"
+    },
+    "source_discovery_semantics_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Discovery Semantics Sha256",
+      "type": "string"
+    },
+    "source_kind_counts": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "maxProperties": 13,
+      "minProperties": 13,
+      "propertyNames": {
+        "$ref": "#/$defs/CompletionInputSourceKind"
+      },
+      "title": "Source Kind Counts",
+      "type": "object"
+    },
+    "source_occurrence_count": {
+      "maximum": 4096,
+      "minimum": 1,
+      "title": "Source Occurrence Count",
+      "type": "integer"
+    },
+    "source_universe_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Universe Sha256",
+      "type": "string"
+    },
+    "status": {
+      "const": "PARTIAL_NONAUTHORIZING",
+      "title": "Status",
+      "type": "string"
+    },
+    "unsatisfied_gate_count": {
+      "maximum": 128,
+      "minimum": 1,
+      "title": "Unsatisfied Gate Count",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "phase",
+    "status",
+    "objective_path",
+    "objective_sha256",
+    "completion_scope",
+    "discovery_scope",
+    "private_repository_completion_in_scope",
+    "source_discovery_semantics_sha256",
+    "source_universe_sha256",
+    "source_coverage",
+    "logical_gates",
+    "source_count",
+    "source_occurrence_count",
+    "audit_config_leaf_locator_count",
+    "audit_config_leaf_occurrence_count",
+    "audit_config_shared_locator_count",
+    "audit_run_option_leaf_count",
+    "audit_override_path_count",
+    "environment_override_count",
+    "cli_run_parameter_count",
+    "pipeline_init_parameter_count",
+    "pipeline_run_parameter_count",
+    "completion_entrypoint_parameter_count",
+    "source_kind_counts",
+    "gate_source_count",
+    "logical_gate_count",
+    "unsatisfied_gate_count",
+    "current_manual_gate_count",
+    "provider_or_network_accessed",
+    "secret_material_read",
+    "runtime_authority",
+    "managed_run_ready",
+    "inventory_sha256"
+  ],
+  "title": "mmaudit nonauthorizing autonomous completion-input gate inventory",
+  "type": "object"
+}

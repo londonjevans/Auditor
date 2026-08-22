@@ -97,6 +97,11 @@ from mmaudit.models.sharding import (
     SolidityGraphsArtifact,
     SolidityShardsArtifact,
 )
+from mmaudit.orchestration.autonomy_gate_inventory import (
+    AUTONOMY_INVENTORY_PATH,
+    AutonomyGateInventory,
+    render_autonomy_gate_inventory,
+)
 from mmaudit.orchestration.context_manifest import ContextManifest
 from mmaudit.orchestration.manifest import (
     AUDIT_MODEL_REFRESH_BINDING_IDS,
@@ -132,6 +137,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_ROOT = ROOT / "schemas"
 SCHEMA_BASE = "https://mmaudit.local/schemas"
 MODELS: dict[str, type[BaseModel]] = {
+    "autonomy_gate_inventory.schema.json": AutonomyGateInventory,
     "authenticated_cross_lineage_runner_evidence.schema.json": (
         AuthenticatedCrossLineageRunnerEvidence
     ),
@@ -216,6 +222,9 @@ MODELS: dict[str, type[BaseModel]] = {
     "solidity_coverage.schema.json": SolidityCoverageArtifact,
 }
 TITLE_OVERRIDES = {
+    "autonomy_gate_inventory.schema.json": (
+        "mmaudit nonauthorizing autonomous completion-input gate inventory"
+    ),
     "authenticated_cross_lineage_runner_evidence.schema.json": (
         "mmaudit non-authorizing authenticated cross-lineage runner evidence"
     ),
@@ -1573,6 +1582,18 @@ def main(argv: list[str] | None = None) -> None:
             continue
         if observed != expected:
             failures.append(f"{filename}: stale")
+    inventory_expected = render_autonomy_gate_inventory(repository_root=ROOT)
+    inventory_path = ROOT / AUTONOMY_INVENTORY_PATH
+    if arguments.write:
+        inventory_path.write_text(inventory_expected, encoding="utf-8")
+    else:
+        try:
+            inventory_observed = inventory_path.read_text(encoding="utf-8")
+        except OSError:
+            failures.append(f"{AUTONOMY_INVENTORY_PATH}: missing")
+        else:
+            if inventory_observed != inventory_expected:
+                failures.append(f"{AUTONOMY_INVENTORY_PATH}: stale")
     if not _run_evidence_manifest_contract_is_current():
         failures.append("run_evidence_manifest.schema.json: stale report-bundle contract")
     if failures:

@@ -39,9 +39,28 @@ from mmaudit.models.policy_selection import (
 )
 from mmaudit.models.public_lineage_authority import PublicModelLineageEvidenceBundle
 from mmaudit.models.qualification import QualificationPolicy
+from mmaudit.orchestration.autonomy_gate_inventory import (
+    AutonomousGateDisposition,
+    AutonomyGateInventory,
+)
 from scripts.generate_release_schemas import MODELS, rendered_schema
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_autonomy_inventory_schema_is_closed_nonauthorizing_and_unsatisfied() -> None:
+    filename = "autonomy_gate_inventory.schema.json"
+    assert MODELS[filename] is AutonomyGateInventory
+    schema = json.loads((ROOT / "schemas" / filename).read_text(encoding="utf-8"))
+    assert schema["properties"]["runtime_authority"]["const"] is False
+    assert schema["properties"]["managed_run_ready"]["const"] is False
+    assert schema["properties"]["provider_or_network_accessed"]["const"] is False
+    assert schema["properties"]["secret_material_read"]["const"] is False
+    assert schema["properties"]["unsatisfied_gate_count"]["minimum"] == 1
+    assert set(schema["$defs"]["AutonomousGateDisposition"]["enum"]) == {
+        disposition.value for disposition in AutonomousGateDisposition
+    }
+    assert "HUMAN_REQUIRED" not in schema["$defs"]["AutonomousGateDisposition"]["enum"]
 
 
 def test_release_schemas_are_exact_strict_generated_models() -> None:
