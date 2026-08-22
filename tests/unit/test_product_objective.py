@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import stat
 from pathlib import Path
 
@@ -84,3 +85,108 @@ def test_product_objective_records_explicit_supersession_and_integrity_backstops
         "real, non-model-generated corpus ground-truth",
     ):
         assert required_text in objective
+
+
+def test_current_completion_authority_has_no_legacy_human_gate() -> None:
+    queue = (ROOT / "docs/remediation/v3/work_queue.md").read_text(encoding="utf-8")
+    traceability = json.loads(
+        (ROOT / "docs/remediation/v3/review_traceability.json").read_text(encoding="utf-8")
+    )
+    runtime_status = json.loads(
+        (ROOT / "docs/remediation/v3/runtime_status.json").read_text(encoding="utf-8")
+    )
+
+    autonomy = queue.split("## V3-AUTONOMY-001", maxsplit=1)[1].split(
+        "## Historical 46-step execution order", maxsplit=1
+    )[0]
+    normalized_autonomy = " ".join(autonomy.split())
+    assert "Phase 0 has no dependency and must not wait" in normalized_autonomy
+    assert "V3-AUTHLINEAGE-PUBLIC-001" in normalized_autonomy
+    assert "The legacy signed `V3-LINEAGE-001` path is objective-out-of-scope" in (
+        normalized_autonomy
+    )
+    assert "Phase 0 completed at `d0402d1c68f0f82d9ee4f8757f7967abda372ac6`" in (
+        normalized_autonomy
+    )
+    assert "Phase 1, the exact versioned managed-toolchain bundle" in normalized_autonomy
+    assert "`runtime_authority=false`" in normalized_autonomy
+    assert "`managed_run_ready=false`" in normalized_autonomy
+
+    requirements = {item["id"]: item for item in traceability["requirements"]}
+    assert "V3-LINEAGE-001" not in requirements["L"]["tickets"]
+    assert "V3-AUTHLINEAGE-RECEIPT-001" not in requirements["L"]["tickets"]
+    assert "V3-HUMANCMP-001" not in requirements["R"]["tickets"]
+    assert (
+        "The optional human-comparison tier is not required"
+        in (requirements["R"]["remaining_proof"])
+    )
+    assert "OBJECTIVE_OUT_OF_SCOPE" in runtime_status["blocked_tickets"]["V3-LINEAGE-001"]
+    assert "OBJECTIVE_OUT_OF_SCOPE" in runtime_status["blocked_tickets"]["V3-CALIBRATE-001"]
+
+    def ticket(ticket_id: str) -> str:
+        section = queue.split(f"## {ticket_id}", maxsplit=1)[1].split("\n## ", maxsplit=1)[0]
+        return " ".join(section.split())
+
+    qualify = ticket("V3-QUALIFY-001")
+    assert "V3-AUTHLINEAGE-PUBLIC-001" in qualify
+    assert "V3-AUTHRUNNER-001" in qualify
+    assert "legacy signed `V3-LINEAGE-001` path" in qualify
+    assert "not qualification blockers" in qualify
+
+    benchmark = ticket("V3-BENCHMARK-001")
+    assert "No commissioned human baseline or human adjudicator is required" in benchmark
+    assert "historical human-relative Tier 1/2 protocol remains an optional" in benchmark
+
+    release = ticket("V3-RELEASE-001")
+    assert "An optional blind human comparison is not a release prerequisite" in release
+
+    model_refresh = ticket("V3-MODELREFRESH-001")
+    assert "The legacy signed `V3-LINEAGE-001` path is not a current dependency" in model_refresh
+
+    time_split = ticket("V3-TIMESPLIT-001")
+    assert "private holdout optional" in time_split
+    assert "objective-out-of-scope and not required for completion" in time_split
+
+    policy = ticket("V3-POLICYELIG-001")
+    assert "customer-facing commercial/legal determination is `OBJECTIVE_OUT_OF_SCOPE`" in policy
+
+    human_comparison = ticket("V3-HUMANCMP-001")
+    assert "**Frozen-objective disposition:** `OBJECTIVE_OUT_OF_SCOPE`" in human_comparison
+
+
+def test_historical_execution_order_cannot_claim_complete_queue_authority() -> None:
+    queue = (ROOT / "docs/remediation/v3/work_queue.md").read_text(encoding="utf-8")
+    ticket_id_list = re.findall(r"^## (V3-[A-Z0-9-]+)\s", queue, flags=re.MULTILINE)
+    ticket_ids = set(ticket_id_list)
+    historical = queue.split("## Historical 46-step execution order", maxsplit=1)[1]
+    historical_id_list = re.findall(r"^\d+\. `?(V3-[A-Z0-9-]+)", historical, flags=re.MULTILINE)
+    historical_ids = set(historical_id_list)
+
+    assert len(ticket_id_list) == len(ticket_ids) == 68
+    assert len(historical_id_list) == len(historical_ids) == 46
+    assert ticket_ids - historical_ids == {
+        "V3-AUTHLINEAGE-001",
+        "V3-AUTHLINEAGE-PUBLIC-001",
+        "V3-AUTHLINEAGE-RECEIPT-001",
+        "V3-AUTHRUNNER-001",
+        "V3-AUTHSEAL-001",
+        "V3-AUTHVERDICT-001",
+        "V3-BASELINE-001",
+        "V3-BENCHSCORE-001",
+        "V3-EFFORT-001",
+        "V3-EXECORIGIN-001",
+        "V3-FLOOR-001",
+        "V3-FORKDIFF-001",
+        "V3-IDENTITY-001",
+        "V3-OBJECTIVE-002",
+        "V3-OMISSION-001",
+        "V3-OUTPUT-001",
+        "V3-PRIVACY-001",
+        "V3-SHARD-001",
+        "V3-SMOKE-001",
+        "V3-TESTQUALITY-001",
+        "V3-TOKENS-001",
+        "V3-TOOLDIAG-001",
+    }
+    assert "not current completion authority" in queue
+    assert "must not be used as completion authority" in " ".join(historical.split())

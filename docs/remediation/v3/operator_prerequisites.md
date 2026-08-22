@@ -136,4 +136,8 @@ process completion.
 ## External evaluation
 
 A private holdout and independently adjudicated professional comparison are not
-present. Superiority therefore remains `NOT_DEMONSTRATED`.
+present. That optional human-comparison tier remains `NOT_DEMONSTRATED` and is
+objective-out-of-scope for frozen synthetic/public completion. The current objective's
+superiority verdict must instead come from precommitted public ground truth,
+cross-lineage automated adjudication, and the objective-pinned benchmark authority;
+absence of a commissioned human auditor is not a completion blocker.

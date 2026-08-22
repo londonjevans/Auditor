@@ -332,6 +332,11 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   independently included authority log (`V3-AUTHSEAL-001`), plus `V3-TIMESPLIT-001` and
   `V3-ENGINES-001`.
 - **Status:** `QUEUED`
+- **Frozen-objective boundary:** The human-relative Tier 1/2 thresholds above are retained as an
+  optional commercial comparison protocol, not as completion authority. The current
+  synthetic/public objective requires a precommitted frozen public benchmark, cross-lineage
+  automated adjudication, independent external-log inclusion, and the objective-pinned verdict
+  policy; it must not wait for commissioned auditors.
 - **Next action:** Documentary lineage (#1) is complete. Do not implement or execute the harness
   while authenticated REAL runner/egress (#2) and external seal inclusion (#3) remain incomplete;
   preserve this frozen acceptance contract for the downstream ticket.
@@ -364,7 +369,11 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Dependencies:** Completed Tier-1-capable `V3-BENCHMARK-001` harness and its strict lineage →
   real-egress → external-log chain.
 - **Status:** `QUEUED`
-- **Next action:** Keep queued until the benchmark harness and independent human process exist.
+- **Frozen-objective disposition:** `OBJECTIVE_OUT_OF_SCOPE`. This optional commercial claim path
+  remains fail-closed and may be implemented later, but commissioned auditors and human
+  adjudicators are not prerequisites for the current synthetic/public completion objective.
+- **Next action:** Keep queued as an optional later tier. Do not map it into current completion or
+  use its absence to block the automated benchmark verdict.
 
 ### V3-AUTHRUNNER-001 — Authenticated cross-lineage runner custody
 
@@ -816,13 +825,11 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   positive owned-REAL parent issue-consume-revoke-reject assay against the external runtime remain
   absent; the completed provider-free cascade does not substitute for that evidence. External-log
   publication and every benchmark run remain queued.
-- **Next action:** Keep current local checkpoint
-  `dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d` unpushed and keep every metadata,
-  paid-smoke, verifier, normal-preflight, construct-only, and full command absent. Separately review
-  paid-smoke eligibility against the complete r8/r8/r8 evidence; any later command emission requires
-  a fresh separately reviewed adjacency sequence. AUTHSEAL publication,
-  audits, benchmarks, and release remain unauthorized. `V3-AUTONOMY-001` Phase 0 remains queued and
-  paused for this handoff.
+- **Next action:** Park `V3-AUTHRUNNER-001` as `PARTIAL / BLOCKED_SAFETY`; keep every metadata,
+  paid-smoke, verifier, normal-preflight, construct-only, and full command absent. Its remaining
+  positive judge/campaign/bundle proof is external and requires a separately authorized future
+  sequence. `V3-AUTONOMY-001` Phase 0 is the sole current provider-free work unit. AUTHSEAL
+  publication, audits, benchmarks, and release remain unauthorized.
 
 ### V3-MODELREFRESH-001 — Provider-free model-refresh runtime and pricing custody
 
@@ -1595,14 +1602,21 @@ and report serialization.
 
 ## Next action
 
-`V3-AUTHRUNNER-001` is `PARTIAL / BLOCKED_SAFETY`. Local checkpoint
-`dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d` includes the confirmed 17-source GLM-5.2
-documentary reseal and binds provider-free native-output, `effort=high`, and explicit metadata
-completion-capacity eligibility. Its v1.3 plan remains nonauthorizing and provider-unverified; the
-checkpoint is not pushed or remote-resolved. Every metadata, paid-smoke, verifier, and full command
-is absent. Candidate, PRIMARY, and explicitly selected replay `modal/mxfp4` r8 discovery succeeded,
-and the r8/r8/r8 live-route gate is valid nonauthorizing `$0` evidence. The next safe action is
-separate paid-smoke eligibility review; no command is emitted, and any later emission must satisfy
-fresh adjacency rules.
-`V3-AUTONOMY-001` Phase 0 remains queued and paused without an
-adopted artifact.
+### V3-AUTONOMY-001 — Phase 1 managed toolchain bundle
+
+- **Objective:** Define one exact versioned bundle for every required compiler, scanner, formal
+  engine, container image, and reporter pin, then make the managed resolver fail closed on a missing
+  or mismatched member. The canonical full ticket remains in `docs/remediation/v3/work_queue.md`.
+- **Dependencies:** Phase 0 completed at
+  `d0402d1c68f0f82d9ee4f8757f7967abda372ac6`; the full ticket retains its recorded later
+  dependencies and remains nonauthorizing.
+- **Status:** `IN_PROGRESS`
+- **Boundary:** `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`; its provider-free client,
+  route, cost, and custody seams are exhausted, while genuine judge/campaign/bundle evidence requires
+  separately authorized external execution. No provider or operator command is emitted.
+- **Phase 0 evidence:** The committed self-hashed inventory covers 3,618 unique sources / 3,621
+  occurrences and joins 3,575 gate sources to 35 logical gates. Twenty-nine gates remain unsatisfied
+  and 16 remain current-manual; `runtime_authority=false` and `managed_run_ready=false`.
+- **Next action:** Inventory the existing exact tool/image/reporter pins, define the minimal typed
+  managed-bundle artifact and resolver, and add mismatch/missing-member regressions. Do not start the
+  separate provisioning-command slice or grant runtime authority.

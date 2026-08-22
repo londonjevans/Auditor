@@ -485,11 +485,15 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   policy authority and trust, resolve the exact `VerifiedAuditModelSelection`, and pass both
   opaque capabilities plus their exact durable evidence bundle into `AuditPipeline`. Persisted
   artifacts alone never authorize a REAL audit.
-- **Dependencies:** `V3-SCOPE-001`, `V3-LINEAGE-001`, `V3-CALIBRATE-001`, and
-  `V3-POLICYELIG-001`.
+- **Dependencies for the frozen synthetic/public objective:** `V3-SCOPE-001`,
+  `V3-AUTHLINEAGE-PUBLIC-001`, `V3-AUTHRUNNER-001`, and the constructed/public automated
+  calibration authority of `V3-CALIBRATE-001`. The legacy signed `V3-LINEAGE-001` path and
+  commercial/client legal determinations in `V3-POLICYELIG-001` are optional later product gates,
+  not qualification blockers for the non-client synthetic/public campaign.
 - **Status:** `QUEUED`
-- **Current blocker:** Lineage and calibration remain `BLOCKED_TECHNICAL`, and no current
-  independently authenticated policy determination or real qualification evidence exists.
+- **Current blocker:** Authenticated REAL runner evidence, measured constructed/public automated
+  calibration authority, and real qualification evidence do not yet exist. No human signature or
+  commercial legal determination is requested for this objective-scoped campaign.
 
 ## V3-SINGLE-AUDIT-001 — Real sharded single-model audit
 
@@ -566,12 +570,13 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
     precision with the full false-positive inventory, severity calibration, distinct-class
     coverage/deduplication, unique-valid/0-day candidates, cost, and wall-clock. No aggregate may
     hide a zero denominator, unsafe-control failure, target omission, or category gap.
-  - Tier 0 proves only verifiable methodology. Tier 1 requires a blind adjudicated sample of at
-    least 25 category-spanning contests/firm audits, recall at least the median human field, and
-    precision at least 0.70. Tier 2 additionally meets or exceeds the best single human firm on the
-    same targets and has at least one independently adjudicated valid finding absent from the human
-    set. Unmet tiers remain explicitly `NOT_DEMONSTRATED`; no benchmark is run before real provider
-    calls and frozen-seal-to-log verification work.
+  - For the frozen objective, the disposition is derived from a blind, precommitted synthetic/public
+    population with constructed or established ground truth, cross-lineage automated adjudication,
+    exact recall/precision/cost evidence, and the objective-pinned verdict policy. No commissioned
+    human baseline or human adjudicator is required. The historical human-relative Tier 1/2
+    protocol remains an optional commercial comparison and cannot block or authorize current
+    completion. An unmet automated threshold remains explicitly `NOT_DEMONSTRATED`; no benchmark is
+    run before real provider calls and frozen-seal-to-log verification work.
 - **Harness files expected to change after dependencies complete:** `benchmarks/` corpus/selection,
   contamination, pre-registration, sealed-run and scoring schemas; benchmark engine/scorer/claims;
   authority-log receipt joins; generated schemas; local synthetic regressions. Building may begin
@@ -609,7 +614,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   independent-evaluation handoff, then commit and push via SSH.
 - **Acceptance criteria:** Full validation passes; release status is evidence-derived;
   all remaining external prerequisites are explicit; superiority remains
-  `NOT_DEMONSTRATED` absent independent blind human comparison.
+  `NOT_DEMONSTRATED` absent the frozen public benchmark, cross-lineage automated adjudication,
+  external inclusion, and objective-pinned verdict. An optional blind human comparison is not a
+  release prerequisite.
 - **Dependencies:** `V3-ADR-001`.
 - **Status:** `QUEUED`
 
@@ -839,6 +846,13 @@ are invisible to source review by construction.
 - **Dependencies:** `V3-TOKENS-001`.
 - **Unblocks:** `V3-QUALIFY-001`, which must not begin before this completes.
 - **Status:** `BLOCKED_TECHNICAL`
+- **Frozen-objective disposition:** The historical signed-operator and privately/human-adjudicated
+  calibration path below remains fail-closed but is not a completion prerequisite for the frozen
+  synthetic/public autonomous objective. Current-objective calibration must instead use
+  precommitted constructed or public frozen ground truth, cross-lineage automated adjudication,
+  exact REAL evidence custody, and deterministic policy derivation. A human signature, private
+  holdout, or commissioned adjudicator may support a later commercial claim but cannot be a
+  required completion-path gate.
 - **Starting evidence:** At ticket start, the committed policy required `1.0` on every one of
   seventeen dimensions and an overall `1.0`, while the qualification conclusion had no
   role-scoped secondary disposition and no calibration artifact or non-dispositive calibration
@@ -849,9 +863,10 @@ are invisible to source review by construction.
   three, and structured-output compliance covers all twenty-four. The re-sealed schema-v1
   predecessor policy `1df14052e97a8ceb2cf3ec9fd25637f5f2f3a821818a54382a7c1f241059da8c`
   records those exact denominators but remains non-dispositive and production-ineligible.
-  Candidate mode emits a canonical private calibration artifact only from a complete live
-  campaign and an exact operator-signed, campaign-timely lineage decision. Caller-self-sealed
-  lineage receives no calibration credit.
+  The legacy candidate mode emits a canonical private calibration artifact only from a complete
+  live campaign and an exact operator-signed, campaign-timely lineage decision. Caller-self-sealed
+  lineage receives no calibration credit. That optional path is retained for compatibility; it is
+  not the autonomous synthetic/public completion path.
 
   Schema-v2 policy derivation is now a single deterministic projection from that calibration:
   global support requires at least eight exact candidates across six reviewed roots; investigator
@@ -875,20 +890,19 @@ are invisible to source review by construction.
   files; generated schemas, JSON parsing, and `git diff --check` passed. This is focused local
   evidence, not a new complete-suite or real-provider result. No provider, network, credential,
   source-egress, paid-call, runtime-approval, checkpoint, or release operation occurred.
-- **Remaining acceptance blockers:** No current authenticated provider refresh, complete actual
-  operator-signed exact-set lineage decision, or real calibration campaign exists. More
-  importantly, the curated project-authored corpus is not a randomized, independently adjudicated
-  holdout from a declared population. Four cases per judgment dimension cannot support the
-  ticket's required statistically meaningful thresholds; the implemented cutoffs are deliberately
-  labelled empirical. No measured P2/C2 is reviewed and source-pinned, and no independent J2
-  qualification campaign has run. Synthetic data, self-hashes, or a caller-selected threshold
-  cannot truthfully close those gaps.
-- **Next action:** None in the current environment. Resume only with a precommitted representative
-  holdout and statistical plan, a current refresh plus authorized signed lineage decision, and a
-  real calibration campaign. `V3-POLICYELIG-001` is complete, but do not begin
-  `V3-QUALIFY-001` or grant production selection while this ticket is blocked.
+- **Remaining acceptance blockers:** No current authenticated REAL calibration campaign exists,
+  and no precommitted constructed/public frozen-ground-truth population has produced measured,
+  source-pinned P2/C2 evidence under cross-lineage automated adjudication. Four cases per judgment
+  dimension cannot support a broad statistical claim; the implemented cutoffs remain deliberately
+  labelled empirical. No independent J2 qualification campaign has run. Synthetic self-hashes or
+  caller-selected thresholds cannot truthfully close those gaps. The optional private/human path is
+  separately unavailable but is objective-out-of-scope, not a blocker to autonomous completion.
+- **Next action:** After the authenticated runner and frozen public benchmark inputs exist, run the
+  provider-independent automated calibration path and bind its measured P2/C2 evidence before
+  qualification. Do not grant production selection from the legacy signer path or from unmeasured
+  policy defaults.
 
-## V3-LINEAGE-001 — Operator root-lineage review record
+## V3-LINEAGE-001 — Legacy operator root-lineage review record
 
 - **Objective:** Perform and record the independent root-lineage review that
   `privacy.approved_model_lineages` requires, so source egress is not blocked for every
@@ -909,6 +923,12 @@ are invisible to source review by construction.
   requires qualification output for an identity-only entry; production role selection remains
   separately qualification-gated.
 - **Status:** `BLOCKED_TECHNICAL`
+- **Frozen-objective disposition:** This signer-mediated ticket is retained as a fail-closed legacy
+  calibration option and is `OBJECTIVE_OUT_OF_SCOPE` for frozen synthetic/public autonomous
+  completion. The current completion authority is the reproducible documentary
+  `V3-AUTHLINEAGE-PUBLIC-001` chain joined to authenticated REAL cross-lineage custody in
+  `V3-AUTHRUNNER-001`; neither a signer nor an operator business decision may substitute for, or
+  block, that chain.
 - **Provisional documentary review:** `docs/remediation/v3/model_lineage_review.md` records eight
   proposed conservative lab groupings — anthropic, openai, google, x-ai, moonshotai, deepseek,
   z-ai, minimax — and a public-source scope rationale. Catalogue `hugging_face_id`, absent
@@ -954,15 +974,15 @@ are invisible to source review by construction.
   authenticated. The frozen candidate registry is obsolete. Therefore no real review artifact,
   identity-only runtime entry, production quality entry, or runtime approval can be emitted
   honestly, and `approved_model_lineages` remains empty.
-- **Blocked boundary (2026-08-17):** The provider-free authentication contract and calibration
-  consumer are implemented, but the acceptance criteria still require evidence only an external
-  refresh and authorized operator can supply: a successful current exact provider refresh and a
-  complete signed decision over that exact candidate set. The repository cannot fabricate either
-  or infer authenticity from a self-hash. Keep runtime approvals empty; the completed
-  `V3-POLICYELIG-001` mechanism does not grant this blocked ticket completion credit.
-- **Next action:** None in the current environment. Resume only after a successful current exact
-  refresh and an authorized operator-signed decision are supplied. `V3-QUALIFY-001` remains
-  non-actionable without lineage completion or runtime approval.
+- **Blocked boundary (2026-08-17, legacy path):** The provider-free signer contract and calibration
+  consumer are implemented, but this optional legacy path still requires an external refresh and
+  independently supplied signed decision. The repository cannot fabricate either or infer
+  authenticity from a self-hash. Keep its runtime approvals empty. This status does not block the
+  autonomous documentary-public-lineage and REAL cross-lineage authority chain.
+- **Next action:** No action is required for frozen-objective completion. If the legacy signed
+  calibration option is later commissioned, resume only after a successful current exact refresh
+  and independently supplied signed decision; never project that optional result as autonomous
+  authority.
 
 ## V3-INTAKE-001 — Untrusted client repository intake
 
@@ -1283,10 +1303,11 @@ are invisible to source review by construction.
   architecture is explicitly retained, reduced, or restructured on that basis.
 - **Files expected to change:** `src/mmaudit/benchmark/engine.py`,
   `src/mmaudit/benchmark/model_portfolio.py`, evaluation artifacts, regressions.
-- **Dependencies:** `V3-CALIBRATE-001`, `V3-EFFORT-001`.
+- **Dependencies:** The constructed/public automated-calibration path of `V3-CALIBRATE-001` and
+  `V3-EFFORT-001`; the legacy signed/private-human calibration route is not a dependency.
 - **Status:** `QUEUED`
 
-## V3-TIMESPLIT-001 — Public time-split benchmark and private holdout
+## V3-TIMESPLIT-001 — Public time-split benchmark (private holdout optional)
 
 - **Objective:** Build a credible external evidence base. The current corpus is 28
   self-authored synthetic cases with `public_real_world_time_split: false`,
@@ -1295,13 +1316,14 @@ are invisible to source review by construction.
   recognition.
 - **Acceptance criteria:** A time-split corpus is assembled from public protocols with public
   source and published post-incident or published-audit findings, each evaluated at a commit
-  that predates the fix, with provenance, licence, and commit recorded per case. A private
-  holdout is withheld from all prompt, template, taxonomy, and configuration development and
-  is used only for final measurement. Corpus construction records who selected each case and
-  on what basis, so selection bias is auditable. Scores are reported separately for
-  synthetic, public time-split, and holdout; a synthetic score is never presented as product
-  performance. Cases whose source is unavailable under an acceptable licence are excluded and
-  recorded, not approximated.
+  that predates the fix, with provenance, licence, and commit recorded per case. Selection follows
+  a precommitted deterministic provenance policy, so selection bias is auditable without an ad hoc
+  human chooser. Scores are reported separately for synthetic and public time-split evidence; a
+  synthetic score is never presented as public performance. An optional later private holdout, if
+  supplied, remains excluded from all prompt/template/taxonomy/configuration development and is
+  reported separately, but it is objective-out-of-scope and not required for completion. Cases
+  whose source is unavailable under an acceptable licence are excluded and recorded, not
+  approximated.
 - **Files expected to change:** `benchmarks/`, corpus schemas,
   `src/mmaudit/benchmark/claims.py`, evaluation documentation, regressions.
 - **Dependencies:** `V3-SINGLE-AUDIT-001`.
@@ -1336,6 +1358,11 @@ are invisible to source review by construction.
   egress → external-log sequence above. Human commissioning/adjudication is an external claim
   prerequisite and is never fabricated or automated away.
 - **Status:** `QUEUED`
+- **Frozen-objective disposition:** `OBJECTIVE_OUT_OF_SCOPE`. This optional human-comparison tier
+  may support a later commercial claim, but it is not a dependency of the current synthetic/public
+  completion objective. Within the frozen objective, superiority can be evaluated only by the
+  precommitted public benchmark, cross-lineage automated adjudication, external-log inclusion, and
+  objective-pinned verdict policy. Absence of a commissioned auditor must never block that path.
 
 ## V3-STABILITY-001 — Run-to-run stability measurement
 
@@ -2491,13 +2518,11 @@ are invisible to source review by construction.
   positive owned-REAL parent issue-consume-revoke-reject assay against the external runtime remain
   absent; the completed provider-free cascade does not substitute for that evidence. External-log
   publication and every benchmark run remain queued.
-- **Next action:** Keep current local checkpoint
-  `dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d` unpushed and keep every metadata,
-  paid-smoke, verifier, normal-preflight, construct-only, and full command absent. Separately review
-  paid-smoke eligibility against the complete r8/r8/r8 evidence; any later command emission requires
-  a fresh separately reviewed adjacency sequence. AUTHSEAL publication,
-  audits, benchmarks, and release remain unauthorized. `V3-AUTONOMY-001` Phase 0 remains queued and
-  paused for this handoff.
+- **Next action:** Park `V3-AUTHRUNNER-001` as `PARTIAL / BLOCKED_SAFETY`; keep every metadata,
+  paid-smoke, verifier, normal-preflight, construct-only, and full command absent. Its remaining
+  positive judge/campaign/bundle proof is external and requires a separately authorized future
+  sequence. `V3-AUTONOMY-001` Phase 0 is the sole current provider-free work unit. AUTHSEAL
+  publication, audits, benchmarks, and release remain unauthorized.
 
 ## V3-TARGETSPEC-001 — Reconcile the product vision with the objective and correct the README
 
@@ -2639,6 +2664,12 @@ are invisible to source review by construction.
   blocked until current independently authenticated operator/legal determinations, qualification,
   and all other production prerequisites exist.
 - **Status:** `COMPLETE`
+- **Frozen-objective disposition:** The enforcement mechanism remains complete, but its
+  customer-facing commercial/legal determination is `OBJECTIVE_OUT_OF_SCOPE` for the frozen
+  synthetic/public campaign. Objective-scoped runs may use only a preprovisioned, current,
+  machine-verified campaign policy artifact and must exclude any route lacking it; they do not
+  infer legal eligibility. Per-client jurisdiction, contract, and resale decisions remain later
+  commercial gates and cannot block autonomous completion.
 - **Starting evidence (2026-08-17):** Existing selection gates cover technical qualification,
   endpoint capability, privacy/ZDR, retention, root lineage, and production-release bindings.
   They do not represent or authenticate provider-terms, commercial-use, source-analysis, entity,
@@ -2673,9 +2704,10 @@ are invisible to source review by construction.
   ensemble, completed audit, provider call, or release claim. Local implementation checkpoint
   `12c389f6f8fe3a242b4bbc6c3e5aceb3880cb4a8` records this provider-free boundary and has not been
   pushed. The 21 skipped tests remain explicit, non-crediting external or opt-in prerequisites.
-- **Next action:** None for this ticket. `V3-QUALIFY-001` is next in model-ticket order but is not
-  actionable while `V3-LINEAGE-001` and `V3-CALIBRATE-001` remain blocked and current
-  independently authenticated policy determinations and real qualification evidence are absent.
+- **Next action:** None for this ticket. Current-objective qualification depends on
+  AUTHLINEAGE-PUBLIC, AUTHRUNNER, constructed/public automated calibration, and a preprovisioned
+  objective-scoped campaign policy artifact. The legacy signed-lineage and customer-facing legal
+  paths remain optional and cannot block that qualification.
 
 
 ## V3-TOOLDIAG-002 — Complete deterministic scanner execution on macOS
@@ -2866,8 +2898,9 @@ are invisible to source review by construction.
 - **Remaining limitation:** The skipped external engines, rootless image, explicit compiler/fork
   integrations, and paid-provider test remain unavailable prerequisites outside this graph-bound
   ticket; none received passing credit.
-- **Next action:** None; `V3-POLICYELIG-001` is complete. `V3-QUALIFY-001` remains
-  non-actionable while `V3-LINEAGE-001` and `V3-CALIBRATE-001` are blocked.
+- **Next action:** None for this ticket. `V3-QUALIFY-001` remains non-actionable until
+  AUTHLINEAGE-PUBLIC, authenticated REAL runner custody, and measured constructed/public automated
+  calibration authority exist; the legacy signer path is not a current dependency.
 
 ## V3-BOOTSTRAP-001 — Separate declared model identity from measured model quality
 
@@ -3034,9 +3067,11 @@ are invisible to source review by construction.
   `src/mmaudit/cli.py`, drift-report schema, `.github/workflows/`, documentation, regressions.
 - **Dependencies:** None for the discovery, diffing, and alerting scope, which is the portion
   scheduled at execution-order step 11 and is useful immediately.
-- **Dependencies for completion:** `V3-CALIBRATE-001` and `V3-LINEAGE-001`. Only the promotion
-  path — moving a discovered model to selectable — requires them. Expect this ticket to remain
-  `PARTIAL` from step 11 until step 13.
+- **Dependencies for completion:** the constructed/public automated-calibration authority of
+  `V3-CALIBRATE-001`, `V3-AUTHLINEAGE-PUBLIC-001`, and authenticated REAL custody from
+  `V3-AUTHRUNNER-001`. Only the promotion path—moving a discovered model to selectable—requires
+  them. The legacy signed `V3-LINEAGE-001` path is not a current dependency. Expect this ticket to
+  remain `PARTIAL` until those autonomous prerequisites close.
 - **Status:** `PARTIAL`
 - **Starting scope:** Implement and validate only discovery, immutable snapshotting, deterministic
   drift classification, staleness/production blocking, and the scheduled provider-free test path
@@ -3238,30 +3273,44 @@ are invisible to source review by construction.
   and provisioning modules, `src/mmaudit/isolation/`, `src/mmaudit/solidity/
   invariant_templates.py`, gating-inventory artifact and its schema, documentation,
   regressions.
-- **Dependencies:** `V3-LINEAGE-001`, `V3-HARDHAT-001`, `V3-INTAKE-001`, `V3-CONSENT-001`.
-  Design work can begin earlier; the gating inventory is useful immediately and should not
-  wait.
-- **Status:** `QUEUED`
-- **Current state:** Phase 0 remains provider-free and ready, but is paused without an adopted
-  artifact while `V3-AUTHRUNNER-001` fixes the newly demonstrated native structured-output
-  eligibility gap. Resume only after that bounded repair is tested and recorded.
+- **Dependencies:** Phase 0 has no dependency and must not wait. Frozen synthetic/public managed-run
+  completion later depends on `V3-AUTHLINEAGE-PUBLIC-001`, `V3-AUTHRUNNER-001`, and
+  `V3-HARDHAT-001`. `V3-INTAKE-001` and `V3-CONSENT-001` belong to the later private/client-managed
+  product extension and are not prerequisites for the current objective. The legacy signed
+  `V3-LINEAGE-001` path is objective-out-of-scope.
+- **Status:** `IN_PROGRESS`
+- **Current state:** Phase 0 completed at
+  `d0402d1c68f0f82d9ee4f8757f7967abda372ac6` with a self-hashed, nonauthorizing inventory of 3,618
+  unique sources / 3,621 occurrences joined to 35 logical gates. Twenty-nine gates remain
+  unsatisfied and 16 remain current-manual; the artifact states `runtime_authority=false` and
+  `managed_run_ready=false`. Phase 1, the exact versioned managed-toolchain bundle and fail-closed
+  resolver, is the sole active provider-free slice. AUTHRUNNER's remaining REAL evidence still
+  requires separately authorized external execution and remains `PARTIAL / BLOCKED_SAFETY` with no
+  command. Provisioning, intake, consent, target derivation, template enforcement, and the zero-input
+  end-to-end run remain later slices, so this ticket remains `IN_PROGRESS`.
 
-## Execution order
+## Historical 46-step execution order (not current completion authority)
 
-**This supersedes the previous three-track layout.** That structure described tracks as
-independent and warned against running them "as one strict chain". That was written for
-parallel workers. Execution is a **single serial agent taking one ticket at a time**, so the
-tracks were labels on one queue with a `Next action` marker parked in Track 1 — which is why
-Track 2 was never entered and `V3-BOOTSTRAP-001` was passed over twice. Track names are kept
-below only to show what gates what. The numbered order is authoritative.
+This list superseded the previous three-track layout when it was written, but later insertions were
+not folded back into it. It contains 46 of the current 68 V3 tickets and omits 22, including the
+newer AUTH* chain and current AUTHRUNNER work. It is retained only as scheduling history and must not
+be used as completion authority.
+
+Current execution authority is the complete set of ticket headings above, each ticket's current
+status and dependency clauses, the one-active-ticket rule, and the current worklog handoff. A phased
+ticket may start only where its own dependency clause explicitly permits that phase. An external-only
+remainder stays `PARTIAL` or blocked while a separately dependency-ready provider-free phase may be
+selected; that does not satisfy the blocked ticket or its dependents. A future generated full order
+must include every current ticket exactly once before this historical list can be replaced.
 
 Ordering principle: **small unblockers before the heavy work whose validation depends on
 them.** A component built before the capability it orchestrates can only be proven against
 the fake provider, which is the `PROVEN_MOCK_ONLY` condition this remediation exists to
 remove.
 
-This order was checked against the declared dependency graph: no cycles, no omitted ticket,
-no duplicate, and no ticket scheduled before a declared dependency completes.
+Historical claim, now superseded: this order was once described as cycle-free, complete, and
+dependency-ordered. Current audit confirms no explicit dependency cycle, but the list is incomplete
+and therefore cannot prove no omission or dependency-order completeness.
 
 ### Phase 1 — finish in flight, then unblock
 
@@ -3291,10 +3340,11 @@ no duplicate, and no ticket scheduled before a declared dependency completes.
     decisions, current capability claims, model-guide boundary, and status-derived drift
     regression are reconciled.
 
-Only when `M1-DETERMINISTIC-PRODUCT` is `REACHED` may the deterministic offering be described as
-complete and saleable: pinned-fork suite execution, local-versus-fork divergence,
-execution-originated findings, audited-suite coverage and assertion strength, honest fail-closed
-status, and full evidence — with no model, qualification, or provider spend anywhere in the path.
+`M1-DETERMINISTIC-PRODUCT` is a deterministic subsystem milestone only. Reaching it demonstrates
+pinned-fork suite execution, local-versus-fork divergence, execution-originated findings,
+audited-suite coverage and assertion strength, and honest fail-closed evidence without model
+spend. It does not establish overall product completion, saleability, model qualification,
+autonomous operation, benchmark superiority, or release readiness.
 
 ### Phase 3 — real models
 
@@ -3302,12 +3352,12 @@ status, and full evidence — with no model, qualification, or provider spend an
    runtime veto, and exact refreshed-pricing custody are implemented and validated. Its declared
    dependencies and external authority/provider-evidence prerequisites still govern the real
    benchmarking and promotion path, so it remains `PARTIAL` until step 13 and those prerequisites.
-12. `V3-LINEAGE-001` — `BLOCKED_TECHNICAL` pending a current refresh and authorized signed
-    exact-set decision; its provider-free calibration-only authentication contract is complete.
+12. `V3-LINEAGE-001` — legacy signed calibration option, `BLOCKED_TECHNICAL` and
+    `OBJECTIVE_OUT_OF_SCOPE`; current completion uses AUTHLINEAGE-PUBLIC plus AUTHRUNNER.
 13. `V3-CALIBRATE-001` — `BLOCKED_TECHNICAL`. Provider-free empirical derivation and the exact
-    two-campaign authority bridge are implemented, but statistically meaningful thresholds require
-    a representative independently adjudicated holdout plus real refreshed/signed/calibration
-    evidence. It still must complete before qualification.
+    two-campaign bridge are implemented; current completion requires measured constructed/public
+    frozen truth and cross-lineage automated adjudication before qualification. The legacy
+    signed/private-human path is objective-out-of-scope.
 14. `V3-POLICYELIG-001` — `COMPLETE` at the provider-free mechanism boundary. No actual
     provider/model/entity/jurisdiction/client determination or production authority exists.
 15. `V3-QUALIFY-001` — next queued model ticket, but not actionable until its blocked lineage,
@@ -3347,7 +3397,8 @@ status, and full evidence — with no model, qualification, or provider spend an
 
 ### Phase 5 — evidence and claims
 29. `V3-CONVERGENCE-001` — thresholds derived from the measured discovery curve, not guessed.
-30. `V3-HUMANCMP-001` — the only ticket that can ever substantiate a superiority claim.
+30. `V3-HUMANCMP-001` — optional commercial human-comparison tier, objective-out-of-scope for
+    current completion; it is not the authority for the frozen automated superiority verdict.
 31. `V3-STABILITY-001`
 
 ### Phase 6 — release
@@ -3484,27 +3535,26 @@ One capability in this queue has no authority in either document and needs one:
   operator's observation that a CI fork-test run surfaced defects nine prior review passes had
   missed. Anchor it in the vision or record it as a standing operator requirement.
 
-## Operator decisions required
+## Legacy and target-state decisions (not current completion gates)
 
-Record these in the worklog as explicit operator inputs rather than inferring them.
+These items must not be inferred, but none is a per-run human prerequisite for the frozen
+synthetic/public objective. Their current dispositions are explicit:
 
-- Which fork states are canonical — chain IDs and pinned block numbers — and which archive
-  RPC provider is approved for read-only forking.
-- Whether product scope stays Solidity/EVM per `V3-SCOPE-001`, or whether non-Solidity
-  targets need coverage and gate parity rather than a reduced review mode. Quality gates
-  currently return early for any repository with no Solidity project.
-- Whether `V3-ADR-001` is amended to a self-serve product, and if so whether frontier
-  retention consent is offered to clients as a tier or refused in favour of strict ZDR.
-  `V3-ADR-001` currently defers a self-service offering and makes no SaaS claim, which
-  conflicts with the operator's stated intent.
-- Which public protocols and incidents are acceptable sources for the `V3-TIMESPLIT-001`
-  corpus, under which licences, and who selects them. Selection must be recorded because the
-  chooser can bias the result.
-- Which independent auditors are commissioned for `V3-HUMANCMP-001`, who adjudicates, and
-  the prior commitment to publish an unfavourable result on the same terms as a favourable
-  one.
-- The product liability posture: what the audit promises, what it disclaims, whether
+- **Pre-provisioned nonhuman input:** canonical fork chain IDs, pinned block numbers, and an
+  allowed read-only archive endpoint are versioned managed state and verified every run.
+- **Objective-out-of-scope:** expanding beyond the `V3-SCOPE-001` Solidity/EVM boundary is a later
+  product decision. Current quality gates continue to fail closed for unsupported repositories.
+- **Objective-out-of-scope:** amending `V3-ADR-001` into a SaaS/self-service offering and choosing
+  commercial retention tiers are later product decisions; the current objective makes no SaaS
+  claim.
+- **Autonomous evidence substitute:** `V3-TIMESPLIT-001` public protocols, incidents, licences, and
+  commits are selected by a precommitted deterministic provenance policy. Selection bias remains
+  recorded, but no ad hoc human chooser is required during completion.
+- Optional later commercial tier only: which independent auditors are commissioned for
+  `V3-HUMANCMP-001`, who adjudicates, and the prior commitment to publish an unfavourable result
+  on the same terms as a favourable one. This is not a current completion-path decision.
+- **Objective-out-of-scope:** the product liability posture—what the audit promises, what it
+  disclaims, whether
   professional indemnity cover is carried, and how a missed critical finding is handled
   commercially. This is an operator and legal decision, not an engineering ticket, but it
-  determines permitted report and marketing language and should be settled before the first
-  external sale.
+  determines later commercial report and marketing language, not the frozen completion result.

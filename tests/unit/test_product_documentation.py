@@ -5,12 +5,15 @@ import hashlib
 import json
 import re
 import stat
+import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 AGENTS_PATH = ROOT / "AGENTS.md"
 QUEUE_PATH = ROOT / "docs/remediation/v3/work_queue.md"
+CODEX_QUEUE_PATH = ROOT / "docs/codex_work_queue.md"
+CODEX_WORKLOG_PATH = ROOT / "docs/codex_worklog.md"
 TRACEABILITY_PATH = ROOT / "docs/remediation/v3/review_traceability.json"
 RUNTIME_STATUS_PATH = ROOT / "docs/remediation/v3/runtime_status.json"
 OPERATOR_RESULTS_PATH = ROOT / "docs/remediation/v3/operator_results.md"
@@ -19,6 +22,8 @@ MODEL_SELECTION_PATH = ROOT / "docs/models/model_selection.md"
 SELECTION_PLAN_PATH = ROOT / "config/models.selection-plan.json"
 PRODUCT_VISION_PATH = ROOT / "product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.md"
 CONFIG_PATH = ROOT / "src/mmaudit/config.py"
+AUTONOMY_INVENTORY_PATH = ROOT / "docs/remediation/v3/autonomy_gate_inventory.json"
+AUTONOMY_INVENTORY_SCHEMA_PATH = ROOT / "schemas/autonomy_gate_inventory.schema.json"
 
 OBJECTIVE_RELATIVE_PATH = "docs/remediation/v3/product_completion_goal.txt"
 OBJECTIVE_SHA256 = "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15"
@@ -36,6 +41,26 @@ CURRENT_LINEAGE_RESEAL_CHECKPOINT = "331bde27c7085d4da34c7b8ec1f688f2ce1e52b3"
 HISTORICAL_COMPLETION_CAPACITY_CHECKPOINT = "3975d2e12fd81a214b9faa1c3031c94506ab696d"
 CURRENT_SELECTION_SUCCESSOR_CHECKPOINT = "dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d"
 CURRENT_AUTHRUNNER_SUCCESSOR_CHECKPOINT = CURRENT_SELECTION_SUCCESSOR_CHECKPOINT
+CURRENT_GOVERNANCE_CHECKPOINT = "d0402d1c68f0f82d9ee4f8757f7967abda372ac6"
+AUTONOMY_INVENTORY_RAW_SHA256 = "6a3c54258dd1f0c25fc8861c8298cf51d187b33bd5528ec25b1549c0e0021980"
+AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256 = (
+    "c762122d00d6655dec1091d4a01188b835801f1ef13cd042d222be6a122184ae"
+)
+AUTONOMY_INVENTORY_SHA256 = "bb14c3258fa9aaba8a1005953f9d57773a1bb9f8a5c43713a03353d51ce6737a"
+AUTONOMY_SOURCE_UNIVERSE_SHA256 = "4e84079ced0d5833f7d6614d2a4f5e1c349699161443c7e30d368fd876116860"
+AUTONOMY_DISCOVERY_SEMANTICS_SHA256 = (
+    "396ab891edcff442c8cf4a5c139c83e48604ae190a79dcb28a5c71eb04535a98"
+)
+AUTONOMY_PHASE_ZERO_PATHS = frozenset(
+    {
+        "docs/remediation/v3/autonomy_gate_inventory.json",
+        "schemas/autonomy_gate_inventory.schema.json",
+        "scripts/generate_release_schemas.py",
+        "src/mmaudit/orchestration/autonomy_gate_inventory.py",
+        "tests/unit/test_autonomy_gate_inventory.py",
+        "tests/unit/test_release_schemas.py",
+    }
+)
 HISTORICAL_INELIGIBLE_GEMMA_PLAN_SHA256 = (
     "41b5af9ae4def5ef535ae25a13c7c38b95d5819a878a5eef1c1c5bfb8386bf58"
 )
@@ -106,7 +131,9 @@ MODEL_WORK_TICKETS = frozenset(
 EXPECTED_REQUIREMENT_IDS = tuple("ABCDEFGHIJKLMNOPQRSTUV")
 
 _LEVEL_TWO_HEADING = re.compile(r"^## (?P<title>[^\n]+)$", re.MULTILINE)
+_QUEUE_TICKET_HEADING = re.compile(r"^#{2,3} (?P<title>[^\n]+)$", re.MULTILINE)
 _TICKET_TITLE = re.compile(r"^(?P<ticket>V3-[A-Z0-9]+(?:-[A-Z0-9]+)*)\b")
+_ANY_TICKET_TITLE = re.compile(r"^(?P<ticket>[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+)\b")
 _TICKET_STATUS = re.compile(
     r"^- \*\*Status:\*\* `(?P<status>[A-Z_]+)`\s*$",
     re.MULTILINE,
@@ -141,6 +168,33 @@ def _parse_queue_ticket_statuses(document: str) -> dict[str, str]:
         )
         statuses[ticket] = status
     assert statuses, "queue contains no parseable V3 ticket blocks"
+    return statuses
+
+
+def _parse_all_queue_ticket_statuses(document: str) -> dict[str, str]:
+    headings = list(_QUEUE_TICKET_HEADING.finditer(document))
+    statuses: dict[str, str] = {}
+    for index, heading in enumerate(headings):
+        ticket_match = _ANY_TICKET_TITLE.match(heading.group("title"))
+        if ticket_match is None:
+            continue
+        body_end = headings[index + 1].start() if index + 1 < len(headings) else len(document)
+        body = document[heading.end() : body_end]
+        status_matches = list(_TICKET_STATUS.finditer(body))
+        if not status_matches:
+            continue
+        ticket = ticket_match.group("ticket")
+        assert ticket not in statuses, f"duplicate queue ticket heading: {ticket}"
+        assert len(status_matches) == 1, (
+            f"queue ticket {ticket} must have exactly one anchored Status line; "
+            f"found {len(status_matches)}"
+        )
+        status = status_matches[0].group("status")
+        assert status in ALLOWED_TICKET_STATUSES, (
+            f"queue ticket {ticket} has unsupported status {status}"
+        )
+        statuses[ticket] = status
+    assert statuses, "queue contains no parseable ticket blocks"
     return statuses
 
 
@@ -304,6 +358,76 @@ def test_queue_parser_rejects_duplicate_missing_and_invalid_statuses() -> None:
     )
 
 
+def test_phase_zero_checkpoint_resolves_and_owns_exact_inventory_paths() -> None:
+    resolved = subprocess.run(
+        ["git", "rev-parse", f"{CURRENT_GOVERNANCE_CHECKPOINT}^{{commit}}"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    changed = subprocess.run(
+        [
+            "git",
+            "diff-tree",
+            "--no-commit-id",
+            "--name-only",
+            "-r",
+            CURRENT_GOVERNANCE_CHECKPOINT,
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    source_tree = subprocess.run(
+        [
+            "git",
+            "ls-tree",
+            "-r",
+            "--name-only",
+            CURRENT_GOVERNANCE_CHECKPOINT,
+            "src",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    worktree_match = subprocess.run(
+        [
+            "git",
+            "diff",
+            "--quiet",
+            CURRENT_GOVERNANCE_CHECKPOINT,
+            "--",
+            *sorted(AUTONOMY_PHASE_ZERO_PATHS),
+        ],
+        cwd=ROOT,
+        check=False,
+    )
+
+    assert resolved.stdout.strip() == CURRENT_GOVERNANCE_CHECKPOINT
+    assert frozenset(changed.stdout.splitlines()) == AUTONOMY_PHASE_ZERO_PATHS
+    assert sum(path.endswith(".py") for path in source_tree.stdout.splitlines()) == 207
+    assert worktree_match.returncode == 0
+
+
+def test_combined_queue_unfinished_count_is_derived() -> None:
+    canonical = _parse_all_queue_ticket_statuses(QUEUE_PATH.read_text(encoding="utf-8"))
+    codex = _parse_all_queue_ticket_statuses(CODEX_QUEUE_PATH.read_text(encoding="utf-8"))
+    for ticket in canonical.keys() & codex.keys():
+        assert canonical[ticket] == codex[ticket], f"queue status disagreement for {ticket}"
+    combined = codex | canonical
+    unfinished = sum(status != "COMPLETE" for status in combined.values())
+
+    assert unfinished == 43
+    assert (
+        "REMAINING_ACTIONABLE_TICKETS: The combined queues contain "
+        f"{unfinished} unfinished tickets."
+    ) in CODEX_WORKLOG_PATH.read_text(encoding="utf-8")
+
+
 def test_status_reducer_is_derived_and_rejects_unknown_ticket_ids() -> None:
     statuses = {
         "V3-COMPLETE-001": "COMPLETE",
@@ -421,6 +545,10 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         QUEUE_PATH.read_text(encoding="utf-8"),
     )
     runtime_status = json.loads(RUNTIME_STATUS_PATH.read_text(encoding="utf-8"))
+    autonomy_inventory_bytes = AUTONOMY_INVENTORY_PATH.read_bytes()
+    autonomy_inventory = json.loads(autonomy_inventory_bytes)
+    autonomy_schema_bytes = AUTONOMY_INVENTORY_SCHEMA_PATH.read_bytes()
+    autonomy_schema = json.loads(autonomy_schema_bytes)
     assert runtime_status["real_model_calls"] == {
         "attempted": 12,
         "succeeded": 2,
@@ -692,26 +820,23 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "authrunner-candidate-20260821-r6" in model_selection
     assert "primary-judge-registry-r6.json" in model_selection
     assert "authrunner-primary-judge-20260821-r6" in model_selection
-    assert runtime_status["candidate_commit"] == CURRENT_AUTHRUNNER_SUCCESSOR_CHECKPOINT
+    assert runtime_status["candidate_commit"] == CURRENT_GOVERNANCE_CHECKPOINT
     assert runtime_status["candidate_commit_pushed"] is False
     assert runtime_status["candidate_commit_remote_resolved"] is False
-    assert runtime_status["candidate_successor_commit"] == CURRENT_AUTHRUNNER_SUCCESSOR_CHECKPOINT
+    assert runtime_status["candidate_successor_commit"] == CURRENT_GOVERNANCE_CHECKPOINT
     assert runtime_status["candidate_successor_status"] == (
         "LOCAL_COMMIT_NOT_PUSHED_OR_REMOTE_RESOLVED"
     )
     assert runtime_status["historical_paid_diagnostic_base_commit"] == (
         HISTORICAL_PAID_DIAGNOSTIC_BASE_CHECKPOINT
     )
-    assert runtime_status["last_checkpoint_commit"] == CURRENT_AUTHRUNNER_SUCCESSOR_CHECKPOINT
-    assert runtime_status["autorun_status"] == "BLOCKED_SAFETY"
-    assert runtime_status["current_ticket"] == "V3-AUTHRUNNER-001"
+    assert runtime_status["last_checkpoint_commit"] == CURRENT_GOVERNANCE_CHECKPOINT
+    assert runtime_status["autorun_status"] == "RUNNING_PROVIDER_FREE"
+    assert runtime_status["current_ticket"] == "V3-AUTONOMY-001"
     assert runtime_status["active_provider_free_work"] == {
-        "ticket": "V3-AUTHRUNNER-001",
-        "slice": "AUTHRUNNER_REPLAY_ROUTE_ALLOWLIST_REFRESH",
-        "status": (
-            "COMPLETED_LOCAL_CHECKPOINT_NOT_PUSHED_OR_REMOTE_RESOLVED_REAL_BLOCKED_SAFETY_"
-            "NO_CURRENT_COMMAND"
-        ),
+        "ticket": "V3-AUTONOMY-001",
+        "slice": "PHASE_1_MANAGED_TOOLCHAIN_BUNDLE",
+        "status": "IN_PROGRESS_PROVIDER_FREE_NONAUTHORIZING",
         "provider_access_authorized": False,
         "secret_access_authorized": False,
         "private_operator_artifact_access_authorized": False,
@@ -719,12 +844,64 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "operator_metadata_egress_command_emitted": False,
         "operator_paid_smoke_command_emitted": False,
         "operator_command_execution_authorized": False,
-        "parked_ticket": "V3-AUTONOMY-001",
-        "parked_ticket_status": "QUEUED_PHASE_0_PAUSED",
+        "parked_ticket": "V3-AUTHRUNNER-001",
+        "parked_ticket_status": "PARTIAL_REAL_BLOCKED_SAFETY_NO_CURRENT_COMMAND",
     }
+    phase_zero = runtime_status["autonomy_phase_zero_inventory"]
+    assert phase_zero == {
+        "status": "COMPLETE_NONAUTHORIZING",
+        "implementation_commit": CURRENT_GOVERNANCE_CHECKPOINT,
+        "implementation_commit_pushed": False,
+        "implementation_commit_remote_resolved": False,
+        "artifact_path": "docs/remediation/v3/autonomy_gate_inventory.json",
+        "schema_path": "schemas/autonomy_gate_inventory.schema.json",
+        "artifact_raw_sha256": AUTONOMY_INVENTORY_RAW_SHA256,
+        "schema_raw_sha256": AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256,
+        "source_discovery_semantics_sha256": AUTONOMY_DISCOVERY_SEMANTICS_SHA256,
+        "source_universe_sha256": AUTONOMY_SOURCE_UNIVERSE_SHA256,
+        "inventory_sha256": AUTONOMY_INVENTORY_SHA256,
+        "source_count": 3618,
+        "source_occurrence_count": 3621,
+        "gate_source_count": 3575,
+        "non_gating_source_count": 43,
+        "logical_gate_count": 35,
+        "unsatisfied_gate_count": 29,
+        "current_manual_gate_count": 16,
+        "provider_or_network_accessed": False,
+        "secret_material_read": False,
+        "runtime_authority": False,
+        "managed_run_ready": False,
+        "next_slice": "PHASE_1_MANAGED_TOOLCHAIN_BUNDLE",
+    }
+    assert hashlib.sha256(autonomy_inventory_bytes).hexdigest() == AUTONOMY_INVENTORY_RAW_SHA256
+    assert hashlib.sha256(autonomy_schema_bytes).hexdigest() == AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256
+    assert autonomy_inventory["schema_version"] == "1.0"
+    assert autonomy_inventory["phase"] == "PHASE_0_INVENTORY_ONLY"
+    assert autonomy_inventory["status"] == "PARTIAL_NONAUTHORIZING"
+    assert autonomy_inventory["source_discovery_semantics_sha256"] == (
+        AUTONOMY_DISCOVERY_SEMANTICS_SHA256
+    )
+    assert autonomy_inventory["source_universe_sha256"] == AUTONOMY_SOURCE_UNIVERSE_SHA256
+    assert autonomy_inventory["inventory_sha256"] == AUTONOMY_INVENTORY_SHA256
+    assert autonomy_inventory["source_count"] == 3618
+    assert autonomy_inventory["source_occurrence_count"] == 3621
+    assert autonomy_inventory["gate_source_count"] == 3575
+    assert autonomy_inventory["logical_gate_count"] == 35
+    assert autonomy_inventory["unsatisfied_gate_count"] == 29
+    assert autonomy_inventory["current_manual_gate_count"] == 16
+    assert autonomy_inventory["provider_or_network_accessed"] is False
+    assert autonomy_inventory["secret_material_read"] is False
+    assert autonomy_inventory["runtime_authority"] is False
+    assert autonomy_inventory["managed_run_ready"] is False
+    assert autonomy_schema["properties"]["runtime_authority"]["const"] is False
+    assert autonomy_schema["properties"]["managed_run_ready"]["const"] is False
+    assert runtime_status["last_validation"]["real_provider_accessed"] is False
+    assert runtime_status["last_validation"]["operator_secret_accessed"] is False
+    assert runtime_status["last_validation"]["operator_private_ledger_accessed_or_mutated"] is False
     resume_action = runtime_status["pause_state"]["resume_action_v3_authrunner"]
-    assert "Separately review paid-smoke eligibility" in resume_action
-    assert "no current metadata, discovery, capture, smoke, verifier" in resume_action
+    assert "Park V3-AUTHRUNNER-001 PARTIAL" in resume_action
+    assert "V3-AUTONOMY-001 Phase 0 is complete and nonauthorizing" in resume_action
+    assert "Phase 1 managed-toolchain work is the sole current provider-free slice" in resume_action
     assert smoke_status["implementation_checkpoint"] == ("692eb173f002818b4434b746c8801b4cbeb852e2")
     assert smoke_status["post_origin_fix_guide_checkpoint"] == (
         "c137f8bae9d27f5120e7e08eba2d9b5b384e1ca5"

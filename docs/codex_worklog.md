@@ -4,14 +4,48 @@ This file is the persistent handoff record. Update it after every meaningful
 implementation slice. Do not record secrets, source excerpts from external targets,
 credentials, RPC URLs, or operational attack instructions.
 
-AUTORUN_STATUS: BLOCKED_SAFETY
-CURRENT_TICKET: V3-AUTHRUNNER-001
+AUTORUN_STATUS: RUNNING_PROVIDER_FREE
+CURRENT_TICKET: V3-AUTONOMY-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001
-NEXT_ACTION: Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY` and preserve current local checkpoint `dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d` without pushing or remote-resolving it. Keep every current capture, metadata, discovery, preflight, construct-only, paid-smoke, verifier, and full command absent. Separately review paid-smoke eligibility against the valid r8/r8/r8 evidence; any later emission requires a fresh adjacency sequence and separate authorization. Keep `V3-AUTONOMY-001` queued and paused.
-LAST_VALIDATION_COMMAND: Root committed-byte suite; release-schema generation; Ruff check; strict mypy over 206 package source files; focused product-documentation/objective tests; strict duplicate-key JSON parsing; focused Ruff format/check; command-absence scan; operator-custody hash/size/line check; and diff integrity.
-LAST_VALIDATION_RESULT: PASS / PARTIAL / BLOCKED_SAFETY — the root committed-byte suite passed 326 tests; schema generation, Ruff, and strict mypy over all 206 package source files passed. The current governance reconciliation preserves the 12/2/10 live call counters and reconciled `$0.01680888` ledger entry. Current checkpoint `dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d` remains unpushed. The current 71,771-byte, 1,276-line operator record at raw SHA-256 `25ee5395a7e2360637f89d89cc0e89084a530c8921d0af395b06bc9b700b01e5` records candidate, PRIMARY, and replay r8 discovery plus a valid r8/r8/r8 metadata-only gate at `$0`, with 15 logical GETs, at most 30 attempts, no completion, no output, and no bundle. No current command or authority exists; paid adjacency remains unproven.
-LAST_CHECKPOINT_COMMIT: `dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d` — local nonauthorizing replay-route-seed successor over explicit-capacity checkpoint `3975d2e12fd81a214b9faa1c3031c94506ab696d` and compiled-lineage checkpoint `331bde27c7085d4da34c7b8ec1f688f2ce1e52b3`; it is not pushed or remote-resolved. Historical ineligible Gemma plan: `3989e7592de6e1c355365443c10e00c2083829d8`. Historical paid diagnostic base: `b4134c70641e33cbbff2b430b135910df903733b`.
-REMAINING_ACTIONABLE_TICKETS: `V3-AUTHRUNNER-001` is `PARTIAL / BLOCKED_SAFETY`. Compiled public lineage separately confirms the current three-model selection and all six directed independence checks, while sealed plan-local lineage deliberately remains `UNCONFIRMED`/`false`. Candidate and PRIMARY r8 discovery succeeded; replay `wafer` failed historically, then the operator explicitly selected `modal/mxfp4`, froze replay r8, and validated the complete r8/r8/r8 metadata-only gate at `$0`. No fresh route discovery is pending. Separate paid-smoke eligibility and fresh-adjacency review remain prerequisites to any later emission. All current commands and every runtime, qualification, runner, seal, audit, and release authority remain absent. `V3-AUTONOMY-001` Phase 0 is queued and paused.
+NEXT_ACTION: Implement only `V3-AUTONOMY-001` Phase 1: define the exact versioned managed-toolchain bundle and a fail-closed resolver for every required compiler, scanner, formal engine, container image, and reporter pin. Do not begin the provisioning-command slice or grant runtime authority. Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY`; every provider, secret, paid-smoke, verifier, and full command remains absent.
+LAST_VALIDATION_COMMAND: Phase-0 inventory/schema pytest; product-documentation/objective pytest; release-schema and committed-inventory verification; Ruff format/check; strict mypy over 207 source files; strict duplicate-key JSON; canonical self-hash and cross-process determinism; cold-start no-secret/no-network assay; operator-custody hash/size/line check; and diff integrity.
+LAST_VALIDATION_RESULT: PASS / PARTIAL / NONAUTHORIZING — 53 inventory/schema tests and 14 product-documentation/objective tests passed. Generator verification, Ruff, strict mypy, strict JSON, canonical self-hash, cross-process determinism, cold-start guards, and diff integrity passed. Independent frozen-byte review reported CLEAN with no BLOCKER/HIGH. Checkpoint `d0402d1c68f0f82d9ee4f8757f7967abda372ac6` commits 3,618 sources / 3,621 occurrences joined to 35 logical gates; 29 remain unsatisfied and 16 remain current-manual. The current operator record remains 71,771 bytes / 1,276 lines / SHA-256 `25ee5395a7e2360637f89d89cc0e89084a530c8921d0af395b06bc9b700b01e5` and grants no Phase-0 authority.
+LAST_CHECKPOINT_COMMIT: `d0402d1c68f0f82d9ee4f8757f7967abda372ac6` — local V3-AUTONOMY Phase-0 inventory implementation checkpoint; it is not pushed or remote-resolved and explicitly retains `runtime_authority=false` and `managed_run_ready=false`. Historical r8 governance base: `28ee5d77ed9c33fb72d0c00e02e93c91b9fde8c6`. Historical paid diagnostic base: `b4134c70641e33cbbff2b430b135910df903733b`.
+REMAINING_ACTIONABLE_TICKETS: The combined queues contain 43 unfinished tickets. `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`: no material provider-free seam remains, and positive judge/campaign/bundle evidence requires separately authorized external execution. `V3-AUTONOMY-001` Phase 0 is complete and Phase 1 managed-toolchain work is the sole `IN_PROGRESS` work unit. Every provider, secret, capture, metadata, discovery, preflight, paid-smoke, verifier, runner, seal, audit, benchmark, and release authority remains absent.
+
+## 2026-08-22T01:33:27Z — V3-AUTONOMY Phase 0 completed nonauthorizing
+
+- **Implementation:** Checkpoint `d0402d1c68f0f82d9ee4f8757f7967abda372ac6` adds the typed
+  generated inventory, release schema, canonical committed artifact, and strict drift regressions.
+  It covers 3,618 unique sources / 3,621 occurrences, with 3,575 gate sources and 43 explicitly
+  non-gating controls joined to 35 logical gates.
+- **Honest state:** Twenty-nine gates remain unsatisfied and 16 remain current-manual. The artifact
+  is `PARTIAL_NONAUTHORIZING`; `runtime_authority=false` and `managed_run_ready=false`. It supplies
+  no provider, campaign, audit, benchmark, seal, or release authority.
+- **Validation:** 53 inventory/schema and 14 documentation/objective tests passed. Release-schema
+  verification, Ruff, formatting, strict mypy over 207 sources, strict JSON, canonical self-hash,
+  cross-process determinism, cold-start no-secret/no-network guards, and diff integrity passed.
+  Independent review reported `CLEAN` with no `BLOCKER` or `HIGH`.
+- **Next:** Continue the same ticket with Phase 1 only: define the exact versioned managed-toolchain
+  bundle and fail-closed resolver. Provisioning remains a later slice.
+
+## 2026-08-21T23:45:57Z — V3-AUTONOMY Phase 0 started after AUTHRUNNER local closure
+
+- **AUTHRUNNER disposition:** The metadata-only live-route path constructs all three exact clients,
+  applies the shared static admission, performs 15 authenticated metadata GETs, verifies exact route
+  registration, and cleans up without spend. The first paid candidate also crossed construction,
+  transport, origin custody, and ledger reconciliation. The remaining judge and durable-bundle path
+  depends on genuine candidate outputs, so there is no honest provider-free construct-only
+  substitute. REAL remains `PARTIAL / BLOCKED_SAFETY`; no command is emitted.
+- **Active slice:** `V3-AUTONOMY-001` Phase 0 only. Generate a complete source-coverage inventory for
+  all audit configuration leaves, semantic overrides, environment overrides, stock-run boundary
+  inputs, pipeline authority inputs, explicit non-field gates, and objective-required missing gates.
+  Every logical gate must have exactly one autonomous, preprovisioned, pre-run-client, or
+  objective-out-of-scope disposition; implementation state is recorded separately.
+- **Boundary:** The artifact is descriptive, self-hashed, provider-free, and nonauthorizing.
+  `runtime_authority=false` and `managed_run_ready=false` are mandatory. Later managed bundle,
+  provisioning, intake/consent, target derivation, template-library, and end-to-end slices remain
+  outstanding, so the ticket stays `PARTIAL` after Phase 0.
 
 ## 2026-08-21T23:05:42Z — replay drift and nonauthorizing allowlist successor reconciled
 
