@@ -66,14 +66,14 @@ _FROZEN_COMPLETION_ENTRYPOINT_PARAMETERS_SHA256 = (
     "02782ec6599a78e92a9b40177ff01509be6bd00232a49bbae88ac031f95b7b5f"
 )
 _FROZEN_AUDITED_MODULE_PATHS_SHA256 = (
-    "7cff6d1bbcf5596c1949a5e9f929c0d423392d97f4da1c4caa0d6b7f860b21ec"
+    "f87687d12e0fc37b1cebf2801558aad7db8b177599a3a694c12116ad29db1810"
 )
 _FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256 = (
-    "c1dab61128241101272df5b94e46c9a92be4e04b6f7df705d7af79368bb2ea2a"
+    "895ee8af69693af1802ef51a7f82f48d225bed567fec1ad355620e274aa35335"
 )
 _FROZEN_PROJECT_SCRIPTS_SHA256 = "9c597fa232065af210cc6b85424e2571d49c6b1ef941c5470602e916ab98c452"
 _FROZEN_FILESYSTEM_INPUT_LOCI_SHA256 = (
-    "ff1cd67b752881472f4669990b9e65d9e8bfce17b19ecc505004f3c47d09116d"
+    "4eba42a2add5dcd61557d74ff266143f21f1796465ef920068b05f5fd9abf8aa"
 )
 _FROZEN_INTERACTIVE_INPUT_LOCI_SHA256 = (
     "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
@@ -619,8 +619,11 @@ _GATE_SPECS = (
         "Every executable and image must retain exact identity and per-run verification.",
         "objective:1,6(J/K/S),7",
         AutonomousGateDisposition.PREPROVISIONED_NONHUMAN_INPUT,
-        GateImplementationState.CURRENT_MANUAL_INPUT,
-        "Individual pins exist, but no one managed bundle provisions and binds the complete set.",
+        GateImplementationState.PARTIAL,
+        "A typed nonauthorizing catalog and config projection bind 28 first-class managed roles, "
+        "but fixed operating-system probe helpers remain unmodeled and lack exact identity "
+        "verification. External production pins, independent bundle trust, provisioning, "
+        "installed-process verification, and image-side attestation also remain absent.",
     ),
     _gate(
         "gate-private-repository-boundary",
@@ -2838,6 +2841,7 @@ _FILESYSTEM_MODULE_GATE_IDS: dict[str, str] = {
     "orchestration/context_manifest.py": "gate-full-quality-analysis",
     "orchestration/cost_ledger.py": "gate-cost-ledger-provisioning",
     "orchestration/manifest.py": "gate-release-evidence-pipeline",
+    "orchestration/managed_toolchain.py": "gate-managed-toolchain-bundle",
     "orchestration/pipeline.py": "gate-full-quality-analysis",
     "orchestration/prior_audit.py": "gate-full-quality-analysis",
     "orchestration/replay.py": "gate-release-evidence-pipeline",

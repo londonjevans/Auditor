@@ -8,9 +8,9 @@ AUTORUN_STATUS: RUNNING_PROVIDER_FREE
 CURRENT_MILESTONE: M1-DETERMINISTIC-PRODUCT (REACHED)
 CURRENT_TICKET: V3-AUTONOMY-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001 (COMPLETE)
-NEXT_ACTION: Implement only `V3-AUTONOMY-001` Phase 1: define the exact versioned managed-toolchain bundle and a fail-closed resolver for every required compiler, scanner, formal engine, container image, and reporter pin. Do not begin the provisioning-command slice or grant runtime authority. Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY`; every provider, secret, paid-smoke, verifier, and full command remains absent.
-LAST_COMMAND: Phase-0 inventory/schema pytest; product-documentation/objective pytest; release-schema and committed-inventory verification; Ruff format/check; strict mypy over 207 source files; strict duplicate-key JSON; canonical self-hash and cross-process determinism; cold-start no-secret/no-network assay; operator-custody hash/size/line check; and diff integrity.
-LAST_RESULT: PASS / PARTIAL / NONAUTHORIZING — 53 inventory/schema tests and 14 product-documentation/objective tests passed. Generator verification, Ruff, strict mypy, strict JSON, canonical self-hash, cross-process determinism, cold-start guards, and diff integrity passed. Independent frozen-byte review reported CLEAN with no BLOCKER/HIGH. Checkpoint `d0402d1c68f0f82d9ee4f8757f7967abda372ac6` commits 3,618 sources / 3,621 occurrences joined to 35 logical gates; 29 remain unsatisfied and 16 remain current-manual. The current operator record remains 71,771 bytes / 1,276 lines / SHA-256 `25ee5395a7e2360637f89d89cc0e89084a530c8921d0af395b06bc9b700b01e5` and grants no Phase-0 authority.
+NEXT_ACTION: Checkpoint the completed nonauthorizing `V3-AUTONOMY-001` Phase 1 slice. Then begin only a separately recorded Phase 2 provisioning-state slice: define explicit idempotent provisioning/refusal evidence for the managed bundle without granting trust, installed-process verification, runtime authority, or managed-run readiness.
+LAST_COMMAND: Generated bundle/schema/inventory verification; 97 focused managed-toolchain/inventory/schema/wheel tests; 273 adjacent config/scanner/isolation/reproduction tests; 16 documentation/objective tests; Ruff; formatting; strict mypy over 208 source files.
+LAST_RESULT: PASS / PHASE_1_COMPLETE_NONAUTHORIZING — the exact 28-role declaration, fail-closed config projection, fixed package loader, generated schema, wheel resource, and reconciled Phase-0 inventory are green. The packaged bundle pins only three reviewed package resources; 25 external roles remain unresolved. Independent trust, provisioning, installed/runtime verification, generic image-side identities, fixed OS probe helpers, and managed readiness remain absent and every authority flag is false.
 REAL_MODEL_CALLS_ATTEMPTED: 12
 REAL_MODEL_CALLS_SUCCEEDED: 2
 REAL_MODEL_CALLS_REJECTED: 10
@@ -22,6 +22,46 @@ HISTORICAL_GOVERNED_LEDGER_USED_USD: 0.0034764325
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable. A private holdout and independently adjudicated professional comparison are not supplied, but those optional human/private tiers are objective-out-of-scope and are not current completion blockers.
 LAST_CHECKPOINT_COMMIT: d0402d1c68f0f82d9ee4f8757f7967abda372ac6 — local V3-AUTONOMY Phase-0 inventory implementation checkpoint; it is not pushed or remote-resolved and explicitly retains runtime_authority=false and managed_run_ready=false. Historical r8 governance base: 28ee5d77ed9c33fb72d0c00e02e93c91b9fde8c6. Historical paid diagnostic base: b4134c70641e33cbbff2b430b135910df903733b.
+
+## 2026-08-22T03:34:19Z — V3-AUTONOMY Phase 1 completed nonauthorizing
+
+- Implementation: added a closed 28-role first-class toolchain catalog, exact consumer joins,
+  immutable/self-hashed declarations and projections, one-snapshot config derivation, and strict
+  refusal for missing, mismatched, ambiguous-host, or unrepresented image-side identities.
+- Artifacts: added the canonical packaged partial bundle and generated release schema. The bundle
+  raw SHA-256 is `6d427e698d1074be2d20747211bcdd53816509e0e71b4225dff0401c32d6561a`;
+  its self-hash is `55c412fdb2dd56a2541c0e737d953b5d0e770ece42b4c1c11ebfb7e1c233498d`.
+  Only the reporter and two reporter schemas are pinned; 25 external roles are unresolved.
+- Phase-0 reconciliation: the regenerated nonauthorizing inventory now covers 3,627 unique sources /
+  3,630 occurrences, with 3,584 gate sources and 43 non-gating controls joined to 35 logical gates.
+  Twenty-nine gates remain unsatisfied and 15 remain current-manual; the managed toolchain gate is
+  `PARTIAL` and all runtime/readiness/provider/secret flags remain false.
+- Validation: 97 focused managed-toolchain/inventory/schema/wheel tests and 273 adjacent
+  config/scanner/isolation/reproduction tests pass. The seven loopback-binding cases initially
+  blocked by the filesystem sandbox pass in the separately permitted local-only test run. Ruff and
+  strict mypy over 208 source files pass; scoped formatting is clean. Independent frozen-byte review
+  found no `BLOCKER` or `HIGH`. A supplementary root suite was stopped after 8m45s at roughly 1%
+  because its timeout-heavy ordering was disproportionate to this slice; 64 tests had passed and 13
+  unavailable-tool cases had skipped, but the interrupted run receives no full-suite credit.
+- Limitation / next: no external production pin is independently trusted or provisioned; no
+  installed process, generic image-side executable, fixed OS helper, transitive dependency, or
+  runtime use is verified. Phase 2 may define provisioning-state evidence and fail-closed setup as a
+  separate slice; it must not grant `runtime_authority` or `managed_run_ready`.
+
+## 2026-08-22T02:15:18Z — V3-AUTONOMY Phase 1 core contract implemented
+
+- Implementation: added a pure typed catalog for 24 exact compiler, scanner, formal-engine,
+  container, Hardhat image-side, reporter, and schema identities. The bundle distinguishes
+  `PINNED`, `UNRESOLVED`, and `DISABLED`, validates exact shared consumers, and self-hashes without
+  assigning independent trust.
+- Resolver: added fail-closed effective-config projection. Enabled or explicitly pinned tools must
+  have matching bundle members; required-but-disabled scanners, maximum-assurance downgrade,
+  conflicting per-run pins, and rootless runtime `auto` are rejected. Projection performs no host,
+  PATH, subprocess, network, secret, or provider inspection and keeps every authority/readiness flag
+  false.
+- Validation: 13 focused tests pass; Ruff check/format and strict mypy pass for the new module.
+- Next: package an honest partial declaration using only existing fixed reporter identities, add its
+  release schema/loader, and regenerate the Phase-0 source inventory. Provisioning is later.
 
 ## 2026-08-22T01:33:27Z — V3-AUTONOMY Phase 0 completed nonauthorizing
 

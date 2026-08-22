@@ -1602,11 +1602,12 @@ and report serialization.
 
 ## Next action
 
-### V3-AUTONOMY-001 — Phase 1 managed toolchain bundle
+### V3-AUTONOMY-001 — Phase 2 managed provisioning state
 
-- **Objective:** Define one exact versioned bundle for every required compiler, scanner, formal
-  engine, container image, and reporter pin, then make the managed resolver fail closed on a missing
-  or mismatched member. The canonical full ticket remains in `docs/remediation/v3/work_queue.md`.
+- **Objective:** Define typed, idempotent provisioning-state and setup/refusal evidence for the
+  completed Phase-1 managed bundle. Incomplete, stale, or mismatched provisioning must remain an
+  explicit nonauthorizing refusal. The canonical full ticket remains in
+  `docs/remediation/v3/work_queue.md`.
 - **Dependencies:** Phase 0 completed at
   `d0402d1c68f0f82d9ee4f8757f7967abda372ac6`; the full ticket retains its recorded later
   dependencies and remains nonauthorizing.
@@ -1614,9 +1615,12 @@ and report serialization.
 - **Boundary:** `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`; its provider-free client,
   route, cost, and custody seams are exhausted, while genuine judge/campaign/bundle evidence requires
   separately authorized external execution. No provider or operator command is emitted.
-- **Phase 0 evidence:** The committed self-hashed inventory covers 3,618 unique sources / 3,621
-  occurrences and joins 3,575 gate sources to 35 logical gates. Twenty-nine gates remain unsatisfied
-  and 16 remain current-manual; `runtime_authority=false` and `managed_run_ready=false`.
-- **Next action:** Inventory the existing exact tool/image/reporter pins, define the minimal typed
-  managed-bundle artifact and resolver, and add mismatch/missing-member regressions. Do not start the
-  separate provisioning-command slice or grant runtime authority.
+- **Current evidence:** Phase 1 is complete nonauthorizing. The regenerated self-hashed inventory
+  covers 3,627 unique sources / 3,630 occurrences and joins 3,584 gate sources to 35 logical gates.
+  Twenty-nine gates remain unsatisfied and 15 remain current-manual; `runtime_authority=false` and
+  `managed_run_ready=false`. The exact 28-role bundle pins three reviewed package resources and
+  explicitly leaves 25 external roles unresolved.
+- **Next action:** After the Phase-1 checkpoint, define the minimal typed provisioning-state and
+  idempotent setup/refusal contract. Do not inspect or execute ambient tools in ordinary test paths,
+  and do not grant independent trust, installed-process verification, runtime authority, or managed
+  readiness.

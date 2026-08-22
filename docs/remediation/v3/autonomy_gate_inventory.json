@@ -8,11 +8,11 @@
   "cli_run_parameter_count": 50,
   "completion_entrypoint_parameter_count": 299,
   "completion_scope": "SYNTHETIC_PUBLIC_ONLY",
-  "current_manual_gate_count": 16,
+  "current_manual_gate_count": 15,
   "discovery_scope": "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_OPAQUE_AUTHORITIES_EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES",
   "environment_override_count": 28,
-  "gate_source_count": 3575,
-  "inventory_sha256": "bb14c3258fa9aaba8a1005953f9d57773a1bb9f8a5c43713a03353d51ce6737a",
+  "gate_source_count": 3584,
+  "inventory_sha256": "81d12a36dc0a80f54682e54811b86139985468bb8a026ca74e1be09fa182ef32",
   "logical_gate_count": 35,
   "logical_gates": [
     {
@@ -2346,8 +2346,8 @@
     {
       "desired_disposition": "PREPROVISIONED_NONHUMAN_INPUT",
       "gate_id": "gate-managed-toolchain-bundle",
-      "implementation_detail": "Individual pins exist, but no one managed bundle provisions and binds the complete set.",
-      "implementation_state": "CURRENT_MANUAL_INPUT",
+      "implementation_detail": "A typed nonauthorizing catalog and config projection bind 28 first-class managed roles, but fixed operating-system probe helpers remain unmodeled and lack exact identity verification. External production pins, independent bundle trust, provisioning, installed-process verification, and image-side attestation also remain absent.",
+      "implementation_state": "PARTIAL",
       "integrity_property": "Every executable and image must retain exact identity and per-run verification.",
       "name": "Versioned managed toolchain bundle",
       "objective_citation": "objective:1,6(J/K/S),7",
@@ -2405,6 +2405,7 @@
         "direct-env-ast:isolation.container:rootless_runtime_environment:environment-call:4",
         "direct-env-ast:isolation.container:rootless_runtime_environment:environment-call:5",
         "direct-env-ast:isolation.hardhat_loopback_relay:hardhatloopbackrelay.__init__:working-directory:1",
+        "direct-env-ast:orchestration.managed_toolchain:load_packaged_managed_toolchain_bundle:working-directory:1",
         "direct-env-ast:repository.discovery:_git_environment:environment-call:1",
         "direct-env-ast:repository.discovery:_git_environment:environment-mapping:1",
         "direct-env-ast:repository.discovery:_git_environment:environment-subscript:1",
@@ -2536,6 +2537,12 @@
         "filesystem-input:isolation.provenance:_normalized_boundary_material:2",
         "filesystem-input:isolation.provenance:_trusted_helper:1",
         "filesystem-input:isolation.provenance:_trusted_helper:2",
+        "filesystem-input:orchestration.managed_toolchain:_load_managed_toolchain_bundle_path:1",
+        "filesystem-input:orchestration.managed_toolchain:_load_managed_toolchain_bundle_path:2",
+        "filesystem-input:orchestration.managed_toolchain:_load_managed_toolchain_bundle_path:3",
+        "filesystem-input:orchestration.managed_toolchain:_load_managed_toolchain_bundle_path:4",
+        "filesystem-input:orchestration.managed_toolchain:_load_managed_toolchain_bundle_path:5",
+        "filesystem-input:orchestration.managed_toolchain:_require_safe_resource_parents:1",
         "filesystem-input:scanners.clean_chain:_bounded_proc_text:1",
         "filesystem-input:scanners.clean_chain:_copy_pinned_executable:1",
         "filesystem-input:scanners.clean_chain:_copy_pinned_executable:10",
@@ -3582,6 +3589,7 @@
         "audited-module:orchestration.cost_ledger",
         "audited-module:orchestration.coverage",
         "audited-module:orchestration.execution_candidates",
+        "audited-module:orchestration.managed_toolchain",
         "audited-module:orchestration.manifest",
         "audited-module:orchestration.model_coverage",
         "audited-module:orchestration.model_review_evidence",
@@ -3642,6 +3650,7 @@
         "audited-module:repository.redaction",
         "audited-module:repository.secrets",
         "audited-module:repository.workspace",
+        "audited-module:resources.managed_toolchain_bundle.json",
         "audited-module:resources.privacy-synthetic-sources.json",
         "audited-module:resources.synthetic.provider_smoke.src.providersmoke.sol",
         "audited-module:scanners.__init__",
@@ -3987,7 +3996,7 @@
   "runtime_authority": false,
   "schema_version": "1.0",
   "secret_material_read": false,
-  "source_count": 3618,
+  "source_count": 3627,
   "source_coverage": [
     {
       "classification": "GATE",
@@ -9927,7 +9936,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/autonomy_gate_inventory.py",
-      "source_semantics_sha256": "769861f2695e148392f4f650fc9fc92e53553f43e36f9158fa5752d419b2b021"
+      "source_semantics_sha256": "80176aefdf5b851d40137f40fac32069662165e4d067b97917a405692d69370b"
     },
     {
       "classification": "GATE",
@@ -10018,6 +10027,15 @@
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/execution_candidates.py",
       "source_semantics_sha256": "956848bcfc70f59984e20447706270caab8849b298209500b4fd15477d737838"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-runtime-package-integrity",
+      "source_id": "audited-module:orchestration.managed_toolchain",
+      "source_kind": "AUDITED_MODULE_UNIVERSE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/managed_toolchain.py",
+      "source_semantics_sha256": "e76538f954d3a8b73ce5ccbdc369a305c87fed757b451d1ffb9bd494519a60c7"
     },
     {
       "classification": "GATE",
@@ -10558,6 +10576,15 @@
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/repository/workspace.py",
       "source_semantics_sha256": "5b7d323743e2c0ece7904447655a85701018a5f4f810f46f29b4e1bd49cb8997"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-runtime-package-integrity",
+      "source_id": "audited-module:resources.managed_toolchain_bundle.json",
+      "source_kind": "AUDITED_MODULE_UNIVERSE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/resources/managed_toolchain_bundle.json",
+      "source_semantics_sha256": "903863daa539823bd323050d5c452f375f9cc57d899925c0e63811c001fae082"
     },
     {
       "classification": "GATE",
@@ -16183,6 +16210,15 @@
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/cost_ledger.py:_validate_operator_ledger_parent:host-identity:1",
       "source_semantics_sha256": "ee0efaff92604655ab31ad5e6965ce9a1c352a696b899ae40d2805443a414f32"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-managed-toolchain-bundle",
+      "source_id": "direct-env-ast:orchestration.managed_toolchain:load_packaged_managed_toolchain_bundle:working-directory:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/managed_toolchain.py:load_packaged_managed_toolchain_bundle:working-directory:1",
+      "source_semantics_sha256": "f324793c7427e57aa32fe71ca8a24a723e02e3871cf571d327bc1241a93e954f"
     },
     {
       "classification": "GATE",
@@ -25381,6 +25417,60 @@
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/cost_ledger.py:AtomicCostLedger.identity_sha256:metadata-observation:1",
       "source_semantics_sha256": "e43bcbbaf5078b59ff3899dc4954747f1c0eb708e2350a58960808ec60566ec2"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-managed-toolchain-bundle",
+      "source_id": "filesystem-input:orchestration.managed_toolchain:_load_managed_toolchain_bundle_path:1",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/managed_toolchain.py:_load_managed_toolchain_bundle_path:metadata-observation:1",
+      "source_semantics_sha256": "707b8d920fb050a1d7452b0c8abcbe106b605c31e870c95fb660f210e540fa1c"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-managed-toolchain-bundle",
+      "source_id": "filesystem-input:orchestration.managed_toolchain:_load_managed_toolchain_bundle_path:2",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/managed_toolchain.py:_load_managed_toolchain_bundle_path:content-read:2",
+      "source_semantics_sha256": "0017f6ec1f62891f06ee0d14afa7ea1d2e6aa1fc55161c5a99fcdac9b4fbe80b"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-managed-toolchain-bundle",
+      "source_id": "filesystem-input:orchestration.managed_toolchain:_load_managed_toolchain_bundle_path:3",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/managed_toolchain.py:_load_managed_toolchain_bundle_path:metadata-observation:3",
+      "source_semantics_sha256": "af56568bb1b28c883a0d15dd20bbeeac47e893b4ba56ac86a2dce3a70922a9a2"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-managed-toolchain-bundle",
+      "source_id": "filesystem-input:orchestration.managed_toolchain:_load_managed_toolchain_bundle_path:4",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/managed_toolchain.py:_load_managed_toolchain_bundle_path:metadata-observation:4",
+      "source_semantics_sha256": "af56568bb1b28c883a0d15dd20bbeeac47e893b4ba56ac86a2dce3a70922a9a2"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-managed-toolchain-bundle",
+      "source_id": "filesystem-input:orchestration.managed_toolchain:_load_managed_toolchain_bundle_path:5",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/managed_toolchain.py:_load_managed_toolchain_bundle_path:metadata-observation:5",
+      "source_semantics_sha256": "707b8d920fb050a1d7452b0c8abcbe106b605c31e870c95fb660f210e540fa1c"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-managed-toolchain-bundle",
+      "source_id": "filesystem-input:orchestration.managed_toolchain:_require_safe_resource_parents:1",
+      "source_kind": "EXPLICIT_NON_FIELD_GATE",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/managed_toolchain.py:_require_safe_resource_parents:metadata-observation:1",
+      "source_semantics_sha256": "34abafc96b5a1a667e895ae9eac703ecc367be1cb56633ce305180c72ea31244"
     },
     {
       "classification": "GATE",
@@ -36552,24 +36642,24 @@
       "source_semantics_sha256": "41cc76819710e44e2710187482c5d8058883cf4e3a1087ec84837720818b44c1"
     }
   ],
-  "source_discovery_semantics_sha256": "396ab891edcff442c8cf4a5c139c83e48604ae190a79dcb28a5c71eb04535a98",
+  "source_discovery_semantics_sha256": "9d82596b3bfc2cac3bc31882787b1bfe4818c5c0c36b963b6c5ecf4b251e8483",
   "source_kind_counts": {
-    "AUDITED_MODULE_UNIVERSE": 228,
+    "AUDITED_MODULE_UNIVERSE": 230,
     "AUDIT_CONFIG_LEAF": 505,
     "AUDIT_OVERRIDE_PATH": 45,
     "AUDIT_RUN_OPTION_LEAF": 13,
     "CLI_RUN_PARAMETER": 50,
     "COMPLETION_ENTRYPOINT_PARAMETER": 299,
-    "DIRECT_ENVIRONMENT_INPUT": 453,
+    "DIRECT_ENVIRONMENT_INPUT": 454,
     "ENTROPY_INPUT": 17,
     "ENVIRONMENT_OVERRIDE": 28,
-    "EXPLICIT_NON_FIELD_GATE": 1926,
+    "EXPLICIT_NON_FIELD_GATE": 1932,
     "PIPELINE_INIT_PARAMETER": 25,
     "PIPELINE_RUN_PARAMETER": 15,
     "REQUIRED_MISSING_GATE": 14
   },
-  "source_occurrence_count": 3621,
-  "source_universe_sha256": "4e84079ced0d5833f7d6614d2a4f5e1c349699161443c7e30d368fd876116860",
+  "source_occurrence_count": 3630,
+  "source_universe_sha256": "b573bae0b27f7f92db65d0475ff183a6c3a89c444d6adce158693f61758557dc",
   "status": "PARTIAL_NONAUTHORIZING",
   "unsatisfied_gate_count": 29
 }

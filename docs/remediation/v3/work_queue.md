@@ -3280,14 +3280,16 @@ are invisible to source review by construction.
   `V3-LINEAGE-001` path is objective-out-of-scope.
 - **Status:** `IN_PROGRESS`
 - **Current state:** Phase 0 completed at
-  `d0402d1c68f0f82d9ee4f8757f7967abda372ac6` with a self-hashed, nonauthorizing inventory of 3,618
-  unique sources / 3,621 occurrences joined to 35 logical gates. Twenty-nine gates remain
-  unsatisfied and 16 remain current-manual; the artifact states `runtime_authority=false` and
-  `managed_run_ready=false`. Phase 1, the exact versioned managed-toolchain bundle and fail-closed
-  resolver, is the sole active provider-free slice. AUTHRUNNER's remaining REAL evidence still
-  requires separately authorized external execution and remains `PARTIAL / BLOCKED_SAFETY` with no
-  command. Provisioning, intake, consent, target derivation, template enforcement, and the zero-input
-  end-to-end run remain later slices, so this ticket remains `IN_PROGRESS`.
+  `d0402d1c68f0f82d9ee4f8757f7967abda372ac6`; Phase 1 is now complete nonauthorizing. The current
+  self-hashed inventory covers 3,627 unique sources / 3,630 occurrences joined to 35 logical gates.
+  Twenty-nine gates remain unsatisfied and 15 remain current-manual; the artifact states
+  `runtime_authority=false` and `managed_run_ready=false`. The exact 28-role managed declaration
+  pins three reviewed package resources and explicitly leaves 25 external roles unresolved.
+  AUTHRUNNER's remaining REAL evidence still requires separately authorized external execution and
+  remains `PARTIAL / BLOCKED_SAFETY` with no command. Provisioning, installed/runtime verification,
+  intake, consent, target derivation, template enforcement, and the zero-input end-to-end run remain
+  later slices, so this ticket remains `IN_PROGRESS`. The next provider-free slice is Phase 2's
+  typed idempotent provisioning-state/refusal contract; it cannot grant runtime authority.
 
 ## Historical 46-step execution order (not current completion authority)
 

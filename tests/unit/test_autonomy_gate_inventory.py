@@ -43,8 +43,8 @@ def inventory() -> AutonomyGateInventory:
 def test_inventory_freezes_the_exact_recursive_source_universe(
     inventory: AutonomyGateInventory,
 ) -> None:
-    assert inventory.source_count == 3618
-    assert inventory.source_occurrence_count == 3621
+    assert inventory.source_count == 3627
+    assert inventory.source_occurrence_count == 3630
     assert inventory.audit_config_leaf_locator_count == 505
     assert inventory.audit_config_leaf_occurrence_count == 508
     assert inventory.audit_config_shared_locator_count == 3
@@ -64,14 +64,14 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         "PIPELINE_INIT_PARAMETER": 25,
         "PIPELINE_RUN_PARAMETER": 15,
         "COMPLETION_ENTRYPOINT_PARAMETER": 299,
-        "DIRECT_ENVIRONMENT_INPUT": 453,
+        "DIRECT_ENVIRONMENT_INPUT": 454,
         "ENTROPY_INPUT": 17,
-        "AUDITED_MODULE_UNIVERSE": 228,
-        "EXPLICIT_NON_FIELD_GATE": 1926,
+        "AUDITED_MODULE_UNIVERSE": 230,
+        "EXPLICIT_NON_FIELD_GATE": 1932,
         "REQUIRED_MISSING_GATE": 14,
     }
     assert Counter(source.classification for source in inventory.source_coverage) == {
-        SourceCoverageClassification.GATE: 3575,
+        SourceCoverageClassification.GATE: 3584,
         SourceCoverageClassification.NON_GATING_CONTROL: 43,
     }
     assert {item.value for item in SourceCoverageClassification} == {
@@ -81,7 +81,7 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
     assert sum(":wall-clock:" in source.source_path for source in inventory.source_coverage) == 99
     assert (
         sum(":working-directory:" in source.source_path for source in inventory.source_coverage)
-        == 110
+        == 111
     )
     assert (
         sum(":process-identity" in source.source_path for source in inventory.source_coverage) == 44
@@ -94,7 +94,7 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         == 17
     )
     assert (
-        sum(":content-read:" in source.source_path for source in inventory.source_coverage) == 271
+        sum(":content-read:" in source.source_path for source in inventory.source_coverage) == 272
     )
     assert (
         sum(":directory-enumeration:" in source.source_path for source in inventory.source_coverage)
@@ -102,7 +102,7 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
     )
     assert (
         sum(":metadata-observation:" in source.source_path for source in inventory.source_coverage)
-        == 1569
+        == 1574
     )
     assert all(
         source.classification is SourceCoverageClassification.GATE
@@ -137,7 +137,7 @@ def test_inventory_has_exact_autonomous_dispositions_and_honest_phase_zero_state
     }
     assert inventory.logical_gate_count == 35
     assert inventory.unsatisfied_gate_count == 29
-    assert inventory.current_manual_gate_count == 16
+    assert inventory.current_manual_gate_count == 15
     assert inventory.runtime_authority is False
     assert inventory.managed_run_ready is False
     assert inventory.provider_or_network_accessed is False
@@ -150,6 +150,26 @@ def test_inventory_has_exact_autonomous_dispositions_and_honest_phase_zero_state
         "EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES"
     )
     assert inventory.private_repository_completion_in_scope is False
+    managed_toolchain = next(
+        gate for gate in inventory.logical_gates if gate.gate_id == "gate-managed-toolchain-bundle"
+    )
+    assert managed_toolchain.implementation_state is GateImplementationState.PARTIAL
+    assert "independent bundle trust" in managed_toolchain.implementation_detail
+    assert "operating-system probe helpers remain unmodeled" in (
+        managed_toolchain.implementation_detail
+    )
+    sources = {source.source_id: source for source in inventory.source_coverage}
+    for source_id in (
+        "audited-module:orchestration.managed_toolchain",
+        "audited-module:resources.managed_toolchain_bundle.json",
+    ):
+        assert sources[source_id].logical_gate_id == "gate-runtime-package-integrity"
+    assert (
+        sources[
+            "filesystem-input:orchestration.managed_toolchain:_load_managed_toolchain_bundle_path:1"
+        ].logical_gate_id
+        == "gate-managed-toolchain-bundle"
+    )
 
 
 def test_every_gate_source_has_exactly_one_logical_assignment(
@@ -465,6 +485,11 @@ def test_filesystem_privacy_provenance_has_exact_nonfallback_gate() -> None:
         (
             "isolation/container.py",
             "discover_rootless_container_backend",
+            "gate-managed-toolchain-bundle",
+        ),
+        (
+            "orchestration/managed_toolchain.py",
+            "_load_managed_toolchain_bundle_path",
             "gate-managed-toolchain-bundle",
         ),
         (

@@ -4,6 +4,9 @@ import json
 import tomllib
 from pathlib import Path
 
+import pytest
+
+import scripts.generate_release_schemas as release_schema_generator
 from mmaudit.benchmark.cross_lineage_adjudication import CrossLineageAdjudicationReport
 from mmaudit.config import ModelLineageConfig
 from mmaudit.models.authenticated_runner import AuthenticatedCrossLineageRunnerEvidence
@@ -43,9 +46,57 @@ from mmaudit.orchestration.autonomy_gate_inventory import (
     AutonomousGateDisposition,
     AutonomyGateInventory,
 )
+from mmaudit.orchestration.managed_toolchain import (
+    MANAGED_TOOLCHAIN_ROLE_SPECS,
+    ManagedToolchainBundle,
+)
 from scripts.generate_release_schemas import MODELS, rendered_schema
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_one_write_pass_updates_managed_resource_before_autonomy_inventory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "repository"
+    schema_root = root / "schemas"
+    resource = root / "src/mmaudit/resources/managed_toolchain_bundle.json"
+    inventory = root / "docs/remediation/v3/autonomy_gate_inventory.json"
+    schema_root.mkdir(parents=True)
+    resource.parent.mkdir(parents=True)
+    inventory.parent.mkdir(parents=True)
+    resource.write_text("stale\n", encoding="utf-8")
+    managed_bytes = '{"managed":"current"}\n'
+    inventory_bytes = '{"inventory":"current"}\n'
+
+    def render_inventory(*, repository_root: Path) -> str:
+        assert repository_root == root
+        assert resource.read_text(encoding="utf-8") == managed_bytes
+        return inventory_bytes
+
+    monkeypatch.setattr(release_schema_generator, "ROOT", root)
+    monkeypatch.setattr(release_schema_generator, "SCHEMA_ROOT", schema_root)
+    monkeypatch.setattr(release_schema_generator, "MODELS", {})
+    monkeypatch.setattr(
+        release_schema_generator,
+        "render_default_managed_toolchain_bundle",
+        lambda: managed_bytes,
+    )
+    monkeypatch.setattr(
+        release_schema_generator,
+        "render_autonomy_gate_inventory",
+        render_inventory,
+    )
+    monkeypatch.setattr(
+        release_schema_generator,
+        "_run_evidence_manifest_contract_is_current",
+        lambda: True,
+    )
+
+    release_schema_generator.main(["--write"])
+    release_schema_generator.main([])
+    assert inventory.read_text(encoding="utf-8") == inventory_bytes
 
 
 def test_autonomy_inventory_schema_is_closed_nonauthorizing_and_unsatisfied() -> None:
@@ -61,6 +112,33 @@ def test_autonomy_inventory_schema_is_closed_nonauthorizing_and_unsatisfied() ->
         disposition.value for disposition in AutonomousGateDisposition
     }
     assert "HUMAN_REQUIRED" not in schema["$defs"]["AutonomousGateDisposition"]["enum"]
+
+
+def test_managed_toolchain_schema_is_closed_partial_and_nonauthorizing() -> None:
+    filename = "managed_toolchain_bundle.schema.json"
+    assert MODELS[filename] is ManagedToolchainBundle
+    schema = json.loads((ROOT / "schemas" / filename).read_text(encoding="utf-8"))
+    assert schema["properties"]["objective_sha256"]["const"] == (
+        "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15"
+    )
+    assert schema["properties"]["independently_trusted"]["const"] is False
+    assert schema["properties"]["installed_members_verified"]["const"] is False
+    assert schema["properties"]["execution_evidence_verified"]["const"] is False
+    assert schema["properties"]["transitive_dependency_closure_verified"]["const"] is False
+    assert schema["properties"]["image_side_attestation_verified"]["const"] is False
+    assert schema["properties"]["provisioning_state_verified"]["const"] is False
+    assert schema["properties"]["runtime_authority"]["const"] is False
+    assert schema["properties"]["managed_run_ready"]["const"] is False
+    assert schema["properties"]["limitations"]["minItems"] == 5
+    assert schema["properties"]["limitations"]["maxItems"] == 5
+    member = schema["$defs"]["ManagedToolchainMember"]
+    assert {
+        "parent_image_role",
+        "parent_image_sha256",
+        "parent_platform_manifest_sha256",
+    } <= set(member["properties"])
+    assert schema["properties"]["members"]["maxItems"] == len(MANAGED_TOOLCHAIN_ROLE_SPECS)
+    assert schema["properties"]["members"]["minItems"] == len(MANAGED_TOOLCHAIN_ROLE_SPECS)
 
 
 def test_release_schemas_are_exact_strict_generated_models() -> None:

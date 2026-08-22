@@ -24,6 +24,8 @@ PRODUCT_VISION_PATH = ROOT / "product/CORROVERA_SECURITY_AUDITOR_PRODUCT_VISION.
 CONFIG_PATH = ROOT / "src/mmaudit/config.py"
 AUTONOMY_INVENTORY_PATH = ROOT / "docs/remediation/v3/autonomy_gate_inventory.json"
 AUTONOMY_INVENTORY_SCHEMA_PATH = ROOT / "schemas/autonomy_gate_inventory.schema.json"
+MANAGED_TOOLCHAIN_BUNDLE_PATH = ROOT / "src/mmaudit/resources/managed_toolchain_bundle.json"
+MANAGED_TOOLCHAIN_SCHEMA_PATH = ROOT / "schemas/managed_toolchain_bundle.schema.json"
 
 OBJECTIVE_RELATIVE_PATH = "docs/remediation/v3/product_completion_goal.txt"
 OBJECTIVE_SHA256 = "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15"
@@ -41,15 +43,23 @@ CURRENT_LINEAGE_RESEAL_CHECKPOINT = "331bde27c7085d4da34c7b8ec1f688f2ce1e52b3"
 HISTORICAL_COMPLETION_CAPACITY_CHECKPOINT = "3975d2e12fd81a214b9faa1c3031c94506ab696d"
 CURRENT_SELECTION_SUCCESSOR_CHECKPOINT = "dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d"
 CURRENT_AUTHRUNNER_SUCCESSOR_CHECKPOINT = CURRENT_SELECTION_SUCCESSOR_CHECKPOINT
-CURRENT_GOVERNANCE_CHECKPOINT = "d0402d1c68f0f82d9ee4f8757f7967abda372ac6"
-AUTONOMY_INVENTORY_RAW_SHA256 = "6a3c54258dd1f0c25fc8861c8298cf51d187b33bd5528ec25b1549c0e0021980"
+HISTORICAL_PHASE_ZERO_CHECKPOINT = "d0402d1c68f0f82d9ee4f8757f7967abda372ac6"
+HISTORICAL_PHASE_ZERO_INVENTORY_RAW_SHA256 = (
+    "6a3c54258dd1f0c25fc8861c8298cf51d187b33bd5528ec25b1549c0e0021980"
+)
+AUTONOMY_INVENTORY_RAW_SHA256 = "363a6f0a59b357d250b04412c55ef21a28c4cb98c80b9d598de9d33c18ee7faa"
 AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256 = (
     "c762122d00d6655dec1091d4a01188b835801f1ef13cd042d222be6a122184ae"
 )
-AUTONOMY_INVENTORY_SHA256 = "bb14c3258fa9aaba8a1005953f9d57773a1bb9f8a5c43713a03353d51ce6737a"
-AUTONOMY_SOURCE_UNIVERSE_SHA256 = "4e84079ced0d5833f7d6614d2a4f5e1c349699161443c7e30d368fd876116860"
+AUTONOMY_INVENTORY_SHA256 = "81d12a36dc0a80f54682e54811b86139985468bb8a026ca74e1be09fa182ef32"
+AUTONOMY_SOURCE_UNIVERSE_SHA256 = "b573bae0b27f7f92db65d0475ff183a6c3a89c444d6adce158693f61758557dc"
 AUTONOMY_DISCOVERY_SEMANTICS_SHA256 = (
-    "396ab891edcff442c8cf4a5c139c83e48604ae190a79dcb28a5c71eb04535a98"
+    "9d82596b3bfc2cac3bc31882787b1bfe4818c5c0c36b963b6c5ecf4b251e8483"
+)
+MANAGED_TOOLCHAIN_RAW_SHA256 = "6d427e698d1074be2d20747211bcdd53816509e0e71b4225dff0401c32d6561a"
+MANAGED_TOOLCHAIN_SHA256 = "55c412fdb2dd56a2541c0e737d953b5d0e770ece42b4c1c11ebfb7e1c233498d"
+MANAGED_TOOLCHAIN_SCHEMA_RAW_SHA256 = (
+    "068d3daa7a0c661e6ad6781d4184ce27e53edbc3c8867989d5dc0c877b73c785"
 )
 AUTONOMY_PHASE_ZERO_PATHS = frozenset(
     {
@@ -360,7 +370,7 @@ def test_queue_parser_rejects_duplicate_missing_and_invalid_statuses() -> None:
 
 def test_phase_zero_checkpoint_resolves_and_owns_exact_inventory_paths() -> None:
     resolved = subprocess.run(
-        ["git", "rev-parse", f"{CURRENT_GOVERNANCE_CHECKPOINT}^{{commit}}"],
+        ["git", "rev-parse", f"{HISTORICAL_PHASE_ZERO_CHECKPOINT}^{{commit}}"],
         cwd=ROOT,
         check=True,
         capture_output=True,
@@ -373,7 +383,7 @@ def test_phase_zero_checkpoint_resolves_and_owns_exact_inventory_paths() -> None
             "--no-commit-id",
             "--name-only",
             "-r",
-            CURRENT_GOVERNANCE_CHECKPOINT,
+            HISTORICAL_PHASE_ZERO_CHECKPOINT,
         ],
         cwd=ROOT,
         check=True,
@@ -386,7 +396,7 @@ def test_phase_zero_checkpoint_resolves_and_owns_exact_inventory_paths() -> None
             "ls-tree",
             "-r",
             "--name-only",
-            CURRENT_GOVERNANCE_CHECKPOINT,
+            HISTORICAL_PHASE_ZERO_CHECKPOINT,
             "src",
         ],
         cwd=ROOT,
@@ -394,23 +404,24 @@ def test_phase_zero_checkpoint_resolves_and_owns_exact_inventory_paths() -> None
         capture_output=True,
         text=True,
     )
-    worktree_match = subprocess.run(
+    historical_inventory = subprocess.run(
         [
             "git",
-            "diff",
-            "--quiet",
-            CURRENT_GOVERNANCE_CHECKPOINT,
-            "--",
-            *sorted(AUTONOMY_PHASE_ZERO_PATHS),
+            "show",
+            f"{HISTORICAL_PHASE_ZERO_CHECKPOINT}:docs/remediation/v3/autonomy_gate_inventory.json",
         ],
         cwd=ROOT,
-        check=False,
+        check=True,
+        capture_output=True,
     )
 
-    assert resolved.stdout.strip() == CURRENT_GOVERNANCE_CHECKPOINT
+    assert resolved.stdout.strip() == HISTORICAL_PHASE_ZERO_CHECKPOINT
     assert frozenset(changed.stdout.splitlines()) == AUTONOMY_PHASE_ZERO_PATHS
     assert sum(path.endswith(".py") for path in source_tree.stdout.splitlines()) == 207
-    assert worktree_match.returncode == 0
+    assert (
+        hashlib.sha256(historical_inventory.stdout).hexdigest()
+        == HISTORICAL_PHASE_ZERO_INVENTORY_RAW_SHA256
+    )
 
 
 def test_combined_queue_unfinished_count_is_derived() -> None:
@@ -549,6 +560,10 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     autonomy_inventory = json.loads(autonomy_inventory_bytes)
     autonomy_schema_bytes = AUTONOMY_INVENTORY_SCHEMA_PATH.read_bytes()
     autonomy_schema = json.loads(autonomy_schema_bytes)
+    managed_toolchain_bytes = MANAGED_TOOLCHAIN_BUNDLE_PATH.read_bytes()
+    managed_toolchain = json.loads(managed_toolchain_bytes)
+    managed_toolchain_schema_bytes = MANAGED_TOOLCHAIN_SCHEMA_PATH.read_bytes()
+    managed_toolchain_schema = json.loads(managed_toolchain_schema_bytes)
     assert runtime_status["real_model_calls"] == {
         "attempted": 12,
         "succeeded": 2,
@@ -820,23 +835,24 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "authrunner-candidate-20260821-r6" in model_selection
     assert "primary-judge-registry-r6.json" in model_selection
     assert "authrunner-primary-judge-20260821-r6" in model_selection
-    assert runtime_status["candidate_commit"] == CURRENT_GOVERNANCE_CHECKPOINT
+    assert runtime_status["candidate_commit"] == HISTORICAL_PHASE_ZERO_CHECKPOINT
     assert runtime_status["candidate_commit_pushed"] is False
     assert runtime_status["candidate_commit_remote_resolved"] is False
-    assert runtime_status["candidate_successor_commit"] == CURRENT_GOVERNANCE_CHECKPOINT
+    assert runtime_status["candidate_successor_commit"] == HISTORICAL_PHASE_ZERO_CHECKPOINT
     assert runtime_status["candidate_successor_status"] == (
         "LOCAL_COMMIT_NOT_PUSHED_OR_REMOTE_RESOLVED"
     )
     assert runtime_status["historical_paid_diagnostic_base_commit"] == (
         HISTORICAL_PAID_DIAGNOSTIC_BASE_CHECKPOINT
     )
-    assert runtime_status["last_checkpoint_commit"] == CURRENT_GOVERNANCE_CHECKPOINT
+    assert runtime_status["last_checkpoint_commit"] == HISTORICAL_PHASE_ZERO_CHECKPOINT
     assert runtime_status["autorun_status"] == "RUNNING_PROVIDER_FREE"
     assert runtime_status["current_ticket"] == "V3-AUTONOMY-001"
     assert runtime_status["active_provider_free_work"] == {
         "ticket": "V3-AUTONOMY-001",
         "slice": "PHASE_1_MANAGED_TOOLCHAIN_BUNDLE",
-        "status": "IN_PROGRESS_PROVIDER_FREE_NONAUTHORIZING",
+        "status": "COMPLETE_NONAUTHORIZING_WITHIN_IN_PROGRESS_TICKET",
+        "next_slice": "PHASE_2_MANAGED_PROVISIONING_STATE",
         "provider_access_authorized": False,
         "secret_access_authorized": False,
         "private_operator_artifact_access_authorized": False,
@@ -850,31 +866,60 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     phase_zero = runtime_status["autonomy_phase_zero_inventory"]
     assert phase_zero == {
         "status": "COMPLETE_NONAUTHORIZING",
-        "implementation_commit": CURRENT_GOVERNANCE_CHECKPOINT,
+        "implementation_commit": HISTORICAL_PHASE_ZERO_CHECKPOINT,
         "implementation_commit_pushed": False,
         "implementation_commit_remote_resolved": False,
         "artifact_path": "docs/remediation/v3/autonomy_gate_inventory.json",
         "schema_path": "schemas/autonomy_gate_inventory.schema.json",
+        "artifact_reconciled_for_slice": "PHASE_1_MANAGED_TOOLCHAIN_BUNDLE",
         "artifact_raw_sha256": AUTONOMY_INVENTORY_RAW_SHA256,
         "schema_raw_sha256": AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256,
         "source_discovery_semantics_sha256": AUTONOMY_DISCOVERY_SEMANTICS_SHA256,
         "source_universe_sha256": AUTONOMY_SOURCE_UNIVERSE_SHA256,
         "inventory_sha256": AUTONOMY_INVENTORY_SHA256,
-        "source_count": 3618,
-        "source_occurrence_count": 3621,
-        "gate_source_count": 3575,
+        "source_count": 3627,
+        "source_occurrence_count": 3630,
+        "gate_source_count": 3584,
         "non_gating_source_count": 43,
         "logical_gate_count": 35,
         "unsatisfied_gate_count": 29,
-        "current_manual_gate_count": 16,
+        "current_manual_gate_count": 15,
         "provider_or_network_accessed": False,
         "secret_material_read": False,
         "runtime_authority": False,
         "managed_run_ready": False,
-        "next_slice": "PHASE_1_MANAGED_TOOLCHAIN_BUNDLE",
+        "next_slice": "PHASE_2_MANAGED_PROVISIONING_STATE",
+    }
+    assert runtime_status["managed_toolchain_phase_one"] == {
+        "status": "COMPLETE_NONAUTHORIZING",
+        "bundle_path": "src/mmaudit/resources/managed_toolchain_bundle.json",
+        "schema_path": "schemas/managed_toolchain_bundle.schema.json",
+        "bundle_raw_sha256": MANAGED_TOOLCHAIN_RAW_SHA256,
+        "bundle_sha256": MANAGED_TOOLCHAIN_SHA256,
+        "schema_raw_sha256": MANAGED_TOOLCHAIN_SCHEMA_RAW_SHA256,
+        "first_class_role_count": 28,
+        "pinned_role_count": 3,
+        "unresolved_role_count": 25,
+        "managed_gate_status": "PARTIAL",
+        "independently_trusted": False,
+        "provisioning_state_verified": False,
+        "installed_members_verified": False,
+        "transitive_dependency_closure_verified": False,
+        "image_side_attestation_verified": False,
+        "execution_evidence_verified": False,
+        "runtime_authority": False,
+        "managed_run_ready": False,
+        "provider_or_network_accessed": False,
+        "secret_material_read": False,
+        "next_slice": "PHASE_2_MANAGED_PROVISIONING_STATE",
     }
     assert hashlib.sha256(autonomy_inventory_bytes).hexdigest() == AUTONOMY_INVENTORY_RAW_SHA256
     assert hashlib.sha256(autonomy_schema_bytes).hexdigest() == AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256
+    assert hashlib.sha256(managed_toolchain_bytes).hexdigest() == MANAGED_TOOLCHAIN_RAW_SHA256
+    assert (
+        hashlib.sha256(managed_toolchain_schema_bytes).hexdigest()
+        == MANAGED_TOOLCHAIN_SCHEMA_RAW_SHA256
+    )
     assert autonomy_inventory["schema_version"] == "1.0"
     assert autonomy_inventory["phase"] == "PHASE_0_INVENTORY_ONLY"
     assert autonomy_inventory["status"] == "PARTIAL_NONAUTHORIZING"
@@ -883,25 +928,63 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     )
     assert autonomy_inventory["source_universe_sha256"] == AUTONOMY_SOURCE_UNIVERSE_SHA256
     assert autonomy_inventory["inventory_sha256"] == AUTONOMY_INVENTORY_SHA256
-    assert autonomy_inventory["source_count"] == 3618
-    assert autonomy_inventory["source_occurrence_count"] == 3621
-    assert autonomy_inventory["gate_source_count"] == 3575
+    assert autonomy_inventory["source_count"] == 3627
+    assert autonomy_inventory["source_occurrence_count"] == 3630
+    assert autonomy_inventory["gate_source_count"] == 3584
     assert autonomy_inventory["logical_gate_count"] == 35
     assert autonomy_inventory["unsatisfied_gate_count"] == 29
-    assert autonomy_inventory["current_manual_gate_count"] == 16
+    assert autonomy_inventory["current_manual_gate_count"] == 15
     assert autonomy_inventory["provider_or_network_accessed"] is False
     assert autonomy_inventory["secret_material_read"] is False
     assert autonomy_inventory["runtime_authority"] is False
     assert autonomy_inventory["managed_run_ready"] is False
     assert autonomy_schema["properties"]["runtime_authority"]["const"] is False
     assert autonomy_schema["properties"]["managed_run_ready"]["const"] is False
+    managed_gate = next(
+        gate
+        for gate in autonomy_inventory["logical_gates"]
+        if gate["gate_id"] == "gate-managed-toolchain-bundle"
+    )
+    assert managed_gate["implementation_state"] == "PARTIAL"
+    assert "28 first-class managed roles" in managed_gate["implementation_detail"]
+    assert (
+        "fixed operating-system probe helpers remain unmodeled"
+        in (managed_gate["implementation_detail"])
+    )
+    assert managed_toolchain["schema_version"] == "1.0"
+    assert managed_toolchain["status"] == "PARTIAL_NONAUTHORIZING"
+    assert managed_toolchain["bundle_sha256"] == MANAGED_TOOLCHAIN_SHA256
+    assert len(managed_toolchain["members"]) == 28
+    assert sum(member["disposition"] == "PINNED" for member in managed_toolchain["members"]) == 3
+    assert (
+        sum(member["disposition"] == "UNRESOLVED" for member in managed_toolchain["members"]) == 25
+    )
+    assert managed_toolchain["limitations"] == [
+        "Config projection is not installed or executed process identity evidence.",
+        "Generic rootless execution is refused until every image-side executable is modeled.",
+        "Image-side executable and relay identities remain unattested until provisioning.",
+        "Fixed operating-system probe helpers remain unmodeled and lack exact identity verification.",
+        "Single-file hashes do not verify transitive dependency closures.",
+    ]
+    for flag in (
+        "independently_trusted",
+        "provisioning_state_verified",
+        "installed_members_verified",
+        "transitive_dependency_closure_verified",
+        "image_side_attestation_verified",
+        "execution_evidence_verified",
+        "runtime_authority",
+        "managed_run_ready",
+    ):
+        assert managed_toolchain[flag] is False
+        assert managed_toolchain_schema["properties"][flag]["const"] is False
     assert runtime_status["last_validation"]["real_provider_accessed"] is False
     assert runtime_status["last_validation"]["operator_secret_accessed"] is False
     assert runtime_status["last_validation"]["operator_private_ledger_accessed_or_mutated"] is False
     resume_action = runtime_status["pause_state"]["resume_action_v3_authrunner"]
     assert "Park V3-AUTHRUNNER-001 PARTIAL" in resume_action
-    assert "V3-AUTONOMY-001 Phase 0 is complete and nonauthorizing" in resume_action
-    assert "Phase 1 managed-toolchain work is the sole current provider-free slice" in resume_action
+    assert "V3-AUTONOMY-001 Phase 0 and Phase 1 are complete nonauthorizing" in resume_action
+    assert "Phase 2 managed provisioning state is the next provider-free slice" in resume_action
     assert smoke_status["implementation_checkpoint"] == ("692eb173f002818b4434b746c8801b4cbeb852e2")
     assert smoke_status["post_origin_fix_guide_checkpoint"] == (
         "c137f8bae9d27f5120e7e08eba2d9b5b384e1ca5"
@@ -1326,21 +1409,38 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert replay_successor["r8_r8_r8_live_route_gate_valid"] is True
     assert replay_successor["current_operator_command_emitted"] is False
     assert replay_successor["authority"] is False
-    full_suite_attempt = runtime_status["last_validation"]["full_suite_attempt"]
-    assert full_suite_attempt["command"] == ".venv/bin/pytest -q"
-    assert full_suite_attempt["started_before_final_governance_bytes"] is True
-    assert full_suite_attempt["status"] == ("INTENTIONALLY_INTERRUPTED_NO_TERMINAL_PASS_CREDIT")
-    assert full_suite_attempt["displayed_progress_percent"] == 2
-    assert full_suite_attempt["visible_skips"] == 6
-    assert full_suite_attempt["interrupted_during_test"] == (
+    assert runtime_status["last_validation"]["terminal_full_suite_run"] is False
+    supplementary_full_suite_attempt = runtime_status["last_validation"][
+        "supplementary_full_suite_attempt"
+    ]
+    assert supplementary_full_suite_attempt == {
+        "command": (
+            ".venv/bin/pytest -q --ignore=tests/unit/test_product_documentation.py "
+            "--ignore=tests/unit/test_product_objective.py"
+        ),
+        "status": "INTENTIONALLY_INTERRUPTED_NO_TERMINAL_PASS_CREDIT",
+        "elapsed_seconds": 525.64,
+        "displayed_progress_percent": 1,
+        "passed_before_interrupt": 64,
+        "skipped_before_interrupt": 13,
+        "exit_code": 130,
+        "terminal_full_suite_pass_credit": False,
+    }
+    historical_full_suite_attempt = exact_status["command_guide_successor_full_suite_attempt"]
+    assert historical_full_suite_attempt["command"] == ".venv/bin/pytest -q"
+    assert historical_full_suite_attempt["started_before_final_governance_bytes"] is True
+    assert historical_full_suite_attempt["status"] == (
+        "INTENTIONALLY_INTERRUPTED_NO_TERMINAL_PASS_CREDIT"
+    )
+    assert historical_full_suite_attempt["displayed_progress_percent"] == 2
+    assert historical_full_suite_attempt["visible_skips"] == 6
+    assert historical_full_suite_attempt["interrupted_during_test"] == (
         "test_scheduler_accepts_default_in_repository_private_output_exclusion"
     )
-    assert full_suite_attempt["exit_code"] == 130
-    assert full_suite_attempt["passed_test_count_printed"] is False
-    assert full_suite_attempt["terminal_full_suite_pass_credit"] is False
-    assert "passed_test_count" not in full_suite_attempt
-    guide_full_suite_attempt = exact_status["command_guide_successor_full_suite_attempt"]
-    assert guide_full_suite_attempt == full_suite_attempt
+    assert historical_full_suite_attempt["exit_code"] == 130
+    assert historical_full_suite_attempt["passed_test_count_printed"] is False
+    assert historical_full_suite_attempt["terminal_full_suite_pass_credit"] is False
+    assert "passed_test_count" not in historical_full_suite_attempt
     assert smoke_status["post_token_budget_fix_preflight_operator_results_sha256"] == (
         "76eff45c95116dea28cdaad78115d3926c6da3674a6b322784203335bfef7465"
     )

@@ -1,0 +1,518 @@
+{
+  "artifact_kind": "managed-toolchain-bundle",
+  "bundle_sha256": "55c412fdb2dd56a2541c0e737d953b5d0e770ece42b4c1c11ebfb7e1c233498d",
+  "execution_evidence_verified": false,
+  "image_side_attestation_verified": false,
+  "independently_trusted": false,
+  "installed_members_verified": false,
+  "limitations": [
+    "Config projection is not installed or executed process identity evidence.",
+    "Generic rootless execution is refused until every image-side executable is modeled.",
+    "Image-side executable and relay identities remain unattested until provisioning.",
+    "Fixed operating-system probe helpers remain unmodeled and lack exact identity verification.",
+    "Single-file hashes do not verify transitive dependency closures."
+  ],
+  "managed_run_ready": false,
+  "members": [
+    {
+      "consumers": [
+        "formal-foundry-invariant",
+        "formal-smtchecker",
+        "generated-invariant-execution",
+        "scanner-foundry-compiler",
+        "scanner-slither-compiler",
+        "solidity-compilation",
+        "solidity-reproduction"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "HOST_EXECUTABLE",
+      "limitation": "Production solc identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "solc",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "clean-fork-matrix"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "HOST_EXECUTABLE",
+      "limitation": "Production anvil identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "anvil",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "scanner-semgrep"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "HOST_EXECUTABLE",
+      "limitation": "Production semgrep identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "semgrep",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "scanner-gitleaks"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "HOST_EXECUTABLE",
+      "limitation": "Production gitleaks identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "gitleaks",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "scanner-trivy"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "HOST_EXECUTABLE",
+      "limitation": "Production trivy identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "trivy",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "scanner-osv"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "HOST_EXECUTABLE",
+      "limitation": "Production osv-scanner identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "osv-scanner",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "scanner-codeql"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "HOST_EXECUTABLE",
+      "limitation": "Production codeql identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "codeql",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "scanner-slither"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "HOST_EXECUTABLE",
+      "limitation": "Production slither identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "slither",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "formal-foundry-invariant",
+        "generated-invariant-execution",
+        "scanner-foundry-fork",
+        "solidity-compilation",
+        "solidity-reproduction"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "HOST_EXECUTABLE",
+      "limitation": "Production forge identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "forge",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "formal-mythril"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "HOST_EXECUTABLE",
+      "limitation": "Production mythril identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "mythril",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "formal-echidna"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "HOST_EXECUTABLE",
+      "limitation": "Production echidna identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "echidna",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "formal-medusa"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "HOST_EXECUTABLE",
+      "limitation": "Production medusa identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "medusa",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "formal-halmos"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "HOST_EXECUTABLE",
+      "limitation": "Production halmos identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "halmos",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "formal-halmos-solver"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "HOST_EXECUTABLE",
+      "limitation": "Production halmos-z3 identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "halmos-z3",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "formal-certora"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "HOST_EXECUTABLE",
+      "limitation": "Production certora-cli identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "certora-cli",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "formal-kontrol"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "HOST_EXECUTABLE",
+      "limitation": "Production kontrol identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "kontrol",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "mmaudit-runtime"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "HOST_EXECUTABLE",
+      "limitation": "Production python-runtime identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "python-runtime",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "repository-discovery"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "HOST_EXECUTABLE",
+      "limitation": "Production git identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "git",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "hardened-host-isolation"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "HOST_EXECUTABLE",
+      "limitation": "Production sandbox-exec identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "sandbox-exec",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "hardened-host-isolation"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "HOST_EXECUTABLE",
+      "limitation": "Production bubblewrap identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "bubblewrap",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "rootless-container",
+        "scanner-hardhat-fork",
+        "solidity-compilation"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "HOST_EXECUTABLE",
+      "limitation": "Production container-runtime identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "container-runtime",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "rootless-container",
+        "scanner-hardhat-fork",
+        "solidity-compilation"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "OCI_IMAGE",
+      "limitation": "Production rootless-toolchain-image identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "rootless-toolchain-image",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "scanner-hardhat-fork",
+        "solidity-compilation"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "IMAGE_EXECUTABLE",
+      "limitation": "Production hardhat-image-hardhat identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "hardhat-image-hardhat",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "scanner-hardhat-fork",
+        "solidity-compilation"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "IMAGE_EXECUTABLE",
+      "limitation": "Production hardhat-image-node identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "hardhat-image-node",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "scanner-hardhat-fork"
+      ],
+      "disposition": "UNRESOLVED",
+      "kind": "IMAGE_EXECUTABLE",
+      "limitation": "Production hardhat-image-loopback identity is not independently pinned or provisioned.",
+      "locator": null,
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "hardhat-image-loopback",
+      "sha256": null,
+      "version": null
+    },
+    {
+      "consumers": [
+        "scanner-hardhat-fork"
+      ],
+      "disposition": "PINNED",
+      "kind": "PACKAGE_RESOURCE",
+      "limitation": null,
+      "locator": "src/mmaudit/scanners/hardhat_reporter.cjs",
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "hardhat-reporter",
+      "sha256": "2269138b1383a5cc37da5914b89cbd3d7c22c9f80503a5f69ebe5e1f7e404226",
+      "version": "1.0.0"
+    },
+    {
+      "consumers": [
+        "scanner-hardhat-fork"
+      ],
+      "disposition": "PINNED",
+      "kind": "GENERATED_SCHEMA",
+      "limitation": null,
+      "locator": "schemas/hardhat_reporter_inventory.schema.json",
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "hardhat-reporter-inventory-schema",
+      "sha256": "c5eb7d2e536b8a34d2b6bfdef31b83a67b28f411468056aa833b873a53423a27",
+      "version": "1.0"
+    },
+    {
+      "consumers": [
+        "scanner-hardhat-fork"
+      ],
+      "disposition": "PINNED",
+      "kind": "GENERATED_SCHEMA",
+      "limitation": null,
+      "locator": "schemas/hardhat_reporter_test.schema.json",
+      "parent_image_role": null,
+      "parent_image_sha256": null,
+      "parent_platform_manifest_sha256": null,
+      "platform": null,
+      "platform_manifest_sha256": null,
+      "role": "hardhat-reporter-test-schema",
+      "sha256": "82938fe228ae9f4ba9bf64b284ec9cbbab6af0b0ce1a9e13f4cc8b7c63e77bc8",
+      "version": "1.0"
+    }
+  ],
+  "objective_sha256": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
+  "provisioning_state_verified": false,
+  "runtime_authority": false,
+  "schema_version": "1.0",
+  "self_consistent": true,
+  "status": "PARTIAL_NONAUTHORIZING",
+  "target_platform": "unresolved",
+  "transitive_dependency_closure_verified": false
+}

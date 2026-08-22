@@ -103,6 +103,11 @@ from mmaudit.orchestration.autonomy_gate_inventory import (
     render_autonomy_gate_inventory,
 )
 from mmaudit.orchestration.context_manifest import ContextManifest
+from mmaudit.orchestration.managed_toolchain import (
+    MANAGED_TOOLCHAIN_BUNDLE_RESOURCE,
+    ManagedToolchainBundle,
+    render_default_managed_toolchain_bundle,
+)
 from mmaudit.orchestration.manifest import (
     AUDIT_MODEL_REFRESH_BINDING_IDS,
     AUDIT_MODEL_REFRESH_EVIDENCE_PATH,
@@ -170,6 +175,7 @@ MODELS: dict[str, type[BaseModel]] = {
     "hardhat_request_inventory.schema.json": HardhatInventoryPhaseRequest,
     "hardhat_request_test.schema.json": HardhatTestPhaseRequest,
     "language_capability.schema.json": LanguageCapabilityArtifact,
+    "managed_toolchain_bundle.schema.json": ManagedToolchainBundle,
     "evidence_sealed_authority.schema.json": EvidenceSealedAuthorityEvidence,
     "evidence_seal_verdict.schema.json": EvidenceSealVerdictProjection,
     "evidence_seal_verdict_policy.schema.json": EvidenceSealVerdictPolicy,
@@ -268,6 +274,9 @@ TITLE_OVERRIDES = {
     "hardhat_request_inventory.schema.json": "mmaudit Hardhat inventory phase request",
     "hardhat_request_test.schema.json": "mmaudit Hardhat test phase request",
     "language_capability.schema.json": "mmaudit language capability artifact",
+    "managed_toolchain_bundle.schema.json": (
+        "mmaudit partial nonauthorizing managed toolchain declaration"
+    ),
     "evidence_sealed_authority.schema.json": (
         "mmaudit non-authorizing evidence-seal comparison artifact"
     ),
@@ -1582,6 +1591,18 @@ def main(argv: list[str] | None = None) -> None:
             continue
         if observed != expected:
             failures.append(f"{filename}: stale")
+    toolchain_expected = render_default_managed_toolchain_bundle()
+    toolchain_path = ROOT / "src" / "mmaudit" / MANAGED_TOOLCHAIN_BUNDLE_RESOURCE
+    if arguments.write:
+        toolchain_path.write_text(toolchain_expected, encoding="utf-8")
+    else:
+        try:
+            toolchain_observed = toolchain_path.read_text(encoding="utf-8")
+        except OSError:
+            failures.append(f"{MANAGED_TOOLCHAIN_BUNDLE_RESOURCE}: missing")
+        else:
+            if toolchain_observed != toolchain_expected:
+                failures.append(f"{MANAGED_TOOLCHAIN_BUNDLE_RESOURCE}: stale")
     inventory_expected = render_autonomy_gate_inventory(repository_root=ROOT)
     inventory_path = ROOT / AUTONOMY_INVENTORY_PATH
     if arguments.write:

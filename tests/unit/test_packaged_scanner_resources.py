@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
 PACKAGED_RESOURCES = (
+    "mmaudit/resources/managed_toolchain_bundle.json",
     "mmaudit/scanners/rules/security.yml",
     "mmaudit/scanners/rules/gitleaks.toml",
 )
@@ -59,7 +60,7 @@ def test_built_wheel_contains_importable_exact_scanner_rule_resources(tmp_path: 
                     "sys.path.insert(0, sys.argv[1])",
                     "observed = {}",
                     "for path in sys.argv[2:]:",
-                    "    resource = files('mmaudit.scanners').joinpath(*path.split('/')[2:])",
+                    "    resource = files('mmaudit').joinpath(*path.split('/')[1:])",
                     "    assert resource.is_file()",
                     "    observed[path] = hashlib.sha256(resource.read_bytes()).hexdigest()",
                     "print(json.dumps(observed, sort_keys=True))",

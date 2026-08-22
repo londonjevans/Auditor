@@ -1,0 +1,377 @@
+{
+  "$defs": {
+    "ManagedToolchainBundleStatus": {
+      "description": "A bundle status that never grants runtime authority.",
+      "enum": [
+        "PARTIAL_NONAUTHORIZING",
+        "PINNED_NONAUTHORIZING"
+      ],
+      "title": "ManagedToolchainBundleStatus",
+      "type": "string"
+    },
+    "ManagedToolchainConsumer": {
+      "description": "Closed consumers for the first-class managed identity constraints.",
+      "enum": [
+        "solidity-compilation",
+        "formal-smtchecker",
+        "generated-invariant-execution",
+        "clean-fork-matrix",
+        "scanner-semgrep",
+        "scanner-gitleaks",
+        "scanner-trivy",
+        "scanner-osv",
+        "scanner-codeql",
+        "scanner-slither",
+        "scanner-slither-compiler",
+        "scanner-foundry-fork",
+        "scanner-foundry-compiler",
+        "scanner-hardhat-fork",
+        "solidity-reproduction",
+        "formal-mythril",
+        "formal-echidna",
+        "formal-medusa",
+        "formal-foundry-invariant",
+        "formal-halmos",
+        "formal-halmos-solver",
+        "formal-certora",
+        "formal-kontrol",
+        "mmaudit-runtime",
+        "repository-discovery",
+        "hardened-host-isolation",
+        "rootless-container"
+      ],
+      "title": "ManagedToolchainConsumer",
+      "type": "string"
+    },
+    "ManagedToolchainDisposition": {
+      "description": "Honest identity availability within a declaration.",
+      "enum": [
+        "PINNED",
+        "UNRESOLVED",
+        "DISABLED"
+      ],
+      "title": "ManagedToolchainDisposition",
+      "type": "string"
+    },
+    "ManagedToolchainMember": {
+      "additionalProperties": false,
+      "description": "One declared identity or explicit unavailable disposition.",
+      "properties": {
+        "consumers": {
+          "items": {
+            "$ref": "#/$defs/ManagedToolchainConsumer"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Consumers",
+          "type": "array"
+        },
+        "disposition": {
+          "$ref": "#/$defs/ManagedToolchainDisposition"
+        },
+        "kind": {
+          "$ref": "#/$defs/ManagedToolchainMemberKind"
+        },
+        "limitation": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limitation"
+        },
+        "locator": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Locator"
+        },
+        "parent_image_role": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManagedToolchainRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "parent_image_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Image Sha256"
+        },
+        "parent_platform_manifest_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Platform Manifest Sha256"
+        },
+        "platform": {
+          "anyOf": [
+            {
+              "enum": [
+                "linux-amd64",
+                "linux-arm64"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Platform"
+        },
+        "platform_manifest_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Platform Manifest Sha256"
+        },
+        "role": {
+          "$ref": "#/$defs/ManagedToolchainRole"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sha256"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version"
+        }
+      },
+      "required": [
+        "role",
+        "kind",
+        "disposition",
+        "consumers"
+      ],
+      "title": "ManagedToolchainMember",
+      "type": "object"
+    },
+    "ManagedToolchainMemberKind": {
+      "description": "Identity representation used by one closed role.",
+      "enum": [
+        "HOST_EXECUTABLE",
+        "OCI_IMAGE",
+        "IMAGE_EXECUTABLE",
+        "PACKAGE_RESOURCE",
+        "GENERATED_SCHEMA"
+      ],
+      "title": "ManagedToolchainMemberKind",
+      "type": "string"
+    },
+    "ManagedToolchainRole": {
+      "description": "Closed first-class managed identities covered by this declaration.",
+      "enum": [
+        "solc",
+        "anvil",
+        "semgrep",
+        "gitleaks",
+        "trivy",
+        "osv-scanner",
+        "codeql",
+        "slither",
+        "forge",
+        "mythril",
+        "echidna",
+        "medusa",
+        "halmos",
+        "halmos-z3",
+        "certora-cli",
+        "kontrol",
+        "python-runtime",
+        "git",
+        "sandbox-exec",
+        "bubblewrap",
+        "container-runtime",
+        "rootless-toolchain-image",
+        "hardhat-image-hardhat",
+        "hardhat-image-node",
+        "hardhat-image-loopback",
+        "hardhat-reporter",
+        "hardhat-reporter-inventory-schema",
+        "hardhat-reporter-test-schema"
+      ],
+      "title": "ManagedToolchainRole",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/managed_toolchain_bundle.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Self-consistent declaration with no trust or execution authority.",
+  "properties": {
+    "artifact_kind": {
+      "const": "managed-toolchain-bundle",
+      "default": "managed-toolchain-bundle",
+      "title": "Artifact Kind",
+      "type": "string"
+    },
+    "bundle_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Bundle Sha256",
+      "type": "string"
+    },
+    "execution_evidence_verified": {
+      "const": false,
+      "default": false,
+      "title": "Execution Evidence Verified",
+      "type": "boolean"
+    },
+    "image_side_attestation_verified": {
+      "const": false,
+      "default": false,
+      "title": "Image Side Attestation Verified",
+      "type": "boolean"
+    },
+    "independently_trusted": {
+      "const": false,
+      "default": false,
+      "title": "Independently Trusted",
+      "type": "boolean"
+    },
+    "installed_members_verified": {
+      "const": false,
+      "default": false,
+      "title": "Installed Members Verified",
+      "type": "boolean"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 5,
+      "minItems": 5,
+      "title": "Limitations",
+      "type": "array"
+    },
+    "managed_run_ready": {
+      "const": false,
+      "default": false,
+      "title": "Managed Run Ready",
+      "type": "boolean"
+    },
+    "members": {
+      "items": {
+        "$ref": "#/$defs/ManagedToolchainMember"
+      },
+      "maxItems": 28,
+      "minItems": 28,
+      "title": "Members",
+      "type": "array"
+    },
+    "objective_sha256": {
+      "const": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
+      "default": "e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15",
+      "title": "Objective Sha256",
+      "type": "string"
+    },
+    "provisioning_state_verified": {
+      "const": false,
+      "default": false,
+      "title": "Provisioning State Verified",
+      "type": "boolean"
+    },
+    "runtime_authority": {
+      "const": false,
+      "default": false,
+      "title": "Runtime Authority",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "self_consistent": {
+      "const": true,
+      "default": true,
+      "title": "Self Consistent",
+      "type": "boolean"
+    },
+    "status": {
+      "$ref": "#/$defs/ManagedToolchainBundleStatus"
+    },
+    "target_platform": {
+      "enum": [
+        "unresolved",
+        "linux-amd64",
+        "linux-arm64"
+      ],
+      "title": "Target Platform",
+      "type": "string"
+    },
+    "transitive_dependency_closure_verified": {
+      "const": false,
+      "default": false,
+      "title": "Transitive Dependency Closure Verified",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "target_platform",
+    "members",
+    "status",
+    "limitations",
+    "bundle_sha256"
+  ],
+  "title": "mmaudit partial nonauthorizing managed toolchain declaration",
+  "type": "object"
+}
