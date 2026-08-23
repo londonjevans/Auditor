@@ -941,9 +941,20 @@ def test_smoke_evidence_schema_is_generated_closed_and_non_authorizing() -> None
         schema,
         schema["$defs"]["AuthenticatedRunnerSmokeCostPlan"],
         schema["$defs"]["AuthenticatedRunnerSmokeRunEvidence"],
-        schema["$defs"]["NoncreditingModelBenchmarkSmokeReport"],
     ):
-        assert definition["properties"]["schema_version"]["const"] == "1.1"
+        assert definition["properties"]["schema_version"]["enum"] == ["1.1", "1.2"]
+        assert definition["properties"]["schema_version"]["default"] == "1.2"
+        assert definition["properties"]["smoke_run_index"] == {
+            "maximum": MAX_AUTHENTICATED_RUNNER_SMOKE_RUN_INDEX,
+            "minimum": 1,
+            "title": "Smoke Run Index",
+            "type": "integer",
+        }
+        assert "smoke_run_index" in definition["required"]
+    report_definition = schema["$defs"]["NoncreditingModelBenchmarkSmokeReport"]
+    assert report_definition["properties"]["schema_version"]["enum"] == ["1.1", "1.2"]
+    assert report_definition["properties"]["schema_version"]["default"] == "1.2"
+    for definition in (report_definition,):
         assert definition["properties"]["smoke_run_index"] == {
             "maximum": MAX_AUTHENTICATED_RUNNER_SMOKE_RUN_INDEX,
             "minimum": 1,

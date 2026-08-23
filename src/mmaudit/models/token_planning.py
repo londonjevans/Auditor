@@ -18,7 +18,11 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from mmaudit.models.reasoning import ReasoningRequestPlanEvidence
+from mmaudit.models.reasoning import (
+    INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD,
+    ReasoningRequestPlanEvidence,
+    TokenDetailAccountingMethod,
+)
 
 _MODEL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
 _ENDPOINT_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$"
@@ -1018,7 +1022,7 @@ class GlobalTokenBudgetEvidence(FrozenTokenEvidence):
 class RequestTokenPlan(FrozenTokenEvidence):
     """Self-hashed endpoint-bound input, reasoning, and output request plan."""
 
-    schema_version: Literal["1.0", "2.0"] = "2.0"
+    schema_version: Literal["1.0", "2.0", "3.0"] = "2.0"
     request_id: str = Field(pattern=_REQUEST_ID_PATTERN)
     role: str = Field(pattern=_ROLE_PATTERN)
     reasoning_plan: ReasoningRequestPlanEvidence | None = None
@@ -1040,6 +1044,16 @@ class RequestTokenPlan(FrozenTokenEvidence):
     reserved_output_tokens: int = Field(gt=0, le=_MAX_TOKENS)
     reserved_reasoning_tokens: int = Field(ge=0, le=_MAX_TOKENS)
     requested_completion_tokens: int = Field(gt=0, le=_MAX_TOKENS)
+    token_detail_accounting_method: TokenDetailAccountingMethod | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    wire_max_tokens: int | None = Field(
+        default=None,
+        gt=0,
+        le=_MAX_TOKENS,
+        exclude_if=lambda value: value is None,
+    )
     hard_prompt_tokens: int = Field(gt=0, le=_MAX_TOKENS)
     usable_prompt_tokens: int = Field(gt=0, le=_MAX_TOKENS)
     estimated_prompt_tokens: int = Field(ge=0, le=_MAX_TOKENS)
@@ -1069,6 +1083,14 @@ class RequestTokenPlan(FrozenTokenEvidence):
     def plan_is_endpoint_bound_conservative_and_self_hashed(self) -> RequestTokenPlan:
         if self.schema_version == "1.0" and self.reasoning_plan is not None:
             raise ValueError("legacy request token plans cannot contain reasoning evidence")
+        if self.schema_version in {"1.0", "2.0"}:
+            if self.token_detail_accounting_method is not None or self.wire_max_tokens is not None:
+                raise ValueError("legacy request token plans cannot carry token-detail accounting")
+        elif (
+            self.token_detail_accounting_method != INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD
+            or self.wire_max_tokens != self.reserved_output_tokens
+        ):
+            raise ValueError("current request token plan lacks its independent-component wire cap")
         if self.reasoning_plan is not None and (
             self.reasoning_plan.resolution.request_role != self.role
             or self.reasoning_plan.control_profile.reserved_reasoning_tokens
@@ -1238,6 +1260,7 @@ def build_request_token_plan(
     required_output_tokens: int,
     reserved_reasoning_tokens: int,
     reasoning_plan: ReasoningRequestPlanEvidence | None = None,
+    token_detail_accounting_method: TokenDetailAccountingMethod | None = None,
     global_input_token_budget: int,
     global_output_token_budget: int,
     input_tokens_reserved_before: int = 0,
@@ -1270,6 +1293,11 @@ def build_request_token_plan(
         raise ContextTokenPlanError("requested surface count is invalid")
     if isinstance(reserved_reasoning_tokens, bool) or reserved_reasoning_tokens < 0:
         raise ContextTokenPlanError("reasoning token reserve cannot be negative")
+    if token_detail_accounting_method not in {
+        None,
+        INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD,
+    }:
+        raise ContextTokenPlanError("request token accounting method is unsupported")
     if reasoning_plan is not None and (
         not isinstance(reasoning_plan, ReasoningRequestPlanEvidence)
         or reasoning_plan.resolution.request_role != role
@@ -1396,8 +1424,11 @@ def build_request_token_plan(
     )
     canonical_omissions = _canonical_context_omissions(context_omissions)
     omission_hashes = tuple(sorted(item.omitted_item_sha256 for item in canonical_omissions))
+    schema_version: Literal["2.0", "3.0"] = (
+        "3.0" if token_detail_accounting_method is not None else "2.0"
+    )
     payload: dict[str, Any] = {
-        "schema_version": "2.0",
+        "schema_version": schema_version,
         "request_id": request_id,
         "role": role,
         "reasoning_plan": reasoning_plan,
@@ -1426,8 +1457,15 @@ def build_request_token_plan(
         "source_budget": source_budget,
         "global_budget": global_budget,
     }
+    if schema_version == "3.0":
+        payload.update(
+            {
+                "token_detail_accounting_method": token_detail_accounting_method,
+                "wire_max_tokens": required_output_tokens,
+            }
+        )
     return RequestTokenPlan(
-        schema_version="2.0",
+        schema_version=schema_version,
         request_id=request_id,
         role=role,
         reasoning_plan=reasoning_plan,
@@ -1440,6 +1478,8 @@ def build_request_token_plan(
         reserved_output_tokens=required_output_tokens,
         reserved_reasoning_tokens=reserved_reasoning_tokens,
         requested_completion_tokens=requested_completion_tokens,
+        token_detail_accounting_method=token_detail_accounting_method,
+        wire_max_tokens=(required_output_tokens if schema_version == "3.0" else None),
         hard_prompt_tokens=hard_prompt_tokens,
         usable_prompt_tokens=usable_prompt_tokens,
         estimated_prompt_tokens=estimated_prompt_tokens,

@@ -474,9 +474,9 @@ class ContextOmissionEvidence(FrozenContextEvidence):
 
 
 class ActualTokenUsageEvidence(FrozenContextEvidence):
-    """Typed actual token totals, with no raw provider response."""
+    """Typed raw provider totals and optional conservative accounting ceilings."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     source: ActualTokenUsageSource
     prompt_tokens: int | None = Field(default=None, ge=0)
     completion_tokens: int | None = Field(default=None, ge=0)
@@ -503,6 +503,40 @@ class ActualTokenUsageEvidence(FrozenContextEvidence):
         pattern=_SHA256_PATTERN,
         exclude_if=lambda value: value is None,
     )
+    token_detail_accounting_method: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    token_detail_accounting_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    accounted_prompt_tokens: int | None = Field(
+        default=None,
+        ge=0,
+        exclude_if=lambda value: value is None,
+    )
+    accounted_visible_output_tokens: int | None = Field(
+        default=None,
+        ge=0,
+        exclude_if=lambda value: value is None,
+    )
+    accounted_reasoning_tokens: int | None = Field(
+        default=None,
+        ge=0,
+        exclude_if=lambda value: value is None,
+    )
+    accounted_completion_tokens: int | None = Field(
+        default=None,
+        ge=0,
+        exclude_if=lambda value: value is None,
+    )
+    accounted_total_tokens: int | None = Field(
+        default=None,
+        ge=0,
+        exclude_if=lambda value: value is None,
+    )
     evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
 
     @classmethod
@@ -515,8 +549,10 @@ class ActualTokenUsageEvidence(FrozenContextEvidence):
             else None
         )
         reasoning = usage.reasoning_evidence
+        token_detail = usage.token_detail_accounting_evidence
+        schema_version: Literal["1.0", "1.1"] = "1.1" if token_detail is not None else "1.0"
         payload: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": schema_version,
             "source": source,
             "prompt_tokens": usage.prompt_tokens if available else None,
             "completion_tokens": usage.completion_tokens if available else None,
@@ -533,8 +569,22 @@ class ActualTokenUsageEvidence(FrozenContextEvidence):
             )
             if reasoning.observed_reasoning_tokens is not None:
                 payload["observed_reasoning_tokens"] = reasoning.observed_reasoning_tokens
+        if token_detail is not None:
+            payload.update(
+                {
+                    "token_detail_accounting_method": token_detail.accounting_method,
+                    "token_detail_accounting_evidence_sha256": token_detail.evidence_sha256,
+                    "accounted_prompt_tokens": token_detail.accounted_prompt_tokens,
+                    "accounted_visible_output_tokens": (
+                        token_detail.accounted_visible_output_tokens
+                    ),
+                    "accounted_reasoning_tokens": token_detail.accounted_reasoning_tokens,
+                    "accounted_completion_tokens": token_detail.accounted_completion_tokens,
+                    "accounted_total_tokens": token_detail.accounted_total_tokens,
+                }
+            )
         return cls(
-            schema_version="1.0",
+            schema_version=schema_version,
             source=source,
             prompt_tokens=payload["prompt_tokens"],
             completion_tokens=payload["completion_tokens"],
@@ -549,6 +599,27 @@ class ActualTokenUsageEvidence(FrozenContextEvidence):
             reasoning_execution_state=(reasoning.state if reasoning is not None else None),
             reasoning_evidence_sha256=(
                 reasoning.evidence_sha256 if reasoning is not None else None
+            ),
+            token_detail_accounting_method=(
+                token_detail.accounting_method if token_detail is not None else None
+            ),
+            token_detail_accounting_evidence_sha256=(
+                token_detail.evidence_sha256 if token_detail is not None else None
+            ),
+            accounted_prompt_tokens=(
+                token_detail.accounted_prompt_tokens if token_detail is not None else None
+            ),
+            accounted_visible_output_tokens=(
+                token_detail.accounted_visible_output_tokens if token_detail is not None else None
+            ),
+            accounted_reasoning_tokens=(
+                token_detail.accounted_reasoning_tokens if token_detail is not None else None
+            ),
+            accounted_completion_tokens=(
+                token_detail.accounted_completion_tokens if token_detail is not None else None
+            ),
+            accounted_total_tokens=(
+                token_detail.accounted_total_tokens if token_detail is not None else None
             ),
             evidence_sha256=_canonical_sha256(payload),
         )
@@ -571,6 +642,37 @@ class ActualTokenUsageEvidence(FrozenContextEvidence):
                 raise ValueError("actual token usage does not conserve prompt and completion")
             if self.prompt_tokens <= 0:
                 raise ValueError("reported token usage requires non-zero prompt tokens")
+        accounting_projection = (
+            self.token_detail_accounting_method,
+            self.token_detail_accounting_evidence_sha256,
+            self.accounted_prompt_tokens,
+            self.accounted_visible_output_tokens,
+            self.accounted_reasoning_tokens,
+            self.accounted_completion_tokens,
+            self.accounted_total_tokens,
+        )
+        if self.schema_version == "1.0":
+            if any(value is not None for value in accounting_projection):
+                raise ValueError("legacy actual usage cannot carry token accounting ceilings")
+        elif (
+            any(value is None for value in accounting_projection)
+            or self.token_detail_accounting_method
+            != "MMAUDIT_INDEPENDENT_REASONING_COMPONENT_ENVELOPE_V1"
+        ):
+            raise ValueError("current actual usage lacks complete token accounting ceilings")
+        else:
+            assert self.accounted_prompt_tokens is not None
+            assert self.accounted_visible_output_tokens is not None
+            assert self.accounted_reasoning_tokens is not None
+            assert self.accounted_completion_tokens is not None
+            assert self.accounted_total_tokens is not None
+            if (
+                self.accounted_completion_tokens
+                != self.accounted_visible_output_tokens + self.accounted_reasoning_tokens
+                or self.accounted_total_tokens
+                != self.accounted_prompt_tokens + self.accounted_completion_tokens
+            ):
+                raise ValueError("actual usage accounting ceilings do not conserve planned tokens")
         reasoning_projection = (
             self.reasoning_observation_available,
             self.observed_reasoning_tokens,
@@ -600,7 +702,10 @@ class ActualTokenUsageEvidence(FrozenContextEvidence):
                 self.observed_reasoning_tokens is None
                 or self.reasoning_execution_state not in observed_states
                 or self.completion_tokens is None
-                or self.observed_reasoning_tokens > self.completion_tokens
+                or (
+                    self.schema_version == "1.0"
+                    and self.observed_reasoning_tokens > self.completion_tokens
+                )
             ):
                 raise ValueError("observed reasoning evidence is inconsistent")
         elif (
@@ -1069,6 +1174,37 @@ class ContextManifestTotals(FrozenContextEvidence):
     provider_reported_request_count: int = Field(ge=0, le=_MAX_CONTEXT_REQUESTS)
     provider_reported_prompt_tokens: int = Field(ge=0)
     provider_reported_completion_tokens: int = Field(ge=0)
+    provider_accounted_request_count: int | None = Field(
+        default=None,
+        ge=0,
+        le=_MAX_CONTEXT_REQUESTS,
+        exclude_if=lambda value: value is None,
+    )
+    provider_accounted_prompt_tokens: int | None = Field(
+        default=None,
+        ge=0,
+        exclude_if=lambda value: value is None,
+    )
+    provider_accounted_visible_output_tokens: int | None = Field(
+        default=None,
+        ge=0,
+        exclude_if=lambda value: value is None,
+    )
+    provider_accounted_reasoning_tokens: int | None = Field(
+        default=None,
+        ge=0,
+        exclude_if=lambda value: value is None,
+    )
+    provider_accounted_completion_tokens: int | None = Field(
+        default=None,
+        ge=0,
+        exclude_if=lambda value: value is None,
+    )
+    provider_accounted_total_tokens: int | None = Field(
+        default=None,
+        ge=0,
+        exclude_if=lambda value: value is None,
+    )
     mock_reported_request_count: int = Field(ge=0, le=_MAX_CONTEXT_REQUESTS)
     mock_reported_prompt_tokens: int = Field(ge=0)
     mock_reported_completion_tokens: int = Field(ge=0)
@@ -1112,6 +1248,33 @@ class ContextManifestTotals(FrozenContextEvidence):
             != self.request_count
         ):
             raise ValueError("actual token provenance does not conserve the request count")
+        accounted_projection = (
+            self.provider_accounted_request_count,
+            self.provider_accounted_prompt_tokens,
+            self.provider_accounted_visible_output_tokens,
+            self.provider_accounted_reasoning_tokens,
+            self.provider_accounted_completion_tokens,
+            self.provider_accounted_total_tokens,
+        )
+        if any(value is None for value in accounted_projection) and not all(
+            value is None for value in accounted_projection
+        ):
+            raise ValueError("provider accounted token aggregate is incomplete")
+        if self.provider_accounted_request_count is not None:
+            assert self.provider_accounted_visible_output_tokens is not None
+            assert self.provider_accounted_reasoning_tokens is not None
+            assert self.provider_accounted_completion_tokens is not None
+            assert self.provider_accounted_prompt_tokens is not None
+            assert self.provider_accounted_total_tokens is not None
+            if (
+                self.provider_accounted_request_count > self.provider_reported_request_count
+                or self.provider_accounted_completion_tokens
+                != self.provider_accounted_visible_output_tokens
+                + self.provider_accounted_reasoning_tokens
+                or self.provider_accounted_total_tokens
+                != self.provider_accounted_prompt_tokens + self.provider_accounted_completion_tokens
+            ):
+                raise ValueError("provider accounted token aggregate is inconsistent")
         if self.planned_prompt_tokens != sum(item.estimated_tokens for item in self.categories):
             raise ValueError("planned prompt total differs from category totals")
         source = next(
@@ -1802,7 +1965,12 @@ def _context_totals_payload(
         for request in provider_requests
         for reservation in request.atomic_token_reservations
     ]
-    return {
+    accounted_provider_usage = [
+        usage
+        for usage in provider_usage
+        if usage.token_detail_accounting_evidence_sha256 is not None
+    ]
+    payload: dict[str, Any] = {
         "request_count": len(requests),
         "planned_request_count": len(request_plans),
         "completed_request_count": states.count(ContextRequestState.COMPLETED),
@@ -1862,6 +2030,33 @@ def _context_totals_payload(
         ),
         "categories": tuple(category_totals),
     }
+    if accounted_provider_usage:
+        payload.update(
+            {
+                "provider_accounted_request_count": len(accounted_provider_usage),
+                "provider_accounted_prompt_tokens": _sum_actual_tokens(
+                    accounted_provider_usage,
+                    "accounted_prompt_tokens",
+                ),
+                "provider_accounted_visible_output_tokens": _sum_actual_tokens(
+                    accounted_provider_usage,
+                    "accounted_visible_output_tokens",
+                ),
+                "provider_accounted_reasoning_tokens": _sum_actual_tokens(
+                    accounted_provider_usage,
+                    "accounted_reasoning_tokens",
+                ),
+                "provider_accounted_completion_tokens": _sum_actual_tokens(
+                    accounted_provider_usage,
+                    "accounted_completion_tokens",
+                ),
+                "provider_accounted_total_tokens": _sum_actual_tokens(
+                    accounted_provider_usage,
+                    "accounted_total_tokens",
+                ),
+            }
+        )
+    return payload
 
 
 def _validate_logical_request_joins(
@@ -1938,7 +2133,15 @@ def _context_omission_inventory(
 
 def _sum_actual_tokens(
     evidence: Sequence[ActualTokenUsageEvidence],
-    field: Literal["prompt_tokens", "completion_tokens"],
+    field: Literal[
+        "prompt_tokens",
+        "completion_tokens",
+        "accounted_prompt_tokens",
+        "accounted_visible_output_tokens",
+        "accounted_reasoning_tokens",
+        "accounted_completion_tokens",
+        "accounted_total_tokens",
+    ],
 ) -> int:
     return sum(getattr(item, field) or 0 for item in evidence)
 

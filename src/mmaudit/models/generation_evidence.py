@@ -29,6 +29,8 @@ from mmaudit.models.usage import (
     _validated_usage_copy_preserving_owned_attestation,
     is_generation_bindable_usage_record,
     is_generation_reconcilable_usage_record,
+    noncrediting_unknown_token_smoke_usage_error,
+    structurally_noncrediting_unknown_token_smoke_usage_error,
 )
 
 _MODEL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
@@ -36,7 +38,7 @@ _GENERATION_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
 _REQUEST_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
 _SAFE_TEXT_MAX_LENGTH = 256
 _SOURCE_API_IDENTITY = "openrouter:/api/v1/generation"
-_SCHEMA_VERSION = "1.0"
+_SCHEMA_VERSION = "1.1"
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _CASE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$")
 MAX_GENERATION_EVIDENCE_RETRIEVAL_ATTEMPTS = 7
@@ -871,7 +873,7 @@ class OpenRouterGenerationEvidence(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0"]
+    schema_version: Literal["1.0", "1.1"]
     source_api_identity: Literal["openrouter:/api/v1/generation"]
     generation_id: str = Field(pattern=_GENERATION_ID_PATTERN)
     exact_model_id: str = Field(pattern=_MODEL_ID_PATTERN)
@@ -914,7 +916,11 @@ class OpenRouterGenerationEvidence(BaseModel):
             if self.native_completion_tokens is not None
             else self.completion_tokens
         )
-        if self.reasoning_tokens is not None and self.reasoning_tokens > completion_token_bound:
+        if (
+            self.schema_version == "1.0"
+            and self.reasoning_tokens is not None
+            and self.reasoning_tokens > completion_token_bound
+        ):
             raise ValueError("generation reasoning tokens exceed completion tokens")
         prompt_token_bound = (
             self.native_prompt_tokens
@@ -1118,6 +1124,36 @@ def reconcile_generation_evidence(
     )
 
 
+def reconcile_noncrediting_smoke_generation_evidence(
+    evidence: OpenRouterGenerationEvidence,
+    *,
+    usage_record: UsageRecord,
+    expected_exact_model: str,
+    expected_canonical_model: str,
+    expected_catalog_identity_binding_sha256: str,
+    expected_discovery_evidence_sha256: str,
+    expected_provider_name: str,
+) -> OpenRouterGenerationEvidence:
+    """Reconcile one owned UNKNOWN-envelope smoke without granting general credit."""
+
+    usage_error = noncrediting_unknown_token_smoke_usage_error(usage_record)
+    if usage_error is not None:
+        raise GenerationEvidenceValidationError(
+            f"noncrediting UNKNOWN-envelope smoke usage is invalid ({usage_error})"
+        )
+    return _reconcile_generation_evidence(
+        evidence,
+        usage_record=usage_record,
+        expected_exact_model=expected_exact_model,
+        expected_canonical_model=expected_canonical_model,
+        expected_catalog_identity_binding_sha256=(expected_catalog_identity_binding_sha256),
+        expected_discovery_evidence_sha256=expected_discovery_evidence_sha256,
+        expected_provider_name=expected_provider_name,
+        require_runtime_attestation=True,
+        allow_noncrediting_unknown_token_accounting=True,
+    )
+
+
 def _reconcile_generation_evidence_structural(
     evidence: OpenRouterGenerationEvidence,
     *,
@@ -1144,6 +1180,36 @@ def _reconcile_generation_evidence_structural(
     )
 
 
+def _reconcile_noncrediting_smoke_generation_evidence_structural(
+    evidence: OpenRouterGenerationEvidence,
+    *,
+    usage_record: UsageRecord,
+    expected_exact_model: str,
+    expected_canonical_model: str,
+    expected_catalog_identity_binding_sha256: str,
+    expected_discovery_evidence_sha256: str,
+    expected_provider_name: str,
+) -> OpenRouterGenerationEvidence:
+    """Replay one serialized UNKNOWN-envelope smoke generation join without authority."""
+
+    usage_error = structurally_noncrediting_unknown_token_smoke_usage_error(usage_record)
+    if usage_error is not None:
+        raise GenerationEvidenceValidationError(
+            f"serialized noncrediting UNKNOWN-envelope smoke usage is invalid ({usage_error})"
+        )
+    return _reconcile_generation_evidence(
+        evidence,
+        usage_record=usage_record,
+        expected_exact_model=expected_exact_model,
+        expected_canonical_model=expected_canonical_model,
+        expected_catalog_identity_binding_sha256=(expected_catalog_identity_binding_sha256),
+        expected_discovery_evidence_sha256=expected_discovery_evidence_sha256,
+        expected_provider_name=expected_provider_name,
+        require_runtime_attestation=False,
+        allow_noncrediting_unknown_token_accounting=True,
+    )
+
+
 def _reconcile_generation_evidence(
     evidence: OpenRouterGenerationEvidence,
     *,
@@ -1155,6 +1221,7 @@ def _reconcile_generation_evidence(
     expected_provider_name: str,
     require_runtime_attestation: bool,
     require_certification: bool = True,
+    allow_noncrediting_unknown_token_accounting: bool = False,
 ) -> OpenRouterGenerationEvidence:
     """Reconcile exact fields under an explicit runtime-provenance policy."""
 
@@ -1191,6 +1258,13 @@ def _reconcile_generation_evidence(
         )
     usage_is_bindable = (
         (
+            noncrediting_unknown_token_smoke_usage_error(usage_record)
+            if require_runtime_attestation
+            else structurally_noncrediting_unknown_token_smoke_usage_error(usage_record)
+        )
+        is None
+        if allow_noncrediting_unknown_token_accounting
+        else (
             is_generation_bindable_usage_record(usage_record)
             if require_certification
             else is_generation_reconcilable_usage_record(
@@ -1310,15 +1384,24 @@ def _reconcile_generation_evidence(
                 GenerationReconciliationMismatchCode.REQUEST_TIMESTAMP
             )
     _require_matching_generation_token_pair(evidence, usage_record)
+    token_detail = usage_record.token_detail_accounting_evidence
     eventual_token_comparisons = (
         (
             evidence.reasoning_tokens,
-            usage_record.reasoning_tokens,
+            (
+                token_detail.provider_reasoning_tokens
+                if token_detail is not None
+                else usage_record.reasoning_tokens
+            ),
             GenerationReconciliationMismatchCode.REASONING_TOKENS,
         ),
         (
             evidence.cached_tokens,
-            usage_record.cached_tokens,
+            (
+                token_detail.provider_cached_tokens
+                if token_detail is not None
+                else usage_record.cached_tokens
+            ),
             GenerationReconciliationMismatchCode.CACHED_TOKENS,
         ),
     )
@@ -1343,7 +1426,15 @@ def _require_matching_generation_token_pair(
 ) -> None:
     """Require one whole normalized or complete native prompt/completion tuple."""
 
-    expected_pair = (usage_record.prompt_tokens, usage_record.completion_tokens)
+    token_detail = usage_record.token_detail_accounting_evidence
+    expected_pair = (
+        (
+            token_detail.provider_prompt_tokens,
+            token_detail.provider_completion_tokens,
+        )
+        if token_detail is not None
+        else (usage_record.prompt_tokens, usage_record.completion_tokens)
+    )
     observed_pairs = [(evidence.prompt_tokens, evidence.completion_tokens)]
     if evidence.native_prompt_tokens is not None and evidence.native_completion_tokens is not None:
         observed_pairs.append(

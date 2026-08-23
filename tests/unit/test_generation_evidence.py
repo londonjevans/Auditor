@@ -596,28 +596,16 @@ def test_generation_reconciliation_rejects_partial_native_token_pair(
     assert raised.value.code is mismatch_code
 
 
-@pytest.mark.parametrize(
-    ("normalized_field", "normalized_value", "native_field", "native_value"),
-    [
-        ("tokens_completion", 10, "native_tokens_reasoning", 8),
-        ("tokens_prompt", 20, "native_tokens_cached", 13),
-    ],
-)
-def test_native_token_details_cannot_exceed_smaller_native_parent(
-    normalized_field: str,
-    normalized_value: int,
-    native_field: str,
-    native_value: int,
-) -> None:
+def test_native_cached_tokens_cannot_exceed_smaller_native_prompt_parent() -> None:
     payload = _generation_payload()
-    payload["data"][normalized_field] = normalized_value
-    payload["data"][native_field] = native_value
+    payload["data"]["tokens_prompt"] = 20
+    payload["data"]["native_tokens_cached"] = 13
 
     with pytest.raises(ValidationError, match="exceed"):
         _evidence(payload=payload)
 
 
-def test_native_token_detail_without_native_parent_uses_conservative_normalized_bound() -> None:
+def test_current_generation_retains_reasoning_without_choosing_completion_semantics() -> None:
     payload = _generation_payload()
     payload["data"].update(
         {
@@ -626,8 +614,10 @@ def test_native_token_detail_without_native_parent_uses_conservative_normalized_
         }
     )
 
-    with pytest.raises(ValidationError, match="reasoning tokens exceed"):
-        _evidence(payload=payload)
+    evidence = _evidence(payload=payload)
+
+    assert evidence.schema_version == "1.1"
+    assert evidence.reasoning_tokens == 6
 
 
 @pytest.mark.parametrize(

@@ -13,7 +13,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from itertools import pairwise
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
 
@@ -420,6 +420,83 @@ def is_generation_reconcilable_usage_record(
     )
 
 
+NoncreditingUnknownTokenSmokeUsageError = Literal[
+    "UsageTypeError",
+    "UsageOriginError",
+    "UsageEnvelopeError",
+    "UnexpectedGeneralCreditability",
+]
+
+
+def noncrediting_unknown_token_smoke_usage_error(
+    record: UsageRecord,
+) -> NoncreditingUnknownTokenSmokeUsageError | None:
+    """Validate one owned v3 UNKNOWN-envelope smoke record without granting credit."""
+
+    if type(record) is not UsageRecord:
+        return "UsageTypeError"
+    try:
+        origin_scope = _authrunner_usage_origin_scope(record)
+    except ValueError:
+        return "UsageOriginError"
+    if (
+        record.execution_evidence is not ExecutionEvidenceKind.REAL
+        or not _has_owned_real_usage_attestation(record)
+        or not _has_authrunner_owned_real_usage_origin(record)
+        or origin_scope != "NONCREDITING_SMOKE"
+    ):
+        return "UsageOriginError"
+    if not _is_strict_usage_record(
+        record,
+        require_real=True,
+        require_certification=True,
+        allow_unbound_real=True,
+        allow_noncrediting_unknown_token_accounting=True,
+    ):
+        return "UsageEnvelopeError"
+    if is_creditable_usage_record(
+        record,
+        require_real=True,
+        require_certification=True,
+    ):
+        return "UnexpectedGeneralCreditability"
+    return None
+
+
+def structurally_noncrediting_unknown_token_smoke_usage_error(
+    record: UsageRecord,
+) -> NoncreditingUnknownTokenSmokeUsageError | None:
+    """Replay a serialized v3 UNKNOWN-envelope smoke without minting runtime credit."""
+
+    if type(record) is not UsageRecord:
+        return "UsageTypeError"
+    try:
+        origin_scope = _authrunner_usage_origin_scope(record)
+    except ValueError:
+        return "UsageOriginError"
+    if (
+        record.execution_evidence is not ExecutionEvidenceKind.REAL
+        or origin_scope != "NONCREDITING_SMOKE"
+    ):
+        return "UsageOriginError"
+    if not _is_strict_usage_record(
+        record,
+        require_real=True,
+        require_certification=True,
+        allow_unbound_real=True,
+        require_runtime_attestation=False,
+        allow_noncrediting_unknown_token_accounting=True,
+    ):
+        return "UsageEnvelopeError"
+    if is_structurally_creditable_usage_record(
+        record,
+        require_real=True,
+        require_certification=True,
+    ):
+        return "UnexpectedGeneralCreditability"
+    return None
+
+
 def _is_strict_usage_record(
     record: UsageRecord,
     *,
@@ -427,6 +504,7 @@ def _is_strict_usage_record(
     require_certification: bool,
     allow_unbound_real: bool,
     require_runtime_attestation: bool = True,
+    allow_noncrediting_unknown_token_accounting: bool = False,
     recovery_request_limit_scope: str | None = None,
     recovery_request_limit_count_before: int | None = None,
 ) -> bool:
@@ -550,6 +628,9 @@ def _is_strict_usage_record(
             record,
             recovery_request_limit_scope=recovery_request_limit_scope,
             recovery_request_limit_count_before=recovery_request_limit_count_before,
+            allow_noncrediting_unknown_token_accounting=(
+                allow_noncrediting_unknown_token_accounting
+            ),
         )
         and routing.get("repair_used") is False
         and routing.get("repair_request") is False
@@ -989,6 +1070,7 @@ def _has_valid_token_plan_routing(
     *,
     recovery_request_limit_scope: str | None = None,
     recovery_request_limit_count_before: int | None = None,
+    allow_noncrediting_unknown_token_accounting: bool = False,
 ) -> bool:
     if "request_token_plan" not in record.routing:
         return False
@@ -1011,6 +1093,10 @@ def _has_valid_token_plan_routing(
         return False
     if plan is None:
         return False
+    if plan.schema_version == "3.0":
+        return allow_noncrediting_unknown_token_accounting and (
+            _has_valid_noncrediting_unknown_token_plan_routing(record, plan)
+        )
     if plan.schema_version != "2.0":
         return False
     reasoning_plan = plan.reasoning_plan
@@ -1054,6 +1140,79 @@ def _has_valid_token_plan_routing(
         and (
             not record.configured_provider_endpoints
             or limits.provider_endpoints == ("mmaudit-local-mock",)
+            or (
+                isinstance(record.actual_provider_endpoint, str)
+                and record.actual_provider_endpoint.casefold()
+                in {endpoint.casefold() for endpoint in limits.provider_endpoints}
+            )
+        )
+    )
+
+
+def _has_valid_noncrediting_unknown_token_plan_routing(
+    record: UsageRecord,
+    plan: RequestTokenPlan,
+) -> bool:
+    """Validate v3 full-plan accounting while deliberately withholding general credit."""
+
+    token_detail = record.token_detail_accounting_evidence
+    reasoning_plan = plan.reasoning_plan
+    reasoning = record.reasoning_evidence
+    if (
+        plan.schema_version != "3.0"
+        or plan.token_detail_accounting_method
+        != "MMAUDIT_INDEPENDENT_REASONING_COMPONENT_ENVELOPE_V1"
+        or plan.wire_max_tokens != plan.reserved_output_tokens
+        or token_detail is None
+        or token_detail.accounting_method != plan.token_detail_accounting_method
+        or token_detail.request_token_plan_sha256 != plan.plan_sha256
+        or token_detail.request_body_sha256 != record.request_body_sha256
+        or reasoning_plan is None
+        or reasoning is None
+        or reasoning.schema_version != "1.1"
+        or reasoning.request_plan != reasoning_plan
+        or reasoning.request_token_plan_sha256 != plan.plan_sha256
+        or reasoning.request_body_sha256 != record.request_body_sha256
+        or reasoning.provider_completion_tokens != token_detail.provider_completion_tokens
+        or reasoning.observed_reasoning_tokens != token_detail.provider_reasoning_tokens
+        or reasoning.token_detail_accounting_evidence_sha256 != token_detail.evidence_sha256
+    ):
+        return False
+    control = reasoning_plan.control_profile
+    if (
+        control.mode != "disabled"
+        and control.reserved_reasoning_tokens > 0
+        and (
+            reasoning.state != "active_observed"
+            or token_detail.provider_reasoning_tokens is None
+            or token_detail.provider_reasoning_tokens <= 0
+        )
+    ):
+        return False
+    limits = plan.route_intersection
+    raw_prompt = token_detail.provider_prompt_tokens
+    raw_completion = token_detail.provider_completion_tokens
+    raw_reasoning = token_detail.provider_reasoning_tokens
+    if raw_reasoning is None:
+        return False
+    return (
+        raw_prompt <= plan.prompt_byte_upper_bound_tokens
+        and raw_prompt <= limits.max_prompt_tokens
+        and raw_completion <= plan.reserved_output_tokens
+        and raw_reasoning <= plan.reserved_reasoning_tokens
+        and token_detail.accounted_prompt_tokens == plan.prompt_byte_upper_bound_tokens
+        and token_detail.accounted_visible_output_tokens == plan.reserved_output_tokens
+        and token_detail.accounted_reasoning_tokens == plan.reserved_reasoning_tokens
+        and token_detail.accounted_completion_tokens == plan.requested_completion_tokens
+        and token_detail.accounted_total_tokens
+        == plan.prompt_byte_upper_bound_tokens + plan.requested_completion_tokens
+        and record.prompt_tokens == token_detail.provider_prompt_tokens
+        and record.completion_tokens == token_detail.provider_completion_tokens
+        and record.reasoning_tokens == raw_reasoning
+        and record.total_tokens == token_detail.provider_total_tokens
+        and record.cached_tokens == token_detail.provider_cached_tokens
+        and (
+            not record.configured_provider_endpoints
             or (
                 isinstance(record.actual_provider_endpoint, str)
                 and record.actual_provider_endpoint.casefold()

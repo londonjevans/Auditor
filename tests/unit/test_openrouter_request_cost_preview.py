@@ -21,6 +21,7 @@ from mmaudit.models.reasoning import (
     ReasoningControlProfile,
     ReasoningPolicyArtifact,
 )
+from mmaudit.models.usage import is_creditable_usage_record
 from mmaudit.orchestration.budgets import BudgetManager
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from tests.unit.test_openrouter import (
@@ -165,7 +166,7 @@ async def test_catalog_effort_fallback_dispatches_the_exact_previewed_reasoning_
             '{"answer":"ok"}',
             selected_model="alpha/atlas-secure-20260727",
             provider="Approved Provider",
-            reasoning_tokens=3,
+            reasoning_tokens=6,
         )
 
     config = config_factory()
@@ -241,11 +242,31 @@ async def test_catalog_effort_fallback_dispatches_the_exact_previewed_reasoning_
     assert evidence.reasoning_capability.supported_reasoning_efforts is None
     assert evidence.model_supported_reasoning_efforts == ("low", "high", "max")
     assert preview.reserved_reasoning_tokens == 4_096
+    assert preview.schema_version == "1.1"
+    assert preview.wire_max_tokens == preview.reserved_output_tokens
+    assert preview.requested_completion_tokens == (
+        preview.reserved_output_tokens + preview.reserved_reasoning_tokens
+    )
     assert len(observed) == 1
-    assert json.loads(observed[0].content)["reasoning"] == {
+    request_body = json.loads(observed[0].content)
+    assert request_body["reasoning"] == {
         "effort": "high",
         "exclude": False,
     }
+    assert request_body["max_tokens"] == preview.wire_max_tokens
+    token_detail = result.usage_record.token_detail_accounting_evidence
+    assert token_detail is not None
+    assert result.usage_record.prompt_tokens == token_detail.provider_prompt_tokens == 10
+    assert result.usage_record.completion_tokens == token_detail.provider_completion_tokens == 5
+    assert result.usage_record.reasoning_tokens == token_detail.provider_reasoning_tokens == 6
+    assert token_detail.accounted_completion_tokens == preview.requested_completion_tokens
+    assert budget.spent_input_tokens == token_detail.accounted_prompt_tokens
+    assert budget.spent_output_tokens == token_detail.accounted_completion_tokens
+    assert not is_creditable_usage_record(
+        result.usage_record,
+        require_real=True,
+        require_certification=True,
+    )
     assert result.usage_record.routing["request_cost_preview_sha256"] == preview.preview_sha256
     assert usage.records == [result.usage_record]
 

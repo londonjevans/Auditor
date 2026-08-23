@@ -43,6 +43,8 @@ from mmaudit.models.generation_evidence import (
     GenerationVerificationRequest,
     OpenRouterGenerationEvidence,
     _reconcile_generation_evidence_structural,
+    _reconcile_noncrediting_smoke_generation_evidence_structural,
+    reconcile_noncrediting_smoke_generation_evidence,
 )
 from mmaudit.models.identity import OpenRouterModelEndpointIdentitySnapshot
 from mmaudit.models.openrouter import (
@@ -67,6 +69,7 @@ from mmaudit.models.usage import (
     UsageLedger,
     _validated_usage_copy_preserving_owned_attestation,
     is_creditable_usage_record,
+    noncrediting_unknown_token_smoke_usage_error,
     require_authenticated_runner_smoke_run_index,
 )
 from mmaudit.orchestration.manifest import canonical_sha256
@@ -620,7 +623,12 @@ class CrossLineageAdjudicationReport(_NonAuthorizingEvidence):
             ):
                 raise ValueError("adjudication usage differs from the exact judge route")
             try:
-                _reconcile_generation_evidence_structural(
+                reconciliation = (
+                    _reconcile_noncrediting_smoke_generation_evidence_structural
+                    if usage.token_detail_accounting_evidence is not None
+                    else _reconcile_generation_evidence_structural
+                )
+                reconciliation(
                     item.generation_evidence,
                     usage_record=usage,
                     expected_exact_model=self.target.judge_model_id,
@@ -1126,6 +1134,11 @@ type _CrossLineageTransportRequirement = Callable[
     OpenRouterModelEndpointIdentitySnapshot,
 ]
 type _CrossLineageRuntimeCreditPredicate = Callable[..., bool]
+type _CrossLineageNoncreditingSmokeUsageError = Callable[[UsageRecord], str | None]
+type _CrossLineageNoncreditingSmokeGenerationReconcile = Callable[
+    ...,
+    OpenRouterGenerationEvidence,
+]
 
 
 class _CrossLineageAdjudicationExecutor(Protocol):
@@ -1156,6 +1169,10 @@ async def _execute_cross_lineage_adjudication_requests_impl(
     trusted_source_request: _CrossLineageTrustedSourceRequest,
     require_transport: _CrossLineageTransportRequirement,
     runtime_credit_predicate: _CrossLineageRuntimeCreditPredicate,
+    noncrediting_smoke_usage_error: _CrossLineageNoncreditingSmokeUsageError | None = None,
+    noncrediting_smoke_generation_reconcile: (
+        _CrossLineageNoncreditingSmokeGenerationReconcile | None
+    ) = None,
     request_cost_preview_type: type[OpenRouterStructuredRequestCostPreview] = (
         OpenRouterStructuredRequestCostPreview
     ),
@@ -1266,14 +1283,22 @@ async def _execute_cross_lineage_adjudication_requests_impl(
             raise CrossLineageAdjudicationError(
                 "cross-lineage transport returned inconsistent completion custody"
             )
-        if not runtime_credit_predicate(
-            completion.usage_record,
-            require_real=True,
-            require_certification=True,
-        ):
-            raise CrossLineageAdjudicationError(
-                "cross-lineage transport returned non-creditable REAL judge usage"
+        usage_is_accepted = (
+            noncrediting_smoke_usage_error(completion.usage_record) is None
+            if noncrediting_smoke_usage_error is not None
+            else runtime_credit_predicate(
+                completion.usage_record,
+                require_real=True,
+                require_certification=True,
             )
+        )
+        if not usage_is_accepted:
+            message = (
+                "cross-lineage transport returned invalid noncrediting smoke judge usage"
+                if noncrediting_smoke_usage_error is not None
+                else "cross-lineage transport returned non-creditable REAL judge usage"
+            )
+            raise CrossLineageAdjudicationError(message)
         _require_usage_matches_live_judge_snapshot(
             usage=completion.usage_record,
             target=sealed.target,
@@ -1307,17 +1332,41 @@ async def _execute_cross_lineage_adjudication_requests_impl(
             raise CrossLineageAdjudicationError(
                 "cross-lineage generation evidence has the wrong type"
             )
+        if noncrediting_smoke_generation_reconcile is not None:
+            try:
+                generation = noncrediting_smoke_generation_reconcile(
+                    generation,
+                    usage_record=completion.usage_record,
+                    expected_exact_model=sealed.target.judge_model_id,
+                    expected_canonical_model=sealed.target.judge_canonical_model_id,
+                    expected_catalog_identity_binding_sha256=(
+                        sealed.target.judge_catalog_identity_binding_sha256
+                    ),
+                    expected_discovery_evidence_sha256=(
+                        sealed.target.judge_discovery_evidence_sha256
+                    ),
+                    expected_provider_name=sealed.target.judge_provider_name,
+                )
+            except GenerationEvidenceValidationError as exc:
+                raise CrossLineageAdjudicationError(
+                    "cross-lineage smoke generation evidence does not reconcile"
+                ) from exc
         result = build_cross_lineage_adjudication_case_result(
             request=request,
             response=response,
             usage_record=completion.usage_record,
             generation_evidence=generation,
         )
-        if not runtime_credit_predicate(
-            result.usage_record,
-            require_real=True,
-            require_certification=True,
-        ):
+        result_usage_is_accepted = (
+            noncrediting_smoke_usage_error(result.usage_record) is None
+            if noncrediting_smoke_usage_error is not None
+            else runtime_credit_predicate(
+                result.usage_record,
+                require_real=True,
+                require_certification=True,
+            )
+        )
+        if not result_usage_is_accepted:
             raise CrossLineageAdjudicationError(
                 "cross-lineage case result lost owned REAL judge usage custody"
             )
@@ -1497,6 +1546,7 @@ def _build_cross_lineage_adjudication_executor(
         "RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION",
         "PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION",
     ] = "RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION",
+    allow_noncrediting_unknown_token_accounting: bool = False,
     public_binding_name: str | None = "execute_cross_lineage_adjudication_requests",
 ) -> _CrossLineageAdjudicationExecutor:
     """Capture exact client descriptors and reject retargeting before provider work."""
@@ -1513,6 +1563,10 @@ def _build_cross_lineage_adjudication_executor(
     trusted_require_transport = _require_exact_cross_lineage_transport
     trusted_require_usage_snapshot = _require_usage_matches_live_judge_snapshot
     trusted_credit_predicate = is_creditable_usage_record
+    trusted_noncrediting_smoke_usage_error = noncrediting_unknown_token_smoke_usage_error
+    trusted_noncrediting_smoke_generation_reconcile = (
+        reconcile_noncrediting_smoke_generation_evidence
+    )
     trusted_usage_copy = _validated_usage_copy_preserving_owned_attestation
     trusted_response_hash = cross_lineage_adjudication_validated_response_sha256
     trusted_bind_response = bind_cross_lineage_adjudication_wire_response
@@ -1531,7 +1585,7 @@ def _build_cross_lineage_adjudication_executor(
             "_is_trusted_prequalification_request",
         }
     )
-    module_bindings = {
+    module_bindings: dict[str, object] = {
         "OpenRouterClient": trusted_client_type,
         "UsageLedger": trusted_usage_type,
         "_execute_cross_lineage_adjudication_requests_impl": trusted_impl,
@@ -1551,6 +1605,17 @@ def _build_cross_lineage_adjudication_executor(
         "UsageRecord": UsageRecord,
         "require_authenticated_runner_smoke_run_index": trusted_smoke_index_validator,
     }
+    if allow_noncrediting_unknown_token_accounting:
+        module_bindings.update(
+            {
+                "noncrediting_unknown_token_smoke_usage_error": (
+                    trusted_noncrediting_smoke_usage_error
+                ),
+                "reconcile_noncrediting_smoke_generation_evidence": (
+                    trusted_noncrediting_smoke_generation_reconcile
+                ),
+            }
+        )
     public_binding: dict[str, object] = {}
 
     def require_pristine(client: OpenRouterClient) -> None:
@@ -1646,6 +1711,16 @@ def _build_cross_lineage_adjudication_executor(
             trusted_source_request=trusted_source_request,
             require_transport=require_exact_transport,
             runtime_credit_predicate=trusted_credit_predicate,
+            noncrediting_smoke_usage_error=(
+                trusted_noncrediting_smoke_usage_error
+                if allow_noncrediting_unknown_token_accounting
+                else None
+            ),
+            noncrediting_smoke_generation_reconcile=(
+                trusted_noncrediting_smoke_generation_reconcile
+                if allow_noncrediting_unknown_token_accounting
+                else None
+            ),
             request_cost_preview_type=trusted_request_cost_preview_type,
             require_pristine=require_client_pristine,
             logical_request_id=trusted_logical_request_id,
@@ -1664,6 +1739,7 @@ _execute_cross_lineage_adjudication_smoke_requests = _build_cross_lineage_adjudi
     logical_request_id=_cross_lineage_adjudication_smoke_logical_request_id,
     require_single_request=True,
     expected_source_proof_kind=("PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION"),
+    allow_noncrediting_unknown_token_accounting=True,
     public_binding_name=None,
 )
 del _build_cross_lineage_adjudication_executor

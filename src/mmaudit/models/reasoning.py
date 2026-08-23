@@ -56,8 +56,15 @@ ReasoningExecutionState = Literal[
     "active_unavailable",
     "failed_before_observation",
 ]
+TokenDetailAccountingMethod = Literal["MMAUDIT_INDEPENDENT_REASONING_COMPONENT_ENVELOPE_V1"]
+ReasoningAccountingSource = Literal["provider_observed", "planned_reserve"]
 
 MAX_REASONING_TOKEN_RESERVE = 65_536
+MAX_PROVIDER_TOKEN_COMPONENT = 2**31 - 1
+MAX_ACCOUNTED_TOKEN_TOTAL = 2 * MAX_PROVIDER_TOKEN_COMPONENT
+INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD: TokenDetailAccountingMethod = (
+    "MMAUDIT_INDEPENDENT_REASONING_COMPONENT_ENVELOPE_V1"
+)
 CANONICAL_REASONING_POLICY_ROLES = (*ALL_MODEL_ROLES, *ALL_SPECIALIST_ROLES)
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -466,10 +473,138 @@ class ReasoningRequestPlanEvidence(_FrozenReasoningEvidence):
         return self
 
 
+class TokenDetailAccountingEvidence(_FrozenReasoningEvidence):
+    """Raw provider counters plus conservative UNKNOWN-semantics accounting ceilings."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    accounting_method: Literal["MMAUDIT_INDEPENDENT_REASONING_COMPONENT_ENVELOPE_V1"] = (
+        INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD
+    )
+    completion_semantics: Literal["UNKNOWN_INCLUSIVE_OR_ADDITIVE"] = "UNKNOWN_INCLUSIVE_OR_ADDITIVE"
+    accounting_basis: Literal["FULL_REQUEST_PLAN_RESERVATION"] = "FULL_REQUEST_PLAN_RESERVATION"
+    provider_prompt_tokens: int = Field(ge=0, le=MAX_PROVIDER_TOKEN_COMPONENT)
+    provider_completion_tokens: int = Field(ge=0, le=MAX_PROVIDER_TOKEN_COMPONENT)
+    provider_total_tokens: int = Field(ge=0, le=MAX_PROVIDER_TOKEN_COMPONENT)
+    provider_reasoning_tokens: int | None = Field(
+        default=None,
+        ge=0,
+        le=MAX_PROVIDER_TOKEN_COMPONENT,
+    )
+    provider_cached_tokens: int = Field(ge=0, le=MAX_PROVIDER_TOKEN_COMPONENT)
+    provider_total_relation: Literal["PROMPT_PLUS_COMPLETION"] = "PROMPT_PLUS_COMPLETION"
+    visible_completion_tokens_exact: int | None = Field(
+        default=None,
+        ge=0,
+        le=MAX_PROVIDER_TOKEN_COMPONENT,
+    )
+    visible_completion_tokens_upper_bound: int = Field(
+        ge=0,
+        le=MAX_PROVIDER_TOKEN_COMPONENT,
+    )
+    planned_prompt_tokens: int = Field(ge=0, le=MAX_PROVIDER_TOKEN_COMPONENT)
+    planned_visible_output_tokens: int = Field(ge=0, le=MAX_PROVIDER_TOKEN_COMPONENT)
+    planned_reasoning_tokens: int = Field(ge=0, le=MAX_PROVIDER_TOKEN_COMPONENT)
+    planned_completion_tokens: int = Field(ge=0, le=MAX_PROVIDER_TOKEN_COMPONENT)
+    accounted_prompt_tokens: int = Field(ge=0, le=MAX_PROVIDER_TOKEN_COMPONENT)
+    accounted_visible_output_tokens: int = Field(ge=0, le=MAX_PROVIDER_TOKEN_COMPONENT)
+    accounted_reasoning_tokens: int = Field(ge=0, le=MAX_PROVIDER_TOKEN_COMPONENT)
+    accounted_completion_tokens: int = Field(ge=0, le=MAX_ACCOUNTED_TOKEN_TOTAL)
+    accounted_total_tokens: int = Field(ge=0, le=MAX_ACCOUNTED_TOKEN_TOTAL)
+    request_token_plan_sha256: str = Field(pattern=_SHA256_PATTERN)
+    request_body_sha256: str = Field(pattern=_SHA256_PATTERN)
+    evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        provider_prompt_tokens: int,
+        provider_completion_tokens: int,
+        provider_total_tokens: int,
+        provider_reasoning_tokens: int | None,
+        provider_cached_tokens: int,
+        planned_prompt_tokens: int,
+        planned_visible_output_tokens: int,
+        planned_reasoning_tokens: int,
+        planned_completion_tokens: int,
+        request_token_plan_sha256: str,
+        request_body_sha256: str,
+    ) -> Self:
+        """Seal raw counters without selecting inclusive or additive semantics."""
+
+        accounted_prompt = planned_prompt_tokens
+        accounted_visible = planned_visible_output_tokens
+        accounted_reasoning = planned_reasoning_tokens
+        accounted_completion = accounted_visible + accounted_reasoning
+        payload: dict[str, Any] = {
+            "schema_version": "1.0",
+            "accounting_method": INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD,
+            "completion_semantics": "UNKNOWN_INCLUSIVE_OR_ADDITIVE",
+            "accounting_basis": "FULL_REQUEST_PLAN_RESERVATION",
+            "provider_prompt_tokens": provider_prompt_tokens,
+            "provider_completion_tokens": provider_completion_tokens,
+            "provider_total_tokens": provider_total_tokens,
+            "provider_reasoning_tokens": provider_reasoning_tokens,
+            "provider_cached_tokens": provider_cached_tokens,
+            "provider_total_relation": "PROMPT_PLUS_COMPLETION",
+            "visible_completion_tokens_exact": (
+                provider_completion_tokens if provider_reasoning_tokens == 0 else None
+            ),
+            "visible_completion_tokens_upper_bound": provider_completion_tokens,
+            "planned_prompt_tokens": planned_prompt_tokens,
+            "planned_visible_output_tokens": planned_visible_output_tokens,
+            "planned_reasoning_tokens": planned_reasoning_tokens,
+            "planned_completion_tokens": planned_completion_tokens,
+            "accounted_prompt_tokens": accounted_prompt,
+            "accounted_visible_output_tokens": accounted_visible,
+            "accounted_reasoning_tokens": accounted_reasoning,
+            "accounted_completion_tokens": accounted_completion,
+            "accounted_total_tokens": accounted_prompt + accounted_completion,
+            "request_token_plan_sha256": request_token_plan_sha256,
+            "request_body_sha256": request_body_sha256,
+        }
+        payload["evidence_sha256"] = _canonical_sha256(payload)
+        return cls.model_validate(payload)
+
+    @model_validator(mode="after")
+    def raw_and_accounted_tokens_are_conservative_and_self_hashed(self) -> Self:
+        if self.provider_total_tokens != (
+            self.provider_prompt_tokens + self.provider_completion_tokens
+        ):
+            raise ValueError("provider token total does not conserve its raw counters")
+        if self.provider_cached_tokens > self.provider_prompt_tokens:
+            raise ValueError("provider cached tokens exceed raw prompt tokens")
+        expected_exact = (
+            self.provider_completion_tokens if self.provider_reasoning_tokens == 0 else None
+        )
+        if self.visible_completion_tokens_exact != expected_exact:
+            raise ValueError("exact visible completion evidence is inconsistent")
+        if self.visible_completion_tokens_upper_bound != self.provider_completion_tokens:
+            raise ValueError("visible completion upper bound is inconsistent")
+        if self.planned_completion_tokens != (
+            self.planned_visible_output_tokens + self.planned_reasoning_tokens
+        ):
+            raise ValueError("planned completion accounting does not conserve components")
+        expected_prompt = self.planned_prompt_tokens
+        expected_visible = self.planned_visible_output_tokens
+        expected_reasoning = self.planned_reasoning_tokens
+        if (
+            self.accounted_prompt_tokens != expected_prompt
+            or self.accounted_visible_output_tokens != expected_visible
+            or self.accounted_reasoning_tokens != expected_reasoning
+            or self.accounted_completion_tokens != expected_visible + expected_reasoning
+            or self.accounted_total_tokens
+            != expected_prompt + expected_visible + expected_reasoning
+        ):
+            raise ValueError("full-plan token accounting is inconsistent")
+        _require_self_hash(self, "evidence_sha256")
+        return self
+
+
 class ReasoningExecutionEvidence(_FrozenReasoningEvidence):
     """Provider accounting joined to the exact pre-transport reasoning plan."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     request_plan: ReasoningRequestPlanEvidence
     reserved_reasoning_tokens: int = Field(ge=0, le=MAX_REASONING_TOKEN_RESERVE)
     observation_available: bool
@@ -480,6 +615,25 @@ class ReasoningExecutionEvidence(_FrozenReasoningEvidence):
     )
     provider_completion_tokens: int | None = Field(default=None, ge=0)
     visible_completion_tokens: int | None = Field(default=None, ge=0)
+    accounting_method: TokenDetailAccountingMethod | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    visible_completion_tokens_upper_bound: int | None = Field(
+        default=None,
+        ge=0,
+        exclude_if=lambda value: value is None,
+    )
+    accounted_completion_tokens: int | None = Field(
+        default=None,
+        ge=0,
+        exclude_if=lambda value: value is None,
+    )
+    token_detail_accounting_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
     state: ReasoningExecutionState
     request_token_plan_sha256: str = Field(pattern=_SHA256_PATTERN)
     request_body_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -494,6 +648,8 @@ class ReasoningExecutionEvidence(_FrozenReasoningEvidence):
         provider_completion_tokens: int | None,
         request_token_plan_sha256: str,
         request_body_sha256: str,
+        accounting_method: TokenDetailAccountingMethod | None = None,
+        token_detail_accounting_evidence: TokenDetailAccountingEvidence | None = None,
     ) -> Self:
         """Seal provider reasoning observation without converting absence to zero."""
 
@@ -509,13 +665,25 @@ class ReasoningExecutionEvidence(_FrozenReasoningEvidence):
             state = "active_unavailable"
         else:
             state = "failed_before_observation"
+        if token_detail_accounting_evidence is not None:
+            if accounting_method not in {
+                None,
+                token_detail_accounting_evidence.accounting_method,
+            }:
+                raise ReasoningPolicyError("reasoning accounting method is inconsistent")
+            accounting_method = token_detail_accounting_evidence.accounting_method
+        schema_version = "1.1" if accounting_method is not None else "1.0"
         visible_completion_tokens = (
-            provider_completion_tokens - (observed_reasoning_tokens or 0)
-            if provider_completion_tokens is not None and (observation_available or disabled)
-            else None
+            token_detail_accounting_evidence.visible_completion_tokens_exact
+            if token_detail_accounting_evidence is not None
+            else (
+                provider_completion_tokens - (observed_reasoning_tokens or 0)
+                if provider_completion_tokens is not None and (observation_available or disabled)
+                else None
+            )
         )
         payload: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": schema_version,
             "request_plan": request_plan,
             "reserved_reasoning_tokens": (request_plan.control_profile.reserved_reasoning_tokens),
             "observation_available": observation_available,
@@ -526,6 +694,27 @@ class ReasoningExecutionEvidence(_FrozenReasoningEvidence):
             "request_token_plan_sha256": request_token_plan_sha256,
             "request_body_sha256": request_body_sha256,
         }
+        if schema_version == "1.1":
+            payload.update(
+                {
+                    "accounting_method": accounting_method,
+                    "visible_completion_tokens_upper_bound": (
+                        token_detail_accounting_evidence.visible_completion_tokens_upper_bound
+                        if token_detail_accounting_evidence is not None
+                        else None
+                    ),
+                    "accounted_completion_tokens": (
+                        token_detail_accounting_evidence.accounted_completion_tokens
+                        if token_detail_accounting_evidence is not None
+                        else None
+                    ),
+                    "token_detail_accounting_evidence_sha256": (
+                        token_detail_accounting_evidence.evidence_sha256
+                        if token_detail_accounting_evidence is not None
+                        else None
+                    ),
+                }
+            )
         payload["evidence_sha256"] = _canonical_sha256(payload)
         try:
             return cls.model_validate(payload)
@@ -555,20 +744,55 @@ class ReasoningExecutionEvidence(_FrozenReasoningEvidence):
         if self.state != expected_state:
             raise ValueError("reasoning execution state is inconsistent")
         if (
-            self.observed_reasoning_tokens is not None
+            self.schema_version == "1.0"
+            and self.observed_reasoning_tokens is not None
             and self.observed_reasoning_tokens > self.reserved_reasoning_tokens
         ):
             raise ValueError("observed reasoning exceeds the reserved ceiling")
-        expected_visible = (
-            self.provider_completion_tokens - (self.observed_reasoning_tokens or 0)
-            if self.provider_completion_tokens is not None
-            and (self.observation_available or disabled)
-            else None
-        )
-        if expected_visible is not None and expected_visible < 0:
-            raise ValueError("observed reasoning exceeds provider completion tokens")
-        if self.visible_completion_tokens != expected_visible:
-            raise ValueError("visible completion accounting is inconsistent")
+        if self.schema_version == "1.0":
+            if any(
+                value is not None
+                for value in (
+                    self.accounting_method,
+                    self.visible_completion_tokens_upper_bound,
+                    self.accounted_completion_tokens,
+                    self.token_detail_accounting_evidence_sha256,
+                )
+            ):
+                raise ValueError("legacy reasoning evidence cannot carry envelope accounting")
+            expected_visible = (
+                self.provider_completion_tokens - (self.observed_reasoning_tokens or 0)
+                if self.provider_completion_tokens is not None
+                and (self.observation_available or disabled)
+                else None
+            )
+            if expected_visible is not None and expected_visible < 0:
+                raise ValueError("observed reasoning exceeds provider completion tokens")
+            if self.visible_completion_tokens != expected_visible:
+                raise ValueError("visible completion accounting is inconsistent")
+        else:
+            if self.accounting_method != INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD:
+                raise ValueError("current reasoning evidence lacks its accounting method")
+            has_provider_usage = self.provider_completion_tokens is not None
+            envelope_projection = (
+                self.visible_completion_tokens_upper_bound,
+                self.accounted_completion_tokens,
+                self.token_detail_accounting_evidence_sha256,
+            )
+            if has_provider_usage != all(value is not None for value in envelope_projection):
+                raise ValueError("reasoning envelope accounting presence is inconsistent")
+            if has_provider_usage:
+                assert self.visible_completion_tokens_upper_bound is not None
+                assert self.accounted_completion_tokens is not None
+                if self.visible_completion_tokens_upper_bound != self.provider_completion_tokens:
+                    raise ValueError("reasoning visible upper bound differs from raw completion")
+                expected_exact = (
+                    self.provider_completion_tokens if self.observed_reasoning_tokens == 0 else None
+                )
+                if self.visible_completion_tokens != expected_exact:
+                    raise ValueError("reasoning exact visible accounting is inconsistent")
+            elif self.visible_completion_tokens is not None:
+                raise ValueError("reasoning without provider usage cannot claim visible tokens")
         _require_self_hash(self, "evidence_sha256")
         return self
 
@@ -735,6 +959,7 @@ def _canonical_json_default(value: Any) -> Any:
 
 __all__ = [
     "CANONICAL_REASONING_POLICY_ROLES",
+    "INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD",
     "MAX_REASONING_TOKEN_RESERVE",
     "REASONING_EFFORT_ORDER",
     "ReasoningControlMode",
@@ -750,6 +975,8 @@ __all__ = [
     "ReasoningRequestRoleMappingKind",
     "ReasoningRequestRoleResolution",
     "ReasoningRolePolicy",
+    "TokenDetailAccountingEvidence",
+    "TokenDetailAccountingMethod",
     "normalize_reasoning_request_role",
     "reasoning_policy_roles_for_qualified_role",
     "reasoning_qualification_benchmark_role",

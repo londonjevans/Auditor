@@ -23,6 +23,7 @@ from mmaudit.models.reasoning import (
     ReasoningPolicyRoleProfile,
     ReasoningRequestPlanEvidence,
     ReasoningRequestRoleResolution,
+    TokenDetailAccountingEvidence,
     normalize_reasoning_request_role,
     reasoning_qualification_benchmark_role,
     resolve_reasoning_request_role,
@@ -570,3 +571,104 @@ def test_execution_evidence_distinguishes_unavailable_observation_from_zero() ->
     )
     with pytest.raises(ValidationError, match="reserved ceiling"):
         ReasoningExecutionEvidence.model_validate(tampered)
+
+
+def test_unknown_completion_semantics_retain_raw_r4_counters_and_plan_accounting() -> None:
+    token_detail = TokenDetailAccountingEvidence.build(
+        provider_prompt_tokens=234,
+        provider_completion_tokens=1_280,
+        provider_total_tokens=1_514,
+        provider_reasoning_tokens=1_307,
+        provider_cached_tokens=0,
+        planned_prompt_tokens=4_096,
+        planned_visible_output_tokens=4_096,
+        planned_reasoning_tokens=4_096,
+        planned_completion_tokens=8_192,
+        request_token_plan_sha256="3" * 64,
+        request_body_sha256="4" * 64,
+    )
+
+    assert token_detail.completion_semantics == "UNKNOWN_INCLUSIVE_OR_ADDITIVE"
+    assert token_detail.provider_completion_tokens == 1_280
+    assert token_detail.provider_reasoning_tokens == 1_307
+    assert token_detail.visible_completion_tokens_exact is None
+    assert token_detail.visible_completion_tokens_upper_bound == 1_280
+    assert token_detail.accounted_prompt_tokens == 4_096
+    assert token_detail.accounted_visible_output_tokens == 4_096
+    assert token_detail.accounted_reasoning_tokens == 4_096
+    assert token_detail.accounted_completion_tokens == 8_192
+    assert token_detail.accounted_total_tokens == 12_288
+    assert "observed_completion_tokens_upper_bound" not in token_detail.model_dump(mode="json")
+
+
+def test_current_reasoning_execution_references_unknown_token_accounting_without_subtraction() -> (
+    None
+):
+    plan = ReasoningRequestPlanEvidence.build(
+        request_role="judge",
+        policy=ReasoningPolicyArtifact.build(controls_by_role=_controls()),
+        endpoint_capability_sha256="1" * 64,
+    )
+    token_detail = TokenDetailAccountingEvidence.build(
+        provider_prompt_tokens=234,
+        provider_completion_tokens=1_280,
+        provider_total_tokens=1_514,
+        provider_reasoning_tokens=1_307,
+        provider_cached_tokens=0,
+        planned_prompt_tokens=4_096,
+        planned_visible_output_tokens=4_096,
+        planned_reasoning_tokens=4_096,
+        planned_completion_tokens=8_192,
+        request_token_plan_sha256="3" * 64,
+        request_body_sha256="4" * 64,
+    )
+
+    evidence = ReasoningExecutionEvidence.build(
+        request_plan=plan,
+        observed_reasoning_tokens=1_307,
+        provider_completion_tokens=1_280,
+        request_token_plan_sha256="3" * 64,
+        request_body_sha256="4" * 64,
+        accounting_method=token_detail.accounting_method,
+        token_detail_accounting_evidence=token_detail,
+    )
+
+    assert evidence.schema_version == "1.1"
+    assert evidence.visible_completion_tokens is None
+    assert evidence.visible_completion_tokens_upper_bound == 1_280
+    assert evidence.accounted_completion_tokens == 8_192
+    assert evidence.token_detail_accounting_evidence_sha256 == token_detail.evidence_sha256
+
+
+def test_current_reasoning_evidence_retains_raw_component_overrun_for_rejection() -> None:
+    plan = ReasoningRequestPlanEvidence.build(
+        request_role="judge",
+        policy=ReasoningPolicyArtifact.build(controls_by_role=_controls()),
+        endpoint_capability_sha256="1" * 64,
+    )
+    token_detail = TokenDetailAccountingEvidence.build(
+        provider_prompt_tokens=234,
+        provider_completion_tokens=1_280,
+        provider_total_tokens=1_514,
+        provider_reasoning_tokens=4_097,
+        provider_cached_tokens=0,
+        planned_prompt_tokens=4_096,
+        planned_visible_output_tokens=4_096,
+        planned_reasoning_tokens=4_096,
+        planned_completion_tokens=8_192,
+        request_token_plan_sha256="3" * 64,
+        request_body_sha256="4" * 64,
+    )
+
+    evidence = ReasoningExecutionEvidence.build(
+        request_plan=plan,
+        observed_reasoning_tokens=4_097,
+        provider_completion_tokens=1_280,
+        request_token_plan_sha256="3" * 64,
+        request_body_sha256="4" * 64,
+        accounting_method=token_detail.accounting_method,
+        token_detail_accounting_evidence=token_detail,
+    )
+
+    assert evidence.observed_reasoning_tokens == 4_097
+    assert evidence.reserved_reasoning_tokens == 4_096

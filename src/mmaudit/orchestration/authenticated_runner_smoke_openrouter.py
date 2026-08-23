@@ -73,9 +73,11 @@ from mmaudit.models.endpoint_snapshots import (
     validate_openrouter_endpoint_snapshot,
 )
 from mmaudit.models.generation_evidence import (
+    GenerationEvidenceValidationError,
     GenerationVerificationRequest,
     OpenRouterGenerationEvidence,
     TrustedGenerationVerification,
+    reconcile_noncrediting_smoke_generation_evidence,
     revoke_trusted_generation_verification,
 )
 from mmaudit.models.openrouter import (
@@ -384,6 +386,32 @@ class _SmokeOpenRouterAdapter:
                 run_kind=plan.run_kind.value,
                 expected_request_cost_preview=cost_plan.request_preview,
             )
+            report_usage = report.result.usage_record
+            report_generation = report.result.generation_evidence
+            if (
+                report_usage is not None
+                and report_usage.token_detail_accounting_evidence is not None
+            ):
+                if report_generation is None:
+                    raise AuthenticatedRunnerSmokeOpenRouterError(
+                        "smoke candidate report lacks its UNKNOWN-envelope generation"
+                    )
+                try:
+                    reconcile_noncrediting_smoke_generation_evidence(
+                        report_generation,
+                        usage_record=report_usage,
+                        expected_exact_model=candidate.exact_model_id,
+                        expected_canonical_model=candidate.canonical_model_slug,
+                        expected_catalog_identity_binding_sha256=(
+                            _canonical_identity_sha256(candidate)
+                        ),
+                        expected_discovery_evidence_sha256=(candidate.discovery_evidence_sha256),
+                        expected_provider_name=candidate.approved_provider_name,
+                    )
+                except GenerationEvidenceValidationError as exc:
+                    raise AuthenticatedRunnerSmokeOpenRouterError(
+                        "smoke candidate UNKNOWN-envelope generation does not reconcile"
+                    ) from exc
             request = _generation_request(
                 report_sha256=report.report_sha256,
                 case_id=launch.smoke_corpus.case.case_id,

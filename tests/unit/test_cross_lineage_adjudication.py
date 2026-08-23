@@ -699,6 +699,65 @@ def test_async_transport_executes_exact_inventory_and_refetches_generation(
     )
 
 
+def test_smoke_transport_uses_bounded_usage_and_generation_hooks(
+    inputs: _Inputs,
+) -> None:
+    prepared = _prepare(inputs)
+    observation, policy = _cross_lineage_privacy_context(inputs, prepared)
+    fake = _SyntheticCrossLineageClient(
+        prepared=prepared,
+        judge=inputs.judge,
+        observation=observation,
+        effective_privacy_policy=policy,
+    )
+    usage_checks: list[str] = []
+    generation_checks: list[str] = []
+
+    def forbidden_general_credit(*_args: Any, **_kwargs: Any) -> bool:
+        raise AssertionError("noncrediting smoke must not call the general credit predicate")
+
+    def bounded_usage_error(record: UsageRecord) -> str | None:
+        usage_checks.append(record.request_id)
+        return None
+
+    def reconcile_generation(
+        evidence: OpenRouterGenerationEvidence,
+        **kwargs: Any,
+    ) -> OpenRouterGenerationEvidence:
+        assert kwargs["expected_exact_model"] == prepared.target.judge_model_id
+        assert kwargs["expected_canonical_model"] == prepared.target.judge_canonical_model_id
+        assert kwargs["expected_provider_name"] == prepared.target.judge_provider_name
+        generation_checks.append(evidence.generation_id)
+        return evidence
+
+    results = asyncio.run(
+        adjudication_module._execute_cross_lineage_adjudication_requests_impl(
+            client=cast(OpenRouterClient, fake),
+            prepared=prepared,
+            generation_evidence_fetcher=None,
+            usage=fake.usage,
+            complete_with_evidence=_synthetic_complete_with_evidence,
+            get_generation_evidence=_synthetic_get_generation_evidence,
+            selected_structured_output_mode=_synthetic_selected_structured_output_mode,
+            registered_model_identity_snapshot=(_synthetic_registered_model_identity_snapshot),
+            trusted_source_request=_synthetic_trusted_source_request,
+            require_transport=adjudication_module._require_exact_cross_lineage_transport,
+            runtime_credit_predicate=forbidden_general_credit,
+            noncrediting_smoke_usage_error=bounded_usage_error,
+            noncrediting_smoke_generation_reconcile=reconcile_generation,
+            require_pristine=lambda: None,
+        )
+    )
+
+    assert len(results) == len(prepared.requests)
+    assert usage_checks == [
+        request_id
+        for result in results
+        for request_id in (result.usage_record.request_id, result.usage_record.request_id)
+    ]
+    assert generation_checks == [result.generation_evidence.generation_id for result in results]
+
+
 def test_async_transport_rejects_unbound_real_judge_usage_before_runner_custody(
     inputs: _Inputs,
 ) -> None:
@@ -900,9 +959,18 @@ def test_transport_rejects_module_retarget_before_provider_state(
     assert client.usage.records == []
 
 
-def test_smoke_transport_rejects_run_index_validator_retarget_before_provider_state(
+@pytest.mark.parametrize(
+    "binding_name",
+    (
+        "require_authenticated_runner_smoke_run_index",
+        "noncrediting_unknown_token_smoke_usage_error",
+        "reconcile_noncrediting_smoke_generation_evidence",
+    ),
+)
+def test_smoke_transport_rejects_smoke_binding_retarget_before_provider_state(
     inputs: _Inputs,
     monkeypatch: pytest.MonkeyPatch,
+    binding_name: str,
 ) -> None:
     prepared = _prepare(inputs)
     client = _uninitialized_exact_client()
@@ -912,11 +980,7 @@ def test_smoke_transport_rejects_run_index_validator_retarget_before_provider_st
         side_effects["validator"] += 1
         return 1
 
-    monkeypatch.setattr(
-        adjudication_module,
-        "require_authenticated_runner_smoke_run_index",
-        retargeted,
-    )
+    monkeypatch.setattr(adjudication_module, binding_name, retargeted)
     with pytest.raises(CrossLineageAdjudicationError, match="binding changed before provider work"):
         asyncio.run(
             adjudication_module._execute_cross_lineage_adjudication_smoke_requests(

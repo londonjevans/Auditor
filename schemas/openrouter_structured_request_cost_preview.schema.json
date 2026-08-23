@@ -369,8 +369,11 @@
       "type": "string"
     },
     "schema_version": {
-      "const": "1.0",
       "default": "1.0",
+      "enum": [
+        "1.0",
+        "1.1"
+      ],
       "title": "Schema Version",
       "type": "string"
     },
@@ -400,10 +403,37 @@
       "title": "Token Budget Config Sha256",
       "type": "string"
     },
+    "token_detail_accounting_method": {
+      "anyOf": [
+        {
+          "const": "MMAUDIT_INDEPENDENT_REASONING_COMPONENT_ENVELOPE_V1",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Token Detail Accounting Method"
+    },
     "user_prompt_sha256": {
       "pattern": "^[0-9a-f]{64}$",
       "title": "User Prompt Sha256",
       "type": "string"
+    },
+    "wire_max_tokens": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "maximum": 9223372036854775807,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Wire Max Tokens"
     }
   },
   "required": [

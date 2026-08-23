@@ -18,7 +18,11 @@ from mmaudit.config import (
     configured_model_ids,
     model_lineage_index,
 )
-from mmaudit.models.generation_evidence import OpenRouterGenerationEvidence
+from mmaudit.models.generation_evidence import (
+    GenerationEvidenceValidationError,
+    OpenRouterGenerationEvidence,
+    _reconcile_noncrediting_smoke_generation_evidence_structural,
+)
 from mmaudit.models.openrouter import (
     OpenRouterClient,
     OpenRouterError,
@@ -41,7 +45,9 @@ from mmaudit.models.usage import (
     UsageLedger,
     _is_structurally_creditable_usage_record,
     is_creditable_usage_record,
+    noncrediting_unknown_token_smoke_usage_error,
     require_authenticated_runner_smoke_run_index,
+    structurally_noncrediting_unknown_token_smoke_usage_error,
 )
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.reporting.json_report import stable_json
@@ -59,6 +65,15 @@ _GROUND_TRUTH_FILENAME = "ground_truth.json"
 MODEL_BENCHMARK_SCHEMA_NAME = "mmaudit_model_benchmark"
 AUTHENTICATED_RUNNER_MODEL_BENCHMARK_CASE_COUNT = 24
 AuthenticatedRunnerModelBenchmarkRunKind = Literal["PRIMARY", "REPLAY"]
+SuccessfulUsageError = Literal[
+    "UsageProvenanceError",
+    "UsageTargetBindingError",
+    "UsageResponseBindingError",
+    "UsageValidationError",
+    "UsageOutputModeBindingError",
+    "UsagePromptBindingError",
+    "UsageSchemaBindingError",
+]
 _GENERIC_TASK = (
     "Assess the supplied synthetic source excerpt, classify its security behavior, "
     "and justify the structured response using only the excerpt."
@@ -1163,7 +1178,7 @@ class NoncreditingModelBenchmarkSmokeReport(StrictModel):
     artifact_kind: Literal["noncrediting_model_benchmark_smoke_report"] = (
         "noncrediting_model_benchmark_smoke_report"
     )
-    schema_version: Literal["1.1"] = "1.1"
+    schema_version: Literal["1.1", "1.2"] = "1.2"
     disposition: Literal["NONCREDITING_SMOKE"] = "NONCREDITING_SMOKE"
     smoke_run_index: int = Field(ge=1, le=MAX_AUTHENTICATED_RUNNER_SMOKE_RUN_INDEX)
     run_kind: AuthenticatedRunnerModelBenchmarkRunKind
@@ -1219,6 +1234,9 @@ class NoncreditingModelBenchmarkSmokeReport(StrictModel):
         result = self.result
         usage = result.usage_record
         generation = result.generation_evidence
+        current_token_accounting = (
+            usage is not None and usage.token_detail_accounting_evidence is not None
+        )
         if (
             result.case_id == ""
             or result.error_kind is not None
@@ -1234,6 +1252,12 @@ class NoncreditingModelBenchmarkSmokeReport(StrictModel):
         ):
             raise ValueError(
                 "model benchmark smoke report requires one successful REAL-shaped case"
+            )
+        if (self.schema_version == "1.1" and current_token_accounting) or (
+            self.schema_version == "1.2" and not current_token_accounting
+        ):
+            raise ValueError(
+                "model benchmark smoke report schema differs from its token accounting"
             )
         expected_request_id = _authenticated_runner_smoke_candidate_logical_request_id(
             smoke_run_index=self.smoke_run_index,
@@ -1614,9 +1638,20 @@ async def execute_noncrediting_model_benchmark_smoke(
         system_prompt=descriptor.system_prompt,
         user_prompt=descriptor.user_prompt,
         response=completion.value,
+        allow_noncrediting_unknown_token_accounting=(
+            usage_record.token_detail_accounting_evidence is not None
+        ),
     )
-    if usage_error is not None or completion.value.case_id != case.case_id:
-        raise ValueError("model benchmark smoke completion is not exact successful REAL evidence")
+    case_id_mismatch = completion.value.case_id != case.case_id
+    if usage_error is not None or case_id_mismatch:
+        failure_reasons = (
+            *((f"usage_error={usage_error}",) if usage_error is not None else ()),
+            *(("case_id_mismatch=true",) if case_id_mismatch else ()),
+        )
+        raise ValueError(
+            "model benchmark smoke completion is not exact successful REAL evidence "
+            f"({', '.join(failure_reasons)})"
+        )
     generation_id = usage_record.openrouter_generation_id
     if generation_id is None:
         raise ValueError("model benchmark smoke completion lacks a generation identity")
@@ -1643,7 +1678,9 @@ async def execute_noncrediting_model_benchmark_smoke(
     )
     values: dict[str, Any] = {
         "artifact_kind": "noncrediting_model_benchmark_smoke_report",
-        "schema_version": "1.1",
+        "schema_version": (
+            "1.2" if usage_record.token_detail_accounting_evidence is not None else "1.1"
+        ),
         "disposition": "NONCREDITING_SMOKE",
         "smoke_run_index": smoke_run_index,
         "run_kind": run_kind,
@@ -1730,7 +1767,38 @@ def verify_noncrediting_model_benchmark_smoke_report(
         user_prompt=descriptor.user_prompt,
         response=response,
         require_runtime_attestation=False,
+        allow_noncrediting_unknown_token_accounting=(
+            usage.token_detail_accounting_evidence is not None
+        ),
     )
+    if usage.token_detail_accounting_evidence is not None:
+        routing = usage.routing
+        identity_fields = (
+            routing.get("canonical_model"),
+            routing.get("catalog_identity_binding_sha256"),
+            routing.get("discovery_evidence_sha256"),
+            routing.get("selected_provider_name"),
+        )
+        if not all(type(value) is str for value in identity_fields):
+            raise ValueError("model benchmark smoke generation identity is incomplete")
+        canonical_model, catalog_binding, discovery_binding, provider_name = cast(
+            tuple[str, str, str, str],
+            identity_fields,
+        )
+        try:
+            _reconcile_noncrediting_smoke_generation_evidence_structural(
+                generation,
+                usage_record=usage,
+                expected_exact_model=sealed_report.target.model_id,
+                expected_canonical_model=canonical_model,
+                expected_catalog_identity_binding_sha256=catalog_binding,
+                expected_discovery_evidence_sha256=discovery_binding,
+                expected_provider_name=provider_name,
+            )
+        except GenerationEvidenceValidationError as exc:
+            raise ValueError(
+                "model benchmark smoke generation does not reconcile structurally"
+            ) from exc
     expected_dimensions = _case_dimension_results(
         ground_truth=truth,
         response=response if expected_error is None and response.case_id == case.case_id else None,
@@ -2165,7 +2233,8 @@ def _successful_usage_error(
     user_prompt: str,
     response: ModelBenchmarkResponse,
     require_runtime_attestation: bool = True,
-) -> str | None:
+    allow_noncrediting_unknown_token_accounting: bool = False,
+) -> SuccessfulUsageError | None:
     evidence = record.execution_evidence
     if evidence not in {ExecutionEvidenceKind.REAL, ExecutionEvidenceKind.MOCK}:
         return "UsageProvenanceError"
@@ -2173,17 +2242,26 @@ def _successful_usage_error(
         return "UsageTargetBindingError"
     if record.validated_response_sha256 != _validated_response_sha256(response):
         return "UsageResponseBindingError"
-    credit_check = (
-        is_creditable_usage_record
-        if require_runtime_attestation
-        else _is_structurally_creditable_usage_record
-    )
-    if not credit_check(
-        record,
-        require_real=evidence is ExecutionEvidenceKind.REAL,
-        require_certification=evidence is ExecutionEvidenceKind.REAL,
-    ):
-        return "UsageValidationError"
+    if allow_noncrediting_unknown_token_accounting:
+        smoke_usage_error = (
+            noncrediting_unknown_token_smoke_usage_error
+            if require_runtime_attestation
+            else structurally_noncrediting_unknown_token_smoke_usage_error
+        )
+        if smoke_usage_error(record) is not None:
+            return "UsageValidationError"
+    else:
+        credit_check = (
+            is_creditable_usage_record
+            if require_runtime_attestation
+            else _is_structurally_creditable_usage_record
+        )
+        if not credit_check(
+            record,
+            require_real=evidence is ExecutionEvidenceKind.REAL,
+            require_certification=evidence is ExecutionEvidenceKind.REAL,
+        ):
+            return "UsageValidationError"
     output_mode = _usage_structured_output_mode(record)
     if output_mode is None:
         return "UsageOutputModeBindingError"

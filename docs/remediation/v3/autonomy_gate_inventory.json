@@ -12,7 +12,7 @@
   "discovery_scope": "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_OPAQUE_AUTHORITIES_EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES",
   "environment_override_count": 28,
   "gate_source_count": 3585,
-  "inventory_sha256": "32c715072bc22a1ef5984c47647f2deb83bcda0617f05311051747a146ee67b6",
+  "inventory_sha256": "a59c4ab4f4aee328f2f26a253ddbbd2d5284dde058885b30c697ac4117f3220e",
   "logical_gate_count": 35,
   "logical_gates": [
     {
@@ -9235,7 +9235,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/benchmark/cross_lineage_adjudication.py",
-      "source_semantics_sha256": "66e557bee1d0e3df1ad1e204e4220e4466d302a06bc22dc735b337de3ad9d766"
+      "source_semantics_sha256": "0d1b1e2ef89e603614b7b9fd737033c85bd0908013146c7e988a44ebe43e27cc"
     },
     {
       "classification": "GATE",
@@ -9262,7 +9262,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/benchmark/models.py",
-      "source_semantics_sha256": "afcf251ea36badb6e4ec8340fa258466a8ee91372921852e6b9f2606293a2a18"
+      "source_semantics_sha256": "8a033150249f2a128ab0d743b7ac36d0c925f9dc258a1ffc65934eb598a92047"
     },
     {
       "classification": "GATE",
@@ -9451,7 +9451,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/authenticated_runner_smoke.py",
-      "source_semantics_sha256": "fbe0f363c18e03f6548a0494ca46c2ec5d84319b111cae3faa1b94f1f0ea89d7"
+      "source_semantics_sha256": "4f82efc32a8621b9ded0a07de1024188f1088ac0ab160f8459b19b482fc02c08"
     },
     {
       "classification": "GATE",
@@ -9577,7 +9577,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/generation_evidence.py",
-      "source_semantics_sha256": "173ae0bbcd9c7afe3c73fec1b933f5d845eae049b8e2f83fa3aab3e7f1087b79"
+      "source_semantics_sha256": "ab40dec662250447c3c8786f2e16698a390ab6a1f6e8c729ab0879f77016cab3"
     },
     {
       "classification": "GATE",
@@ -9640,7 +9640,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/openrouter.py",
-      "source_semantics_sha256": "f9bed84e830d5aceb8b1497c60b3daa363de81b6e16a6205662daaedab19a95b"
+      "source_semantics_sha256": "90fe5e30232cebb69d96e6f6d39607b753a38415b8bce21c29b97ad3fcdeb3b8"
     },
     {
       "classification": "GATE",
@@ -9739,7 +9739,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/reasoning.py",
-      "source_semantics_sha256": "ef1673c7d2d943ba5cb2dc82bb8c7ab93e7f35f0a33a054218acdb3183612d4e"
+      "source_semantics_sha256": "695e4957c0d23679c643fae4db9b79cd058ce56f0940da79dbc50a2403967365"
     },
     {
       "classification": "GATE",
@@ -9811,7 +9811,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/schemas.py",
-      "source_semantics_sha256": "f8ecbfb68788ae2aefad0a860289e284dfb62f3d305a61fc012cb7ccfa0a40be"
+      "source_semantics_sha256": "ce9b1b64b2458159026e380aa41738bc62f6e9f403b359952f4bc4d8c96ae416"
     },
     {
       "classification": "GATE",
@@ -9838,7 +9838,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/token_planning.py",
-      "source_semantics_sha256": "0b72dcdc52625ff239eb184639b1d94bf88d9caae4d7543e28e234306a1ea6c4"
+      "source_semantics_sha256": "7d647d463d417a6e6da49886c2bd07b1a5f03e47b8fbe3727b668990acf50cd3"
     },
     {
       "classification": "GATE",
@@ -9883,7 +9883,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/usage.py",
-      "source_semantics_sha256": "0de53267d767ccd12775d404c19e403633e8107cc679de95172989d6383ea768"
+      "source_semantics_sha256": "79f65fd323b9a44525fa8df380060c6803c4a40cee364d1811baf2ecd62288ce"
     },
     {
       "classification": "GATE",
@@ -9928,7 +9928,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/authenticated_runner_smoke_openrouter.py",
-      "source_semantics_sha256": "ba1e964925af4865c3e360c38932c4e4d396be8e3cc57f67976a8151f23321c7"
+      "source_semantics_sha256": "fbe4b73c44586744043d53e46fd8a30e3be6ef8d50f05d633798dae4b6a02858"
     },
     {
       "classification": "GATE",
@@ -9946,7 +9946,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/budgets.py",
-      "source_semantics_sha256": "a1a4aba9bd1df2c667e5bb0d1cae883302e007beca6ac6141a5977f8e8296a5d"
+      "source_semantics_sha256": "91609f4aff396688b2486748a987c50b3b3b15dcd16f1aa476ec11d91e2cf0db"
     },
     {
       "classification": "GATE",
@@ -10000,7 +10000,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/context_manifest.py",
-      "source_semantics_sha256": "988ea99003c973ea601246558975de5c55edf8c07b657419690a68bf092664e8"
+      "source_semantics_sha256": "1a6cd209bb0021f5c0b93e00f3c220ac044ed53723ce3187db3b87d2e51f036a"
     },
     {
       "classification": "GATE",
@@ -36669,7 +36669,7 @@
     "REQUIRED_MISSING_GATE": 14
   },
   "source_occurrence_count": 3631,
-  "source_universe_sha256": "c9d1f83121eb300d9b36fe9223176c7381b913466eeccd8db12a7db63e6a9f6a",
+  "source_universe_sha256": "3e11dd7b9169cfb883bd1928831a7cc7f4933f6ce0ffa0ffa5fa9abc348e0441",
   "status": "PARTIAL_NONAUTHORIZING",
   "unsatisfied_gate_count": 29
 }

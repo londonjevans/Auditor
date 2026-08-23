@@ -1664,19 +1664,32 @@ class BudgetManager:
                         "persistent model-cost ledger differs from recovered usage cost"
                     )
                 expected_spent_usd = _exact_decimal_add(expected_spent_usd, record_cost)
-                spent_input_tokens += sum(
-                    item.planned_prompt_tokens for item in token_evidence[:-1]
-                ) + (
-                    record.prompt_tokens
-                    if creditable or record.prompt_tokens > 0
-                    else token_evidence[-1].planned_prompt_tokens
+                token_detail = record.token_detail_accounting_evidence
+                final_accounted_prompt_tokens = (
+                    token_detail.accounted_prompt_tokens
+                    if token_detail is not None
+                    else (
+                        record.prompt_tokens
+                        if creditable or record.prompt_tokens > 0
+                        else token_evidence[-1].planned_prompt_tokens
+                    )
                 )
-                spent_output_tokens += sum(
-                    item.planned_completion_tokens for item in token_evidence[:-1]
-                ) + (
-                    record.completion_tokens
-                    if creditable or record.completion_tokens > 0
-                    else token_evidence[-1].planned_completion_tokens
+                final_accounted_completion_tokens = (
+                    token_detail.accounted_completion_tokens
+                    if token_detail is not None
+                    else (
+                        record.completion_tokens
+                        if creditable or record.completion_tokens > 0
+                        else token_evidence[-1].planned_completion_tokens
+                    )
+                )
+                spent_input_tokens += (
+                    sum(item.planned_prompt_tokens for item in token_evidence[:-1])
+                    + final_accounted_prompt_tokens
+                )
+                spent_output_tokens += (
+                    sum(item.planned_completion_tokens for item in token_evidence[:-1])
+                    + final_accounted_completion_tokens
                 )
                 _increment_decimal(spent_model_usd, record.requested_model, record_cost)
                 _increment_decimal(spent_role_usd, record.role, record_cost)

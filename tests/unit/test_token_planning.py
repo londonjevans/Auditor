@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
+from mmaudit.models.reasoning import INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD
 from mmaudit.models.token_planning import (
     CONTEXT_OMISSION_SAMPLE_CAP,
     PROMPT_ALLOCATION_CATEGORIES,
@@ -85,6 +86,7 @@ def _plan(
     maximum_source_tokens_per_request: int = 200_000,
     context_package_source_byte_ceiling: int | None = None,
     context_omissions: tuple[ContextOmissionItem, ...] = (),
+    unknown_completion_accounting: bool = False,
 ) -> RequestTokenPlan:
     resolved_allocations = allocations or _allocations(source_tokens=63_000)
     return build_request_token_plan(
@@ -94,6 +96,11 @@ def _plan(
         allocations=resolved_allocations,
         required_output_tokens=required_output_tokens,
         reserved_reasoning_tokens=reserved_reasoning_tokens,
+        token_detail_accounting_method=(
+            INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD
+            if unknown_completion_accounting
+            else None
+        ),
         global_input_token_budget=global_input_token_budget,
         global_output_token_budget=global_output_token_budget,
         context_utilization=context_utilization,
@@ -107,6 +114,31 @@ def _plan(
             allocation.estimate.byte_upper_bound_tokens for allocation in resolved_allocations
         ),
     )
+
+
+def test_current_plan_separates_visible_wire_cap_from_conservative_completion_reserve() -> None:
+    plan = _plan(
+        required_output_tokens=4_096,
+        reserved_reasoning_tokens=4_096,
+        unknown_completion_accounting=True,
+    )
+
+    assert plan.schema_version == "3.0"
+    assert plan.wire_max_tokens == 4_096
+    assert plan.reserved_output_tokens == 4_096
+    assert plan.requested_completion_tokens == 8_192
+    assert plan.global_budget.request_output_tokens == 8_192
+    assert plan.token_detail_accounting_method == (INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD)
+
+
+def test_legacy_plan_serialization_does_not_gain_current_optional_fields() -> None:
+    plan = _plan()
+    payload = plan.model_dump(mode="json")
+
+    assert plan.schema_version == "2.0"
+    assert "token_detail_accounting_method" not in payload
+    assert "wire_max_tokens" not in payload
+    assert RequestTokenPlan.model_validate_json(json.dumps(payload)) == plan
 
 
 def _surface_plan(

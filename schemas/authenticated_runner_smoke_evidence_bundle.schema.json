@@ -219,8 +219,11 @@
           "type": "boolean"
         },
         "schema_version": {
-          "const": "1.1",
-          "default": "1.1",
+          "default": "1.2",
+          "enum": [
+            "1.1",
+            "1.2"
+          ],
           "title": "Schema Version",
           "type": "string"
         },
@@ -336,8 +339,11 @@
           "type": "boolean"
         },
         "schema_version": {
-          "const": "1.1",
-          "default": "1.1",
+          "default": "1.2",
+          "enum": [
+            "1.1",
+            "1.2"
+          ],
           "title": "Schema Version",
           "type": "string"
         },
@@ -2322,8 +2328,11 @@
           "type": "boolean"
         },
         "schema_version": {
-          "const": "1.1",
-          "default": "1.1",
+          "default": "1.2",
+          "enum": [
+            "1.1",
+            "1.2"
+          ],
           "title": "Schema Version",
           "type": "string"
         },
@@ -2556,7 +2565,10 @@
           "type": "string"
         },
         "schema_version": {
-          "const": "1.0",
+          "enum": [
+            "1.0",
+            "1.1"
+          ],
           "title": "Schema Version",
           "type": "string"
         },
@@ -2949,8 +2961,11 @@
           "type": "string"
         },
         "schema_version": {
-          "const": "1.0",
           "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1"
+          ],
           "title": "Schema Version",
           "type": "string"
         },
@@ -2980,10 +2995,37 @@
           "title": "Token Budget Config Sha256",
           "type": "string"
         },
+        "token_detail_accounting_method": {
+          "anyOf": [
+            {
+              "const": "MMAUDIT_INDEPENDENT_REASONING_COMPONENT_ENVELOPE_V1",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Token Detail Accounting Method"
+        },
         "user_prompt_sha256": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "User Prompt Sha256",
           "type": "string"
+        },
+        "wire_max_tokens": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 9223372036854775807,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Wire Max Tokens"
         }
       },
       "required": [
@@ -3212,6 +3254,32 @@
       "additionalProperties": false,
       "description": "Provider accounting joined to the exact pre-transport reasoning plan.",
       "properties": {
+        "accounted_completion_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Accounted Completion Tokens"
+        },
+        "accounting_method": {
+          "anyOf": [
+            {
+              "const": "MMAUDIT_INDEPENDENT_REASONING_COMPONENT_ENVELOPE_V1",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Accounting Method"
+        },
         "evidence_sha256": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Evidence Sha256",
@@ -3268,8 +3336,11 @@
           "type": "integer"
         },
         "schema_version": {
-          "const": "1.0",
           "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1"
+          ],
           "title": "Schema Version",
           "type": "string"
         },
@@ -3284,6 +3355,19 @@
           "title": "State",
           "type": "string"
         },
+        "token_detail_accounting_evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Token Detail Accounting Evidence Sha256"
+        },
         "visible_completion_tokens": {
           "anyOf": [
             {
@@ -3296,6 +3380,19 @@
           ],
           "default": null,
           "title": "Visible Completion Tokens"
+        },
+        "visible_completion_tokens_upper_bound": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Visible Completion Tokens Upper Bound"
         }
       },
       "required": [
@@ -3465,6 +3562,190 @@
       ],
       "title": "StructuredOutputMode",
       "type": "string"
+    },
+    "TokenDetailAccountingEvidence": {
+      "additionalProperties": false,
+      "description": "Raw provider counters plus conservative UNKNOWN-semantics accounting ceilings.",
+      "properties": {
+        "accounted_completion_tokens": {
+          "maximum": 4294967294,
+          "minimum": 0,
+          "title": "Accounted Completion Tokens",
+          "type": "integer"
+        },
+        "accounted_prompt_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Accounted Prompt Tokens",
+          "type": "integer"
+        },
+        "accounted_reasoning_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Accounted Reasoning Tokens",
+          "type": "integer"
+        },
+        "accounted_total_tokens": {
+          "maximum": 4294967294,
+          "minimum": 0,
+          "title": "Accounted Total Tokens",
+          "type": "integer"
+        },
+        "accounted_visible_output_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Accounted Visible Output Tokens",
+          "type": "integer"
+        },
+        "accounting_basis": {
+          "const": "FULL_REQUEST_PLAN_RESERVATION",
+          "default": "FULL_REQUEST_PLAN_RESERVATION",
+          "title": "Accounting Basis",
+          "type": "string"
+        },
+        "accounting_method": {
+          "const": "MMAUDIT_INDEPENDENT_REASONING_COMPONENT_ENVELOPE_V1",
+          "default": "MMAUDIT_INDEPENDENT_REASONING_COMPONENT_ENVELOPE_V1",
+          "title": "Accounting Method",
+          "type": "string"
+        },
+        "completion_semantics": {
+          "const": "UNKNOWN_INCLUSIVE_OR_ADDITIVE",
+          "default": "UNKNOWN_INCLUSIVE_OR_ADDITIVE",
+          "title": "Completion Semantics",
+          "type": "string"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "planned_completion_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Planned Completion Tokens",
+          "type": "integer"
+        },
+        "planned_prompt_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Planned Prompt Tokens",
+          "type": "integer"
+        },
+        "planned_reasoning_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Planned Reasoning Tokens",
+          "type": "integer"
+        },
+        "planned_visible_output_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Planned Visible Output Tokens",
+          "type": "integer"
+        },
+        "provider_cached_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Provider Cached Tokens",
+          "type": "integer"
+        },
+        "provider_completion_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Provider Completion Tokens",
+          "type": "integer"
+        },
+        "provider_prompt_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Provider Prompt Tokens",
+          "type": "integer"
+        },
+        "provider_reasoning_tokens": {
+          "anyOf": [
+            {
+              "maximum": 2147483647,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Reasoning Tokens"
+        },
+        "provider_total_relation": {
+          "const": "PROMPT_PLUS_COMPLETION",
+          "default": "PROMPT_PLUS_COMPLETION",
+          "title": "Provider Total Relation",
+          "type": "string"
+        },
+        "provider_total_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Provider Total Tokens",
+          "type": "integer"
+        },
+        "request_body_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Body Sha256",
+          "type": "string"
+        },
+        "request_token_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Token Plan Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "visible_completion_tokens_exact": {
+          "anyOf": [
+            {
+              "maximum": 2147483647,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Visible Completion Tokens Exact"
+        },
+        "visible_completion_tokens_upper_bound": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Visible Completion Tokens Upper Bound",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "provider_prompt_tokens",
+        "provider_completion_tokens",
+        "provider_total_tokens",
+        "provider_cached_tokens",
+        "visible_completion_tokens_upper_bound",
+        "planned_prompt_tokens",
+        "planned_visible_output_tokens",
+        "planned_reasoning_tokens",
+        "planned_completion_tokens",
+        "accounted_prompt_tokens",
+        "accounted_visible_output_tokens",
+        "accounted_reasoning_tokens",
+        "accounted_completion_tokens",
+        "accounted_total_tokens",
+        "request_token_plan_sha256",
+        "request_body_sha256",
+        "evidence_sha256"
+      ],
+      "title": "TokenDetailAccountingEvidence",
+      "type": "object"
     },
     "UsageRecord": {
       "additionalProperties": false,
@@ -3792,6 +4073,17 @@
           "title": "Timestamp",
           "type": "string"
         },
+        "token_detail_accounting_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TokenDetailAccountingEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "total_tokens": {
           "default": 0,
           "minimum": 0,
@@ -4051,8 +4343,11 @@
       "type": "array"
     },
     "schema_version": {
-      "const": "1.1",
-      "default": "1.1",
+      "default": "1.2",
+      "enum": [
+        "1.1",
+        "1.2"
+      ],
       "title": "Schema Version",
       "type": "string"
     },

@@ -41,7 +41,11 @@ from mmaudit.models.output_modes import (
     mode_for_supported_parameters,
     output_mode_request_parameters,
 )
-from mmaudit.models.reasoning import ReasoningExecutionEvidence
+from mmaudit.models.reasoning import (
+    INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD,
+    ReasoningExecutionEvidence,
+    TokenDetailAccountingEvidence,
+)
 from mmaudit.models.structured_output import StructuredOutputRepairEvidence
 from mmaudit.models.token_planning import (
     CONTEXT_OMISSION_GROUP_CAP,
@@ -12464,6 +12468,10 @@ class UsageRecord(StrictModel):
     finish_reason: str | None = Field(default=None, max_length=100)
     reasoning_tokens: int = Field(default=0, ge=0)
     reasoning_evidence: ReasoningExecutionEvidence | None = None
+    token_detail_accounting_evidence: TokenDetailAccountingEvidence | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     cached_tokens: int = Field(default=0, ge=0)
     retry_count: int | None = Field(default=None, ge=0)
     provider_error_classification: str | None = Field(default=None, max_length=100)
@@ -12550,15 +12558,46 @@ class UsageRecord(StrictModel):
             (token_plan.reasoning_plan is None) != (self.reasoning_evidence is None)
         ):
             raise ValueError("usage reasoning evidence differs from its routed reasoning plan")
+        token_detail = self.token_detail_accounting_evidence
+        if token_plan is None or token_plan.schema_version != "3.0":
+            if token_detail is not None:
+                raise ValueError("legacy usage cannot carry UNKNOWN token-detail accounting")
+        elif token_detail is None:
+            if any(
+                value != 0
+                for value in (
+                    self.prompt_tokens,
+                    self.completion_tokens,
+                    self.total_tokens,
+                    self.reasoning_tokens,
+                    self.cached_tokens,
+                )
+            ):
+                raise ValueError("current usage with provider tokens lacks typed accounting")
+        elif (
+            token_plan.token_detail_accounting_method
+            != INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD
+            or token_detail.accounting_method != token_plan.token_detail_accounting_method
+            or token_detail.request_token_plan_sha256 != token_plan.plan_sha256
+            or token_detail.request_body_sha256 != self.request_body_sha256
+            or self.prompt_tokens != token_detail.provider_prompt_tokens
+            or self.completion_tokens != token_detail.provider_completion_tokens
+            or self.total_tokens != token_detail.provider_total_tokens
+            or self.reasoning_tokens != (token_detail.provider_reasoning_tokens or 0)
+            or self.cached_tokens != token_detail.provider_cached_tokens
+        ):
+            raise ValueError("usage UNKNOWN token-detail accounting is inconsistent")
         if self.reasoning_evidence is not None:
             reasoning = self.reasoning_evidence
             assert token_plan is not None
-            if (
+            common_mismatch = (
                 token_plan.reasoning_plan != reasoning.request_plan
                 or reasoning.request_token_plan_sha256 != token_plan.plan_sha256
                 or reasoning.request_plan.resolution.request_role != self.role
                 or reasoning.request_body_sha256 != self.request_body_sha256
-                or (reasoning.provider_completion_tokens is None and self.completion_tokens != 0)
+            )
+            legacy_mismatch = token_detail is None and (
+                (reasoning.provider_completion_tokens is None and self.completion_tokens != 0)
                 or (
                     reasoning.provider_completion_tokens is not None
                     and reasoning.provider_completion_tokens != self.completion_tokens
@@ -12568,7 +12607,20 @@ class UsageRecord(StrictModel):
                     and reasoning.observed_reasoning_tokens != self.reasoning_tokens
                 )
                 or (not reasoning.observation_available and self.reasoning_tokens != 0)
-            ):
+            )
+            envelope_mismatch = token_detail is not None and (
+                reasoning.schema_version != "1.1"
+                or reasoning.accounting_method != token_detail.accounting_method
+                or reasoning.provider_completion_tokens != token_detail.provider_completion_tokens
+                or reasoning.observed_reasoning_tokens != token_detail.provider_reasoning_tokens
+                or reasoning.visible_completion_tokens
+                != token_detail.visible_completion_tokens_exact
+                or reasoning.visible_completion_tokens_upper_bound
+                != token_detail.visible_completion_tokens_upper_bound
+                or reasoning.accounted_completion_tokens != token_detail.accounted_completion_tokens
+                or reasoning.token_detail_accounting_evidence_sha256 != token_detail.evidence_sha256
+            )
+            if common_mismatch or legacy_mismatch or envelope_mismatch:
                 raise ValueError("typed reasoning evidence differs from provider usage")
         if (
             self.ended_at is not None

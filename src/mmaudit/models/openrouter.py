@@ -98,6 +98,7 @@ from mmaudit.models.output_modes import (
 )
 from mmaudit.models.reasoning import (
     CANONICAL_REASONING_POLICY_ROLES,
+    INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD,
     REASONING_EFFORT_ORDER,
     ReasoningControlProfile,
     ReasoningEffort,
@@ -105,6 +106,7 @@ from mmaudit.models.reasoning import (
     ReasoningPolicyArtifact,
     ReasoningPolicyError,
     ReasoningRequestPlanEvidence,
+    TokenDetailAccountingEvidence,
     reasoning_policy_roles_for_qualified_role,
     resolve_reasoning_request_role,
 )
@@ -1942,7 +1944,11 @@ def _require_exact_openrouter_request_body(
             {"role": "user", "content": structured_output_plan.user_prompt},
         ],
         "temperature": 0,
-        "max_tokens": request_token_plan.requested_completion_tokens,
+        "max_tokens": (
+            request_token_plan.wire_max_tokens
+            if request_token_plan.wire_max_tokens is not None
+            else request_token_plan.requested_completion_tokens
+        ),
         "stream": False,
         "provider": provider,
     }
@@ -2519,7 +2525,7 @@ class OpenRouterStructuredRequestCostPreview(BaseModel):
     artifact_kind: Literal["openrouter_structured_request_cost_preview"] = (
         "openrouter_structured_request_cost_preview"
     )
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     logical_request_id: str = Field(min_length=1, max_length=128)
     role: str = Field(min_length=1, max_length=128)
     exact_model_id: str = Field(min_length=3, max_length=384)
@@ -2583,6 +2589,15 @@ class OpenRouterStructuredRequestCostPreview(BaseModel):
     requested_completion_tokens: int = Field(gt=0, le=2**63 - 1)
     reserved_output_tokens: int = Field(gt=0, le=2**63 - 1)
     reserved_reasoning_tokens: int = Field(ge=0, le=2**63 - 1)
+    token_detail_accounting_method: (
+        Literal["MMAUDIT_INDEPENDENT_REASONING_COMPONENT_ENVELOPE_V1"] | None
+    ) = Field(default=None, exclude_if=lambda value: value is None)
+    wire_max_tokens: int | None = Field(
+        default=None,
+        gt=0,
+        le=2**63 - 1,
+        exclude_if=lambda value: value is None,
+    )
     maximum_priced_prompt_units: int = Field(gt=0, le=2**63 - 1)
     maximum_cost_usd_per_attempt_exact: str
     maximum_cost_usd_all_attempts_exact: str
@@ -2634,6 +2649,14 @@ class OpenRouterStructuredRequestCostPreview(BaseModel):
             self.reserved_output_tokens + self.reserved_reasoning_tokens
         ):
             raise ValueError("request-cost preview completion units do not conserve output")
+        if self.schema_version == "1.0":
+            if self.token_detail_accounting_method is not None or self.wire_max_tokens is not None:
+                raise ValueError("legacy request-cost preview cannot carry token accounting")
+        elif (
+            self.token_detail_accounting_method != INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD
+            or self.wire_max_tokens != self.reserved_output_tokens
+        ):
+            raise ValueError("current request-cost preview lacks its independent wire cap")
         expected_prompt_units = max(
             self.request_material_projection_utf8_bytes,
             self.prompt_byte_upper_bound_tokens,
@@ -3167,7 +3190,7 @@ def _assemble_structured_request_body(
     structured_output_plan: _StructuredOutputRequestPlan,
     provider_policy: OpenRouterProviderPolicy,
     require_zdr: bool,
-    requested_completion_tokens: int,
+    wire_max_tokens: int,
     request_metadata: Mapping[str, str],
     routing_max_price: Mapping[str, float] | None,
 ) -> dict[str, Any]:
@@ -3180,7 +3203,7 @@ def _assemble_structured_request_body(
             {"role": "user", "content": structured_output_plan.user_prompt},
         ],
         "temperature": 0,
-        "max_tokens": requested_completion_tokens,
+        "max_tokens": wire_max_tokens,
         "stream": False,
         "provider": provider_policy.as_request_payload(
             require_zdr=require_zdr,
@@ -3371,7 +3394,7 @@ def _build_structured_request_cost_preview(
     )
     values: dict[str, Any] = {
         "artifact_kind": "openrouter_structured_request_cost_preview",
-        "schema_version": "1.0",
+        "schema_version": ("1.1" if request_token_plan.schema_version == "3.0" else "1.0"),
         "logical_request_id": request_token_plan.request_id,
         "role": request_token_plan.role,
         "exact_model_id": discovery_evidence.exact_model_id,
@@ -3446,6 +3469,15 @@ def _build_structured_request_cost_preview(
         "grants_review_credit": False,
         "grants_completion_credit": False,
     }
+    if request_token_plan.schema_version == "3.0":
+        values.update(
+            {
+                "token_detail_accounting_method": (
+                    request_token_plan.token_detail_accounting_method
+                ),
+                "wire_max_tokens": request_token_plan.wire_max_tokens,
+            }
+        )
     preview = OpenRouterStructuredRequestCostPreview.model_validate(
         {**values, "preview_sha256": _canonical_sha256(values)},
         strict=True,
@@ -3655,6 +3687,7 @@ def preview_openrouter_structured_request_cost(
         required_output_tokens=required_output_tokens,
         reserved_reasoning_tokens=control.reserved_reasoning_tokens,
         reasoning_plan=reasoning_plan,
+        token_detail_accounting_method=(INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD),
         global_input_token_budget=sealed_token_budgets.global_input_token_budget,
         global_output_token_budget=sealed_token_budgets.global_output_token_budget,
         input_tokens_reserved_before=0,
@@ -3699,7 +3732,11 @@ def preview_openrouter_structured_request_cost(
         structured_output_plan=structured_output_plan,
         provider_policy=sealed_provider_policy,
         require_zdr=sealed_privacy.require_zdr,
-        requested_completion_tokens=request_token_plan.requested_completion_tokens,
+        wire_max_tokens=(
+            request_token_plan.wire_max_tokens
+            if request_token_plan.wire_max_tokens is not None
+            else request_token_plan.requested_completion_tokens
+        ),
         request_metadata=request_metadata,
         routing_max_price=dict(endpoint_policy.routing_max_price),
     )
@@ -3877,6 +3914,8 @@ def _require_matching_structured_request_cost_preview(
         "requested_completion_tokens": request_token_plan.requested_completion_tokens,
         "reserved_output_tokens": request_token_plan.reserved_output_tokens,
         "reserved_reasoning_tokens": request_token_plan.reserved_reasoning_tokens,
+        "token_detail_accounting_method": request_token_plan.token_detail_accounting_method,
+        "wire_max_tokens": request_token_plan.wire_max_tokens,
         "maximum_priced_prompt_units": _trusted_endpoint_request_maximum_units_for(
             endpoint_cost_bound,
             "prompt",
@@ -3917,6 +3956,22 @@ def _validate_provider_token_usage(
     """Reject provider usage that exceeds any frozen request or endpoint ceiling."""
 
     limits = request_token_plan.route_intersection
+    if request_token_plan.schema_version == "3.0":
+        if (
+            prompt_tokens > request_token_plan.prompt_byte_upper_bound_tokens
+            or prompt_tokens > limits.max_prompt_tokens
+            or completion_tokens > request_token_plan.reserved_output_tokens
+            or reasoning_tokens > request_token_plan.reserved_reasoning_tokens
+        ):
+            raise OpenRouterSchemaError(
+                "provider-reported token usage exceeds the independent-component request plan "
+                f"(prompt_tokens={prompt_tokens}, completion_tokens={completion_tokens}, "
+                f"reasoning_tokens={reasoning_tokens}, "
+                f"planned_prompt_tokens={request_token_plan.prompt_byte_upper_bound_tokens}, "
+                f"planned_visible_output_tokens={request_token_plan.reserved_output_tokens}, "
+                f"planned_reasoning_tokens={request_token_plan.reserved_reasoning_tokens})"
+            )
+        return
     if (
         prompt_tokens > request_token_plan.prompt_byte_upper_bound_tokens
         or prompt_tokens > limits.max_prompt_tokens
@@ -3928,7 +3983,9 @@ def _validate_provider_token_usage(
         or completion_tokens - reasoning_tokens > request_token_plan.reserved_output_tokens
     ):
         raise OpenRouterSchemaError(
-            "provider-reported token usage exceeds the endpoint-bound request plan"
+            "provider-reported token usage exceeds the endpoint-bound request plan "
+            f"(prompt_tokens={prompt_tokens}, completion_tokens={completion_tokens}, "
+            f"reasoning_tokens={reasoning_tokens})"
         )
 
 
@@ -7417,6 +7474,7 @@ class OpenRouterClient:
         schema_name: str,
         reasoning_plan: ReasoningRequestPlanEvidence | None,
         context_package: ContextPackage | None = None,
+        use_unknown_token_accounting: bool = False,
     ) -> tuple[RequestTokenPlan, ContextRequestEvidence | None]:
         if context_package is not None:
             from mmaudit.orchestration.context import (
@@ -7507,6 +7565,11 @@ class OpenRouterClient:
                 required_output_tokens=required_output_tokens,
                 reserved_reasoning_tokens=reserved_reasoning_tokens,
                 reasoning_plan=reasoning_plan,
+                token_detail_accounting_method=(
+                    INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD
+                    if use_unknown_token_accounting
+                    else None
+                ),
                 global_input_token_budget=global_input_budget,
                 global_output_token_budget=global_output_budget,
                 input_tokens_reserved_before=(
@@ -8064,7 +8127,11 @@ class OpenRouterClient:
                     "provider routes differ from the endpoint-bound token plan"
                 )
         maximum_tokens = (
-            request_token_plan.requested_completion_tokens
+            (
+                request_token_plan.wire_max_tokens
+                if request_token_plan.wire_max_tokens is not None
+                else request_token_plan.requested_completion_tokens
+            )
             if request_token_plan is not None
             else self.execution.max_output_tokens_per_request
         )
@@ -8108,7 +8175,7 @@ class OpenRouterClient:
             structured_output_plan=request_plan,
             provider_policy=effective_provider_policy,
             require_zdr=self.privacy.require_zdr,
-            requested_completion_tokens=maximum_tokens,
+            wire_max_tokens=maximum_tokens,
             request_metadata=request_metadata or {},
             routing_max_price=routing_max_price,
         )
@@ -10017,6 +10084,7 @@ class OpenRouterClient:
                 schema_name=schema_name,
                 reasoning_plan=reasoning_plan,
                 context_package=context_package,
+                use_unknown_token_accounting=(expected_request_cost_preview is not None),
             )
             response_schema_generation.require_current(
                 response_model,
@@ -10297,6 +10365,7 @@ class OpenRouterClient:
         active_actual_prompt_tokens: int | None = None
         active_actual_completion_tokens: int | None = None
         active_actual_reasoning_tokens: int | None = None
+        active_token_detail_accounting_evidence: TokenDetailAccountingEvidence | None = None
         started_at = datetime.now(UTC)
         started_clock = time.perf_counter()
         initial_usage: dict[str, Any] = {}
@@ -10308,6 +10377,47 @@ class OpenRouterClient:
         validated_envelope: CompletionEnvelope | None = None
         raw_payload: dict[str, Any] | None = None
         response_headers: Mapping[str, str] = {}
+
+        def capture_active_token_usage(usage: Mapping[str, Any]) -> None:
+            nonlocal active_actual_prompt_tokens
+            nonlocal active_actual_completion_tokens
+            nonlocal active_actual_reasoning_tokens
+            nonlocal active_token_detail_accounting_evidence
+            prompt_tokens = _nonnegative_int(usage.get("prompt_tokens"))
+            completion_tokens = _nonnegative_int(usage.get("completion_tokens"))
+            observed_reasoning_tokens = _observed_reasoning_tokens(usage)
+            if request_token_plan.schema_version != "3.0":
+                if (
+                    observed_reasoning_tokens is not None
+                    and observed_reasoning_tokens > completion_tokens
+                ):
+                    active_actual_prompt_tokens = None
+                    active_actual_completion_tokens = None
+                    active_actual_reasoning_tokens = None
+                    active_token_detail_accounting_evidence = None
+                    return
+                active_actual_prompt_tokens = prompt_tokens
+                active_actual_completion_tokens = completion_tokens
+                active_actual_reasoning_tokens = observed_reasoning_tokens
+                active_token_detail_accounting_evidence = None
+                return
+            token_detail = TokenDetailAccountingEvidence.build(
+                provider_prompt_tokens=prompt_tokens,
+                provider_completion_tokens=completion_tokens,
+                provider_total_tokens=_nonnegative_int(usage.get("total_tokens")),
+                provider_reasoning_tokens=observed_reasoning_tokens,
+                provider_cached_tokens=_cached_tokens(usage),
+                planned_prompt_tokens=request_token_plan.prompt_byte_upper_bound_tokens,
+                planned_visible_output_tokens=request_token_plan.reserved_output_tokens,
+                planned_reasoning_tokens=request_token_plan.reserved_reasoning_tokens,
+                planned_completion_tokens=request_token_plan.requested_completion_tokens,
+                request_token_plan_sha256=request_token_plan.plan_sha256,
+                request_body_sha256=request_body_hash,
+            )
+            active_token_detail_accounting_evidence = token_detail
+            active_actual_prompt_tokens = token_detail.accounted_prompt_tokens
+            active_actual_completion_tokens = token_detail.accounted_completion_tokens
+            active_actual_reasoning_tokens = token_detail.accounted_reasoning_tokens
 
         async def finalize_active(actual_cost: Decimal | None) -> None:
             nonlocal accounted_cost_usd, accounted_cost_usd_exact, active_reservation
@@ -10635,6 +10745,7 @@ class OpenRouterClient:
                 active_actual_prompt_tokens = None
                 active_actual_completion_tokens = None
                 active_actual_reasoning_tokens = None
+                active_token_detail_accounting_evidence = None
                 self.logger.info(
                     "Sending bounded structured model request",
                     extra={
@@ -10961,11 +11072,7 @@ class OpenRouterClient:
             initial_cost = _optional_cost_decimal(initial_usage.get("cost"))
             assert initial_cost is not None
             active_actual_cost = initial_cost
-            active_actual_prompt_tokens = _nonnegative_int(initial_usage.get("prompt_tokens"))
-            active_actual_completion_tokens = _nonnegative_int(
-                initial_usage.get("completion_tokens")
-            )
-            active_actual_reasoning_tokens = _observed_reasoning_tokens(initial_usage)
+            capture_active_token_usage(initial_usage)
             envelope = _validate_completion_envelope(
                 payload,
                 response.headers,
@@ -11020,15 +11127,11 @@ class OpenRouterClient:
                 truncated_envelope_evidence=truncated_envelope_evidence,
             )
             initial_usage = envelope.usage
-            active_actual_prompt_tokens = _nonnegative_int(initial_usage.get("prompt_tokens"))
-            active_actual_completion_tokens = _nonnegative_int(
-                initial_usage.get("completion_tokens")
-            )
-            active_actual_reasoning_tokens = _observed_reasoning_tokens(initial_usage)
+            capture_active_token_usage(initial_usage)
             _validate_provider_token_usage(
                 request_token_plan=request_token_plan,
-                prompt_tokens=active_actual_prompt_tokens,
-                completion_tokens=active_actual_completion_tokens,
+                prompt_tokens=_nonnegative_int(initial_usage.get("prompt_tokens")),
+                completion_tokens=_nonnegative_int(initial_usage.get("completion_tokens")),
                 reasoning_tokens=_reasoning_tokens(initial_usage),
             )
             response_hash = hashlib.sha256(envelope.content.encode()).hexdigest()
@@ -11146,10 +11249,20 @@ class OpenRouterClient:
             reasoning_execution_evidence = (
                 ReasoningExecutionEvidence.build(
                     request_plan=request_token_plan.reasoning_plan,
-                    observed_reasoning_tokens=active_actual_reasoning_tokens,
-                    provider_completion_tokens=active_actual_completion_tokens,
+                    observed_reasoning_tokens=(
+                        active_token_detail_accounting_evidence.provider_reasoning_tokens
+                        if active_token_detail_accounting_evidence is not None
+                        else active_actual_reasoning_tokens
+                    ),
+                    provider_completion_tokens=(
+                        active_token_detail_accounting_evidence.provider_completion_tokens
+                        if active_token_detail_accounting_evidence is not None
+                        else active_actual_completion_tokens
+                    ),
                     request_token_plan_sha256=request_token_plan.plan_sha256,
                     request_body_sha256=request_body_hash,
+                    accounting_method=request_token_plan.token_detail_accounting_method,
+                    token_detail_accounting_evidence=(active_token_detail_accounting_evidence),
                 )
                 if request_token_plan.reasoning_plan is not None
                 else None
@@ -11187,6 +11300,7 @@ class OpenRouterClient:
                 finish_reason=envelope.finish_reason,
                 reasoning_tokens=_reasoning_tokens(initial_usage),
                 reasoning_evidence=reasoning_execution_evidence,
+                token_detail_accounting_evidence=active_token_detail_accounting_evidence,
                 cached_tokens=_cached_tokens(initial_usage),
                 retry_count=attempts - 1,
                 validation_status=(
@@ -11331,10 +11445,20 @@ class OpenRouterClient:
                 failed_reasoning_evidence = (
                     ReasoningExecutionEvidence.build(
                         request_plan=request_token_plan.reasoning_plan,
-                        observed_reasoning_tokens=active_actual_reasoning_tokens,
-                        provider_completion_tokens=active_actual_completion_tokens,
+                        observed_reasoning_tokens=(
+                            active_token_detail_accounting_evidence.provider_reasoning_tokens
+                            if active_token_detail_accounting_evidence is not None
+                            else active_actual_reasoning_tokens
+                        ),
+                        provider_completion_tokens=(
+                            active_token_detail_accounting_evidence.provider_completion_tokens
+                            if active_token_detail_accounting_evidence is not None
+                            else active_actual_completion_tokens
+                        ),
                         request_token_plan_sha256=request_token_plan.plan_sha256,
                         request_body_sha256=request_body_hash,
+                        accounting_method=request_token_plan.token_detail_accounting_method,
+                        token_detail_accounting_evidence=(active_token_detail_accounting_evidence),
                     )
                     if request_token_plan.reasoning_plan is not None
                     else None
@@ -11419,6 +11543,7 @@ class OpenRouterClient:
                     ),
                     reasoning_tokens=_reasoning_tokens(initial_usage),
                     reasoning_evidence=failed_reasoning_evidence,
+                    token_detail_accounting_evidence=(active_token_detail_accounting_evidence),
                     cached_tokens=_cached_tokens(initial_usage),
                     retry_count=max(0, attempts - 1),
                     provider_error_classification=_provider_error_classification(terminal_error),
@@ -14310,10 +14435,7 @@ def _validate_usage(value: Any) -> dict[str, Any]:
     )
     normalized_reasoning_tokens = reasoning_tokens or 0
     normalized_cached_tokens = cached_tokens or 0
-    if (
-        normalized_reasoning_tokens > fields["completion_tokens"]
-        or normalized_cached_tokens > fields["prompt_tokens"]
-    ):
+    if normalized_cached_tokens > fields["prompt_tokens"]:
         raise OpenRouterSchemaError(
             "model response token details are inconsistent "
             f"(prompt_tokens={fields['prompt_tokens']}, "

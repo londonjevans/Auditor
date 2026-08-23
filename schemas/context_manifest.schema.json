@@ -2,8 +2,73 @@
   "$defs": {
     "ActualTokenUsageEvidence": {
       "additionalProperties": false,
-      "description": "Typed actual token totals, with no raw provider response.",
+      "description": "Typed raw provider totals and optional conservative accounting ceilings.",
       "properties": {
+        "accounted_completion_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Accounted Completion Tokens"
+        },
+        "accounted_prompt_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Accounted Prompt Tokens"
+        },
+        "accounted_reasoning_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Accounted Reasoning Tokens"
+        },
+        "accounted_total_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Accounted Total Tokens"
+        },
+        "accounted_visible_output_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Accounted Visible Output Tokens"
+        },
         "completion_tokens": {
           "anyOf": [
             {
@@ -106,13 +171,41 @@
           "title": "Reasoning Observation Available"
         },
         "schema_version": {
-          "const": "1.0",
           "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1"
+          ],
           "title": "Schema Version",
           "type": "string"
         },
         "source": {
           "$ref": "#/$defs/ActualTokenUsageSource"
+        },
+        "token_detail_accounting_evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Token Detail Accounting Evidence Sha256"
+        },
+        "token_detail_accounting_method": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Token Detail Accounting Method"
         },
         "total_tokens": {
           "anyOf": [
@@ -389,6 +482,85 @@
           "minimum": 0,
           "title": "Preflight Rejected Request Count",
           "type": "integer"
+        },
+        "provider_accounted_completion_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Accounted Completion Tokens"
+        },
+        "provider_accounted_prompt_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Accounted Prompt Tokens"
+        },
+        "provider_accounted_reasoning_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Accounted Reasoning Tokens"
+        },
+        "provider_accounted_request_count": {
+          "anyOf": [
+            {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Accounted Request Count"
+        },
+        "provider_accounted_total_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Accounted Total Tokens"
+        },
+        "provider_accounted_visible_output_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Accounted Visible Output Tokens"
         },
         "provider_attempt_count": {
           "minimum": 0,
@@ -2029,7 +2201,8 @@
           "default": "2.0",
           "enum": [
             "1.0",
-            "2.0"
+            "2.0",
+            "3.0"
           ],
           "title": "Schema Version",
           "type": "string"
@@ -2037,11 +2210,38 @@
         "source_budget": {
           "$ref": "#/$defs/SourceTokenBudgetEvidence"
         },
+        "token_detail_accounting_method": {
+          "anyOf": [
+            {
+              "const": "MMAUDIT_INDEPENDENT_REASONING_COMPONENT_ENVELOPE_V1",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Token Detail Accounting Method"
+        },
         "usable_prompt_tokens": {
           "exclusiveMinimum": 0,
           "maximum": 2147483647,
           "title": "Usable Prompt Tokens",
           "type": "integer"
+        },
+        "wire_max_tokens": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 2147483647,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Wire Max Tokens"
         }
       },
       "required": [

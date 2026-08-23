@@ -9898,19 +9898,14 @@ def test_cached_prompt_tokens_may_equal_but_not_exceed_total_prompt_tokens(
             openrouter_module._validate_usage(usage)
 
 
-@pytest.mark.parametrize(("reasoning_tokens", "accepted"), [(0, True), (5, True), (6, False)])
-def test_reasoning_tokens_may_equal_but_not_exceed_total_completion_tokens(
+@pytest.mark.parametrize("reasoning_tokens", [0, 5, 6])
+def test_usage_parser_retains_bounded_reasoning_without_choosing_completion_semantics(
     reasoning_tokens: int,
-    accepted: bool,
 ) -> None:
     usage = _completion('{"answer":"reasoning accounting"}')["usage"]
     usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
 
-    if accepted:
-        assert openrouter_module._validate_usage(usage) == usage
-    else:
-        with pytest.raises(OpenRouterSchemaError, match="token details are inconsistent"):
-            openrouter_module._validate_usage(usage)
+    assert openrouter_module._validate_usage(usage) == usage
 
 
 @pytest.mark.parametrize(

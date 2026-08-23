@@ -25,6 +25,7 @@ from mmaudit.models.authenticated_runner import AuthenticatedCrossLineageLedgerI
 from mmaudit.models.generation_evidence import (
     OpenRouterGenerationEvidence,
     _reconcile_generation_evidence_structural,
+    _reconcile_noncrediting_smoke_generation_evidence_structural,
 )
 from mmaudit.models.openrouter import OpenRouterStructuredRequestCostPreview
 from mmaudit.models.qualification import CandidateModel, LineageReviewStatus
@@ -72,7 +73,7 @@ class AuthenticatedRunnerSmokeCostPlan(_StrictSmokeModel):
     artifact_kind: Literal["authenticated_runner_smoke_cost_plan"] = (
         "authenticated_runner_smoke_cost_plan"
     )
-    schema_version: Literal["1.1"] = "1.1"
+    schema_version: Literal["1.1", "1.2"] = "1.2"
     disposition: Literal["NONCREDITING_SMOKE"] = "NONCREDITING_SMOKE"
     smoke_run_index: int = Field(ge=1, le=MAX_AUTHENTICATED_RUNNER_SMOKE_RUN_INDEX)
     run_kind: CrossLineageAdjudicationRunKind
@@ -131,6 +132,13 @@ class AuthenticatedRunnerSmokeCostPlan(_StrictSmokeModel):
     @model_validator(mode="after")
     def request_is_exact_and_self_bound(self) -> Self:
         preview = self.request_preview
+        if (self.schema_version, preview.schema_version) not in {
+            ("1.1", "1.0"),
+            ("1.2", "1.1"),
+        }:
+            raise ValueError(
+                "authenticated runner smoke plan schema differs from its token accounting"
+            )
         expected_prefix = (
             f"authrunner.smoke.r{self.smoke_run_index}.candidate.{self.run_kind.value.casefold()}:"
             if self.stage == "CANDIDATE"
@@ -181,7 +189,7 @@ class AuthenticatedRunnerSmokeRunEvidence(_StrictSmokeModel):
     artifact_kind: Literal["authenticated_runner_smoke_run_evidence"] = (
         "authenticated_runner_smoke_run_evidence"
     )
-    schema_version: Literal["1.1"] = "1.1"
+    schema_version: Literal["1.1", "1.2"] = "1.2"
     disposition: Literal["NONCREDITING_SMOKE"] = "NONCREDITING_SMOKE"
     smoke_run_index: int = Field(ge=1, le=MAX_AUTHENTICATED_RUNNER_SMOKE_RUN_INDEX)
     run_kind: CrossLineageAdjudicationRunKind
@@ -227,6 +235,33 @@ class AuthenticatedRunnerSmokeRunEvidence(_StrictSmokeModel):
         judge_usage = judge_cases[0].usage_record if len(judge_cases) == 1 else None
         target = self.prepared_adjudication.target
         candidate_report_root = self.candidate_report.target.root_lineage
+        usages = (candidate_usage, judge_usage)
+        if (
+            self.schema_version == "1.1"
+            and (
+                self.candidate_cost_plan.schema_version != "1.1"
+                or self.judge_cost_plan.schema_version != "1.1"
+                or self.candidate_report.schema_version != "1.1"
+                or any(
+                    usage is not None and usage.token_detail_accounting_evidence is not None
+                    for usage in usages
+                )
+            )
+        ) or (
+            self.schema_version == "1.2"
+            and (
+                self.candidate_cost_plan.schema_version != "1.2"
+                or self.judge_cost_plan.schema_version != "1.2"
+                or self.candidate_report.schema_version != "1.2"
+                or any(
+                    usage is None or usage.token_detail_accounting_evidence is None
+                    for usage in usages
+                )
+            )
+        ):
+            raise ValueError(
+                "authenticated runner smoke run schema differs from its token accounting"
+            )
         if (
             type(self.candidate) is not CandidateModel
             or type(self.judge) is not CandidateModel
@@ -347,7 +382,7 @@ class AuthenticatedRunnerSmokeEvidenceBundle(_StrictSmokeModel):
     artifact_kind: Literal["authenticated_runner_noncrediting_smoke_evidence"] = (
         "authenticated_runner_noncrediting_smoke_evidence"
     )
-    schema_version: Literal["1.1"] = "1.1"
+    schema_version: Literal["1.1", "1.2"] = "1.2"
     purpose: Literal["NONCREDITING_SMOKE"] = "NONCREDITING_SMOKE"
     disposition: Literal["TRANSPORT_SCHEMA_IDENTITY_COST_VALID"] = (
         "TRANSPORT_SCHEMA_IDENTITY_COST_VALID"
@@ -502,6 +537,22 @@ class AuthenticatedRunnerSmokeEvidenceBundle(_StrictSmokeModel):
         )
         if len(usages) != AUTHENTICATED_RUNNER_SMOKE_LOGICAL_REQUEST_COUNT:
             raise ValueError("authenticated runner smoke bundle lacks four exact usages")
+        if (
+            self.schema_version == "1.1"
+            and (
+                any(run.schema_version != "1.1" for run in self.runs)
+                or any(usage.token_detail_accounting_evidence is not None for usage in usages)
+            )
+        ) or (
+            self.schema_version == "1.2"
+            and (
+                any(run.schema_version != "1.2" for run in self.runs)
+                or any(usage.token_detail_accounting_evidence is None for usage in usages)
+            )
+        ):
+            raise ValueError(
+                "authenticated runner smoke bundle schema differs from its token accounting"
+            )
         expected_sequence = (
             usages[0].request_id,
             usages[2].request_id,
@@ -595,7 +646,7 @@ def build_authenticated_runner_smoke_cost_plan(
     )
     values: dict[str, Any] = {
         "artifact_kind": "authenticated_runner_smoke_cost_plan",
-        "schema_version": "1.1",
+        "schema_version": "1.2" if preview.schema_version == "1.1" else "1.1",
         "disposition": "NONCREDITING_SMOKE",
         "smoke_run_index": smoke_run_index,
         "run_kind": run_kind,
@@ -624,10 +675,19 @@ def seal_authenticated_runner_smoke_run_evidence(
 ) -> AuthenticatedRunnerSmokeRunEvidence:
     """Seal one run after all four exact runtime joins have already succeeded."""
 
+    candidate_plan = values.get("candidate_cost_plan")
+    judge_plan = values.get("judge_cost_plan")
+    schema_version = (
+        "1.2"
+        if isinstance(candidate_plan, AuthenticatedRunnerSmokeCostPlan)
+        and isinstance(judge_plan, AuthenticatedRunnerSmokeCostPlan)
+        and candidate_plan.schema_version == judge_plan.schema_version == "1.2"
+        else "1.1"
+    )
     payload = {
         **values,
         "artifact_kind": "authenticated_runner_smoke_run_evidence",
-        "schema_version": "1.1",
+        "schema_version": schema_version,
         "disposition": "NONCREDITING_SMOKE",
         "serialized_authority": False,
         "grants_review_credit": False,
@@ -648,10 +708,21 @@ def seal_authenticated_runner_smoke_evidence_bundle(
 ) -> AuthenticatedRunnerSmokeEvidenceBundle:
     """Seal the final four-request result while keeping every authority flag false."""
 
+    runs = values.get("runs")
+    schema_version = (
+        "1.2"
+        if isinstance(runs, tuple)
+        and bool(runs)
+        and all(
+            isinstance(run, AuthenticatedRunnerSmokeRunEvidence) and run.schema_version == "1.2"
+            for run in runs
+        )
+        else "1.1"
+    )
     payload = {
         **values,
         "artifact_kind": "authenticated_runner_noncrediting_smoke_evidence",
-        "schema_version": "1.1",
+        "schema_version": schema_version,
         "purpose": "NONCREDITING_SMOKE",
         "disposition": "TRANSPORT_SCHEMA_IDENTITY_COST_VALID",
         **_false_bundle_authority_payload(),
@@ -704,7 +775,12 @@ def _require_generation_refetch(
     model: CandidateModel,
 ) -> None:
     try:
-        reconciled = _reconcile_generation_evidence_structural(
+        reconcile = (
+            _reconcile_noncrediting_smoke_generation_evidence_structural
+            if usage.token_detail_accounting_evidence is not None
+            else _reconcile_generation_evidence_structural
+        )
+        reconciled = reconcile(
             evidence,
             usage_record=usage,
             expected_exact_model=model.exact_model_id,
@@ -742,8 +818,43 @@ def _require_usage_preview_join(
     except (TypeError, ValueError, ValidationError):
         raise ValueError("authenticated runner smoke usage token plan is invalid") from None
     reasoning_plan = token_plan.reasoning_plan
+    token_detail = usage.token_detail_accounting_evidence
+    legacy_token_accounting = (
+        token_plan.schema_version == "2.0"
+        and preview.schema_version == "1.0"
+        and token_detail is None
+    )
+    current_token_accounting = (
+        token_plan.schema_version == "3.0"
+        and preview.schema_version == "1.1"
+        and token_detail is not None
+        and token_plan.token_detail_accounting_method
+        == preview.token_detail_accounting_method
+        == token_detail.accounting_method
+        and token_plan.wire_max_tokens
+        == preview.wire_max_tokens
+        == token_plan.reserved_output_tokens
+        and token_detail.request_token_plan_sha256 == token_plan.plan_sha256
+        and token_detail.request_body_sha256 == usage.request_body_sha256
+        and token_detail.provider_prompt_tokens == usage.prompt_tokens
+        and token_detail.provider_completion_tokens == usage.completion_tokens
+        and token_detail.provider_total_tokens == usage.total_tokens
+        and (token_detail.provider_reasoning_tokens or 0) == usage.reasoning_tokens
+        and token_detail.provider_cached_tokens == usage.cached_tokens
+        and token_detail.planned_prompt_tokens == token_plan.prompt_byte_upper_bound_tokens
+        and token_detail.planned_visible_output_tokens == token_plan.reserved_output_tokens
+        and token_detail.planned_reasoning_tokens == token_plan.reserved_reasoning_tokens
+        and token_detail.planned_completion_tokens == token_plan.requested_completion_tokens
+        and token_detail.accounted_prompt_tokens == token_plan.prompt_byte_upper_bound_tokens
+        and token_detail.accounted_visible_output_tokens == token_plan.reserved_output_tokens
+        and token_detail.accounted_reasoning_tokens == token_plan.reserved_reasoning_tokens
+        and token_detail.accounted_completion_tokens == token_plan.requested_completion_tokens
+        and token_detail.accounted_total_tokens
+        == token_plan.prompt_byte_upper_bound_tokens + token_plan.requested_completion_tokens
+    )
     if (
-        usage.request_id != preview.logical_request_id
+        not (legacy_token_accounting or current_token_accounting)
+        or usage.request_id != preview.logical_request_id
         or usage.role != preview.role
         or usage.requested_model != preview.exact_model_id
         or tuple(usage.configured_provider_endpoints) != (preview.provider_endpoint,)

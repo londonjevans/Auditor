@@ -418,6 +418,96 @@ def test_smoke_execute_uses_one_cost_bound_request_and_refetches_generation(
     assert report.generation_verification_authorized is False
 
 
+@pytest.mark.parametrize(
+    ("usage_error", "case_id_mismatch", "expected_reasons"),
+    (
+        (
+            "UsageValidationError",
+            False,
+            "usage_error=UsageValidationError",
+        ),
+        (
+            None,
+            True,
+            "case_id_mismatch=true",
+        ),
+        (
+            "UsageResponseBindingError",
+            True,
+            "usage_error=UsageResponseBindingError, case_id_mismatch=true",
+        ),
+    ),
+)
+def test_smoke_execute_preserves_bounded_usage_and_case_failure_reasons(
+    monkeypatch: pytest.MonkeyPatch,
+    usage_error: str | None,
+    case_id_mismatch: bool,
+    expected_reasons: str,
+) -> None:
+    suite = load_model_benchmark_corpus(CORPUS_PATH)
+    case, truth = _selection(suite)
+    target = ModelBenchmarkTarget(model_id="fixture/model-v1")
+    source = _smoke_report(suite, model_id=target.model_id)
+    assert source.result.normalized_response is not None
+    assert source.result.usage_record is not None
+    usage = _attest_owned_real_usage_record(source.result.usage_record)
+    response = source.result.normalized_response
+    if case_id_mismatch:
+        response = response.model_copy(update={"case_id": suite.cases[1].case_id})
+    descriptor = authenticated_runner_smoke_model_benchmark_request_descriptor(
+        smoke_run_index=1,
+        run_kind="PRIMARY",
+        selection_sha256=SELECTION_SHA256,
+        case=case,
+        target=target,
+    )
+    preview = _smoke_preview(descriptor)
+
+    async def complete(
+        client: OpenRouterClient,
+        **_kwargs: Any,
+    ) -> StructuredCompletion[ModelBenchmarkResponse]:
+        client.usage.add(usage)
+        return StructuredCompletion(value=response, usage_record=usage)
+
+    async def unexpected_generation_fetch(
+        _client: OpenRouterClient,
+        _generation_id: str,
+    ) -> OpenRouterGenerationEvidence:
+        raise AssertionError("generation retrieval must follow smoke completion validation")
+
+    monkeypatch.setattr(OpenRouterClient, "complete_with_evidence", complete)
+    monkeypatch.setattr(OpenRouterClient, "get_generation_evidence", unexpected_generation_fetch)
+    monkeypatch.setattr(
+        benchmark_models,
+        "_successful_usage_error",
+        lambda *_args, **_kwargs: usage_error,
+    )
+    client = object.__new__(OpenRouterClient)
+    object.__setattr__(client, "usage", UsageLedger())
+
+    with pytest.raises(ValueError) as exc_info:
+        asyncio.run(
+            execute_noncrediting_model_benchmark_smoke(
+                smoke_run_index=1,
+                suite=suite,
+                selected_case=case,
+                selected_ground_truth=truth,
+                selection_sha256=SELECTION_SHA256,
+                target=target,
+                client=client,
+                run_kind="PRIMARY",
+                expected_request_cost_preview=preview,
+            )
+        )
+
+    assert str(exc_info.value) == (
+        "model benchmark smoke completion is not exact successful REAL evidence "
+        f"({expected_reasons})"
+    )
+    assert client.usage.records == [usage]
+
+
 def test_smoke_report_replays_one_case_and_every_authority_field_is_false() -> None:
     suite = load_model_benchmark_corpus(CORPUS_PATH)
     case, truth = _selection(suite)

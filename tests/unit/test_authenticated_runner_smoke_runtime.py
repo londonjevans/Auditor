@@ -26,6 +26,7 @@ from mmaudit.benchmark.cross_lineage_adjudication import (
 from mmaudit.benchmark.models import load_model_benchmark_corpus
 from mmaudit.config import AuditConfig
 from mmaudit.models.authenticated_runner_smoke import (
+    AuthenticatedRunnerSmokeCostPlan,
     AuthenticatedRunnerSmokeEvidenceBundle,
     AuthenticatedRunnerSmokeRunEvidence,
     build_authenticated_runner_smoke_cost_plan,
@@ -413,6 +414,7 @@ def _fake_bundle_validator_subject() -> tuple[
     ]
     plans = [
         SimpleNamespace(
+            schema_version="1.1",
             smoke_run_index=1,
             request_preview=previews[index],
             maximum_attempts=2,
@@ -425,6 +427,7 @@ def _fake_bundle_validator_subject() -> tuple[
     usages = [
         SimpleNamespace(
             request_id=f"smoke-request-{index}",
+            token_detail_accounting_evidence=None,
             openrouter_generation_id=f"generation-{index}",
             request_body_sha256=canonical_sha256({"body": index}),
             attempts=1,
@@ -450,6 +453,7 @@ def _fake_bundle_validator_subject() -> tuple[
         public_lineage_manifest_file_sha256="5" * 64,
     )
     primary = SimpleNamespace(
+        schema_version="1.1",
         smoke_run_index=1,
         run_kind=CrossLineageAdjudicationRunKind.PRIMARY,
         run_sha256="7" * 64,
@@ -458,6 +462,7 @@ def _fake_bundle_validator_subject() -> tuple[
         candidate_cost_plan=plans[0],
         judge_cost_plan=plans[1],
         candidate_report=SimpleNamespace(
+            schema_version="1.1",
             smoke_run_index=1,
             result=SimpleNamespace(usage_record=usages[0]),
         ),
@@ -465,6 +470,7 @@ def _fake_bundle_validator_subject() -> tuple[
         adjudication_report=SimpleNamespace(cases=(SimpleNamespace(usage_record=usages[1]),)),
     )
     replay = SimpleNamespace(
+        schema_version="1.1",
         smoke_run_index=1,
         run_kind=CrossLineageAdjudicationRunKind.REPLAY,
         run_sha256="8" * 64,
@@ -473,6 +479,7 @@ def _fake_bundle_validator_subject() -> tuple[
         candidate_cost_plan=plans[2],
         judge_cost_plan=plans[3],
         candidate_report=SimpleNamespace(
+            schema_version="1.1",
             smoke_run_index=1,
             result=SimpleNamespace(usage_record=usages[2]),
         ),
@@ -488,6 +495,7 @@ def _fake_bundle_validator_subject() -> tuple[
         for usage in usages
     ]
     bundle = SimpleNamespace(
+        schema_version="1.1",
         smoke_run_index=1,
         runs=(primary, replay),
         selected_case_id="case-df79ea132113b863",
@@ -543,6 +551,7 @@ def _fake_run_validator_subject(
     request_sha256 = "a" * 64
     candidate_usage = SimpleNamespace(
         request_id="candidate-request",
+        token_detail_accounting_evidence=None,
         routing={
             "privacy_profile": "SYNTHETIC_BENCHMARK",
             "privacy_source_classification": "SYNTHETIC_COMMITTED",
@@ -550,10 +559,14 @@ def _fake_run_validator_subject(
             "privacy_source_proof_kind": ("PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK"),
         },
     )
-    judge_usage = SimpleNamespace(request_id=f"authrunner.smoke.r1.judge.primary:{request_sha256}")
+    judge_usage = SimpleNamespace(
+        request_id=f"authrunner.smoke.r1.judge.primary:{request_sha256}",
+        token_detail_accounting_evidence=None,
+    )
     embedded_candidate = SimpleNamespace(retrieved_at=NOW)
     embedded_judge = SimpleNamespace(retrieved_at=NOW)
     candidate_report = SimpleNamespace(
+        schema_version="1.1",
         smoke_run_index=1,
         run_kind="PRIMARY",
         selection_sha256="b" * 64,
@@ -573,6 +586,7 @@ def _fake_run_validator_subject(
         ),
     )
     candidate_plan = SimpleNamespace(
+        schema_version="1.1",
         smoke_run_index=1,
         run_kind=CrossLineageAdjudicationRunKind.PRIMARY,
         stage="CANDIDATE",
@@ -605,6 +619,7 @@ def _fake_run_validator_subject(
         ),
     )
     judge_plan = SimpleNamespace(
+        schema_version="1.1",
         smoke_run_index=1,
         run_kind=CrossLineageAdjudicationRunKind.PRIMARY,
         stage="JUDGE",
@@ -627,6 +642,7 @@ def _fake_run_validator_subject(
         ),
     )
     run = SimpleNamespace(
+        schema_version="1.1",
         smoke_run_index=1,
         run_kind=CrossLineageAdjudicationRunKind.PRIMARY,
         candidate=candidate,
@@ -1454,6 +1470,108 @@ async def test_smoke_candidate_revokes_generation_capability_after_detached_refe
 
 
 @pytest.mark.asyncio
+async def test_smoke_candidate_reconciles_unknown_envelope_before_trusted_refetch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    launch = _launch(config=_smoke_config(config_factory), tmp_path=tmp_path)
+    source = await asyncio.to_thread(
+        _smoke_report,
+        launch.benchmark_suite,
+        model_id=CANDIDATE_ID,
+    )
+    generation = source.result.generation_evidence
+    assert generation is not None
+    usage = SimpleNamespace(token_detail_accounting_evidence=object())
+    report = SimpleNamespace(
+        report_sha256=source.report_sha256,
+        result=SimpleNamespace(usage_record=usage, generation_evidence=generation),
+    )
+    request = SimpleNamespace(
+        benchmark_report_sha256=source.report_sha256,
+        case_id=source.result.case_id,
+        exact_model_id=CANDIDATE_ID,
+        canonical_model_id=CANDIDATE_ID,
+        catalog_identity_binding_sha256="a" * 64,
+        discovery_evidence_sha256="b" * 64,
+        usage_record=usage,
+        expected_provider_name="Fixture Provider",
+    )
+    events: list[str] = []
+
+    class _Capability:
+        def attestation_for(self, **_kwargs: object) -> OpenRouterGenerationEvidence:
+            events.append("ATTEST")
+            return generation
+
+    class _FakeClient:
+        async def create_trusted_generation_verification(
+            self,
+            _requests: tuple[object, ...],
+        ) -> _Capability:
+            events.append("ISSUE")
+            return _Capability()
+
+        async def close(self) -> None:
+            events.append("CLOSE")
+
+    async def refresh(**_kwargs: object) -> None:
+        return None
+
+    async def execute_smoke(**_kwargs: object) -> object:
+        return report
+
+    def reconcile(
+        observed: OpenRouterGenerationEvidence,
+        **kwargs: object,
+    ) -> OpenRouterGenerationEvidence:
+        candidate = launch.candidate_registry.candidates[0]
+        assert observed is generation
+        assert kwargs["usage_record"] is usage
+        assert kwargs["expected_exact_model"] == candidate.exact_model_id
+        assert kwargs["expected_canonical_model"] == candidate.canonical_model_slug
+        assert kwargs["expected_provider_name"] == candidate.approved_provider_name
+        events.append("RECONCILE")
+        return observed
+
+    monkeypatch.setattr(
+        smoke_runtime_module._SmokeOpenRouterAdapter,
+        "_new_candidate_client",
+        lambda *_args, **_kwargs: _FakeClient(),
+    )
+    monkeypatch.setattr(smoke_runtime_module, "_refresh_and_register_exact_route", refresh)
+    monkeypatch.setattr(
+        smoke_runtime_module,
+        "execute_noncrediting_model_benchmark_smoke",
+        execute_smoke,
+    )
+    monkeypatch.setattr(smoke_runtime_module, "_generation_request", lambda **_kwargs: request)
+    monkeypatch.setattr(
+        smoke_runtime_module,
+        "reconcile_noncrediting_smoke_generation_evidence",
+        reconcile,
+    )
+    secrets = OperatorSecrets({OPENROUTER_API_KEY_NAME: "synthetic-smoke-envelope-test"})
+    adapter = smoke_runtime_module._SmokeOpenRouterAdapter(
+        launch=launch,
+        secrets=secrets,
+        _generation_revoke=lambda _capability: events.append("REVOKE"),
+    )
+    try:
+        returned, refetch = await adapter.candidate(
+            plan=launch.run_plans[0],
+            cost_plan=cast(Any, SimpleNamespace(request_preview=object())),
+        )
+        assert returned is report
+        assert refetch is generation
+        assert events == ["RECONCILE", "ISSUE", "ATTEST", "REVOKE", "CLOSE"]
+    finally:
+        await adapter.close()
+        secrets.clear()
+
+
+@pytest.mark.asyncio
 async def test_smoke_judge_revokes_generation_capability_after_detached_refetch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1744,9 +1862,20 @@ async def test_preflight_admits_r2_without_changing_the_reconciled_r1_entry(
     )
 
     assert inventory.smoke_run_index == 2
+    assert all(plan.schema_version == "1.2" for plan in inventory.candidate_cost_plans)
+    assert all(
+        plan.request_preview.schema_version == "1.1" for plan in inventory.candidate_cost_plans
+    )
     assert all(
         ".r2." in plan.request_preview.logical_request_id for plan in inventory.candidate_cost_plans
     )
+    current_as_legacy = inventory.candidate_cost_plans[0].model_dump(mode="python")
+    current_as_legacy["schema_version"] = "1.1"
+    current_as_legacy["plan_sha256"] = canonical_sha256(
+        {key: value for key, value in current_as_legacy.items() if key != "plan_sha256"}
+    )
+    with pytest.raises(ValueError, match="schema differs from its token accounting"):
+        AuthenticatedRunnerSmokeCostPlan.model_validate(current_as_legacy, strict=True)
     assert ledger.snapshot() == before
     assert ledger.snapshot().entries[0].request_id == r1_request_id
     assert ledger.snapshot().entries[0].status is CostEntryStatus.RECONCILED
@@ -1781,6 +1910,15 @@ def test_r2_cost_plans_bind_both_provider_attempt_ids() -> None:
         f"authrunner.smoke.r2.judge.replay:{request_sha256}",
         f"authrunner.smoke.r2.judge.replay:{request_sha256}:attempt:2",
     )
+
+    assert candidate.schema_version == judge.schema_version == "1.1"
+    legacy_as_current = candidate.model_dump(mode="python")
+    legacy_as_current["schema_version"] = "1.2"
+    legacy_as_current["plan_sha256"] = canonical_sha256(
+        {key: value for key, value in legacy_as_current.items() if key != "plan_sha256"}
+    )
+    with pytest.raises(ValueError, match="schema differs from its token accounting"):
+        AuthenticatedRunnerSmokeCostPlan.model_validate(legacy_as_current, strict=True)
 
 
 @pytest.mark.asyncio
@@ -2650,6 +2788,21 @@ def test_bundle_rejects_mixed_common_preview_config_hashes(
         _validate_fake_bundle(monkeypatch, bundle)
 
 
+@pytest.mark.parametrize("drift", ("current_label", "legacy_with_token_detail"))
+def test_bundle_rejects_resealed_token_accounting_version_crossover(
+    monkeypatch: pytest.MonkeyPatch,
+    drift: str,
+) -> None:
+    bundle, _previews, usages, _entries = _fake_bundle_validator_subject()
+    if drift == "current_label":
+        bundle.schema_version = "1.2"
+    else:
+        usages[0].token_detail_accounting_evidence = SimpleNamespace()
+
+    with pytest.raises(ValueError, match="schema differs from its token accounting"):
+        _validate_fake_bundle(monkeypatch, bundle)
+
+
 @pytest.mark.parametrize(
     "binding",
     ("run", "candidate_report", "candidate_plan", "judge_plan"),
@@ -2706,6 +2859,23 @@ def test_run_requires_monotonic_generation_refetch_timestamps(
 
     run.judge_generation_refetch.retrieved_at = NOW - timedelta(seconds=1)
     with pytest.raises(ValueError, match="refetch is not fresh"):
+        _validate_fake_run(monkeypatch, run)
+
+
+@pytest.mark.parametrize("drift", ("current_label", "legacy_with_token_detail"))
+def test_run_rejects_resealed_token_accounting_version_crossover(
+    monkeypatch: pytest.MonkeyPatch,
+    drift: str,
+) -> None:
+    run, _prepared, _candidate_report = _fake_run_validator_subject()
+    if drift == "current_label":
+        run.schema_version = "1.2"
+    else:
+        run.candidate_report.result.usage_record.token_detail_accounting_evidence = (
+            SimpleNamespace()
+        )
+
+    with pytest.raises(ValueError, match="schema differs from its token accounting"):
         _validate_fake_run(monkeypatch, run)
 
 
