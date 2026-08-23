@@ -8,18 +8,22 @@ import hashlib
 import json
 import logging
 import math
+import os
 import random
 import re
+import ssl
 import sys
 import time
 import uuid
+import weakref
 from collections.abc import Callable, Coroutine, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation, localcontext
 from functools import lru_cache
 from pathlib import Path
-from threading import Lock
+from threading import Lock, get_ident
+from types import CodeType, FunctionType, ModuleType
 from typing import TYPE_CHECKING, Any, Literal, Protocol, Self, TypeVar, cast
 from urllib.parse import quote
 from weakref import WeakKeyDictionary
@@ -29,6 +33,8 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from pydantic_core import SchemaValidator
 
+import mmaudit.models.generation_evidence as generation_evidence_module
+import mmaudit.models.usage as usage_module
 from mmaudit.config import ExecutionConfig, PrivacyConfig, TokenBudgetConfig, model_family
 from mmaudit.constants import OPENROUTER_DEFAULT_BASE_URL, VERSION
 from mmaudit.models.discovery import (
@@ -63,8 +69,11 @@ from mmaudit.models.generation_evidence import (
     OpenRouterGenerationEvidence,
     TrustedGenerationVerification,
     _attest_authrunner_generation_origin,
+    _initial_real_generation_reconciliation_expectation,
     _issue_trusted_generation_verification,
     _reconcile_generation_evidence_structural,
+    _reconcile_generation_expectation_structural,
+    _reconcile_noncrediting_smoke_generation_evidence_structural,
     _register_authrunner_generation_origin_issuer,
     validate_generation_id,
     validate_openrouter_generation_payload,
@@ -193,9 +202,11 @@ from mmaudit.models.usage import (
     _attest_authrunner_owned_real_usage_origin,
     _attest_owned_real_usage_record,
     _authrunner_usage_origin_scope,
+    _has_authrunner_owned_real_usage_origin,
     _has_owned_real_usage_attestation,
     _register_authrunner_owned_real_usage_origin_issuer,
     _validated_usage_copy_preserving_owned_attestation,
+    structurally_noncrediting_unknown_token_smoke_usage_error,
 )
 from mmaudit.orchestration.budgets import (
     BudgetExhaustedError,
@@ -222,7 +233,7 @@ from mmaudit.orchestration.context_manifest import (
     ContextPreflightSource,
     ContextRequestState,
 )
-from mmaudit.orchestration.cost_ledger import AtomicCostLedger
+from mmaudit.orchestration.cost_ledger import AtomicCostLedger, CostEntryStatus
 from mmaudit.privacy import (
     EffectivePrivacyPolicyEvidence,
     EndpointPolicyClass,
@@ -4069,6 +4080,132 @@ def _registered_endpoints_for_output_mode(
     return tuple(projected)
 
 
+def _provider_security_header_fingerprint(headers: Mapping[str, str]) -> str:
+    """Hash every sealed configured header without retaining header values."""
+
+    if type(headers) is not dict or not all(
+        type(name) is str and type(value) is str for name, value in headers.items()
+    ):
+        raise OpenRouterPrivacyError("provider transport headers are not sealed")
+    projected = tuple(
+        sorted(
+            (
+                name.casefold(),
+                hashlib.sha256(value.encode("utf-8")).hexdigest(),
+            )
+            for name, value in headers.items()
+        )
+    )
+    if len({name for name, _digest in projected}) != len(projected):
+        raise OpenRouterPrivacyError("provider transport headers are not unique")
+    return hashlib.sha256(
+        json.dumps(projected, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _httpx_header_multiset_fingerprint(headers: httpx.Headers) -> str:
+    if type(headers) is not httpx.Headers:
+        raise OpenRouterPrivacyError("owned HTTP client headers have the wrong exact type")
+    header_values = vars(headers)
+    if frozenset(header_values) != {"_list", "_encoding"}:
+        raise OpenRouterPrivacyError("owned HTTP client headers have mutable instance state")
+    raw_headers = object.__getattribute__(headers, "_list")
+    encoding = object.__getattribute__(headers, "_encoding")
+    if type(raw_headers) is not list or (encoding is not None and type(encoding) is not str):
+        raise OpenRouterPrivacyError("owned HTTP client headers have invalid internal state")
+    projected: list[tuple[str, str, str]] = []
+    for item in raw_headers:
+        if (
+            type(item) is not tuple
+            or len(item) != 3
+            or any(type(value) is not bytes for value in item)
+        ):
+            raise OpenRouterPrivacyError("owned HTTP client headers have invalid raw entries")
+        raw_name, normalized_name, raw_value = item
+        projected.append(
+            (
+                raw_name.hex(),
+                normalized_name.hex(),
+                hashlib.sha256(raw_value).hexdigest(),
+            )
+        )
+    return hashlib.sha256(
+        json.dumps(sorted(projected), ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _httpx_timeout_configuration(timeout: httpx.Timeout) -> tuple[float | None, ...]:
+    if type(timeout) is not httpx.Timeout:
+        raise OpenRouterPrivacyError("owned HTTP client timeout has the wrong exact type")
+    timeout_values = vars(timeout)
+    if frozenset(timeout_values) != {"connect", "read", "write", "pool"}:
+        raise OpenRouterPrivacyError("owned HTTP client timeout has mutable instance state")
+    values = tuple(
+        object.__getattribute__(timeout, name) for name in ("connect", "read", "write", "pool")
+    )
+    if any(
+        value is not None
+        and (type(value) not in {float, int} or type(value) is bool or not math.isfinite(value))
+        for value in values
+    ):
+        raise OpenRouterPrivacyError("owned HTTP client timeout is invalid")
+    return cast(tuple[float | None, ...], values)
+
+
+def _tls_context_security_fingerprint(context: ssl.SSLContext) -> str:
+    """Hash the introspectable TLS policy and trust store without retaining certificates."""
+
+    if type(context) is not ssl.SSLContext:
+        raise OpenRouterPrivacyError("owned TLS context has the wrong exact type")
+    if vars(context):
+        raise OpenRouterPrivacyError("owned TLS context has mutable instance state")
+    if (
+        context.check_hostname is not True
+        or context.verify_mode != ssl.CERT_REQUIRED
+        or context.minimum_version < ssl.TLSVersion.TLSv1_2
+        or context.keylog_filename is not None
+        or context.security_level < 2
+    ):
+        raise OpenRouterPrivacyError("owned TLS context does not meet the sealed security policy")
+    ca_digests = tuple(
+        sorted(
+            hashlib.sha256(certificate).hexdigest() for certificate in context.get_ca_certs(True)
+        )
+    )
+    cipher_projection = tuple(
+        sorted(
+            (
+                str(cipher.get("name")),
+                str(cipher.get("protocol")),
+                int(cipher.get("strength_bits", 0)),
+                int(cipher.get("alg_bits", 0)),
+            )
+            for cipher in context.get_ciphers()
+        )
+    )
+    payload = {
+        "ca_digests": ca_digests,
+        "cert_store_stats": context.cert_store_stats(),
+        "check_hostname": context.check_hostname,
+        "cipher_projection": cipher_projection,
+        "hostname_checks_common_name": context.hostname_checks_common_name,
+        "keylog_filename": context.keylog_filename,
+        "maximum_version": int(context.maximum_version),
+        "minimum_version": int(context.minimum_version),
+        "num_tickets": context.num_tickets,
+        "options": context.options,
+        "post_handshake_auth": context.post_handshake_auth,
+        "security_level": context.security_level,
+        "verify_flags": context.verify_flags,
+        "verify_mode": int(context.verify_mode),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+
+
 @dataclass(frozen=True)
 class _TrustedTransportBinding:
     """Issuer-held transport authority that instance attribute mutation cannot create."""
@@ -4140,6 +4277,2053 @@ def _transport_binding_registry() -> tuple[
 _register_trusted_transport_binding, _lookup_trusted_transport_binding = (
     _transport_binding_registry()
 )
+_TRUSTED_LOOKUP_TRANSPORT_BINDING = _lookup_trusted_transport_binding
+
+
+class _ProviderTransportAttemptReceipt:
+    """Opaque one-shot proof that one exact provider transport attempt ran."""
+
+    __slots__ = ("__weakref__",)
+
+    def __new__(cls, *_args: object, **_kwargs: object) -> _ProviderTransportAttemptReceipt:
+        del cls, _args, _kwargs
+        raise TypeError("provider transport attempt receipts cannot be constructed directly")
+
+
+class _ProviderTransportOperationGrant:
+    """Opaque parent-issued authority for one exact transport receipt chain."""
+
+    __slots__ = ("__weakref__",)
+
+    def __new__(cls, *_args: object, **_kwargs: object) -> _ProviderTransportOperationGrant:
+        del cls, _args, _kwargs
+        raise TypeError("provider transport operation grants cannot be constructed directly")
+
+
+def _nested_code(function: Callable[..., object], name: str) -> CodeType:
+    matches = tuple(
+        value
+        for value in function.__code__.co_consts
+        if isinstance(value, CodeType) and value.co_name == name
+    )
+    if len(matches) != 1:
+        raise RuntimeError(f"provider transport callable lacks one exact {name!r} frame")
+    return matches[0]
+
+
+def _build_provider_transport_attempt_authority(
+    *,
+    _isolated_stream: Callable[..., object] | None = None,
+    _isolated_parent_codes: Mapping[str, CodeType] | None = None,
+    _isolated_attempt_codes: Mapping[str, CodeType] | None = None,
+    _isolated_frame_globals: dict[str, object] | None = None,
+) -> tuple[
+    Callable[..., None],
+    Callable[..., _ProviderTransportOperationGrant | None],
+    Callable[..., _ProviderTransportAttemptReceipt | None],
+    Callable[..., Coroutine[Any, Any, httpx.Response]],
+    Callable[..., None],
+    Callable[[_ProviderTransportAttemptReceipt], None],
+    Callable[..., bool],
+    Callable[..., bool],
+    Callable[[_ProviderTransportOperationGrant], None],
+]:
+    """Keep REAL POST/GET transport receipts behind captured live-I/O frames."""
+
+    if _isolated_stream is None:
+
+        def register_dormant(**_kwargs: object) -> None:
+            return None
+
+        def prepare_dormant_operation(
+            *_args: object,
+            **_kwargs: object,
+        ) -> _ProviderTransportOperationGrant | None:
+            return None
+
+        def reject_dormant_attempt(
+            *_args: object,
+            **_kwargs: object,
+        ) -> _ProviderTransportAttemptReceipt | None:
+            raise OpenRouterPrivacyError("provider transport receipt authority is dormant")
+
+        async def reject_dormant_dispatch(
+            *_args: object,
+            **_kwargs: object,
+        ) -> httpx.Response:
+            raise OpenRouterPrivacyError("provider transport receipt authority is dormant")
+
+        def reject_dormant_transition(*_args: object, **_kwargs: object) -> None:
+            raise OpenRouterPrivacyError("provider transport receipt authority is dormant")
+
+        def revoke_dormant_attempt(_receipt: _ProviderTransportAttemptReceipt) -> None:
+            return None
+
+        def inspect_dormant_attempt(*_args: object, **_kwargs: object) -> bool:
+            return False
+
+        def consume_dormant_attempt(*_args: object, **_kwargs: object) -> bool:
+            return False
+
+        def revoke_dormant_operation(_grant: _ProviderTransportOperationGrant) -> None:
+            return None
+
+        return (
+            register_dormant,
+            prepare_dormant_operation,
+            reject_dormant_attempt,
+            reject_dormant_dispatch,
+            reject_dormant_transition,
+            revoke_dormant_attempt,
+            inspect_dormant_attempt,
+            consume_dormant_attempt,
+            revoke_dormant_operation,
+        )
+
+    import h11 as h11_module
+    import httpcore._async.connection as httpcore_async_connection_module
+    import httpcore._async.connection_pool as httpcore_async_connection_pool_module
+    import httpcore._async.http11 as httpcore_async_http11_module
+    import httpcore._synchronization as httpcore_synchronization_module
+    import httpx._client as httpx_client_module
+    import httpx._config as httpx_config_module
+    import httpx._models as httpx_models_module
+    import httpx._transports.default as httpx_default_transport_module
+    import httpx._urls as httpx_urls_module
+
+    type ReceiptState = dict[str, object]
+    type Issuer = tuple[
+        object,
+        type[object],
+        Callable[..., object],
+        CodeType,
+        Callable[..., object],
+        Callable[..., object],
+        Callable[[object], _TrustedTransportBinding | None],
+        Callable[[], bool],
+        Callable[[object], ExecutionEvidenceKind],
+        Callable[[AtomicCostLedger], object],
+        dict[str, object],
+        Callable[..., object],
+        Callable[..., object],
+        Callable[..., object],
+    ]
+
+    issuer: Issuer | None = None
+    issuer_callable_states: tuple[tuple[object, ...], ...] | None = None
+    issuer_codes: dict[str, CodeType] | None = None
+    registry: dict[
+        int,
+        tuple[weakref.ReferenceType[_ProviderTransportAttemptReceipt], ReceiptState],
+    ] = {}
+    grant_registry: dict[
+        int,
+        tuple[weakref.ReferenceType[_ProviderTransportOperationGrant], ReceiptState],
+    ] = {}
+    receipt_seals: WeakKeyDictionary[object, dict[str, object]] = WeakKeyDictionary()
+    lock = Lock()
+    trusted_sys = sys
+    trusted_getframe = sys._getframe
+    trusted_asyncio = asyncio
+    trusted_httpx = httpx
+    trusted_current_task = asyncio.current_task
+    trusted_get_ident = get_ident
+    trusted_getpid = os.getpid
+    trusted_receipt_type = _ProviderTransportAttemptReceipt
+    trusted_grant_type = _ProviderTransportOperationGrant
+    trusted_reservation_type = Reservation
+    trusted_budget_manager_type = BudgetManager
+    trusted_atomic_ledger_type = AtomicCostLedger
+    trusted_execution_evidence_type = ExecutionEvidenceKind
+    trusted_usage_record_type = UsageRecord
+    trusted_real_evidence = ExecutionEvidenceKind.REAL
+    trusted_privacy_error_type = OpenRouterPrivacyError
+    trusted_schema_error_type = OpenRouterSchemaError
+    trusted_sha256 = hashlib.sha256
+    trusted_json_loads = json.loads
+    trusted_json_dumps = json.dumps
+    trusted_debug_json_default = _debug_json_default
+    trusted_reject_nonfinite = _reject_nonfinite_json_constant
+    trusted_unique_object = _unique_json_object
+    trusted_finite_numbers = _require_finite_json_numbers
+    trusted_object_new = object.__new__
+    trusted_object_getattribute = object.__getattribute__
+    trusted_async_client_type = httpx.AsyncClient
+    trusted_async_client_stream = httpx.AsyncClient.stream
+    trusted_async_client_build_request = httpx.AsyncClient.build_request
+    trusted_response_type = httpx.Response
+    trusted_response_aiter_bytes = httpx.Response.aiter_bytes
+    trusted_request_type = httpx.Request
+    trusted_headers_type = httpx.Headers
+    trusted_timeout_type = httpx.Timeout
+    trusted_url_type = httpx.URL
+    trusted_query_params_type = httpx.QueryParams
+    trusted_decode_response_headers = _decoded_response_headers
+    trusted_attempt_request_id = _attempt_request_id
+    trusted_security_header_fingerprint = _provider_security_header_fingerprint
+    trusted_validate_generation_id = validate_generation_id
+    trusted_is_exact_model_id = is_exact_openrouter_model_id
+    trusted_sha256_pattern = _SHA256_PATTERN
+    trusted_logical_request_id_pattern = _LOGICAL_REQUEST_ID_PATTERN
+    trusted_httpx_header_fingerprint = _httpx_header_multiset_fingerprint
+    trusted_httpx_timeout_configuration = _httpx_timeout_configuration
+    trusted_tls_context_fingerprint = _tls_context_security_fingerprint
+    trusted_owned_httpx_pristine = _owned_httpx_callables_are_pristine
+    trusted_network_backend_current = _network_backend_graph_is_current
+    trusted_safe_headers = safe_headers
+    trusted_decoded_response_headers = _decoded_response_headers
+
+    def canonical_sha256(value: object) -> str:
+        return trusted_sha256(
+            trusted_json_dumps(
+                value,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+                default=trusted_debug_json_default,
+            ).encode("utf-8")
+        ).hexdigest()
+
+    empty_cell = trusted_object_new(object)
+
+    def function_state(function: FunctionType) -> tuple[object, ...]:
+        closure = function.__closure__
+        closure_values: list[tuple[object, object]] = []
+        for cell in closure or ():
+            try:
+                contents = cell.cell_contents
+            except ValueError:
+                contents = empty_cell
+            closure_values.append((cell, contents))
+        kwdefaults = function.__kwdefaults__
+        attributes = function.__dict__
+        return (
+            function,
+            function.__code__,
+            function.__defaults__,
+            kwdefaults,
+            tuple(sorted((name, value) for name, value in (kwdefaults or {}).items())),
+            function.__globals__,
+            closure,
+            tuple(closure_values),
+            attributes,
+            tuple(sorted(attributes.items())),
+        )
+
+    def function_state_is_current(state: tuple[object, ...]) -> bool:
+        function = state[0]
+        if type(function) is not FunctionType:
+            return False
+        current_kwdefaults = function.__kwdefaults__
+        current_attributes = function.__dict__
+        current_closure = function.__closure__
+        expected_kwdefaults = cast(tuple[tuple[str, object], ...], state[4])
+        expected_closure = cast(tuple[tuple[object, object], ...], state[7])
+        expected_attributes = cast(tuple[tuple[str, object], ...], state[9])
+        if (
+            function.__code__ is not state[1]
+            or function.__defaults__ is not state[2]
+            or current_kwdefaults is not state[3]
+            or function.__globals__ is not state[5]
+            or current_closure is not state[6]
+            or current_attributes is not state[8]
+            or type(current_kwdefaults) not in {dict, type(None)}
+            or type(current_attributes) is not dict
+            or len(current_kwdefaults or {}) != len(expected_kwdefaults)
+            or any(
+                (current_kwdefaults or {}).get(name) is not value
+                for name, value in expected_kwdefaults
+            )
+            or len(current_attributes) != len(expected_attributes)
+            or any(current_attributes.get(name) is not value for name, value in expected_attributes)
+            or len(current_closure or ()) != len(expected_closure)
+        ):
+            return False
+        for current_cell, (expected_cell, expected_value) in zip(
+            current_closure or (), expected_closure, strict=True
+        ):
+            if current_cell is not expected_cell:
+                return False
+            try:
+                current_value = current_cell.cell_contents
+            except ValueError:
+                current_value = empty_cell
+            if current_value is not expected_value:
+                return False
+        return True
+
+    def descriptor_functions(descriptor: object) -> tuple[FunctionType, ...]:
+        if type(descriptor) is FunctionType:
+            return (descriptor,)
+        if type(descriptor) in {classmethod, staticmethod}:
+            function = trusted_object_getattribute(descriptor, "__func__")
+            return (function,) if type(function) is FunctionType else ()
+        if type(descriptor) is property:
+            return tuple(
+                function
+                for function in (
+                    trusted_object_getattribute(descriptor, "fget"),
+                    trusted_object_getattribute(descriptor, "fset"),
+                    trusted_object_getattribute(descriptor, "fdel"),
+                )
+                if type(function) is FunctionType
+            )
+        return ()
+
+    def class_dispatch_surface(
+        subject_type: type[object],
+    ) -> tuple[tuple[str, object, object], ...]:
+        return tuple(
+            (
+                name,
+                descriptor,
+                tuple(function_state(function) for function in descriptor_functions(descriptor)),
+            )
+            for name, descriptor in sorted(vars(subject_type).items())
+            if callable(descriptor) or type(descriptor) in {classmethod, staticmethod, property}
+        )
+
+    def class_dispatch_surface_is_current(
+        subject_type: type[object],
+        expected: tuple[tuple[str, object, object], ...],
+    ) -> bool:
+        current = tuple(
+            (name, descriptor)
+            for name, descriptor in sorted(vars(subject_type).items())
+            if callable(descriptor) or type(descriptor) in {classmethod, staticmethod, property}
+        )
+        if len(current) != len(expected):
+            return False
+        for (current_name, current_descriptor), (
+            expected_name,
+            expected_descriptor,
+            function_states,
+        ) in zip(current, expected, strict=True):
+            if current_name != expected_name or current_descriptor is not expected_descriptor:
+                return False
+            if not all(
+                function_state_is_current(cast(tuple[object, ...], state))
+                for state in cast(tuple[object, ...], function_states)
+            ):
+                return False
+        return True
+
+    def module_dispatch_surface(module: ModuleType) -> tuple[tuple[str, object, object], ...]:
+        return tuple(
+            (
+                name,
+                value,
+                (
+                    class_dispatch_surface(value)
+                    if isinstance(value, type)
+                    else ((function_state(value),) if type(value) is FunctionType else ())
+                ),
+            )
+            for name, value in sorted(vars(module).items())
+            if isinstance(value, ModuleType) or callable(value) or isinstance(value, type)
+        )
+
+    def module_dispatch_surface_is_current(
+        module: ModuleType,
+        expected: tuple[tuple[str, object, object], ...],
+    ) -> bool:
+        current = tuple(
+            (name, value)
+            for name, value in sorted(vars(module).items())
+            if isinstance(value, ModuleType) or callable(value) or isinstance(value, type)
+        )
+        if len(current) != len(expected):
+            return False
+        for (current_name, current_value), (
+            expected_name,
+            expected_value,
+            nested_state,
+        ) in zip(current, expected, strict=True):
+            if current_name != expected_name or current_value is not expected_value:
+                return False
+            if isinstance(expected_value, type):
+                if not class_dispatch_surface_is_current(
+                    expected_value,
+                    cast(tuple[tuple[str, object, object], ...], nested_state),
+                ):
+                    return False
+            elif type(expected_value) is FunctionType and not all(
+                function_state_is_current(cast(tuple[object, ...], state))
+                for state in cast(tuple[object, ...], nested_state)
+            ):
+                return False
+        return True
+
+    trusted_library_modules = (
+        trusted_httpx,
+        ssl,
+        httpx_client_module,
+        httpx_config_module,
+        httpx_models_module,
+        httpx_default_transport_module,
+        httpx_urls_module,
+        httpcore,
+        httpcore_async_connection_pool_module,
+        httpcore_async_connection_module,
+        httpcore_async_http11_module,
+        httpcore_synchronization_module,
+        h11_module,
+    )
+    trusted_library_surfaces = tuple(
+        (module, module_dispatch_surface(module)) for module in trusted_library_modules
+    )
+    trusted_bound_async_stream_type = httpx_client_module.BoundAsyncStream
+    trusted_async_response_stream_type = httpx_default_transport_module.AsyncResponseStream
+    trusted_pool_byte_stream_type = httpcore_async_connection_pool_module.PoolByteStream
+    trusted_pool_request_type = httpcore_async_connection_pool_module.AsyncPoolRequest
+    trusted_httpcore_connection_type = httpcore_async_connection_module.AsyncHTTPConnection
+    trusted_http11_connection_type = httpcore_async_http11_module.AsyncHTTP11Connection
+    trusted_http11_byte_stream_type = httpcore_async_http11_module.HTTP11ConnectionByteStream
+    trusted_async_event_type = httpcore_synchronization_module.AsyncEvent
+    trusted_httpx_descriptor_surfaces = tuple(
+        (subject_type, class_dispatch_surface(subject_type))
+        for subject_type in (
+            trusted_response_type,
+            trusted_request_type,
+            trusted_headers_type,
+            trusted_url_type,
+            trusted_query_params_type,
+            trusted_timeout_type,
+        )
+    )
+    isolated_values = (
+        _isolated_stream,
+        _isolated_parent_codes,
+        _isolated_attempt_codes,
+        _isolated_frame_globals,
+    )
+    isolated = any(value is not None for value in isolated_values)
+    if isolated and any(value is None for value in isolated_values):
+        raise ValueError("isolated provider transport authority configuration is incomplete")
+    trusted_transport_stream = _isolated_stream if isolated else trusted_async_client_stream
+
+    def header_multiset_projection(
+        headers: httpx.Headers | Mapping[str, str],
+    ) -> tuple[tuple[str, str, str], ...]:
+        projected: list[tuple[str, str, str]] = []
+        if type(headers) is trusted_headers_type:
+            header_values = vars(headers)
+            raw_items = trusted_object_getattribute(headers, "_list")
+            if frozenset(header_values) != {"_list", "_encoding"} or type(raw_items) is not list:
+                raise trusted_privacy_error_type(
+                    "provider transport headers have mutable instance state"
+                )
+            for item in raw_items:
+                if (
+                    type(item) is not tuple
+                    or len(item) != 3
+                    or any(type(value) is not bytes for value in item)
+                ):
+                    raise trusted_privacy_error_type(
+                        "provider transport headers have invalid raw entries"
+                    )
+                raw_name, normalized_name, raw_value = item
+                projected.append(
+                    (
+                        raw_name.hex(),
+                        normalized_name.hex(),
+                        trusted_sha256(raw_value).hexdigest(),
+                    )
+                )
+            return tuple(sorted(projected))
+        if type(headers) is not dict:
+            raise trusted_privacy_error_type("provider transport headers are not exact")
+        for name, value in dict.items(headers):
+            if type(name) is not str or type(value) is not str:
+                raise trusted_privacy_error_type("provider transport headers are invalid")
+            projected.append(
+                (
+                    name.encode("utf-8").hex(),
+                    name.casefold().encode("utf-8").hex(),
+                    trusted_sha256(value.encode("utf-8")).hexdigest(),
+                )
+            )
+        return tuple(sorted(projected))
+
+    def decoded_safe_response_headers(headers: httpx.Headers) -> dict[str, str]:
+        if type(headers) is not trusted_headers_type:
+            raise trusted_privacy_error_type("provider response headers have the wrong exact type")
+        header_values = vars(headers)
+        raw_items = trusted_object_getattribute(headers, "_list")
+        encoding = trusted_object_getattribute(headers, "_encoding") or "ascii"
+        if (
+            frozenset(header_values) != {"_list", "_encoding"}
+            or type(raw_items) is not list
+            or type(encoding) is not str
+        ):
+            raise trusted_privacy_error_type("provider response headers have mutable state")
+        grouped: dict[str, list[str]] = {}
+        for item in raw_items:
+            if (
+                type(item) is not tuple
+                or len(item) != 3
+                or any(type(value) is not bytes for value in item)
+            ):
+                raise trusted_privacy_error_type("provider response headers are malformed")
+            _raw_name, normalized_name, raw_value = item
+            try:
+                name = normalized_name.decode("ascii")
+                value = raw_value.decode(encoding)
+            except (LookupError, UnicodeDecodeError):
+                raise trusted_privacy_error_type(
+                    "provider response headers cannot be decoded safely"
+                ) from None
+            grouped.setdefault(name, []).append(value)
+        removed = {"content-encoding", "content-length", "transfer-encoding"}
+        redacted = {"authorization", "proxy-authorization", "x-api-key"}
+        return {
+            name: "[REDACTED]" if name in redacted else ", ".join(values)
+            for name, values in grouped.items()
+            if name not in removed
+        }
+
+    def exact_request_projection(
+        request: httpx.Request,
+    ) -> tuple[str, str, tuple[tuple[str, str, str], ...], bytes]:
+        if type(request) is not trusted_request_type:
+            raise trusted_privacy_error_type("provider request has the wrong exact type")
+        request_values = vars(request)
+        if frozenset(request_values) != {
+            "method",
+            "url",
+            "headers",
+            "extensions",
+            "stream",
+            "_content",
+        }:
+            raise trusted_privacy_error_type("provider request has mutable instance state")
+        method = request_values["method"]
+        url = request_values["url"]
+        headers = request_values["headers"]
+        content = request_values["_content"]
+        if (
+            type(method) is not str
+            or type(url) is not trusted_url_type
+            or frozenset(vars(url)) != {"_uri_reference"}
+            or type(headers) is not trusted_headers_type
+            or type(content) is not bytes
+            or type(request_values["extensions"]) is not dict
+        ):
+            raise trusted_privacy_error_type("provider request projection is invalid")
+        return method, str(url), header_multiset_projection(headers), content
+
+    def register_issuer(
+        *,
+        module: object,
+        client_type: type[object],
+        bounded_request: Callable[..., object],
+        complete_one: Callable[..., object],
+        request_metadata: Callable[..., object],
+        transport_lookup: Callable[[object], _TrustedTransportBinding | None],
+        pristine_predicate: Callable[[], bool],
+        execution_evidence_resolver: Callable[[object], ExecutionEvidenceKind],
+        ledger_snapshot: Callable[[AtomicCostLedger], object],
+        complete_with_evidence: Callable[..., object],
+        bind_real_completion_identity: Callable[..., object],
+        fetch_generation_attestations: Callable[..., object],
+    ) -> None:
+        nonlocal issuer, issuer_callable_states, issuer_codes
+        module_values = getattr(module, "__dict__", None)
+        perform_code = _nested_code(bounded_request, "perform")
+        issuer_callables = (
+            bounded_request,
+            complete_one,
+            request_metadata,
+            transport_lookup,
+            pristine_predicate,
+            execution_evidence_resolver,
+            ledger_snapshot,
+            complete_with_evidence,
+            bind_real_completion_identity,
+            fetch_generation_attestations,
+        )
+        if (
+            getattr(module, "__name__", None) != "mmaudit.models.openrouter"
+            or type(module_values) is not dict
+            or (
+                not isolated
+                and (
+                    trusted_getframe(1).f_globals is not module_values
+                    or trusted_getframe(1).f_code.co_name != "<module>"
+                )
+            )
+            or getattr(module, "OpenRouterClient", None) is not client_type
+            or vars(client_type).get("_bounded_request") is not bounded_request
+            or vars(client_type).get("_complete_one") is not complete_one
+            or vars(client_type).get("_request_metadata") is not request_metadata
+            or vars(client_type).get("complete_with_evidence") is not complete_with_evidence
+            or vars(client_type).get("_bind_real_completion_identity")
+            is not bind_real_completion_identity
+            or vars(client_type).get("_fetch_generation_attestations_with_deadline")
+            is not fetch_generation_attestations
+            or any(type(function) is not FunctionType for function in issuer_callables)
+        ):
+            raise RuntimeError("provider transport receipt issuer registration is invalid")
+        with lock:
+            if issuer is not None:
+                raise RuntimeError("provider transport receipt issuer is already registered")
+            issuer = (
+                module,
+                client_type,
+                bounded_request,
+                perform_code,
+                complete_one,
+                request_metadata,
+                transport_lookup,
+                pristine_predicate,
+                execution_evidence_resolver,
+                ledger_snapshot,
+                module_values,
+                complete_with_evidence,
+                bind_real_completion_identity,
+                fetch_generation_attestations,
+            )
+            issuer_callable_states = tuple(
+                function_state(cast(FunctionType, function)) for function in issuer_callables
+            )
+            issuer_codes = {
+                "COMPLETION": cast(FunctionType, complete_with_evidence).__code__,
+                "INITIAL_IDENTITY_BIND": cast(FunctionType, bind_real_completion_identity).__code__,
+                "CAPABILITY_REFETCH": cast(FunctionType, fetch_generation_attestations).__code__,
+                "POST": cast(FunctionType, complete_one).__code__,
+                "GET": cast(FunctionType, request_metadata).__code__,
+                "PERFORM": perform_code,
+            }
+
+    def receipt_state(
+        receipt: _ProviderTransportAttemptReceipt,
+    ) -> ReceiptState:
+        if type(receipt) is not trusted_receipt_type:
+            raise trusted_privacy_error_type("provider transport receipt has the wrong exact type")
+        with lock:
+            registered = registry.get(id(receipt))
+            if (
+                registered is None
+                or registered[0]() is not receipt
+                or registered[1].get("process_id") != trusted_getpid()
+            ):
+                raise trusted_privacy_error_type("provider transport receipt is absent or revoked")
+            return dict(registered[1])
+
+    def update_receipt_state(
+        receipt: _ProviderTransportAttemptReceipt,
+        *,
+        expected_phase: str,
+        expected_nonce: object,
+        updates: Mapping[str, object],
+    ) -> ReceiptState:
+        key = id(receipt)
+        with lock:
+            registered = registry.get(key)
+            if (
+                type(receipt) is not trusted_receipt_type
+                or registered is None
+                or registered[0]() is not receipt
+                or registered[1].get("process_id") != trusted_getpid()
+                or registered[1].get("phase") != expected_phase
+                or registered[1].get("nonce") is not expected_nonce
+            ):
+                raise trusted_privacy_error_type(
+                    "provider transport receipt transition order is invalid"
+                )
+            previous = registered
+            next_state = {**registered[1], **updates}
+            installed = (registered[0], next_state)
+            try:
+                registry[key] = installed
+                return dict(next_state)
+            except BaseException:
+                current = registry.get(key)
+                if current is installed:
+                    registry[key] = previous
+                raise
+
+    def operation_state(grant: _ProviderTransportOperationGrant) -> ReceiptState:
+        if type(grant) is not trusted_grant_type:
+            raise trusted_privacy_error_type(
+                "provider transport operation grant has the wrong exact type"
+            )
+        with lock:
+            registered = grant_registry.get(id(grant))
+            if (
+                registered is None
+                or registered[0]() is not grant
+                or registered[1].get("process_id") != trusted_getpid()
+                or registered[1].get("phase") != "ACTIVE"
+            ):
+                raise trusted_privacy_error_type(
+                    "provider transport operation grant is absent or consumed"
+                )
+            return dict(registered[1])
+
+    def update_operation_state(
+        grant: _ProviderTransportOperationGrant,
+        *,
+        expected_next_attempt: int,
+        expected_nonce: object,
+        updates: Mapping[str, object],
+    ) -> ReceiptState:
+        key = id(grant)
+        with lock:
+            registered = grant_registry.get(key)
+            if (
+                type(grant) is not trusted_grant_type
+                or registered is None
+                or registered[0]() is not grant
+                or registered[1].get("phase") != "ACTIVE"
+                or registered[1].get("next_attempt") != expected_next_attempt
+                or registered[1].get("nonce") is not expected_nonce
+            ):
+                raise trusted_privacy_error_type(
+                    "provider transport operation attempt order is invalid"
+                )
+            next_state = {**registered[1], **updates}
+            installed = (registered[0], next_state)
+            previous = registered
+            try:
+                grant_registry[key] = installed
+                return dict(next_state)
+            except BaseException:
+                if grant_registry.get(key) is installed:
+                    grant_registry[key] = previous
+                raise
+
+    def prepare_operation(
+        client: object,
+        *,
+        purpose: Literal[
+            "COMPLETION",
+            "INITIAL_IDENTITY_BIND",
+            "CAPABILITY_REFETCH",
+        ],
+        logical_request_id: str,
+        role: str,
+        exact_model_id: str,
+        maximum_attempts: int,
+        generation_id: str | None = None,
+        anchor: object | None = None,
+        expectation_sha256: str | None = None,
+    ) -> _ProviderTransportOperationGrant | None:
+        with lock:
+            registered_issuer = issuer
+        if registered_issuer is None:
+            raise trusted_privacy_error_type("provider transport receipt issuer is not registered")
+        (
+            _module,
+            _client_type,
+            _bounded_request,
+            _perform_code,
+            _complete_one,
+            _request_metadata,
+            _transport_lookup,
+            _pristine_predicate,
+            execution_evidence_resolver,
+            ledger_snapshot,
+            module_values,
+            _complete_with_evidence,
+            _bind_real_completion_identity,
+            _fetch_generation_attestations,
+        ) = registered_issuer
+        if execution_evidence_resolver(client) is not trusted_real_evidence:
+            return None
+        # Production receipt activation remains closed until the completion and
+        # metadata receipt composites consume this raw authority transactionally.
+        # Isolated authorities exercise the lower state machine without minting
+        # production transport authority.
+        if not isolated:
+            return None
+        frame = trusted_getframe(1)
+        captured_codes = issuer_codes
+        expected_code = (
+            cast(Mapping[str, CodeType], _isolated_parent_codes).get(purpose)
+            if isolated
+            else (captured_codes or {}).get(purpose)
+        )
+        expected_globals = (
+            cast(dict[str, object], _isolated_frame_globals) if isolated else module_values
+        )
+        try:
+            validated_generation_id = (
+                trusted_validate_generation_id(generation_id) if generation_id is not None else None
+            )
+        except GenerationEvidenceValidationError:
+            validated_generation_id = None
+        if (
+            expected_code is None
+            or frame.f_code is not expected_code
+            or frame.f_globals is not expected_globals
+            or frame.f_locals.get("self") is not client
+            or type(logical_request_id) is not str
+            or trusted_logical_request_id_pattern.fullmatch(logical_request_id) is None
+            or type(role) is not str
+            or type(exact_model_id) is not str
+            or not trusted_is_exact_model_id(exact_model_id)
+            or type(maximum_attempts) is not int
+            or not 1 <= maximum_attempts <= 32
+            or (generation_id is None) is not (purpose == "COMPLETION")
+            or (expectation_sha256 is None) is not (purpose == "COMPLETION")
+            or (anchor is None) is not (purpose == "COMPLETION")
+            or (anchor is not None and type(anchor) is not trusted_usage_record_type)
+            or (
+                expectation_sha256 is not None
+                and trusted_sha256_pattern.fullmatch(expectation_sha256) is None
+            )
+            or validated_generation_id != generation_id
+            or (
+                type(anchor) is trusted_usage_record_type
+                and (
+                    anchor.request_id != logical_request_id
+                    or anchor.role != role
+                    or anchor.requested_model != exact_model_id
+                    or anchor.openrouter_generation_id != generation_id
+                )
+            )
+        ):
+            raise trusted_privacy_error_type(
+                "provider transport operation grant coordinates are invalid"
+            )
+        ensure_receipt_seal(client)
+        binding, ledger = live_binding(client)
+        anchor_digest = (
+            canonical_sha256(anchor.model_dump(mode="json"))
+            if type(anchor) is trusted_usage_record_type
+            else expectation_sha256
+        )
+        grant = trusted_object_new(trusted_grant_type)
+        key = id(grant)
+
+        def discard(reference: weakref.ReferenceType[_ProviderTransportOperationGrant]) -> None:
+            with lock:
+                current = grant_registry.get(key)
+                if current is not None and current[0] is reference:
+                    grant_registry.pop(key, None)
+
+        reference = weakref.ref(grant, discard)
+        state: ReceiptState = {
+            "phase": "ACTIVE",
+            "process_id": trusted_getpid(),
+            "thread_id": trusted_get_ident(),
+            "parent_task": trusted_current_task(),
+            "child_task": None,
+            "nonce": trusted_object_new(object),
+            "client": client,
+            "transport": binding.transport,
+            "budget": binding.budget_manager,
+            "ledger": ledger,
+            "ledger_snapshot_before": ledger_snapshot(ledger),
+            "purpose": purpose,
+            "logical_request_id": logical_request_id,
+            "role": role,
+            "exact_model_id": exact_model_id,
+            "maximum_attempts": maximum_attempts,
+            "next_attempt": 1,
+            "generation_id": generation_id,
+            "anchor": anchor,
+            "anchor_digest": anchor_digest,
+            "expectation_sha256": expectation_sha256,
+        }
+        try:
+            with lock:
+                grant_registry[key] = (reference, state)
+            return grant
+        except BaseException:
+            with lock:
+                current = grant_registry.get(key)
+                if current is not None and current[0] is reference:
+                    grant_registry.pop(key, None)
+            raise
+
+    def pool_graph_is_current(
+        binding: _TrustedTransportBinding,
+        *,
+        require_idle: bool,
+    ) -> bool:
+        if binding.execution_evidence is not trusted_real_evidence:
+            return False
+        try:
+            pool = trusted_object_getattribute(binding.transport, "_pool")
+            pool_values = vars(pool)
+            connections = pool_values.get("_connections")
+            requests = pool_values.get("_requests")
+            if (
+                pool is not binding.owned_pool
+                or frozenset(pool_values) != binding.owned_pool_attribute_names
+                or any(
+                    pool_values.get(name) is not original
+                    for name, original in binding.owned_pool_attribute_values
+                )
+                or "handle_async_request" in pool_values
+                or getattr(type(pool), "handle_async_request", None)
+                is not binding.owned_pool_request_callable
+                or getattr(type(pool), "create_connection", None)
+                is not binding.owned_pool_create_connection_callable
+                or getattr(type(pool), "_assign_requests_to_connections", None)
+                is not binding.owned_pool_assign_requests_callable
+                or getattr(type(pool), "_close_connections", None)
+                is not binding.owned_pool_close_connections_callable
+                or getattr(type(pool), "__getattribute__", None)
+                is not binding.owned_pool_getattribute_callable
+                or type(connections) is not list
+                or type(requests) is not list
+                or pool_values.get("_http1") is not True
+                or pool_values.get("_http2") is not False
+                or pool_values.get("_max_keepalive_connections") != 0
+                or not trusted_network_backend_current(binding)
+                or (require_idle and (bool(connections) or bool(requests)))
+            ):
+                return False
+        except (AttributeError, TypeError):
+            return False
+        return True
+
+    def ensure_receipt_seal(client: object) -> None:
+        """Capture receipt-only HTTPX/TLS state lazily for this isolated authority."""
+
+        with lock:
+            registered_issuer = issuer
+            existing = receipt_seals.get(client)
+        if existing is not None:
+            return
+        if registered_issuer is None:
+            raise trusted_privacy_error_type("provider transport receipt issuer is not registered")
+        transport_lookup = registered_issuer[6]
+        binding = transport_lookup(client)
+        try:
+            current_http_client = trusted_object_getattribute(client, "_client")
+            current_base_url = trusted_object_getattribute(current_http_client, "_base_url")
+            current_headers = trusted_object_getattribute(client, "_headers")
+            current_http_headers = trusted_object_getattribute(current_http_client, "_headers")
+            current_cookies = trusted_object_getattribute(current_http_client, "_cookies")
+            current_params = trusted_object_getattribute(current_http_client, "_params")
+            current_timeout = trusted_object_getattribute(current_http_client, "_timeout")
+            current_header_list = trusted_object_getattribute(current_http_headers, "_list")
+            current_cookie_jar = trusted_object_getattribute(current_cookies, "jar")
+            current_cookie_store = trusted_object_getattribute(current_cookie_jar, "_cookies")
+            current_cookie_policy = trusted_object_getattribute(current_cookie_jar, "_policy")
+            current_params_dict = trusted_object_getattribute(current_params, "_dict")
+            current_pool = (
+                trusted_object_getattribute(binding.transport, "_pool")
+                if binding is not None and binding.execution_evidence is trusted_real_evidence
+                else None
+            )
+            current_tls_context = (
+                trusted_object_getattribute(current_pool, "_ssl_context")
+                if current_pool is not None
+                else None
+            )
+        except (AttributeError, TypeError):
+            raise trusted_privacy_error_type(
+                "provider transport receipt cannot seal owned request state"
+            ) from None
+        if (
+            binding is None
+            or binding.http_client is not current_http_client
+            or type(current_base_url) is not trusted_url_type
+            or frozenset(vars(current_base_url)) != {"_uri_reference"}
+            or type(current_headers) is not dict
+            or type(current_http_headers) is not trusted_headers_type
+            or frozenset(vars(current_http_headers)) != {"_list", "_encoding"}
+            or type(current_header_list) is not list
+            or type(current_cookies) is not trusted_httpx.Cookies
+            or frozenset(vars(current_cookies)) != {"jar"}
+            or type(current_cookie_store) is not dict
+            or bool(current_cookie_store)
+            or current_cookie_policy is None
+            or type(current_params) is not trusted_query_params_type
+            or frozenset(vars(current_params)) != {"_dict"}
+            or type(current_params_dict) is not dict
+            or bool(current_params_dict)
+            or type(current_timeout) is not trusted_timeout_type
+            or frozenset(vars(current_timeout)) != {"connect", "read", "write", "pool"}
+            or (
+                binding.execution_evidence is trusted_real_evidence
+                and type(current_tls_context) is not ssl.SSLContext
+            )
+        ):
+            raise trusted_privacy_error_type(
+                "provider transport receipt cannot seal owned request state"
+            )
+        sealed = {
+            "http_client_base_url": current_base_url,
+            "provider_headers": current_headers,
+            "provider_security_header_sha256": trusted_security_header_fingerprint(current_headers),
+            "http_client_headers": current_http_headers,
+            "http_client_headers_attribute_names": frozenset(vars(current_http_headers)),
+            "http_client_header_list": current_header_list,
+            "http_client_headers_sha256": trusted_httpx_header_fingerprint(current_http_headers),
+            "http_client_cookies": current_cookies,
+            "http_client_cookies_attribute_names": frozenset(vars(current_cookies)),
+            "http_client_cookie_jar": current_cookie_jar,
+            "http_client_cookie_jar_type": type(current_cookie_jar),
+            "http_client_cookie_jar_attribute_names": frozenset(vars(current_cookie_jar)),
+            "http_client_cookie_store": current_cookie_store,
+            "http_client_cookie_policy": current_cookie_policy,
+            "http_client_params": current_params,
+            "http_client_params_attribute_names": frozenset(vars(current_params)),
+            "http_client_params_dict": current_params_dict,
+            "http_client_timeout": current_timeout,
+            "http_client_timeout_attribute_names": frozenset(vars(current_timeout)),
+            "http_client_timeout_configuration": trusted_httpx_timeout_configuration(
+                current_timeout
+            ),
+            "tls_context": current_tls_context,
+            "tls_context_attribute_names": (
+                frozenset(vars(current_tls_context))
+                if type(current_tls_context) is ssl.SSLContext
+                else frozenset()
+            ),
+            "tls_context_security_sha256": (
+                trusted_tls_context_fingerprint(current_tls_context)
+                if type(current_tls_context) is ssl.SSLContext
+                else None
+            ),
+        }
+        with lock:
+            if receipt_seals.get(client) is None:
+                receipt_seals[client] = sealed
+
+    def live_binding(
+        client: object,
+        *,
+        require_idle: bool = True,
+    ) -> tuple[_TrustedTransportBinding, AtomicCostLedger]:
+        with lock:
+            registered_issuer = issuer
+            receipt_seal = receipt_seals.get(client)
+        if registered_issuer is None:
+            raise trusted_privacy_error_type("provider transport receipt issuer is not registered")
+        (
+            module,
+            client_type,
+            bounded_request,
+            _perform_code,
+            complete_one,
+            request_metadata,
+            transport_lookup,
+            pristine_predicate,
+            execution_evidence_resolver,
+            _ledger_snapshot,
+            registered_module_values,
+            complete_with_evidence,
+            bind_real_completion_identity,
+            fetch_generation_attestations,
+        ) = registered_issuer
+        module_values = getattr(module, "__dict__", None)
+        captured_issuer_states = issuer_callable_states
+        binding = transport_lookup(client)
+        try:
+            current_http_client = trusted_object_getattribute(client, "_client")
+            current_transport = trusted_object_getattribute(current_http_client, "_transport")
+            current_base_url = trusted_object_getattribute(current_http_client, "_base_url")
+            current_budget = trusted_object_getattribute(client, "budget")
+            current_ledger = trusted_object_getattribute(current_budget, "atomic_ledger")
+            current_headers = trusted_object_getattribute(client, "_headers")
+            current_http_headers = trusted_object_getattribute(current_http_client, "_headers")
+            current_cookies = trusted_object_getattribute(current_http_client, "_cookies")
+            current_params = trusted_object_getattribute(current_http_client, "_params")
+            current_timeout = trusted_object_getattribute(current_http_client, "_timeout")
+            current_header_list = trusted_object_getattribute(current_http_headers, "_list")
+            current_cookie_jar = trusted_object_getattribute(current_cookies, "jar")
+            current_cookie_store = trusted_object_getattribute(current_cookie_jar, "_cookies")
+            current_cookie_policy = trusted_object_getattribute(current_cookie_jar, "_policy")
+            current_params_dict = trusted_object_getattribute(current_params, "_dict")
+        except (AttributeError, TypeError):
+            binding = None
+            current_http_client = None
+            current_transport = None
+            current_base_url = None
+            current_ledger = None
+            current_headers = None
+            current_http_headers = None
+            current_cookies = None
+            current_params = None
+            current_timeout = None
+            current_header_list = None
+            current_cookie_jar = None
+            current_cookie_store = None
+            current_cookie_policy = None
+            current_params_dict = None
+        if (
+            type(module_values) is not dict
+            or receipt_seal is None
+            or captured_issuer_states is None
+            or not all(function_state_is_current(state) for state in captured_issuer_states)
+            or module_values is not registered_module_values
+            or trusted_sys.modules.get(getattr(module, "__name__", "")) is not module
+            or module_values.get("sys") is not trusted_sys
+            or module_values.get("asyncio") is not trusted_asyncio
+            or module_values.get("ssl") is not ssl
+            or module_values.get("hashlib") is not hashlib
+            or module_values.get("json") is not json
+            or module_values.get("httpx") is not trusted_httpx
+            or module_values.get("httpcore") is not httpcore
+            or module_values.get("get_ident") is not trusted_get_ident
+            or module_values.get("quote") is not quote
+            or getattr(trusted_sys, "_getframe", None) is not trusted_getframe
+            or module_values.get("Reservation") is not trusted_reservation_type
+            or module_values.get("BudgetManager") is not trusted_budget_manager_type
+            or module_values.get("AtomicCostLedger") is not trusted_atomic_ledger_type
+            or module_values.get("ExecutionEvidenceKind") is not trusted_execution_evidence_type
+            or module_values.get("UsageRecord") is not trusted_usage_record_type
+            or module_values.get("OpenRouterPrivacyError") is not trusted_privacy_error_type
+            or module_values.get("OpenRouterSchemaError") is not trusted_schema_error_type
+            or module_values.get("_reject_nonfinite_json_constant") is not trusted_reject_nonfinite
+            or module_values.get("_unique_json_object") is not trusted_unique_object
+            or module_values.get("_require_finite_json_numbers") is not trusted_finite_numbers
+            or module_values.get("_decoded_response_headers") is not trusted_decode_response_headers
+            or module_values.get("_attempt_request_id") is not trusted_attempt_request_id
+            or module_values.get("_provider_security_header_fingerprint")
+            is not trusted_security_header_fingerprint
+            or module_values.get("_httpx_header_multiset_fingerprint")
+            is not trusted_httpx_header_fingerprint
+            or module_values.get("_httpx_timeout_configuration")
+            is not trusted_httpx_timeout_configuration
+            or module_values.get("_tls_context_security_fingerprint")
+            is not trusted_tls_context_fingerprint
+            or module_values.get("_network_backend_graph_is_current")
+            is not trusted_network_backend_current
+            or module_values.get("safe_headers") is not trusted_safe_headers
+            or module_values.get("_decoded_response_headers")
+            is not trusted_decoded_response_headers
+            or trusted_sha256 is not hashlib.sha256
+            or trusted_json_dumps is not json.dumps
+            or trusted_json_loads is not json.loads
+            or any(
+                not module_dispatch_surface_is_current(module, expected_surface)
+                for module, expected_surface in trusted_library_surfaces
+            )
+            or trusted_httpx.AsyncClient is not trusted_async_client_type
+            or trusted_httpx.AsyncClient.build_request is not trusted_async_client_build_request
+            or (
+                not isolated and trusted_httpx.AsyncClient.stream is not trusted_async_client_stream
+            )
+            or trusted_httpx.Response is not trusted_response_type
+            or trusted_httpx.Response.aiter_bytes is not trusted_response_aiter_bytes
+            or trusted_httpx.Request is not trusted_request_type
+            or trusted_httpx.Headers is not trusted_headers_type
+            or trusted_httpx.Timeout is not trusted_timeout_type
+            or trusted_httpx.URL is not trusted_url_type
+            or trusted_httpx.QueryParams is not trusted_query_params_type
+            or any(
+                not class_dispatch_surface_is_current(subject_type, expected_surface)
+                for subject_type, expected_surface in trusted_httpx_descriptor_surfaces
+            )
+            or getattr(module, "OpenRouterClient", None) is not client_type
+            or vars(client_type).get("_bounded_request") is not bounded_request
+            or vars(client_type).get("_complete_one") is not complete_one
+            or vars(client_type).get("_request_metadata") is not request_metadata
+            or vars(client_type).get("complete_with_evidence") is not complete_with_evidence
+            or vars(client_type).get("_bind_real_completion_identity")
+            is not bind_real_completion_identity
+            or vars(client_type).get("_fetch_generation_attestations_with_deadline")
+            is not fetch_generation_attestations
+            or getattr(module, "_lookup_trusted_transport_binding", None) is not transport_lookup
+            or getattr(module, "_openrouter_client_callables_are_pristine", None)
+            is not pristine_predicate
+            or getattr(module, "trusted_openrouter_execution_evidence", None)
+            is not execution_evidence_resolver
+            or type(client) is not client_type
+            or binding is None
+            or binding.execution_evidence is not trusted_real_evidence
+            or binding.http_client is not current_http_client
+            or receipt_seal.get("http_client_base_url") is not current_base_url
+            or type(current_base_url) is not trusted_url_type
+            or frozenset(vars(current_base_url)) != {"_uri_reference"}
+            or str(current_base_url) != binding.base_url
+            or trusted_object_getattribute(current_http_client, "follow_redirects") is not False
+            or trusted_object_getattribute(current_http_client, "max_redirects")
+            != binding.max_redirects
+            or binding.transport is not current_transport
+            or binding.budget_manager is not current_budget
+            or type(current_budget) is not trusted_budget_manager_type
+            or binding.atomic_cost_ledger is not current_ledger
+            or type(current_ledger) is not trusted_atomic_ledger_type
+            or receipt_seal.get("provider_headers") is not current_headers
+            or type(current_headers) is not dict
+            or trusted_security_header_fingerprint(current_headers)
+            != receipt_seal.get("provider_security_header_sha256")
+            or receipt_seal.get("http_client_headers") is not current_http_headers
+            or type(current_http_headers) is not trusted_headers_type
+            or frozenset(vars(current_http_headers))
+            != receipt_seal.get("http_client_headers_attribute_names")
+            or receipt_seal.get("http_client_header_list") is not current_header_list
+            or trusted_httpx_header_fingerprint(current_http_headers)
+            != receipt_seal.get("http_client_headers_sha256")
+            or receipt_seal.get("http_client_cookies") is not current_cookies
+            or type(current_cookies) is not trusted_httpx.Cookies
+            or frozenset(vars(current_cookies))
+            != receipt_seal.get("http_client_cookies_attribute_names")
+            or receipt_seal.get("http_client_cookie_jar") is not current_cookie_jar
+            or type(current_cookie_jar) is not receipt_seal.get("http_client_cookie_jar_type")
+            or frozenset(vars(current_cookie_jar))
+            != receipt_seal.get("http_client_cookie_jar_attribute_names")
+            or receipt_seal.get("http_client_cookie_store") is not current_cookie_store
+            or type(current_cookie_store) is not dict
+            or bool(current_cookie_store)
+            or receipt_seal.get("http_client_cookie_policy") is not current_cookie_policy
+            or receipt_seal.get("http_client_params") is not current_params
+            or type(current_params) is not trusted_query_params_type
+            or frozenset(vars(current_params))
+            != receipt_seal.get("http_client_params_attribute_names")
+            or receipt_seal.get("http_client_params_dict") is not current_params_dict
+            or type(current_params_dict) is not dict
+            or bool(current_params_dict)
+            or receipt_seal.get("http_client_timeout") is not current_timeout
+            or type(current_timeout) is not trusted_timeout_type
+            or frozenset(vars(current_timeout))
+            != receipt_seal.get("http_client_timeout_attribute_names")
+            or trusted_httpx_timeout_configuration(current_timeout)
+            != receipt_seal.get("http_client_timeout_configuration")
+            or (
+                binding.execution_evidence is trusted_real_evidence
+                and (
+                    type(receipt_seal.get("tls_context")) is not ssl.SSLContext
+                    or frozenset(vars(receipt_seal["tls_context"]))
+                    != receipt_seal.get("tls_context_attribute_names")
+                    or trusted_tls_context_fingerprint(receipt_seal["tls_context"])
+                    != receipt_seal.get("tls_context_security_sha256")
+                )
+            )
+            or not trusted_owned_httpx_pristine(current_http_client, current_transport)
+            or binding is None
+            or not pool_graph_is_current(binding, require_idle=require_idle)
+            or not pristine_predicate()
+            or (require_idle and execution_evidence_resolver(client) is not trusted_real_evidence)
+        ):
+            raise trusted_privacy_error_type(
+                "provider transport receipt requires a pristine owned REAL client"
+            )
+        return binding, current_ledger
+
+    def inflight_response_anchor(
+        client: object,
+        response: httpx.Response,
+        previous: tuple[object, ...] | None,
+    ) -> tuple[object, ...]:
+        binding, _ledger = live_binding(client, require_idle=False)
+        if binding.request_lock is None or not binding.request_lock.locked():
+            raise trusted_privacy_error_type(
+                "provider transport receipt lacks its in-flight request lock"
+            )
+        response_values = vars(response)
+        response_request = response_values.get("_request")
+        response_headers = response_values.get("headers")
+        if (
+            type(response) is not trusted_response_type
+            or type(response_request) is not trusted_request_type
+            or type(response_headers) is not trusted_headers_type
+        ):
+            raise trusted_privacy_error_type(
+                "provider transport returned an untrusted response object"
+            )
+        exact_request_projection(response_request)
+        header_multiset_projection(response_headers)
+        current: tuple[object, ...]
+        if isolated:
+            current = (response, response_request, response_headers)
+        else:
+            pool = binding.owned_pool
+            if pool is None:
+                raise trusted_privacy_error_type("provider transport lacks its owned pool")
+            pool_values = vars(pool)
+            connections = pool_values.get("_connections")
+            requests = pool_values.get("_requests")
+            response_stream = response_values.get("stream")
+            if (
+                type(connections) is not list
+                or len(connections) != 1
+                or type(requests) is not list
+                or len(requests) != 1
+                or type(response_stream) is not trusted_bound_async_stream_type
+                or frozenset(vars(response_stream)) != {"_stream", "_response", "_start"}
+                or trusted_object_getattribute(response_stream, "_response") is not response
+            ):
+                raise trusted_privacy_error_type(
+                    "provider transport in-flight response graph is invalid"
+                )
+            transport_stream = trusted_object_getattribute(response_stream, "_stream")
+            if type(transport_stream) is not trusted_async_response_stream_type or frozenset(
+                vars(transport_stream)
+            ) != {"_httpcore_stream"}:
+                raise trusted_privacy_error_type(
+                    "provider transport in-flight adapter graph is invalid"
+                )
+            pool_stream = trusted_object_getattribute(transport_stream, "_httpcore_stream")
+            if (
+                type(pool_stream) is not trusted_pool_byte_stream_type
+                or frozenset(vars(pool_stream)) != {"_stream", "_pool_request", "_pool", "_closed"}
+                or trusted_object_getattribute(pool_stream, "_pool") is not pool
+                or trusted_object_getattribute(pool_stream, "_closed") is not False
+            ):
+                raise trusted_privacy_error_type(
+                    "provider transport in-flight pool stream is invalid"
+                )
+            pool_request = trusted_object_getattribute(pool_stream, "_pool_request")
+            protocol_stream = trusted_object_getattribute(pool_stream, "_stream")
+            connection_acquired = (
+                trusted_object_getattribute(pool_request, "_connection_acquired")
+                if type(pool_request) is trusted_pool_request_type
+                else None
+            )
+            if (
+                type(pool_request) is not trusted_pool_request_type
+                or frozenset(vars(pool_request))
+                != {"request", "connection", "_connection_acquired"}
+                or requests[0] is not pool_request
+                or type(connection_acquired) is not trusted_async_event_type
+                or "wait" in vars(connection_acquired)
+                or "set" in vars(connection_acquired)
+                or type(protocol_stream) is not trusted_http11_byte_stream_type
+                or frozenset(vars(protocol_stream)) != {"_connection", "_request", "_closed"}
+                or trusted_object_getattribute(protocol_stream, "_request")
+                is not trusted_object_getattribute(pool_request, "request")
+                or trusted_object_getattribute(protocol_stream, "_closed") is not False
+            ):
+                raise trusted_privacy_error_type(
+                    "provider transport in-flight protocol stream is invalid"
+                )
+            connection = trusted_object_getattribute(pool_request, "connection")
+            protocol_connection = trusted_object_getattribute(protocol_stream, "_connection")
+            if (
+                type(connection) is not trusted_httpcore_connection_type
+                or connections[0] is not connection
+                or "handle_async_request" in vars(connection)
+                or type(protocol_connection) is not trusted_http11_connection_type
+                or trusted_object_getattribute(connection, "_connection") is not protocol_connection
+                or "handle_async_request" in vars(protocol_connection)
+            ):
+                raise trusted_privacy_error_type(
+                    "provider transport in-flight connection graph is invalid"
+                )
+            current = (
+                response,
+                response_request,
+                response_headers,
+                response_stream,
+                transport_stream,
+                pool_stream,
+                pool_request,
+                connection_acquired,
+                protocol_stream,
+                connection,
+                protocol_connection,
+                connections,
+                requests,
+            )
+        if previous is not None and (
+            len(current) != len(previous)
+            or any(
+                observed is not expected
+                for observed, expected in zip(current, previous, strict=True)
+            )
+        ):
+            raise trusted_privacy_error_type("provider transport in-flight response graph changed")
+        return current
+
+    def completed_response_anchor(
+        client: object,
+        response: httpx.Response,
+        previous: tuple[object, ...] | None,
+    ) -> tuple[object, ...]:
+        binding, _ledger = live_binding(client)
+        if previous is None or previous[0] is not response:
+            raise trusted_privacy_error_type(
+                "provider transport completed without its in-flight response anchor"
+            )
+        if isolated:
+            response_values = vars(response)
+            current = (
+                response,
+                response_values.get("_request"),
+                response_values.get("headers"),
+            )
+            if len(previous) != len(current) or any(
+                observed is not expected
+                for observed, expected in zip(current, previous, strict=True)
+            ):
+                raise trusted_privacy_error_type(
+                    "provider transport isolated response anchor changed"
+                )
+            return current
+        if len(previous) != 13:
+            raise trusted_privacy_error_type(
+                "provider transport completed response anchor is invalid"
+            )
+        response_stream = previous[3]
+        transport_stream = previous[4]
+        pool_stream = previous[5]
+        protocol_stream = previous[8]
+        if (
+            binding.owned_pool is None
+            or vars(response).get("stream") is not response_stream
+            or trusted_object_getattribute(response_stream, "_stream") is not transport_stream
+            or trusted_object_getattribute(transport_stream, "_httpcore_stream") is not pool_stream
+            or trusted_object_getattribute(pool_stream, "_stream") is not protocol_stream
+            or trusted_object_getattribute(pool_stream, "_closed") is not True
+            or trusted_object_getattribute(protocol_stream, "_closed") is not True
+        ):
+            raise trusted_privacy_error_type(
+                "provider transport completed response did not close its exact stream chain"
+            )
+        return previous
+
+    def prepare(
+        client: object,
+        *,
+        operation_grant: _ProviderTransportOperationGrant,
+        method: str,
+        path: str,
+        json_body: dict[str, Any] | None,
+        reservation: Reservation | None,
+        purpose: Literal[
+            "COMPLETION",
+            "INITIAL_IDENTITY_BIND",
+            "CAPABILITY_REFETCH",
+        ],
+    ) -> _ProviderTransportAttemptReceipt | None:
+        with lock:
+            registered_issuer = issuer
+        if registered_issuer is None:
+            raise trusted_privacy_error_type("provider transport receipt issuer is not registered")
+        (
+            _module,
+            _client_type,
+            _bounded_request,
+            _perform_code,
+            _complete_one,
+            _request_metadata,
+            _transport_lookup,
+            _pristine_predicate,
+            execution_evidence_resolver,
+            ledger_snapshot,
+            module_values,
+            _complete_with_evidence,
+            _bind_real_completion_identity,
+            _fetch_generation_attestations,
+        ) = registered_issuer
+        if execution_evidence_resolver(client) is not trusted_real_evidence:
+            return None
+        frame = trusted_getframe(1)
+        captured_codes = issuer_codes
+        expected_code = (
+            cast(Mapping[str, CodeType], _isolated_attempt_codes).get(method)
+            if isolated
+            else (captured_codes or {}).get(method)
+        )
+        expected_globals = (
+            cast(dict[str, object], _isolated_frame_globals) if isolated else module_values
+        )
+        grant_state = operation_state(operation_grant)
+        next_attempt = cast(int, grant_state["next_attempt"])
+        current_task = trusted_current_task()
+        grant_generation_id = grant_state.get("generation_id")
+        expected_generation_path = (
+            "/generation?id=" + quote(grant_generation_id, safe="")
+            if type(grant_generation_id) is str
+            else None
+        )
+        if (
+            frame.f_code is not expected_code
+            or frame.f_globals is not expected_globals
+            or frame.f_locals.get("self") is not client
+            or grant_state.get("client") is not client
+            or grant_state.get("thread_id") != trusted_get_ident()
+            or (method == "POST" and grant_state.get("parent_task") is not current_task)
+            or (method == "GET" and grant_state.get("child_task") not in {None, current_task})
+            or method not in {"GET", "POST"}
+            or (method == "POST") is not (path == "/chat/completions")
+            or (method == "GET") is not (path == expected_generation_path)
+            or (method == "POST") is not (type(json_body) is dict)
+            or (method == "POST") is not (type(reservation) is trusted_reservation_type)
+            or (method == "GET" and (json_body is not None or reservation is not None))
+            or (method == "POST" and purpose != "COMPLETION")
+            or (method == "GET" and purpose not in {"INITIAL_IDENTITY_BIND", "CAPABILITY_REFETCH"})
+            or grant_state.get("purpose") != purpose
+            or next_attempt > cast(int, grant_state["maximum_attempts"])
+            or (
+                method == "POST"
+                and (
+                    frame.f_locals.get("body") is not json_body
+                    or frame.f_locals.get("active_reservation") is not reservation
+                    or frame.f_locals.get("request_id") != grant_state.get("logical_request_id")
+                    or frame.f_locals.get("attempts") != next_attempt
+                    or reservation is None
+                    or reservation.identifier
+                    != trusted_attempt_request_id(
+                        cast(str, grant_state["logical_request_id"]),
+                        next_attempt,
+                    )
+                )
+            )
+            or (
+                method == "GET"
+                and (frame.f_locals.get("path") != path or path != expected_generation_path)
+            )
+        ):
+            raise trusted_privacy_error_type("provider transport receipt preparation is invalid")
+        binding, ledger = live_binding(client)
+        with lock:
+            receipt_seal = receipt_seals.get(client)
+        headers = None if receipt_seal is None else receipt_seal.get("provider_headers")
+        if type(headers) is not dict or not all(
+            type(name) is str and type(value) is str for name, value in headers.items()
+        ):
+            raise trusted_privacy_error_type("provider transport headers are not sealed")
+        sealed_headers = cast(dict[str, str], headers)
+        snapshot_before = ledger_snapshot(ledger)
+        logical_body_sha256 = (
+            canonical_sha256(json_body)
+            if json_body is not None
+            else trusted_sha256(b"").hexdigest()
+        )
+        expected_request = trusted_async_client_build_request(
+            binding.http_client,
+            method,
+            path.lstrip("/"),
+            json=json_body,
+            headers=sealed_headers,
+        )
+        if type(expected_request) is not trusted_request_type:
+            raise trusted_privacy_error_type(
+                "provider transport request plan has the wrong exact type"
+            )
+        (
+            expected_request_method,
+            expected_request_url,
+            expected_request_headers,
+            expected_request_content,
+        ) = exact_request_projection(expected_request)
+        if expected_request_method != method:
+            raise trusted_privacy_error_type("provider transport request plan method changed")
+        receipt = trusted_object_new(trusted_receipt_type)
+        key = id(receipt)
+
+        def discard(reference: weakref.ReferenceType[_ProviderTransportAttemptReceipt]) -> None:
+            with lock:
+                current = registry.get(key)
+                if current is not None and current[0] is reference:
+                    registry.pop(key, None)
+
+        reference = weakref.ref(receipt, discard)
+        state: ReceiptState = {
+            "phase": "PREPARED",
+            "process_id": trusted_getpid(),
+            "thread_id": trusted_get_ident(),
+            "task": trusted_current_task(),
+            "nonce": trusted_object_new(object),
+            "client": client,
+            "transport": binding.transport,
+            "http_client": binding.http_client,
+            "budget": binding.budget_manager,
+            "base_url": binding.base_url,
+            "expected_url": expected_request_url,
+            "headers": headers,
+            "expected_header_multiset": expected_request_headers,
+            "expected_raw_request_sha256": trusted_sha256(expected_request_content).hexdigest(),
+            "ledger": ledger,
+            "ledger_snapshot_before": snapshot_before,
+            "method": method,
+            "path": path,
+            "purpose": purpose,
+            "operation_grant": operation_grant,
+            "operation_nonce": grant_state["nonce"],
+            "logical_request_id": grant_state["logical_request_id"],
+            "attempt_ordinal": next_attempt,
+            "maximum_attempts": grant_state["maximum_attempts"],
+            "expected_generation_id": grant_state["generation_id"],
+            "logical_body_sha256": logical_body_sha256,
+            "json_body": json_body,
+            "reservation": reservation,
+            "reservation_id": reservation.identifier if reservation is not None else None,
+            "persistent_reservation": reservation.persistent if reservation is not None else None,
+            "response": None,
+            "response_digest": None,
+            "raw_request_sha256": None,
+            "outcome": None,
+        }
+        try:
+            with lock:
+                registry[key] = (reference, state)
+            update_operation_state(
+                operation_grant,
+                expected_next_attempt=next_attempt,
+                expected_nonce=grant_state["nonce"],
+                updates={
+                    "child_task": (
+                        current_task if method == "GET" else grant_state.get("child_task")
+                    ),
+                    "next_attempt": next_attempt + 1,
+                },
+            )
+            return receipt
+        except BaseException:
+            with lock:
+                current = registry.get(key)
+                if current is not None and current[0] is reference:
+                    registry.pop(key, None)
+            raise
+
+    async def dispatch(
+        client: object,
+        receipt: _ProviderTransportAttemptReceipt | None,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        max_bytes: int,
+        trusted_pre_transport_check: Callable[[], Coroutine[Any, Any, None]] | None = None,
+    ) -> httpx.Response:
+        with lock:
+            registered_issuer = issuer
+        if registered_issuer is None:
+            raise trusted_privacy_error_type("provider transport receipt issuer is not registered")
+        bounded_request = registered_issuer[2]
+        if receipt is None:
+            return await cast(
+                Coroutine[Any, Any, httpx.Response],
+                bounded_request(
+                    client,
+                    method,
+                    path,
+                    json_body=json_body,
+                    max_bytes=max_bytes,
+                    trusted_pre_transport_check=trusted_pre_transport_check,
+                ),
+            )
+        state = receipt_state(receipt)
+        if (
+            state.get("phase") != "PREPARED"
+            or state.get("client") is not client
+            or state.get("thread_id") != trusted_get_ident()
+            or state.get("task") is not trusted_current_task()
+            or state.get("method") != method
+            or state.get("path") != path
+            or state.get("json_body") is not json_body
+            or state.get("logical_body_sha256")
+            != (
+                canonical_sha256(json_body)
+                if json_body is not None
+                else trusted_sha256(b"").hexdigest()
+            )
+        ):
+            raise trusted_privacy_error_type(
+                "provider transport receipt dispatch differs from plan"
+            )
+        binding, _ledger = live_binding(client)
+        if binding.request_lock is None:
+            revoke(receipt)
+            raise trusted_privacy_error_type(
+                "provider transport receipt lacks the owned request lock"
+            )
+
+        async def receipted_io() -> httpx.Response:
+            chunks: list[bytes] = []
+            total = 0
+            active_inflight_anchor: tuple[object, ...] | None = None
+            if trusted_pre_transport_check is not None:
+                await trusted_pre_transport_check()
+            live_binding(client)
+            transition(client, receipt, phase="DISPATCHED")
+            try:
+                async with cast(Any, trusted_transport_stream)(
+                    binding.http_client,
+                    method,
+                    path.lstrip("/"),
+                    json=json_body,
+                    headers=cast(Mapping[str, str], state["headers"]),
+                    timeout=trusted_timeout_type(
+                        trusted_object_getattribute(client, "execution").request_timeout_seconds
+                    ),
+                ) as live_response:
+                    if (
+                        type(live_response) is not trusted_response_type
+                        or type(live_response.request) is not trusted_request_type
+                        or type(live_response.headers) is not trusted_headers_type
+                    ):
+                        raise trusted_privacy_error_type(
+                            "provider transport returned an untrusted response object"
+                        )
+                    active_inflight_anchor = inflight_response_anchor(
+                        client,
+                        live_response,
+                        active_inflight_anchor,
+                    )
+                    actual_request = trusted_object_getattribute(live_response, "_request")
+                    live_headers = trusted_object_getattribute(live_response, "headers")
+                    raw_headers = header_multiset_projection(live_headers)
+                    async for chunk in trusted_response_aiter_bytes(live_response):
+                        active_inflight_anchor = inflight_response_anchor(
+                            client,
+                            live_response,
+                            active_inflight_anchor,
+                        )
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise trusted_schema_error_type(
+                                "provider response exceeded the configured safety limit"
+                            )
+                        chunks.append(chunk)
+                    active_inflight_anchor = completed_response_anchor(
+                        client,
+                        live_response,
+                        active_inflight_anchor,
+                    )
+                    _actual_method, actual_url, _actual_headers, _actual_content = (
+                        exact_request_projection(actual_request)
+                    )
+                    safe_request = trusted_request_type(method, actual_url)
+                    safe_response = trusted_response_type(
+                        status_code=trusted_object_getattribute(live_response, "status_code"),
+                        headers=decoded_safe_response_headers(live_headers),
+                        content=b"".join(chunks),
+                        request=safe_request,
+                    )
+                live_binding(client)
+                transition(
+                    client,
+                    receipt,
+                    phase="RESPONSE",
+                    actual_request=actual_request,
+                    response=safe_response,
+                    raw_response_headers=raw_headers,
+                )
+                return safe_response
+            except BaseException as io_error:
+                try:
+                    current = receipt_state(receipt)
+                except trusted_privacy_error_type:
+                    raise io_error from None
+                if current.get("phase") == "DISPATCHED":
+                    live_binding(client)
+                    actual_error_request = vars(io_error).get("_request")
+                    transition(
+                        client,
+                        receipt,
+                        phase="ERROR",
+                        actual_request=(
+                            actual_error_request
+                            if type(actual_error_request) is trusted_request_type
+                            else None
+                        ),
+                        error=io_error,
+                    )
+                raise io_error
+
+        try:
+            async with binding.request_lock:
+                response = await receipted_io()
+            current = receipt_state(receipt)
+            if current.get("phase") != "RESPONSE" or current.get("response") is not response:
+                raise trusted_privacy_error_type(
+                    "provider transport receipt lacks its exact response"
+                )
+            update_receipt_state(
+                receipt,
+                expected_phase="RESPONSE",
+                expected_nonce=current["nonce"],
+                updates={"phase": "CLAIMED"},
+            )
+            try:
+                return response
+            except BaseException:
+                revoke(receipt)
+                raise
+        except BaseException as dispatch_error:
+            try:
+                current = receipt_state(receipt)
+            except trusted_privacy_error_type:
+                raise dispatch_error from None
+            if current.get("phase") == "ERROR":
+                update_receipt_state(
+                    receipt,
+                    expected_phase="ERROR",
+                    expected_nonce=current["nonce"],
+                    updates={"phase": "CLAIMED"},
+                )
+                raise dispatch_error
+            revoke(receipt)
+            raise dispatch_error
+
+    receipted_io_code = _nested_code(dispatch, "receipted_io")
+
+    def transition(
+        client: object,
+        receipt: _ProviderTransportAttemptReceipt,
+        *,
+        phase: Literal["DISPATCHED", "RESPONSE", "ERROR"],
+        actual_request: httpx.Request | None = None,
+        response: httpx.Response | None = None,
+        raw_response_headers: tuple[tuple[str, str, str], ...] | None = None,
+        error: BaseException | None = None,
+    ) -> None:
+        with lock:
+            registered_issuer = issuer
+        if registered_issuer is None:
+            raise trusted_privacy_error_type("provider transport receipt issuer is not registered")
+        frame = trusted_getframe(1)
+        state = receipt_state(receipt)
+        if frame.f_code is not receipted_io_code or state.get("client") is not client:
+            raise trusted_privacy_error_type(
+                "provider transport receipt transition is unauthorized"
+            )
+        if (
+            state.get("thread_id") != trusted_get_ident()
+            or state.get("task") is not trusted_current_task()
+        ):
+            raise trusted_privacy_error_type(
+                "provider transport receipt crossed its invocation task"
+            )
+        current_phase = state.get("phase")
+        if phase == "DISPATCHED":
+            if current_phase != "PREPARED" or actual_request is not None or response is not None:
+                raise trusted_privacy_error_type(
+                    "provider transport receipt dispatch order is invalid"
+                )
+            live_binding(client)
+            update_receipt_state(
+                receipt,
+                expected_phase="PREPARED",
+                expected_nonce=state["nonce"],
+                updates={"phase": phase},
+            )
+            return
+        if current_phase != "DISPATCHED":
+            raise trusted_privacy_error_type("provider transport receipt outcome order is invalid")
+        if actual_request is None:
+            if phase != "ERROR" or error is None or response is not None:
+                raise trusted_privacy_error_type(
+                    "provider transport receipt outcome lacks its request"
+                )
+            update_receipt_state(
+                receipt,
+                expected_phase="DISPATCHED",
+                expected_nonce=state["nonce"],
+                updates={
+                    "phase": "ERROR",
+                    "outcome": f"DISPATCH_ERROR_NO_REQUEST:{type(error).__name__}",
+                    "error_type": type(error),
+                    "request_observed": False,
+                },
+            )
+            return
+        (
+            actual_method,
+            actual_url,
+            actual_headers,
+            raw_request,
+        ) = exact_request_projection(actual_request)
+        raw_request_sha256 = trusted_sha256(raw_request).hexdigest()
+        method = state["method"]
+        if (
+            actual_method != method
+            or actual_url != state["expected_url"]
+            or actual_headers != state.get("expected_header_multiset")
+            or raw_request_sha256 != state.get("expected_raw_request_sha256")
+        ):
+            raise trusted_privacy_error_type(
+                "provider transport request target differs from receipt"
+            )
+        if method == "GET" and actual_url != state.get("expected_url"):
+            raise trusted_privacy_error_type(
+                "provider generation metadata query differs from receipt"
+            )
+        if method == "POST":
+            try:
+                decoded_body = trusted_json_loads(
+                    raw_request,
+                    parse_constant=trusted_reject_nonfinite,
+                    object_pairs_hook=trusted_unique_object,
+                )
+                trusted_finite_numbers(decoded_body)
+            except (TypeError, ValueError):
+                raise trusted_privacy_error_type(
+                    "provider transport request body differs from receipt"
+                ) from None
+            if (
+                type(decoded_body) is not dict
+                or canonical_sha256(decoded_body) != state["logical_body_sha256"]
+            ):
+                raise trusted_privacy_error_type(
+                    "provider transport request body differs from receipt"
+                )
+        elif raw_request:
+            raise trusted_privacy_error_type(
+                "provider metadata transport unexpectedly carried a body"
+            )
+        updates: dict[str, object] = {
+            "raw_request_sha256": raw_request_sha256,
+            "request_observed": True,
+        }
+        if phase == "RESPONSE":
+            response_values = vars(response) if response is not None else {}
+            response_request = response_values.get("_request")
+            response_headers = response_values.get("headers")
+            response_content = response_values.get("_content")
+            response_status = response_values.get("status_code")
+            if (
+                response is None
+                or type(response) is not trusted_response_type
+                or error is not None
+                or raw_response_headers is None
+                or type(response_request) is not trusted_request_type
+                or exact_request_projection(response_request)[1] != actual_url
+                or type(response_headers) is not trusted_headers_type
+                or type(response_content) is not bytes
+                or type(response_status) is not int
+            ):
+                raise trusted_privacy_error_type("provider transport response differs from receipt")
+            updates["response"] = response
+            updates["response_status_code"] = response_status
+            updates["response_content_sha256"] = trusted_sha256(response_content).hexdigest()
+            updates["safe_response_headers"] = tuple(
+                sorted(decoded_safe_response_headers(response_headers).items())
+            )
+            raw_response_header_sha256 = canonical_sha256(raw_response_headers)
+            updates["response_digest"] = canonical_sha256(
+                {
+                    "content_sha256": trusted_sha256(response_content).hexdigest(),
+                    "raw_header_sha256": raw_response_header_sha256,
+                    "status_code": response_status,
+                }
+            )
+            updates["raw_response_header_sha256"] = raw_response_header_sha256
+            updates["outcome"] = "RESPONSE"
+        else:
+            if response is not None or error is None:
+                raise trusted_privacy_error_type("provider transport error differs from receipt")
+            updates["outcome"] = type(error).__name__
+            updates["error_type"] = type(error)
+        updates["phase"] = phase
+        update_receipt_state(
+            receipt,
+            expected_phase="DISPATCHED",
+            expected_nonce=state["nonce"],
+            updates=updates,
+        )
+
+    def revoke(receipt: _ProviderTransportAttemptReceipt) -> None:
+        if type(receipt) is not trusted_receipt_type:
+            return
+        with lock:
+            registered = registry.get(id(receipt))
+            if registered is None or registered[0]() is not receipt:
+                return
+            registry.pop(id(receipt), None)
+
+    def inspect_receipt(
+        receipt: _ProviderTransportAttemptReceipt,
+        *,
+        client: object,
+        method: str,
+        require_response: bool,
+    ) -> bool:
+        try:
+            state = receipt_state(receipt)
+            binding, ledger = live_binding(client)
+        except OpenRouterPrivacyError:
+            return False
+        response = state.get("response")
+        response_values = vars(response) if type(response) is trusted_response_type else {}
+        response_content = response_values.get("_content")
+        response_headers = response_values.get("headers")
+        accepted = bool(
+            state.get("phase") == "CLAIMED"
+            and state.get("client") is client
+            and state.get("transport") is binding.transport
+            and state.get("ledger") is ledger
+            and state.get("method") == method
+            and (
+                response is None
+                or (
+                    type(response) is trusted_response_type
+                    and response_values.get("status_code") == state.get("response_status_code")
+                    and type(response_content) is bytes
+                    and trusted_sha256(response_content).hexdigest()
+                    == state.get("response_content_sha256")
+                    and type(response_headers) is trusted_headers_type
+                    and tuple(sorted(decoded_safe_response_headers(response_headers).items()))
+                    == state.get("safe_response_headers")
+                )
+            )
+            and (not require_response or state.get("outcome") == "RESPONSE")
+        )
+        if not accepted:
+            return False
+        with lock:
+            registered = registry.get(id(receipt))
+            return bool(
+                registered is not None
+                and registered[0]() is receipt
+                and registered[1].get("phase") == "CLAIMED"
+                and registered[1].get("nonce") is state.get("nonce")
+            )
+
+    def consume_receipt(
+        receipt: _ProviderTransportAttemptReceipt,
+        *,
+        client: object,
+        method: str,
+        require_response: bool,
+    ) -> bool:
+        if not inspect_receipt(
+            receipt,
+            client=client,
+            method=method,
+            require_response=require_response,
+        ):
+            return False
+        state = receipt_state(receipt)
+        try:
+            update_receipt_state(
+                receipt,
+                expected_phase="CLAIMED",
+                expected_nonce=state["nonce"],
+                updates={"phase": "CONSUMED"},
+            )
+        except trusted_privacy_error_type:
+            return False
+        with lock:
+            registered = registry.get(id(receipt))
+            return bool(
+                registered is not None
+                and registered[0]() is receipt
+                and registered[1].get("phase") == "CONSUMED"
+                and registered[1].get("nonce") is state.get("nonce")
+            )
+
+    def revoke_operation(grant: _ProviderTransportOperationGrant) -> None:
+        if type(grant) is not trusted_grant_type:
+            return
+        with lock:
+            registered = grant_registry.get(id(grant))
+            if registered is None or registered[0]() is not grant:
+                return
+            operation_nonce = registered[1].get("nonce")
+            grant_registry.pop(id(grant), None)
+            for key, current in tuple(registry.items()):
+                if (
+                    current[1].get("operation_grant") is grant
+                    and current[1].get("operation_nonce") is operation_nonce
+                ):
+                    registry.pop(key, None)
+
+    return (
+        register_issuer,
+        prepare_operation,
+        prepare,
+        dispatch,
+        transition,
+        revoke,
+        inspect_receipt,
+        consume_receipt,
+        revoke_operation,
+    )
 
 
 def _endpoint_snapshot_binding_registry() -> tuple[
@@ -5210,6 +7394,11 @@ class OpenRouterClient:
             GenerationReconciliationExpectation | GenerationVerificationRequest | None
         ) = None,
         _request_semaphore: asyncio.Semaphore | None = None,
+        _authrunner_receipt_purpose: Literal[
+            "INITIAL_IDENTITY_BIND",
+            "CAPABILITY_REFETCH",
+        ]
+        | None = None,
     ) -> OpenRouterGenerationEvidence:
         """Poll boundedly for one eventual, content-free generation attestation."""
 
@@ -5263,6 +7452,7 @@ class OpenRouterClient:
                             exact_decimal_json=True,
                             maximum_attempts=1,
                             not_found_is_pending=True,
+                            _authrunner_receipt_purpose=_authrunner_receipt_purpose,
                         )
                     else:
                         async with _request_semaphore:
@@ -5273,6 +7463,7 @@ class OpenRouterClient:
                                 exact_decimal_json=True,
                                 maximum_attempts=1,
                                 not_found_is_pending=True,
+                                _authrunner_receipt_purpose=_authrunner_receipt_purpose,
                             )
                 except (
                     OpenRouterGenerationMetadataNotReadyError,
@@ -5313,7 +7504,7 @@ class OpenRouterClient:
                             "OpenRouter returned invalid generation metadata"
                         ) from None
                     if may_be_pending:
-                        last_pending_error = OpenRouterSchemaError(
+                        last_pending_error = OpenRouterGenerationMetadataNotReadyError(
                             "OpenRouter generation metadata remained incomplete"
                         )
                         last_reconciliation_code = None
@@ -5324,19 +7515,9 @@ class OpenRouterClient:
                     ) from None
                 if expectation is not None:
                     try:
-                        _reconcile_generation_evidence_structural(
+                        _reconcile_generation_expectation_structural(
                             evidence,
-                            usage_record=expectation.usage_record,
-                            expected_exact_model=expectation.exact_model_id,
-                            expected_canonical_model=expectation.canonical_model_id,
-                            expected_catalog_identity_binding_sha256=(
-                                expectation.catalog_identity_binding_sha256
-                            ),
-                            expected_discovery_evidence_sha256=(
-                                expectation.discovery_evidence_sha256
-                            ),
-                            expected_provider_name=expectation.expected_provider_name,
-                            require_certification=expectation.require_certification,
+                            expectation=expectation,
                         )
                     except GenerationReconciliationMismatchError as exc:
                         if not exc.is_eventual_usage_field:
@@ -5507,12 +7688,23 @@ class OpenRouterClient:
             raise OpenRouterPrivacyError(
                 "trusted generation verification requires an owned REAL provider client"
             )
+        if any(
+            structurally_noncrediting_unknown_token_smoke_usage_error(request.usage_record) is None
+            for request in normalized
+        ):
+            raise OpenRouterPrivacyError(
+                "NONCREDITING_SMOKE generation verification awaits immutable metadata receipts"
+            )
         verification_started_at = datetime.now(UTC)
         attestations = await OpenRouterClient._fetch_generation_attestations_with_deadline(
             self,
             normalized,
             cast(tuple[str, ...], generation_ids),
         )
+        if not _openrouter_client_callables_are_pristine():
+            raise OpenRouterPrivacyError(
+                "trusted generation verification runtime changed during provider re-fetch"
+            )
         OpenRouterClient._validate_transport_provenance(self)
         try:
             capability = _issue_trusted_generation_verification(
@@ -5834,7 +8026,8 @@ class OpenRouterClient:
         identity_binding: OpenRouterIdentityBindingResult,
         trusted_issuer: object | None,
     ) -> UsageRecord:
-        return self._usage_with_identity_result(
+        return _TRUSTED_USAGE_WITH_IDENTITY_RESULT(
+            self,
             usage_record=usage_record,
             identity_binding=identity_binding,
             trusted_issuer=trusted_issuer,
@@ -5849,7 +8042,8 @@ class OpenRouterClient:
         trusted_issuer: object | None,
         generation_observation: OpenRouterGenerationEvidence | None = None,
     ) -> UsageRecord:
-        return self._usage_with_identity_result(
+        return _TRUSTED_USAGE_WITH_IDENTITY_RESULT(
+            self,
             usage_record=usage_record,
             identity_binding=identity_binding,
             trusted_issuer=trusted_issuer,
@@ -5944,6 +8138,14 @@ class OpenRouterClient:
             ) from None
         if concluded_usage.execution_evidence is ExecutionEvidenceKind.REAL:
             concluded_usage = _attest_owned_real_usage_record(concluded_usage)
+        if (
+            require_bound
+            and concluded_usage.execution_evidence is ExecutionEvidenceKind.REAL
+            and structurally_noncrediting_unknown_token_smoke_usage_error(concluded_usage) is None
+        ):
+            raise OpenRouterPrivacyError(
+                "NONCREDITING_SMOKE identity binding awaits immutable completion receipts"
+            )
         try:
             if require_bound:
                 self.usage.replace_with_bound_identity(concluded_usage)
@@ -5961,6 +8163,64 @@ class OpenRouterClient:
                     "REAL bound usage lacks AUTHRUNNER transport-origin custody"
                 ) from None
         return concluded_usage
+
+    def _require_terminal_usage_cost_custody(
+        self,
+        usage_record: UsageRecord,
+    ) -> AtomicCostLedger:
+        """Bind AUTHRUNNER origin to the exact terminal paid-attempt ledger entries."""
+
+        _TRUSTED_VALIDATE_TRANSPORT_PROVENANCE(self)
+        binding = _TRUSTED_LOOKUP_TRANSPORT_BINDING(self)
+        budget = object.__getattribute__(self, "budget")
+        ledger = object.__getattribute__(budget, "atomic_ledger")
+        if (
+            binding is None
+            or binding.budget_manager is not budget
+            or binding.atomic_cost_ledger is not ledger
+            or type(budget) is not BudgetManager
+            or type(ledger) is not AtomicCostLedger
+            or type(usage_record) is not UsageRecord
+            or usage_record.accounted_cost_usd_exact is None
+            or usage_record.reported_cost_usd_exact is None
+        ):
+            raise ValueError("AUTHRUNNER usage lacks exact terminal cost custody")
+        try:
+            expected_ids = tuple(
+                _TRUSTED_ATTEMPT_REQUEST_ID(usage_record.request_id, attempt)
+                for attempt in range(1, usage_record.attempts + 1)
+            )
+            snapshot = _TRUSTED_ATOMIC_LEDGER_SNAPSHOT(ledger)
+            entries = {entry.request_id: entry for entry in snapshot.entries}
+            matched = tuple(entries[request_id] for request_id in expected_ids)
+            accounted = Decimal(usage_record.accounted_cost_usd_exact)
+            reported = Decimal(usage_record.reported_cost_usd_exact)
+            with localcontext() as context:
+                context.prec = 160
+                ledger_accounted = sum(
+                    (entry.accounted_cost_usd for entry in matched),
+                    start=Decimal(0),
+                )
+        except (ArithmeticError, InvalidOperation, KeyError, ValueError):
+            raise ValueError("AUTHRUNNER usage lacks exact terminal cost custody") from None
+        final = matched[-1]
+        if (
+            len(expected_ids) != usage_record.attempts
+            or len(set(expected_ids)) != len(expected_ids)
+            or any(
+                entry.status
+                not in {
+                    _TRUSTED_COST_ENTRY_RECONCILED,
+                    _TRUSTED_COST_ENTRY_UNCERTAIN_ACCOUNTED,
+                }
+                for entry in matched
+            )
+            or final.status is not _TRUSTED_COST_ENTRY_RECONCILED
+            or final.actual_cost_usd != reported
+            or ledger_accounted != accounted
+        ):
+            raise ValueError("AUTHRUNNER usage lacks exact terminal cost custody")
+        return ledger
 
     def register_endpoint_snapshot(
         self,
@@ -7643,6 +9903,11 @@ class OpenRouterClient:
         exact_decimal_json: bool = False,
         maximum_attempts: int | None = None,
         not_found_is_pending: bool = False,
+        _authrunner_receipt_purpose: Literal[
+            "INITIAL_IDENTITY_BIND",
+            "CAPABILITY_REFETCH",
+        ]
+        | None = None,
     ) -> dict[str, Any]:
         attempt_limit = (
             self.execution.max_model_retries + 1 if maximum_attempts is None else maximum_attempts
@@ -7656,6 +9921,9 @@ class OpenRouterClient:
         attempts = 0
         while True:
             attempts += 1
+            # Raw provider receipts are deliberately dormant in production until
+            # an opaque parent grant is threaded through this polling lifecycle.
+            transport_receipt = None
             try:
                 response = await _TRUSTED_BOUNDED_REQUEST(
                     self,
@@ -7664,21 +9932,31 @@ class OpenRouterClient:
                     max_bytes=max_bytes,
                 )
             except (httpx.TimeoutException, httpx.NetworkError):
+                if transport_receipt is not None:
+                    _TRUSTED_REVOKE_PROVIDER_TRANSPORT_ATTEMPT(transport_receipt)
                 if attempts >= attempt_limit:
                     raise OpenRouterTimeoutError("OpenRouter metadata request failed") from None
                 await self._backoff(attempts, None)
                 continue
             except httpx.HTTPError:
+                if transport_receipt is not None:
+                    _TRUSTED_REVOKE_PROVIDER_TRANSPORT_ATTEMPT(transport_receipt)
                 raise OpenRouterModelError(
                     "OpenRouter metadata transport response was invalid"
                 ) from None
             if response.status_code in {401, 403}:
+                if transport_receipt is not None:
+                    _TRUSTED_REVOKE_PROVIDER_TRANSPORT_ATTEMPT(transport_receipt)
                 raise OpenRouterAuthenticationError("OpenRouter rejected the API credentials")
             if response.status_code == 404 and not_found_is_pending:
+                if transport_receipt is not None:
+                    _TRUSTED_REVOKE_PROVIDER_TRANSPORT_ATTEMPT(transport_receipt)
                 raise OpenRouterGenerationMetadataNotReadyError(
                     "OpenRouter generation metadata is not ready"
                 )
             if is_retryable_status(response.status_code):
+                if transport_receipt is not None:
+                    _TRUSTED_REVOKE_PROVIDER_TRANSPORT_ATTEMPT(transport_receipt)
                 if attempts >= attempt_limit:
                     if response.status_code == 429:
                         raise OpenRouterRateLimitError(
@@ -7694,6 +9972,8 @@ class OpenRouterClient:
                 await self._backoff(attempts, response.headers.get("Retry-After"))
                 continue
             if response.status_code >= 400:
+                if transport_receipt is not None:
+                    _TRUSTED_REVOKE_PROVIDER_TRANSPORT_ATTEMPT(transport_receipt)
                 raise OpenRouterModelError(
                     f"OpenRouter metadata request failed with HTTP {response.status_code}"
                 )
@@ -7709,10 +9989,14 @@ class OpenRouterClient:
         except ValueError:
             payload = None
         if not isinstance(payload, dict):
+            if transport_receipt is not None:
+                _TRUSTED_REVOKE_PROVIDER_TRANSPORT_ATTEMPT(transport_receipt)
             raise OpenRouterModelError("OpenRouter metadata response was not a valid object")
         _TRUSTED_ENSURE_NO_CREDENTIAL_IN_VALUE(self, payload)
         observation_path = "/" + path.lstrip("/")
         self._metadata_observations[observation_path] = _canonical_sha256(payload)
+        if transport_receipt is not None:
+            _TRUSTED_REVOKE_PROVIDER_TRANSPORT_ATTEMPT(transport_receipt)
         return payload
 
     async def _bounded_request(
@@ -7753,20 +10037,25 @@ class OpenRouterClient:
                             )
                         chunks.append(chunk)
                     safe_request = httpx.Request(method, response.request.url)
-                    return httpx.Response(
+                    safe_response = httpx.Response(
                         status_code=response.status_code,
                         headers=_decoded_response_headers(response.headers),
                         content=b"".join(chunks),
                         request=safe_request,
                     )
-            except OpenRouterError:
-                raise
-            except httpx.HTTPError as exc:
-                if exc.request is not None:
-                    exc.request = httpx.Request(method, self._client.base_url.join(relative_path))
-                raise
-            except Exception:
-                pass
+                    return safe_response
+            except BaseException as exc:
+                if isinstance(exc, OpenRouterError):
+                    raise
+                if isinstance(exc, httpx.HTTPError):
+                    if exc.request is not None:
+                        exc.request = httpx.Request(
+                            method,
+                            self._client.base_url.join(relative_path),
+                        )
+                    raise
+                if not isinstance(exc, Exception):
+                    raise
             raise OpenRouterSchemaError("model transport failed safely")
 
         if binding.execution_evidence is ExecutionEvidenceKind.REAL:
@@ -7782,6 +10071,14 @@ class OpenRouterClient:
         if any(
             name in vars(self)
             for name in (
+                "complete_with_evidence",
+                "_complete_one",
+                "_bind_real_completion_identity",
+                "_bind_generation_identity",
+                "_usage_with_bound_identity",
+                "_usage_with_unbound_identity",
+                "_usage_with_identity_result",
+                "_require_terminal_usage_cost_custody",
                 "validate_authentication",
                 "get_generation_evidence",
                 "create_trusted_generation_verification",
@@ -7981,6 +10278,27 @@ class OpenRouterClient:
         if execution_evidence is ExecutionEvidenceKind.UNVERIFIED:
             raise OpenRouterPrivacyError("provider transport provenance changed after validation")
         return execution_evidence
+
+    def _require_real_completion_dispatch_surface(self) -> None:
+        """Reject instance dispatch overrides across the owned REAL completion seam."""
+
+        if type(self) is not _TRUSTED_OPENROUTER_CLIENT_TYPE or any(
+            name in vars(self)
+            for name in (
+                "complete_with_evidence",
+                "_complete_one",
+                "_bind_real_completion_identity",
+                "_bind_generation_identity",
+                "_usage_with_bound_identity",
+                "_usage_with_unbound_identity",
+                "_usage_with_identity_result",
+                "_require_terminal_usage_cost_custody",
+                "_require_real_completion_dispatch_surface",
+            )
+        ):
+            raise OpenRouterPrivacyError(
+                "REAL completion dispatch surface changed after validation"
+            )
 
     def build_request(
         self,
@@ -8852,7 +11170,9 @@ class OpenRouterClient:
     ) -> ResponseT:
         """Compatibility wrapper returning only the validated structured value."""
 
-        completion = await self.complete_with_evidence(
+        _TRUSTED_REQUIRE_REAL_COMPLETION_DISPATCH_SURFACE(self)
+        completion = await _TRUSTED_COMPLETE_WITH_EVIDENCE(
+            self,
             role=role,
             models=models,
             system_prompt=system_prompt,
@@ -9259,6 +11579,7 @@ class OpenRouterClient:
                     "real provider completion lacks validated endpoint pricing"
                 )
         if trusted_openrouter_execution_evidence(self) is ExecutionEvidenceKind.REAL:
+            _TRUSTED_REQUIRE_REAL_COMPLETION_DISPATCH_SURFACE(self)
             if (
                 type(self) is not _TRUSTED_OPENROUTER_CLIENT_TYPE
                 or not self._owns_client
@@ -9481,12 +11802,19 @@ class OpenRouterClient:
         last_error: OpenRouterError | None = None
         for index, model in enumerate(models):
             try:
+                real_dispatch = (
+                    trusted_openrouter_execution_evidence(self) is ExecutionEvidenceKind.REAL
+                )
+                # Production raw transport receipts remain dormant until their
+                # completion and metadata composites are transactionally wired.
+                transport_operation_grant = None
                 complete_one = (
                     _TRUSTED_COMPLETE_ONE.__get__(
                         self,
                         _TRUSTED_OPENROUTER_CLIENT_TYPE,
                     )
-                    if response_model is _TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE
+                    if real_dispatch
+                    or response_model is _TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE
                     else self._complete_one
                 )
                 completion = await complete_one(
@@ -9510,6 +11838,7 @@ class OpenRouterClient:
                     maximum_attempts=maximum_attempts,
                     expected_resource_preview=_expected_resource_preview,
                     expected_request_cost_preview=expected_request_cost_preview,
+                    _authrunner_operation_grant=transport_operation_grant,
                 )
             except (
                 OpenRouterTransientError,
@@ -9544,7 +11873,9 @@ class OpenRouterClient:
                 )
                 return completion
             if trusted_openrouter_execution_evidence(self) is ExecutionEvidenceKind.REAL:
-                completion = await self._bind_real_completion_identity(completion)
+                _TRUSTED_REQUIRE_REAL_COMPLETION_DISPATCH_SURFACE(self)
+                _TRUSTED_VALIDATE_TRANSPORT_PROVENANCE(self)
+                completion = await _TRUSTED_BIND_REAL_COMPLETION_IDENTITY(self, completion)
                 if _is_concluded_unbound_completion(completion):
                     self._retain_unbound_completion(completion)
                     self.logger.warning(
@@ -9622,6 +11953,7 @@ class OpenRouterClient:
             raise OpenRouterPrivacyError(
                 "REAL identity binding requires an authenticated owned provider client"
             )
+        _TRUSTED_REQUIRE_REAL_COMPLETION_DISPATCH_SURFACE(self)
         OpenRouterClient._validate_transport_provenance(self)
         generation_id = completion.usage_record.openrouter_generation_id
         if generation_id is None:
@@ -9629,13 +11961,63 @@ class OpenRouterClient:
         identity = self._model_identities.get(completion.usage_record.requested_model)
         if identity is None:
             raise OpenRouterModelError("REAL provider completion lacks frozen model identity")
+        usage_ledger = self.usage
+        if type(usage_ledger) is not UsageLedger or type(usage_ledger._records) is not list:
+            raise OpenRouterPrivacyError("REAL identity binding usage custody is invalid")
+        usage_records = usage_ledger._records
+        if (
+            sum(item is completion.usage_record for item in usage_records) != 1
+            or sum(item.request_id == completion.usage_record.request_id for item in usage_records)
+            != 1
+        ):
+            raise OpenRouterPrivacyError(
+                "REAL identity binding lacks one exact provisional usage record"
+            )
+
+        def require_usage_custody() -> None:
+            if (
+                self.usage is not usage_ledger
+                or self.usage._records is not usage_records
+                or sum(item is completion.usage_record for item in usage_records) != 1
+                or sum(
+                    item.request_id == completion.usage_record.request_id for item in usage_records
+                )
+                != 1
+                or not _TRUSTED_HAS_OWNED_REAL_USAGE_ATTESTATION(completion.usage_record)
+            ):
+                raise OpenRouterPrivacyError(
+                    "REAL identity binding usage custody changed during generation retrieval"
+                )
+
+        initial_noncrediting_smoke = (
+            _TRUSTED_STRUCTURALLY_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_ERROR(
+                completion.usage_record
+            )
+            is None
+        )
+        if initial_noncrediting_smoke:
+            try:
+                if (
+                    not _TRUSTED_HAS_OWNED_REAL_USAGE_ATTESTATION(completion.usage_record)
+                    or type(self.usage) is not UsageLedger
+                ):
+                    raise ValueError
+                _TRUSTED_REQUIRE_TERMINAL_USAGE_COST_CUSTODY(
+                    self,
+                    completion.usage_record,
+                )
+            except ValueError:
+                raise OpenRouterPrivacyError(
+                    "initial REAL smoke reconciliation lacks owned runtime and cost custody"
+                ) from None
 
         def conclude_unbound(
             diagnostic_codes: set[OpenRouterIdentityDiagnosticCode],
             *,
             generation_observation: OpenRouterGenerationEvidence | None = None,
         ) -> StructuredCompletion[ResponseT]:
-            missing_binding = self._bind_generation_identity(
+            missing_binding = _TRUSTED_BIND_GENERATION_IDENTITY(
+                self,
                 usage_record=completion.usage_record,
                 generation_evidence=None,
                 evaluated_at=None,
@@ -9644,7 +12026,8 @@ class OpenRouterClient:
                     sorted(diagnostic_codes, key=lambda item: item.value)
                 ),
             )
-            unbound_usage = self._usage_with_unbound_identity(
+            unbound_usage = _TRUSTED_USAGE_WITH_UNBOUND_IDENTITY(
+                self,
                 usage_record=completion.usage_record,
                 identity_binding=missing_binding,
                 trusted_issuer=_TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER,
@@ -9653,22 +12036,35 @@ class OpenRouterClient:
             return StructuredCompletion(value=completion.value, usage_record=unbound_usage)
 
         try:
-            reconciliation_expectation = GenerationReconciliationExpectation(
-                exact_model_id=identity.exact_model_id,
-                canonical_model_id=identity.canonical_slug,
-                catalog_identity_binding_sha256=identity.catalog_identity_binding_sha256,
-                discovery_evidence_sha256=identity.discovery_evidence_sha256,
-                expected_provider_name=identity.snapshot.provider_name,
-                require_certification=(
-                    completion.usage_record.routing.get("certification_request") is True
-                ),
-                usage_record=completion.usage_record,
+            require_certification = (
+                completion.usage_record.routing.get("certification_request") is True
             )
+            if initial_noncrediting_smoke:
+                reconciliation_expectation = (
+                    _TRUSTED_INITIAL_REAL_GENERATION_RECONCILIATION_EXPECTATION(
+                        exact_model_id=identity.exact_model_id,
+                        canonical_model_id=identity.canonical_slug,
+                        catalog_identity_binding_sha256=(identity.catalog_identity_binding_sha256),
+                        discovery_evidence_sha256=identity.discovery_evidence_sha256,
+                        expected_provider_name=identity.snapshot.provider_name,
+                        require_certification=require_certification,
+                        usage_record=completion.usage_record,
+                    )
+                )
+            else:
+                reconciliation_expectation = GenerationReconciliationExpectation(
+                    exact_model_id=identity.exact_model_id,
+                    canonical_model_id=identity.canonical_slug,
+                    catalog_identity_binding_sha256=(identity.catalog_identity_binding_sha256),
+                    discovery_evidence_sha256=identity.discovery_evidence_sha256,
+                    expected_provider_name=identity.snapshot.provider_name,
+                    require_certification=require_certification,
+                    usage_record=completion.usage_record,
+                )
         except GenerationEvidenceValidationError:
             usage = completion.usage_record
             diagnostic_codes = {
                 OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_INTEGRITY_REJECTED,
-                OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_MISSING,
             }
             if usage.actual_provider_endpoint != identity.snapshot.approved_provider_endpoint:
                 diagnostic_codes.add(OpenRouterIdentityDiagnosticCode.ENDPOINT_VARIANT_MISMATCH)
@@ -9689,34 +12085,47 @@ class OpenRouterClient:
                 reconciliation_request=reconciliation_expectation,
             )
         except OpenRouterError as exc:
+            if not _openrouter_client_callables_are_pristine():
+                raise OpenRouterPrivacyError(
+                    "REAL identity binding runtime changed during generation retrieval"
+                ) from None
+            OpenRouterClient._validate_transport_provenance(self)
+            _TRUSTED_REQUIRE_REAL_COMPLETION_DISPATCH_SURFACE(self)
+            require_usage_custody()
             generation_observation = (
                 exc.last_evidence
                 if isinstance(exc, OpenRouterGenerationReconciliationError)
                 else None
             )
             return conclude_unbound(
-                {
-                    OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_MISSING,
-                    _generation_metadata_failure_diagnostic(exc),
-                },
+                _generation_metadata_failure_diagnostics(exc),
                 generation_observation=generation_observation,
             )
+        if not _openrouter_client_callables_are_pristine():
+            raise OpenRouterPrivacyError(
+                "REAL identity binding runtime changed during generation retrieval"
+            )
         OpenRouterClient._validate_transport_provenance(self)
-        binding = self._bind_generation_identity(
+        _TRUSTED_REQUIRE_REAL_COMPLETION_DISPATCH_SURFACE(self)
+        require_usage_custody()
+        binding = _TRUSTED_BIND_GENERATION_IDENTITY(
+            self,
             usage_record=completion.usage_record,
             generation_evidence=generation,
             evaluated_at=None,
             trusted_issuer=_TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER,
         )
         if binding.strength is ModelIdentityStrength.UNBOUND:
-            unbound_usage = self._usage_with_unbound_identity(
+            unbound_usage = _TRUSTED_USAGE_WITH_UNBOUND_IDENTITY(
+                self,
                 usage_record=completion.usage_record,
                 identity_binding=binding,
                 trusted_issuer=_TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER,
                 generation_observation=generation,
             )
             return StructuredCompletion(value=completion.value, usage_record=unbound_usage)
-        bound_usage = self._usage_with_bound_identity(
+        bound_usage = _TRUSTED_USAGE_WITH_BOUND_IDENTITY(
+            self,
             usage_record=completion.usage_record,
             identity_binding=binding,
             trusted_issuer=_TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER,
@@ -9744,6 +12153,7 @@ class OpenRouterClient:
         maximum_attempts: int | None = None,
         expected_resource_preview: ModelSurfaceTaskResourcePreview | None = None,
         expected_request_cost_preview: OpenRouterStructuredRequestCostPreview | None = None,
+        _authrunner_operation_grant: _ProviderTransportOperationGrant | None = None,
     ) -> StructuredCompletion[ResponseT]:
         paid_controls_required = _trusted_paid_controls_required(self)
         configured_attempts = self.execution.max_model_retries + 1
@@ -10351,6 +12761,7 @@ class OpenRouterClient:
         accounted_cost_usd_exact = Decimal(0)
         active_reservation: Reservation | None = None
         attempt_reservations: list[Reservation] = []
+        transport_attempt_receipts: list[_ProviderTransportAttemptReceipt] = []
         refresh_pricing_reservation_checks: dict[str, datetime] = {}
         refresh_pricing_transport_checks: dict[str, datetime] = {}
         refresh_pricing_attempt_routes: dict[str, AuditModelRefreshPricingRouteEvidence] = {}
@@ -10992,16 +13403,48 @@ class OpenRouterClient:
                             )
                         last_dispatched_refresh_routing_evidence = final_refresh_routing_evidence
                     require_current_refresh_pricing(phase="after lifecycle dispatch observation")
-                    response = await _TRUSTED_BOUNDED_REQUEST(
-                        self,
-                        "POST",
-                        "/chat/completions",
-                        json_body=body,
-                        max_bytes=max(
-                            1_000_000,
-                            request_token_plan.requested_completion_tokens * 32,
-                        ),
-                        trusted_pre_transport_check=(require_current_refresh_inside_transport_lock),
+                    transport_receipt = (
+                        _TRUSTED_PREPARE_PROVIDER_TRANSPORT_ATTEMPT(
+                            self,
+                            operation_grant=_authrunner_operation_grant,
+                            method="POST",
+                            path="/chat/completions",
+                            json_body=body,
+                            reservation=active_reservation,
+                            purpose="COMPLETION",
+                        )
+                        if _authrunner_operation_grant is not None
+                        else None
+                    )
+                    if transport_receipt is not None:
+                        transport_attempt_receipts.append(transport_receipt)
+                    request_max_bytes = max(
+                        1_000_000,
+                        request_token_plan.requested_completion_tokens * 32,
+                    )
+                    response = (
+                        await _TRUSTED_DISPATCH_PROVIDER_TRANSPORT_ATTEMPT(
+                            self,
+                            transport_receipt,
+                            "POST",
+                            "/chat/completions",
+                            json_body=body,
+                            max_bytes=request_max_bytes,
+                            trusted_pre_transport_check=(
+                                require_current_refresh_inside_transport_lock
+                            ),
+                        )
+                        if transport_receipt is not None
+                        else await _TRUSTED_BOUNDED_REQUEST(
+                            self,
+                            "POST",
+                            "/chat/completions",
+                            json_body=body,
+                            max_bytes=request_max_bytes,
+                            trusted_pre_transport_check=(
+                                require_current_refresh_inside_transport_lock
+                            ),
+                        )
                     )
                     if paid_controls_required:
                         _TRUSTED_VALIDATE_TRANSPORT_PROVENANCE(self)
@@ -13156,6 +15599,38 @@ async def trusted_complete_candidate_review_with_evidence(
     )
 
 
+def _generation_metadata_failure_diagnostic(
+    error: OpenRouterError,
+) -> OpenRouterIdentityDiagnosticCode:
+    if isinstance(error, OpenRouterAuthenticationError):
+        return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_AUTHENTICATION_FAILED
+    if isinstance(error, OpenRouterTimeoutError):
+        return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_TIMEOUT
+    if isinstance(error, OpenRouterRateLimitError):
+        return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_RATE_LIMITED
+    if isinstance(error, OpenRouterProviderUnavailableError):
+        return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_PROVIDER_UNAVAILABLE
+    if isinstance(error, OpenRouterGenerationMetadataNotReadyError):
+        return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_NOT_READY
+    if isinstance(error, (OpenRouterPrivacyError, OpenRouterGenerationReconciliationError)):
+        return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_INTEGRITY_REJECTED
+    if isinstance(error, OpenRouterSchemaError):
+        return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_INVALID
+    return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_RETRIEVAL_FAILED
+
+
+def _generation_metadata_failure_diagnostics(
+    error: OpenRouterError,
+) -> set[OpenRouterIdentityDiagnosticCode]:
+    """Keep absence distinct from malformed or contradicted metadata."""
+
+    diagnostic = _generation_metadata_failure_diagnostic(error)
+    diagnostics = {diagnostic}
+    if isinstance(error, OpenRouterGenerationMetadataNotReadyError):
+        diagnostics.add(OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_MISSING)
+    return diagnostics
+
+
 _TRUSTED_OPENROUTER_CLIENT_TYPE = OpenRouterClient
 _TRUSTED_CANDIDATE_REVIEW_PROTOCOL_BOUNDARY_IS_PRISTINE = (
     _candidate_review_protocol_boundary_is_pristine
@@ -13204,11 +15679,48 @@ _TRUSTED_CANDIDATE_REVIEW_USAGE_RECORD_VALIDATOR = UsageRecord.__pydantic_valida
 _TRUSTED_CANDIDATE_REVIEW_USAGE_RECORD_CORE_SCHEMA = UsageRecord.__pydantic_core_schema__
 _TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER = object()
 _TRUSTED_RECONCILIATION_EXPECTATION = GenerationVerificationRequest.reconciliation_expectation
+_TRUSTED_GENERATION_EVIDENCE_MODULE = generation_evidence_module
+_TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_TYPE = GenerationReconciliationExpectation
+_TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_INIT = GenerationReconciliationExpectation.__init__
+_TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_POST_INIT = (
+    GenerationReconciliationExpectation.__post_init__
+)
+_TRUSTED_GENERATION_VERIFICATION_REQUEST_TYPE = GenerationVerificationRequest
+_TRUSTED_GENERATION_VERIFICATION_REQUEST_INIT = GenerationVerificationRequest.__init__
+_TRUSTED_GENERATION_VERIFICATION_REQUEST_POST_INIT = GenerationVerificationRequest.__post_init__
+_TRUSTED_INITIAL_REAL_GENERATION_RECONCILIATION_EXPECTATION = (
+    _initial_real_generation_reconciliation_expectation
+)
+_TRUSTED_RECONCILE_GENERATION_EXPECTATION_STRUCTURAL = _reconcile_generation_expectation_structural
+_TRUSTED_RECONCILE_GENERATION_EVIDENCE_STRUCTURAL = _reconcile_generation_evidence_structural
+_TRUSTED_RECONCILE_NONCREDITING_SMOKE_GENERATION_EVIDENCE_STRUCTURAL = (
+    _reconcile_noncrediting_smoke_generation_evidence_structural
+)
+_TRUSTED_STRUCTURALLY_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_ERROR = (
+    structurally_noncrediting_unknown_token_smoke_usage_error
+)
+_TRUSTED_GENERATION_RECONCILIATION_POLICY_TYPE = (
+    generation_evidence_module._GenerationReconciliationPolicy
+)
+_TRUSTED_GENERATION_RECONCILIATION_POLICY_VALUES = tuple(
+    generation_evidence_module._GenerationReconciliationPolicy
+)
+_TRUSTED_GENERATION_METADATA_FAILURE_DIAGNOSTIC = _generation_metadata_failure_diagnostic
+_TRUSTED_GENERATION_METADATA_FAILURE_DIAGNOSTICS = _generation_metadata_failure_diagnostics
+_TRUSTED_USAGE_LEDGER_TYPE = UsageLedger
+_TRUSTED_USAGE_MODULE = usage_module
+_TRUSTED_USAGE_LEDGER_REPLACE_WITH_BOUND_IDENTITY = UsageLedger.replace_with_bound_identity
+_TRUSTED_USAGE_LEDGER_REPLACE_WITH_UNBOUND_IDENTITY = UsageLedger.replace_with_unbound_identity
+_TRUSTED_USAGE_LEDGER_REPLACE_WITH_IDENTITY_RESULT = UsageLedger._replace_with_identity_result
+_TRUSTED_REQUIRE_TERMINAL_USAGE_COST_CUSTODY = OpenRouterClient._require_terminal_usage_cost_custody
 _TRUSTED_VALIDATE_AUTHENTICATION = OpenRouterClient.validate_authentication
 _TRUSTED_GET_GENERATION_EVIDENCE = OpenRouterClient.get_generation_evidence
 _TRUSTED_ISSUE_GENERATION_VERIFICATION = _issue_trusted_generation_verification
 _TRUSTED_ATTEST_AUTHRUNNER_GENERATION_ORIGIN = _attest_authrunner_generation_origin
 _TRUSTED_ATTEST_AUTHRUNNER_USAGE_ORIGIN = _attest_authrunner_owned_real_usage_origin
+_TRUSTED_HAS_AUTHRUNNER_USAGE_ORIGIN = _has_authrunner_owned_real_usage_origin
+_TRUSTED_ATTEST_OWNED_REAL_USAGE_RECORD = _attest_owned_real_usage_record
+_TRUSTED_HAS_OWNED_REAL_USAGE_ATTESTATION = _has_owned_real_usage_attestation
 _TRUSTED_AUTHRUNNER_USAGE_ORIGIN_SCOPE = _authrunner_usage_origin_scope
 _TRUSTED_VALIDATED_USAGE_COPY = _validated_usage_copy_preserving_owned_attestation
 _TRUSTED_CREATE_GENERATION_VERIFICATION = OpenRouterClient.create_trusted_generation_verification
@@ -13223,6 +15735,14 @@ _TRUSTED_PREVIEW_CANDIDATE_REVIEW_TASK_RESOURCES = (
 )
 _TRUSTED_COMPLETE_WITH_EVIDENCE = OpenRouterClient.complete_with_evidence
 _TRUSTED_COMPLETE_ONE = OpenRouterClient._complete_one
+_TRUSTED_BIND_REAL_COMPLETION_IDENTITY = OpenRouterClient._bind_real_completion_identity
+_TRUSTED_BIND_GENERATION_IDENTITY = OpenRouterClient._bind_generation_identity
+_TRUSTED_USAGE_WITH_BOUND_IDENTITY = OpenRouterClient._usage_with_bound_identity
+_TRUSTED_USAGE_WITH_UNBOUND_IDENTITY = OpenRouterClient._usage_with_unbound_identity
+_TRUSTED_USAGE_WITH_IDENTITY_RESULT = OpenRouterClient._usage_with_identity_result
+_TRUSTED_REQUIRE_REAL_COMPLETION_DISPATCH_SURFACE = (
+    OpenRouterClient._require_real_completion_dispatch_surface
+)
 _TRUSTED_COMPLETE_CANDIDATE_REVIEW_WITH_EVIDENCE = (
     OpenRouterClient.complete_candidate_review_with_evidence
 )
@@ -13245,6 +15765,11 @@ _TRUSTED_ATOMIC_LEDGER_RECONCILE = AtomicCostLedger.reconcile
 _TRUSTED_ATOMIC_LEDGER_RELEASE = AtomicCostLedger.release
 _TRUSTED_ATOMIC_LEDGER_ACTIVE_RESERVATION = AtomicCostLedger.active_reservation
 _TRUSTED_ATOMIC_LEDGER_SNAPSHOT = AtomicCostLedger.snapshot
+_TRUSTED_ATTEMPT_REQUEST_ID = _attempt_request_id
+_TRUSTED_COST_ENTRY_STATUS_TYPE = CostEntryStatus
+_TRUSTED_COST_ENTRY_STATUS_VALUES = tuple(CostEntryStatus)
+_TRUSTED_COST_ENTRY_RECONCILED = CostEntryStatus.RECONCILED
+_TRUSTED_COST_ENTRY_UNCERTAIN_ACCOUNTED = CostEntryStatus.UNCERTAIN_ACCOUNTED
 _TRUSTED_ATOMIC_LEDGER_LOCKED = AtomicCostLedger._locked
 _TRUSTED_ATOMIC_LEDGER_REQUIRED_STATE = AtomicCostLedger._required_state
 _TRUSTED_ATOMIC_LEDGER_READ_STATE = AtomicCostLedger._read_state
@@ -13301,7 +15826,28 @@ def _provider_callable_descriptor_surface(
     )
 
 
+def _provider_callable_descriptor_surface_is_current(
+    subject_type: type[object],
+    expected: tuple[tuple[str, object], ...],
+) -> bool:
+    current = _provider_callable_descriptor_surface(subject_type)
+    return bool(
+        len(current) == len(expected)
+        and all(
+            current_name == expected_name and current_descriptor is expected_descriptor
+            for (current_name, current_descriptor), (expected_name, expected_descriptor) in zip(
+                current,
+                expected,
+                strict=True,
+            )
+        )
+    )
+
+
 _TRUSTED_PROVIDER_CALLABLE_DESCRIPTOR_SURFACE = _provider_callable_descriptor_surface
+_TRUSTED_PROVIDER_CALLABLE_DESCRIPTOR_SURFACE_IS_CURRENT = (
+    _provider_callable_descriptor_surface_is_current
+)
 _TRUSTED_OPENROUTER_CLIENT_DESCRIPTOR_SURFACE = _TRUSTED_PROVIDER_CALLABLE_DESCRIPTOR_SURFACE(
     OpenRouterClient
 )
@@ -13345,13 +15891,130 @@ def _openrouter_client_callables_are_pristine() -> bool:
             is _TRUSTED_PUBLIC_CANDIDATE_REVIEW_COMPLETION
         )
         and _provider_callable_descriptor_surface is _TRUSTED_PROVIDER_CALLABLE_DESCRIPTOR_SURFACE
+        and _lookup_trusted_transport_binding is _TRUSTED_LOOKUP_TRANSPORT_BINDING
+        and _ProviderTransportAttemptReceipt is _TRUSTED_PROVIDER_TRANSPORT_ATTEMPT_TYPE
+        and (_ProviderTransportOperationGrant is _TRUSTED_PROVIDER_TRANSPORT_OPERATION_GRANT_TYPE)
+        and (_prepare_provider_transport_operation is _TRUSTED_PREPARE_PROVIDER_TRANSPORT_OPERATION)
+        and (_prepare_provider_transport_attempt is _TRUSTED_PREPARE_PROVIDER_TRANSPORT_ATTEMPT)
+        and (_dispatch_provider_transport_attempt is _TRUSTED_DISPATCH_PROVIDER_TRANSPORT_ATTEMPT)
+        and (
+            _transition_provider_transport_attempt is _TRUSTED_TRANSITION_PROVIDER_TRANSPORT_ATTEMPT
+        )
+        and (_revoke_provider_transport_attempt is _TRUSTED_REVOKE_PROVIDER_TRANSPORT_ATTEMPT)
+        and (
+            _provider_transport_attempt_is_claimed is _TRUSTED_PROVIDER_TRANSPORT_ATTEMPT_IS_CLAIMED
+        )
+        and (_consume_provider_transport_attempt is _TRUSTED_CONSUME_PROVIDER_TRANSPORT_ATTEMPT)
+        and (_revoke_provider_transport_operation is _TRUSTED_REVOKE_PROVIDER_TRANSPORT_OPERATION)
+        and _attempt_request_id is _TRUSTED_ATTEMPT_REQUEST_ID
+        and CostEntryStatus is _TRUSTED_COST_ENTRY_STATUS_TYPE
+        and tuple(CostEntryStatus) == _TRUSTED_COST_ENTRY_STATUS_VALUES
+        and CostEntryStatus.RECONCILED is _TRUSTED_COST_ENTRY_RECONCILED
+        and (CostEntryStatus.UNCERTAIN_ACCOUNTED is _TRUSTED_COST_ENTRY_UNCERTAIN_ACCOUNTED)
+        and generation_evidence_module is _TRUSTED_GENERATION_EVIDENCE_MODULE
+        and (
+            generation_evidence_module.GenerationReconciliationExpectation
+            is _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_TYPE
+        )
+        and (
+            GenerationReconciliationExpectation
+            is _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_TYPE
+        )
+        and (
+            GenerationReconciliationExpectation.__init__
+            is _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_INIT
+        )
+        and (
+            GenerationReconciliationExpectation.__post_init__
+            is _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_POST_INIT
+        )
+        and (
+            generation_evidence_module.GenerationVerificationRequest
+            is _TRUSTED_GENERATION_VERIFICATION_REQUEST_TYPE
+        )
+        and GenerationVerificationRequest is _TRUSTED_GENERATION_VERIFICATION_REQUEST_TYPE
+        and (
+            GenerationVerificationRequest.__init__ is _TRUSTED_GENERATION_VERIFICATION_REQUEST_INIT
+        )
+        and (
+            GenerationVerificationRequest.__post_init__
+            is _TRUSTED_GENERATION_VERIFICATION_REQUEST_POST_INIT
+        )
         and (
             GenerationVerificationRequest.reconciliation_expectation
             is _TRUSTED_RECONCILIATION_EXPECTATION
         )
+        and (
+            _initial_real_generation_reconciliation_expectation
+            is _TRUSTED_INITIAL_REAL_GENERATION_RECONCILIATION_EXPECTATION
+        )
+        and (
+            generation_evidence_module._initial_real_generation_reconciliation_expectation
+            is _TRUSTED_INITIAL_REAL_GENERATION_RECONCILIATION_EXPECTATION
+        )
+        and (
+            _reconcile_generation_expectation_structural
+            is _TRUSTED_RECONCILE_GENERATION_EXPECTATION_STRUCTURAL
+        )
+        and (
+            generation_evidence_module._reconcile_generation_expectation_structural
+            is _TRUSTED_RECONCILE_GENERATION_EXPECTATION_STRUCTURAL
+        )
+        and (
+            _reconcile_generation_evidence_structural
+            is _TRUSTED_RECONCILE_GENERATION_EVIDENCE_STRUCTURAL
+        )
+        and (
+            generation_evidence_module._reconcile_generation_evidence_structural
+            is _TRUSTED_RECONCILE_GENERATION_EVIDENCE_STRUCTURAL
+        )
+        and (
+            _reconcile_noncrediting_smoke_generation_evidence_structural
+            is _TRUSTED_RECONCILE_NONCREDITING_SMOKE_GENERATION_EVIDENCE_STRUCTURAL
+        )
+        and (
+            generation_evidence_module._reconcile_noncrediting_smoke_generation_evidence_structural
+            is _TRUSTED_RECONCILE_NONCREDITING_SMOKE_GENERATION_EVIDENCE_STRUCTURAL
+        )
+        and (
+            structurally_noncrediting_unknown_token_smoke_usage_error
+            is _TRUSTED_STRUCTURALLY_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_ERROR
+        )
+        and (
+            generation_evidence_module._GenerationReconciliationPolicy
+            is _TRUSTED_GENERATION_RECONCILIATION_POLICY_TYPE
+        )
+        and tuple(generation_evidence_module._GenerationReconciliationPolicy)
+        == _TRUSTED_GENERATION_RECONCILIATION_POLICY_VALUES
+        and _generation_metadata_failure_diagnostic
+        is _TRUSTED_GENERATION_METADATA_FAILURE_DIAGNOSTIC
+        and _generation_metadata_failure_diagnostics
+        is _TRUSTED_GENERATION_METADATA_FAILURE_DIAGNOSTICS
+        and UsageLedger is _TRUSTED_USAGE_LEDGER_TYPE
+        and usage_module is _TRUSTED_USAGE_MODULE
+        and usage_module.UsageLedger is _TRUSTED_USAGE_LEDGER_TYPE
+        and (
+            UsageLedger.replace_with_bound_identity
+            is _TRUSTED_USAGE_LEDGER_REPLACE_WITH_BOUND_IDENTITY
+        )
+        and (
+            UsageLedger.replace_with_unbound_identity
+            is _TRUSTED_USAGE_LEDGER_REPLACE_WITH_UNBOUND_IDENTITY
+        )
+        and (
+            UsageLedger._replace_with_identity_result
+            is _TRUSTED_USAGE_LEDGER_REPLACE_WITH_IDENTITY_RESULT
+        )
+        and (
+            OpenRouterClient._require_terminal_usage_cost_custody
+            is _TRUSTED_REQUIRE_TERMINAL_USAGE_COST_CUSTODY
+        )
         and _issue_trusted_generation_verification is _TRUSTED_ISSUE_GENERATION_VERIFICATION
         and (_attest_authrunner_generation_origin is _TRUSTED_ATTEST_AUTHRUNNER_GENERATION_ORIGIN)
         and (_attest_authrunner_owned_real_usage_origin is _TRUSTED_ATTEST_AUTHRUNNER_USAGE_ORIGIN)
+        and (_has_authrunner_owned_real_usage_origin is _TRUSTED_HAS_AUTHRUNNER_USAGE_ORIGIN)
+        and _attest_owned_real_usage_record is _TRUSTED_ATTEST_OWNED_REAL_USAGE_RECORD
+        and _has_owned_real_usage_attestation is _TRUSTED_HAS_OWNED_REAL_USAGE_ATTESTATION
         and (_authrunner_usage_origin_scope is _TRUSTED_AUTHRUNNER_USAGE_ORIGIN_SCOPE)
         and _validated_usage_copy_preserving_owned_attestation is _TRUSTED_VALIDATED_USAGE_COPY
         and OpenRouterClient.validate_authentication is _TRUSTED_VALIDATE_AUTHENTICATION
@@ -13403,6 +16066,18 @@ def _openrouter_client_callables_are_pristine() -> bool:
         )
         and OpenRouterClient.complete_with_evidence is _TRUSTED_COMPLETE_WITH_EVIDENCE
         and OpenRouterClient._complete_one is _TRUSTED_COMPLETE_ONE
+        and (
+            OpenRouterClient._bind_real_completion_identity
+            is _TRUSTED_BIND_REAL_COMPLETION_IDENTITY
+        )
+        and OpenRouterClient._bind_generation_identity is _TRUSTED_BIND_GENERATION_IDENTITY
+        and OpenRouterClient._usage_with_bound_identity is _TRUSTED_USAGE_WITH_BOUND_IDENTITY
+        and (OpenRouterClient._usage_with_unbound_identity is _TRUSTED_USAGE_WITH_UNBOUND_IDENTITY)
+        and OpenRouterClient._usage_with_identity_result is _TRUSTED_USAGE_WITH_IDENTITY_RESULT
+        and (
+            OpenRouterClient._require_real_completion_dispatch_surface
+            is _TRUSTED_REQUIRE_REAL_COMPLETION_DISPATCH_SURFACE
+        )
         and (
             OpenRouterClient.complete_candidate_review_with_evidence
             is _TRUSTED_COMPLETE_CANDIDATE_REVIEW_WITH_EVIDENCE
@@ -13492,12 +16167,18 @@ def _openrouter_client_callables_are_pristine() -> bool:
         is _TRUSTED_ENDPOINT_REQUEST_FROM_PRICING
         and EndpointRequestCostBound.maximum_units_for
         is _TRUSTED_ENDPOINT_REQUEST_MAXIMUM_UNITS_FOR
-        and _TRUSTED_PROVIDER_CALLABLE_DESCRIPTOR_SURFACE(OpenRouterClient)
-        == _TRUSTED_OPENROUTER_CLIENT_DESCRIPTOR_SURFACE
-        and _TRUSTED_PROVIDER_CALLABLE_DESCRIPTOR_SURFACE(BudgetManager)
-        == _TRUSTED_BUDGET_MANAGER_DESCRIPTOR_SURFACE
-        and _TRUSTED_PROVIDER_CALLABLE_DESCRIPTOR_SURFACE(AtomicCostLedger)
-        == _TRUSTED_ATOMIC_LEDGER_DESCRIPTOR_SURFACE
+        and _TRUSTED_PROVIDER_CALLABLE_DESCRIPTOR_SURFACE_IS_CURRENT(
+            OpenRouterClient,
+            _TRUSTED_OPENROUTER_CLIENT_DESCRIPTOR_SURFACE,
+        )
+        and _TRUSTED_PROVIDER_CALLABLE_DESCRIPTOR_SURFACE_IS_CURRENT(
+            BudgetManager,
+            _TRUSTED_BUDGET_MANAGER_DESCRIPTOR_SURFACE,
+        )
+        and _TRUSTED_PROVIDER_CALLABLE_DESCRIPTOR_SURFACE_IS_CURRENT(
+            AtomicCostLedger,
+            _TRUSTED_ATOMIC_LEDGER_DESCRIPTOR_SURFACE,
+        )
     )
 
 
@@ -15068,19 +17749,9 @@ def _generation_metadata_payload_may_be_pending(
     if reconciliation_expectation is None:
         return True
     try:
-        _reconcile_generation_evidence_structural(
+        _reconcile_generation_expectation_structural(
             projected,
-            usage_record=reconciliation_expectation.usage_record,
-            expected_exact_model=reconciliation_expectation.exact_model_id,
-            expected_canonical_model=reconciliation_expectation.canonical_model_id,
-            expected_catalog_identity_binding_sha256=(
-                reconciliation_expectation.catalog_identity_binding_sha256
-            ),
-            expected_discovery_evidence_sha256=(
-                reconciliation_expectation.discovery_evidence_sha256
-            ),
-            expected_provider_name=reconciliation_expectation.expected_provider_name,
-            require_certification=reconciliation_expectation.require_certification,
+            expectation=reconciliation_expectation,
         )
     except GenerationReconciliationMismatchError as exc:
         if exc.is_eventual_usage_field:
@@ -15133,26 +17804,6 @@ def _generation_metadata_operation_timeout(
     return sum(poll_delays) + io_budget
 
 
-def _generation_metadata_failure_diagnostic(
-    error: OpenRouterError,
-) -> OpenRouterIdentityDiagnosticCode:
-    if isinstance(error, OpenRouterAuthenticationError):
-        return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_AUTHENTICATION_FAILED
-    if isinstance(error, OpenRouterTimeoutError):
-        return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_TIMEOUT
-    if isinstance(error, OpenRouterRateLimitError):
-        return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_RATE_LIMITED
-    if isinstance(error, OpenRouterProviderUnavailableError):
-        return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_PROVIDER_UNAVAILABLE
-    if isinstance(error, OpenRouterGenerationMetadataNotReadyError):
-        return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_NOT_READY
-    if isinstance(error, OpenRouterPrivacyError):
-        return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_INTEGRITY_REJECTED
-    if isinstance(error, OpenRouterSchemaError):
-        return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_INVALID
-    return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_RETRIEVAL_FAILED
-
-
 def _failure_validation_status(error: Exception) -> ModelRequestValidationStatus:
     if isinstance(error, OpenRouterResponseIdentityError):
         return error.validation_status
@@ -15197,3 +17848,43 @@ def _ensure_all_fields_supplied(value: Any, path: str = "response") -> None:
     elif isinstance(value, list):
         for index, item in enumerate(value):
             _ensure_all_fields_supplied(item, f"{path}[{index}]")
+
+
+(
+    _register_provider_transport_attempt_issuer,
+    _prepare_provider_transport_operation,
+    _prepare_provider_transport_attempt,
+    _dispatch_provider_transport_attempt,
+    _transition_provider_transport_attempt,
+    _revoke_provider_transport_attempt,
+    _inspect_provider_transport_attempt,
+    _consume_provider_transport_attempt,
+    _revoke_provider_transport_operation,
+) = _build_provider_transport_attempt_authority()
+
+_provider_transport_attempt_is_claimed = _inspect_provider_transport_attempt
+_TRUSTED_PROVIDER_TRANSPORT_ATTEMPT_TYPE = _ProviderTransportAttemptReceipt
+_TRUSTED_PROVIDER_TRANSPORT_OPERATION_GRANT_TYPE = _ProviderTransportOperationGrant
+_TRUSTED_PREPARE_PROVIDER_TRANSPORT_OPERATION = _prepare_provider_transport_operation
+_TRUSTED_PREPARE_PROVIDER_TRANSPORT_ATTEMPT = _prepare_provider_transport_attempt
+_TRUSTED_DISPATCH_PROVIDER_TRANSPORT_ATTEMPT = _dispatch_provider_transport_attempt
+_TRUSTED_TRANSITION_PROVIDER_TRANSPORT_ATTEMPT = _transition_provider_transport_attempt
+_TRUSTED_REVOKE_PROVIDER_TRANSPORT_ATTEMPT = _revoke_provider_transport_attempt
+_TRUSTED_PROVIDER_TRANSPORT_ATTEMPT_IS_CLAIMED = _provider_transport_attempt_is_claimed
+_TRUSTED_CONSUME_PROVIDER_TRANSPORT_ATTEMPT = _consume_provider_transport_attempt
+_TRUSTED_REVOKE_PROVIDER_TRANSPORT_OPERATION = _revoke_provider_transport_operation
+
+_register_provider_transport_attempt_issuer(
+    module=sys.modules[__name__],
+    client_type=_TRUSTED_OPENROUTER_CLIENT_TYPE,
+    bounded_request=OpenRouterClient._bounded_request,
+    complete_one=OpenRouterClient._complete_one,
+    request_metadata=OpenRouterClient._request_metadata,
+    transport_lookup=_lookup_trusted_transport_binding,
+    pristine_predicate=_TRUSTED_OPENROUTER_CLIENT_CALLABLES_ARE_PRISTINE,
+    execution_evidence_resolver=trusted_openrouter_execution_evidence,
+    ledger_snapshot=_TRUSTED_ATOMIC_LEDGER_SNAPSHOT,
+    complete_with_evidence=OpenRouterClient.complete_with_evidence,
+    bind_real_completion_identity=OpenRouterClient._bind_real_completion_identity,
+    fetch_generation_attestations=(OpenRouterClient._fetch_generation_attestations_with_deadline),
+)

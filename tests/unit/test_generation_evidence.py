@@ -5,6 +5,7 @@ import copy
 import hashlib
 import json
 import os
+import sys
 import threading
 from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime
@@ -994,7 +995,7 @@ async def test_generation_metadata_poll_is_bounded_for_incomplete_same_generatio
     client, http_client = _client(config, handler)
     monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
     try:
-        with pytest.raises(OpenRouterSchemaError, match="incomplete"):
+        with pytest.raises(OpenRouterGenerationMetadataNotReadyError, match="incomplete"):
             await client.get_generation_evidence(_GENERATION_ID)
     finally:
         await client.close()
@@ -2447,32 +2448,51 @@ def test_trusted_generation_capability_is_pid_bound_across_fork() -> None:
     revoke_trusted_generation_verification(capability)
 
 
-def test_trusted_generation_revocation_wins_a_concurrent_attestation(
+def test_trusted_generation_attestation_rejects_reconciliation_retarget_before_invocation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    capability, request, _evidence_value = _trusted_generation_capability()
+    invocations: list[str] = []
+
+    def forged_reconcile(*_args: Any, **_kwargs: Any) -> OpenRouterGenerationEvidence:
+        invocations.append("reconcile")
+        return _evidence_value
+
+    monkeypatch.setattr(
+        generation_evidence_module,
+        "_reconcile_generation_expectation_structural",
+        forged_reconcile,
+    )
+    with pytest.raises(GenerationEvidenceValidationError, match="runtime is not pristine"):
+        _resolve_trusted_generation(capability, request)
+
+    assert invocations == []
+    revoke_trusted_generation_verification(capability)
+
+
+def test_trusted_generation_revocation_wins_a_concurrent_attestation() -> None:
     capability, request, _evidence_value = _trusted_generation_capability()
     reconciliation_started = threading.Event()
     allow_reconciliation = threading.Event()
     observed: list[BaseException | OpenRouterGenerationEvidence] = []
-    original_reconcile = generation_evidence_module._reconcile_generation_evidence_structural
+    reconcile_code = generation_evidence_module._reconcile_generation_evidence.__code__
 
-    def blocking_reconcile(*args: Any, **kwargs: Any) -> OpenRouterGenerationEvidence:
-        reconciliation_started.set()
-        if not allow_reconciliation.wait(timeout=2):
-            raise AssertionError("concurrent generation reconciliation did not resume")
-        return original_reconcile(*args, **kwargs)
+    def block_inside_pristine_reconciliation(frame: Any, event: str, _arg: Any) -> Any:
+        if event == "call" and frame.f_code is reconcile_code:
+            reconciliation_started.set()
+            if not allow_reconciliation.wait(timeout=2):
+                raise AssertionError("concurrent generation reconciliation did not resume")
+        return block_inside_pristine_reconciliation
 
     def resolve() -> None:
+        sys.settrace(block_inside_pristine_reconciliation)
         try:
             observed.append(_resolve_trusted_generation(capability, request))
         except BaseException as exc:
             observed.append(exc)
+        finally:
+            sys.settrace(None)
 
-    monkeypatch.setattr(
-        generation_evidence_module,
-        "_reconcile_generation_evidence_structural",
-        blocking_reconcile,
-    )
     worker = threading.Thread(target=resolve)
     worker.start()
     try:

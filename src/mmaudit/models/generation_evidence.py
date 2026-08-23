@@ -11,7 +11,7 @@ import sys
 import threading
 import weakref
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
@@ -24,6 +24,7 @@ from mmaudit.models.identifiers import is_exact_openrouter_model_id
 from mmaudit.models.schemas import ExecutionEvidenceKind, UsageRecord
 from mmaudit.models.usage import (
     _has_authrunner_owned_real_usage_origin,
+    _has_owned_real_usage_attestation,
     _is_structurally_generation_bindable_usage_record,
     _is_structurally_generation_reconcilable_usage_record,
     _validated_usage_copy_preserving_owned_attestation,
@@ -42,6 +43,13 @@ _SCHEMA_VERSION = "1.1"
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _CASE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$")
 MAX_GENERATION_EVIDENCE_RETRIEVAL_ATTEMPTS = 7
+
+_TRUSTED_HAS_OWNED_REAL_USAGE_ATTESTATION = _has_owned_real_usage_attestation
+_TRUSTED_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_ERROR = noncrediting_unknown_token_smoke_usage_error
+_TRUSTED_STRUCTURALLY_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_ERROR = (
+    structurally_noncrediting_unknown_token_smoke_usage_error
+)
+_INITIAL_REAL_BINDING_RECONCILIATION_ISSUER = object()
 
 
 class GenerationEvidenceValidationError(ValueError):
@@ -101,6 +109,13 @@ class GenerationReconciliationMismatchError(GenerationEvidenceValidationError):
         return self.code in EVENTUAL_GENERATION_USAGE_MISMATCH_CODES
 
 
+class _GenerationReconciliationPolicy(StrEnum):
+    """Closed structural reconciliation policy carried by one frozen expectation."""
+
+    GENERIC = "GENERIC"
+    NONCREDITING_UNKNOWN_TOKEN_SMOKE = "NONCREDITING_UNKNOWN_TOKEN_SMOKE"
+
+
 @dataclass(frozen=True, slots=True)
 class GenerationReconciliationExpectation:
     """Expected identity and usage for one eventual generation observation."""
@@ -112,8 +127,30 @@ class GenerationReconciliationExpectation:
     expected_provider_name: str
     require_certification: bool
     usage_record: UsageRecord
+    _initial_real_binding_issuer: InitVar[object | None] = None
+    reconciliation_policy: _GenerationReconciliationPolicy = field(init=False)
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, _initial_real_binding_issuer: object | None) -> None:
+        if (
+            type(self) is not _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_TYPE
+            or GenerationReconciliationExpectation
+            is not _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_TYPE
+            or GenerationReconciliationExpectation.__init__
+            is not _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_INIT
+            or GenerationReconciliationExpectation.__post_init__
+            is not _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_POST_INIT
+            or _GenerationReconciliationPolicy is not _TRUSTED_GENERATION_RECONCILIATION_POLICY_TYPE
+            or tuple(_GenerationReconciliationPolicy)
+            != _TRUSTED_GENERATION_RECONCILIATION_POLICY_VALUES
+            or _has_owned_real_usage_attestation is not _TRUSTED_HAS_OWNED_REAL_USAGE_ATTESTATION
+            or noncrediting_unknown_token_smoke_usage_error
+            is not _TRUSTED_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_ERROR
+            or structurally_noncrediting_unknown_token_smoke_usage_error
+            is not _TRUSTED_STRUCTURALLY_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_ERROR
+        ):
+            raise GenerationEvidenceValidationError(
+                "generation reconciliation usage-policy runtime is not pristine"
+            )
         _require_exact_model_id(self.exact_model_id)
         _require_exact_model_id(self.canonical_model_id)
         if (
@@ -169,7 +206,59 @@ class GenerationReconciliationExpectation:
             raise GenerationEvidenceValidationError(
                 "generation verification usage has a different model identity binding"
             )
+        runtime_smoke = noncrediting_unknown_token_smoke_usage_error(usage_record) is None
+        structural_smoke = (
+            structurally_noncrediting_unknown_token_smoke_usage_error(usage_record) is None
+        )
+        if _initial_real_binding_issuer is not None:
+            if (
+                _initial_real_binding_issuer is not _INITIAL_REAL_BINDING_RECONCILIATION_ISSUER
+                or not structural_smoke
+                or not _has_owned_real_usage_attestation(usage_record)
+            ):
+                raise GenerationEvidenceValidationError(
+                    "initial REAL smoke reconciliation authority is invalid"
+                )
+            policy = _GenerationReconciliationPolicy.NONCREDITING_UNKNOWN_TOKEN_SMOKE
+        elif runtime_smoke:
+            policy = _GenerationReconciliationPolicy.NONCREDITING_UNKNOWN_TOKEN_SMOKE
+        else:
+            policy = _GenerationReconciliationPolicy.GENERIC
         object.__setattr__(self, "usage_record", usage_record)
+        object.__setattr__(self, "reconciliation_policy", policy)
+
+
+def _initial_real_generation_reconciliation_expectation(
+    *,
+    exact_model_id: str,
+    canonical_model_id: str,
+    catalog_identity_binding_sha256: str,
+    discovery_evidence_sha256: str,
+    expected_provider_name: str,
+    require_certification: bool,
+    usage_record: UsageRecord,
+) -> GenerationReconciliationExpectation:
+    """Seal the sole pre-origin exception for owned REAL v3 smoke binding."""
+
+    if (
+        GenerationReconciliationExpectation
+        is not _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_TYPE
+        or _initial_real_generation_reconciliation_expectation
+        is not _TRUSTED_INITIAL_REAL_GENERATION_RECONCILIATION_EXPECTATION
+    ):
+        raise GenerationEvidenceValidationError(
+            "initial REAL generation reconciliation runtime is not pristine"
+        )
+    return _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_TYPE(
+        exact_model_id=exact_model_id,
+        canonical_model_id=canonical_model_id,
+        catalog_identity_binding_sha256=catalog_identity_binding_sha256,
+        discovery_evidence_sha256=discovery_evidence_sha256,
+        expected_provider_name=expected_provider_name,
+        require_certification=require_certification,
+        usage_record=usage_record,
+        _initial_real_binding_issuer=_INITIAL_REAL_BINDING_RECONCILIATION_ISSUER,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,6 +275,19 @@ class GenerationVerificationRequest:
     usage_record: UsageRecord
 
     def __post_init__(self) -> None:
+        if (
+            type(self) is not _TRUSTED_GENERATION_VERIFICATION_REQUEST_TYPE
+            or GenerationVerificationRequest is not _TRUSTED_GENERATION_VERIFICATION_REQUEST_TYPE
+            or GenerationVerificationRequest.__init__
+            is not _TRUSTED_GENERATION_VERIFICATION_REQUEST_INIT
+            or GenerationVerificationRequest.__post_init__
+            is not _TRUSTED_GENERATION_VERIFICATION_REQUEST_POST_INIT
+            or GenerationVerificationRequest.reconciliation_expectation
+            is not _TRUSTED_GENERATION_VERIFICATION_REQUEST_RECONCILIATION_EXPECTATION
+        ):
+            raise GenerationEvidenceValidationError(
+                "generation verification request runtime is not pristine"
+            )
         if _SHA256_PATTERN.fullmatch(self.benchmark_report_sha256) is None:
             raise GenerationEvidenceValidationError("benchmark report hash is invalid")
         if _CASE_ID_PATTERN.fullmatch(self.case_id) is None:
@@ -196,7 +298,18 @@ class GenerationVerificationRequest:
     def reconciliation_expectation(self) -> GenerationReconciliationExpectation:
         """Return the core provider observation expected by this report case."""
 
-        return GenerationReconciliationExpectation(
+        if (
+            GenerationReconciliationExpectation
+            is not _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_TYPE
+            or GenerationReconciliationExpectation.__init__
+            is not _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_INIT
+            or GenerationReconciliationExpectation.__post_init__
+            is not _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_POST_INIT
+        ):
+            raise GenerationEvidenceValidationError(
+                "generation reconciliation expectation runtime is not pristine"
+            )
+        return _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_TYPE(
             exact_model_id=self.exact_model_id,
             canonical_model_id=self.canonical_model_id,
             catalog_identity_binding_sha256=self.catalog_identity_binding_sha256,
@@ -288,14 +401,34 @@ class TrustedGenerationVerification:
             raise GenerationEvidenceValidationError(
                 "generation verification capability does not bind this report case"
             )
-        result = _reconcile_generation_evidence_structural(
-            binding.attestation,
-            usage_record=validated_usage,
-            expected_exact_model=exact_model_id,
-            expected_canonical_model=canonical_model_id,
-            expected_catalog_identity_binding_sha256=(catalog_identity_binding_sha256),
-            expected_discovery_evidence_sha256=discovery_evidence_sha256,
+        if (
+            GenerationReconciliationExpectation
+            is not _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_TYPE
+            or GenerationReconciliationExpectation.__init__
+            is not _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_INIT
+            or GenerationReconciliationExpectation.__post_init__
+            is not _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_POST_INIT
+            or _GenerationReconciliationPolicy is not _TRUSTED_GENERATION_RECONCILIATION_POLICY_TYPE
+            or tuple(_GenerationReconciliationPolicy)
+            != _TRUSTED_GENERATION_RECONCILIATION_POLICY_VALUES
+            or _reconcile_generation_expectation_structural
+            is not _TRUSTED_RECONCILE_GENERATION_EXPECTATION_STRUCTURAL
+        ):
+            raise GenerationEvidenceValidationError(
+                "generation verification reconciliation runtime is not pristine"
+            )
+        expectation = _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_TYPE(
+            exact_model_id=exact_model_id,
+            canonical_model_id=canonical_model_id,
+            catalog_identity_binding_sha256=catalog_identity_binding_sha256,
+            discovery_evidence_sha256=discovery_evidence_sha256,
             expected_provider_name=expected_provider_name,
+            require_certification=True,
+            usage_record=validated_usage,
+        )
+        result = _TRUSTED_RECONCILE_GENERATION_EXPECTATION_STRUCTURAL(
+            binding.attestation,
+            expectation=expectation,
         )
         _recheck_trusted_generation_capability(self, lease_snapshot)
         return result
@@ -703,14 +836,14 @@ def _build_authrunner_generation_origin_authority() -> tuple[
             inserted = True
         try:
             trusted_recheck(capability, lease_snapshot)
-        except GenerationEvidenceValidationError:
+            return capability
+        except BaseException:
             if inserted:
                 with lock:
                     current = registry.get(key)
                     if current is not None and current[0] is reference:
                         registry.pop(key, None)
             raise
-        return capability
 
     def contains(
         capability: TrustedGenerationVerification,
@@ -1210,6 +1343,98 @@ def _reconcile_noncrediting_smoke_generation_evidence_structural(
     )
 
 
+_TRUSTED_RECONCILE_GENERATION_EVIDENCE_STRUCTURAL = _reconcile_generation_evidence_structural
+_TRUSTED_RECONCILE_NONCREDITING_SMOKE_GENERATION_EVIDENCE_STRUCTURAL = (
+    _reconcile_noncrediting_smoke_generation_evidence_structural
+)
+
+
+def _reconcile_generation_expectation_structural(
+    evidence: OpenRouterGenerationEvidence,
+    *,
+    expectation: GenerationReconciliationExpectation,
+) -> OpenRouterGenerationEvidence:
+    """Dispatch one frozen expectation without widening generic generation credit."""
+
+    if (
+        type(expectation) is not _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_TYPE
+        or GenerationReconciliationExpectation
+        is not _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_TYPE
+        or GenerationReconciliationExpectation.__init__
+        is not _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_INIT
+        or GenerationReconciliationExpectation.__post_init__
+        is not _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_POST_INIT
+        or _GenerationReconciliationPolicy is not _TRUSTED_GENERATION_RECONCILIATION_POLICY_TYPE
+        or tuple(_GenerationReconciliationPolicy)
+        != _TRUSTED_GENERATION_RECONCILIATION_POLICY_VALUES
+        or _reconcile_generation_expectation_structural
+        is not _TRUSTED_RECONCILE_GENERATION_EXPECTATION_STRUCTURAL
+        or _reconcile_generation_evidence_structural
+        is not _TRUSTED_RECONCILE_GENERATION_EVIDENCE_STRUCTURAL
+        or _reconcile_noncrediting_smoke_generation_evidence_structural
+        is not _TRUSTED_RECONCILE_NONCREDITING_SMOKE_GENERATION_EVIDENCE_STRUCTURAL
+        or structurally_noncrediting_unknown_token_smoke_usage_error
+        is not _TRUSTED_STRUCTURALLY_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_ERROR
+    ):
+        raise GenerationEvidenceValidationError(
+            "generation reconciliation dispatcher runtime is not pristine"
+        )
+    if (
+        expectation.reconciliation_policy
+        is _GenerationReconciliationPolicy.NONCREDITING_UNKNOWN_TOKEN_SMOKE
+    ):
+        if (
+            not expectation.require_certification
+            or structurally_noncrediting_unknown_token_smoke_usage_error(expectation.usage_record)
+            is not None
+        ):
+            raise GenerationEvidenceValidationError(
+                "noncrediting smoke reconciliation expectation is invalid"
+            )
+        return _reconcile_noncrediting_smoke_generation_evidence_structural(
+            evidence,
+            usage_record=expectation.usage_record,
+            expected_exact_model=expectation.exact_model_id,
+            expected_canonical_model=expectation.canonical_model_id,
+            expected_catalog_identity_binding_sha256=(expectation.catalog_identity_binding_sha256),
+            expected_discovery_evidence_sha256=expectation.discovery_evidence_sha256,
+            expected_provider_name=expectation.expected_provider_name,
+        )
+    if expectation.reconciliation_policy is not _GenerationReconciliationPolicy.GENERIC:
+        raise GenerationEvidenceValidationError(
+            "generation reconciliation expectation policy is invalid"
+        )
+    return _reconcile_generation_evidence_structural(
+        evidence,
+        usage_record=expectation.usage_record,
+        expected_exact_model=expectation.exact_model_id,
+        expected_canonical_model=expectation.canonical_model_id,
+        expected_catalog_identity_binding_sha256=(expectation.catalog_identity_binding_sha256),
+        expected_discovery_evidence_sha256=expectation.discovery_evidence_sha256,
+        expected_provider_name=expectation.expected_provider_name,
+        require_certification=expectation.require_certification,
+    )
+
+
+_TRUSTED_RECONCILE_GENERATION_EXPECTATION_STRUCTURAL = _reconcile_generation_expectation_structural
+_TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_TYPE = GenerationReconciliationExpectation
+_TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_INIT = GenerationReconciliationExpectation.__init__
+_TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_POST_INIT = (
+    GenerationReconciliationExpectation.__post_init__
+)
+_TRUSTED_GENERATION_VERIFICATION_REQUEST_TYPE = GenerationVerificationRequest
+_TRUSTED_GENERATION_VERIFICATION_REQUEST_INIT = GenerationVerificationRequest.__init__
+_TRUSTED_GENERATION_VERIFICATION_REQUEST_POST_INIT = GenerationVerificationRequest.__post_init__
+_TRUSTED_GENERATION_VERIFICATION_REQUEST_RECONCILIATION_EXPECTATION = (
+    GenerationVerificationRequest.reconciliation_expectation
+)
+_TRUSTED_INITIAL_REAL_GENERATION_RECONCILIATION_EXPECTATION = (
+    _initial_real_generation_reconciliation_expectation
+)
+_TRUSTED_GENERATION_RECONCILIATION_POLICY_TYPE = _GenerationReconciliationPolicy
+_TRUSTED_GENERATION_RECONCILIATION_POLICY_VALUES = tuple(_GenerationReconciliationPolicy)
+
+
 def _reconcile_generation_evidence(
     evidence: OpenRouterGenerationEvidence,
     *,
@@ -1545,14 +1770,19 @@ def _issue_trusted_generation_verification(
             raise GenerationEvidenceValidationError(
                 "generation verification did not use a fresh provider re-fetch"
             )
-        _reconcile_generation_evidence_structural(
+        if (
+            GenerationVerificationRequest.reconciliation_expectation
+            is not _TRUSTED_GENERATION_VERIFICATION_REQUEST_RECONCILIATION_EXPECTATION
+            or _reconcile_generation_expectation_structural
+            is not _TRUSTED_RECONCILE_GENERATION_EXPECTATION_STRUCTURAL
+        ):
+            raise GenerationEvidenceValidationError(
+                "generation verification issue runtime is not pristine"
+            )
+        expectation = _TRUSTED_GENERATION_VERIFICATION_REQUEST_RECONCILIATION_EXPECTATION(request)
+        _TRUSTED_RECONCILE_GENERATION_EXPECTATION_STRUCTURAL(
             attestation,
-            usage_record=request.usage_record,
-            expected_exact_model=request.exact_model_id,
-            expected_canonical_model=request.canonical_model_id,
-            expected_catalog_identity_binding_sha256=(request.catalog_identity_binding_sha256),
-            expected_discovery_evidence_sha256=request.discovery_evidence_sha256,
-            expected_provider_name=request.expected_provider_name,
+            expectation=expectation,
         )
         bindings.append(
             _TrustedGenerationBinding(

@@ -11,8 +11,8 @@
   "current_manual_gate_count": 15,
   "discovery_scope": "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_OPAQUE_AUTHORITIES_EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES",
   "environment_override_count": 28,
-  "gate_source_count": 3585,
-  "inventory_sha256": "c0857884300006d5e7ceb9dce4bd08dcb27e46939e6a706aa2ee18f5e63e2ae7",
+  "gate_source_count": 3591,
+  "inventory_sha256": "d58c5e217c85afc9dbe2c12e416df66c5b4bf5a2281b1d67d9ce7b8ec3da54f8",
   "logical_gate_count": 35,
   "logical_gates": [
     {
@@ -39,6 +39,12 @@
         "direct-env-ast:models.authenticated_runner:_build_cross_lineage_ledger_interval_authority.current_view:process-identity:1",
         "direct-env-ast:models.authenticated_runner:_build_cross_lineage_ledger_interval_authority:process-identity-binding:1",
         "direct-env-ast:models.authenticated_runner_smoke_corpus:_read_exact_artifact_directory:working-directory:1",
+        "direct-env-ast:models.openrouter:_build_provider_transport_attempt_authority.operation_state:process-identity:1",
+        "direct-env-ast:models.openrouter:_build_provider_transport_attempt_authority.prepare:process-identity:1",
+        "direct-env-ast:models.openrouter:_build_provider_transport_attempt_authority.prepare_operation:process-identity:1",
+        "direct-env-ast:models.openrouter:_build_provider_transport_attempt_authority.receipt_state:process-identity:1",
+        "direct-env-ast:models.openrouter:_build_provider_transport_attempt_authority.update_receipt_state:process-identity:1",
+        "direct-env-ast:models.openrouter:_build_provider_transport_attempt_authority:process-identity-binding:1",
         "entropy-ast:models.openrouter:_request_ids_for_routes:uuid-uuid4:1",
         "filesystem-input:models.authenticated_runner_smoke_corpus:_read_artifact_at:1",
         "filesystem-input:models.authenticated_runner_smoke_corpus:_read_artifact_at:2",
@@ -3997,7 +4003,7 @@
   "runtime_authority": false,
   "schema_version": "1.0",
   "secret_material_read": false,
-  "source_count": 3628,
+  "source_count": 3634,
   "source_coverage": [
     {
       "classification": "GATE",
@@ -9577,7 +9583,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/generation_evidence.py",
-      "source_semantics_sha256": "ab40dec662250447c3c8786f2e16698a390ab6a1f6e8c729ab0879f77016cab3"
+      "source_semantics_sha256": "b82290606b1fd5b6e2be3b6a64bffac017b6749a2aa3740864ed45096024b333"
     },
     {
       "classification": "GATE",
@@ -9640,7 +9646,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/openrouter.py",
-      "source_semantics_sha256": "90fe5e30232cebb69d96e6f6d39607b753a38415b8bce21c29b97ad3fcdeb3b8"
+      "source_semantics_sha256": "464d68fe6d4ae6340c39f9ed9bb2c30ece2bd53abf895fed34595b8c8118420d"
     },
     {
       "classification": "GATE",
@@ -9937,7 +9943,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/autonomy_gate_inventory.py",
-      "source_semantics_sha256": "cd4b35c1650bffcd13a96aa329ca3621d16a1ba43d6359ca30a366f52a93bdaa"
+      "source_semantics_sha256": "a6eb6807b475c7367ec4b698f92fa01ec62a0960b2e80e7efd1a0f8f6566e38d"
     },
     {
       "classification": "GATE",
@@ -15464,6 +15470,60 @@
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/lineage_authority.py:_verify_sshsig:temporary-root:1",
       "source_semantics_sha256": "17835c98968b7648251533c24884caed6e0cab1a37e64081f99aa8ab7bb54899"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-authenticated-real-campaign",
+      "source_id": "direct-env-ast:models.openrouter:_build_provider_transport_attempt_authority.operation_state:process-identity:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/models/openrouter.py:_build_provider_transport_attempt_authority.operation_state:process-identity:1",
+      "source_semantics_sha256": "6c7a369a7c4fd4f145999b06f0ff5cf8804fed8bbbedc21ce8639875396f9510"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-authenticated-real-campaign",
+      "source_id": "direct-env-ast:models.openrouter:_build_provider_transport_attempt_authority.prepare:process-identity:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/models/openrouter.py:_build_provider_transport_attempt_authority.prepare:process-identity:1",
+      "source_semantics_sha256": "147112a21864a5845f254b17a8ead112203f68a008c6298094fd3d361aacbf9d"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-authenticated-real-campaign",
+      "source_id": "direct-env-ast:models.openrouter:_build_provider_transport_attempt_authority.prepare_operation:process-identity:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/models/openrouter.py:_build_provider_transport_attempt_authority.prepare_operation:process-identity:1",
+      "source_semantics_sha256": "7cae7ba0b57e60e0c1df0b23e52a8b0910b82d7ec4e9ac8df56ca3f585b50fc5"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-authenticated-real-campaign",
+      "source_id": "direct-env-ast:models.openrouter:_build_provider_transport_attempt_authority.receipt_state:process-identity:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/models/openrouter.py:_build_provider_transport_attempt_authority.receipt_state:process-identity:1",
+      "source_semantics_sha256": "5eb5b5ca9b49e3357b95aee47ab6bed5951c48c4962f9f9ec768599795c72db3"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-authenticated-real-campaign",
+      "source_id": "direct-env-ast:models.openrouter:_build_provider_transport_attempt_authority.update_receipt_state:process-identity:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/models/openrouter.py:_build_provider_transport_attempt_authority.update_receipt_state:process-identity:1",
+      "source_semantics_sha256": "2cd153cdda4e389f79449de047eb55bfb33af994c33de7191a5f4abf34db2814"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-authenticated-real-campaign",
+      "source_id": "direct-env-ast:models.openrouter:_build_provider_transport_attempt_authority:process-identity-binding:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/models/openrouter.py:_build_provider_transport_attempt_authority:process-identity-binding:1",
+      "source_semantics_sha256": "b3ad1bb3f6a695efd8b1c13e0a106ad0ecd08f8fe46b92f166d1499f28d7f46b"
     },
     {
       "classification": "GATE",
@@ -36652,7 +36712,7 @@
       "source_semantics_sha256": "41cc76819710e44e2710187482c5d8058883cf4e3a1087ec84837720818b44c1"
     }
   ],
-  "source_discovery_semantics_sha256": "3690079580843c5775bcde33836094745ae8c30ccb591cbab2cb4c9b08b0af2e",
+  "source_discovery_semantics_sha256": "cc7f2d6ce15e210152549e526bf23ab8e8628bad2c5db29d87884f3880fb167f",
   "source_kind_counts": {
     "AUDITED_MODULE_UNIVERSE": 230,
     "AUDIT_CONFIG_LEAF": 505,
@@ -36660,7 +36720,7 @@
     "AUDIT_RUN_OPTION_LEAF": 13,
     "CLI_RUN_PARAMETER": 50,
     "COMPLETION_ENTRYPOINT_PARAMETER": 300,
-    "DIRECT_ENVIRONMENT_INPUT": 454,
+    "DIRECT_ENVIRONMENT_INPUT": 460,
     "ENTROPY_INPUT": 17,
     "ENVIRONMENT_OVERRIDE": 28,
     "EXPLICIT_NON_FIELD_GATE": 1932,
@@ -36668,8 +36728,8 @@
     "PIPELINE_RUN_PARAMETER": 15,
     "REQUIRED_MISSING_GATE": 14
   },
-  "source_occurrence_count": 3631,
-  "source_universe_sha256": "71bff09169358e9365678be37078598e8921eb8b18f2aa7f19f865891d84ed87",
+  "source_occurrence_count": 3637,
+  "source_universe_sha256": "b350ec56e41722e693129a06b3bae3305669c0caf33ea4481885ffb1b7c97bf5",
   "status": "PARTIAL_NONAUTHORIZING",
   "unsatisfied_gate_count": 29
 }
