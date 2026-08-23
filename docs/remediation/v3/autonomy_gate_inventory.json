@@ -12,7 +12,7 @@
   "discovery_scope": "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_OPAQUE_AUTHORITIES_EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES",
   "environment_override_count": 28,
   "gate_source_count": 3585,
-  "inventory_sha256": "f1c352f2077f85c83b758cd762e694adf23774604f3a2d5fa0d226f11de5c6b9",
+  "inventory_sha256": "174faccfd1dbdce1f2726bc92bcf910253bddfc285ce2af07f2a7b9f184f47be",
   "logical_gate_count": 35,
   "logical_gates": [
     {
@@ -9937,7 +9937,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/autonomy_gate_inventory.py",
-      "source_semantics_sha256": "0455b569516413e1eeea7e3c0ac660870a247948fdc9c4fe69400cccee73a34f"
+      "source_semantics_sha256": "cd4b35c1650bffcd13a96aa329ca3621d16a1ba43d6359ca30a366f52a93bdaa"
     },
     {
       "classification": "GATE",
@@ -12115,7 +12115,7 @@
       "source_kind": "COMPLETION_ENTRYPOINT_PARAMETER",
       "source_occurrence_count": 1,
       "source_path": "mmaudit.cli.benchmark_command:corpus",
-      "source_semantics_sha256": "2c0a52668ef1341e3a0d4c15c7e4b7ef5cc16129ec533bf5bed96098b8396c1d"
+      "source_semantics_sha256": "81be2902af4d36c622189587743c21c833399a8df0be7ac5cf5bc8cda71ab941"
     },
     {
       "classification": "NON_GATING_CONTROL",
@@ -12565,7 +12565,7 @@
       "source_kind": "COMPLETION_ENTRYPOINT_PARAMETER",
       "source_occurrence_count": 1,
       "source_path": "mmaudit.cli.models_authenticated_runner:corpus",
-      "source_semantics_sha256": "57b5556b951a978c0123aafe0c694233b74a843aae9276c7a3cafe3d79e8ba7a"
+      "source_semantics_sha256": "385afbbc2465368a001cae0f10fdb66b343e1a80de70aef5f3b0cb516e316eae"
     },
     {
       "classification": "GATE",
@@ -12583,7 +12583,7 @@
       "source_kind": "COMPLETION_ENTRYPOINT_PARAMETER",
       "source_occurrence_count": 1,
       "source_path": "mmaudit.cli.models_authenticated_runner:ground_truth_provenance",
-      "source_semantics_sha256": "5089c355a3eb7a8382f95c6563621a3ed1c8090d4447261bf2d2107824acdcaa"
+      "source_semantics_sha256": "09d94b6e2d2dbab754c944a4ae2a4f7f4d5d108bda902b11bd49dac78242b333"
     },
     {
       "classification": "NON_GATING_CONTROL",
@@ -12781,7 +12781,7 @@
       "source_kind": "COMPLETION_ENTRYPOINT_PARAMETER",
       "source_occurrence_count": 1,
       "source_path": "mmaudit.cli.models_authenticated_runner_smoke:corpus",
-      "source_semantics_sha256": "165df5244f218520064aece9fe21c1fb3ef4aefbe0667034a13d159b15001897"
+      "source_semantics_sha256": "3f4bc78f5b06df8c5372ec4f8349c73613cfba0d447d0c1a46eb468732111784"
     },
     {
       "classification": "GATE",
@@ -12970,7 +12970,7 @@
       "source_kind": "COMPLETION_ENTRYPOINT_PARAMETER",
       "source_occurrence_count": 1,
       "source_path": "mmaudit.cli.models_benchmark:corpus",
-      "source_semantics_sha256": "8bcbaf6bce3171dfce85262be0bc8a379f25de60e1481ebfcf55587d7826ecc8"
+      "source_semantics_sha256": "95597b4b5f822b88d0d73c39fa75c551aa42cf73a2a40ae0acc4faaba6ac94af"
     },
     {
       "classification": "GATE",
@@ -13627,7 +13627,7 @@
       "source_kind": "COMPLETION_ENTRYPOINT_PARAMETER",
       "source_occurrence_count": 1,
       "source_path": "mmaudit.cli.models_verify_authenticated_runner_smoke:corpus",
-      "source_semantics_sha256": "bb760d2d487df3b29fe56efba604509ee5ba6088b846a6688e0d8f0d2b9462e5"
+      "source_semantics_sha256": "62b3c4447fc5fb4339cc16b33c095d146632d22297b42eca258b7b6346d07eb2"
     },
     {
       "classification": "NON_GATING_CONTROL",
@@ -36652,7 +36652,7 @@
       "source_semantics_sha256": "41cc76819710e44e2710187482c5d8058883cf4e3a1087ec84837720818b44c1"
     }
   ],
-  "source_discovery_semantics_sha256": "280a875d62cb0c94be1d567020073ea67028cbdebb94c4982355f4b15aa3b584",
+  "source_discovery_semantics_sha256": "3690079580843c5775bcde33836094745ae8c30ccb591cbab2cb4c9b08b0af2e",
   "source_kind_counts": {
     "AUDITED_MODULE_UNIVERSE": 230,
     "AUDIT_CONFIG_LEAF": 505,
@@ -36669,7 +36669,7 @@
     "REQUIRED_MISSING_GATE": 14
   },
   "source_occurrence_count": 3631,
-  "source_universe_sha256": "8c7b6545854ac92fb88c03e8fb21f369964e65a940b061b1525396c3ab0c050d",
+  "source_universe_sha256": "3931f91732b73d59866734872a21ac4ad30eaa0ea4ab3ae297a4f33297c94971",
   "status": "PARTIAL_NONAUTHORIZING",
   "unsatisfied_gate_count": 29
 }

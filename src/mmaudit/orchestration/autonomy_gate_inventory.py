@@ -807,20 +807,27 @@ def _qualified_name(value: object) -> str:
     return f"{module}.{qualname}"
 
 
-def _canonical_default(value: object) -> object:
+def _canonical_default(value: object, *, repository_root: Path | None = None) -> object:
     if value is inspect.Parameter.empty:
         return {"kind": "NO_DEFAULT"}
     if value is None or type(value) in {bool, int, float, str}:
         return value
     if isinstance(value, Path):
+        if repository_root is not None and value.is_absolute():
+            try:
+                repository_path = value.relative_to(repository_root)
+            except ValueError:
+                pass
+            else:
+                return {"repository_path": repository_path.as_posix()}
         return {"path": value.as_posix()}
     if isinstance(value, StrEnum):
         return {"enum": _qualified_name(type(value)), "value": value.value}
     if isinstance(value, tuple):
-        return [_canonical_default(item) for item in value]
+        return [_canonical_default(item, repository_root=repository_root) for item in value]
     if isinstance(value, frozenset):
         return sorted(
-            (_canonical_default(item) for item in value),
+            (_canonical_default(item, repository_root=repository_root) for item in value),
             key=_canonical_json,
         )
     return {"type": _qualified_name(value), "repr": repr(value)}
@@ -983,6 +990,7 @@ def _callable_parameter_sources(
     *,
     source_kind: CompletionInputSourceKind,
     prefix: str,
+    repository_root: Path | None = None,
 ) -> tuple[tuple[str, str, str], ...]:
     callable_hash = hashlib.sha256(_normalized_ast(value).encode("utf-8")).hexdigest()
     result: list[tuple[str, str, str]] = []
@@ -997,7 +1005,10 @@ def _callable_parameter_sources(
                 "parameter": parameter.name,
                 "kind": parameter.kind.name,
                 "annotation": _annotation_descriptor(parameter.annotation),
-                "default": _canonical_default(parameter.default),
+                "default": _canonical_default(
+                    parameter.default,
+                    repository_root=repository_root,
+                ),
             }
         )
         result.append((f"{prefix}:{parameter.name}", source_path, semantics))
@@ -1470,7 +1481,9 @@ def _discover_environment_sources(
     return drafts
 
 
-def _discover_cli_sources(value: Callable[..., object]) -> list[_SourceDraft]:
+def _discover_cli_sources(
+    value: Callable[..., object], *, repository_root: Path | None = None
+) -> list[_SourceDraft]:
     _assert_frozen_source_shape(
         label="run_command parameters",
         observed=list(_callable_parameter_names(value)),
@@ -1481,6 +1494,7 @@ def _discover_cli_sources(value: Callable[..., object]) -> list[_SourceDraft]:
         value,
         source_kind=CompletionInputSourceKind.CLI_RUN_PARAMETER,
         prefix="cli-run",
+        repository_root=repository_root,
     ):
         name = source_id.removeprefix("cli-run:")
         if name in _CLI_GATE_IDS:
@@ -1754,7 +1768,9 @@ def _command_parameter_classification(
     )
 
 
-def _discover_completion_entrypoint_sources() -> list[_SourceDraft]:
+def _discover_completion_entrypoint_sources(
+    *, repository_root: Path | None = None
+) -> list[_SourceDraft]:
     from mmaudit.cli import _execute_audit
 
     commands = [
@@ -1774,6 +1790,7 @@ def _discover_completion_entrypoint_sources() -> list[_SourceDraft]:
             value,
             source_kind=CompletionInputSourceKind.COMPLETION_ENTRYPOINT_PARAMETER,
             prefix=f"completion-entrypoint:{command_name}",
+            repository_root=repository_root,
         )
         for source_id, source_path, semantics in parameters:
             parameter_name = source_id.rsplit(":", 1)[-1]
@@ -1814,7 +1831,9 @@ def _discover_completion_entrypoint_sources() -> list[_SourceDraft]:
     return drafts
 
 
-def _discover_pipeline_init_sources(value: Callable[..., object]) -> list[_SourceDraft]:
+def _discover_pipeline_init_sources(
+    value: Callable[..., object], *, repository_root: Path | None = None
+) -> list[_SourceDraft]:
     _assert_frozen_source_shape(
         label="AuditPipeline.__init__ parameters",
         observed=list(_callable_parameter_names(value)),
@@ -1825,6 +1844,7 @@ def _discover_pipeline_init_sources(value: Callable[..., object]) -> list[_Sourc
         value,
         source_kind=CompletionInputSourceKind.PIPELINE_INIT_PARAMETER,
         prefix="pipeline-init",
+        repository_root=repository_root,
     ):
         name = source_id.removeprefix("pipeline-init:")
         if name not in _PIPELINE_INIT_GATE_IDS:
@@ -1844,7 +1864,9 @@ def _discover_pipeline_init_sources(value: Callable[..., object]) -> list[_Sourc
     return drafts
 
 
-def _discover_pipeline_run_sources(value: Callable[..., object]) -> list[_SourceDraft]:
+def _discover_pipeline_run_sources(
+    value: Callable[..., object], *, repository_root: Path | None = None
+) -> list[_SourceDraft]:
     _assert_frozen_source_shape(
         label="AuditPipeline.run parameters",
         observed=list(_callable_parameter_names(value)),
@@ -1855,6 +1877,7 @@ def _discover_pipeline_run_sources(value: Callable[..., object]) -> list[_Source
         value,
         source_kind=CompletionInputSourceKind.PIPELINE_RUN_PARAMETER,
         prefix="pipeline-run",
+        repository_root=repository_root,
     ):
         name = source_id.removeprefix("pipeline-run:")
         if name not in _PIPELINE_RUN_GATE_IDS:
@@ -3507,10 +3530,12 @@ def build_autonomy_gate_inventory(
         *_discover_audit_run_option_sources(audit_run_options_model),
         *_discover_override_sources(audit_override_value_types),
         *_discover_environment_sources(environment_override_mappings),
-        *_discover_cli_sources(cli_run_command or run_command),
-        *_discover_pipeline_init_sources(pipeline_init or AuditPipeline.__init__),
-        *_discover_pipeline_run_sources(pipeline_run or AuditPipeline.run),
-        *_discover_completion_entrypoint_sources(),
+        *_discover_cli_sources(cli_run_command or run_command, repository_root=root),
+        *_discover_pipeline_init_sources(
+            pipeline_init or AuditPipeline.__init__, repository_root=root
+        ),
+        *_discover_pipeline_run_sources(pipeline_run or AuditPipeline.run, repository_root=root),
+        *_discover_completion_entrypoint_sources(repository_root=root),
         *_discover_audited_module_sources(root / "src" / "mmaudit"),
         *_discover_direct_environment_sources(root / "src" / "mmaudit"),
         *_discover_entropy_input_sources(root / "src" / "mmaudit"),

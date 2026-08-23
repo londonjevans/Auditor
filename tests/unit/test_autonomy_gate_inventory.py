@@ -336,6 +336,36 @@ def test_existing_field_semantics_drift_changes_the_objective_source_universe() 
     assert changed.inventory_sha256 != baseline.inventory_sha256
 
 
+def test_repository_local_path_defaults_are_worktree_independent(
+    tmp_path: Path,
+) -> None:
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    relative_path = Path("benchmarks/model_corpus/manifest.json")
+
+    first = inventory_module._canonical_default(
+        first_root / relative_path,
+        repository_root=first_root,
+    )
+    second = inventory_module._canonical_default(
+        second_root / relative_path,
+        repository_root=second_root,
+    )
+
+    assert first == second == {"repository_path": relative_path.as_posix()}
+    assert inventory_module._canonical_default(
+        (first_root / relative_path, frozenset({first_root / "schemas/current.json"})),
+        repository_root=first_root,
+    ) == [
+        {"repository_path": relative_path.as_posix()},
+        [{"repository_path": "schemas/current.json"}],
+    ]
+    assert inventory_module._canonical_default(
+        tmp_path / "external.json",
+        repository_root=first_root,
+    ) == {"path": (tmp_path / "external.json").as_posix()}
+
+
 def test_new_runtime_resource_and_interactive_input_fail_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
