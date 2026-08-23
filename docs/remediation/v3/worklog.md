@@ -4,13 +4,13 @@ The objective source is `docs/remediation/v3/product_completion_goal.txt`, with 
 `e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_FOR_OPERATOR_R8_ADJACENT_SEQUENCE
+AUTORUN_STATUS: PAUSED_FOR_OPERATOR_R9_R8_R8_INDEXED_SEQUENCE
 CURRENT_MILESTONE: M1-DETERMINISTIC-PRODUCT (REACHED)
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001 (COMPLETE)
-NEXT_ACTION: From the clean exact command checkpoint, run only the r8/r8/r8 metadata-only step A and record its complete result. Request separate paid-step authorization only if A is exactly VALID and no state changed; otherwise rerun A after fresh review. Reconcile the operator result before resuming `V3-AUTONOMY-001` Phase 2.
-LAST_COMMAND: Exact command-parity and governance regression; strict JSON; Ruff; formatting; diff integrity. No AUTHRUNNER command was executed.
-LAST_RESULT: PASS / COMMANDS_EMITTED_NOT_RUN — exactly two separate r8/r8/r8 commands are current: metadata-only step A and paid-smoke step B. Step B remains unauthorized pending separate authorization after an immediate complete exact-VALID A. Every runtime, qualification, audit, benchmark, seal, and release authority remains false.
+NEXT_ACTION: From the clean exact checkpoint, run only the r9/r8/r8 metadata-only step A with `--smoke-run-index 2` and record its complete result. Request separate paid-step authorization only if A is exactly VALID and no state changed; otherwise obtain a fresh run index and rerun A after review. Reconcile the operator result before resuming `V3-AUTONOMY-001` Phase 2.
+LAST_COMMAND: Focused smoke-run-index, runtime, CLI, schema, documentation, strict JSON, Ruff, formatting, mypy, and diff gates; no AUTHRUNNER command was executed.
+LAST_RESULT: PASS — 385 implementation tests, 363 independent review tests, and 16 documentation/objective tests passed; Ruff, formatting, strict mypy, release-schema write/verify, strict JSON, command parity, and diff checks passed. Current operator evidence is reconciled; the historical paid attempt failed before provider completion or new spend on a reused `r1` ledger request ID. The corrected r9/r8/r8 index-2 A/B commands remain unexecuted, and B remains separately unauthorized pending immediate exact-VALID A. Every runtime, qualification, audit, benchmark, seal, and release authority remains false.
 REAL_MODEL_CALLS_ATTEMPTED: 12
 REAL_MODEL_CALLS_SUCCEEDED: 2
 REAL_MODEL_CALLS_REJECTED: 10
@@ -21,7 +21,31 @@ OPENROUTER_BUDGET_REMAINING_USD: 249.98319112
 HISTORICAL_GOVERNED_LEDGER_USED_USD: 0.0034764325
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable. A private holdout and independently adjudicated professional comparison are not supplied, but those optional human/private tiers are objective-out-of-scope and are not current completion blockers.
-LAST_CHECKPOINT_COMMIT: 084add8778ef36a2e4c86fdbdea4082eb3a1b332 — local V3-AUTONOMY Phase-1 managed-toolchain implementation checkpoint; it is not pushed or remote-resolved and explicitly retains runtime_authority=false and managed_run_ready=false. Historical Phase-0 checkpoint: d0402d1c68f0f82d9ee4f8757f7967abda372ac6. Historical r8 governance base: 28ee5d77ed9c33fb72d0c00e02e93c91b9fde8c6. Historical paid diagnostic base: b4134c70641e33cbbff2b430b135910df903733b.
+LAST_CHECKPOINT_COMMIT: 9c61871502abbd19ff13278893f9c7785c5b28ba — local 16-path V3-AUTHRUNNER smoke-run-index implementation checkpoint; it is not pushed or remote-resolved and grants no runtime authority. Historical V3-AUTONOMY Phase-1 checkpoint: 084add8778ef36a2e4c86fdbdea4082eb3a1b332. Historical Phase-0 checkpoint: d0402d1c68f0f82d9ee4f8757f7967abda372ac6. Historical r8 governance base: 28ee5d77ed9c33fb72d0c00e02e93c91b9fde8c6. Historical paid diagnostic base: b4134c70641e33cbbff2b430b135910df903733b.
+
+## 2026-08-22T05:49:02Z — smoke request namespace collision reconciled; indexed rerun prepared
+
+- Operator result: fully reconciled the operator-supplied 74,562-byte / 1,330-line record at
+  `302679f3e8e9281cdf9e0ec3d6d1d566d172cb54b389fbac607180d1f0911940`. Candidate r8 drifted;
+  candidate r9 was re-frozen at `$0` as `candidate-registry-r9.json` /
+  `authrunner-candidate-20260822-r9`, frozen
+  `cc65071ef3723fc075b958aec4ad0180cdc99dc853d19b3a7983015f7e1c34ad`. The r9/r8/r8 gate was
+  VALID through 15 GETs.
+- Failure: paid smoke #3 stopped before provider completion or new spend because permanent ledger
+  request ID
+  `authrunner.smoke.r1.candidate.primary:721f058726cf9509c07cb2aae662fb6ac23b5c30a363db40229faf8895034497`
+  already exists. The live ledger remains one reconciled entry at `used=0.01680888`, `reserved=0`,
+  `remaining=249.98319112`; the real charge is retained and no bundle was published.
+- Fix: checkpoint `9c61871502abbd19ff13278893f9c7785c5b28ba` makes a canonical positive
+  `--smoke-run-index` mandatory; seals it through candidate and judge
+  request IDs, costs, reports, runs, the final bundle, schema, and offline replay; reject a reused
+  run namespace provider-free before secret or transport access. Release/full request namespaces
+  remain disjoint. The implementer matrix passed 385 tests; independent review passed 360 focused
+  plus 3 adjacent namespace/retry tests and found no blocker/HIGH. Ruff, format, strict mypy, schema
+  write/verify, JSON, and diff gates passed.
+- Emission boundary: exactly two corrected r9/r8/r8 commands use smoke index 2. They are emitted,
+  not run. Step B remains separately unauthorized until immediate exact-VALID A and explicit post-A
+  authorization. AUTONOMY Phase 2 remains paused.
 
 ## 2026-08-22T04:55:34Z — r8/r8/r8 adjacent command-only checkpoint
 
@@ -141,7 +165,8 @@ LAST_CHECKPOINT_COMMIT: 084add8778ef36a2e4c86fdbdea4082eb3a1b332 — local V3-AU
   single live ledger entry remains reconciled at `$0.01680888`, with `$249.98319112` remaining. No
   command or authority was emitted at that recorded boundary.
 - Historical next at that boundary: separately review paid-smoke eligibility. That no-command state
-  is superseded by the current adjacent r8/r8/r8 command-only checkpoint.
+  and the later r8/r8/r8 command-only checkpoint are superseded by the current indexed r9/r8/r8
+  sequence.
 
 ## 2026-08-21T22:18:00Z — GLM-5.2 added only to the immutable capture inventory
 

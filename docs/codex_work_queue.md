@@ -431,13 +431,21 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   sorted allowlist `modal/mxfp4`, `phala`. Exact operator choice remains mandatory; there is no
   automatic fallback. The operator explicitly selected `modal/mxfp4`, froze replay r8 at
   `75451839c72020a5e34c2f21a433e420f79c6db3e7238adb808e1c382af348f8`, and validated r8/r8/r8
-  through 15 logical GETs with at most 30 attempts, `$0`, no completion, and no output. Current
-  operator custody is 71,771 bytes / 1,276 lines / SHA-256
-  `25ee5395a7e2360637f89d89cc0e89084a530c8921d0af395b06bc9b700b01e5`. The operator has now
-  explicitly requested one command-only checkpoint containing the adjacent r8/r8/r8 metadata-only
-  step A and paid-smoke step B. Both are emitted but not run; step B still requires separate
-  authorization after an immediate complete exact-VALID step A, and any drift or intervening change
-  requires starting again at step A. REAL remains `BLOCKED_SAFETY`; no authority changes.
+  through 15 logical GETs with at most 30 attempts, `$0`, no completion, and no output. Historical
+  checkpoint `7ca15589453fbc5219da4bbda87e37da824470a7` emitted the r8 pair. Its step A then found
+  overnight candidate drift. The operator re-froze candidate r9 at `$0` as
+  `candidate-registry-r9.json` / `authrunner-candidate-20260822-r9`, frozen SHA-256
+  `cc65071ef3723fc075b958aec4ad0180cdc99dc853d19b3a7983015f7e1c34ad`; PRIMARY and REPLAY
+  r8 remained valid, and the r9/r8/r8 gate passed through 15 GETs. Paid smoke #3 stopped before
+  provider completion or new spend because cumulative ledger request ID
+  `authrunner.smoke.r1.candidate.primary:721f058726cf9509c07cb2aae662fb6ac23b5c30a363db40229faf8895034497`
+  already exists. The ledger remains one reconciled `$0.01680888` entry and no bundle exists.
+  Current operator custody is 74,562 bytes / 1,330 lines / SHA-256
+  `302679f3e8e9281cdf9e0ec3d6d1d566d172cb54b389fbac607180d1f0911940`. Local checkpoint
+  `9c61871502abbd19ff13278893f9c7785c5b28ba` makes a canonical positive smoke run index explicit,
+  seals it through every durable layer, and rejects reused ledger namespaces provider-free. Its 385
+  focused tests and independent 363-test review passed. This checkpoint emits corrected r9/r8/r8 A/B
+  commands with `--smoke-run-index 2`; REAL remains `BLOCKED_SAFETY` and no authority changes.
 - **Local revocation-cascade slice:** Pushed checkpoint
   `692eb173f002818b4434b746c8801b4cbeb852e2` adds explicit PID-bound campaign and generation
   revokers, parent-to-child cascade, traceback-safe execution handoff guards, and immediate smoke
@@ -813,9 +821,11 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   proved constructor parity, and the later metadata-only live-route gate established genuine
   candidate endpoint-inventory drift. The latest paid candidate request reached transport, origin
   custody, and exact ledger reconciliation, then failed strict schema validation because the retained
-  candidate route lacks native `structured_outputs`; no judge request or bundle followed. The current
-  paid step B is emitted but remains unauthorized pending separate authorization after immediate
-  exact-VALID step A.
+  candidate route lacks native `structured_outputs`; no judge request or bundle followed. The next
+  paid attempt was blocked provider-free by the reused hardcoded `r1` request namespace; its
+  cumulative ledger entry is retained and no new spend occurred. The corrected index-2 paid command
+  remains unauthorized until an immediate exact-VALID r9/r8/r8 step A from the same checkpoint is
+  inspected and the operator separately authorizes B.
   Exact judge admission and the
   full-campaign cost bound cannot exist before both genuine candidate outputs. Current repository
   rules prohibit Codex from reading real credentials or accessing the provider. Judge request bytes
@@ -829,13 +839,12 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   positive owned-REAL parent issue-consume-revoke-reject assay against the external runtime remain
   absent; the completed provider-free cascade does not substitute for that evidence. External-log
   publication and every benchmark run remain queued.
-- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY`. Exactly two r8/r8/r8
-  commands are emitted but not run: metadata-only step A and paid step B. Run only A from the clean
-  command checkpoint; request separate B authorization only after its immediate complete exact-VALID
-  result, with no intervening state change. The verifier, normal preflight, discovery,
-  construct-only, and full commands remain absent. `V3-AUTONOMY-001` Phase 2 is paused until the
-  external result is reconciled. AUTHSEAL publication, audits, benchmarks, and release remain
-  unauthorized.
+- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY`. Run the corrected
+  r9/r8/r8 metadata step A with smoke run index 2 from the clean checkpoint. Only if it returns the
+  complete exact-VALID result immediately and no state changes, request separate authorization for
+  paid step B. The verifier, normal preflight, discovery, construct-only, and full commands remain
+  absent. `V3-AUTONOMY-001` Phase 2 is paused until the external result is reconciled. AUTHSEAL
+  publication, audits, benchmarks, and release remain unauthorized.
 
 ### V3-MODELREFRESH-001 — Provider-free model-refresh runtime and pricing custody
 
@@ -1608,25 +1617,28 @@ and report serialization.
 
 ## Next action
 
-### V3-AUTHRUNNER-001 — adjacent r8/r8/r8 operator sequence
+### V3-AUTHRUNNER-001 — repeatable r9/r8/r8 smoke sequence
 
-- **Objective:** Preserve the time-sensitive r8/r8/r8 route state by emitting exactly one
-  metadata-only live-route command and one paid-smoke command in the same command-only checkpoint.
+- **Objective:** Preserve the time-sensitive r9/r8/r8 route state and repair the single-use smoke
+  namespace by emitting exactly one indexed metadata-only command and one indexed paid-smoke
+  command in the same tested checkpoint.
 - **Dependencies:** Exact current operator evidence
-  `25ee5395a7e2360637f89d89cc0e89084a530c8921d0af395b06bc9b700b01e5`, plan
-  `ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f`, and all three r8 frozen
-  registries.
+  `302679f3e8e9281cdf9e0ec3d6d1d566d172cb54b389fbac607180d1f0911940`, plan
+  `ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f`, candidate r9, both
+  judge r8 registries, and the unchanged one-entry cumulative ledger.
 - **Status:** `PARTIAL / BLOCKED_SAFETY`
-- **Boundary:** Both commands are emitted but not run and must remain separate. Step B requires
-  separate authorization after step A returns the complete exact-VALID result; any delay or state
-  change requires a new step A. No verifier, full runner, qualification, seal, audit, benchmark, or
-  release command is emitted.
+- **Boundary:** Both index-2 commands are emitted but not run and must remain separate. The current
+  operator request authorizes command emission only; B remains unauthorized until A returns the
+  complete exact-VALID result immediately and the operator separately authorizes B. Any failure,
+  delay, reused-index rejection, or state change requires a fresh A. No verifier,
+  full runner, qualification, seal, audit, benchmark, or release command is emitted.
 - **Current evidence:** `V3-AUTONOMY-001` remains `IN_PROGRESS`, but its Phase 2 working bytes are
   paused and excluded from the clean command worktree. After the operator result is reconciled,
   resume the typed idempotent provisioning-state/refusal slice. The exact 28-role bundle pins three
   reviewed package resources and
   explicitly leaves 25 external roles unresolved.
-- **Next action:** From the clean exact command checkpoint, run only metadata step A and record its
-  complete result. Request separate authorization for paid step B only if A is exactly valid and no
-  source/config/artifact/ledger/output/secret/environment state changes. Then reconcile the result
-  before resuming Phase 2; do not grant runner or release authority from command emission.
+- **Next action:** From the clean exact checkpoint, run indexed metadata step A and inspect its
+  complete result. If and only if it is exactly valid and no
+  source/config/artifact/ledger/output/secret/environment state changes, request separate
+  authorization for indexed paid step B. Reconcile the result before resuming Phase 2; do
+  not grant runner or release authority from command emission.

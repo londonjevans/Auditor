@@ -571,38 +571,53 @@ Kimi/`wafer` failed closed because the endpoint had drifted to status `-5`. No r
 live-route gate, completion, new charge, or bundle resulted. That 69,112-byte / 1,236-line operator
 record has SHA-256 `5fb3d3091e339b840e84468093c0f1f64c738673a40761fcf7d7b9d7ae4c41c6`.
 
-Current local checkpoint `dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d` retains the candidate and
-PRIMARY routes and replaces the failed replay singleton with the nonauthorizing sorted allowlist
+Local checkpoint `dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d` retained the candidate and
+PRIMARY routes and replaced the failed replay singleton with the nonauthorizing sorted allowlist
 `modal/mxfp4`, `phala`. Plan SHA-256
-`ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f` remains provider-unverified,
-local only, and not pushed or remote-resolved. Fresh exact replay metadata discovery for one
-explicitly operator-chosen allowlisted route remains required after separate review; no discovery
-command is currently emitted.
+`ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f` remains nonauthorizing,
+local only, and not pushed or remote-resolved. The operator explicitly selected `modal/mxfp4` and
+completed its exact r8 discovery; no automatic route fallback is permitted.
 
-The operator then explicitly chose `modal/mxfp4`, froze replay r8 at
+The operator froze replay r8 at
 `75451839c72020a5e34c2f21a433e420f79c6db3e7238adb808e1c382af348f8`, and validated the
 complete r8/r8/r8 live-route gate through 15 logical metadata GETs with at most 30 attempts. The
 effective config SHA-256 remained
 `42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54`; usage, budget, ledger,
-and output were unchanged, with no completion, new spend, or bundle. The current operator record is
-71,771 bytes / 1,276 lines / SHA-256
-`25ee5395a7e2360637f89d89cc0e89084a530c8921d0af395b06bc9b700b01e5`. That record also binds the
-exact r8 discovery-run names used below. The operator explicitly requested one narrow command-only
-checkpoint so the live-route recheck and paid smoke can remain adjacent while route drift is still
-fresh. Command emission is nonauthorizing evidence and does not prove execution or success.
+and output were unchanged, with no completion, new spend, or bundle. Historical command checkpoint
+`7ca15589453fbc5219da4bbda87e37da824470a7` then emitted the r8/r8/r8 pair. Its step A failed on
+overnight candidate endpoint-inventory drift. The operator re-froze only the candidate at `$0` as
+`candidate-registry-r9.json`, run `authrunner-candidate-20260822-r9`, frozen SHA-256
+`cc65071ef3723fc075b958aec4ad0180cdc99dc853d19b3a7983015f7e1c34ad`; PRIMARY and REPLAY r8
+remained current. The resulting r9/r8/r8 metadata-only gate was exactly `VALID` through 15 logical
+GETs. The paid launch then stopped before provider completion or new spend because the permanent
+ledger already contained deterministic request ID
+`authrunner.smoke.r1.candidate.primary:721f058726cf9509c07cb2aae662fb6ac23b5c30a363db40229faf8895034497`.
+The ledger remains exactly one reconciled `$0.01680888` entry and no bundle was published.
 
-### Current r8/r8/r8 adjacent smoke sequence
+The cause was lifecycle identity, not route admission: every smoke request hardcoded namespace
+`r1`, so the fixed one-case corpus could never be rerun against its cumulative ledger. Source
+checkpoint `9c61871502abbd19ff13278893f9c7785c5b28ba` makes `--smoke-run-index` an explicit required canonical positive integer, seals that
+index through candidate and judge cost plans, reports, run evidence, the final bundle, and offline
+replay, and retains disjoint full-release namespaces. Provider-free preflight rejects an index
+already present anywhere in the cumulative smoke ledger before secret selection or metadata/model
+transport. Its 385-test implementer matrix and independent 363-test review passed alongside Ruff,
+format, strict mypy, schema write/verify, and diff gates. The current operator record is 74,562
+bytes / 1,330 lines / SHA-256
+`302679f3e8e9281cdf9e0ec3d6d1d566d172cb54b389fbac607180d1f0911940`.
+
+### Current r9/r8/r8 smoke-run-index-2 adjacent sequence
 
 These are the only current AUTHRUNNER commands. They are two separate commands and must not be
-chained or pasted into one shell invocation. The explicit operator request authorizes this
-command-only checkpoint; it does not authorize Codex to execute either command or preauthorize the
-paid step. Step B still requires separate operator authorization after step A produces the complete
-exact result below.
+chained or pasted into one shell invocation. The operator explicitly requested this corrected
+command emission against r9; that does not authorize Codex to execute either command or authorize
+paid step B. Step B remains separately unauthorized until this checkpoint's step A immediately
+produces the complete exact result below and the operator explicitly authorizes B after inspecting
+it. A failed, ambiguous, delayed, or changed step A requires a fresh A.
 
 Before step A, inspect and confirm all of the following without changing them:
 
-- the candidate, PRIMARY, and REPLAY registry/discovery pairs are the exact r8 paths below and their
-  frozen SHA-256 values remain `4e08e6496952e817e39d6872684a4e69cfb05cf74374870f51c234a6513b7306`,
+- the candidate r9 and PRIMARY/REPLAY r8 registry/discovery pairs are the exact paths below and their
+  frozen SHA-256 values remain `cc65071ef3723fc075b958aec4ad0180cdc99dc853d19b3a7983015f7e1c34ad`,
   `8f3fc274390d983bde683e3039a91f7cb6ead0f4dfa9aa89caa02ecca7e9ed26`, and
   `75451839c72020a5e34c2f21a433e420f79c6db3e7238adb808e1c382af348f8`;
 - the effective configuration remains
@@ -610,7 +625,8 @@ Before step A, inspect and confirm all of the following without changing them:
   selection plan remains
   `ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f`;
 - the dedicated ledger has exactly its one historical reconciled entry, `used=0.01680888`,
-  `reserved=0`, and `remaining=249.98319112`, with no active reservation;
+  `reserved=0`, and `remaining=249.98319112`, with no active reservation and no request in the
+  `authrunner.smoke.r2.*` namespace;
 - `$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260822-s3.json` is absent
   and its operator-owned parent directory already exists with mode `0700`; and
 - the smoke corpus, parent corpus, public-lineage manifest, config, secret-file location, and shell
@@ -626,33 +642,36 @@ candidate-plan admission before metadata transport. A separate normal preflight 
 and would age the live metadata.
 
 ```shell
-env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE PYTHONPATH="$PWD/src" MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" /Users/generalcuster/Documents/dev/Auditor/.venv/bin/mmaudit models authenticated-runner-smoke --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r8.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260821-r8" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r8.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r8" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r8.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260822-r8" --smoke-corpus benchmarks/model_corpus_smoke --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260822-s3.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --secrets-env-file "$HOME/.mmaudit/secrets.env" --allow-metadata-egress --live-route-preflight-only --no-color
+env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE PYTHONPATH="$PWD/src" MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" /Users/generalcuster/Documents/dev/Auditor/.venv/bin/mmaudit models authenticated-runner-smoke --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r9.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260822-r9" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r8.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r8" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r8.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260822-r8" --smoke-corpus benchmarks/model_corpus_smoke --smoke-run-index 2 --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260822-s3.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --secrets-env-file "$HOME/.mmaudit/secrets.env" --allow-metadata-egress --live-route-preflight-only --no-color
 ```
 
 Step B is eligible only after step A exits `0` and the operator inspects the complete terminal
 record. It must report exactly `VALID / NONCREDITING / NONAUTHORIZING / METADATA EGRESS ONLY / NO
-MODEL COMPLETION`; the three model IDs `deepseek/deepseek-v4-pro-0813`, `z-ai/glm-5.2`, and
+MODEL COMPLETION`; `Smoke run index: 2`; the three model IDs
+`deepseek/deepseek-v4-pro-0813`, `z-ai/glm-5.2`, and
 `moonshotai/kimi-k3`; `logical_gets=15`; `maximum_provider_attempts=30`; `usage_records=0`;
 unchanged budget and atomic ledger; no output; and effective-config SHA-256
 `42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54`. The frozen evidence must
 still bind `parasail/fp8`, `sail-research/fp8`, and `modal/mxfp4` on three distinct providers.
 
-After separate authorization, run step B immediately after that exact inspection, with no
+Only after separate post-A operator authorization, run step B immediately after that exact
+inspection, with no
 intervening source, configuration, registry, discovery, lineage/corpus artifact, ledger, output-path,
 secret-file, or shell-environment change. Any delay, interruption, mismatch, ambiguous result,
-output collision, or state change invalidates adjacency: do not run step B; obtain separate
-authorization and start again at step A. The paid smoke is one-shot, non-resumable, and may reserve
-and spend provider cost.
+output collision, reused-index rejection, or state change invalidates adjacency: do not run step B;
+obtain a new run index and fresh authorization, then start again at step A. The paid smoke remains
+one-process, non-resumable within a run index, and may reserve and spend provider cost.
 
 ```shell
-env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE PYTHONPATH="$PWD/src" MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" /Users/generalcuster/Documents/dev/Auditor/.venv/bin/mmaudit models authenticated-runner-smoke --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r8.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260821-r8" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r8.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r8" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r8.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260822-r8" --smoke-corpus benchmarks/model_corpus_smoke --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260822-s3.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --secrets-env-file "$HOME/.mmaudit/secrets.env" --allow-code-egress --no-color
+env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE PYTHONPATH="$PWD/src" MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" /Users/generalcuster/Documents/dev/Auditor/.venv/bin/mmaudit models authenticated-runner-smoke --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r9.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260822-r9" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r8.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r8" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r8.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260822-r8" --smoke-corpus benchmarks/model_corpus_smoke --smoke-run-index 2 --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260822-s3.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --secrets-env-file "$HOME/.mmaudit/secrets.env" --allow-code-egress --no-color
 ```
 
 No normal provider-free preflight, verifier, discovery, construct-only, or full AUTHRUNNER command is
-emitted. Both current commands are emitted but not run. `V3-AUTHRUNNER-001` remains
+emitted. Both corrected commands are emitted but not run from this checkpoint. The historical paid
+attempt is retained exactly and never released. `V3-AUTHRUNNER-001` remains
 `PARTIAL / BLOCKED_SAFETY`; `V3-AUTONOMY-001` remains `IN_PROGRESS` but Phase 2 is paused until this
-external adjacent sequence is recorded and reconciled. No provider result, ledger value, governed
-counter, qualification, release state, or authority changed at command emission.
+external adjacent sequence is recorded and reconciled. No qualification, release state, or authority
+changed at command emission.
 
 Root's earlier focused matrix passed `348` tests; an independent focused matrix passed `223`; the
 reasoning slice passed `69` focused tests; and the expanded selection, discovery, benchmark,
