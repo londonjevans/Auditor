@@ -33,6 +33,7 @@ from mmaudit.benchmark.models import (
     verify_noncrediting_model_benchmark_smoke_report,
 )
 from mmaudit.models.generation_evidence import OpenRouterGenerationEvidence
+from mmaudit.models.identity import OpenRouterIdentityDiagnosticCode
 from mmaudit.models.openrouter import (
     OpenRouterClient,
     OpenRouterStructuredRequestCostPreview,
@@ -419,28 +420,42 @@ def test_smoke_execute_uses_one_cost_bound_request_and_refetches_generation(
 
 
 @pytest.mark.parametrize(
-    ("usage_error", "case_id_mismatch", "expected_reasons"),
+    ("usage_error", "identity_diagnostics", "case_id_mismatch", "expected_reasons"),
     (
         (
             "UsageValidationError",
+            (),
             False,
             "usage_error=UsageValidationError",
         ),
         (
             None,
+            (),
             True,
             "case_id_mismatch=true",
         ),
         (
             "UsageResponseBindingError",
+            (),
             True,
             "usage_error=UsageResponseBindingError, case_id_mismatch=true",
+        ),
+        (
+            "UsageValidationError",
+            (
+                OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_INVALID,
+                OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_MISSING,
+            ),
+            False,
+            "usage_error=UsageValidationError, "
+            "identity_diagnostics=GENERATION_METADATA_INVALID|GENERATION_METADATA_MISSING",
         ),
     ),
 )
 def test_smoke_execute_preserves_bounded_usage_and_case_failure_reasons(
     monkeypatch: pytest.MonkeyPatch,
     usage_error: str | None,
+    identity_diagnostics: tuple[OpenRouterIdentityDiagnosticCode, ...],
     case_id_mismatch: bool,
     expected_reasons: str,
 ) -> None:
@@ -482,6 +497,11 @@ def test_smoke_execute_preserves_bounded_usage_and_case_failure_reasons(
         benchmark_models,
         "_successful_usage_error",
         lambda *_args, **_kwargs: usage_error,
+    )
+    monkeypatch.setattr(
+        benchmark_models,
+        "_successful_usage_identity_diagnostics",
+        lambda *_args, **_kwargs: identity_diagnostics,
     )
     client = object.__new__(OpenRouterClient)
     object.__setattr__(client, "usage", UsageLedger())

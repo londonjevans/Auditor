@@ -23,6 +23,11 @@ from mmaudit.models.generation_evidence import (
     OpenRouterGenerationEvidence,
     _reconcile_noncrediting_smoke_generation_evidence_structural,
 )
+from mmaudit.models.identity import (
+    OpenRouterIdentityBindingResult,
+    OpenRouterIdentityDiagnosticCode,
+    OpenRouterIdentityStrength,
+)
 from mmaudit.models.openrouter import (
     OpenRouterClient,
     OpenRouterError,
@@ -1642,10 +1647,18 @@ async def execute_noncrediting_model_benchmark_smoke(
             usage_record.token_detail_accounting_evidence is not None
         ),
     )
+    identity_diagnostics = (
+        _successful_usage_identity_diagnostics(usage_record) if usage_error is not None else ()
+    )
     case_id_mismatch = completion.value.case_id != case.case_id
     if usage_error is not None or case_id_mismatch:
         failure_reasons = (
             *((f"usage_error={usage_error}",) if usage_error is not None else ()),
+            *(
+                ("identity_diagnostics=" + "|".join(item.value for item in identity_diagnostics),)
+                if identity_diagnostics
+                else ()
+            ),
             *(("case_id_mismatch=true",) if case_id_mismatch else ()),
         )
         raise ValueError(
@@ -2278,6 +2291,26 @@ def _successful_usage_error(
     if record.schema_sha256 != expected_schema_sha256:
         return "UsageSchemaBindingError"
     return None
+
+
+def _successful_usage_identity_diagnostics(
+    record: UsageRecord,
+) -> tuple[OpenRouterIdentityDiagnosticCode, ...]:
+    """Return only self-bound closed codes from one unbound identity result."""
+
+    raw_binding = record.routing.get("identity_binding")
+    if type(raw_binding) is not dict:
+        return ()
+    try:
+        binding = OpenRouterIdentityBindingResult.model_validate(raw_binding)
+    except ValidationError:
+        return ()
+    if (
+        binding.strength is not OpenRouterIdentityStrength.UNBOUND
+        or binding.model_dump(mode="json") != raw_binding
+    ):
+        return ()
+    return binding.diagnostic_codes
 
 
 def _usage_structured_output_mode(

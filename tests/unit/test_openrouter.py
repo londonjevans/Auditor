@@ -22,6 +22,7 @@ from mmaudit.benchmark.models import (
     MODEL_BENCHMARK_SCHEMA_NAME,
     ModelBenchmarkClassification,
     ModelBenchmarkResponse,
+    _successful_usage_identity_diagnostics,
     blinded_model_benchmark_request,
     load_model_benchmark_corpus,
     model_benchmark_system_prompt,
@@ -4053,6 +4054,16 @@ async def test_missing_generation_metadata_preserves_unbound_identity_result(
     assert concluded.routing["identity_binding"]["diagnostic_codes"] == [
         OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_MISSING.value
     ]
+    assert _successful_usage_identity_diagnostics(concluded) == (
+        OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_MISSING,
+    )
+    tampered_routing = dict(concluded.routing)
+    tampered_binding = dict(tampered_routing["identity_binding"])
+    tampered_binding["binding_sha256"] = "0" * 64
+    tampered_routing["identity_binding"] = tampered_binding
+    assert not _successful_usage_identity_diagnostics(
+        concluded.model_copy(update={"routing": tampered_routing})
+    )
     assert usage.records == [concluded]
     assert not is_creditable_usage_record(concluded, require_certification=True)
 
