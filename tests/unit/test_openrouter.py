@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError, create_model
 import mmaudit.models.generation_evidence as generation_evidence_module
 import mmaudit.models.openrouter as openrouter_module
 import mmaudit.models.truncation as truncation_module
+import mmaudit.models.usage as usage_module
 from mmaudit.benchmark.models import (
     MODEL_BENCHMARK_SCHEMA_NAME,
     ModelBenchmarkClassification,
@@ -131,7 +132,9 @@ from mmaudit.models.usage import (
     _authrunner_usage_origin_scope,
     _has_authrunner_owned_real_usage_origin,
     _has_owned_real_usage_attestation,
+    authrunner_noncrediting_unknown_token_smoke_scope,
     is_creditable_usage_record,
+    noncrediting_unknown_token_smoke_usage_diagnostics,
     noncrediting_unknown_token_smoke_usage_error,
     structurally_noncrediting_unknown_token_smoke_usage_error,
 )
@@ -975,6 +978,7 @@ async def _assert_v3_smoke_receipt_cutoff(
     response_json: str,
     case_id: str,
     monkeypatch: pytest.MonkeyPatch,
+    intrinsic_invalid: bool = False,
 ) -> None:
     """Prove v3 smoke reconciliation cannot mint authority without receipts."""
 
@@ -1011,7 +1015,195 @@ async def _assert_v3_smoke_receipt_cutoff(
             }
         )
     )
-    assert structurally_noncrediting_unknown_token_smoke_usage_error(provisional) is None
+    expected_scope = (
+        "CANDIDATE"
+        if provisional.routing.get("privacy_source_proof_kind")
+        == "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK"
+        else "JUDGE"
+    )
+    assert authrunner_noncrediting_unknown_token_smoke_scope(provisional) == expected_scope
+    with monkeypatch.context() as classifier_type_context:
+        classifier_type_context.setattr(usage_module, "UsageRecord", object)
+        classifier_type_context.setattr(usage_module, "ExecutionEvidenceKind", object)
+        assert authrunner_noncrediting_unknown_token_smoke_scope(provisional) == expected_scope
+    assert (
+        authrunner_noncrediting_unknown_token_smoke_scope(
+            provisional.model_copy(update={"role": "source_audit"})
+        )
+        == "INVALID"
+    )
+    assert (
+        authrunner_noncrediting_unknown_token_smoke_scope(
+            provisional.model_copy(update={"execution_evidence": ExecutionEvidenceKind.MOCK})
+        )
+        == "INVALID"
+    )
+    malformed_proof = provisional.model_copy(
+        update={
+            "routing": {
+                **provisional.routing,
+                "privacy_source_proof_kind": None,
+            }
+        }
+    )
+    assert authrunner_noncrediting_unknown_token_smoke_scope(malformed_proof) == "INVALID"
+    unhashable_proof = provisional.model_copy(
+        update={
+            "routing": {
+                **provisional.routing,
+                "privacy_source_proof_kind": {},
+            }
+        }
+    )
+    assert authrunner_noncrediting_unknown_token_smoke_scope(unhashable_proof) == "INVALID"
+    release_request = provisional.model_copy(
+        update={
+            "request_id": "authrunner.candidate.primary:case-0123456789abcdef",
+            "routing": {
+                **provisional.routing,
+                "privacy_source_proof_kind": "RELEASE_PINNED_MODEL_BENCHMARK",
+            },
+        }
+    )
+    assert authrunner_noncrediting_unknown_token_smoke_scope(release_request) is None
+    malformed_release = release_request.model_copy(
+        update={
+            "routing": {
+                **release_request.routing,
+                "privacy_source_proof_kind": ("RELEASE_PINNED_CROSS_LINEAGE_ADJUDICATION"),
+            }
+        }
+    )
+    assert authrunner_noncrediting_unknown_token_smoke_scope(malformed_release) is None
+    generic_request = provisional.model_copy(
+        update={
+            "request_id": "generic-request",
+            "routing": {
+                **provisional.routing,
+                "privacy_source_proof_kind": "SYNTHETIC_TEST",
+            },
+        }
+    )
+    assert authrunner_noncrediting_unknown_token_smoke_scope(generic_request) is None
+    assert (
+        noncrediting_unknown_token_smoke_usage_diagnostics(
+            provisional,
+            require_runtime_attestation=False,
+        )
+        == ()
+    )
+    diagnostic_mutations = (
+        ("STATUS", provisional.model_copy(update={"status": "failed"})),
+        ("REQUIRED_FIELDS", provisional.model_copy(update={"provider": ""})),
+        (
+            "TIMING",
+            provisional.model_copy(
+                update={"ended_at": provisional.started_at - timedelta(milliseconds=1)}
+            ),
+        ),
+        ("HASHES", provisional.model_copy(update={"prompt_sha256": "not-a-sha256"})),
+        (
+            "TOKEN_ALGEBRA",
+            provisional.model_copy(update={"total_tokens": provisional.total_tokens + 1}),
+        ),
+        (
+            "ENDPOINT",
+            provisional.model_copy(update={"actual_provider_endpoint": "outside-provider"}),
+        ),
+        (
+            "ROUTER_IDENTITY",
+            provisional.model_copy(
+                update={
+                    "routing": {
+                        **provisional.routing,
+                        "generation_id": "other-generation",
+                    }
+                }
+            ),
+        ),
+        (
+            "PRIVACY_ROUTING",
+            provisional.model_copy(
+                update={"routing": {**provisional.routing, "zdr_requested": False}}
+            ),
+        ),
+        (
+            "STRUCTURED_OUTPUT_ROUTING",
+            provisional.model_copy(
+                update={
+                    "routing": {
+                        **provisional.routing,
+                        "structured_output_capability_sha256": "0" * 64,
+                    }
+                }
+            ),
+        ),
+        (
+            "TOKEN_PLAN_ROUTING",
+            provisional.model_copy(
+                update={
+                    "routing": {
+                        key: value
+                        for key, value in provisional.routing.items()
+                        if key != "request_token_plan"
+                    }
+                }
+            ),
+        ),
+    )
+    for expected_diagnostic, invalid_record in diagnostic_mutations:
+        assert noncrediting_unknown_token_smoke_usage_diagnostics(
+            invalid_record,
+            require_runtime_attestation=False,
+        ) == (expected_diagnostic,)
+    raw_plan = provisional.routing["request_token_plan"]
+    assert type(raw_plan) is dict
+    malformed_plan_variants: tuple[object, ...] = (
+        None,
+        {**raw_plan, "schema_version": "2.0"},
+        {**raw_plan, "request_id": "not-the-smoke-request"},
+        {**raw_plan, "role": "not-model-benchmark"},
+        {**raw_plan, "token_detail_accounting_method": "not-independent"},
+        {key: value for key, value in raw_plan.items() if key != "requested_surface_count"},
+        {**raw_plan, "requested_surface_count": True},
+        {key: value for key, value in raw_plan.items() if key != "wire_max_tokens"},
+        {**raw_plan, "wire_max_tokens": True},
+    )
+    for malformed_plan in malformed_plan_variants:
+        malformed_routing = {
+            **provisional.routing,
+            "request_token_plan": malformed_plan,
+        }
+        malformed = provisional.model_copy(update={"routing": malformed_routing})
+        assert authrunner_noncrediting_unknown_token_smoke_scope(malformed) == "INVALID"
+    without_token_details = provisional.model_copy(
+        update={"token_detail_accounting_evidence": None}
+    )
+    assert authrunner_noncrediting_unknown_token_smoke_scope(without_token_details) == "INVALID"
+    if intrinsic_invalid:
+        routing = {
+            **provisional.routing,
+            "structured_output_capability_sha256": "0" * 64,
+        }
+        provisional = _attest_owned_real_usage_record(
+            UsageRecord.model_validate(
+                {
+                    **provisional.model_dump(mode="json"),
+                    "routing": routing,
+                }
+            )
+        )
+        assert authrunner_noncrediting_unknown_token_smoke_scope(provisional) == expected_scope
+        assert (
+            structurally_noncrediting_unknown_token_smoke_usage_error(provisional)
+            == "UsageEnvelopeError"
+        )
+        assert noncrediting_unknown_token_smoke_usage_diagnostics(
+            provisional,
+            require_runtime_attestation=True,
+        ) == ("STRUCTURED_OUTPUT_ROUTING",)
+    else:
+        assert structurally_noncrediting_unknown_token_smoke_usage_error(provisional) is None
     assert noncrediting_unknown_token_smoke_usage_error(provisional) == "UsageOriginError"
     assert not is_creditable_usage_record(
         provisional,
@@ -1111,8 +1303,53 @@ async def _assert_v3_smoke_receipt_cutoff(
             with pytest.raises(
                 OpenRouterPrivacyError,
                 match="awaits immutable completion receipts",
-            ):
+            ) as raised_initial_cutoff:
                 await client._bind_real_completion_identity(completion)
+            if intrinsic_invalid:
+                assert "usage_diagnostics=STRUCTURED_OUTPUT_ROUTING" in str(
+                    raised_initial_cutoff.value
+                )
+            usage._records[0] = unhashable_proof
+            try:
+                with pytest.raises(
+                    OpenRouterPrivacyError,
+                    match="awaits immutable completion receipts",
+                ):
+                    await client._bind_real_completion_identity(
+                        StructuredCompletion(
+                            value=mock_completion.value,
+                            usage_record=unhashable_proof,
+                        )
+                    )
+            finally:
+                usage._records[0] = provisional
+            if intrinsic_invalid:
+                identity_binding = client._bind_generation_identity(
+                    usage_record=provisional,
+                    generation_evidence=generic_evidence,
+                    evaluated_at=generic_evidence.retrieved_at,
+                    trusted_issuer=(openrouter_module._TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER),
+                )
+                assert identity_binding.strength is not OpenRouterIdentityStrength.UNBOUND
+                with monkeypatch.context() as classifier_context:
+                    classifier_context.setattr(
+                        openrouter_module,
+                        "authrunner_noncrediting_unknown_token_smoke_scope",
+                        lambda _record: None,
+                    )
+                    with pytest.raises(
+                        OpenRouterPrivacyError,
+                        match="awaits immutable completion receipts",
+                    ) as raised_cutoff:
+                        client._usage_with_identity_result(
+                            usage_record=provisional,
+                            identity_binding=identity_binding,
+                            trusted_issuer=(
+                                openrouter_module._TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER
+                            ),
+                            require_bound=True,
+                        )
+                    assert "usage_diagnostics=STRUCTURED_OUTPUT_ROUTING" in str(raised_cutoff.value)
             request = GenerationVerificationRequest(
                 benchmark_report_sha256="b" * 64,
                 case_id=case_id,
@@ -1123,15 +1360,63 @@ async def _assert_v3_smoke_receipt_cutoff(
                 expected_provider_name=discovery_endpoint.provider_name,
                 usage_record=provisional,
             )
+            if intrinsic_invalid:
+                with monkeypatch.context() as classifier_context:
+                    classifier_context.setattr(
+                        openrouter_module.usage_module,
+                        "authrunner_noncrediting_unknown_token_smoke_scope",
+                        lambda _record: None,
+                    )
+                    with pytest.raises(OpenRouterPrivacyError, match="callables are not pristine"):
+                        await client.create_trusted_generation_verification((request,))
             with pytest.raises(
                 OpenRouterPrivacyError,
                 match="awaits immutable metadata receipts",
-            ):
+            ) as raised_verification:
                 await client.create_trusted_generation_verification((request,))
+            if intrinsic_invalid:
+                assert "usage_diagnostics=STRUCTURED_OUTPUT_ROUTING" in str(
+                    raised_verification.value
+                )
+            if intrinsic_invalid:
+                mismatched_proof = (
+                    "PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION"
+                    if expected_scope == "CANDIDATE"
+                    else "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK"
+                )
+                mismatched_usage = _attest_owned_real_usage_record(
+                    UsageRecord.model_validate(
+                        {
+                            **provisional.model_dump(mode="json"),
+                            "routing": {
+                                **provisional.routing,
+                                "privacy_source_proof_kind": mismatched_proof,
+                            },
+                        }
+                    )
+                )
+                assert (
+                    authrunner_noncrediting_unknown_token_smoke_scope(mismatched_usage) == "INVALID"
+                )
+                mismatched_request = GenerationVerificationRequest(
+                    benchmark_report_sha256="b" * 64,
+                    case_id=case_id,
+                    exact_model_id=discovery.exact_model_id,
+                    canonical_model_id=discovery.canonical_slug,
+                    catalog_identity_binding_sha256=(discovery.catalog_identity_binding_sha256),
+                    discovery_evidence_sha256=discovery.discovery_evidence_sha256,
+                    expected_provider_name=discovery_endpoint.provider_name,
+                    usage_record=mismatched_usage,
+                )
+                with pytest.raises(
+                    OpenRouterPrivacyError,
+                    match="awaits immutable metadata receipts",
+                ):
+                    await client.create_trusted_generation_verification((mismatched_request,))
     finally:
         await client.close()
 
-    assert observed_paths == ["/generation?id=generation-test"]
+    assert observed_paths == []
     assert usage.records == original_usage_records
     assert len(usage.records) == 1 and usage.records[0] is provisional
     assert not _has_authrunner_owned_real_usage_origin(provisional)
@@ -4361,6 +4646,23 @@ async def test_owned_real_v3_smoke_identity_binding_remains_closed_without_recei
         case_id=bundle.case.case_id,
         monkeypatch=monkeypatch,
     )
+    intrinsic_invalid_dir = tmp_path / "candidate-intrinsic-invalid"
+    intrinsic_invalid_dir.mkdir()
+    await _assert_v3_smoke_receipt_cutoff(
+        config=config,
+        tmp_path=intrinsic_invalid_dir,
+        source_sha256=bundle.source_sha256,
+        source_provenance=source_provenance,
+        logical_request_id=f"authrunner.smoke.r8.candidate.primary:{bundle.bundle_sha256}",
+        system_prompt=model_benchmark_system_prompt(),
+        user_prompt=blinded_model_benchmark_request(bundle.case),
+        response_model=ModelBenchmarkResponse,
+        schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
+        response_json=response.model_dump_json(),
+        case_id=bundle.case.case_id,
+        monkeypatch=monkeypatch,
+        intrinsic_invalid=True,
+    )
 
 
 @pytest.mark.asyncio
@@ -4496,6 +4798,23 @@ async def test_mock_transport_binds_only_the_judge_smoke_namespace_without_real_
         response_json=response.model_dump_json(),
         case_id=bundle.case.case_id,
         monkeypatch=monkeypatch,
+    )
+    intrinsic_invalid_dir = tmp_path / "judge-intrinsic-invalid"
+    intrinsic_invalid_dir.mkdir()
+    await _assert_v3_smoke_receipt_cutoff(
+        config=config,
+        tmp_path=intrinsic_invalid_dir,
+        source_sha256=cross_lineage_adjudication_source_sha256(prepared),
+        source_provenance=source_provenance,
+        logical_request_id=judge_request_id,
+        system_prompt=cross_lineage_adjudication_system_prompt(),
+        user_prompt=request.provider_visible_user_prompt,
+        response_model=CrossLineageAdjudicationWireResponse,
+        schema_name=CROSS_LINEAGE_ADJUDICATION_SCHEMA_NAME,
+        response_json=response.model_dump_json(),
+        case_id=bundle.case.case_id,
+        monkeypatch=monkeypatch,
+        intrinsic_invalid=True,
     )
 
 

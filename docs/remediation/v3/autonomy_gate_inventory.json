@@ -12,7 +12,7 @@
   "discovery_scope": "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_OPAQUE_AUTHORITIES_EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES",
   "environment_override_count": 28,
   "gate_source_count": 3591,
-  "inventory_sha256": "d58c5e217c85afc9dbe2c12e416df66c5b4bf5a2281b1d67d9ce7b8ec3da54f8",
+  "inventory_sha256": "186f89a396ba42f4bf2e74e7c9fd0caf711d69a69b2f6f2ec88d341a760a61d1",
   "logical_gate_count": 35,
   "logical_gates": [
     {
@@ -9268,7 +9268,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/benchmark/models.py",
-      "source_semantics_sha256": "ce962c9a314b4cfcfd43061c61fc65c90dd081725c1aae7c2d37702996092193"
+      "source_semantics_sha256": "73e9d7d9deb0a27d200699bbd6a877014e0abb8be369125e7a06e5ba48cafbe1"
     },
     {
       "classification": "GATE",
@@ -9646,7 +9646,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/openrouter.py",
-      "source_semantics_sha256": "464d68fe6d4ae6340c39f9ed9bb2c30ece2bd53abf895fed34595b8c8118420d"
+      "source_semantics_sha256": "53b6c07de533b80e3dfdd6430320b561cfab2e2b19954f27d745ff850b874799"
     },
     {
       "classification": "GATE",
@@ -9889,7 +9889,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/usage.py",
-      "source_semantics_sha256": "79f65fd323b9a44525fa8df380060c6803c4a40cee364d1811baf2ecd62288ce"
+      "source_semantics_sha256": "9339c54468cadd7cdf096ea4ddefe2547148deaf25c8d883bd07734854c99e33"
     },
     {
       "classification": "GATE",
@@ -36729,7 +36729,7 @@
     "REQUIRED_MISSING_GATE": 14
   },
   "source_occurrence_count": 3637,
-  "source_universe_sha256": "b350ec56e41722e693129a06b3bae3305669c0caf33ea4481885ffb1b7c97bf5",
+  "source_universe_sha256": "4e2f19d4e2f7b477cd07ecdbfd5c5d656a857235b8a294b23a942edd9a1b97c3",
   "status": "PARTIAL_NONAUTHORIZING",
   "unsatisfied_gate_count": 29
 }

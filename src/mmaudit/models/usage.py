@@ -19,6 +19,7 @@ from pydantic import BaseModel, ValidationError
 
 from mmaudit.models.identity import OpenRouterIdentityBindingResult
 from mmaudit.models.output_modes import supported_output_modes
+from mmaudit.models.reasoning import INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD
 from mmaudit.models.schemas import (
     ContextRequestEvidence,
     ContextRequestRelationship,
@@ -66,7 +67,10 @@ def parse_authenticated_runner_smoke_run_index(value: object) -> int:
     return require_authenticated_runner_smoke_run_index(int(value))
 
 
-def _build_authrunner_usage_origin_scope_validator() -> Callable[[UsageRecord], str | None]:
+def _build_authrunner_usage_origin_scope_validator() -> tuple[
+    Callable[[UsageRecord], str | None],
+    Callable[[UsageRecord], bool],
+]:
     """Bind each closed AUTHRUNNER proof kind to its disjoint request namespace."""
 
     routes = {
@@ -94,9 +98,27 @@ def _build_authrunner_usage_origin_scope_validator() -> Callable[[UsageRecord], 
         ),
     }
     namespaces = tuple(pattern for _scope, pattern in routes.values())
+    smoke_proof_kinds = frozenset(
+        proof_kind
+        for proof_kind, (scope, _pattern) in routes.items()
+        if scope == "NONCREDITING_SMOKE"
+    )
+    smoke_namespaces = tuple(
+        pattern for scope, pattern in routes.values() if scope == "NONCREDITING_SMOKE"
+    )
+    usage_record_type = UsageRecord
+
+    def has_noncrediting_smoke_coordinate(record: UsageRecord) -> bool:
+        if type(record) is not usage_record_type:
+            return False
+        proof_kind = record.routing.get("privacy_source_proof_kind")
+        return bool(
+            any(pattern.fullmatch(record.request_id) for pattern in smoke_namespaces)
+            or (type(proof_kind) is str and proof_kind in smoke_proof_kinds)
+        )
 
     def validate(record: UsageRecord) -> str | None:
-        if type(record) is not UsageRecord:
+        if type(record) is not usage_record_type:
             return None
         proof_kind = record.routing.get("privacy_source_proof_kind")
         request_uses_closed_namespace = any(
@@ -127,11 +149,85 @@ def _build_authrunner_usage_origin_scope_validator() -> Callable[[UsageRecord], 
             )
         return scope
 
-    return validate
+    return validate, has_noncrediting_smoke_coordinate
 
 
-_authrunner_usage_origin_scope = _build_authrunner_usage_origin_scope_validator()
+(
+    _authrunner_usage_origin_scope,
+    _has_authrunner_noncrediting_smoke_coordinate,
+) = _build_authrunner_usage_origin_scope_validator()
 del _build_authrunner_usage_origin_scope_validator
+
+
+AuthrunnerNoncreditingUnknownTokenSmokeScope = Literal["CANDIDATE", "JUDGE", "INVALID"]
+
+
+def _build_authrunner_noncrediting_unknown_token_smoke_scope_classifier() -> Callable[
+    [UsageRecord],
+    AuthrunnerNoncreditingUnknownTokenSmokeScope | None,
+]:
+    origin_scope_validator = _authrunner_usage_origin_scope
+    has_smoke_coordinate = _has_authrunner_noncrediting_smoke_coordinate
+    accounting_method = INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD
+    usage_record_type = UsageRecord
+    real_evidence = ExecutionEvidenceKind.REAL
+    proof_scopes: tuple[
+        tuple[str, Literal["CANDIDATE", "JUDGE"]],
+        ...,
+    ] = (
+        ("PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK", "CANDIDATE"),
+        ("PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION", "JUDGE"),
+    )
+
+    def classify(
+        record: UsageRecord,
+    ) -> AuthrunnerNoncreditingUnknownTokenSmokeScope | None:
+        """Classify the exact v3 smoke surface without treating validity as scope.
+
+        This pure classifier deliberately checks only closed AUTHRUNNER coordinates and
+        request-surface markers. Strict usage validation remains a separate decision, so
+        malformed smoke evidence cannot escape a safety cutoff by failing validation.
+        """
+
+        if type(record) is not usage_record_type:
+            return None
+        proof_kind = record.routing.get("privacy_source_proof_kind")
+        try:
+            origin_scope = origin_scope_validator(record)
+        except ValueError:
+            return "INVALID" if has_smoke_coordinate(record) else None
+        if origin_scope != "NONCREDITING_SMOKE":
+            return None
+        if (
+            record.execution_evidence is not real_evidence
+            or record.role != "model_benchmark"
+            or type(proof_kind) is not str
+        ):
+            return "INVALID"
+        raw_plan = record.routing.get("request_token_plan")
+        if (
+            type(raw_plan) is not dict
+            or raw_plan.get("schema_version") != "3.0"
+            or raw_plan.get("request_id") != record.request_id
+            or raw_plan.get("role") != record.role
+            or raw_plan.get("token_detail_accounting_method") != accounting_method
+            or type(raw_plan.get("requested_surface_count")) is not int
+            or type(raw_plan.get("wire_max_tokens")) is not int
+            or record.token_detail_accounting_evidence is None
+        ):
+            return "INVALID"
+        return next(
+            (scope for expected_proof, scope in proof_scopes if proof_kind == expected_proof),
+            "INVALID",
+        )
+
+    return classify
+
+
+authrunner_noncrediting_unknown_token_smoke_scope = (
+    _build_authrunner_noncrediting_unknown_token_smoke_scope_classifier()
+)
+del _build_authrunner_noncrediting_unknown_token_smoke_scope_classifier
 
 
 def candidate_falsifier_role_prefix(candidate_id: str) -> str:
@@ -497,7 +593,56 @@ def structurally_noncrediting_unknown_token_smoke_usage_error(
     return None
 
 
-def _is_strict_usage_record(
+StrictUsageFailureCode = Literal[
+    "RECOVERY_SCOPE",
+    "EXECUTION",
+    "RUNTIME_ATTESTATION",
+    "STATUS",
+    "REQUIRED_FIELDS",
+    "TIMING",
+    "HASHES",
+    "TOKEN_ALGEBRA",
+    "COST",
+    "ENDPOINT",
+    "ROUTER_IDENTITY",
+    "PRIVACY_ROUTING",
+    "STRUCTURED_OUTPUT_ROUTING",
+    "TOKEN_PLAN_ROUTING",
+    "REPAIR_TEMPORAL_ROUTING",
+    "ALIAS",
+    "CERTIFICATION",
+    "BOUND_IDENTITY",
+    "CERTIFICATION_ROUTE",
+    "SMOKE_SCOPE",
+    "UNEXPECTED_GENERAL_CREDITABILITY",
+]
+
+STRICT_USAGE_FAILURE_CODES: tuple[StrictUsageFailureCode, ...] = (
+    "RECOVERY_SCOPE",
+    "EXECUTION",
+    "RUNTIME_ATTESTATION",
+    "STATUS",
+    "REQUIRED_FIELDS",
+    "TIMING",
+    "HASHES",
+    "TOKEN_ALGEBRA",
+    "COST",
+    "ENDPOINT",
+    "ROUTER_IDENTITY",
+    "PRIVACY_ROUTING",
+    "STRUCTURED_OUTPUT_ROUTING",
+    "TOKEN_PLAN_ROUTING",
+    "REPAIR_TEMPORAL_ROUTING",
+    "ALIAS",
+    "CERTIFICATION",
+    "BOUND_IDENTITY",
+    "CERTIFICATION_ROUTE",
+    "SMOKE_SCOPE",
+    "UNEXPECTED_GENERAL_CREDITABILITY",
+)
+
+
+def _strict_usage_record_failure_code(
     record: UsageRecord,
     *,
     require_real: bool,
@@ -507,42 +652,63 @@ def _is_strict_usage_record(
     allow_noncrediting_unknown_token_accounting: bool = False,
     recovery_request_limit_scope: str | None = None,
     recovery_request_limit_count_before: int | None = None,
-) -> bool:
+    validate_recovery_coordinates: Callable[..., None],
+    has_owned_real_attestation: Callable[[UsageRecord], bool],
+    has_valid_privacy_routing: Callable[[UsageRecord], bool],
+    has_valid_structured_output_routing: Callable[[UsageRecord], bool],
+    has_valid_token_plan_routing: Callable[..., bool],
+    is_sha256: Callable[[Any], bool],
+    has_valid_bound_identity: Callable[[UsageRecord], bool],
+    real_evidence: ExecutionEvidenceKind,
+    mock_evidence: ExecutionEvidenceKind,
+    valid_status: ModelRequestValidationStatus,
+    canonical_bound_strength: ModelIdentityStrength,
+    decimal_type: type[Decimal],
+    invalid_operation_type: type[InvalidOperation],
+    math_isfinite: Callable[[float], bool],
+    hashlib_sha256: Callable[..., Any],
+    json_dumps: Callable[..., str],
+    sha256_pattern: re.Pattern[str],
+) -> StrictUsageFailureCode | None:
+    """Return the first closed reason an exact usage record is not strict."""
+
     recovery_mode = recovery_request_limit_scope is not None
     if recovery_mode != (recovery_request_limit_count_before is not None):
-        return False
+        return "RECOVERY_SCOPE"
     if recovery_mode:
         assert recovery_request_limit_scope is not None
         assert recovery_request_limit_count_before is not None
         try:
-            _validate_recovery_request_limit_coordinates(
+            validate_recovery_coordinates(
                 record,
                 request_limit_scope=recovery_request_limit_scope,
                 request_limit_count_before=recovery_request_limit_count_before,
             )
         except ValueError:
-            return False
+            return "RECOVERY_SCOPE"
     if record.execution_evidence not in {
-        ExecutionEvidenceKind.REAL,
-        ExecutionEvidenceKind.MOCK,
+        real_evidence,
+        mock_evidence,
     }:
-        return False
-    if require_real and record.execution_evidence is not ExecutionEvidenceKind.REAL:
-        return False
+        return "EXECUTION"
+    if require_real and record.execution_evidence is not real_evidence:
+        return "EXECUTION"
     if (
-        record.execution_evidence is ExecutionEvidenceKind.REAL
+        record.execution_evidence is real_evidence
         and require_runtime_attestation
-        and not _has_owned_real_usage_attestation(record)
+        and not has_owned_real_attestation(record)
     ):
-        return False
+        return "RUNTIME_ATTESTATION"
+    if type(record.routing) is not dict:
+        return "REQUIRED_FIELDS"
     if (
         record.status != "success"
-        or record.validation_status is not ModelRequestValidationStatus.VALID
+        or record.validation_status is not valid_status
         or record.substitution_detected
         or record.provider_error_classification is not None
         or record.finish_reason != "stop"
     ):
-        return False
+        return "STATUS"
     required_strings = (
         record.request_id,
         record.role,
@@ -553,8 +719,8 @@ def _is_strict_usage_record(
         record.actual_provider_endpoint,
         record.openrouter_generation_id,
     )
-    if any(not isinstance(value, str) or not value.strip() for value in required_strings):
-        return False
+    if any(type(value) is not str or not value.strip() for value in required_strings):
+        return "REQUIRED_FIELDS"
     if (
         record.started_at is None
         or record.ended_at is None
@@ -564,9 +730,9 @@ def _is_strict_usage_record(
         or record.retry_count is None
         or record.retry_count != record.attempts - 1
     ):
-        return False
+        return "TIMING"
     if not all(
-        isinstance(value, str) and _SHA256.fullmatch(value) is not None
+        type(value) is str and sha256_pattern.fullmatch(value) is not None
         for value in (
             record.prompt_sha256,
             record.response_sha256,
@@ -575,95 +741,101 @@ def _is_strict_usage_record(
             record.schema_sha256,
         )
     ):
-        return False
+        return "HASHES"
     if (
         record.prompt_tokens <= 0
         or record.completion_tokens <= 0
         or record.total_tokens != record.prompt_tokens + record.completion_tokens
         or record.cached_tokens > record.prompt_tokens
     ):
-        return False
+        return "TOKEN_ALGEBRA"
     if (
         record.reported_cost_usd is None
-        or not math.isfinite(record.reported_cost_usd)
-        or not math.isfinite(record.accounted_cost_usd)
+        or not math_isfinite(record.reported_cost_usd)
+        or not math_isfinite(record.accounted_cost_usd)
         or record.accounted_cost_usd + 1e-12 < record.reported_cost_usd
     ):
-        return False
-    if record.execution_evidence is ExecutionEvidenceKind.REAL:
+        return "COST"
+    if record.execution_evidence is real_evidence:
         if record.reported_cost_usd_exact is None or record.accounted_cost_usd_exact is None:
-            return False
+            return "COST"
         try:
-            exact_reported = Decimal(record.reported_cost_usd_exact)
-            exact_accounted = Decimal(record.accounted_cost_usd_exact)
-        except InvalidOperation:
-            return False
+            exact_reported = decimal_type(record.reported_cost_usd_exact)
+            exact_accounted = decimal_type(record.accounted_cost_usd_exact)
+        except invalid_operation_type:
+            return "COST"
         if (
             exact_accounted < exact_reported
             or float(exact_reported) != record.reported_cost_usd
             or float(exact_accounted) != record.accounted_cost_usd
         ):
-            return False
+            return "COST"
     actual_endpoint = record.actual_provider_endpoint
-    if not isinstance(actual_endpoint, str):
-        return False
-    if record.configured_provider_endpoints and actual_endpoint.casefold() not in {
-        endpoint.casefold() for endpoint in record.configured_provider_endpoints
-    }:
-        return False
+    if type(actual_endpoint) is not str:
+        return "ENDPOINT"
+    if record.configured_provider_endpoints and (
+        any(type(endpoint) is not str for endpoint in record.configured_provider_endpoints)
+        or actual_endpoint.casefold()
+        not in {endpoint.casefold() for endpoint in record.configured_provider_endpoints}
+    ):
+        return "ENDPOINT"
     routing = record.routing
-    base_valid = (
+    if not (
         routing.get("generation_id") == record.openrouter_generation_id
         and routing.get("selected_model") == record.actual_model
         and routing.get("selected_provider_endpoint") == actual_endpoint
         and routing.get("router_strategy") in {"direct", "fallback"}
         and routing.get("finish_reason") == record.finish_reason
         and routing.get("schema_sha256") == record.schema_sha256
-        and _is_sha256(routing.get("router_metadata_sha256"))
-        and _is_sha256(routing.get("provider_policy_sha256"))
+        and is_sha256(routing.get("router_metadata_sha256"))
+        and is_sha256(routing.get("provider_policy_sha256"))
         and routing.get("validation_status") == "valid"
-        and _has_valid_privacy_routing(record)
-        and _has_valid_structured_output_routing(record)
-        and _has_valid_token_plan_routing(
-            record,
-            recovery_request_limit_scope=recovery_request_limit_scope,
-            recovery_request_limit_count_before=recovery_request_limit_count_before,
-            allow_noncrediting_unknown_token_accounting=(
-                allow_noncrediting_unknown_token_accounting
-            ),
-        )
-        and routing.get("repair_used") is False
+    ):
+        return "ROUTER_IDENTITY"
+    if not has_valid_privacy_routing(record):
+        return "PRIVACY_ROUTING"
+    if not has_valid_structured_output_routing(record):
+        return "STRUCTURED_OUTPUT_ROUTING"
+    if not has_valid_token_plan_routing(
+        record,
+        recovery_request_limit_scope=recovery_request_limit_scope,
+        recovery_request_limit_count_before=recovery_request_limit_count_before,
+        allow_noncrediting_unknown_token_accounting=(allow_noncrediting_unknown_token_accounting),
+    ):
+        return "TOKEN_PLAN_ROUTING"
+    if not (
+        routing.get("repair_used") is False
         and routing.get("repair_request") is False
         and routing.get("request_started_at") == record.started_at.isoformat()
         and routing.get("request_ended_at") == record.ended_at.isoformat()
         and routing.get("latency_ms") == record.latency_ms
-    )
-    if not base_valid:
-        return False
+    ):
+        return "REPAIR_TEMPORAL_ROUTING"
     aliases = routing.get("accepted_model_aliases")
     if record.returned_model != record.requested_model and (
         not isinstance(aliases, list)
         or aliases != sorted(set(aliases))
         or record.returned_model not in aliases
         or record.actual_model not in aliases
-        or routing.get("provisional_identity_strength")
-        != ModelIdentityStrength.CANONICAL_MODEL_AND_ENDPOINT_BOUND.value
+        or routing.get("provisional_identity_strength") != canonical_bound_strength.value
     ):
-        return False
+        return "ALIAS"
     certification_request = routing.get("certification_request") is True
     if require_certification and not certification_request:
-        return False
+        return "CERTIFICATION"
     if not certification_request:
-        return (
-            allow_unbound_real
-            or record.execution_evidence is not ExecutionEvidenceKind.REAL
-            or _has_valid_bound_identity(record)
-        )
+        if (
+            not allow_unbound_real
+            and record.execution_evidence is real_evidence
+            and not has_valid_bound_identity(record)
+        ):
+            return "BOUND_IDENTITY"
+        return None
     canonical_model = routing.get("canonical_model")
     actual_model = record.actual_model
     expected_identity_hash = (
-        hashlib.sha256(
-            json.dumps(
+        hashlib_sha256(
+            json_dumps(
                 {
                     "canonical_slug": canonical_model,
                     "id": record.requested_model,
@@ -675,9 +847,10 @@ def _is_strict_usage_record(
         if isinstance(canonical_model, str)
         else None
     )
-    return (
+    if not allow_unbound_real and not has_valid_bound_identity(record):
+        return "BOUND_IDENTITY"
+    if not (
         not record.fallback_used
-        and (allow_unbound_real or _has_valid_bound_identity(record))
         and actual_model in {record.requested_model, canonical_model}
         and routing.get("catalog_identity_binding_sha256") == expected_identity_hash
         and len(record.configured_provider_endpoints) == 1
@@ -686,13 +859,217 @@ def _is_strict_usage_record(
         and routing.get("router_attempt") == 1
         and routing.get("router_attempt_count") == 1
         and routing.get("router_pipeline") == []
-        and _is_sha256(routing.get("endpoint_snapshot_sha256"))
-        and _is_sha256(routing.get("endpoint_pricing_sha256"))
-        and _is_sha256(routing.get("catalog_identity_binding_sha256"))
-        and _is_sha256(routing.get("catalog_snapshot_sha256"))
-        and _is_sha256(routing.get("discovery_provenance_sha256"))
-        and _is_sha256(routing.get("discovery_evidence_sha256"))
+        and is_sha256(routing.get("endpoint_snapshot_sha256"))
+        and is_sha256(routing.get("endpoint_pricing_sha256"))
+        and is_sha256(routing.get("catalog_identity_binding_sha256"))
+        and is_sha256(routing.get("catalog_snapshot_sha256"))
+        and is_sha256(routing.get("discovery_provenance_sha256"))
+        and is_sha256(routing.get("discovery_evidence_sha256"))
+    ):
+        return "CERTIFICATION_ROUTE"
+    return None
+
+
+def _build_strict_usage_record_validators() -> tuple[
+    Callable[..., bool],
+    Callable[..., tuple[StrictUsageFailureCode, ...]],
+]:
+    """Close strict acceptance and diagnostics over one immutable evaluator."""
+
+    failure_code = _strict_usage_record_failure_code
+    failure_codes = STRICT_USAGE_FAILURE_CODES
+    module_globals = globals()
+    validate_recovery_coordinates = _validate_recovery_request_limit_coordinates
+    owned_attestation_predicate = _has_owned_real_usage_attestation
+    privacy_routing_predicate = _has_valid_privacy_routing
+    structured_output_routing_predicate = _has_valid_structured_output_routing
+    token_plan_routing_predicate = _has_valid_token_plan_routing
+    sha256_predicate = _is_sha256
+    bound_identity_predicate = _has_valid_bound_identity
+    nested_helpers = (
+        (
+            "_validate_recovery_request_limit_coordinates",
+            validate_recovery_coordinates,
+        ),
+        ("_has_owned_real_usage_attestation", owned_attestation_predicate),
+        ("_has_valid_privacy_routing", privacy_routing_predicate),
+        ("_has_valid_structured_output_routing", structured_output_routing_predicate),
+        ("_has_valid_token_plan_routing", token_plan_routing_predicate),
+        ("_is_sha256", sha256_predicate),
+        ("_has_valid_bound_identity", bound_identity_predicate),
     )
+    execution_evidence_type = ExecutionEvidenceKind
+    real_evidence = ExecutionEvidenceKind.REAL
+    mock_evidence = ExecutionEvidenceKind.MOCK
+    validation_status_type = ModelRequestValidationStatus
+    valid_status = ModelRequestValidationStatus.VALID
+    identity_strength_type = ModelIdentityStrength
+    canonical_bound_strength = ModelIdentityStrength.CANONICAL_MODEL_AND_ENDPOINT_BOUND
+    decimal_type = Decimal
+    invalid_operation_type = InvalidOperation
+    math_module = math
+    math_isfinite = math.isfinite
+    hashlib_module = hashlib
+    hashlib_sha256 = hashlib.sha256
+    json_module = json
+    json_dumps = json.dumps
+    sha256_pattern = _SHA256
+    usage_record_type = UsageRecord
+    origin_scope_validator = _authrunner_usage_origin_scope
+    authrunner_attestation_predicate = _has_authrunner_owned_real_usage_origin
+
+    def evaluator_boundary_is_pristine() -> bool:
+        return bool(
+            all(module_globals.get(name) is helper for name, helper in nested_helpers)
+            and module_globals.get("ExecutionEvidenceKind") is execution_evidence_type
+            and ExecutionEvidenceKind.REAL is real_evidence
+            and ExecutionEvidenceKind.MOCK is mock_evidence
+            and module_globals.get("ModelRequestValidationStatus") is validation_status_type
+            and ModelRequestValidationStatus.VALID is valid_status
+            and module_globals.get("ModelIdentityStrength") is identity_strength_type
+            and (
+                ModelIdentityStrength.CANONICAL_MODEL_AND_ENDPOINT_BOUND is canonical_bound_strength
+            )
+            and module_globals.get("Decimal") is decimal_type
+            and module_globals.get("InvalidOperation") is invalid_operation_type
+            and module_globals.get("math") is math_module
+            and math.isfinite is math_isfinite
+            and module_globals.get("hashlib") is hashlib_module
+            and hashlib.sha256 is hashlib_sha256
+            and module_globals.get("json") is json_module
+            and json.dumps is json_dumps
+            and module_globals.get("_SHA256") is sha256_pattern
+            and module_globals.get("UsageRecord") is usage_record_type
+            and module_globals.get("_authrunner_usage_origin_scope") is origin_scope_validator
+            and (
+                module_globals.get("_has_owned_real_usage_attestation")
+                is owned_attestation_predicate
+            )
+            and (
+                module_globals.get("_has_authrunner_owned_real_usage_origin")
+                is authrunner_attestation_predicate
+            )
+        )
+
+    def evaluate(
+        record: UsageRecord,
+        *,
+        require_real: bool,
+        require_certification: bool,
+        allow_unbound_real: bool,
+        require_runtime_attestation: bool = True,
+        allow_noncrediting_unknown_token_accounting: bool = False,
+        recovery_request_limit_scope: str | None = None,
+        recovery_request_limit_count_before: int | None = None,
+    ) -> StrictUsageFailureCode | None:
+        return failure_code(
+            record,
+            require_real=require_real,
+            require_certification=require_certification,
+            allow_unbound_real=allow_unbound_real,
+            require_runtime_attestation=require_runtime_attestation,
+            allow_noncrediting_unknown_token_accounting=(
+                allow_noncrediting_unknown_token_accounting
+            ),
+            recovery_request_limit_scope=recovery_request_limit_scope,
+            recovery_request_limit_count_before=recovery_request_limit_count_before,
+            validate_recovery_coordinates=validate_recovery_coordinates,
+            has_owned_real_attestation=owned_attestation_predicate,
+            has_valid_privacy_routing=privacy_routing_predicate,
+            has_valid_structured_output_routing=structured_output_routing_predicate,
+            has_valid_token_plan_routing=token_plan_routing_predicate,
+            is_sha256=sha256_predicate,
+            has_valid_bound_identity=bound_identity_predicate,
+            real_evidence=real_evidence,
+            mock_evidence=mock_evidence,
+            valid_status=valid_status,
+            canonical_bound_strength=canonical_bound_strength,
+            decimal_type=decimal_type,
+            invalid_operation_type=invalid_operation_type,
+            math_isfinite=math_isfinite,
+            hashlib_sha256=hashlib_sha256,
+            json_dumps=json_dumps,
+            sha256_pattern=sha256_pattern,
+        )
+
+    def is_strict_usage_record(
+        record: UsageRecord,
+        *,
+        require_real: bool,
+        require_certification: bool,
+        allow_unbound_real: bool,
+        require_runtime_attestation: bool = True,
+        allow_noncrediting_unknown_token_accounting: bool = False,
+        recovery_request_limit_scope: str | None = None,
+        recovery_request_limit_count_before: int | None = None,
+    ) -> bool:
+        """Return whether the one source-of-truth strict usage evaluator accepts."""
+
+        if not evaluator_boundary_is_pristine():
+            return False
+        failure = evaluate(
+            record,
+            require_real=require_real,
+            require_certification=require_certification,
+            allow_unbound_real=allow_unbound_real,
+            require_runtime_attestation=require_runtime_attestation,
+            allow_noncrediting_unknown_token_accounting=(
+                allow_noncrediting_unknown_token_accounting
+            ),
+            recovery_request_limit_scope=recovery_request_limit_scope,
+            recovery_request_limit_count_before=recovery_request_limit_count_before,
+        )
+        return failure is None and evaluator_boundary_is_pristine()
+
+    def smoke_usage_diagnostics(
+        record: UsageRecord,
+        *,
+        require_runtime_attestation: bool,
+    ) -> tuple[StrictUsageFailureCode, ...]:
+        """Return one bounded smoke usage failure code without exposing raw evidence."""
+
+        if (
+            not evaluator_boundary_is_pristine()
+            or type(record) is not usage_record_type
+            or type(require_runtime_attestation) is not bool
+        ):
+            return ("REQUIRED_FIELDS",)
+        try:
+            origin_scope = origin_scope_validator(record)
+        except ValueError:
+            return ("SMOKE_SCOPE",)
+        if record.execution_evidence is not real_evidence or origin_scope != "NONCREDITING_SMOKE":
+            return ("SMOKE_SCOPE",)
+        if require_runtime_attestation and (not owned_attestation_predicate(record)):
+            return ("RUNTIME_ATTESTATION",)
+        failure = evaluate(
+            record,
+            require_real=True,
+            require_certification=True,
+            allow_unbound_real=True,
+            require_runtime_attestation=require_runtime_attestation,
+            allow_noncrediting_unknown_token_accounting=True,
+        )
+        if not evaluator_boundary_is_pristine():
+            return ("REQUIRED_FIELDS",)
+        if failure is not None:
+            return (failure,) if failure in failure_codes else ("REQUIRED_FIELDS",)
+        unexpected_credit = (
+            evaluate(
+                record,
+                require_real=True,
+                require_certification=True,
+                allow_unbound_real=False,
+                require_runtime_attestation=require_runtime_attestation,
+                allow_noncrediting_unknown_token_accounting=False,
+            )
+            is None
+        )
+        if not evaluator_boundary_is_pristine():
+            return ("REQUIRED_FIELDS",)
+        return ("UNEXPECTED_GENERAL_CREDITABILITY",) if unexpected_credit else ()
+
+    return is_strict_usage_record, smoke_usage_diagnostics
 
 
 def _is_sha256(value: Any) -> bool:
@@ -2084,6 +2461,12 @@ def _has_valid_bound_identity(record: UsageRecord) -> bool:
     _has_authrunner_owned_real_usage_origin,
 ) = _build_authrunner_owned_real_usage_origin_authority()
 del _build_authrunner_owned_real_usage_origin_authority
+
+(
+    _is_strict_usage_record,
+    noncrediting_unknown_token_smoke_usage_diagnostics,
+) = _build_strict_usage_record_validators()
+del _build_strict_usage_record_validators
 
 
 def _has_valid_unbound_identity_conclusion(record: UsageRecord) -> bool:

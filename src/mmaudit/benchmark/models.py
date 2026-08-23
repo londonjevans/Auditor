@@ -47,9 +47,11 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.models.usage import (
     MAX_AUTHENTICATED_RUNNER_SMOKE_RUN_INDEX,
+    STRICT_USAGE_FAILURE_CODES,
     UsageLedger,
     _is_structurally_creditable_usage_record,
     is_creditable_usage_record,
+    noncrediting_unknown_token_smoke_usage_diagnostics,
     noncrediting_unknown_token_smoke_usage_error,
     require_authenticated_runner_smoke_run_index,
     structurally_noncrediting_unknown_token_smoke_usage_error,
@@ -79,6 +81,10 @@ SuccessfulUsageError = Literal[
     "UsagePromptBindingError",
     "UsageSchemaBindingError",
 ]
+_TRUSTED_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_DIAGNOSTICS = (
+    noncrediting_unknown_token_smoke_usage_diagnostics
+)
+_TRUSTED_STRICT_USAGE_FAILURE_CODES = STRICT_USAGE_FAILURE_CODES
 _GENERIC_TASK = (
     "Assess the supplied synthetic source excerpt, classify its security behavior, "
     "and justify the structured response using only the excerpt."
@@ -1650,10 +1656,31 @@ async def execute_noncrediting_model_benchmark_smoke(
     identity_diagnostics = (
         _successful_usage_identity_diagnostics(usage_record) if usage_error is not None else ()
     )
+    usage_diagnostics = (
+        _TRUSTED_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_DIAGNOSTICS(
+            usage_record, require_runtime_attestation=True
+        )
+        if usage_error == "UsageValidationError"
+        and usage_record.token_detail_accounting_evidence is not None
+        else ()
+    )
+    if (
+        noncrediting_unknown_token_smoke_usage_diagnostics
+        is not _TRUSTED_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_DIAGNOSTICS
+        or STRICT_USAGE_FAILURE_CODES is not _TRUSTED_STRICT_USAGE_FAILURE_CODES
+        or type(usage_diagnostics) is not tuple
+        or len(usage_diagnostics) > 1
+        or any(
+            type(code) is not str or code not in _TRUSTED_STRICT_USAGE_FAILURE_CODES
+            for code in usage_diagnostics
+        )
+    ):
+        raise ValueError("model benchmark smoke usage diagnostic boundary changed")
     case_id_mismatch = completion.value.case_id != case.case_id
     if usage_error is not None or case_id_mismatch:
         failure_reasons = (
             *((f"usage_error={usage_error}",) if usage_error is not None else ()),
+            *(("usage_diagnostics=" + "|".join(usage_diagnostics),) if usage_diagnostics else ()),
             *(
                 ("identity_diagnostics=" + "|".join(item.value for item in identity_diagnostics),)
                 if identity_diagnostics

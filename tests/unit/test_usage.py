@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+import mmaudit.models.usage as usage_module
 from mmaudit.models.identity import OpenRouterIdentityBindingResult
 from mmaudit.models.output_modes import StructuredOutputMode, supported_output_modes
 from mmaudit.models.reasoning import (
@@ -32,6 +33,7 @@ from mmaudit.models.token_planning import (
     build_request_token_plan,
 )
 from mmaudit.models.usage import (
+    STRICT_USAGE_FAILURE_CODES,
     _authrunner_usage_origin_scope,
     _has_authrunner_owned_real_usage_origin,
     _issue_trusted_usage_recovery_scope,
@@ -70,6 +72,45 @@ _CATALOG_IDENTITY_BINDING_SHA256 = hashlib.sha256(
         separators=(",", ":"),
     ).encode()
 ).hexdigest()
+
+
+def test_strict_usage_failure_vocabulary_is_closed_and_evaluator_retarget_cannot_credit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert STRICT_USAGE_FAILURE_CODES == (
+        "RECOVERY_SCOPE",
+        "EXECUTION",
+        "RUNTIME_ATTESTATION",
+        "STATUS",
+        "REQUIRED_FIELDS",
+        "TIMING",
+        "HASHES",
+        "TOKEN_ALGEBRA",
+        "COST",
+        "ENDPOINT",
+        "ROUTER_IDENTITY",
+        "PRIVACY_ROUTING",
+        "STRUCTURED_OUTPUT_ROUTING",
+        "TOKEN_PLAN_ROUTING",
+        "REPAIR_TEMPORAL_ROUTING",
+        "ALIAS",
+        "CERTIFICATION",
+        "BOUND_IDENTITY",
+        "CERTIFICATION_ROUTE",
+        "SMOKE_SCOPE",
+        "UNEXPECTED_GENERAL_CREDITABILITY",
+    )
+    invalid = _creditable_record().model_copy(update={"status": "failed"})
+    assert not is_creditable_usage_record(invalid)
+
+    monkeypatch.setattr(
+        usage_module,
+        "_strict_usage_record_failure_code",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+
+    assert not is_creditable_usage_record(invalid)
 
 
 def _creditable_record(
@@ -182,6 +223,136 @@ def _creditable_record(
             }
         }
     )
+
+
+def test_strict_usage_nested_helper_retargets_remain_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = _creditable_record()
+    assert is_creditable_usage_record(record)
+    captured_helper_names = (
+        "_validate_recovery_request_limit_coordinates",
+        "_has_owned_real_usage_attestation",
+        "_has_valid_privacy_routing",
+        "_has_valid_structured_output_routing",
+        "_has_valid_token_plan_routing",
+        "_is_sha256",
+        "_has_valid_bound_identity",
+    )
+    for helper_name in captured_helper_names:
+        with monkeypatch.context() as helper_context:
+            helper_context.setattr(usage_module, helper_name, lambda *_args, **_kwargs: True)
+            assert not is_creditable_usage_record(record)
+
+    trusted_structured_output_validator = usage_module._has_valid_structured_output_routing
+
+    class RetargetingEndpoint(str):
+        def casefold(self) -> str:
+            monkeypatch.setattr(
+                usage_module,
+                "_has_valid_structured_output_routing",
+                lambda _record: True,
+            )
+            return super().casefold()
+
+    invalid_structured_routing = {
+        key: value for key, value in record.routing.items() if key != "structured_output"
+    }
+    callback_endpoint = record.model_copy(
+        update={
+            "actual_provider_endpoint": RetargetingEndpoint(record.actual_provider_endpoint or ""),
+            "routing": invalid_structured_routing,
+        }
+    )
+    assert not is_creditable_usage_record(callback_endpoint)
+    assert usage_module._has_valid_structured_output_routing is trusted_structured_output_validator
+
+    class RetargetingRequiredString(str):
+        def strip(self, chars: str | None = None) -> str:
+            monkeypatch.setattr(
+                usage_module,
+                "_has_valid_structured_output_routing",
+                lambda _record: True,
+            )
+            return super().strip(chars)
+
+    callback_provider = record.model_copy(
+        update={
+            "provider": RetargetingRequiredString(record.provider),
+            "routing": invalid_structured_routing,
+        }
+    )
+    assert not is_creditable_usage_record(callback_provider)
+    assert usage_module._has_valid_structured_output_routing is trusted_structured_output_validator
+
+    class RetargetingRouting(dict[str, Any]):
+        def get(self, key: str, default: Any = None) -> Any:
+            monkeypatch.setattr(
+                usage_module,
+                "_has_valid_structured_output_routing",
+                lambda _record: True,
+            )
+            return super().get(key, default)
+
+    callback_routing = record.model_copy(
+        update={"routing": RetargetingRouting(invalid_structured_routing)}
+    )
+    assert not is_creditable_usage_record(callback_routing)
+    assert usage_module._has_valid_structured_output_routing is trusted_structured_output_validator
+
+    mutations = (
+        (
+            "_has_valid_structured_output_routing",
+            record.model_copy(
+                update={
+                    "routing": {
+                        key: value
+                        for key, value in record.routing.items()
+                        if key != "structured_output"
+                    }
+                }
+            ),
+        ),
+        (
+            "_has_valid_privacy_routing",
+            record.model_copy(
+                update={
+                    "routing": {
+                        **record.routing,
+                        "effective_privacy_policy_sha256": None,
+                    }
+                }
+            ),
+        ),
+        (
+            "_has_valid_token_plan_routing",
+            record.model_copy(
+                update={
+                    "routing": {
+                        key: value
+                        for key, value in record.routing.items()
+                        if key != "request_token_plan"
+                    }
+                }
+            ),
+        ),
+        (
+            "_is_sha256",
+            record.model_copy(
+                update={
+                    "routing": {
+                        **record.routing,
+                        "router_metadata_sha256": "not-a-sha256",
+                    }
+                }
+            ),
+        ),
+    )
+    for helper_name, invalid in mutations:
+        assert not is_creditable_usage_record(invalid)
+        with monkeypatch.context() as helper_context:
+            helper_context.setattr(usage_module, helper_name, lambda *_args, **_kwargs: True)
+            assert not is_creditable_usage_record(invalid)
 
 
 def _token_plan_for_record(

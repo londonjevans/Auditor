@@ -420,11 +420,20 @@ def test_smoke_execute_uses_one_cost_bound_request_and_refetches_generation(
 
 
 @pytest.mark.parametrize(
-    ("usage_error", "identity_diagnostics", "case_id_mismatch", "expected_reasons"),
+    (
+        "usage_error",
+        "identity_diagnostics",
+        "case_id_mismatch",
+        "structured_output_diagnostic",
+        "diagnostic_boundary_retarget",
+        "expected_reasons",
+    ),
     (
         (
             "UsageValidationError",
             (),
+            False,
+            False,
             False,
             "usage_error=UsageValidationError",
         ),
@@ -432,12 +441,16 @@ def test_smoke_execute_uses_one_cost_bound_request_and_refetches_generation(
             None,
             (),
             True,
+            False,
+            False,
             "case_id_mismatch=true",
         ),
         (
             "UsageResponseBindingError",
             (),
             True,
+            False,
+            False,
             "usage_error=UsageResponseBindingError, case_id_mismatch=true",
         ),
         (
@@ -447,8 +460,26 @@ def test_smoke_execute_uses_one_cost_bound_request_and_refetches_generation(
                 OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_MISSING,
             ),
             False,
+            False,
+            False,
             "usage_error=UsageValidationError, "
             "identity_diagnostics=GENERATION_METADATA_INVALID|GENERATION_METADATA_MISSING",
+        ),
+        (
+            "UsageValidationError",
+            (),
+            False,
+            True,
+            False,
+            "usage_error=UsageValidationError, usage_diagnostics=STRUCTURED_OUTPUT_ROUTING",
+        ),
+        (
+            "UsageValidationError",
+            (),
+            False,
+            False,
+            True,
+            "model benchmark smoke usage diagnostic boundary changed",
         ),
     ),
 )
@@ -457,6 +488,8 @@ def test_smoke_execute_preserves_bounded_usage_and_case_failure_reasons(
     usage_error: str | None,
     identity_diagnostics: tuple[OpenRouterIdentityDiagnosticCode, ...],
     case_id_mismatch: bool,
+    structured_output_diagnostic: bool,
+    diagnostic_boundary_retarget: bool,
     expected_reasons: str,
 ) -> None:
     suite = load_model_benchmark_corpus(CORPUS_PATH)
@@ -466,6 +499,30 @@ def test_smoke_execute_preserves_bounded_usage_and_case_failure_reasons(
     assert source.result.normalized_response is not None
     assert source.result.usage_record is not None
     usage = _attest_owned_real_usage_record(source.result.usage_record)
+    if structured_output_diagnostic:
+        from tests.unit.test_openrouter import _as_v3_unknown_token_smoke_usage
+
+        usage = UsageRecord.model_validate(
+            {
+                **usage.model_dump(mode="json"),
+                "routing": {
+                    **usage.routing,
+                    "privacy_source_proof_kind": ("PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK"),
+                },
+            }
+        )
+        usage = _as_v3_unknown_token_smoke_usage(usage)
+        usage = _attest_owned_real_usage_record(
+            UsageRecord.model_validate(
+                {
+                    **usage.model_dump(mode="json"),
+                    "routing": {
+                        **usage.routing,
+                        "structured_output_capability_sha256": "0" * 64,
+                    },
+                }
+            )
+        )
     response = source.result.normalized_response
     if case_id_mismatch:
         response = response.model_copy(update={"case_id": suite.cases[1].case_id})
@@ -503,6 +560,12 @@ def test_smoke_execute_preserves_bounded_usage_and_case_failure_reasons(
         "_successful_usage_identity_diagnostics",
         lambda *_args, **_kwargs: identity_diagnostics,
     )
+    if diagnostic_boundary_retarget:
+        monkeypatch.setattr(
+            benchmark_models,
+            "noncrediting_unknown_token_smoke_usage_diagnostics",
+            lambda *_args, **_kwargs: (),
+        )
     client = object.__new__(OpenRouterClient)
     object.__setattr__(client, "usage", UsageLedger())
 
@@ -522,8 +585,12 @@ def test_smoke_execute_preserves_bounded_usage_and_case_failure_reasons(
         )
 
     assert str(exc_info.value) == (
-        "model benchmark smoke completion is not exact successful REAL evidence "
-        f"({expected_reasons})"
+        expected_reasons
+        if diagnostic_boundary_retarget
+        else (
+            "model benchmark smoke completion is not exact successful REAL evidence "
+            f"({expected_reasons})"
+        )
     )
     assert client.usage.records == [usage]
 

@@ -198,6 +198,7 @@ from mmaudit.models.truncation import (
     seal_candidate_review_truncated_envelope_evidence,
 )
 from mmaudit.models.usage import (
+    STRICT_USAGE_FAILURE_CODES,
     UsageLedger,
     _attest_authrunner_owned_real_usage_origin,
     _attest_owned_real_usage_record,
@@ -206,6 +207,8 @@ from mmaudit.models.usage import (
     _has_owned_real_usage_attestation,
     _register_authrunner_owned_real_usage_origin_issuer,
     _validated_usage_copy_preserving_owned_attestation,
+    authrunner_noncrediting_unknown_token_smoke_scope,
+    noncrediting_unknown_token_smoke_usage_diagnostics,
     structurally_noncrediting_unknown_token_smoke_usage_error,
 )
 from mmaudit.orchestration.budgets import (
@@ -7688,12 +7691,36 @@ class OpenRouterClient:
             raise OpenRouterPrivacyError(
                 "trusted generation verification requires an owned REAL provider client"
             )
-        if any(
-            structurally_noncrediting_unknown_token_smoke_usage_error(request.usage_record) is None
+        scoped_smoke_usage = tuple(
+            request.usage_record
             for request in normalized
-        ):
+            if _TRUSTED_AUTHRUNNER_NONCREDITING_UNKNOWN_TOKEN_SMOKE_SCOPE(request.usage_record)
+            is not None
+        )
+        if scoped_smoke_usage:
+            scoped_usage_diagnostics = tuple(
+                _TRUSTED_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_DIAGNOSTICS(
+                    usage_record,
+                    require_runtime_attestation=False,
+                )
+                for usage_record in scoped_smoke_usage
+            )
+            if any(
+                type(diagnostics) is not tuple
+                or len(diagnostics) > 1
+                or any(
+                    type(code) is not str or code not in _TRUSTED_STRICT_USAGE_FAILURE_CODES
+                    for code in diagnostics
+                )
+                for diagnostics in scoped_usage_diagnostics
+            ):
+                raise OpenRouterPrivacyError("NONCREDITING_SMOKE usage diagnostic boundary changed")
+            usage_diagnostics = tuple(
+                sorted({code for diagnostics in scoped_usage_diagnostics for code in diagnostics})
+            )
             raise OpenRouterPrivacyError(
-                "NONCREDITING_SMOKE generation verification awaits immutable metadata receipts"
+                "NONCREDITING_SMOKE generation verification awaits immutable metadata receipts "
+                f"(usage_diagnostics={'|'.join(usage_diagnostics) or 'NONE'})"
             )
         verification_started_at = datetime.now(UTC)
         attestations = await OpenRouterClient._fetch_generation_attestations_with_deadline(
@@ -8136,16 +8163,31 @@ class OpenRouterClient:
             raise OpenRouterPrivacyError(
                 "AUTHRUNNER privacy proof kind does not match its request namespace"
             ) from None
-        if concluded_usage.execution_evidence is ExecutionEvidenceKind.REAL:
-            concluded_usage = _attest_owned_real_usage_record(concluded_usage)
+        smoke_scope = _TRUSTED_AUTHRUNNER_NONCREDITING_UNKNOWN_TOKEN_SMOKE_SCOPE(concluded_usage)
         if (
             require_bound
             and concluded_usage.execution_evidence is ExecutionEvidenceKind.REAL
-            and structurally_noncrediting_unknown_token_smoke_usage_error(concluded_usage) is None
+            and smoke_scope is not None
         ):
-            raise OpenRouterPrivacyError(
-                "NONCREDITING_SMOKE identity binding awaits immutable completion receipts"
+            usage_diagnostics = _TRUSTED_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_DIAGNOSTICS(
+                concluded_usage,
+                require_runtime_attestation=False,
             )
+            if (
+                type(usage_diagnostics) is not tuple
+                or len(usage_diagnostics) > 1
+                or any(
+                    type(code) is not str or code not in _TRUSTED_STRICT_USAGE_FAILURE_CODES
+                    for code in usage_diagnostics
+                )
+            ):
+                raise OpenRouterPrivacyError("NONCREDITING_SMOKE usage diagnostic boundary changed")
+            raise OpenRouterPrivacyError(
+                "NONCREDITING_SMOKE identity binding awaits immutable completion receipts "
+                f"(usage_diagnostics={'|'.join(usage_diagnostics) or 'NONE'})"
+            )
+        if concluded_usage.execution_evidence is ExecutionEvidenceKind.REAL:
+            concluded_usage = _attest_owned_real_usage_record(concluded_usage)
         try:
             if require_bound:
                 self.usage.replace_with_bound_identity(concluded_usage)
@@ -11973,6 +12015,27 @@ class OpenRouterClient:
             raise OpenRouterPrivacyError(
                 "REAL identity binding lacks one exact provisional usage record"
             )
+        smoke_scope = _TRUSTED_AUTHRUNNER_NONCREDITING_UNKNOWN_TOKEN_SMOKE_SCOPE(
+            completion.usage_record
+        )
+        if smoke_scope is not None:
+            usage_diagnostics = _TRUSTED_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_DIAGNOSTICS(
+                completion.usage_record,
+                require_runtime_attestation=False,
+            )
+            if (
+                type(usage_diagnostics) is not tuple
+                or len(usage_diagnostics) > 1
+                or any(
+                    type(code) is not str or code not in _TRUSTED_STRICT_USAGE_FAILURE_CODES
+                    for code in usage_diagnostics
+                )
+            ):
+                raise OpenRouterPrivacyError("NONCREDITING_SMOKE usage diagnostic boundary changed")
+            raise OpenRouterPrivacyError(
+                "NONCREDITING_SMOKE identity binding awaits immutable completion receipts "
+                f"(usage_diagnostics={'|'.join(usage_diagnostics) or 'NONE'})"
+            )
 
         def require_usage_custody() -> None:
             if (
@@ -15699,6 +15762,13 @@ _TRUSTED_RECONCILE_NONCREDITING_SMOKE_GENERATION_EVIDENCE_STRUCTURAL = (
 _TRUSTED_STRUCTURALLY_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_ERROR = (
     structurally_noncrediting_unknown_token_smoke_usage_error
 )
+_TRUSTED_AUTHRUNNER_NONCREDITING_UNKNOWN_TOKEN_SMOKE_SCOPE = (
+    authrunner_noncrediting_unknown_token_smoke_scope
+)
+_TRUSTED_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_DIAGNOSTICS = (
+    noncrediting_unknown_token_smoke_usage_diagnostics
+)
+_TRUSTED_STRICT_USAGE_FAILURE_CODES = STRICT_USAGE_FAILURE_CODES
 _TRUSTED_GENERATION_RECONCILIATION_POLICY_TYPE = (
     generation_evidence_module._GenerationReconciliationPolicy
 )
@@ -15981,6 +16051,15 @@ def _openrouter_client_callables_are_pristine() -> bool:
             is _TRUSTED_STRUCTURALLY_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_ERROR
         )
         and (
+            authrunner_noncrediting_unknown_token_smoke_scope
+            is _TRUSTED_AUTHRUNNER_NONCREDITING_UNKNOWN_TOKEN_SMOKE_SCOPE
+        )
+        and (
+            noncrediting_unknown_token_smoke_usage_diagnostics
+            is _TRUSTED_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_DIAGNOSTICS
+        )
+        and STRICT_USAGE_FAILURE_CODES is _TRUSTED_STRICT_USAGE_FAILURE_CODES
+        and (
             generation_evidence_module._GenerationReconciliationPolicy
             is _TRUSTED_GENERATION_RECONCILIATION_POLICY_TYPE
         )
@@ -15993,6 +16072,15 @@ def _openrouter_client_callables_are_pristine() -> bool:
         and UsageLedger is _TRUSTED_USAGE_LEDGER_TYPE
         and usage_module is _TRUSTED_USAGE_MODULE
         and usage_module.UsageLedger is _TRUSTED_USAGE_LEDGER_TYPE
+        and (
+            usage_module.authrunner_noncrediting_unknown_token_smoke_scope
+            is _TRUSTED_AUTHRUNNER_NONCREDITING_UNKNOWN_TOKEN_SMOKE_SCOPE
+        )
+        and (
+            usage_module.noncrediting_unknown_token_smoke_usage_diagnostics
+            is _TRUSTED_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_DIAGNOSTICS
+        )
+        and usage_module.STRICT_USAGE_FAILURE_CODES is _TRUSTED_STRICT_USAGE_FAILURE_CODES
         and (
             UsageLedger.replace_with_bound_identity
             is _TRUSTED_USAGE_LEDGER_REPLACE_WITH_BOUND_IDENTITY
