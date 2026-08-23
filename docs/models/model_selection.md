@@ -588,11 +588,12 @@ and output were unchanged, with no completion, new spend, or bundle. Historical 
 overnight candidate endpoint-inventory drift. The operator re-froze only the candidate at `$0` as
 `candidate-registry-r9.json`, run `authrunner-candidate-20260822-r9`, frozen SHA-256
 `cc65071ef3723fc075b958aec4ad0180cdc99dc853d19b3a7983015f7e1c34ad`; PRIMARY and REPLAY r8
-remained current. The resulting r9/r8/r8 metadata-only gate was exactly `VALID` through 15 logical
+remained unchanged for that historical sequence. The resulting r9/r8/r8 metadata-only gate was
+exactly `VALID` through 15 logical
 GETs. The paid launch then stopped before provider completion or new spend because the permanent
 ledger already contained deterministic request ID
 `authrunner.smoke.r1.candidate.primary:721f058726cf9509c07cb2aae662fb6ac23b5c30a363db40229faf8895034497`.
-The ledger remains exactly one reconciled `$0.01680888` entry and no bundle was published.
+The ledger then contained exactly one reconciled `$0.01680888` entry and no bundle was published.
 
 The cause was lifecycle identity, not route admission: every smoke request hardcoded namespace
 `r1`, so the fixed one-case corpus could never be rerun against its cumulative ledger. Source
@@ -601,77 +602,100 @@ index through candidate and judge cost plans, reports, run evidence, the final b
 replay, and retains disjoint full-release namespaces. Provider-free preflight rejects an index
 already present anywhere in the cumulative smoke ledger before secret selection or metadata/model
 transport. Its 385-test implementer matrix and independent 363-test review passed alongside Ruff,
-format, strict mypy, schema write/verify, and diff gates. The current operator record is 74,562
-bytes / 1,330 lines / SHA-256
-`302679f3e8e9281cdf9e0ec3d6d1d566d172cb54b389fbac607180d1f0911940`.
+format, strict mypy, schema write/verify, and diff gates. That r9/index-2 command pair is historical
+and has been removed from the current guide after execution.
 
-### Current r9/r8/r8 smoke-run-index-2 adjacent sequence
+### Current r1–r9 accounting and initial identity-binding blocker
 
-These are the only current AUTHRUNNER commands. They are two separate commands and must not be
-chained or pasted into one shell invocation. The operator explicitly requested this corrected
-command emission against r9; that does not authorize Codex to execute either command or authorize
-paid step B. Step B remains separately unauthorized until this checkpoint's step A immediately
-produces the complete exact result below and the operator explicitly authorizes B after inspecting
-it. A failed, ambiguous, delayed, or changed step A requires a fresh A.
+The current operator record is 95,945 bytes / 1,728 lines / SHA-256
+`efab7ac219c7a4bea4c2cd513f0d3455fff021483d28af1d958b6dd0eb59413d`. Every smoke index 1–9 is
+permanently occupied.
+The first four entries are individually enumerated:
 
-Before step A, inspect and confirm all of the following without changing them:
+| index | actual USD | accounted USD | terminal status |
+| --- | ---: | ---: | --- |
+| 1 | `0.01680888` | `0.01680888` | `reconciled` |
+| 2 | `null` | `0.05225616` | `uncertain_accounted` |
+| 3 | `0.00554796` | `0.00554796` | `reconciled` |
+| 4 | `0.00537768` | `0.00537768` | `reconciled` |
 
-- the candidate r9 and PRIMARY/REPLAY r8 registry/discovery pairs are the exact paths below and their
-  frozen SHA-256 values remain `cc65071ef3723fc075b958aec4ad0180cdc99dc853d19b3a7983015f7e1c34ad`,
-  `8f3fc274390d983bde683e3039a91f7cb6ead0f4dfa9aa89caa02ecca7e9ed26`, and
-  `75451839c72020a5e34c2f21a433e420f79c6db3e7238adb808e1c382af348f8`;
-- the effective configuration remains
-  `42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54` and the committed
-  selection plan remains
-  `ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f`;
-- the dedicated ledger has exactly its one historical reconciled entry, `used=0.01680888`,
-  `reserved=0`, and `remaining=249.98319112`, with no active reservation and no request in the
-  `authrunner.smoke.r2.*` namespace;
-- `$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260822-s3.json` is absent
-  and its operator-owned parent directory already exists with mode `0700`; and
-- the smoke corpus, parent corpus, public-lineage manifest, config, secret-file location, and shell
-  environment match this command checkpoint. Execute from a clean worktree at this exact command
-  checkpoint with `PYTHONPATH="$PWD/src"`; do not run against or copy in the paused Phase-2 working
-  changes. Freeze those executable bytes across A and B. Never print or copy secret-file contents.
+Runs 5–9 are all `reconciled`, but the operator record does not provide an authoritative per-index
+cost mapping for them; directly queried generation totals are not a complete ledger table and are not
+assigned to indices here. Total accounted exposure is `$0.10457436`, reserved is `$0`, and the
+remaining cap is `$249.89542564`. No entry may be released,
+superseded, reused, or hand-edited. Run 2 remains
+conservatively accounted because no exact authenticated actual cost is available through a sanctioned
+reconciliation path. Run 3 passed token validation and then failed at the successful-REAL benchmark
+boundary; the historical caller discarded its typed cause. Run 4 retained raw provider counters
+`prompt_tokens=234`, `completion_tokens=1280`, `reasoning_tokens=1307`, `cached_tokens=0`. This
+disproves a universal response-level reasoning-within-completion assumption for that sample. It does
+not prove that the route always reports additively or that completion and reasoning are same-domain
+components, so neither `completion+reasoning` nor `max(completion, reasoning)` is treated as observed
+usage.
 
-Step A is metadata egress only. Its bounded inventory is 15 logical GETs with at most 30 attempts;
-an authentication, network, malformed-response, registration, or policy failure can stop earlier.
-It does not reserve ledger cost, dispatch a model completion, create a usage record, or publish
-output. It also runs the shared static corpus, lineage, configuration, token/cost-budget, ledger, and
-candidate-plan admission before metadata transport. A separate normal preflight would add no gate
-and would age the live metadata.
+Source checkpoint `531a9d822e9989bf2eda94530e88cf55f2dd2e0d` keeps raw provider prompt,
+completion, total, reasoning, and cached counters raw. Request-plan v3 separates the wire-visible
+output maximum from the conservative visible-plus-reasoning reservation. A typed self-hashed
+`MMAUDIT_INDEPENDENT_REASONING_COMPONENT_ENVELOPE_V1` accounts the complete planned prompt, visible
+output, and reasoning reserves without claiming inclusive or additive provider semantics; exact USD
+comes only from `usage.cost`. This exceptional envelope is admitted only for exact owned REAL
+`NONCREDITING_SMOKE` records reconciled to authenticated generation identity, provider, time, cost,
+and raw counters. General usage creditability, durable release evidence, qualification, and the
+24-case campaign still reject unknown convention. Closed smoke diagnostics now retain the typed
+usage-cause code and separate case-ID mismatch without exposing unbounded response data. Runs 5–9
+confirm both the independent plan-envelope check and typed `UsageValidationError` surface work
+nonauthorizingly.
 
-```shell
-env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE PYTHONPATH="$PWD/src" MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" /Users/generalcuster/Documents/dev/Auditor/.venv/bin/mmaudit models authenticated-runner-smoke --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r9.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260822-r9" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r8.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r8" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r8.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260822-r8" --smoke-corpus benchmarks/model_corpus_smoke --smoke-run-index 2 --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260822-s3.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --secrets-env-file "$HOME/.mmaudit/secrets.env" --allow-metadata-egress --live-route-preflight-only --no-color
-```
+The current fail-closed boundary is later: provisional identity is
+`CANONICAL_MODEL_AND_ENDPOINT_BOUND`, but final identity is downgraded to `UNBOUND` with
+`identity_binding_status=generation_metadata_unbound`. Exact and canonical DeepSeek aliases are
+accepted, provider is Parasail, both fallback flags are false, certification is requested, and the
+endpoint policy is ZDR. Operator-side direct generation and timing/validation probes are
+nonauthorizing observations and cannot independently establish the internal client cause.
+Provider-free
+successor `77fb4b9a0c03969a9776edf2091dc09d3b67daec` now surfaces the already-sealed closed
+`OpenRouterIdentityDiagnosticCode` set at this branch, rejects raw or unbounded provider text, keeps
+case mismatch separate, and regresses each disposition. Index 9 confirms that surface with
+`GENERATION_METADATA_INVALID|GENERATION_METADATA_MISSING`. Operator-side probes report that aliases,
+the configured IO budget/poll window, and the live payload validator are individually viable, but
+those probes are nonauthorizing and do not prove the in-client fetch sequence. Source inspection
+provides a stronger provider-free hypothesis: initial REAL completion binding builds the generic
+generation-reconciliation expectation and applies generic bindability, which intentionally rejects
+the v3 unknown-token convention. The special `NONCREDITING_SMOKE` reconciliation exists only later in
+the benchmark seam, unreachable after the usage identity has already been downgraded. That error can
+be translated into `GENERATION_METADATA_INVALID` while the current diagnostic also adds
+`GENERATION_METADATA_MISSING`. The remaining safe provider-free work is to audit and wire the special
+smoke reconciliation at the initial identity-binding seam, preserve generic credit fail-closed,
+separate the diagnostic branches, and add bounded regressions. This is a source-derived hypothesis,
+not a completed repair. Index 8 independently failed `SCHEMA_VALIDATION_FAILED`; this is candidate
+reliability evidence, not route-disqualification authority.
 
-Step B is eligible only after step A exits `0` and the operator inspects the complete terminal
-record. It must report exactly `VALID / NONCREDITING / NONAUTHORIZING / METADATA EGRESS ONLY / NO
-MODEL COMPLETION`; `Smoke run index: 2`; the three model IDs
-`deepseek/deepseek-v4-pro-0813`, `z-ai/glm-5.2`, and
-`moonshotai/kimi-k3`; `logical_gets=15`; `maximum_provider_attempts=30`; `usage_records=0`;
-unchanged budget and atomic ledger; no output; and effective-config SHA-256
-`42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54`. The frozen evidence must
-still bind `parasail/fp8`, `sail-research/fp8`, and `modal/mxfp4` on three distinct providers.
+The `531a9d8` 906-test matrix and independent review were CLEAN. The successor's 340 focused tests,
+Ruff, format, strict mypy, generator write/verify, and independent no-HIGH review also passed. Current
+inventory raw/self/discovery/universe hashes are
+`0f06405d421a10d0264dd97e53f77643668ca02bb610124251c0b6a8437099e4`,
+`c0857884300006d5e7ceb9dce4bd08dcb27e46939e6a706aa2ee18f5e63e2ae7`,
+`3690079580843c5775bcde33836094745ae8c30ccb591cbab2cb4c9b08b0af2e`, and
+`71bff09169358e9365678be37078598e8921eb8b18f2aa7f19f865891d84ed87`; counts are
+`3628/3631/3585/43/35/29/15`. The smoke schema raw SHA-256 is
+`2163642df1d0b7adf463eb04887e2027e462acdd716ec83451d76c49d80db78d`.
 
-Only after separate post-A operator authorization, run step B immediately after that exact
-inspection, with no
-intervening source, configuration, registry, discovery, lineage/corpus artifact, ledger, output-path,
-secret-file, or shell-environment change. Any delay, interruption, mismatch, ambiguous result,
-output collision, reused-index rejection, or state change invalidates adjacency: do not run step B;
-obtain a new run index and fresh authorization, then start again at step A. The paid smoke remains
-one-process, non-resumable within a run index, and may reserve and spend provider cost.
-
-```shell
-env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE PYTHONPATH="$PWD/src" MMAUDIT_BUDGET_USD=250 MMAUDIT_COST_LEDGER_PATH="$HOME/.mmaudit/private/openrouter-cost-ledger.json" /Users/generalcuster/Documents/dev/Auditor/.venv/bin/mmaudit models authenticated-runner-smoke --candidate-registry "$HOME/.mmaudit/private/authrunner/candidate-registry-r9.json" --candidate-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-candidate-20260822-r9" --primary-judge-registry "$HOME/.mmaudit/private/authrunner/primary-judge-registry-r8.json" --primary-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-primary-judge-20260821-r8" --replay-judge-registry "$HOME/.mmaudit/private/authrunner/replay-judge-registry-r8.json" --replay-judge-discovery-run "$HOME/.mmaudit/private/model-discovery/authrunner-replay-judge-20260822-r8" --smoke-corpus benchmarks/model_corpus_smoke --smoke-run-index 2 --output "$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260822-s3.json" --candidate-cost-cap-usd-per-attempt 1.00 --primary-judge-cost-cap-usd-per-attempt 1.00 --replay-judge-cost-cap-usd-per-attempt 1.00 --config config/openrouter-qualification.toml --corpus benchmarks/model_corpus/manifest.json --cost-ledger "$HOME/.mmaudit/private/openrouter-cost-ledger.json" --secrets-env-file "$HOME/.mmaudit/secrets.env" --allow-code-egress --no-color
-```
-
-No normal provider-free preflight, verifier, discovery, construct-only, or full AUTHRUNNER command is
-emitted. Both corrected commands are emitted but not run from this checkpoint. The historical paid
-attempt is retained exactly and never released. `V3-AUTHRUNNER-001` remains
-`PARTIAL / BLOCKED_SAFETY`; `V3-AUTONOMY-001` remains `IN_PROGRESS` but Phase 2 is paused until this
-external adjacent sequence is recorded and reconciled. No qualification, release state, or authority
-changed at command emission.
+The operator also reports a metadata-only index-10 gate VALID on candidate r10, primary r12, and replay
+r8, but it is nonauthorizing and sub-hour primary drift means it is not durable launch freshness. No
+AUTHRUNNER command is current. Index 10 is the next unused ledger namespace, not authorization. Only
+after the initial-binding reconciliation checkpoint may fresh discovery/refreeze and metadata-only
+step A be prepared
+adjacent enough to avoid route drift; paid
+step B remains separately authorized only after A returns an immediate complete exact-VALID result.
+`V3-PLANCONSTRAINTS-001` is queued after successful smoke and is mandatory before the 24-case
+campaign. Its shared route-predicate profile must explicitly mark runtime token-detail convention
+`UNAVAILABLE` until authoritative evidence exists; r3/r4 cannot populate it. Proposal item 5 is
+`ADOPTED_NONAUTHORIZING / IMPLEMENTED` at `531a9d8`: bounded typed successful-usage diagnostics keep
+case mismatch separate and avoid premature generation fetch. Item 3's REPLAY allowlist is historical;
+its proposed candidate/PRIMARY extension, and items 2, 4, and 6, remain
+`OPERATOR_SUPPLIED_NONAUTHORIZING_ANALYSIS`. `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`, and
+`V3-AUTONOMY-001` Phase 2 remains paused. No qualification, runner, seal, audit, benchmark, or release
+authority exists.
 
 Root's earlier focused matrix passed `348` tests; an independent focused matrix passed `223`; the
 reasoning slice passed `69` focused tests; and the expanded selection, discovery, benchmark,

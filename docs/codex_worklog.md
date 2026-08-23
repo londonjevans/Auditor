@@ -4,14 +4,131 @@ This file is the persistent handoff record. Update it after every meaningful
 implementation slice. Do not record secrets, source excerpts from external targets,
 credentials, RPC URLs, or operational attack instructions.
 
-AUTORUN_STATUS: PAUSED_FOR_OPERATOR_R9_R8_R8_INDEXED_SEQUENCE
+AUTORUN_STATUS: PAUSED_FOR_AUTHRUNNER_INITIAL_IDENTITY_BINDING_RECONCILIATION_BEFORE_INDEX_10_GATE
 CURRENT_TICKET: V3-AUTHRUNNER-001
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001
-NEXT_ACTION: From the clean exact checkpoint, run only the r9/r8/r8 metadata-only step A with `--smoke-run-index 2` and record its complete result. Request separate paid-step authorization only if A is exactly VALID and no state changed; otherwise obtain a fresh run index and rerun A after review. Reconcile the operator result before resuming `V3-AUTONOMY-001` Phase 2.
-LAST_VALIDATION_COMMAND: Focused smoke-run-index, runtime, CLI, schema, documentation, strict JSON, Ruff, formatting, mypy, and diff gates; no AUTHRUNNER command was executed.
-LAST_VALIDATION_RESULT: PASS — 385 implementation tests, 363 independent review tests, and 16 documentation/objective tests passed; Ruff, formatting, strict mypy, release-schema write/verify, strict JSON, command parity, and diff checks passed. Current operator evidence is reconciled; the historical paid attempt failed before provider completion or new spend on a reused `r1` ledger request ID. The corrected r9/r8/r8 index-2 A/B commands remain unexecuted, and B remains separately unauthorized pending immediate exact-VALID A. Every runtime, qualification, audit, benchmark, seal, and release authority remains false.
-LAST_CHECKPOINT_COMMIT: `9c61871502abbd19ff13278893f9c7785c5b28ba` — local 16-path V3-AUTHRUNNER smoke-run-index implementation checkpoint; it is not pushed or remote-resolved and grants no runtime authority. Historical V3-AUTONOMY Phase-1 checkpoint: `084add8778ef36a2e4c86fdbdea4082eb3a1b332`. Historical Phase-0 checkpoint: `d0402d1c68f0f82d9ee4f8757f7967abda372ac6`. Historical r8 governance base: `28ee5d77ed9c33fb72d0c00e02e93c91b9fde8c6`. Historical paid diagnostic base: `b4134c70641e33cbbff2b430b135910df903733b`.
-REMAINING_ACTIONABLE_TICKETS: The combined queues contain 43 unfinished tickets. `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`: the single-use `r1` defect is repaired at the local source checkpoint, exactly two corrected r9/r8/r8 index-2 commands are emitted but not run, and paid step B still needs separate authorization after exact step A. `V3-AUTONOMY-001` remains `IN_PROGRESS`, with Phase 2 paused and excluded from the clean command worktree. Every runner, qualification, audit, benchmark, seal, and release authority remains absent.
+NEXT_ACTION: Provider-free, audit and wire the special unknown-token `NONCREDITING_SMOKE` generation reconciliation at the initial REAL identity-binding seam, preserve generic credit fail-closed, distinguish the bounded identity diagnostic branches, add focused regressions, and checkpoint. Only afterward refresh/re-freeze route evidence and prepare metadata-only step A under unused `--smoke-run-index 10`; paid B remains separately authorized only after an immediate complete exact-VALID A. A successful smoke and `V3-PLANCONSTRAINTS-001` remain mandatory before the 24-case campaign; `V3-AUTONOMY-001` Phase 2 stays paused.
+LAST_VALIDATION_COMMAND: `.venv/bin/pytest -q tests/unit/test_product_documentation.py tests/unit/test_product_objective.py`; strict duplicate-key/nonfinite JSON loads for runtime status and review traceability; `.venv/bin/ruff check` and `.venv/bin/ruff format --check` over both governance tests; exact-path diff review. Codex emitted or executed no AUTHRUNNER command.
+LAST_VALIDATION_RESULT: PARTIAL — 17/17 current governance tests passed; both JSON documents passed strict duplicate-key/nonfinite validation; Ruff and format checks passed. Base checkpoint `531a9d822e9989bf2eda94530e88cf55f2dd2e0d` preserves raw provider token counters and a typed self-hashed smoke-only full-plan envelope; its 906-test matrix and independent review were CLEAN. Successor `77fb4b9a0c03969a9776edf2091dc09d3b67daec` surfaces bounded closed identity codes without retaining provider text; 340 focused tests, Ruff, format, strict mypy, generator write/verify, and independent no-HIGH review passed. Operator runs r1–r9 are terminal, r2 alone remains `uncertain_accounted`, total accounted exposure is `$0.10457436`, reserved is `$0`, and no bundle exists. Run 8 records intermittent `SCHEMA_VALIDATION_FAILED`; run 9 records `GENERATION_METADATA_INVALID|GENERATION_METADATA_MISSING`. Current command count is zero and every runtime/release authority remains false.
+LAST_CHECKPOINT_COMMIT: `77fb4b9a0c03969a9776edf2091dc09d3b67daec` — four-path AUTHRUNNER bounded generation-identity diagnostic successor over `531a9d8`; it owns only the inventory, `benchmark/models.py`, and two focused tests, excludes operator results/governance/unrelated `.gitignore`, and grants no runtime authority. Historical worktree-independent inventory checkpoint: `3d4a43ac026547dd8652796b6186c48891fd7622`; smoke-run-index checkpoint: `9c61871502abbd19ff13278893f9c7785c5b28ba`; V3-AUTONOMY Phase-1 checkpoint: `084add8778ef36a2e4c86fdbdea4082eb3a1b332`; paused Phase-2 stash: `31b8d30f14a012c1c7fe1b7e2d5647c874fbbd50`.
+REMAINING_ACTIONABLE_TICKETS: The combined queues contain 44 unfinished tickets. `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`: indices 1–9 are permanently occupied, no successful smoke bundle exists, and no index-10 command or paid authority is current. The next action is the provider-free initial identity-binding reconciliation audit/fix and bounded regressions. `V3-PLANCONSTRAINTS-001` is `QUEUED`, depends on successful smoke, and is mandatory before the 24-case campaign. `V3-AUTONOMY-001` remains `IN_PROGRESS`, with Phase 2 paused and preserved separately. Every runner, qualification, audit, benchmark, seal, and release authority remains absent.
+
+## 2026-08-23T09:07:00Z — r8/r9 reconciled; initial identity-binding seam is next
+
+- **Operator evidence:** Fully read the 95,945-byte / 1,728-line operator record at raw SHA-256
+  `efab7ac219c7a4bea4c2cd513f0d3455fff021483d28af1d958b6dd0eb59413d`. Smoke indices 1–9 are
+  permanently occupied. Nine terminal entries account `$0.10457436`, reserve `$0`, and leave
+  `$249.89542564`; r2 alone is `uncertain_accounted` and all others are reconciled. The record does
+  not provide an authoritative per-run cost table for r5–r9, so no such mapping is inferred.
+- **Latest results:** Run 8 failed `SCHEMA_VALIDATION_FAILED`, retained only as candidate
+  reliability evidence and not route-disqualification authority. Run 9 reported
+  `GENERATION_METADATA_INVALID|GENERATION_METADATA_MISSING`. Operator-side alias, timing/budget, and
+  live-payload-validator probes are nonauthorizing observations; they cannot independently decide
+  the internal cause or grant route, launch, or credit authority.
+- **Provider-free code-path hypothesis:** Initial REAL completion binding uses generic generation
+  reconciliation. For the v3 unknown-token smoke, generic bindability rejects by design, while the
+  special `NONCREDITING_SMOKE` reconciliation exists later in the benchmark seam and is unreachable
+  after identity has already been downgraded. That failure can be translated into `INVALID` while
+  the current diagnostic also adds `MISSING`. This is a strong source-derived hypothesis, not a
+  completed repair. Audit and wire the special smoke reconciliation at the initial binding seam,
+  preserve generic credit fail-closed, separate the diagnostic branches, and regress provider-free.
+- **Route evidence / boundary:** A metadata-only gate using candidate r10, primary r12, replay r8,
+  and effective config `42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54`
+  was VALID through 15 logical GETs at `$0`, but primary evidence had already shown sub-hour drift.
+  It is operator-supplied nonauthorizing evidence, not a current command or durable launch gate. No
+  paid index-10 run occurred. Only after a focused code checkpoint may route evidence be freshly
+  re-frozen and exact A prepared under unused index 10; B remains separately authorized post-A.
+- **Governance:** Current source is `77fb4b9a0c03969a9776edf2091dc09d3b67daec`; inventory
+  raw/self/discovery/universe hashes remain `0f06405d421a10d0264dd97e53f77643668ca02bb610124251c0b6a8437099e4`,
+  `c0857884300006d5e7ceb9dce4bd08dcb27e46939e6a706aa2ee18f5e63e2ae7`,
+  `3690079580843c5775bcde33836094745ae8c30ccb591cbab2cb4c9b08b0af2e`, and
+  `71bff09169358e9365678be37078598e8921eb8b18f2aa7f19f865891d84ed87`; counts remain
+  `3628/3631/3585/43/35/29/15`. No AUTHRUNNER command is current; AUTONOMY Phase 2 stays paused.
+
+## 2026-08-23T08:45:00Z — r5–r7 confirm token/usage repairs; generation identity remains unbound
+
+- **Historical operator evidence at that boundary:** Fully read the then-current 90,254-byte /
+  1,633-line operator record at raw SHA-256
+  `d2010a612ca4237906a03640604847f1fb6ac4110b846cc870b3a08b69138fe5`. Runs r1–r4 then had
+  actual/accounted costs `0.01680888/0.01680888`, `null/0.05225616`,
+  `0.00554796/0.00554796`, and `0.00537768/0.00537768`; statuses are
+  `reconciled/uncertain_accounted/reconciled/reconciled`. Runs r5–r7 are reconciled without an
+  authoritative per-index cost table. Total accounted is `0.09414372`, reserved is `0`, and remaining
+  is `249.90585628`. Never release, reuse, or hand-edit any entry.
+- **Failure evidence:** Run 3 passed token validation and failed later at the successful-REAL
+  benchmark boundary, where its typed cause was historically discarded. Run 4 recorded raw
+  `prompt=234`, `completion=1280`, `reasoning=1307`, `cached=0`. This refutes a universal response
+  subset assumption for that sample but does not prove additive/same-domain semantics for the route.
+  Runs 5–7 confirm the plan-bounded token envelope and typed `UsageValidationError` reporting. The
+  remaining failure is `generation_metadata_unbound`: provisional exact canonical identity binds,
+  then final identity is downgraded at generation metadata. Accepted aliases, Parasail, no fallback,
+  and ZDR are observed. The operator's direct complete-record query is nonauthorizing and cannot
+  distinguish fetch timeout, validation rejection, or reconciliation mismatch.
+- **Implementation:** Checkpoint `531a9d822e9989bf2eda94530e88cf55f2dd2e0d` preserves raw counters;
+  uses the exact `usage.cost` for USD; keeps wire output maximum separate from the full visible-plus-
+  reasoning reservation; and seals a typed full-request-plan component envelope only for exact owned
+  REAL `NONCREDITING_SMOKE` plus authenticated generation evidence. Normal credit, durable release,
+  and the full campaign reject unknown convention. Bounded smoke errors now retain closed typed cause
+  codes and the case-mismatch flag. Successor `77fb4b9a0c03969a9776edf2091dc09d3b67daec`
+  surfaces the bounded closed identity diagnostic set without retaining provider text and owns exactly
+  four paths.
+- **Artifacts / validation:** Inventory raw/self/discovery/universe hashes are respectively
+  `0f06405d421a10d0264dd97e53f77643668ca02bb610124251c0b6a8437099e4`,
+  `c0857884300006d5e7ceb9dce4bd08dcb27e46939e6a706aa2ee18f5e63e2ae7`,
+  `3690079580843c5775bcde33836094745ae8c30ccb591cbab2cb4c9b08b0af2e`, and
+  `71bff09169358e9365678be37078598e8921eb8b18f2aa7f19f865891d84ed87`; counts are
+  `3628/3631/3585/43/35/29/15`. Smoke schema raw SHA-256 is
+  `2163642df1d0b7adf463eb04887e2027e462acdd716ec83451d76c49d80db78d`. Focused provider-free,
+  the base 906-test matrix and CLEAN review passed; the successor's 340 focused tests, Ruff, format,
+  strict mypy, generator write/verify, and independent no-HIGH review also passed.
+- **Queue / boundary:** Added queued `V3-PLANCONSTRAINTS-001` for one complete typed, self-hashed
+  selection/runtime route-predicate profile. Its runtime-only token-convention predicate must be
+  typed `UNAVAILABLE` until authoritative evidence exists; it cannot infer convention from r3/r4.
+  Operator proposal item 5 is `ADOPTED_NONAUTHORIZING / IMPLEMENTED` at `531a9d8` through bounded
+  typed usage errors plus separate case-mismatch handling; items 2, 3, 4, and 6 remain nonauthorizing
+  analysis. At that now-superseded boundary, command count was zero, r10/r8/r8 was historical only,
+  and index 8 was next; current evidence instead consumes indices 8 and 9. Fresh
+  refreeze plus A is required and paid B remains separately
+  authorized only after immediate exact-VALID A. AUTONOMY Phase 2 stays paused.
+
+## 2026-08-23T07:01:41Z — r10/index-2 token-detail failure reconciled; local custody repair checkpointed
+
+- **Operator result:** Reread the exact 77,817-byte / 1,401-line operator record at raw SHA-256
+  `4a43bbb561b1ce0aac2e4f0751bc151ea4133f3c4439566ade051bcd6bcf481f`. Candidate r10 was
+  re-frozen at `$0` as `candidate-registry-r10.json` / `authrunner-candidate-20260823-r10`, frozen
+  `66b620665f4c8911c38b280b36b70eeab9fe4a0ae44259a608ede271f207dd5c`; PRIMARY and REPLAY r8
+  remained unchanged, and the immediate r10/r8/r8 gate was VALID through 15 logical GETs.
+- **Paid failure and custody:** Paid smoke #4 used index 2, reached candidate transport, and rejected
+  the response before credit because normalized token-detail subset validation failed. No judge or
+  bundle followed. The retained r1 entry remains `RECONCILED` at `$0.01680888`; r2 is terminal
+  `UNCERTAIN_ACCOUNTED`, actual unavailable and `$0.05225616` accounted. Total accounted exposure is
+  `$0.06906504`, reserved is `$0`, and remaining is `$249.93093496`. Never release or reuse r2.
+- **Repair:** Local checkpoint `8e1581d96352d90d73f372fdb0f6e55202bb42ec` retains the normalized
+  OpenRouter subset contract, validates bounded direct/nested token aliases, reports prompt,
+  completion, reasoning, and cached values on inconsistency, and captures only durable-domain valid
+  cost before semantic rejection. Known cost can reconcile while the response remains noncreditable;
+  absent, malformed, or out-of-domain cost remains uncertain.
+- **Historical boundary / then-next:** All r9/index-2 commands were removed and command count was
+  zero. Index 3 was then the next namespace; that state is superseded by terminal indices 3–9 and
+  must not be used as current launch guidance. AUTONOMY Phase 2 remained paused and no authority
+  existed.
+
+## 2026-08-23T06:34:07Z — authoritative r9 checkpoint adopted; paused Phase 2 preserved
+
+- **Historical adoption:** Fast-forwarded the authoritative branch to clean command checkpoint
+  `e93a1dc309359f2f3ef8c53dde31f2d8dd56a8a4`. At that boundary the exact two r9/r8/r8 index-2
+  commands remained unexecuted; both are now historical, and step B was separately unauthorized.
+- **Preservation:** Parked the exact 13-path unfinished Phase-2 working state recoverably at stash
+  object `31b8d30f14a012c1c7fe1b7e2d5647c874fbbd50`; it was not merged into the command checkpoint.
+- **Inventory correction:** Checkpoint `3d4a43ac026547dd8652796b6186c48891fd7622` normalizes
+  repository-local callable defaults before hashing. The canonical artifact is now raw SHA-256
+  `6ad1e434be9b6a68c21c3e41fb76e861e6c54f7458c3acc5c7f10dc8961fd973`, self-hash
+  `174faccfd1dbdce1f2726bc92bcf910253bddfc285ce2af07f2a7b9f184f47be`; counts and every
+  nonauthority/readiness flag are unchanged. A second worktree reproduced the exact bytes.
+- **Historical result / then-next:** Provider, secret, ledger, output, and operator-result state were
+  untouched. That boundary called for step A from
+  `e93a1dc309359f2f3ef8c53dde31f2d8dd56a8a4`; it has since been executed and superseded, so it must
+  not be rerun.
 
 ## 2026-08-22T05:49:02Z — smoke request namespace collision reconciled; indexed rerun prepared
 

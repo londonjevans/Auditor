@@ -123,18 +123,27 @@ def test_current_completion_authority_has_no_legacy_human_gate() -> None:
     assert "not pushed or remote-resolved" in autonomy_evidence
     assert "owns exactly 18 Phase-1 paths" in autonomy_evidence
     assert "excludes operator_results" in autonomy_evidence
-    assert "9c61871502abbd19ff13278893f9c7785c5b28ba" in autonomy_evidence
+    assert "531a9d822e9989bf2eda94530e88cf55f2dd2e0d" in autonomy_evidence
+    assert "77fb4b9a0c03969a9776edf2091dc09d3b67daec" in autonomy_evidence
+    assert "0f06405d421a10d0264dd97e53f77643668ca02bb610124251c0b6a8437099e4" in (autonomy_evidence)
+    assert "c0857884300006d5e7ceb9dce4bd08dcb27e46939e6a706aa2ee18f5e63e2ae7" in (autonomy_evidence)
+    assert "71bff09169358e9365678be37078598e8921eb8b18f2aa7f19f865891d84ed87" in (autonomy_evidence)
+    assert "3690079580843c5775bcde33836094745ae8c30ccb591cbab2cb4c9b08b0af2e" in (autonomy_evidence)
     assert "3628 unique completion inputs / 3631 occurrences" in autonomy_evidence
     assert "3585 gate sources" in autonomy_evidence
-    assert "28-role packaged declaration" in autonomy_evidence
+    assert "three package resources are pinned" in autonomy_evidence
     assert "25 external roles remain unresolved" in autonomy_evidence
     assert "Phase 2" in requirements["U"]["remaining_proof"]
     assert "Checkpoint the completed" not in requirements["U"]["remaining_proof"]
-    assert runtime_status["candidate_commit"] == "9c61871502abbd19ff13278893f9c7785c5b28ba"
+    assert runtime_status["candidate_commit"] == "77fb4b9a0c03969a9776edf2091dc09d3b67daec"
+    assert runtime_status["autonomy_phase_zero_inventory"]["current_reconciliation_commit"] == (
+        "77fb4b9a0c03969a9776edf2091dc09d3b67daec"
+    )
     assert runtime_status["candidate_commit_pushed"] is False
     assert runtime_status["candidate_commit_remote_resolved"] is False
     assert "V3-LINEAGE-001" not in requirements["L"]["tickets"]
     assert "V3-AUTHLINEAGE-RECEIPT-001" not in requirements["L"]["tickets"]
+    assert "V3-PLANCONSTRAINTS-001" in requirements["L"]["tickets"]
     assert "V3-HUMANCMP-001" not in requirements["R"]["tickets"]
     assert (
         "The optional human-comparison tier is not required"
@@ -182,7 +191,7 @@ def test_historical_execution_order_cannot_claim_complete_queue_authority() -> N
     historical_id_list = re.findall(r"^\d+\. `?(V3-[A-Z0-9-]+)", historical, flags=re.MULTILINE)
     historical_ids = set(historical_id_list)
 
-    assert len(ticket_id_list) == len(ticket_ids) == 68
+    assert len(ticket_id_list) == len(ticket_ids) == 69
     assert len(historical_id_list) == len(historical_ids) == 46
     assert ticket_ids - historical_ids == {
         "V3-AUTHLINEAGE-001",
@@ -201,6 +210,7 @@ def test_historical_execution_order_cannot_claim_complete_queue_authority() -> N
         "V3-OBJECTIVE-002",
         "V3-OMISSION-001",
         "V3-OUTPUT-001",
+        "V3-PLANCONSTRAINTS-001",
         "V3-PRIVACY-001",
         "V3-SHARD-001",
         "V3-SMOKE-001",

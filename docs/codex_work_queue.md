@@ -444,8 +444,60 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `302679f3e8e9281cdf9e0ec3d6d1d566d172cb54b389fbac607180d1f0911940`. Local checkpoint
   `9c61871502abbd19ff13278893f9c7785c5b28ba` makes a canonical positive smoke run index explicit,
   seals it through every durable layer, and rejects reused ledger namespaces provider-free. Its 385
-  focused tests and independent 363-test review passed. This checkpoint emits corrected r9/r8/r8 A/B
-  commands with `--smoke-run-index 2`; REAL remains `BLOCKED_SAFETY` and no authority changes.
+  focused tests and independent 363-test review passed. At that historical boundary the checkpoint
+  emitted corrected r9/r8/r8 A/B commands with `--smoke-run-index 2`; both commands have since run
+  or been superseded and are no longer current.
+  The operator next re-froze drifted candidate evidence at `$0` as
+  `candidate-registry-r10.json` / `authrunner-candidate-20260823-r10`, frozen SHA-256
+  `66b620665f4c8911c38b280b36b70eeab9fe4a0ae44259a608ede271f207dd5c`; PRIMARY and REPLAY r8
+  remained unchanged. The immediate r10/r8/r8 gate was VALID through 15 logical GETs, but it is now
+  historical route evidence, not a current freshness claim. Paid smoke runs r1 through r9 are all
+  permanently occupied. The first four actual/accounted/status tuples are respectively
+  `$0.01680888`/`$0.01680888`/`reconciled`, `null`/`$0.05225616`/`uncertain_accounted`,
+  `$0.00554796`/`$0.00554796`/`reconciled`, and
+  `$0.00537768`/`$0.00537768`/`reconciled`. Runs 5–9 are also reconciled, but the current operator
+  record does not enumerate an authoritative per-index cost mapping for them. Total accounted exposure
+  is `$0.10457436`, reserved is `$0`, and remaining is `$249.89542564`; none may be released, reused,
+  or edited. Run 3 passed token
+  validation and failed later at the successful-REAL benchmark boundary, but the historical caller
+  discarded its typed cause. Run 4 recorded raw provider counters
+  `prompt=234`, `completion=1280`, `reasoning=1307`, `cached=0`; those values disprove a universal
+  response-level reasoning-within-completion assumption for that sample, but do not prove a
+  route-wide additive or same-domain convention.
+  Source checkpoint `531a9d822e9989bf2eda94530e88cf55f2dd2e0d` preserves raw provider counters,
+  adds a typed self-hashed full-request-plan accounting envelope for unknown inclusive/additive
+  semantics, and admits that envelope only to exact owned REAL `NONCREDITING_SMOKE` custody plus
+  authenticated generation reconciliation. General creditability and the full 24-case campaign
+  remain fail closed. It also emits bounded closed-code smoke usage diagnostics. Runs 5–7 confirm the
+  token envelope and typed `UsageValidationError` reporting work nonauthorizingly. The latest failure
+  is `generation_metadata_unbound`: provisional exact canonical model and endpoint identity was
+  downgraded to `UNBOUND` only during generation-metadata binding despite accepted exact/canonical
+  aliases, Parasail, no fallback, and ZDR. An operator-side direct query found complete generation
+  records but is nonauthorizing and does not distinguish timeout, validation, or reconciliation. The
+  successor checkpoint `77fb4b9a0c03969a9776edf2091dc09d3b67daec` surfaces the already-sealed
+  bounded closed `OpenRouterIdentityDiagnosticCode` values at that branch without retaining provider
+  text, keeps case mismatch separate, and regresses the closed alternatives. Its 340-test focused
+  matrix, Ruff, format, strict mypy, generator write/verify, and independent no-HIGH review passed.
+  Index 9 confirms the bounded surface as
+  `GENERATION_METADATA_INVALID|GENERATION_METADATA_MISSING`. Operator-side alias, timing/IO-budget,
+  and live-payload-validator probes are nonauthorizing. Source inspection identifies a stronger
+  provider-free hypothesis: generic initial generation reconciliation rejects the unknown-token
+  convention before later special `NONCREDITING_SMOKE` reconciliation can run, and that error can
+  produce `INVALID` while the current diagnostic also adds `MISSING`. Index 8 separately failed
+  `SCHEMA_VALIDATION_FAILED`, which is candidate reliability evidence rather than
+  route-disqualification authority. The next provider-free slice is to audit and wire the special
+  smoke path at initial identity binding, preserve generic credit fail-closed, distinguish the
+  branches, and add bounded regressions.
+  The committed inventory is raw SHA-256
+  `0f06405d421a10d0264dd97e53f77643668ca02bb610124251c0b6a8437099e4`, self-hash
+  `c0857884300006d5e7ceb9dce4bd08dcb27e46939e6a706aa2ee18f5e63e2ae7`, discovery semantics
+  `3690079580843c5775bcde33836094745ae8c30ccb591cbab2cb4c9b08b0af2e`, and source universe
+  `71bff09169358e9365678be37078598e8921eb8b18f2aa7f19f865891d84ed87`, with counts
+  `3628/3631/3585/43/35/29/15`; the smoke schema raw SHA-256 is
+  `2163642df1d0b7adf463eb04887e2027e462acdd716ec83451d76c49d80db78d`.
+  A metadata-only index-10 gate was VALID on candidate r10 / primary r12 / replay r8, but it is
+  nonauthorizing, primary drifted within about 25 minutes, and it must be rerun after a code checkpoint.
+  Current command count is zero. Index 10 is only the next unused namespace, not paid authority.
 - **Local revocation-cascade slice:** Pushed checkpoint
   `692eb173f002818b4434b746c8801b4cbeb852e2` adds explicit PID-bound campaign and generation
   revokers, parent-to-child cascade, traceback-safe execution handoff guards, and immediate smoke
@@ -819,13 +871,15 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   between request and atomic global input-token budgets before provider dispatch. The local parity
   repair is checkpointed and its committed-byte provider-free smoke preflight is valid. Paid smoke #2
   proved constructor parity, and the later metadata-only live-route gate established genuine
-  candidate endpoint-inventory drift. The latest paid candidate request reached transport, origin
-  custody, and exact ledger reconciliation, then failed strict schema validation because the retained
-  candidate route lacks native `structured_outputs`; no judge request or bundle followed. The next
-  paid attempt was blocked provider-free by the reused hardcoded `r1` request namespace; its
-  cumulative ledger entry is retained and no new spend occurred. The corrected index-2 paid command
-  remains unauthorized until an immediate exact-VALID r9/r8/r8 step A from the same checkpoint is
-  inspected and the operator separately authorizes B.
+  candidate endpoint-inventory drift. Runs 1 through 9 are now permanently occupied. Run 3's typed
+  post-validation cause is unavailable because the historical caller discarded it. Run 4 proves
+  only that one raw response reported `reasoning_tokens=1307 > completion_tokens=1280`; it does not
+  establish a provider-wide accounting convention. Runs 5–7 confirm the plan-bounded token envelope
+  and typed usage error work, while exposing `generation_metadata_unbound` as the next closed blocker.
+  The current typed envelope is deliberately
+  smoke-only and noncrediting. No successful smoke bundle exists, and the full campaign remains
+  blocked on both successful smoke evidence and an explicit, evidence-backed token-detail convention
+  policy rather than an inferred additive/subset rule.
   Exact judge admission and the
   full-campaign cost bound cannot exist before both genuine candidate outputs. Current repository
   rules prohibit Codex from reading real credentials or accessing the provider. Judge request bytes
@@ -839,12 +893,69 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   positive owned-REAL parent issue-consume-revoke-reject assay against the external runtime remain
   absent; the completed provider-free cascade does not substitute for that evidence. External-log
   publication and every benchmark run remain queued.
-- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY`. Run the corrected
-  r9/r8/r8 metadata step A with smoke run index 2 from the clean checkpoint. Only if it returns the
-  complete exact-VALID result immediately and no state changes, request separate authorization for
-  paid step B. The verifier, normal preflight, discovery, construct-only, and full commands remain
-  absent. `V3-AUTONOMY-001` Phase 2 is paused until the external result is reconciled. AUTHSEAL
-  publication, audits, benchmarks, and release remain unauthorized.
+- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY`. Provider-free, audit and wire
+  special unknown-token `NONCREDITING_SMOKE` reconciliation at initial REAL identity binding,
+  preserve generic credit fail-closed, distinguish diagnostic branches, add bounded regressions, and
+  checkpoint. Only afterward re-freeze drifted route evidence at `$0` and
+  prepare one fresh metadata-only step A under unused smoke run index 10. Only if A returns the
+  complete exact-VALID result immediately and no state changes may the operator
+  separately authorize paid B. No command is current. `V3-AUTONOMY-001` Phase 2 remains paused;
+  AUTHSEAL publication, audits, benchmarks, the 24-case campaign, and release remain unauthorized.
+
+### V3-PLANCONSTRAINTS-001 — Enforce selection/runtime route-constraint parity
+
+- **Objective:** Define one typed, self-hashed route-predicate profile and make plan construction,
+  publication, provider-free qualification, and runtime admission consume the same finite predicates.
+- **Files/modules:** Candidate selection and endpoint snapshots, selection-plan schemas/builders,
+  provider-free route checks, runtime admission adapters, documentation, and focused parity tests.
+- **Acceptance criteria:**
+  - The profile covers exact model identity and endpoint tag, whole-inventory provider display-name
+    injectivity, the exact operational accepted state, ZDR eligibility, and the emitted request
+    parameters `max_tokens`, `temperature`, `response_format`, and `reasoning`. It separately binds
+    the `structured_outputs` native-capability marker in both the exact-model inventory and the
+    selected-endpoint inventory rather than treating that marker as an emitted parameter.
+  - It binds singleton exact-route/no-automatic-fallback selection; the complete effective reasoning
+    control and profile hashes, mode/effort and reserve; prompt/output/context capacity envelopes and
+    metadata-sourced completion capacity; exact-pricing eligibility that proves the configured
+    provider cap is expressible by, and no weaker than, the exact route's price bound rather than
+    merely checking that a price is present; frozen-discovery/live-route equivalence; and registry
+    selection/constraint hash custody. Reasoning-effort support is endpoint-first, with exact-model
+    catalog fallback only under the validated endpoint-inventory-absence rule; an explicit empty or
+    contradictory endpoint inventory fails closed.
+  - Discovery applies the complete profile before it can publish an endpoint snapshot; validating
+    only a base model or applying constraints after snapshot construction is rejected.
+  - Selection-plan construction and publication use the same typed predicate implementations as
+    runtime admission; no parallel hand-maintained list may silently diverge.
+  - A provider-free internal diagnostic/test API returns one closed typed disposition/reason for
+    every route predicate,
+    and regressions fail whenever a runtime admission predicate lacks a selection representation.
+  - Exact-model and selected-endpoint `structured_outputs` metadata parity is necessary but never
+    proves behavioral schema reliability. Runtime schema conformance remains a separate empirical,
+    fail-closed gate; intermittent run-8 nonconformance cannot be promoted into metadata authority.
+  - Runtime-only token-detail reporting convention has an explicit completeness disposition. Because
+    discovery exposes no authoritative same-domain inclusive/additive field and r3/r4 cannot establish
+    one, it must remain typed `UNAVAILABLE` and fail closed for the 24-case campaign until a separate
+    policy/evidence gate resolves it. Completing metadata parity alone cannot grant launch readiness.
+- **Tests:** Provider-free profile construction, route-reason sweep, plan/runtime parity, missing-
+  predicate mutation, ambiguous display identity, output-parameter, reasoning-effort precedence,
+  capacity, and runtime-only convention-`UNAVAILABLE` regressions.
+- **Dependencies:** A successfully sealed and offline-verified `V3-AUTHRUNNER-001` smoke. This ticket
+  is mandatory before the 24-case campaign.
+- **Status:** `QUEUED`
+- **Operator proposal disposition:** Proposal item 1 is converted into this bounded ticket without
+  adopting the operator-supplied direct-reference count as proof that these predicates are wholly
+  runtime-only: high effort is already checked indirectly, endpoint snapshot construction already
+  rejects ambiguous display names, and native-output helpers already check part of the parameter
+  set. The defect is absence of one complete shared predicate profile. Proposal item 2's `models
+  check` route-sweep UX remains adjacent. Item 3's REPLAY allowlist is historical; its proposed
+  candidate/PRIMARY extension remains advisory and is not absorbed by the internal diagnostic/parity
+  acceptance above. Item 5 is
+  `ADOPTED_NONAUTHORIZING / IMPLEMENTED` by checkpoint `531a9d822e9989bf2eda94530e88cf55f2dd2e0d`:
+  bounded typed successful-usage errors preserve the cause, keep case mismatch separate, and do not
+  fetch generation evidence prematurely. Items 2, 3, 4, and 6 remain
+  `OPERATOR_SUPPLIED_NONAUTHORIZING_ANALYSIS`; none grants command or launch authority.
+- **Next action:** Keep queued until AUTHRUNNER produces a successful smoke bundle; then implement
+  before authoring or launching the 24-case campaign.
 
 ### V3-MODELREFRESH-001 — Provider-free model-refresh runtime and pricing custody
 
@@ -1617,28 +1728,32 @@ and report serialization.
 
 ## Next action
 
-### V3-AUTHRUNNER-001 — repeatable r9/r8/r8 smoke sequence
+### V3-AUTHRUNNER-001 — initial identity-binding reconciliation before fresh index-10 gate
 
-- **Objective:** Preserve the time-sensitive r9/r8/r8 route state and repair the single-use smoke
-  namespace by emitting exactly one indexed metadata-only command and one indexed paid-smoke
-  command in the same tested checkpoint.
+- **Objective:** Surface the bounded typed generation-identity downgrade cause provider-free, then
+  re-establish a fresh exact route gate under the next unused smoke namespace without granting paid
+  authority.
 - **Dependencies:** Exact current operator evidence
-  `302679f3e8e9281cdf9e0ec3d6d1d566d172cb54b389fbac607180d1f0911940`, plan
-  `ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f`, candidate r9, both
-  judge r8 registries, and the unchanged one-entry cumulative ledger.
+  `efab7ac219c7a4bea4c2cd513f0d3455fff021483d28af1d958b6dd0eb59413d`, current source checkpoint
+  `77fb4b9a0c03969a9776edf2091dc09d3b67daec`, nonauthorizing plan
+  `ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f`, current route evidence,
+  and the nine-entry cumulative ledger with exact accounted exposure `$0.10457436`.
 - **Status:** `PARTIAL / BLOCKED_SAFETY`
-- **Boundary:** Both index-2 commands are emitted but not run and must remain separate. The current
-  operator request authorizes command emission only; B remains unauthorized until A returns the
-  complete exact-VALID result immediately and the operator separately authorizes B. Any failure,
-  delay, reused-index rejection, or state change requires a fresh A. No verifier,
-  full runner, qualification, seal, audit, benchmark, or release command is emitted.
+- **Boundary:** Every earlier command is historical; current command count is zero and indices 1–9
+  are permanently occupied. Do not release, reuse, or edit any terminal ledger entry and do not infer
+  actual r2 cost. Index 10 is the next unused namespace only. The latest metadata-only gate is
+  nonauthorizing and must be rerun after the initial-binding reconciliation checkpoint. Paid B remains unauthorized until a
+  freshly emitted A
+  returns the complete exact-VALID result immediately and the operator separately authorizes B. No
+  verifier, full runner, qualification, seal, audit, benchmark, or release command is emitted.
 - **Current evidence:** `V3-AUTONOMY-001` remains `IN_PROGRESS`, but its Phase 2 working bytes are
   paused and excluded from the clean command worktree. After the operator result is reconciled,
   resume the typed idempotent provisioning-state/refusal slice. The exact 28-role bundle pins three
   reviewed package resources and
   explicitly leaves 25 external roles unresolved.
-- **Next action:** From the clean exact checkpoint, run indexed metadata step A and inspect its
-  complete result. If and only if it is exactly valid and no
-  source/config/artifact/ledger/output/secret/environment state changes, request separate
-  authorization for indexed paid step B. Reconcile the result before resuming Phase 2; do
-  not grant runner or release authority from command emission.
+- **Next action:** Audit and wire special unknown-token `NONCREDITING_SMOKE` reconciliation at initial
+  REAL identity binding, preserve generic credit fail-closed, distinguish bounded diagnostic branches,
+  add provider-free regressions, and checkpoint. Only afterward refresh or re-freeze
+  drifted route evidence and prepare one fresh metadata-only step A with index 10. Only after an
+  immediate complete exact-VALID A and separate explicit post-A authorization may paid B be emitted
+  or run. Reconcile that result before resuming Phase 2; do not grant runner or release authority.
