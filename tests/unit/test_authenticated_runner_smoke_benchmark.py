@@ -11,9 +11,11 @@ from pydantic import ValidationError
 
 import mmaudit.benchmark.cross_lineage_adjudication as adjudication
 import mmaudit.benchmark.models as benchmark_models
+import mmaudit.models.openrouter as openrouter_module
 from mmaudit.benchmark.cross_lineage_adjudication import (
     CrossLineageAdjudicationError,
     CrossLineageAdjudicationRunKind,
+    execute_noncrediting_cross_lineage_adjudication_smoke_requests,
     prepare_noncrediting_cross_lineage_adjudication_smoke,
 )
 from mmaudit.benchmark.models import (
@@ -36,6 +38,7 @@ from mmaudit.models.generation_evidence import OpenRouterGenerationEvidence
 from mmaudit.models.identity import OpenRouterIdentityDiagnosticCode
 from mmaudit.models.openrouter import (
     OpenRouterClient,
+    OpenRouterPrivacyError,
     OpenRouterStructuredRequestCostPreview,
     StructuredCompletion,
     strict_json_schema,
@@ -353,7 +356,7 @@ def test_smoke_cost_preview_binds_request_and_preserves_reasoning_plan() -> None
         )
 
 
-def test_smoke_execute_uses_one_cost_bound_request_and_refetches_generation(
+def test_smoke_execute_rejects_patched_completion_without_receipt_bound_carrier(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     suite = load_model_benchmark_corpus(CORPUS_PATH)
@@ -375,6 +378,10 @@ def test_smoke_execute_uses_one_cost_bound_request_and_refetches_generation(
     )
     preview = _smoke_preview(descriptor)
     generation_fetches: list[str] = []
+    forged_completion = StructuredCompletion(
+        value=response,
+        usage_record=usage,
+    )
 
     async def complete(
         client: OpenRouterClient,
@@ -383,7 +390,7 @@ def test_smoke_execute_uses_one_cost_bound_request_and_refetches_generation(
         assert kwargs["logical_request_id"] == descriptor.logical_request_id
         assert kwargs["expected_request_cost_preview"] == preview
         client.usage.add(usage)
-        return StructuredCompletion(value=response, usage_record=usage)
+        return forged_completion
 
     async def get_generation(
         _client: OpenRouterClient,
@@ -397,26 +404,182 @@ def test_smoke_execute_uses_one_cost_bound_request_and_refetches_generation(
     client = object.__new__(OpenRouterClient)
     object.__setattr__(client, "usage", UsageLedger())
 
-    report = asyncio.run(
-        execute_noncrediting_model_benchmark_smoke(
-            smoke_run_index=1,
-            suite=suite,
-            selected_case=case,
-            selected_ground_truth=truth,
-            selection_sha256=SELECTION_SHA256,
-            target=target,
-            client=client,
-            run_kind="PRIMARY",
-            expected_request_cost_preview=preview,
+    with pytest.raises(ValueError, match="generation carrier boundary changed"):
+        asyncio.run(
+            execute_noncrediting_model_benchmark_smoke(
+                smoke_run_index=1,
+                suite=suite,
+                selected_case=case,
+                selected_ground_truth=truth,
+                selection_sha256=SELECTION_SHA256,
+                target=target,
+                client=client,
+                run_kind="PRIMARY",
+                expected_request_cost_preview=preview,
+            )
         )
-    )
 
-    assert report.disposition == "NONCREDITING_SMOKE"
-    assert report.result.case_id == case.case_id
-    assert client.usage.records == [usage]
-    assert generation_fetches == [generation.generation_id]
-    assert report.benchmark_credit_authorized is False
-    assert report.generation_verification_authorized is False
+    assert client.usage.records == []
+    assert generation_fetches == []
+    for _attempt in range(2):
+        with pytest.raises(OpenRouterPrivacyError, match="carrier is absent or replayed"):
+            openrouter_module._resolve_structured_completion_generation_evidence(forged_completion)
+
+
+@pytest.mark.parametrize(
+    "binding_name",
+    (
+        "_resolve_structured_completion_generation_evidence",
+        "_openrouter_client_callables_are_pristine",
+        "_provider_authority_checker",
+    ),
+)
+def test_smoke_execute_rejects_in_place_carrier_authority_retarget_before_dispatch(
+    binding_name: str,
+) -> None:
+    suite = load_model_benchmark_corpus(CORPUS_PATH)
+    case, truth = _selection(suite)
+    target = ModelBenchmarkTarget(model_id="fixture/model-v1")
+    descriptor = authenticated_runner_smoke_model_benchmark_request_descriptor(
+        smoke_run_index=1,
+        run_kind="PRIMARY",
+        selection_sha256=SELECTION_SHA256,
+        case=case,
+        target=target,
+    )
+    preview = _smoke_preview(descriptor)
+    client = object.__new__(OpenRouterClient)
+    object.__setattr__(client, "usage", UsageLedger())
+    authority_function: Any
+    if binding_name == "_provider_authority_checker":
+        executor_closure = dict(
+            zip(
+                execute_noncrediting_model_benchmark_smoke.__code__.co_freevars,
+                execute_noncrediting_model_benchmark_smoke.__closure__ or (),
+                strict=True,
+            )
+        )
+        authority_function = executor_closure["provider_authority_is_pristine"].cell_contents
+    else:
+        authority_function = getattr(openrouter_module, binding_name)
+    original_code = authority_function.__code__
+
+    def changed(*_args: object, **_kwargs: object) -> object:
+        return object()
+
+    authority_function.__code__ = changed.__code__.replace(co_freevars=original_code.co_freevars)
+    try:
+        with pytest.raises(ValueError, match="generation carrier boundary changed"):
+            asyncio.run(
+                execute_noncrediting_model_benchmark_smoke(
+                    smoke_run_index=1,
+                    suite=suite,
+                    selected_case=case,
+                    selected_ground_truth=truth,
+                    selection_sha256=SELECTION_SHA256,
+                    target=target,
+                    client=client,
+                    run_kind="PRIMARY",
+                    expected_request_cost_preview=preview,
+                )
+            )
+    finally:
+        authority_function.__code__ = original_code
+    assert client.usage.records == []
+
+
+def test_smoke_execute_rejects_in_place_executor_impl_retarget_before_dispatch() -> None:
+    suite = load_model_benchmark_corpus(CORPUS_PATH)
+    case, truth = _selection(suite)
+    target = ModelBenchmarkTarget(model_id="fixture/model-v1")
+    descriptor = authenticated_runner_smoke_model_benchmark_request_descriptor(
+        smoke_run_index=1,
+        run_kind="PRIMARY",
+        selection_sha256=SELECTION_SHA256,
+        case=case,
+        target=target,
+    )
+    preview = _smoke_preview(descriptor)
+    client = object.__new__(OpenRouterClient)
+    object.__setattr__(client, "usage", UsageLedger())
+    trusted_impl = benchmark_models._execute_noncrediting_model_benchmark_smoke_impl
+    original_code = trusted_impl.__code__
+
+    async def changed(*_args: object, **_kwargs: object) -> object:
+        return object()
+
+    trusted_impl.__code__ = changed.__code__.replace(co_freevars=original_code.co_freevars)
+    try:
+        with pytest.raises(ValueError, match="generation carrier boundary changed"):
+            asyncio.run(
+                execute_noncrediting_model_benchmark_smoke(
+                    smoke_run_index=1,
+                    suite=suite,
+                    selected_case=case,
+                    selected_ground_truth=truth,
+                    selection_sha256=SELECTION_SHA256,
+                    target=target,
+                    client=client,
+                    run_kind="PRIMARY",
+                    expected_request_cost_preview=preview,
+                )
+            )
+    finally:
+        trusted_impl.__code__ = original_code
+    assert client.usage.records == []
+
+
+def test_smoke_execute_rejects_provider_graph_subset_and_default_retarget_before_dispatch() -> None:
+    suite = load_model_benchmark_corpus(CORPUS_PATH)
+    case, truth = _selection(suite)
+    target = ModelBenchmarkTarget(model_id="fixture/model-v1")
+    descriptor = authenticated_runner_smoke_model_benchmark_request_descriptor(
+        smoke_run_index=1,
+        run_kind="PRIMARY",
+        selection_sha256=SELECTION_SHA256,
+        case=case,
+        target=target,
+    )
+    preview = _smoke_preview(descriptor)
+    client = object.__new__(OpenRouterClient)
+    object.__setattr__(client, "usage", UsageLedger())
+    predicate = openrouter_module._openrouter_client_callables_are_pristine
+    original_kwdefaults = predicate.__kwdefaults__
+    assert original_kwdefaults is not None
+    guard: Any = original_kwdefaults["_provider_authority_graph_is_pristine"]
+    guard_closure = dict(zip(guard.__code__.co_freevars, guard.__closure__ or (), strict=True))
+    states_cell = guard_closure["frozen_states"]
+    seal_cell = guard_closure["frozen_states_seal"]
+    original_states = states_cell.cell_contents
+    assert type(original_states) is tuple
+    subset = (original_states[0],)
+    states_cell.cell_contents = subset
+    seal_cell.cell_contents = subset
+    predicate.__kwdefaults__ = {
+        **original_kwdefaults,
+        "_provider_authority_graph_frozen_states": subset,
+    }
+    try:
+        with pytest.raises(ValueError, match="generation carrier boundary changed"):
+            asyncio.run(
+                execute_noncrediting_model_benchmark_smoke(
+                    smoke_run_index=1,
+                    suite=suite,
+                    selected_case=case,
+                    selected_ground_truth=truth,
+                    selection_sha256=SELECTION_SHA256,
+                    target=target,
+                    client=client,
+                    run_kind="PRIMARY",
+                    expected_request_cost_preview=preview,
+                )
+            )
+    finally:
+        predicate.__kwdefaults__ = original_kwdefaults
+        states_cell.cell_contents = original_states
+        seal_cell.cell_contents = original_states
+    assert predicate()
+    assert client.usage.records == []
 
 
 @pytest.mark.parametrize(
@@ -548,6 +711,11 @@ def test_smoke_execute_preserves_bounded_usage_and_case_failure_reasons(
     ) -> OpenRouterGenerationEvidence:
         raise AssertionError("generation retrieval must follow smoke completion validation")
 
+    def unexpected_generation_resolver(
+        _completion: StructuredCompletion[Any],
+    ) -> OpenRouterGenerationEvidence:
+        raise AssertionError("invalid smoke evidence must not resolve a carrier")
+
     monkeypatch.setattr(OpenRouterClient, "complete_with_evidence", complete)
     monkeypatch.setattr(OpenRouterClient, "get_generation_evidence", unexpected_generation_fetch)
     monkeypatch.setattr(
@@ -571,7 +739,7 @@ def test_smoke_execute_preserves_bounded_usage_and_case_failure_reasons(
 
     with pytest.raises(ValueError) as exc_info:
         asyncio.run(
-            execute_noncrediting_model_benchmark_smoke(
+            benchmark_models._execute_noncrediting_model_benchmark_smoke_impl(
                 smoke_run_index=1,
                 suite=suite,
                 selected_case=case,
@@ -581,6 +749,8 @@ def test_smoke_execute_preserves_bounded_usage_and_case_failure_reasons(
                 client=client,
                 run_kind="PRIMARY",
                 expected_request_cost_preview=preview,
+                generation_resolver=unexpected_generation_resolver,
+                require_provider_authority_pristine=lambda: True,
             )
         )
 
@@ -675,3 +845,40 @@ def test_smoke_prepare_emits_one_existing_nonauthorizing_request_and_rejects_sam
             judge=_judge(SAME_ROOT_JUDGE_ID),
             run_kind=CrossLineageAdjudicationRunKind.PRIMARY,
         )
+
+
+def test_smoke_judge_rejects_external_generation_fetcher_before_provider_state() -> None:
+    suite = load_model_benchmark_corpus(CORPUS_PATH)
+    case, truth = _selection(suite)
+    report = _smoke_report(suite)
+    prepared = prepare_noncrediting_cross_lineage_adjudication_smoke(
+        public_lineage_capability=resolve_verified_public_model_lineage(),
+        suite=suite,
+        selected_case=case,
+        selected_ground_truth=truth,
+        selection_sha256=SELECTION_SHA256,
+        candidate_report=report,
+        judge=_judge(JUDGE_ID),
+        run_kind=CrossLineageAdjudicationRunKind.PRIMARY,
+    )
+    client = object.__new__(OpenRouterClient)
+    object.__setattr__(client, "usage", UsageLedger())
+    fetches: list[str] = []
+
+    async def external_fetcher(_request: Any, _usage: UsageRecord) -> Any:
+        fetches.append("called")
+        raise AssertionError("external smoke generation fetcher must not run")
+
+    with pytest.raises(CrossLineageAdjudicationError, match="external generation fetcher"):
+        asyncio.run(
+            execute_noncrediting_cross_lineage_adjudication_smoke_requests(
+                smoke_run_index=1,
+                client=client,
+                prepared=prepared,
+                expected_request_cost_previews=(_preview(0),),
+                generation_evidence_fetcher=external_fetcher,
+            )
+        )
+
+    assert fetches == []
+    assert client.usage.records == []

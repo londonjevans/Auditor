@@ -15,8 +15,8 @@ from dataclasses import InitVar, dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from types import MappingProxyType
-from typing import Any, Literal, Never, SupportsIndex
+from types import FunctionType, MappingProxyType
+from typing import Any, Literal, Never, SupportsIndex, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -28,6 +28,7 @@ from mmaudit.models.usage import (
     _is_structurally_generation_bindable_usage_record,
     _is_structurally_generation_reconcilable_usage_record,
     _validated_usage_copy_preserving_owned_attestation,
+    authrunner_noncrediting_unknown_token_smoke_scope,
     is_generation_bindable_usage_record,
     is_generation_reconcilable_usage_record,
     noncrediting_unknown_token_smoke_usage_error,
@@ -615,12 +616,10 @@ def _build_generation_capability_authority() -> tuple[
 
 def _build_authrunner_generation_origin_authority() -> tuple[
     Callable[..., None],
-    Callable[
-        [TrustedGenerationVerification, tuple[GenerationVerificationRequest, ...]],
-        TrustedGenerationVerification,
-    ],
+    Callable[..., TrustedGenerationVerification],
     Callable[..., bool],
     Callable[[TrustedGenerationVerification], None],
+    Callable[[], None],
 ]:
     """Keep fresh REAL re-fetch origin separate from structural test capabilities."""
 
@@ -631,6 +630,7 @@ def _build_authrunner_generation_origin_authority() -> tuple[
         Callable[..., object],
         Callable[[], bool],
         Callable[[object], ExecutionEvidenceKind],
+        Callable[..., bool],
     ]
 
     registry: dict[
@@ -643,6 +643,7 @@ def _build_authrunner_generation_origin_authority() -> tuple[
         ],
     ] = {}
     issuer: Issuer | None = None
+    issuer_callable_states: tuple[tuple[object, ...], ...] | None = None
     lock = threading.RLock()
     trusted_sys = sys
     trusted_self_module = trusted_sys.modules[__name__]
@@ -654,8 +655,132 @@ def _build_authrunner_generation_origin_authority() -> tuple[
     trusted_snapshot = _snapshot_trusted_generation_capability
     trusted_recheck = _recheck_trusted_generation_capability
     trusted_usage_origin = _has_authrunner_owned_real_usage_origin
+    trusted_smoke_scope = authrunner_noncrediting_unknown_token_smoke_scope
     trusted_capability_type = TrustedGenerationVerification
     trusted_getpid = os.getpid
+    empty_cell = object()
+
+    def function_state(function: FunctionType) -> tuple[object, ...]:
+        closure = function.__closure__
+        closure_values: list[tuple[object, object]] = []
+        for cell in closure or ():
+            try:
+                contents = cell.cell_contents
+            except ValueError:
+                contents = empty_cell
+            closure_values.append((cell, contents))
+        kwdefaults = function.__kwdefaults__
+        attributes = function.__dict__
+        return (
+            function,
+            function.__code__,
+            function.__defaults__,
+            kwdefaults,
+            tuple(sorted((name, value) for name, value in (kwdefaults or {}).items())),
+            function.__globals__,
+            closure,
+            tuple(closure_values),
+            attributes,
+            tuple(sorted(attributes.items())),
+        )
+
+    def function_state_is_current(state: tuple[object, ...] | None) -> bool:
+        if state is None or type(state[0]) is not FunctionType:
+            return False
+        function = state[0]
+        assert type(function) is FunctionType
+        current_kwdefaults = function.__kwdefaults__
+        current_attributes = function.__dict__
+        current_closure = function.__closure__
+        expected_kwdefaults = state[4]
+        expected_closure = state[7]
+        expected_attributes = state[9]
+        if (
+            type(expected_kwdefaults) is not tuple
+            or type(expected_closure) is not tuple
+            or type(expected_attributes) is not tuple
+            or function.__code__ is not state[1]
+            or function.__defaults__ is not state[2]
+            or current_kwdefaults is not state[3]
+            or function.__globals__ is not state[5]
+            or current_closure is not state[6]
+            or current_attributes is not state[8]
+            or type(current_kwdefaults) not in {dict, type(None)}
+            or type(current_attributes) is not dict
+            or len(current_kwdefaults or {}) != len(expected_kwdefaults)
+            or any(
+                (current_kwdefaults or {}).get(name) is not value
+                for name, value in expected_kwdefaults
+            )
+            or len(current_attributes) != len(expected_attributes)
+            or any(current_attributes.get(name) is not value for name, value in expected_attributes)
+            or len(current_closure or ()) != len(expected_closure)
+        ):
+            return False
+        for current_cell, expected in zip(
+            current_closure or (),
+            expected_closure,
+            strict=True,
+        ):
+            if type(expected) is not tuple or len(expected) != 2:
+                return False
+            expected_cell, expected_value = expected
+            if current_cell is not expected_cell:
+                return False
+            try:
+                current_value = current_cell.cell_contents
+            except ValueError:
+                current_value = empty_cell
+            if current_value is not expected_value:
+                return False
+        return True
+
+    def function_graph_state(
+        function: FunctionType,
+        *,
+        excluded_functions: tuple[FunctionType, ...] = (),
+    ) -> tuple[tuple[object, ...], ...]:
+        states: list[tuple[object, ...]] = []
+        seen: set[int] = set()
+
+        def visit_value(value: object) -> None:
+            if any(value is excluded for excluded in excluded_functions):
+                return
+            if type(value) is FunctionType:
+                visit_function(value)
+            elif type(value) is tuple:
+                for item in value:
+                    visit_value(item)
+
+        def visit_function(current: FunctionType) -> None:
+            key = id(current)
+            if key in seen:
+                return
+            seen.add(key)
+            state = function_state(current)
+            states.append(state)
+            for value in current.__defaults__ or ():
+                visit_value(value)
+            for value in (current.__kwdefaults__ or {}).values():
+                visit_value(value)
+            closure_values = state[7]
+            if type(closure_values) is not tuple:
+                return
+            for closure_value in closure_values:
+                if type(closure_value) is not tuple or len(closure_value) != 2:
+                    return
+                _cell, value = closure_value
+                visit_value(value)
+            for value in current.__dict__.values():
+                visit_value(value)
+
+        visit_function(function)
+        return tuple(states)
+
+    def function_graph_state_is_current(
+        states: tuple[tuple[object, ...], ...] | None,
+    ) -> bool:
+        return bool(states and all(function_state_is_current(state) for state in states))
 
     def trusted_usage_sha256(record: UsageRecord) -> str:
         return trusted_sha256(
@@ -675,13 +800,20 @@ def _build_authrunner_generation_origin_authority() -> tuple[
         refetch_method: Callable[..., object],
         pristine_predicate: Callable[[], bool],
         execution_evidence_resolver: Callable[[object], ExecutionEvidenceKind],
+        receipt_consumer: Callable[..., bool],
     ) -> None:
         """Register the exact OpenRouter authenticated refetch method once."""
 
-        nonlocal issuer
+        nonlocal issuer, issuer_callable_states
         frame = trusted_sys._getframe(1)
         module_name = getattr(module, "__name__", None)
         module_values = getattr(module, "__dict__", None)
+        pristine_kwdefaults = pristine_predicate.__kwdefaults__
+        graph_guard = (
+            pristine_kwdefaults.get("_provider_authority_graph_is_pristine")
+            if type(pristine_kwdefaults) is dict
+            else None
+        )
         if (
             module_name != "mmaudit.models.openrouter"
             or type(module_values) is not dict
@@ -698,6 +830,18 @@ def _build_authrunner_generation_origin_authority() -> tuple[
             is not pristine_predicate
             or getattr(module, "trusted_openrouter_execution_evidence", None)
             is not execution_evidence_resolver
+            or getattr(module, "_consume_provider_refetch_receipt_composite", None)
+            is not receipt_consumer
+            or type(graph_guard) is not FunctionType
+            or any(
+                type(function) is not FunctionType
+                for function in (
+                    refetch_method,
+                    pristine_predicate,
+                    execution_evidence_resolver,
+                    receipt_consumer,
+                )
+            )
         ):
             raise RuntimeError("AUTHRUNNER generation-origin issuer registration is invalid")
         with lock:
@@ -709,11 +853,77 @@ def _build_authrunner_generation_origin_authority() -> tuple[
                 refetch_method,
                 pristine_predicate,
                 execution_evidence_resolver,
+                receipt_consumer,
             )
+            registered_functions = (
+                refetch_method,
+                pristine_predicate,
+                execution_evidence_resolver,
+                receipt_consumer,
+            )
+            issuer_callable_states = (
+                *(
+                    function_state(cast(FunctionType, function))
+                    for function in registered_functions[:-1]
+                ),
+                *function_graph_state(
+                    cast(FunctionType, registered_functions[-1]),
+                    excluded_functions=(graph_guard,),
+                ),
+            )
+
+    def finalize_issuer_function_states() -> None:
+        """Refresh the registered predicate graph after its final receipt binding."""
+
+        nonlocal issuer_callable_states
+        frame = trusted_sys._getframe(1)
+        with lock:
+            registered_issuer = issuer
+        if registered_issuer is None:
+            raise RuntimeError("AUTHRUNNER generation-origin issuer is not registered")
+        module = registered_issuer[0]
+        module_values = getattr(module, "__dict__", None)
+        pristine_predicate = registered_issuer[3]
+        pristine_kwdefaults = pristine_predicate.__kwdefaults__
+        graph_guard = (
+            pristine_kwdefaults.get("_provider_authority_graph_is_pristine")
+            if type(pristine_kwdefaults) is dict
+            else None
+        )
+        functions = (
+            registered_issuer[2],
+            registered_issuer[3],
+            registered_issuer[4],
+            registered_issuer[5],
+        )
+        if (
+            type(module_values) is not dict
+            or frame.f_code.co_name != "<module>"
+            or frame.f_globals is not module_values
+            or type(graph_guard) is not FunctionType
+            or any(type(function) is not FunctionType for function in functions)
+        ):
+            raise RuntimeError("AUTHRUNNER generation-origin issuer finalization is invalid")
+        refreshed = (
+            *(function_state(cast(FunctionType, function)) for function in functions[:-1]),
+            *function_graph_state(
+                cast(FunctionType, functions[-1]),
+                excluded_functions=(graph_guard,),
+            ),
+        )
+        with lock:
+            if issuer is not registered_issuer:
+                raise RuntimeError(
+                    "AUTHRUNNER generation-origin issuer changed during finalization"
+                )
+            issuer_callable_states = refreshed
 
     def mark(
         capability: TrustedGenerationVerification,
         requests: tuple[GenerationVerificationRequest, ...],
+        *,
+        receipt_composite: object | None = None,
+        attestations: tuple[OpenRouterGenerationEvidence, ...] | None = None,
     ) -> TrustedGenerationVerification:
         """Strong-mark one exact capability returned by the pristine live refetch path."""
 
@@ -729,6 +939,7 @@ def _build_authrunner_generation_origin_authority() -> tuple[
             refetch_method,
             pristine_predicate,
             execution_evidence_resolver,
+            receipt_consumer,
         ) = registered_issuer
         frame = trusted_sys._getframe(1)
         module_name = getattr(module, "__name__", "")
@@ -750,6 +961,12 @@ def _build_authrunner_generation_origin_authority() -> tuple[
             is not trusted_recheck
             or getattr(trusted_self_module, "_has_authrunner_owned_real_usage_origin", None)
             is not trusted_usage_origin
+            or getattr(
+                trusted_self_module,
+                "authrunner_noncrediting_unknown_token_smoke_scope",
+                None,
+            )
+            is not trusted_smoke_scope
             or trusted_sys.modules.get(module_name) is not module
             or getattr(module, "OpenRouterClient", None) is not client_type
             or vars(client_type).get("create_trusted_generation_verification") is not refetch_method
@@ -757,6 +974,9 @@ def _build_authrunner_generation_origin_authority() -> tuple[
             is not pristine_predicate
             or getattr(module, "trusted_openrouter_execution_evidence", None)
             is not execution_evidence_resolver
+            or getattr(module, "_consume_provider_refetch_receipt_composite", None)
+            is not receipt_consumer
+            or not function_graph_state_is_current(issuer_callable_states)
             or frame.f_globals is not module_values
             or frame.f_code is not refetch_method.__code__
             or type(client) is not client_type
@@ -812,6 +1032,26 @@ def _build_authrunner_generation_origin_authority() -> tuple[
                 )
             )
         frozen_bindings = tuple(request_bindings)
+        request_scopes = tuple(trusted_smoke_scope(request.usage_record) for request in requests)
+        exact_smoke = bool(
+            request_scopes
+            and len(set(request_scopes)) == 1
+            and request_scopes[0] in {"CANDIDATE", "JUDGE"}
+        )
+        if exact_smoke:
+            if type(attestations) is not tuple or not receipt_consumer(
+                receipt_composite,
+                client=client,
+                requests=requests,
+                generations=attestations,
+            ):
+                raise GenerationEvidenceValidationError(
+                    "AUTHRUNNER smoke generation origin lacks one-shot receipt custody"
+                )
+        elif receipt_composite is not None or attestations is not None:
+            raise GenerationEvidenceValidationError(
+                "AUTHRUNNER release generation origin rejects smoke receipt custody"
+            )
         key = id(capability)
 
         def discard(reference: weakref.ReferenceType[TrustedGenerationVerification]) -> None:
@@ -866,6 +1106,7 @@ def _build_authrunner_generation_origin_authority() -> tuple[
             refetch_method,
             pristine_predicate,
             execution_evidence_resolver,
+            receipt_consumer,
         ) = registered_issuer
         module_name = getattr(module, "__name__", "")
         if (
@@ -883,6 +1124,12 @@ def _build_authrunner_generation_origin_authority() -> tuple[
             is not trusted_recheck
             or getattr(trusted_self_module, "_has_authrunner_owned_real_usage_origin", None)
             is not trusted_usage_origin
+            or getattr(
+                trusted_self_module,
+                "authrunner_noncrediting_unknown_token_smoke_scope",
+                None,
+            )
+            is not trusted_smoke_scope
             or trusted_sys.modules.get(module_name) is not module
             or getattr(module, "OpenRouterClient", None) is not client_type
             or vars(client_type).get("create_trusted_generation_verification") is not refetch_method
@@ -890,6 +1137,9 @@ def _build_authrunner_generation_origin_authority() -> tuple[
             is not pristine_predicate
             or getattr(module, "trusted_openrouter_execution_evidence", None)
             is not execution_evidence_resolver
+            or getattr(module, "_consume_provider_refetch_receipt_composite", None)
+            is not receipt_consumer
+            or not function_graph_state_is_current(issuer_callable_states)
             or not pristine_predicate()
         ):
             return False
@@ -934,7 +1184,7 @@ def _build_authrunner_generation_origin_authority() -> tuple[
                 "generation verification AUTHRUNNER origin changed during revocation"
             )
 
-    return register_issuer, mark, contains, revoke
+    return register_issuer, mark, contains, revoke, finalize_issuer_function_states
 
 
 (
@@ -942,6 +1192,7 @@ def _build_authrunner_generation_origin_authority() -> tuple[
     _attest_authrunner_generation_origin,
     _has_authrunner_generation_origin,
     _revoke_authrunner_generation_origin,
+    _finalize_authrunner_generation_origin_issuer,
 ) = _build_authrunner_generation_origin_authority()
 del _build_authrunner_generation_origin_authority
 

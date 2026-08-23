@@ -6,13 +6,14 @@ import hashlib
 import json
 import ssl
 import traceback
+import weakref
 from collections.abc import Callable
 from contextlib import asynccontextmanager
-from dataclasses import replace
+from dataclasses import asdict, fields, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -132,13 +133,18 @@ from mmaudit.models.usage import (
     _authrunner_usage_origin_scope,
     _has_authrunner_owned_real_usage_origin,
     _has_owned_real_usage_attestation,
+    atomic_request_limit_reservations_from_usage,
+    atomic_token_reservations_from_usage,
     authrunner_noncrediting_unknown_token_smoke_scope,
     is_creditable_usage_record,
     noncrediting_unknown_token_smoke_usage_diagnostics,
     noncrediting_unknown_token_smoke_usage_error,
+    request_token_plan_from_usage,
     structurally_noncrediting_unknown_token_smoke_usage_error,
 )
 from mmaudit.orchestration.budgets import (
+    AtomicRequestLimitReservationEvidence,
+    AtomicTokenReservationEvidence,
     BudgetExhaustedError,
     BudgetManager,
     TokenReservationOverrunError,
@@ -765,6 +771,7 @@ async def _dispatch_mock_smoke_request(
     certification: bool = False,
     persistent_cost_ledger: AtomicCostLedger | None = None,
     reasoning: OpenRouterReasoning | None = None,
+    observed_requests: list[httpx.Request] | None = None,
 ) -> tuple[
     OpenRouterClient,
     httpx.AsyncClient,
@@ -805,14 +812,20 @@ async def _dispatch_mock_smoke_request(
         if persistent_cost_ledger is not None
         else None
     )
-    client, http_client, _usage = _client(
-        config,
-        lambda _request: _completion_response(
+
+    def completion_handler(request: httpx.Request) -> httpx.Response:
+        if observed_requests is not None:
+            observed_requests.append(request)
+        return _completion_response(
             response_json,
             selected_model="alpha/atlas-secure-20260727",
             provider="Approved Provider",
             reasoning_tokens=(2 if reasoning is not None else None),
-        ),
+        )
+
+    client, http_client, _usage = _client(
+        config,
+        completion_handler,
         provider_policy=OpenRouterProviderPolicy(
             certification=certification,
             only=("approved-provider",),
@@ -960,6 +973,105 @@ def _as_v3_unknown_token_smoke_usage(record: UsageRecord) -> UsageRecord:
         }
     )
     upgraded = _attest_owned_real_usage_record(upgraded)
+    assert structurally_noncrediting_unknown_token_smoke_usage_error(upgraded) is None
+    return upgraded
+
+
+def _as_two_attempt_v3_unknown_token_smoke_usage(record: UsageRecord) -> UsageRecord:
+    """Extend one structural smoke fixture to two exact ordered attempt inventories."""
+
+    assert record.attempts == 1
+    raw_plan = record.routing.get("request_token_plan")
+    raw_tokens = record.routing.get("atomic_token_reservations")
+    raw_requests = record.routing.get("atomic_request_limit_reservations")
+    assert type(raw_plan) is dict
+    assert type(raw_tokens) is list and len(raw_tokens) == 1
+    plan = request_token_plan_from_usage(record)
+    assert plan is not None
+    token_inventory = atomic_token_reservations_from_usage(record, plan)
+    assert len(token_inventory) == 1
+    first_token = token_inventory[0]
+    request_inventory = atomic_request_limit_reservations_from_usage(record, plan)
+    if request_inventory:
+        assert type(raw_requests) is list and len(raw_requests) == 1
+        first_request = request_inventory[0]
+    else:
+        assert raw_requests is None
+        first_request = AtomicRequestLimitReservationEvidence.build(
+            request_id=record.request_id,
+            exact_model_id=record.requested_model,
+            role=record.role,
+            request_token_plan_sha256=plan.plan_sha256,
+            request_limit_scope=record.request_id,
+            request_limit_count_before=0,
+            request_limit_maximum=2,
+        )
+    second_request_id = f"{record.request_id}:attempt:2"
+    second_token = AtomicTokenReservationEvidence.build(
+        request_id=second_request_id,
+        exact_model_id=record.requested_model,
+        role=record.role,
+        request_token_plan_sha256=plan.plan_sha256,
+        planned_prompt_tokens=plan.prompt_byte_upper_bound_tokens,
+        planned_visible_output_tokens=plan.reserved_output_tokens,
+        planned_reasoning_tokens=plan.reserved_reasoning_tokens,
+        planned_completion_tokens=plan.requested_completion_tokens,
+        global_input_token_limit=plan.global_budget.global_input_token_budget,
+        global_output_token_limit=plan.global_budget.global_output_token_budget,
+        spent_input_tokens_before=first_token.after.spent_input_tokens,
+        reserved_input_tokens_before=first_token.after.reserved_input_tokens,
+        spent_output_tokens_before=first_token.after.spent_output_tokens,
+        reserved_output_tokens_before=first_token.after.reserved_output_tokens,
+    )
+    second_request = AtomicRequestLimitReservationEvidence.build(
+        request_id=second_request_id,
+        exact_model_id=record.requested_model,
+        role=record.role,
+        request_token_plan_sha256=plan.plan_sha256,
+        request_limit_scope=record.request_id,
+        request_limit_count_before=1,
+        request_limit_maximum=first_request.request_limit_maximum,
+    )
+    routing = {
+        **record.routing,
+        "request_cost_preview_sha256": "c" * 64,
+        "atomic_token_reservations": [
+            first_token.model_dump(mode="json"),
+            second_token.model_dump(mode="json"),
+        ],
+        "atomic_token_reservation_sha256s": [
+            first_token.evidence_sha256,
+            second_token.evidence_sha256,
+        ],
+        "atomic_token_reservation": second_token.model_dump(mode="json"),
+        "atomic_token_reservation_sha256": second_token.evidence_sha256,
+        "atomic_request_limit_reservations": [
+            first_request.model_dump(mode="json"),
+            second_request.model_dump(mode="json"),
+        ],
+        "atomic_request_limit_reservation_sha256s": [
+            first_request.evidence_sha256,
+            second_request.evidence_sha256,
+        ],
+        "atomic_request_limit_reservation": second_request.model_dump(mode="json"),
+        "atomic_request_limit_reservation_sha256": second_request.evidence_sha256,
+    }
+    reported = Decimal(record.reported_cost_usd_exact or "0")
+    accounted = reported + Decimal("0.001")
+    upgraded = _attest_owned_real_usage_record(
+        UsageRecord.model_validate(
+            {
+                **record.model_dump(mode="json"),
+                "attempts": 2,
+                "retry_count": 1,
+                "reported_cost_usd": float(reported),
+                "reported_cost_usd_exact": format(reported, "f"),
+                "accounted_cost_usd": float(accounted),
+                "accounted_cost_usd_exact": format(accounted, "f"),
+                "routing": routing,
+            }
+        )
+    )
     assert structurally_noncrediting_unknown_token_smoke_usage_error(upgraded) is None
     return upgraded
 
@@ -1302,7 +1414,7 @@ async def _assert_v3_smoke_receipt_cutoff(
             assert openrouter_module._openrouter_client_callables_are_pristine()
             with pytest.raises(
                 OpenRouterPrivacyError,
-                match="awaits immutable completion receipts",
+                match="lacks exact completion receipts",
             ) as raised_initial_cutoff:
                 await client._bind_real_completion_identity(completion)
             if intrinsic_invalid:
@@ -1313,7 +1425,7 @@ async def _assert_v3_smoke_receipt_cutoff(
             try:
                 with pytest.raises(
                     OpenRouterPrivacyError,
-                    match="awaits immutable completion receipts",
+                    match="lacks exact completion receipts",
                 ):
                     await client._bind_real_completion_identity(
                         StructuredCompletion(
@@ -1339,7 +1451,7 @@ async def _assert_v3_smoke_receipt_cutoff(
                     )
                     with pytest.raises(
                         OpenRouterPrivacyError,
-                        match="awaits immutable completion receipts",
+                        match="lacks immutable receipt custody",
                     ) as raised_cutoff:
                         client._usage_with_identity_result(
                             usage_record=provisional,
@@ -1371,12 +1483,20 @@ async def _assert_v3_smoke_receipt_cutoff(
                         await client.create_trusted_generation_verification((request,))
             with pytest.raises(
                 OpenRouterPrivacyError,
-                match="awaits immutable metadata receipts",
+                match="generation verification rejects mixed or invalid requests",
             ) as raised_verification:
                 await client.create_trusted_generation_verification((request,))
             if intrinsic_invalid:
                 assert "usage_diagnostics=STRUCTURED_OUTPUT_ROUTING" in str(
                     raised_verification.value
+                )
+            with pytest.raises(
+                OpenRouterPrivacyError,
+                match="generation refetch rejects mixed or invalid",
+            ):
+                await client._fetch_generation_attestations_with_deadline(
+                    (request,),
+                    ("generation-test",),
                 )
             if intrinsic_invalid:
                 mismatched_proof = (
@@ -1410,7 +1530,7 @@ async def _assert_v3_smoke_receipt_cutoff(
                 )
                 with pytest.raises(
                     OpenRouterPrivacyError,
-                    match="awaits immutable metadata receipts",
+                    match="generation verification rejects mixed or invalid requests",
                 ):
                     await client.create_trusted_generation_verification((mismatched_request,))
     finally:
@@ -1507,6 +1627,31 @@ def _model_discovery_run(
     )
     manifest = write_model_discovery_run(tmp_path / canonical_model.rsplit("/", 1)[-1], evidence)
     return manifest, evidence[0]
+
+
+def test_structured_completion_public_dataclass_surface_remains_two_fields() -> None:
+    usage = cast(UsageRecord, "synthetic-usage")
+    first = StructuredCompletion(value=Answer(answer="synthetic"), usage_record=usage)
+    second = StructuredCompletion(value=Answer(answer="synthetic"), usage_record=usage)
+
+    assert tuple(field.name for field in fields(StructuredCompletion)) == (
+        "value",
+        "usage_record",
+    )
+    assert StructuredCompletion.__match_args__ == ("value", "usage_record")
+    assert first == second
+    assert asdict(first) == {
+        "value": Answer(answer="synthetic"),
+        "usage_record": "synthetic-usage",
+    }
+    assert "generation_evidence" not in repr(first)
+    with pytest.raises(TypeError, match="generation_evidence"):
+        StructuredCompletion(
+            value=Answer(answer="synthetic"),
+            usage_record=usage,
+            generation_evidence=object(),  # type: ignore[call-arg]
+        )
+    assert weakref.ref(first)() is first
 
 
 def test_model_discovery_registration_cannot_overwrite_reasoning_parent(
@@ -2031,6 +2176,8 @@ async def test_isolated_transport_receipt_authority_claims_consumes_and_cannot_c
         base_url=OPENROUTER_DEFAULT_BASE_URL,
     )
 
+    stream_dispatches = 0
+
     @asynccontextmanager
     async def synthetic_stream(
         http_client: httpx.AsyncClient,
@@ -2038,6 +2185,8 @@ async def test_isolated_transport_receipt_authority_claims_consumes_and_cannot_c
         url: str,
         **kwargs: Any,
     ):
+        nonlocal stream_dispatches
+        stream_dispatches += 1
         request = http_client.build_request(
             method,
             url,
@@ -2086,6 +2235,7 @@ async def test_isolated_transport_receipt_authority_claims_consumes_and_cannot_c
     async def execute_operation(
         self: OpenRouterClient,
         usage_anchor: UsageRecord,
+        maximum_attempts: int = 1,
     ) -> tuple[object, object, httpx.Response]:
         grant = prepare_operation(
             self,
@@ -2093,7 +2243,7 @@ async def test_isolated_transport_receipt_authority_claims_consumes_and_cannot_c
             logical_request_id=usage_anchor.request_id,
             role=usage_anchor.role,
             exact_model_id=usage_anchor.requested_model,
-            maximum_attempts=1,
+            maximum_attempts=maximum_attempts,
             generation_id="generation-test",
             anchor=usage_anchor,
             expectation_sha256="b" * 64,
@@ -2126,6 +2276,13 @@ async def test_isolated_transport_receipt_authority_claims_consumes_and_cannot_c
             fetch_generation_attestations=(
                 OpenRouterClient._fetch_generation_attestations_with_deadline
             ),
+            terminal_usage_cost_custody=(OpenRouterClient._require_terminal_usage_cost_custody),
+            trusted_prequalification_request=(
+                OpenRouterClient._is_trusted_prequalification_request
+            ),
+            create_generation_verification=(
+                OpenRouterClient.create_trusted_generation_verification
+            ),
         )
         return authority
 
@@ -2140,6 +2297,7 @@ async def test_isolated_transport_receipt_authority_claims_consumes_and_cannot_c
         inspect_attempt,
         consume_attempt,
         revoke_operation,
+        *_,
     ) = authority
     del register_issuer
 
@@ -2175,6 +2333,7 @@ async def test_isolated_transport_receipt_authority_claims_consumes_and_cannot_c
             inspect_attempt,
             consume_attempt,
             revoke_operation,
+            *_,
         ) = second_authority
         second_grant, second_receipt, second_response = await execute_operation(client, anchor)
         assert second_response.status_code == 200
@@ -2265,6 +2424,361 @@ async def test_isolated_transport_receipt_authority_claims_consumes_and_cannot_c
         )
         revoke_first(receipt)
         revoke_attempt(second_receipt)
+
+        consume_refetch_composite = second_authority[12]
+        revoke_composite = second_authority[13]
+        revoke_refetch_batch = second_authority[15]
+        seal_isolated_component = second_authority[16]
+        inspect_sealed_component = second_authority[18]
+
+        replay_grant, replay_receipt, _replay_response = await execute_operation(client, anchor)
+        assert inspect_attempt(
+            replay_receipt,
+            client=client,
+            method="GET",
+            require_response=True,
+        )
+        replay_composite, replay_batch = seal_isolated_component(client, (replay_grant,))
+        (
+            sealed_receipt_keys,
+            sealed_grant_keys,
+            sealed_batch_keys,
+            sealed_composite_keys,
+        ) = inspect_sealed_component(replay_composite)
+        assert sealed_receipt_keys == (
+            frozenset(
+                {
+                    "phase",
+                    "process_id",
+                    "nonce",
+                    "operation_grant_ref",
+                    "operation_nonce",
+                    "attempt_ordinal",
+                    "raw_request_sha256",
+                    "response_digest",
+                    "outcome",
+                }
+            ),
+        )
+        assert sealed_grant_keys == (
+            frozenset({"phase", "process_id", "nonce", "parent_grant", "receipts"}),
+        )
+        assert sealed_batch_keys == frozenset({"phase", "process_id", "nonce"})
+        raw_transport_fields = frozenset(
+            {
+                "actual_request",
+                "client",
+                "headers",
+                "json_body",
+                "ledger",
+                "response",
+                "response_content",
+                "safe_response_headers",
+                "transport",
+            }
+        )
+        assert all(raw_transport_fields.isdisjoint(keys) for keys in sealed_receipt_keys)
+        assert all(raw_transport_fields.isdisjoint(keys) for keys in sealed_grant_keys)
+        assert sealed_batch_keys is not None
+        assert raw_transport_fields.isdisjoint(sealed_batch_keys)
+        assert frozenset({"json_body", "headers", "response", "actual_request"}).isdisjoint(
+            sealed_composite_keys
+        )
+        assert not openrouter_module._consume_provider_refetch_receipt_composite(
+            replay_composite,
+            client=client,
+            requests=(),
+            generations=(),
+        )
+        assert consume_refetch_composite(
+            replay_composite,
+            client=client,
+            requests=(),
+            generations=(),
+        )
+        assert not consume_refetch_composite(
+            replay_composite,
+            client=client,
+            requests=(),
+            generations=(),
+        )
+        revoke_refetch_batch(replay_batch)
+
+        batch_grant, batch_receipt, _batch_response = await execute_operation(client, anchor)
+        assert inspect_attempt(
+            batch_receipt,
+            client=client,
+            method="GET",
+            require_response=True,
+        )
+        batch_composite, batch = seal_isolated_component(client, (batch_grant,))
+        revoke_refetch_batch(batch)
+        revoke_refetch_batch(batch)
+        assert not consume_refetch_composite(
+            batch_composite,
+            client=client,
+            requests=(),
+            generations=(),
+        )
+
+        child_grant, child_receipt, _child_response = await execute_operation(client, anchor)
+        assert inspect_attempt(
+            child_receipt,
+            client=client,
+            method="GET",
+            require_response=True,
+        )
+        child_composite, child_batch = seal_isolated_component(client, (child_grant,))
+        revoke_operation(child_grant)
+        revoke_refetch_batch(child_batch)
+        revoke_composite(child_composite)
+        assert not consume_refetch_composite(
+            child_composite,
+            client=client,
+            requests=(),
+            generations=(),
+        )
+
+        receipt_grant, receipt_child, _receipt_response = await execute_operation(
+            client,
+            anchor,
+        )
+        assert inspect_attempt(
+            receipt_child,
+            client=client,
+            method="GET",
+            require_response=True,
+        )
+        receipt_composite, receipt_batch = seal_isolated_component(
+            client,
+            (receipt_grant,),
+        )
+        revoke_attempt(receipt_child)
+        revoke_composite(receipt_composite)
+        revoke_refetch_batch(receipt_batch)
+        assert not consume_refetch_composite(
+            receipt_composite,
+            client=client,
+            requests=(),
+            generations=(),
+        )
+
+        composite_grant, composite_receipt, _composite_response = await execute_operation(
+            client,
+            anchor,
+        )
+        assert inspect_attempt(
+            composite_receipt,
+            client=client,
+            method="GET",
+            require_response=True,
+        )
+        revoked_composite, revoked_batch = seal_isolated_component(
+            client,
+            (composite_grant,),
+        )
+        revoke_composite(revoked_composite)
+        revoke_refetch_batch(revoked_batch)
+        assert not consume_refetch_composite(
+            revoked_composite,
+            client=client,
+            requests=(),
+            generations=(),
+        )
+
+        retry_dispatches = 0
+
+        @asynccontextmanager
+        async def retry_then_success_stream(
+            http_client: httpx.AsyncClient,
+            method: str,
+            url: str,
+            **kwargs: Any,
+        ):
+            nonlocal retry_dispatches
+            retry_dispatches += 1
+            request = http_client.build_request(
+                method,
+                url,
+                headers=kwargs["headers"],
+            )
+            yield httpx.Response(
+                503 if retry_dispatches == 1 else 200,
+                json=_generation_payload(),
+                request=request,
+            )
+
+        retry_authority = build_authority(retry_then_success_stream)
+        (
+            _register_retry,
+            prepare_operation,
+            prepare_attempt,
+            dispatch_attempt,
+            _transition_retry,
+            revoke_attempt,
+            inspect_attempt,
+            consume_attempt,
+            revoke_operation,
+            *_,
+        ) = retry_authority
+        seal_isolated_component = retry_authority[16]
+        consume_refetch_composite = retry_authority[12]
+        revoke_composite = retry_authority[13]
+        revoke_refetch_batch = retry_authority[15]
+        retry_grant, retry_receipt, retry_response = await execute_operation(
+            client,
+            anchor,
+            maximum_attempts=2,
+        )
+        terminal_receipt, terminal_response = await execute_attempt(client, retry_grant)
+        assert retry_response.status_code == 503
+        assert terminal_response.status_code == 200
+        assert retry_dispatches == 2
+        assert inspect_attempt(
+            retry_receipt,
+            client=client,
+            method="GET",
+            require_response=True,
+        )
+        assert inspect_attempt(
+            terminal_receipt,
+            client=client,
+            method="GET",
+            require_response=True,
+        )
+        with pytest.raises(OpenRouterPrivacyError, match="differs from grant custody"):
+            seal_isolated_component(
+                client,
+                (retry_grant,),
+                ((terminal_receipt, retry_receipt),),
+            )
+        assert inspect_attempt(
+            retry_receipt,
+            client=client,
+            method="GET",
+            require_response=True,
+        )
+        assert inspect_attempt(
+            terminal_receipt,
+            client=client,
+            method="GET",
+            require_response=True,
+        )
+        retry_composite, retry_batch = seal_isolated_component(
+            client,
+            (retry_grant,),
+            ((retry_receipt, terminal_receipt),),
+        )
+        assert consume_refetch_composite(
+            retry_composite,
+            client=client,
+            requests=(),
+            generations=(),
+        )
+        assert not consume_refetch_composite(
+            retry_composite,
+            client=client,
+            requests=(),
+            generations=(),
+        )
+        revoke_composite(retry_composite)
+        revoke_refetch_batch(retry_batch)
+
+        vector_authority = build_authority()
+        (
+            _register_vector,
+            prepare_operation,
+            prepare_attempt,
+            dispatch_attempt,
+            _transition_vector,
+            revoke_attempt,
+            inspect_attempt,
+            consume_attempt,
+            revoke_operation,
+            *_,
+        ) = vector_authority
+        seal_isolated_component = vector_authority[16]
+        consume_refetch_composite = vector_authority[12]
+        revoke_composite = vector_authority[13]
+        revoke_refetch_batch = vector_authority[15]
+        first_vector_grant, first_vector_receipt, _first_vector_response = await execute_operation(
+            client, anchor
+        )
+        (
+            second_vector_grant,
+            second_vector_receipt,
+            _second_vector_response,
+        ) = await execute_operation(client, anchor)
+        vector_grants = (first_vector_grant, second_vector_grant)
+        exact_vectors = ((first_vector_receipt,), (second_vector_receipt,))
+        malformed_vectors = (
+            ((first_vector_receipt,),),
+            ((first_vector_receipt,), (first_vector_receipt,)),
+            ((second_vector_receipt,), (first_vector_receipt,)),
+        )
+        for malformed_vector in malformed_vectors:
+            with pytest.raises(OpenRouterPrivacyError, match="differs from grant custody"):
+                seal_isolated_component(client, vector_grants, malformed_vector)
+            assert inspect_attempt(
+                first_vector_receipt,
+                client=client,
+                method="GET",
+                require_response=True,
+            )
+            assert inspect_attempt(
+                second_vector_receipt,
+                client=client,
+                method="GET",
+                require_response=True,
+            )
+        with pytest.raises(OpenRouterPrivacyError, match="sealing is unavailable"):
+            seal_isolated_component(
+                client,
+                (first_vector_grant, first_vector_grant),
+                ((first_vector_receipt,), (first_vector_receipt,)),
+            )
+        assert inspect_attempt(
+            first_vector_receipt,
+            client=client,
+            method="GET",
+            require_response=True,
+        )
+        foreign_sealer = build_authority()[16]
+        with pytest.raises(OpenRouterPrivacyError, match="absent or consumed"):
+            foreign_sealer(client, vector_grants, exact_vectors)
+        assert inspect_attempt(
+            first_vector_receipt,
+            client=client,
+            method="GET",
+            require_response=True,
+        )
+        assert inspect_attempt(
+            second_vector_receipt,
+            client=client,
+            method="GET",
+            require_response=True,
+        )
+        vector_composite, vector_batch = seal_isolated_component(
+            client,
+            vector_grants,
+            exact_vectors,
+        )
+        assert consume_refetch_composite(
+            vector_composite,
+            client=client,
+            requests=(),
+            generations=(),
+        )
+        assert not consume_refetch_composite(
+            vector_composite,
+            client=client,
+            requests=(),
+            generations=(),
+        )
+        revoke_composite(vector_composite)
+        revoke_refetch_batch(vector_batch)
+        assert not _has_authrunner_owned_real_usage_origin(anchor)
+        assert not is_creditable_usage_record(anchor, require_real=True)
 
         original_headers = dict(client._headers)
         header_mutations = (
@@ -2361,10 +2875,73 @@ async def test_isolated_transport_receipt_authority_claims_consumes_and_cannot_c
 
         httpx.AsyncClient.stream.__code__ = changed_stream_factory().__code__
         try:
-            with pytest.raises(OpenRouterPrivacyError, match="pristine owned REAL client"):
+            with pytest.raises(
+                OpenRouterPrivacyError,
+                match=r"pristine owned REAL client|provider transport provenance",
+            ):
                 await execute_operation(client, anchor)
         finally:
             httpx.AsyncClient.stream.__code__ = original_stream_code
+
+        def changed_graph_factory(freevar_count: int) -> Callable[..., object]:
+            if freevar_count == 3:
+                a = object()
+                b = object()
+                c = object()
+
+                def changed_completed_graph(*_args: object, **_kwargs: object) -> object:
+                    return (a, b, c)
+
+                return changed_completed_graph
+            assert freevar_count == 14
+            a = object()
+            b = object()
+            c = object()
+            d = object()
+            e = object()
+            f = object()
+            g = object()
+            h = object()
+            i = object()
+            j = object()
+            k = object()
+            cell_l = object()
+            m = object()
+            n = object()
+
+            def changed_graph(*_args: object, **_kwargs: object) -> object:
+                return (a, b, c, d, e, f, g, h, i, j, k, cell_l, m, n)
+
+            return changed_graph
+
+        for graph_helper in (
+            openrouter_module._provider_httpx_inflight_response_graph,
+            openrouter_module._provider_httpx_completed_response_graph,
+        ):
+            original_graph_code = graph_helper.__code__
+            before_graph_mutation_receipts = len(observed_receipts)
+            before_graph_mutation_dispatches = stream_dispatches
+            graph_helper.__code__ = changed_graph_factory(
+                len(original_graph_code.co_freevars)
+            ).__code__
+            try:
+                with pytest.raises(
+                    OpenRouterPrivacyError,
+                    match=r"pristine|provider transport provenance",
+                ):
+                    await execute_operation(client, anchor)
+            finally:
+                graph_helper.__code__ = original_graph_code
+            assert stream_dispatches == before_graph_mutation_dispatches
+            assert len(observed_receipts) == before_graph_mutation_receipts + 1
+            failed_receipt = observed_receipts[-1]
+            revoke_operation(observed_grants[-1])
+            assert not inspect_attempt(
+                failed_receipt,
+                client=client,
+                method="GET",
+                require_response=False,
+            )
 
         with monkeypatch.context() as context:
             context.setattr(openrouter_module, "safe_headers", lambda _headers: {})
@@ -2401,6 +2978,7 @@ async def test_isolated_transport_receipt_authority_claims_consumes_and_cannot_c
             inspect_attempt,
             consume_attempt,
             revoke_operation,
+            *_,
         ) = delayed_authority
         delayed_task = asyncio.create_task(execute_operation(client, anchor))
         await stream_entered.wait()
@@ -2421,10 +2999,208 @@ async def test_isolated_transport_receipt_authority_claims_consumes_and_cannot_c
         await client.close()
 
 
+@pytest.mark.parametrize(
+    "binding_names",
+    [
+        (
+            "_attest_authrunner_generation_origin",
+            "_TRUSTED_ATTEST_AUTHRUNNER_GENERATION_ORIGIN",
+        ),
+        (
+            "_attest_authrunner_owned_real_usage_origin",
+            "_TRUSTED_ATTEST_AUTHRUNNER_USAGE_ORIGIN",
+        ),
+        (
+            "_has_authrunner_owned_real_usage_origin",
+            "_TRUSTED_HAS_AUTHRUNNER_USAGE_ORIGIN",
+        ),
+        (
+            "_revoke_authrunner_owned_real_usage_origin",
+            "_TRUSTED_REVOKE_AUTHRUNNER_USAGE_ORIGIN",
+        ),
+        (
+            "_consume_provider_initial_receipt_composite",
+            "_TRUSTED_CONSUME_PROVIDER_INITIAL_RECEIPT_COMPOSITE",
+        ),
+        (
+            "_consume_provider_refetch_receipt_composite",
+            "_TRUSTED_CONSUME_PROVIDER_REFETCH_RECEIPT_COMPOSITE",
+        ),
+        (
+            "_revoke_provider_transport_operation",
+            "_TRUSTED_REVOKE_PROVIDER_TRANSPORT_OPERATION",
+        ),
+        (
+            "_revoke_provider_transport_receipt_composite",
+            "_TRUSTED_REVOKE_PROVIDER_TRANSPORT_RECEIPT_COMPOSITE",
+        ),
+        (
+            "_revoke_provider_refetch_batch",
+            "_TRUSTED_REVOKE_PROVIDER_REFETCH_BATCH",
+        ),
+        (
+            "_register_structured_completion_generation_evidence",
+            "_TRUSTED_REGISTER_STRUCTURED_COMPLETION_GENERATION_EVIDENCE",
+        ),
+        (
+            "_resolve_structured_completion_generation_evidence",
+            "_TRUSTED_RESOLVE_STRUCTURED_COMPLETION_GENERATION_EVIDENCE",
+        ),
+        (
+            "_revoke_structured_completion_generation_evidence",
+            "_TRUSTED_REVOKE_STRUCTURED_COMPLETION_GENERATION_EVIDENCE",
+        ),
+        ("_provider_httpx_inflight_response_graph",),
+        ("_provider_httpx_completed_response_graph",),
+    ],
+)
+def test_receipt_publication_and_cleanup_alias_pair_retarget_is_not_pristine(
+    monkeypatch: pytest.MonkeyPatch,
+    binding_names: tuple[str, ...],
+) -> None:
+    def replacement(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    for name in binding_names:
+        monkeypatch.setattr(openrouter_module, name, replacement)
+    assert not openrouter_module._openrouter_client_callables_are_pristine()
+
+
+@pytest.mark.parametrize(
+    "binding_name",
+    (
+        "_prepare_provider_transport_operation",
+        "_prepare_provider_transport_attempt",
+        "_dispatch_provider_transport_attempt",
+        "_transition_provider_transport_attempt",
+        "_revoke_provider_transport_attempt",
+        "_inspect_provider_transport_attempt",
+        "_consume_provider_transport_attempt",
+        "_revoke_provider_transport_operation",
+        "_seal_provider_initial_receipt_composite",
+        "_consume_provider_initial_receipt_composite",
+        "_seal_provider_refetch_receipt_composite",
+        "_consume_provider_refetch_receipt_composite",
+        "_revoke_provider_transport_receipt_composite",
+        "_prepare_provider_refetch_batch",
+        "_revoke_provider_refetch_batch",
+        "_register_structured_completion_generation_evidence",
+        "_resolve_structured_completion_generation_evidence",
+        "_revoke_structured_completion_generation_evidence",
+        "_has_structured_completion_generation_evidence",
+        "_attest_authrunner_owned_real_usage_origin",
+        "_has_authrunner_owned_real_usage_origin",
+        "_revoke_authrunner_owned_real_usage_origin",
+        "_attest_authrunner_generation_origin",
+        "_has_authrunner_generation_origin",
+    ),
+)
+def test_receipt_authority_function_code_retarget_is_not_pristine(
+    binding_name: str,
+) -> None:
+    function = getattr(openrouter_module, binding_name)
+    original_code = function.__code__
+
+    def changed(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    function.__code__ = changed.__code__.replace(co_freevars=original_code.co_freevars)
+    try:
+        assert not openrouter_module._openrouter_client_callables_are_pristine()
+    finally:
+        function.__code__ = original_code
+    assert openrouter_module._openrouter_client_callables_are_pristine()
+
+
+@pytest.mark.parametrize(
+    ("binding_name", "closure_name"),
+    (
+        ("_consume_provider_initial_receipt_composite", "consume_composite"),
+        ("_consume_provider_refetch_receipt_composite", "consume_composite"),
+        ("_register_structured_completion_generation_evidence", "validate"),
+        ("_resolve_structured_completion_generation_evidence", "validate"),
+    ),
+)
+def test_receipt_authority_nested_function_code_retarget_is_not_pristine(
+    binding_name: str,
+    closure_name: str,
+) -> None:
+    root = getattr(openrouter_module, binding_name)
+    closure = dict(zip(root.__code__.co_freevars, root.__closure__ or (), strict=True))
+    nested = closure[closure_name].cell_contents
+    original_code = nested.__code__
+
+    def changed(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    nested.__code__ = changed.__code__.replace(co_freevars=original_code.co_freevars)
+    try:
+        assert not openrouter_module._openrouter_client_callables_are_pristine()
+    finally:
+        nested.__code__ = original_code
+    assert openrouter_module._openrouter_client_callables_are_pristine()
+
+
+def test_provider_authority_graph_guard_code_retarget_is_not_pristine() -> None:
+    kwdefaults = openrouter_module._openrouter_client_callables_are_pristine.__kwdefaults__
+    assert kwdefaults is not None
+    guard = kwdefaults["_provider_authority_graph_is_pristine"]
+    original_code = guard.__code__
+
+    def changed(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    guard.__code__ = changed.__code__.replace(co_freevars=original_code.co_freevars)
+    try:
+        assert not openrouter_module._openrouter_client_callables_are_pristine()
+    finally:
+        guard.__code__ = original_code
+    assert openrouter_module._openrouter_client_callables_are_pristine()
+
+
+def test_provider_authority_graph_guard_has_no_mutable_state_holder() -> None:
+    kwdefaults = openrouter_module._openrouter_client_callables_are_pristine.__kwdefaults__
+    assert kwdefaults is not None
+    guard = kwdefaults["_provider_authority_graph_is_pristine"]
+    closure = dict(zip(guard.__code__.co_freevars, guard.__closure__ or (), strict=True))
+    frozen_states_cell = closure["frozen_states"]
+    frozen_states = frozen_states_cell.cell_contents
+    frozen_states_seal = closure["frozen_states_seal"].cell_contents
+    assert type(frozen_states) is tuple
+    assert frozen_states
+    assert frozen_states_seal is frozen_states
+    assert all(type(cell.cell_contents) not in {list, dict, set} for cell in closure.values())
+
+    frozen_states_cell.cell_contents = [()]
+    try:
+        assert not openrouter_module._openrouter_client_callables_are_pristine()
+    finally:
+        frozen_states_cell.cell_contents = frozen_states
+    assert openrouter_module._openrouter_client_callables_are_pristine()
+
+    frozen_states_cell.cell_contents = (frozen_states[0],)
+    try:
+        assert not openrouter_module._openrouter_client_callables_are_pristine()
+    finally:
+        frozen_states_cell.cell_contents = frozen_states
+    assert openrouter_module._openrouter_client_callables_are_pristine()
+
+    frozen_states_seal_cell = closure["frozen_states_seal"]
+    frozen_states_cell.cell_contents = (frozen_states[0],)
+    frozen_states_seal_cell.cell_contents = frozen_states_cell.cell_contents
+    try:
+        assert not openrouter_module._openrouter_client_callables_are_pristine()
+    finally:
+        frozen_states_cell.cell_contents = frozen_states
+        frozen_states_seal_cell.cell_contents = frozen_states
+    assert openrouter_module._openrouter_client_callables_are_pristine()
+
+
 @pytest.mark.asyncio
-async def test_isolated_post_and_error_transport_receipts_are_one_shot_and_production_dormant(
+async def test_isolated_post_and_error_receipts_are_one_shot_and_cross_authority_rejected(
     config_factory,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Exercise POST and no-request ERROR receipts without production authority."""
 
@@ -2452,17 +3228,13 @@ async def test_isolated_post_and_error_transport_receipts_are_one_shot_and_produ
     )
     logical_request_id = "isolated.post.receipt"
     attempt_id = openrouter_module._attempt_request_id(logical_request_id, 1)
-    persistent = atomic_ledger.reserve(attempt_id, Decimal("0.01"))
-    reservation = openrouter_module.Reservation(
-        identifier=attempt_id,
-        estimated_cost_usd=0.01,
-        persistent=persistent,
-    )
     body = {
         "model": "alpha/atlas-secure",
         "messages": [{"role": "user", "content": "synthetic"}],
         "provider": {"max_price": {"prompt": 0.001, "completion": 0.002}},
     }
+
+    post_dispatches = 0
 
     @asynccontextmanager
     async def post_stream(
@@ -2471,6 +3243,8 @@ async def test_isolated_post_and_error_transport_receipts_are_one_shot_and_produ
         url: str,
         **kwargs: Any,
     ):
+        nonlocal post_dispatches
+        post_dispatches += 1
         request = http_client.build_request(
             method,
             url,
@@ -2564,6 +3338,13 @@ async def test_isolated_post_and_error_transport_receipts_are_one_shot_and_produ
             fetch_generation_attestations=(
                 OpenRouterClient._fetch_generation_attestations_with_deadline
             ),
+            terminal_usage_cost_custody=(OpenRouterClient._require_terminal_usage_cost_custody),
+            trusted_prequalification_request=(
+                OpenRouterClient._is_trusted_prequalification_request
+            ),
+            create_generation_verification=(
+                OpenRouterClient.create_trusted_generation_verification
+            ),
         )
         return authority
 
@@ -2582,6 +3363,7 @@ async def test_isolated_post_and_error_transport_receipts_are_one_shot_and_produ
         consume_attempt = authority[7]
         revoke_operation = authority[8]
 
+    persistent = None
     try:
         assert (
             openrouter_module._prepare_provider_transport_operation(
@@ -2594,10 +3376,27 @@ async def test_isolated_post_and_error_transport_receipts_are_one_shot_and_produ
             )
             is None
         )
-        after_reservation = atomic_ledger.snapshot()
         select_authority(post_stream)
+        before_unsupported_runtime = atomic_ledger.snapshot()
+        with monkeypatch.context() as context:
+            context.setattr(httpx, "__version__", "0.28.2")
+            with pytest.raises(OpenRouterPrivacyError, match="coordinates are invalid"):
+                await execute_post_operation(client, body, object())
+        assert observed_grants == []
+        assert observed_receipts == []
+        assert post_dispatches == 0
+        assert atomic_ledger.snapshot() == before_unsupported_runtime
+        assert before_unsupported_runtime.entries == ()
+
+        persistent = atomic_ledger.reserve(attempt_id, Decimal("0.01"))
+        reservation = openrouter_module.Reservation(
+            identifier=attempt_id,
+            estimated_cost_usd=0.01,
+            persistent=persistent,
+        )
+        after_reservation = atomic_ledger.snapshot()
         grant, receipt, response = await execute_post_operation(client, body, reservation)
-        with pytest.raises(OpenRouterPrivacyError, match="authority is dormant"):
+        with pytest.raises(OpenRouterPrivacyError, match="absent or consumed"):
             openrouter_module._prepare_provider_transport_attempt(
                 client,
                 operation_grant=grant,
@@ -2682,12 +3481,478 @@ async def test_isolated_post_and_error_transport_receipts_are_one_shot_and_produ
         revoke_operation(error_grant)
         assert atomic_ledger.snapshot() == after_reservation
     finally:
-        atomic_ledger.reconcile(persistent, Decimal("0.001"))
+        if persistent is not None:
+            atomic_ledger.reconcile(persistent, Decimal("0.001"))
         await client.close()
 
 
 @pytest.mark.asyncio
-async def test_ordinary_completion_and_metadata_bypass_dormant_receipt_dispatch(
+async def test_isolated_smoke_completion_and_metadata_vectors_join_exact_raw_evidence(
+    config_factory: Callable[..., Any],
+    tmp_path: Path,
+) -> None:
+    """Exercise production validators locally without minting runtime origin."""
+
+    bundle = load_authenticated_runner_smoke_corpus_bundle(_MODEL_BENCHMARK_SMOKE_CORPUS)
+    source_provenance = prove_pinned_noncrediting_smoke_model_benchmark_source(
+        bundle,
+        now=datetime.now(UTC).replace(microsecond=0),
+    )
+    response = ModelBenchmarkResponse(
+        case_id=bundle.case.case_id,
+        classification=ModelBenchmarkClassification.SAFE,
+        locations=[],
+        invariant=None,
+        repository_instructions_followed=True,
+        assumptions=[],
+        unsupported_assumptions=[],
+        verifier_conclusion=None,
+        falsifier_conclusion=None,
+        rationale="Synthetic receipt-vector validation response.",
+    )
+    response_json = response.model_dump_json()
+    config = config_factory(
+        privacy={
+            "profile": PrivacyProfile.SYNTHETIC_BENCHMARK,
+            "require_zdr": True,
+        },
+        execution={"max_json_repair_attempts": 0, "max_model_retries": 1},
+    )
+    observed_requests: list[httpx.Request] = []
+    mock_dir = tmp_path / "vector-mock"
+    mock_dir.mkdir()
+    (
+        mock_client,
+        mock_http_client,
+        mock_completion,
+        _manifest,
+        discovery,
+    ) = await _dispatch_mock_smoke_request(
+        config=config,
+        tmp_path=mock_dir,
+        source_sha256=bundle.source_sha256,
+        source_provenance=source_provenance,
+        logical_request_id=f"authrunner.smoke.r1.candidate.primary:{bundle.bundle_sha256}",
+        system_prompt=model_benchmark_system_prompt(),
+        user_prompt=blinded_model_benchmark_request(bundle.case),
+        response_model=ModelBenchmarkResponse,
+        schema_name=MODEL_BENCHMARK_SCHEMA_NAME,
+        response_json=response_json,
+        certification=True,
+        observed_requests=observed_requests,
+    )
+    await mock_client.close()
+    await mock_http_client.aclose()
+    assert len(observed_requests) == 1
+    request_body = json.loads(observed_requests[0].content)
+    provisional = _as_v3_unknown_token_smoke_usage(
+        UsageRecord.model_validate(
+            {
+                **mock_completion.usage_record.model_dump(mode="json"),
+                "execution_evidence": ExecutionEvidenceKind.REAL,
+            }
+        )
+    )
+    completion_usage = _as_two_attempt_v3_unknown_token_smoke_usage(provisional)
+    assert canonical_sha256(request_body) == completion_usage.request_body_sha256
+    assert (
+        noncrediting_unknown_token_smoke_usage_diagnostics(
+            completion_usage,
+            require_runtime_attestation=False,
+        )
+        == ()
+    )
+
+    def owned_client(name: str) -> tuple[OpenRouterClient, AtomicCostLedger]:
+        ledger = AtomicCostLedger.initialize(
+            tmp_path / f"{name}.json",
+            cap_usd=Decimal("20"),
+        )
+        return (
+            OpenRouterClient(
+                api_key="synthetic-key",
+                execution=config.execution,
+                privacy=config.privacy,
+                budget=BudgetManager(
+                    total_usd=20,
+                    max_output_tokens=config.execution.max_output_tokens_per_request,
+                    conservative_usd_per_million_tokens=10,
+                    max_requests_per_agent=2,
+                    atomic_ledger=ledger,
+                    require_endpoint_cost_bound=True,
+                ),
+                usage=UsageLedger(),
+                base_url=OPENROUTER_DEFAULT_BASE_URL,
+            ),
+            ledger,
+        )
+
+    def register_isolated_authority(authority: tuple[Callable[..., Any], ...]) -> None:
+        authority[0](
+            module=openrouter_module,
+            client_type=OpenRouterClient,
+            bounded_request=OpenRouterClient._bounded_request,
+            complete_one=OpenRouterClient._complete_one,
+            request_metadata=OpenRouterClient._request_metadata,
+            transport_lookup=openrouter_module._lookup_trusted_transport_binding,
+            pristine_predicate=openrouter_module._openrouter_client_callables_are_pristine,
+            execution_evidence_resolver=openrouter_module.trusted_openrouter_execution_evidence,
+            ledger_snapshot=openrouter_module._TRUSTED_ATOMIC_LEDGER_SNAPSHOT,
+            complete_with_evidence=OpenRouterClient.complete_with_evidence,
+            bind_real_completion_identity=OpenRouterClient._bind_real_completion_identity,
+            fetch_generation_attestations=(
+                OpenRouterClient._fetch_generation_attestations_with_deadline
+            ),
+            terminal_usage_cost_custody=(OpenRouterClient._require_terminal_usage_cost_custody),
+            trusted_prequalification_request=(
+                OpenRouterClient._is_trusted_prequalification_request
+            ),
+            create_generation_verification=(
+                OpenRouterClient.create_trusted_generation_verification
+            ),
+        )
+
+    prepare_completion_operation: Callable[..., Any]
+    prepare_completion_attempt: Callable[..., Any]
+    dispatch_completion_attempt: Callable[..., Any]
+    completion_responses = 0
+
+    @asynccontextmanager
+    async def completion_stream(
+        http_client: httpx.AsyncClient,
+        method: str,
+        url: str,
+        **kwargs: Any,
+    ):
+        nonlocal completion_responses
+        completion_responses += 1
+        request = http_client.build_request(
+            method,
+            url,
+            headers=kwargs["headers"],
+            json=kwargs["json"],
+        )
+        if completion_responses == 1:
+            yield httpx.Response(503, json={"error": "synthetic retry"}, request=request)
+        else:
+            yield httpx.Response(
+                200,
+                headers={"X-Generation-Id": "generation-test"},
+                json=_completion(
+                    response_json,
+                    selected_model="alpha/atlas-secure-20260727",
+                    provider="Approved Provider",
+                ),
+                request=request,
+            )
+
+    async def prepare_completion(self: OpenRouterClient) -> object:
+        return prepare_completion_operation(
+            self,
+            purpose="COMPLETION",
+            logical_request_id=completion_usage.request_id,
+            role=completion_usage.role,
+            exact_model_id=completion_usage.requested_model,
+            maximum_attempts=2,
+            expectation_sha256="c" * 64,
+        )
+
+    async def execute_completion_attempt(
+        self: OpenRouterClient,
+        grant: object,
+        reservation: object,
+        attempts: int,
+    ) -> tuple[object, httpx.Response]:
+        body = request_body
+        active_reservation = reservation
+        request_id = completion_usage.request_id
+        receipt = prepare_completion_attempt(
+            self,
+            operation_grant=grant,
+            method="POST",
+            path="/chat/completions",
+            json_body=body,
+            reservation=active_reservation,
+            purpose="COMPLETION",
+        )
+        response_value = await dispatch_completion_attempt(
+            self,
+            receipt,
+            "POST",
+            "/chat/completions",
+            json_body=body,
+            max_bytes=1_000_000,
+        )
+        assert request_id == completion_usage.request_id
+        return receipt, response_value
+
+    completion_authority = openrouter_module._build_provider_transport_attempt_authority(
+        _isolated_stream=completion_stream,
+        _isolated_parent_codes={"COMPLETION": prepare_completion.__code__},
+        _isolated_attempt_codes={"POST": execute_completion_attempt.__code__},
+        _isolated_frame_globals=globals(),
+    )
+    register_isolated_authority(completion_authority)
+    prepare_completion_operation = completion_authority[1]
+    prepare_completion_attempt = completion_authority[2]
+    dispatch_completion_attempt = completion_authority[3]
+    inspect_completion_attempt = completion_authority[6]
+    revoke_completion_operation = completion_authority[8]
+    revoke_completion_composite = completion_authority[13]
+    seal_completion = completion_authority[19]
+    completion_client, completion_ledger = owned_client("completion-vector")
+    try:
+        completion_grant = await prepare_completion(completion_client)
+        completion_receipts: list[object] = []
+        attempt_costs = (Decimal("0.001"), Decimal("0.01"))
+        for ordinal, cost in enumerate(attempt_costs, start=1):
+            attempt_id = openrouter_module._attempt_request_id(
+                completion_usage.request_id,
+                ordinal,
+            )
+            persistent = completion_ledger.reserve(attempt_id, cost)
+            reservation = openrouter_module.Reservation(
+                identifier=attempt_id,
+                estimated_cost_usd=float(cost),
+                persistent=persistent,
+            )
+            receipt, raw_response = await execute_completion_attempt(
+                completion_client,
+                completion_grant,
+                reservation,
+                ordinal,
+            )
+            assert raw_response.status_code == (503 if ordinal == 1 else 200)
+            completion_ledger.reconcile(persistent, cost)
+            completion_receipts.append(receipt)
+        assert completion_responses == 2
+        drifted_completion_usage = completion_usage.model_copy(
+            update={
+                "accounted_cost_usd": 0.012,
+                "accounted_cost_usd_exact": "0.012",
+            }
+        )
+        with pytest.raises(OpenRouterPrivacyError, match="terminal cost custody"):
+            seal_completion(
+                completion_client,
+                completion_grant,
+                drifted_completion_usage,
+                tuple(completion_receipts),
+            )
+        with pytest.raises(OpenRouterPrivacyError, match="differs from grant custody"):
+            seal_completion(
+                completion_client,
+                completion_grant,
+                completion_usage,
+                tuple(reversed(completion_receipts)),
+            )
+        assert all(
+            inspect_completion_attempt(
+                receipt,
+                client=completion_client,
+                method="POST",
+                require_response=True,
+            )
+            for receipt in completion_receipts
+        )
+        completion_composite = seal_completion(
+            completion_client,
+            completion_grant,
+            completion_usage,
+            tuple(completion_receipts),
+        )
+        assert not _has_authrunner_owned_real_usage_origin(completion_usage)
+        assert not is_creditable_usage_record(completion_usage, require_real=True)
+        revoke_completion_composite(completion_composite)
+        assert all(
+            not inspect_completion_attempt(
+                receipt,
+                client=completion_client,
+                method="POST",
+                require_response=False,
+            )
+            for receipt in completion_receipts
+        )
+        revoke_completion_operation(completion_grant)
+    finally:
+        await completion_client.close()
+
+    discovery_endpoint = discovery.endpoint_snapshot.endpoint(discovery.approved_provider_endpoint)
+    assert discovery_endpoint is not None
+    expectation = generation_evidence_module._initial_real_generation_reconciliation_expectation(
+        exact_model_id=discovery.exact_model_id,
+        canonical_model_id=discovery.canonical_slug,
+        catalog_identity_binding_sha256=discovery.catalog_identity_binding_sha256,
+        discovery_evidence_sha256=discovery.discovery_evidence_sha256,
+        expected_provider_name=discovery_endpoint.provider_name,
+        require_certification=True,
+        usage_record=provisional,
+    )
+    final_generation_payload = _generation_payload()
+    retrieved_at = datetime.now(UTC)
+    final_generation = validate_openrouter_generation_payload(
+        final_generation_payload,
+        requested_generation_id="generation-test",
+        retrieved_at=retrieved_at,
+        retrieval_attempts=2,
+        execution_evidence=ExecutionEvidenceKind.REAL,
+    )
+    wire_final_generation = validate_openrouter_generation_payload(
+        json.loads(
+            httpx.Response(200, json=final_generation_payload).content,
+            parse_float=Decimal,
+        ),
+        requested_generation_id="generation-test",
+        retrieved_at=final_generation.retrieved_at,
+        retrieval_attempts=final_generation.retrieval_attempts,
+        execution_evidence=final_generation.execution_evidence,
+    )
+    assert wire_final_generation == final_generation
+    incomplete_payload = {"data": {"id": "generation-test"}}
+    eventual_payload = json.loads(json.dumps(final_generation_payload))
+    eventual_payload["data"]["tokens_prompt"] = 9
+    eventual_payload["data"]["native_tokens_prompt"] = 9
+    malformed_payload = json.loads(json.dumps(final_generation_payload))
+    malformed_payload["data"]["model"] = "other/model"
+    assert openrouter_module._generation_metadata_payload_may_be_pending(
+        incomplete_payload,
+        requested_generation_id="generation-test",
+        reconciliation_expectation=expectation,
+        retrieval_attempts=1,
+        execution_evidence=ExecutionEvidenceKind.REAL,
+    )
+
+    for case_name, first_payload, accepted in (
+        ("incomplete", incomplete_payload, True),
+        ("eventual", eventual_payload, True),
+        ("non-eventual", malformed_payload, False),
+    ):
+        metadata_client, metadata_ledger = owned_client(f"metadata-vector-{case_name}")
+        prepare_metadata_operation: Callable[..., Any]
+        prepare_metadata_attempt: Callable[..., Any]
+        dispatch_metadata_attempt: Callable[..., Any]
+        payloads = (first_payload, final_generation_payload)
+        response_index = 0
+
+        @asynccontextmanager
+        async def metadata_stream(
+            http_client: httpx.AsyncClient,
+            method: str,
+            url: str,
+            **kwargs: Any,
+        ):
+            nonlocal response_index
+            request = http_client.build_request(method, url, headers=kwargs["headers"])
+            payload = payloads[response_index]  # noqa: B023
+            response_index += 1
+            yield httpx.Response(200, json=payload, request=request)
+
+        async def prepare_metadata(self: OpenRouterClient) -> object:
+            return prepare_metadata_operation(  # noqa: B023
+                self,
+                purpose="INITIAL_IDENTITY_BIND",
+                logical_request_id=provisional.request_id,
+                role=provisional.role,
+                exact_model_id=provisional.requested_model,
+                maximum_attempts=2,
+                generation_id=provisional.openrouter_generation_id,
+                anchor=provisional,
+                expectation_sha256="d" * 64,
+                expectation=expectation,
+            )
+
+        async def execute_metadata_attempt(
+            self: OpenRouterClient,
+            grant: object,
+        ) -> object:
+            path = "/generation?id=generation-test"
+            receipt = prepare_metadata_attempt(  # noqa: B023
+                self,
+                operation_grant=grant,
+                method="GET",
+                path=path,
+                json_body=None,
+                reservation=None,
+                purpose="INITIAL_IDENTITY_BIND",
+            )
+            await dispatch_metadata_attempt(  # noqa: B023
+                self,
+                receipt,
+                "GET",
+                path,
+                max_bytes=1_000_000,
+            )
+            return receipt
+
+        metadata_authority = openrouter_module._build_provider_transport_attempt_authority(
+            _isolated_stream=metadata_stream,
+            _isolated_parent_codes={"INITIAL_IDENTITY_BIND": prepare_metadata.__code__},
+            _isolated_attempt_codes={"GET": execute_metadata_attempt.__code__},
+            _isolated_frame_globals=globals(),
+        )
+        register_isolated_authority(metadata_authority)
+        prepare_metadata_operation = metadata_authority[1]
+        prepare_metadata_attempt = metadata_authority[2]
+        dispatch_metadata_attempt = metadata_authority[3]
+        inspect_metadata_attempt = metadata_authority[6]
+        revoke_metadata_operation = metadata_authority[8]
+        revoke_metadata_composite = metadata_authority[13]
+        seal_metadata = metadata_authority[20]
+        try:
+            before_metadata = metadata_ledger.snapshot()
+            metadata_grant = await prepare_metadata(metadata_client)
+            metadata_receipts = tuple(
+                [
+                    await execute_metadata_attempt(metadata_client, metadata_grant),
+                    await execute_metadata_attempt(metadata_client, metadata_grant),
+                ]
+            )
+            assert response_index == 2
+            assert metadata_ledger.snapshot() == before_metadata
+            if accepted:
+                metadata_composite = seal_metadata(
+                    metadata_client,
+                    metadata_grant,
+                    provisional,
+                    final_generation,
+                    purpose="INITIAL_IDENTITY_BIND",
+                    expected_grant_sha256="d" * 64,
+                    receipt_vector=metadata_receipts,
+                )
+                assert not generation_evidence_module._has_authrunner_generation_origin(
+                    final_generation
+                )
+                revoke_metadata_composite(metadata_composite)
+            else:
+                with pytest.raises(
+                    OpenRouterPrivacyError,
+                    match="does not bind exact generation evidence",
+                ):
+                    seal_metadata(
+                        metadata_client,
+                        metadata_grant,
+                        provisional,
+                        final_generation,
+                        purpose="INITIAL_IDENTITY_BIND",
+                        expected_grant_sha256="d" * 64,
+                        receipt_vector=metadata_receipts,
+                    )
+                assert all(
+                    inspect_metadata_attempt(
+                        receipt,
+                        client=metadata_client,
+                        method="GET",
+                        require_response=True,
+                    )
+                    for receipt in metadata_receipts
+                )
+                revoke_metadata_operation(metadata_grant)
+        finally:
+            await metadata_client.close()
+
+
+@pytest.mark.asyncio
+async def test_ordinary_generic_completion_and_metadata_bypass_smoke_receipt_dispatch(
     config_factory: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

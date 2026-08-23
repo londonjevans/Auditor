@@ -92,6 +92,7 @@ NOW = datetime(2026, 8, 18, 12, 0, tzinfo=UTC)
 CANDIDATE_ID = "deepseek/deepseek-v3.2-exp"
 JUDGE_ID = "google/gemma-4-26b-a4b-it"
 SAME_ROOT_JUDGE_ID = "deepcogito/cogito-v2.1-671b"
+_SYNTHETIC_COMPLETION_GENERATIONS: dict[str, OpenRouterGenerationEvidence] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -352,6 +353,7 @@ class _SyntheticCrossLineageClient:
             for index, item in enumerate(prepared.requests)
         }
         self.generations: dict[str, OpenRouterGenerationEvidence] = {}
+        self.generation_fetches: list[str] = []
         sample_request = prepared.requests[0]
         sample_response = build_cross_lineage_adjudication_response(
             request=sample_request,
@@ -441,12 +443,18 @@ class _SyntheticCrossLineageClient:
         self.usage.add(usage)
         assert usage.openrouter_generation_id is not None
         self.generations[usage.openrouter_generation_id] = generation
-        return StructuredCompletion(value=wire, usage_record=usage)
+        completion = StructuredCompletion(
+            value=wire,
+            usage_record=usage,
+        )
+        _SYNTHETIC_COMPLETION_GENERATIONS[usage.request_id] = generation
+        return completion
 
     async def get_generation_evidence(
         self,
         generation_id: str,
     ) -> OpenRouterGenerationEvidence:
+        self.generation_fetches.append(generation_id)
         return self.generations[generation_id]
 
 
@@ -462,6 +470,12 @@ async def _synthetic_get_generation_evidence(
     generation_id: str,
 ) -> OpenRouterGenerationEvidence:
     return await cast(Any, client).get_generation_evidence(generation_id)
+
+
+def _synthetic_structured_completion_generation(
+    completion: StructuredCompletion[Any],
+) -> OpenRouterGenerationEvidence:
+    return _SYNTHETIC_COMPLETION_GENERATIONS.pop(completion.usage_record.request_id)
 
 
 def _synthetic_selected_structured_output_mode(
@@ -661,6 +675,7 @@ def test_async_transport_executes_exact_inventory_and_refetches_generation(
             trusted_source_request=_synthetic_trusted_source_request,
             require_transport=adjudication_module._require_exact_cross_lineage_transport,
             runtime_credit_predicate=is_creditable_usage_record,
+            structured_completion_generation_resolver=None,
             require_pristine=lambda: None,
         )
     )
@@ -697,6 +712,9 @@ def test_async_transport_executes_exact_inventory_and_refetches_generation(
         )
         for item in report.cases
     )
+    assert fake.generation_fetches == [
+        result.generation_evidence.generation_id for result in results
+    ]
 
 
 def test_smoke_transport_uses_bounded_usage_and_generation_hooks(
@@ -745,6 +763,7 @@ def test_smoke_transport_uses_bounded_usage_and_generation_hooks(
             runtime_credit_predicate=forbidden_general_credit,
             noncrediting_smoke_usage_error=bounded_usage_error,
             noncrediting_smoke_generation_reconcile=reconcile_generation,
+            structured_completion_generation_resolver=(_synthetic_structured_completion_generation),
             require_pristine=lambda: None,
         )
     )
@@ -756,6 +775,7 @@ def test_smoke_transport_uses_bounded_usage_and_generation_hooks(
         for request_id in (result.usage_record.request_id, result.usage_record.request_id)
     ]
     assert generation_checks == [result.generation_evidence.generation_id for result in results]
+    assert fake.generation_fetches == []
 
 
 def test_async_transport_rejects_unbound_real_judge_usage_before_runner_custody(
@@ -785,6 +805,7 @@ def test_async_transport_rejects_unbound_real_judge_usage_before_runner_custody(
                 trusted_source_request=_synthetic_trusted_source_request,
                 require_transport=adjudication_module._require_exact_cross_lineage_transport,
                 runtime_credit_predicate=is_creditable_usage_record,
+                structured_completion_generation_resolver=None,
                 require_pristine=lambda: None,
             )
         )
@@ -835,6 +856,7 @@ def test_async_transport_rejects_registered_discovery_mismatch_before_dispatch(
                 trusted_source_request=_synthetic_trusted_source_request,
                 require_transport=adjudication_module._require_exact_cross_lineage_transport,
                 runtime_credit_predicate=is_creditable_usage_record,
+                structured_completion_generation_resolver=None,
                 require_pristine=lambda: None,
             )
         )
@@ -992,6 +1014,199 @@ def test_smoke_transport_rejects_smoke_binding_retarget_before_provider_state(
         )
 
     assert side_effects == {"validator": 0, "provider": 0}
+    assert client.usage.records == []
+
+
+@pytest.mark.parametrize(
+    "binding_name",
+    (
+        "_resolve_structured_completion_generation_evidence",
+        "_openrouter_client_callables_are_pristine",
+    ),
+)
+def test_smoke_transport_rejects_in_place_carrier_authority_retarget_before_provider_state(
+    inputs: _Inputs,
+    binding_name: str,
+) -> None:
+    prepared = _prepare(inputs)
+    client = _uninitialized_exact_client()
+    authority_function = getattr(openrouter_module, binding_name)
+    original_code = authority_function.__code__
+
+    def changed(*_args: object, **_kwargs: object) -> object:
+        return object()
+
+    authority_function.__code__ = changed.__code__.replace(co_freevars=original_code.co_freevars)
+    try:
+        with pytest.raises(
+            CrossLineageAdjudicationError,
+            match="binding changed before provider work",
+        ):
+            asyncio.run(
+                adjudication_module._execute_cross_lineage_adjudication_smoke_requests(
+                    client=client,
+                    prepared=prepared,
+                    expected_request_cost_previews=(),
+                    smoke_run_index=1,
+                )
+            )
+    finally:
+        authority_function.__code__ = original_code
+
+    assert client.usage.records == []
+
+
+def test_smoke_transport_rejects_in_place_executor_impl_retarget_before_provider_state(
+    inputs: _Inputs,
+) -> None:
+    prepared = _prepare(inputs)
+    client = _uninitialized_exact_client()
+    trusted_impl = adjudication_module._execute_cross_lineage_adjudication_requests_impl
+    original_code = trusted_impl.__code__
+
+    async def changed(*_args: object, **_kwargs: object) -> object:
+        return object()
+
+    trusted_impl.__code__ = changed.__code__.replace(co_freevars=original_code.co_freevars)
+    try:
+        with pytest.raises(
+            CrossLineageAdjudicationError,
+            match="transport guard changed before provider work",
+        ):
+            asyncio.run(
+                adjudication_module._execute_cross_lineage_adjudication_smoke_requests(
+                    client=client,
+                    prepared=prepared,
+                    expected_request_cost_previews=(),
+                    smoke_run_index=1,
+                )
+            )
+    finally:
+        trusted_impl.__code__ = original_code
+
+    assert client.usage.records == []
+
+
+@pytest.mark.parametrize("mutation", ("code", "module_alias", "attribute"))
+def test_public_smoke_transport_pins_private_executor_state_before_provider_state(
+    inputs: _Inputs,
+    mutation: str,
+) -> None:
+    prepared = _prepare(inputs)
+    client = _uninitialized_exact_client()
+    trusted_executor = adjudication_module._execute_cross_lineage_adjudication_smoke_requests
+    original_code = trusted_executor.__code__
+    original_binding = adjudication_module._execute_cross_lineage_adjudication_smoke_requests
+    original_attributes = dict(trusted_executor.__dict__)
+
+    async def changed(*_args: object, **_kwargs: object) -> object:
+        return "BYPASS"
+
+    if mutation == "code":
+        trusted_executor.__code__ = changed.__code__.replace(co_freevars=original_code.co_freevars)
+    elif mutation == "module_alias":
+        adjudication_module._execute_cross_lineage_adjudication_smoke_requests = cast(
+            Any,
+            changed,
+        )
+    else:
+        trusted_executor.__dict__["synthetic_state_retarget"] = object()
+    try:
+        with pytest.raises(
+            CrossLineageAdjudicationError,
+            match="smoke executor boundary changed",
+        ):
+            asyncio.run(
+                adjudication_module.execute_noncrediting_cross_lineage_adjudication_smoke_requests(
+                    smoke_run_index=1,
+                    client=client,
+                    prepared=prepared,
+                    expected_request_cost_previews=(cast(Any, None),),
+                )
+            )
+    finally:
+        trusted_executor.__code__ = original_code
+        adjudication_module._execute_cross_lineage_adjudication_smoke_requests = original_binding
+        trusted_executor.__dict__.clear()
+        trusted_executor.__dict__.update(original_attributes)
+
+    assert client.usage.records == []
+
+
+def test_smoke_transport_rejects_in_place_outer_pristine_guard_retarget_before_provider_state(
+    inputs: _Inputs,
+) -> None:
+    prepared = _prepare(inputs)
+    client = _uninitialized_exact_client()
+    executor = adjudication_module._execute_cross_lineage_adjudication_smoke_requests
+    executor_closure = dict(
+        zip(executor.__code__.co_freevars, executor.__closure__ or (), strict=True)
+    )
+    require_pristine = cast(Any, executor_closure["require_pristine"].cell_contents)
+    original_code = require_pristine.__code__
+
+    def changed(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    require_pristine.__code__ = changed.__code__.replace(co_freevars=original_code.co_freevars)
+    try:
+        with pytest.raises(
+            CrossLineageAdjudicationError,
+            match="transport guard changed before provider work",
+        ):
+            asyncio.run(
+                executor(
+                    client=client,
+                    prepared=prepared,
+                    expected_request_cost_previews=(),
+                    smoke_run_index=1,
+                )
+            )
+    finally:
+        require_pristine.__code__ = original_code
+
+    assert client.usage.records == []
+
+
+def test_smoke_transport_rejects_provider_graph_subset_and_default_retarget_before_state(
+    inputs: _Inputs,
+) -> None:
+    prepared = _prepare(inputs)
+    client = _uninitialized_exact_client()
+    predicate = openrouter_module._openrouter_client_callables_are_pristine
+    original_kwdefaults = predicate.__kwdefaults__
+    assert original_kwdefaults is not None
+    guard = cast(Any, original_kwdefaults["_provider_authority_graph_is_pristine"])
+    guard_closure = dict(zip(guard.__code__.co_freevars, guard.__closure__ or (), strict=True))
+    states_cell = guard_closure["frozen_states"]
+    seal_cell = guard_closure["frozen_states_seal"]
+    original_states = states_cell.cell_contents
+    assert type(original_states) is tuple
+    subset = (original_states[0],)
+    states_cell.cell_contents = subset
+    seal_cell.cell_contents = subset
+    predicate.__kwdefaults__ = {
+        **original_kwdefaults,
+        "_provider_authority_graph_frozen_states": subset,
+    }
+    try:
+        with pytest.raises(
+            CrossLineageAdjudicationError,
+            match="binding changed before provider work",
+        ):
+            asyncio.run(
+                adjudication_module._execute_cross_lineage_adjudication_smoke_requests(
+                    client=client,
+                    prepared=prepared,
+                    expected_request_cost_previews=(),
+                    smoke_run_index=1,
+                )
+            )
+    finally:
+        predicate.__kwdefaults__ = original_kwdefaults
+        states_cell.cell_contents = original_states
+        seal_cell.cell_contents = original_states
+    assert predicate()
     assert client.usage.records == []
 
 

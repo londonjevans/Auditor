@@ -69,12 +69,16 @@ from mmaudit.models.generation_evidence import (
     OpenRouterGenerationEvidence,
     TrustedGenerationVerification,
     _attest_authrunner_generation_origin,
+    _finalize_authrunner_generation_origin_issuer,
+    _has_authrunner_generation_origin,
     _initial_real_generation_reconciliation_expectation,
     _issue_trusted_generation_verification,
     _reconcile_generation_evidence_structural,
     _reconcile_generation_expectation_structural,
     _reconcile_noncrediting_smoke_generation_evidence_structural,
     _register_authrunner_generation_origin_issuer,
+    _revoke_authrunner_generation_origin,
+    revoke_trusted_generation_verification,
     validate_generation_id,
     validate_openrouter_generation_payload,
 )
@@ -202,10 +206,15 @@ from mmaudit.models.usage import (
     UsageLedger,
     _attest_authrunner_owned_real_usage_origin,
     _attest_owned_real_usage_record,
+    _authrunner_noncrediting_smoke_request_scope,
+    _authrunner_request_origin_scope,
     _authrunner_usage_origin_scope,
+    _finalize_authrunner_owned_real_usage_origin_issuer,
     _has_authrunner_owned_real_usage_origin,
     _has_owned_real_usage_attestation,
+    _propagate_authrunner_owned_real_usage_origin,
     _register_authrunner_owned_real_usage_origin_issuer,
+    _revoke_authrunner_owned_real_usage_origin,
     _validated_usage_copy_preserving_owned_attestation,
     authrunner_noncrediting_unknown_token_smoke_scope,
     noncrediting_unknown_token_smoke_usage_diagnostics,
@@ -247,6 +256,39 @@ from mmaudit.privacy import (
 from mmaudit.reporting.json_report import stable_json
 
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
+
+type _UsageOriginCallRoots = tuple[
+    Callable[..., UsageRecord],
+    Callable[..., bool],
+    Callable[[UsageRecord], None],
+]
+type _GenerationOriginCallRoots = tuple[
+    Callable[..., TrustedGenerationVerification],
+    Callable[..., bool],
+    Callable[[TrustedGenerationVerification], None],
+]
+type _ProviderCleanupCallRoots = tuple[
+    Callable[..., None],
+    Callable[..., None],
+    Callable[..., None],
+]
+type _ProviderCompositeCallRoots = tuple[
+    Callable[..., object],
+    Callable[..., bool],
+    Callable[..., object],
+    Callable[..., bool],
+]
+
+_AUTHRUNNER_USAGE_ORIGIN_CALL_ROOTS: _UsageOriginCallRoots = (
+    _attest_authrunner_owned_real_usage_origin,
+    _has_authrunner_owned_real_usage_origin,
+    _revoke_authrunner_owned_real_usage_origin,
+)
+_AUTHRUNNER_GENERATION_ORIGIN_CALL_ROOTS: _GenerationOriginCallRoots = (
+    _attest_authrunner_generation_origin,
+    _has_authrunner_generation_origin,
+    revoke_trusted_generation_verification,
+)
 
 _TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE = CandidateReviewFramedDocument
 _TRUSTED_CANDIDATE_REVIEW_NORMALIZATION_EVIDENCE_TYPE = CandidateReviewNormalizationEvidence
@@ -1389,7 +1431,7 @@ class CompletionEnvelope:
     pipeline: tuple[dict[str, str], ...]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class StructuredCompletion[ValueT: BaseModel]:
     """Validated structured response paired with its exact provider evidence."""
 
@@ -4283,6 +4325,195 @@ _register_trusted_transport_binding, _lookup_trusted_transport_binding = (
 _TRUSTED_LOOKUP_TRANSPORT_BINDING = _lookup_trusted_transport_binding
 
 
+def _build_provider_httpx_response_graph_authority() -> tuple[
+    Callable[..., tuple[object, ...]],
+    Callable[..., tuple[object, ...]],
+]:
+    """Validate the pinned HTTPX/httpcore response graph without granting receipt authority."""
+
+    import httpcore._async.connection as httpcore_async_connection_module
+    import httpcore._async.connection_pool as httpcore_async_connection_pool_module
+    import httpcore._async.http11 as httpcore_async_http11_module
+    import httpcore._synchronization as httpcore_synchronization_module
+    import httpx._client as httpx_client_module
+    import httpx._transports.default as httpx_default_transport_module
+
+    trusted_object_getattribute = object.__getattribute__
+    trusted_privacy_error_type = OpenRouterPrivacyError
+    trusted_response_type = httpx.Response
+    trusted_request_type = httpx.Request
+    trusted_headers_type = httpx.Headers
+    trusted_lock_type = asyncio.Lock
+    trusted_bound_async_stream_type = httpx_client_module.BoundAsyncStream
+    trusted_async_response_stream_type = httpx_default_transport_module.AsyncResponseStream
+    trusted_pool_byte_stream_type = httpcore_async_connection_pool_module.PoolByteStream
+    trusted_pool_request_type = httpcore_async_connection_pool_module.AsyncPoolRequest
+    trusted_httpcore_connection_type = httpcore_async_connection_module.AsyncHTTPConnection
+    trusted_http11_connection_type = httpcore_async_http11_module.AsyncHTTP11Connection
+    trusted_http11_byte_stream_type = httpcore_async_http11_module.HTTP11ConnectionByteStream
+    trusted_async_event_type = httpcore_synchronization_module.AsyncEvent
+
+    def inflight(
+        *,
+        owned_pool: object,
+        request_lock: asyncio.Lock,
+        response: httpx.Response,
+        previous: tuple[object, ...] | None,
+    ) -> tuple[object, ...]:
+        if type(request_lock) is not trusted_lock_type or not request_lock.locked():
+            raise trusted_privacy_error_type(
+                "provider transport receipt lacks its in-flight request lock"
+            )
+        response_values = vars(response)
+        response_request = response_values.get("_request")
+        response_headers = response_values.get("headers")
+        pool_values = vars(owned_pool)
+        connections = pool_values.get("_connections")
+        requests = pool_values.get("_requests")
+        response_stream = response_values.get("stream")
+        if (
+            type(response) is not trusted_response_type
+            or type(response_request) is not trusted_request_type
+            or type(response_headers) is not trusted_headers_type
+            or type(connections) is not list
+            or len(connections) != 1
+            or type(requests) is not list
+            or len(requests) != 1
+            or type(response_stream) is not trusted_bound_async_stream_type
+            or frozenset(vars(response_stream)) != {"_stream", "_response", "_start"}
+            or trusted_object_getattribute(response_stream, "_response") is not response
+        ):
+            raise trusted_privacy_error_type(
+                "provider transport in-flight response graph is invalid"
+            )
+        transport_stream = trusted_object_getattribute(response_stream, "_stream")
+        if type(transport_stream) is not trusted_async_response_stream_type or frozenset(
+            vars(transport_stream)
+        ) != {"_httpcore_stream"}:
+            raise trusted_privacy_error_type(
+                "provider transport in-flight adapter graph is invalid"
+            )
+        pool_stream = trusted_object_getattribute(transport_stream, "_httpcore_stream")
+        if (
+            type(pool_stream) is not trusted_pool_byte_stream_type
+            or frozenset(vars(pool_stream)) != {"_stream", "_pool_request", "_pool", "_closed"}
+            or trusted_object_getattribute(pool_stream, "_pool") is not owned_pool
+            or trusted_object_getattribute(pool_stream, "_closed") is not False
+        ):
+            raise trusted_privacy_error_type("provider transport in-flight pool stream is invalid")
+        pool_request = trusted_object_getattribute(pool_stream, "_pool_request")
+        protocol_stream = trusted_object_getattribute(pool_stream, "_stream")
+        connection_acquired = (
+            trusted_object_getattribute(pool_request, "_connection_acquired")
+            if type(pool_request) is trusted_pool_request_type
+            else None
+        )
+        if (
+            type(pool_request) is not trusted_pool_request_type
+            or frozenset(vars(pool_request)) != {"request", "connection", "_connection_acquired"}
+            or requests[0] is not pool_request
+            or type(connection_acquired) is not trusted_async_event_type
+            or "wait" in vars(connection_acquired)
+            or "set" in vars(connection_acquired)
+            or type(protocol_stream) is not trusted_http11_byte_stream_type
+            or frozenset(vars(protocol_stream)) != {"_connection", "_request", "_closed"}
+            or trusted_object_getattribute(protocol_stream, "_request")
+            is not trusted_object_getattribute(pool_request, "request")
+            or trusted_object_getattribute(protocol_stream, "_closed") is not False
+        ):
+            raise trusted_privacy_error_type(
+                "provider transport in-flight protocol stream is invalid"
+            )
+        connection = trusted_object_getattribute(pool_request, "connection")
+        protocol_connection = trusted_object_getattribute(protocol_stream, "_connection")
+        if (
+            type(connection) is not trusted_httpcore_connection_type
+            or connections[0] is not connection
+            or "handle_async_request" in vars(connection)
+            or type(protocol_connection) is not trusted_http11_connection_type
+            or trusted_object_getattribute(connection, "_connection") is not protocol_connection
+            or "handle_async_request" in vars(protocol_connection)
+        ):
+            raise trusted_privacy_error_type(
+                "provider transport in-flight connection graph is invalid"
+            )
+        current = (
+            response,
+            response_request,
+            response_headers,
+            response_stream,
+            transport_stream,
+            pool_stream,
+            pool_request,
+            connection_acquired,
+            protocol_stream,
+            connection,
+            protocol_connection,
+            connections,
+            requests,
+        )
+        if previous is not None and (
+            len(current) != len(previous)
+            or any(
+                observed is not expected
+                for observed, expected in zip(current, previous, strict=True)
+            )
+        ):
+            raise trusted_privacy_error_type("provider transport in-flight response graph changed")
+        return current
+
+    def completed(
+        *,
+        owned_pool: object,
+        request_lock: asyncio.Lock,
+        response: httpx.Response,
+        previous: tuple[object, ...] | None,
+    ) -> tuple[object, ...]:
+        if type(request_lock) is not trusted_lock_type or not request_lock.locked():
+            raise trusted_privacy_error_type(
+                "provider transport receipt lacks its in-flight request lock"
+            )
+        if previous is None or len(previous) != 13 or previous[0] is not response:
+            raise trusted_privacy_error_type(
+                "provider transport completed without its in-flight response anchor"
+            )
+        pool_values = vars(owned_pool)
+        connections = pool_values.get("_connections")
+        requests = pool_values.get("_requests")
+        response_stream = previous[3]
+        transport_stream = previous[4]
+        pool_stream = previous[5]
+        protocol_stream = previous[8]
+        if (
+            type(connections) is not list
+            or connections is not previous[11]
+            or connections
+            or type(requests) is not list
+            or requests is not previous[12]
+            or requests
+            or vars(response).get("stream") is not response_stream
+            or trusted_object_getattribute(response_stream, "_stream") is not transport_stream
+            or trusted_object_getattribute(transport_stream, "_httpcore_stream") is not pool_stream
+            or trusted_object_getattribute(pool_stream, "_pool") is not owned_pool
+            or trusted_object_getattribute(pool_stream, "_stream") is not protocol_stream
+            or trusted_object_getattribute(pool_stream, "_closed") is not True
+            or trusted_object_getattribute(protocol_stream, "_closed") is not True
+        ):
+            raise trusted_privacy_error_type(
+                "provider transport completed response did not close its exact stream chain"
+            )
+        return previous
+
+    return inflight, completed
+
+
+(
+    _provider_httpx_inflight_response_graph,
+    _provider_httpx_completed_response_graph,
+) = _build_provider_httpx_response_graph_authority()
+del _build_provider_httpx_response_graph_authority
+
+
 class _ProviderTransportAttemptReceipt:
     """Opaque one-shot proof that one exact provider transport attempt ran."""
 
@@ -4301,6 +4532,34 @@ class _ProviderTransportOperationGrant:
     def __new__(cls, *_args: object, **_kwargs: object) -> _ProviderTransportOperationGrant:
         del cls, _args, _kwargs
         raise TypeError("provider transport operation grants cannot be constructed directly")
+
+
+class _ProviderTransportRefetchBatchGrant:
+    """Opaque one-shot parent custody for one exact capability refetch inventory."""
+
+    __slots__ = ("__weakref__",)
+
+    def __new__(cls, *_args: object, **_kwargs: object) -> _ProviderTransportRefetchBatchGrant:
+        del cls, _args, _kwargs
+        raise TypeError("provider transport refetch batch grants cannot be constructed directly")
+
+
+class _ProviderTransportReceiptComposite:
+    """Opaque one-shot proof over a complete ordered transport operation set."""
+
+    __slots__ = ("__weakref__",)
+
+    def __new__(cls, *_args: object, **_kwargs: object) -> _ProviderTransportReceiptComposite:
+        del cls, _args, _kwargs
+        raise TypeError("provider transport receipt composites cannot be constructed directly")
+
+
+@dataclass(frozen=True, slots=True)
+class _GenerationAttestationFetchResult:
+    """Internal transfer of exact smoke attestations and their one-shot receipt."""
+
+    attestations: tuple[OpenRouterGenerationEvidence, ...]
+    receipt_composite: _ProviderTransportReceiptComposite
 
 
 def _nested_code(function: Callable[..., object], name: str) -> CodeType:
@@ -4330,58 +4589,31 @@ def _build_provider_transport_attempt_authority(
     Callable[..., bool],
     Callable[..., bool],
     Callable[[_ProviderTransportOperationGrant], None],
+    Callable[..., _ProviderTransportReceiptComposite],
+    Callable[..., bool],
+    Callable[..., _ProviderTransportReceiptComposite],
+    Callable[..., bool],
+    Callable[[_ProviderTransportReceiptComposite], None],
+    Callable[..., _ProviderTransportRefetchBatchGrant],
+    Callable[[_ProviderTransportRefetchBatchGrant], None],
+    Callable[
+        [object, tuple[_ProviderTransportOperationGrant, ...]],
+        tuple[_ProviderTransportReceiptComposite, _ProviderTransportRefetchBatchGrant],
+    ],
+    Callable[[], None],
+    Callable[
+        [_ProviderTransportReceiptComposite],
+        tuple[
+            tuple[frozenset[str], ...],
+            tuple[frozenset[str], ...],
+            frozenset[str] | None,
+            frozenset[str],
+        ],
+    ],
+    Callable[..., _ProviderTransportReceiptComposite],
+    Callable[..., _ProviderTransportReceiptComposite],
 ]:
     """Keep REAL POST/GET transport receipts behind captured live-I/O frames."""
-
-    if _isolated_stream is None:
-
-        def register_dormant(**_kwargs: object) -> None:
-            return None
-
-        def prepare_dormant_operation(
-            *_args: object,
-            **_kwargs: object,
-        ) -> _ProviderTransportOperationGrant | None:
-            return None
-
-        def reject_dormant_attempt(
-            *_args: object,
-            **_kwargs: object,
-        ) -> _ProviderTransportAttemptReceipt | None:
-            raise OpenRouterPrivacyError("provider transport receipt authority is dormant")
-
-        async def reject_dormant_dispatch(
-            *_args: object,
-            **_kwargs: object,
-        ) -> httpx.Response:
-            raise OpenRouterPrivacyError("provider transport receipt authority is dormant")
-
-        def reject_dormant_transition(*_args: object, **_kwargs: object) -> None:
-            raise OpenRouterPrivacyError("provider transport receipt authority is dormant")
-
-        def revoke_dormant_attempt(_receipt: _ProviderTransportAttemptReceipt) -> None:
-            return None
-
-        def inspect_dormant_attempt(*_args: object, **_kwargs: object) -> bool:
-            return False
-
-        def consume_dormant_attempt(*_args: object, **_kwargs: object) -> bool:
-            return False
-
-        def revoke_dormant_operation(_grant: _ProviderTransportOperationGrant) -> None:
-            return None
-
-        return (
-            register_dormant,
-            prepare_dormant_operation,
-            reject_dormant_attempt,
-            reject_dormant_dispatch,
-            reject_dormant_transition,
-            revoke_dormant_attempt,
-            inspect_dormant_attempt,
-            consume_dormant_attempt,
-            revoke_dormant_operation,
-        )
 
     import h11 as h11_module
     import httpcore._async.connection as httpcore_async_connection_module
@@ -4410,10 +4642,14 @@ def _build_provider_transport_attempt_authority(
         Callable[..., object],
         Callable[..., object],
         Callable[..., object],
+        Callable[[object, UsageRecord], AtomicCostLedger],
+        Callable[..., bool],
+        Callable[..., object],
     ]
 
     issuer: Issuer | None = None
     issuer_callable_states: tuple[tuple[object, ...], ...] | None = None
+    registered_issuer_callables: tuple[FunctionType, ...] | None = None
     issuer_codes: dict[str, CodeType] | None = None
     registry: dict[
         int,
@@ -4423,22 +4659,35 @@ def _build_provider_transport_attempt_authority(
         int,
         tuple[weakref.ReferenceType[_ProviderTransportOperationGrant], ReceiptState],
     ] = {}
+    batch_registry: dict[
+        int,
+        tuple[weakref.ReferenceType[_ProviderTransportRefetchBatchGrant], ReceiptState],
+    ] = {}
+    composite_registry: dict[
+        int,
+        tuple[weakref.ReferenceType[_ProviderTransportReceiptComposite], ReceiptState],
+    ] = {}
     receipt_seals: WeakKeyDictionary[object, dict[str, object]] = WeakKeyDictionary()
     lock = Lock()
     trusted_sys = sys
     trusted_getframe = sys._getframe
     trusted_asyncio = asyncio
     trusted_httpx = httpx
+    trusted_h11_version = getattr(h11_module, "__version__", None)
     trusted_current_task = asyncio.current_task
     trusted_get_ident = get_ident
     trusted_getpid = os.getpid
     trusted_receipt_type = _ProviderTransportAttemptReceipt
     trusted_grant_type = _ProviderTransportOperationGrant
+    trusted_batch_grant_type = _ProviderTransportRefetchBatchGrant
+    trusted_composite_type = _ProviderTransportReceiptComposite
     trusted_reservation_type = Reservation
     trusted_budget_manager_type = BudgetManager
     trusted_atomic_ledger_type = AtomicCostLedger
     trusted_execution_evidence_type = ExecutionEvidenceKind
     trusted_usage_record_type = UsageRecord
+    trusted_generation_evidence_type = OpenRouterGenerationEvidence
+    trusted_identity_binding_type = OpenRouterIdentityBindingResult
     trusted_real_evidence = ExecutionEvidenceKind.REAL
     trusted_privacy_error_type = OpenRouterPrivacyError
     trusted_schema_error_type = OpenRouterSchemaError
@@ -4475,6 +4724,28 @@ def _build_provider_transport_attempt_authority(
     trusted_network_backend_current = _network_backend_graph_is_current
     trusted_safe_headers = safe_headers
     trusted_decoded_response_headers = _decoded_response_headers
+    trusted_smoke_scope = authrunner_noncrediting_unknown_token_smoke_scope
+    trusted_smoke_usage_diagnostics = noncrediting_unknown_token_smoke_usage_diagnostics
+    trusted_validate_generation_payload = validate_openrouter_generation_payload
+    trusted_request_origin_scope = _authrunner_request_origin_scope
+    trusted_smoke_request_scope = _authrunner_noncrediting_smoke_request_scope
+    trusted_supported_runtime_versions = ("0.28.1", "1.0.9", "0.16.0")
+    trusted_decimal_type = Decimal
+    trusted_token_detail_type = TokenDetailAccountingEvidence
+    trusted_validate_completion_usage = _validate_usage
+    trusted_optional_cost_decimal = _optional_cost_decimal
+    trusted_nonnegative_int = _nonnegative_int
+    trusted_reasoning_tokens = _reasoning_tokens
+    trusted_cached_tokens = _cached_tokens
+    trusted_is_retryable_status = is_retryable_status
+    trusted_cost_entry_reserved = CostEntryStatus.RESERVED
+    trusted_expectation_sha256 = _generation_reconciliation_expectation_sha256
+    trusted_verification_request_sha256 = _generation_verification_request_sha256
+    trusted_metadata_payload_may_be_pending = _generation_metadata_payload_may_be_pending
+    trusted_reconcile_generation_expectation = _reconcile_generation_expectation_structural
+    trusted_has_usage_origin = _has_authrunner_owned_real_usage_origin
+    trusted_inflight_response_graph = _provider_httpx_inflight_response_graph
+    trusted_completed_response_graph = _provider_httpx_completed_response_graph
 
     def canonical_sha256(value: object) -> str:
         return trusted_sha256(
@@ -4676,14 +4947,6 @@ def _build_provider_transport_attempt_authority(
     trusted_library_surfaces = tuple(
         (module, module_dispatch_surface(module)) for module in trusted_library_modules
     )
-    trusted_bound_async_stream_type = httpx_client_module.BoundAsyncStream
-    trusted_async_response_stream_type = httpx_default_transport_module.AsyncResponseStream
-    trusted_pool_byte_stream_type = httpcore_async_connection_pool_module.PoolByteStream
-    trusted_pool_request_type = httpcore_async_connection_pool_module.AsyncPoolRequest
-    trusted_httpcore_connection_type = httpcore_async_connection_module.AsyncHTTPConnection
-    trusted_http11_connection_type = httpcore_async_http11_module.AsyncHTTP11Connection
-    trusted_http11_byte_stream_type = httpcore_async_http11_module.HTTP11ConnectionByteStream
-    trusted_async_event_type = httpcore_synchronization_module.AsyncEvent
     trusted_httpx_descriptor_surfaces = tuple(
         (subject_type, class_dispatch_surface(subject_type))
         for subject_type in (
@@ -4830,8 +5093,11 @@ def _build_provider_transport_attempt_authority(
         complete_with_evidence: Callable[..., object],
         bind_real_completion_identity: Callable[..., object],
         fetch_generation_attestations: Callable[..., object],
+        terminal_usage_cost_custody: Callable[[object, UsageRecord], AtomicCostLedger],
+        trusted_prequalification_request: Callable[..., bool],
+        create_generation_verification: Callable[..., object],
     ) -> None:
-        nonlocal issuer, issuer_callable_states, issuer_codes
+        nonlocal issuer, issuer_callable_states, issuer_codes, registered_issuer_callables
         module_values = getattr(module, "__dict__", None)
         perform_code = _nested_code(bounded_request, "perform")
         issuer_callables = (
@@ -4845,6 +5111,11 @@ def _build_provider_transport_attempt_authority(
             complete_with_evidence,
             bind_real_completion_identity,
             fetch_generation_attestations,
+            terminal_usage_cost_custody,
+            trusted_prequalification_request,
+            create_generation_verification,
+            trusted_inflight_response_graph,
+            trusted_completed_response_graph,
         )
         if (
             getattr(module, "__name__", None) != "mmaudit.models.openrouter"
@@ -4865,6 +5136,12 @@ def _build_provider_transport_attempt_authority(
             is not bind_real_completion_identity
             or vars(client_type).get("_fetch_generation_attestations_with_deadline")
             is not fetch_generation_attestations
+            or vars(client_type).get("_require_terminal_usage_cost_custody")
+            is not terminal_usage_cost_custody
+            or vars(client_type).get("_is_trusted_prequalification_request")
+            is not trusted_prequalification_request
+            or vars(client_type).get("create_trusted_generation_verification")
+            is not create_generation_verification
             or any(type(function) is not FunctionType for function in issuer_callables)
         ):
             raise RuntimeError("provider transport receipt issuer registration is invalid")
@@ -4886,18 +5163,46 @@ def _build_provider_transport_attempt_authority(
                 complete_with_evidence,
                 bind_real_completion_identity,
                 fetch_generation_attestations,
+                terminal_usage_cost_custody,
+                trusted_prequalification_request,
+                create_generation_verification,
             )
             issuer_callable_states = tuple(
                 function_state(cast(FunctionType, function)) for function in issuer_callables
+            )
+            registered_issuer_callables = tuple(
+                cast(FunctionType, function) for function in issuer_callables
             )
             issuer_codes = {
                 "COMPLETION": cast(FunctionType, complete_with_evidence).__code__,
                 "INITIAL_IDENTITY_BIND": cast(FunctionType, bind_real_completion_identity).__code__,
                 "CAPABILITY_REFETCH": cast(FunctionType, fetch_generation_attestations).__code__,
+                "CAPABILITY_REFETCH_BATCH": cast(
+                    FunctionType,
+                    create_generation_verification,
+                ).__code__,
                 "POST": cast(FunctionType, complete_one).__code__,
                 "GET": cast(FunctionType, request_metadata).__code__,
                 "PERFORM": perform_code,
             }
+
+    def finalize_issuer_function_states() -> None:
+        """Refresh the one import-time snapshot after final pristine-graph binding."""
+
+        nonlocal issuer_callable_states
+        frame = trusted_getframe(1)
+        with lock:
+            if (
+                isolated
+                or issuer is None
+                or registered_issuer_callables is None
+                or frame.f_code.co_name != "<module>"
+                or frame.f_globals is not issuer[10]
+            ):
+                raise RuntimeError("provider transport receipt issuer finalization is invalid")
+            issuer_callable_states = tuple(
+                function_state(function) for function in registered_issuer_callables
+            )
 
     def receipt_state(
         receipt: _ProviderTransportAttemptReceipt,
@@ -4965,6 +5270,22 @@ def _build_provider_transport_attempt_authority(
                 )
             return dict(registered[1])
 
+    def refetch_batch_state(grant: _ProviderTransportRefetchBatchGrant) -> ReceiptState:
+        if type(grant) is not trusted_batch_grant_type:
+            raise trusted_privacy_error_type("provider refetch batch grant has the wrong type")
+        with lock:
+            registered = batch_registry.get(id(grant))
+            if (
+                registered is None
+                or registered[0]() is not grant
+                or registered[1].get("process_id") != trusted_getpid()
+                or registered[1].get("phase") != "ACTIVE"
+            ):
+                raise trusted_privacy_error_type(
+                    "provider refetch batch grant is absent, consumed, or revoked"
+                )
+            return dict(registered[1])
+
     def update_operation_state(
         grant: _ProviderTransportOperationGrant,
         *,
@@ -4997,6 +5318,395 @@ def _build_provider_transport_attempt_authority(
                     grant_registry[key] = previous
                 raise
 
+    def ordered_operation_receipts(
+        grant: _ProviderTransportOperationGrant,
+        *,
+        require_claimed: bool,
+    ) -> tuple[tuple[_ProviderTransportAttemptReceipt, ReceiptState], ...]:
+        grant_state = operation_state(grant)
+        receipts = grant_state.get("receipts")
+        if type(receipts) is not tuple or any(
+            type(receipt) is not trusted_receipt_type for receipt in receipts
+        ):
+            raise trusted_privacy_error_type("provider transport operation vector is unavailable")
+        with lock:
+            observed = tuple(
+                (
+                    receipt,
+                    dict(cast(tuple[object, ReceiptState], registry[id(receipt)])[1]),
+                )
+                for receipt in receipts
+                if id(receipt) in registry and registry[id(receipt)][0]() is receipt
+            )
+        ordered = cast(
+            tuple[tuple[_ProviderTransportAttemptReceipt, ReceiptState], ...],
+            observed,
+        )
+        expected_count = cast(int, grant_state["next_attempt"]) - 1
+        if (
+            len(observed) != len(receipts)
+            or len(ordered) != expected_count
+            or len({id(receipt) for receipt, _state in ordered}) != len(ordered)
+            or tuple(state.get("attempt_ordinal") for _receipt, state in ordered)
+            != tuple(range(1, expected_count + 1))
+            or any(
+                state.get("client") is not grant_state.get("client")
+                or state.get("transport") is not grant_state.get("transport")
+                or state.get("ledger") is not grant_state.get("ledger")
+                or state.get("purpose") != grant_state.get("purpose")
+                or state.get("logical_request_id") != grant_state.get("logical_request_id")
+                or state.get("maximum_attempts") != grant_state.get("maximum_attempts")
+                or (require_claimed and state.get("phase") != "CLAIMED")
+                for _receipt, state in ordered
+            )
+        ):
+            raise trusted_privacy_error_type("provider transport operation vector is incomplete")
+        return ordered
+
+    def validate_completion_vector(
+        client: object,
+        grant: _ProviderTransportOperationGrant,
+        usage_record: UsageRecord,
+    ) -> tuple[tuple[_ProviderTransportAttemptReceipt, ReceiptState], ...]:
+        grant_state = operation_state(grant)
+        scope = trusted_smoke_scope(usage_record)
+        diagnostics = trusted_smoke_usage_diagnostics(
+            usage_record,
+            require_runtime_attestation=False,
+        )
+        with lock:
+            registered_issuer = issuer
+        if registered_issuer is None:
+            raise trusted_privacy_error_type("provider transport receipt issuer is not registered")
+        ledger_snapshot = registered_issuer[9]
+        terminal_usage_cost_custody = registered_issuer[14]
+        try:
+            terminal_ledger = terminal_usage_cost_custody(client, usage_record)
+            terminal_snapshot = ledger_snapshot(terminal_ledger)
+        except (TypeError, ValueError):
+            raise trusted_privacy_error_type(
+                "provider completion receipt vector lacks terminal cost custody"
+            ) from None
+        ordered = ordered_operation_receipts(grant, require_claimed=True)
+        final_state = ordered[-1][1] if ordered else {}
+        response = final_state.get("response")
+        response_values = vars(response) if type(response) is trusted_response_type else {}
+        response_content = response_values.get("_content")
+        response_headers = response_values.get("headers")
+        try:
+            payload = trusted_json_loads(
+                cast(str | bytes | bytearray, response_content),
+                parse_float=trusted_decimal_type,
+                parse_constant=trusted_reject_nonfinite,
+                object_pairs_hook=trusted_unique_object,
+            )
+            trusted_finite_numbers(payload)
+        except (TypeError, ValueError):
+            payload = None
+        choices = payload.get("choices") if type(payload) is dict else None
+        first_choice = choices[0] if type(choices) is list and len(choices) == 1 else None
+        message = first_choice.get("message") if type(first_choice) is dict else None
+        response_text = message.get("content") if type(message) is dict else None
+        try:
+            raw_usage = trusted_validate_completion_usage(
+                payload.get("usage") if type(payload) is dict else None
+            )
+            raw_cost = trusted_optional_cost_decimal(raw_usage.get("cost"))
+            token_detail = usage_record.token_detail_accounting_evidence
+            raw_usage_is_exact = bool(
+                type(token_detail) is trusted_token_detail_type
+                and trusted_nonnegative_int(raw_usage.get("prompt_tokens"))
+                == usage_record.prompt_tokens
+                == token_detail.provider_prompt_tokens
+                and trusted_nonnegative_int(raw_usage.get("completion_tokens"))
+                == usage_record.completion_tokens
+                == token_detail.provider_completion_tokens
+                and trusted_nonnegative_int(raw_usage.get("total_tokens"))
+                == usage_record.total_tokens
+                == token_detail.provider_total_tokens
+                and trusted_reasoning_tokens(raw_usage)
+                == usage_record.reasoning_tokens
+                == token_detail.provider_reasoning_tokens
+                and trusted_cached_tokens(raw_usage)
+                == usage_record.cached_tokens
+                == token_detail.provider_cached_tokens
+                and raw_cost is not None
+                and usage_record.reported_cost_usd_exact == format(raw_cost, "f")
+                and usage_record.reported_cost_usd == float(raw_cost)
+            )
+        except (OpenRouterSchemaError, TypeError, ValueError):
+            raw_usage_is_exact = False
+        response_generation_ids = {
+            value
+            for value in (
+                payload.get("id") if type(payload) is dict else None,
+                payload.get("generation_id") if type(payload) is dict else None,
+                (
+                    response_headers.get("x-generation-id")
+                    if type(response_headers) is trusted_headers_type
+                    else None
+                ),
+            )
+            if type(value) is str
+        }
+        expected_attempt_ids = tuple(
+            trusted_attempt_request_id(usage_record.request_id, ordinal)
+            for ordinal in range(1, usage_record.attempts + 1)
+        )
+        snapshot_before = grant_state.get("ledger_snapshot_before")
+        before_entries = {
+            entry.request_id: entry for entry in getattr(snapshot_before, "entries", ())
+        }
+        terminal_entries = {
+            entry.request_id: entry for entry in getattr(terminal_snapshot, "entries", ())
+        }
+        ledger_delta_is_exact = bool(
+            type(snapshot_before) is type(terminal_snapshot)
+            and getattr(snapshot_before, "cap_usd", None)
+            == getattr(terminal_snapshot, "cap_usd", None)
+            and set(terminal_entries) == set(before_entries) | set(expected_attempt_ids)
+            and all(terminal_entries.get(key) == value for key, value in before_entries.items())
+        )
+        receipt_reservations_are_exact = True
+        for ordinal, (_receipt, state) in enumerate(ordered, start=1):
+            reservation = state.get("reservation")
+            persistent = state.get("persistent_reservation")
+            attempt_id = expected_attempt_ids[ordinal - 1]
+            snapshot_entries = {
+                entry.request_id: entry
+                for entry in getattr(state.get("ledger_snapshot_before"), "entries", ())
+            }
+            persistent_entry = snapshot_entries.get(attempt_id)
+            expected_snapshot_ids = set(before_entries) | set(expected_attempt_ids[:ordinal])
+            if (
+                type(reservation) is not trusted_reservation_type
+                or reservation.persistent is not persistent
+                or persistent is None
+                or persistent.request_id != attempt_id
+                or persistent_entry is None
+                or persistent_entry.status is not trusted_cost_entry_reserved
+                or persistent_entry.reservation_id != persistent.reservation_id
+                or persistent_entry.reserved_usd != persistent.reserved_usd
+                or set(snapshot_entries) != expected_snapshot_ids
+                or any(snapshot_entries.get(key) != value for key, value in before_entries.items())
+                or any(
+                    snapshot_entries.get(previous_id) != terminal_entries.get(previous_id)
+                    for previous_id in expected_attempt_ids[: ordinal - 1]
+                )
+            ):
+                receipt_reservations_are_exact = False
+                break
+        retry_outcomes_are_exact = all(
+            (
+                state.get("outcome") == "RESPONSE"
+                and type(state.get("response_status_code")) is int
+                and trusted_is_retryable_status(cast(int, state["response_status_code"]))
+            )
+            or (
+                type(state.get("error_type")) is type
+                and issubclass(
+                    cast(type[BaseException], state["error_type"]),
+                    (trusted_httpx.TimeoutException, trusted_httpx.NetworkError),
+                )
+            )
+            for _receipt, state in ordered[:-1]
+        )
+        if (
+            scope not in {"CANDIDATE", "JUDGE"}
+            or diagnostics
+            or grant_state.get("purpose") != "COMPLETION"
+            or grant_state.get("client") is not client
+            or grant_state.get("logical_request_id") != usage_record.request_id
+            or grant_state.get("role") != usage_record.role
+            or grant_state.get("exact_model_id") != usage_record.requested_model
+            or grant_state.get("expectation_sha256")
+            != usage_record.routing.get("request_cost_preview_sha256")
+            or grant_state.get("ledger") is not terminal_ledger
+            or not ledger_delta_is_exact
+            or not receipt_reservations_are_exact
+            or not retry_outcomes_are_exact
+            or len(ordered) != usage_record.attempts
+            or tuple(state.get("reservation_id") for _receipt, state in ordered)
+            != expected_attempt_ids
+            or any(
+                state.get("method") != "POST"
+                or state.get("path") != "/chat/completions"
+                or state.get("logical_body_sha256") != usage_record.request_body_sha256
+                or type(state.get("reservation")) is not trusted_reservation_type
+                for _receipt, state in ordered
+            )
+            or final_state.get("outcome") != "RESPONSE"
+            or type(response_content) is not bytes
+            or type(payload) is not dict
+            or not raw_usage_is_exact
+            or payload.get("model") != usage_record.returned_model
+            or response_generation_ids != {usage_record.openrouter_generation_id}
+            or type(response_text) is not str
+            or trusted_sha256(response_text.encode("utf-8")).hexdigest()
+            != usage_record.response_sha256
+        ):
+            raise trusted_privacy_error_type(
+                "provider completion receipt vector does not bind exact smoke usage"
+            )
+        return ordered
+
+    def validate_metadata_vector(
+        client: object,
+        grant: _ProviderTransportOperationGrant,
+        usage_record: UsageRecord,
+        generation: OpenRouterGenerationEvidence,
+        *,
+        purpose: Literal["INITIAL_IDENTITY_BIND", "CAPABILITY_REFETCH"],
+        expected_grant_sha256: str,
+    ) -> tuple[tuple[_ProviderTransportAttemptReceipt, ReceiptState], ...]:
+        grant_state = operation_state(grant)
+        expectation = grant_state.get("expectation")
+        if (
+            type(generation) is not trusted_generation_evidence_type
+            or trusted_smoke_scope(usage_record) not in {"CANDIDATE", "JUDGE"}
+            or trusted_smoke_usage_diagnostics(
+                usage_record,
+                require_runtime_attestation=False,
+            )
+            or grant_state.get("purpose") != purpose
+            or grant_state.get("client") is not client
+            or grant_state.get("logical_request_id") != usage_record.request_id
+            or grant_state.get("role") != usage_record.role
+            or grant_state.get("exact_model_id") != usage_record.requested_model
+            or grant_state.get("generation_id") != usage_record.openrouter_generation_id
+            or grant_state.get("anchor") is not usage_record
+            or grant_state.get("anchor_digest")
+            != canonical_sha256(usage_record.model_dump(mode="json"))
+            or type(expectation) is not GenerationReconciliationExpectation
+            or expectation.usage_record != usage_record
+            or grant_state.get("expectation_sha256") != expected_grant_sha256
+        ):
+            raise trusted_privacy_error_type(
+                "provider metadata receipt vector does not bind exact smoke usage"
+            )
+        with lock:
+            registered_issuer = issuer
+        if registered_issuer is None:
+            raise trusted_privacy_error_type("provider transport receipt issuer is not registered")
+        ledger_snapshot = registered_issuer[9]
+        try:
+            _binding, ledger = live_binding(client)
+            current_snapshot = ledger_snapshot(ledger)
+        except (TypeError, ValueError):
+            raise trusted_privacy_error_type(
+                "provider metadata receipt vector lacks ledger custody"
+            ) from None
+        ordered = ordered_operation_receipts(grant, require_claimed=True)
+        final_state = ordered[-1][1] if ordered else {}
+        response = final_state.get("response")
+        response_values = vars(response) if type(response) is trusted_response_type else {}
+        response_content = response_values.get("_content")
+        try:
+            payload = trusted_json_loads(
+                cast(str | bytes | bytearray, response_content),
+                parse_float=trusted_decimal_type,
+                parse_constant=trusted_reject_nonfinite,
+                object_pairs_hook=trusted_unique_object,
+            )
+            trusted_finite_numbers(payload)
+            observed_generation = trusted_validate_generation_payload(
+                payload,
+                requested_generation_id=generation.generation_id,
+                retrieved_at=generation.retrieved_at,
+                retrieval_attempts=generation.retrieval_attempts,
+                execution_evidence=generation.execution_evidence,
+            )
+        except (GenerationEvidenceValidationError, TypeError, ValidationError, ValueError):
+            observed_generation = None
+        expected_path = "/generation?id=" + quote(generation.generation_id, safe="")
+
+        def is_exact_metadata_retry(state: ReceiptState, ordinal: int) -> bool:
+            error_type = state.get("error_type")
+            if type(error_type) is type and issubclass(
+                cast(type[BaseException], error_type),
+                (trusted_httpx.TimeoutException, trusted_httpx.NetworkError),
+            ):
+                return True
+            status = state.get("response_status_code")
+            if state.get("outcome") != "RESPONSE" or type(status) is not int:
+                return False
+            if status == 404 or trusted_is_retryable_status(status):
+                return True
+            if status != 200:
+                return False
+            prior_response = state.get("response")
+            prior_values = (
+                vars(prior_response) if type(prior_response) is trusted_response_type else {}
+            )
+            try:
+                prior_payload = trusted_json_loads(
+                    cast(str | bytes | bytearray, prior_values.get("_content")),
+                    parse_float=trusted_decimal_type,
+                    parse_constant=trusted_reject_nonfinite,
+                    object_pairs_hook=trusted_unique_object,
+                )
+                trusted_finite_numbers(prior_payload)
+            except (TypeError, ValueError):
+                return False
+            try:
+                prior_generation = trusted_validate_generation_payload(
+                    prior_payload,
+                    requested_generation_id=generation.generation_id,
+                    retrieved_at=generation.retrieved_at,
+                    retrieval_attempts=ordinal,
+                    execution_evidence=generation.execution_evidence,
+                )
+            except (GenerationEvidenceValidationError, ValidationError):
+                try:
+                    return trusted_metadata_payload_may_be_pending(
+                        prior_payload,
+                        requested_generation_id=generation.generation_id,
+                        reconciliation_expectation=expectation,
+                        retrieval_attempts=ordinal,
+                        execution_evidence=generation.execution_evidence,
+                    )
+                except (
+                    GenerationEvidenceValidationError,
+                    GenerationReconciliationMismatchError,
+                    ValidationError,
+                ):
+                    return False
+            try:
+                trusted_reconcile_generation_expectation(
+                    prior_generation,
+                    expectation=expectation,
+                )
+            except GenerationReconciliationMismatchError as exc:
+                return exc.is_eventual_usage_field
+            except GenerationEvidenceValidationError:
+                return False
+            return False
+
+        retry_outcomes_are_exact = all(
+            is_exact_metadata_retry(state, ordinal)
+            for ordinal, (_receipt, state) in enumerate(ordered[:-1], start=1)
+        )
+        if (
+            grant_state.get("ledger") is not ledger
+            or current_snapshot != grant_state.get("ledger_snapshot_before")
+            or len(ordered) != generation.retrieval_attempts
+            or not retry_outcomes_are_exact
+            or any(
+                state.get("method") != "GET"
+                or state.get("path") != expected_path
+                or state.get("logical_body_sha256") != trusted_sha256(b"").hexdigest()
+                or state.get("reservation") is not None
+                for _receipt, state in ordered
+            )
+            or final_state.get("outcome") != "RESPONSE"
+            or response_values.get("status_code") != 200
+            or observed_generation != generation
+        ):
+            raise trusted_privacy_error_type(
+                "provider metadata receipt vector does not bind exact generation evidence"
+            )
+        return ordered
+
     def prepare_operation(
         client: object,
         *,
@@ -5012,6 +5722,18 @@ def _build_provider_transport_attempt_authority(
         generation_id: str | None = None,
         anchor: object | None = None,
         expectation_sha256: str | None = None,
+        proof_kind: object | None = None,
+        parent_grant: (
+            _ProviderTransportOperationGrant | _ProviderTransportRefetchBatchGrant | None
+        ) = None,
+        expectation: GenerationReconciliationExpectation | None = None,
+        verification_request: GenerationVerificationRequest | None = None,
+        system_prompt: str | None = None,
+        user_prompt: str | None = None,
+        response_model: type[BaseModel] | None = None,
+        schema_name: str | None = None,
+        structured_output_mode: StructuredOutputMode | None = None,
+        context_package: ContextPackage | None = None,
     ) -> _ProviderTransportOperationGrant | None:
         with lock:
             registered_issuer = issuer
@@ -5029,17 +5751,14 @@ def _build_provider_transport_attempt_authority(
             execution_evidence_resolver,
             ledger_snapshot,
             module_values,
-            _complete_with_evidence,
-            _bind_real_completion_identity,
-            _fetch_generation_attestations,
+            complete_with_evidence,
+            bind_real_completion_identity,
+            fetch_generation_attestations,
+            _terminal_usage_cost_custody,
+            trusted_prequalification_request,
+            _create_generation_verification,
         ) = registered_issuer
         if execution_evidence_resolver(client) is not trusted_real_evidence:
-            return None
-        # Production receipt activation remains closed until the completion and
-        # metadata receipt composites consume this raw authority transactionally.
-        # Isolated authorities exercise the lower state machine without minting
-        # production transport authority.
-        if not isolated:
             return None
         frame = trusted_getframe(1)
         captured_codes = issuer_codes
@@ -5051,17 +5770,72 @@ def _build_provider_transport_attempt_authority(
         expected_globals = (
             cast(dict[str, object], _isolated_frame_globals) if isolated else module_values
         )
+        parent_method = {
+            "COMPLETION": complete_with_evidence,
+            "INITIAL_IDENTITY_BIND": bind_real_completion_identity,
+            "CAPABILITY_REFETCH": fetch_generation_attestations,
+        }.get(purpose)
+        parent_kwdefaults = (
+            parent_method.__kwdefaults__ if type(parent_method) is FunctionType else None
+        )
+        expected_cleanup_call_roots = (
+            parent_kwdefaults.get("_authrunner_cleanup_call_roots")
+            if type(parent_kwdefaults) is dict
+            else None
+        )
         try:
             validated_generation_id = (
                 trusted_validate_generation_id(generation_id) if generation_id is not None else None
             )
         except GenerationEvidenceValidationError:
             validated_generation_id = None
+        try:
+            operation_scope = (
+                None if isolated else trusted_smoke_request_scope(logical_request_id, proof_kind)
+            )
+        except ValueError:
+            operation_scope = "INVALID"
+        if not isolated and operation_scope is None:
+            return None
+        anchor_scope = (
+            trusted_smoke_scope(anchor) if type(anchor) is trusted_usage_record_type else None
+        )
+        anchor_diagnostics = (
+            trusted_smoke_usage_diagnostics(anchor, require_runtime_attestation=False)
+            if type(anchor) is trusted_usage_record_type
+            else ()
+        )
+        try:
+            completion_surface_is_exact = bool(
+                purpose == "COMPLETION"
+                and system_prompt is not None
+                and user_prompt is not None
+                and response_model is not None
+                and schema_name is not None
+                and structured_output_mode is not None
+                and trusted_prequalification_request(
+                    client,
+                    role,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    response_model=response_model,
+                    schema_name=schema_name,
+                    structured_output_mode=structured_output_mode,
+                    context_package=context_package,
+                )
+            )
+        except (AttributeError, TypeError, ValueError):
+            completion_surface_is_exact = False
         if (
             expected_code is None
             or frame.f_code is not expected_code
             or frame.f_globals is not expected_globals
             or frame.f_locals.get("self") is not client
+            or (
+                not isolated
+                and frame.f_locals.get("_authrunner_cleanup_call_roots")
+                is not expected_cleanup_call_roots
+            )
             or type(logical_request_id) is not str
             or trusted_logical_request_id_pattern.fullmatch(logical_request_id) is None
             or type(role) is not str
@@ -5070,14 +5844,61 @@ def _build_provider_transport_attempt_authority(
             or type(maximum_attempts) is not int
             or not 1 <= maximum_attempts <= 32
             or (generation_id is None) is not (purpose == "COMPLETION")
-            or (expectation_sha256 is None) is not (purpose == "COMPLETION")
+            or (not isolated and expectation_sha256 is None)
             or (anchor is None) is not (purpose == "COMPLETION")
+            or (
+                not isolated
+                and (
+                    (expectation is None) is not (purpose == "COMPLETION")
+                    or (verification_request is not None) is not (purpose == "CAPABILITY_REFETCH")
+                )
+            )
+            or (
+                verification_request is not None
+                and (
+                    verification_request.usage_record is not anchor
+                    or verification_request.reconciliation_expectation() != expectation
+                )
+            )
             or (anchor is not None and type(anchor) is not trusted_usage_record_type)
             or (
                 expectation_sha256 is not None
                 and trusted_sha256_pattern.fullmatch(expectation_sha256) is None
             )
             or validated_generation_id != generation_id
+            or (
+                not isolated
+                and (
+                    (purpose == "INITIAL_IDENTITY_BIND")
+                    is not (type(parent_grant) is trusted_grant_type)
+                    or (purpose == "CAPABILITY_REFETCH")
+                    is not (type(parent_grant) is trusted_batch_grant_type)
+                )
+            )
+            or (
+                not isolated
+                and (
+                    operation_scope not in {"CANDIDATE", "JUDGE"}
+                    or role != "model_benchmark"
+                    or (purpose == "COMPLETION" and not completion_surface_is_exact)
+                    or (
+                        purpose != "COMPLETION"
+                        and (
+                            anchor_scope not in {"CANDIDATE", "JUDGE"}
+                            or anchor_scope != operation_scope
+                            or anchor_diagnostics != ()
+                            or proof_kind
+                            != cast(UsageRecord, anchor).routing.get("privacy_source_proof_kind")
+                        )
+                    )
+                )
+            )
+            or (
+                trusted_httpx.__version__,
+                httpcore.__version__,
+                trusted_h11_version,
+            )
+            != trusted_supported_runtime_versions
             or (
                 type(anchor) is trusted_usage_record_type
                 and (
@@ -5091,8 +5912,49 @@ def _build_provider_transport_attempt_authority(
             raise trusted_privacy_error_type(
                 "provider transport operation grant coordinates are invalid"
             )
+        parent_batch_state: ReceiptState | None = None
+        if purpose == "INITIAL_IDENTITY_BIND":
+            if type(anchor) is not trusted_usage_record_type:
+                raise trusted_privacy_error_type(
+                    "provider metadata operation lacks exact completion custody"
+                )
+            if not isolated:
+                assert type(parent_grant) is trusted_grant_type
+                validate_completion_vector(client, parent_grant, anchor)
+        elif purpose == "CAPABILITY_REFETCH":
+            if isolated:
+                parent_batch_state = None
+            else:
+                assert type(parent_grant) is trusted_batch_grant_type
+                parent_batch_state = refetch_batch_state(parent_grant)
+            if isolated:
+                pass
+            elif (
+                parent_batch_state is None
+                or parent_batch_state.get("client") is not client
+                or parent_batch_state.get("thread_id") != trusted_get_ident()
+                or parent_batch_state.get("task") is not trusted_current_task()
+                or type(verification_request) is not GenerationVerificationRequest
+                or not any(
+                    request is verification_request
+                    for request in cast(
+                        tuple[GenerationVerificationRequest, ...],
+                        parent_batch_state.get("requests", ()),
+                    )
+                )
+            ):
+                raise trusted_privacy_error_type(
+                    "provider metadata operation lacks exact refetch batch custody"
+                )
         ensure_receipt_seal(client)
         binding, ledger = live_binding(client)
+        if parent_batch_state is not None and (
+            parent_batch_state.get("transport") is not binding.transport
+            or parent_batch_state.get("ledger") is not ledger
+        ):
+            raise trusted_privacy_error_type(
+                "provider metadata operation refetch batch binding changed"
+            )
         anchor_digest = (
             canonical_sha256(anchor.model_dump(mode="json"))
             if type(anchor) is trusted_usage_record_type
@@ -5106,6 +5968,11 @@ def _build_provider_transport_attempt_authority(
                 current = grant_registry.get(key)
                 if current is not None and current[0] is reference:
                     grant_registry.pop(key, None)
+                    for receipt in cast(
+                        tuple[_ProviderTransportAttemptReceipt, ...],
+                        current[1].get("receipts", ()),
+                    ):
+                        registry.pop(id(receipt), None)
 
         reference = weakref.ref(grant, discard)
         state: ReceiptState = {
@@ -5126,10 +5993,21 @@ def _build_provider_transport_attempt_authority(
             "exact_model_id": exact_model_id,
             "maximum_attempts": maximum_attempts,
             "next_attempt": 1,
+            "receipts": (),
             "generation_id": generation_id,
             "anchor": anchor,
             "anchor_digest": anchor_digest,
             "expectation_sha256": expectation_sha256,
+            "proof_kind": proof_kind,
+            "parent_grant": parent_grant,
+            "expectation": expectation,
+            "verification_request": verification_request,
+            "runtime_versions": (
+                trusted_httpx.__version__,
+                httpcore.__version__,
+                trusted_h11_version,
+            ),
+            "completion_surface_is_exact": completion_surface_is_exact,
         }
         try:
             with lock:
@@ -5141,6 +6019,101 @@ def _build_provider_transport_attempt_authority(
                 if current is not None and current[0] is reference:
                     grant_registry.pop(key, None)
             raise
+
+    def prepare_refetch_batch(
+        client: object,
+        requests: tuple[GenerationVerificationRequest, ...],
+    ) -> _ProviderTransportRefetchBatchGrant:
+        with lock:
+            registered_issuer = issuer
+        if registered_issuer is None:
+            raise trusted_privacy_error_type("provider transport receipt issuer is not registered")
+        execution_evidence_resolver = registered_issuer[8]
+        module_values = registered_issuer[10]
+        create_generation_verification = registered_issuer[16]
+        frame = trusted_getframe(1)
+        captured_codes = issuer_codes or {}
+        create_kwdefaults = cast(FunctionType, create_generation_verification).__kwdefaults__
+        expected_origin_call_roots = (
+            create_kwdefaults.get("_authrunner_origin_call_roots")
+            if type(create_kwdefaults) is dict
+            else None
+        )
+        expected_cleanup_call_roots = (
+            create_kwdefaults.get("_authrunner_cleanup_call_roots")
+            if type(create_kwdefaults) is dict
+            else None
+        )
+        if execution_evidence_resolver(client) is not trusted_real_evidence:
+            raise trusted_privacy_error_type("provider refetch batch requires REAL execution")
+        if (
+            frame.f_code is not captured_codes.get("CAPABILITY_REFETCH_BATCH")
+            or frame.f_globals is not module_values
+            or frame.f_locals.get("self") is not client
+            or frame.f_locals.get("_authrunner_origin_call_roots") is not expected_origin_call_roots
+            or frame.f_locals.get("_authrunner_cleanup_call_roots")
+            is not expected_cleanup_call_roots
+            or type(requests) is not tuple
+            or not requests
+            or len(requests) > 512
+            or any(type(request) is not GenerationVerificationRequest for request in requests)
+        ):
+            raise trusted_privacy_error_type("provider refetch batch coordinates are invalid")
+        binding, ledger = live_binding(client)
+        scopes = tuple(trusted_smoke_scope(request.usage_record) for request in requests)
+        diagnostics = tuple(
+            trusted_smoke_usage_diagnostics(
+                request.usage_record,
+                require_runtime_attestation=True,
+            )
+            for request in requests
+        )
+        if (
+            len(set(scopes)) != 1
+            or scopes[0] not in {"CANDIDATE", "JUDGE"}
+            or any(diagnostics)
+            or len({request.usage_record.request_id for request in requests}) != len(requests)
+            or len({request.usage_record.openrouter_generation_id for request in requests})
+            != len(requests)
+            or any(
+                not trusted_has_usage_origin(
+                    request.usage_record,
+                    atomic_ledger=ledger,
+                )
+                for request in requests
+            )
+        ):
+            raise trusted_privacy_error_type(
+                "provider refetch batch lacks exact same-ledger smoke custody"
+            )
+        request_set_sha256 = canonical_sha256(
+            tuple(trusted_verification_request_sha256(request) for request in requests)
+        )
+        grant = trusted_object_new(trusted_batch_grant_type)
+        key = id(grant)
+
+        def discard(reference: weakref.ReferenceType[_ProviderTransportRefetchBatchGrant]) -> None:
+            with lock:
+                current = batch_registry.get(key)
+                if current is not None and current[0] is reference:
+                    batch_registry.pop(key, None)
+
+        reference = weakref.ref(grant, discard)
+        state: ReceiptState = {
+            "phase": "ACTIVE",
+            "process_id": trusted_getpid(),
+            "thread_id": trusted_get_ident(),
+            "task": trusted_current_task(),
+            "nonce": trusted_object_new(object),
+            "client": client,
+            "transport": binding.transport,
+            "ledger": ledger,
+            "requests": requests,
+            "request_set_sha256": request_set_sha256,
+        }
+        with lock:
+            batch_registry[key] = (reference, state)
+        return grant
 
     def pool_graph_is_current(
         binding: _TrustedTransportBinding,
@@ -5316,6 +6289,9 @@ def _build_provider_transport_attempt_authority(
             complete_with_evidence,
             bind_real_completion_identity,
             fetch_generation_attestations,
+            terminal_usage_cost_custody,
+            trusted_prequalification_request,
+            create_generation_verification,
         ) = registered_issuer
         module_values = getattr(module, "__dict__", None)
         captured_issuer_states = issuer_callable_states
@@ -5391,6 +6367,17 @@ def _build_provider_transport_attempt_authority(
             is not trusted_tls_context_fingerprint
             or module_values.get("_network_backend_graph_is_current")
             is not trusted_network_backend_current
+            or module_values.get("is_retryable_status") is not trusted_is_retryable_status
+            or module_values.get("_authrunner_request_origin_scope")
+            is not trusted_request_origin_scope
+            or module_values.get("_authrunner_noncrediting_smoke_request_scope")
+            is not trusted_smoke_request_scope
+            or module_values.get("_has_authrunner_owned_real_usage_origin")
+            is not trusted_has_usage_origin
+            or module_values.get("_generation_reconciliation_expectation_sha256")
+            is not trusted_expectation_sha256
+            or module_values.get("_generation_verification_request_sha256")
+            is not trusted_verification_request_sha256
             or module_values.get("safe_headers") is not trusted_safe_headers
             or module_values.get("_decoded_response_headers")
             is not trusted_decoded_response_headers
@@ -5426,6 +6413,12 @@ def _build_provider_transport_attempt_authority(
             is not bind_real_completion_identity
             or vars(client_type).get("_fetch_generation_attestations_with_deadline")
             is not fetch_generation_attestations
+            or vars(client_type).get("_require_terminal_usage_cost_custody")
+            is not terminal_usage_cost_custody
+            or vars(client_type).get("_is_trusted_prequalification_request")
+            is not trusted_prequalification_request
+            or vars(client_type).get("create_trusted_generation_verification")
+            is not create_generation_verification
             or getattr(module, "_lookup_trusted_transport_binding", None) is not transport_lookup
             or getattr(module, "_openrouter_client_callables_are_pristine", None)
             is not pristine_predicate
@@ -5532,98 +6525,24 @@ def _build_provider_transport_attempt_authority(
             current = (response, response_request, response_headers)
         else:
             pool = binding.owned_pool
-            if pool is None:
+            request_lock = binding.request_lock
+            if pool is None or request_lock is None:
                 raise trusted_privacy_error_type("provider transport lacks its owned pool")
-            pool_values = vars(pool)
-            connections = pool_values.get("_connections")
-            requests = pool_values.get("_requests")
-            response_stream = response_values.get("stream")
-            if (
-                type(connections) is not list
-                or len(connections) != 1
-                or type(requests) is not list
-                or len(requests) != 1
-                or type(response_stream) is not trusted_bound_async_stream_type
-                or frozenset(vars(response_stream)) != {"_stream", "_response", "_start"}
-                or trusted_object_getattribute(response_stream, "_response") is not response
-            ):
-                raise trusted_privacy_error_type(
-                    "provider transport in-flight response graph is invalid"
-                )
-            transport_stream = trusted_object_getattribute(response_stream, "_stream")
-            if type(transport_stream) is not trusted_async_response_stream_type or frozenset(
-                vars(transport_stream)
-            ) != {"_httpcore_stream"}:
-                raise trusted_privacy_error_type(
-                    "provider transport in-flight adapter graph is invalid"
-                )
-            pool_stream = trusted_object_getattribute(transport_stream, "_httpcore_stream")
-            if (
-                type(pool_stream) is not trusted_pool_byte_stream_type
-                or frozenset(vars(pool_stream)) != {"_stream", "_pool_request", "_pool", "_closed"}
-                or trusted_object_getattribute(pool_stream, "_pool") is not pool
-                or trusted_object_getattribute(pool_stream, "_closed") is not False
-            ):
-                raise trusted_privacy_error_type(
-                    "provider transport in-flight pool stream is invalid"
-                )
-            pool_request = trusted_object_getattribute(pool_stream, "_pool_request")
-            protocol_stream = trusted_object_getattribute(pool_stream, "_stream")
-            connection_acquired = (
-                trusted_object_getattribute(pool_request, "_connection_acquired")
-                if type(pool_request) is trusted_pool_request_type
-                else None
+            current = trusted_inflight_response_graph(
+                owned_pool=pool,
+                request_lock=request_lock,
+                response=response,
+                previous=previous,
             )
-            if (
-                type(pool_request) is not trusted_pool_request_type
-                or frozenset(vars(pool_request))
-                != {"request", "connection", "_connection_acquired"}
-                or requests[0] is not pool_request
-                or type(connection_acquired) is not trusted_async_event_type
-                or "wait" in vars(connection_acquired)
-                or "set" in vars(connection_acquired)
-                or type(protocol_stream) is not trusted_http11_byte_stream_type
-                or frozenset(vars(protocol_stream)) != {"_connection", "_request", "_closed"}
-                or trusted_object_getattribute(protocol_stream, "_request")
-                is not trusted_object_getattribute(pool_request, "request")
-                or trusted_object_getattribute(protocol_stream, "_closed") is not False
-            ):
-                raise trusted_privacy_error_type(
-                    "provider transport in-flight protocol stream is invalid"
+        if (
+            isolated
+            and previous is not None
+            and (
+                len(current) != len(previous)
+                or any(
+                    observed is not expected
+                    for observed, expected in zip(current, previous, strict=True)
                 )
-            connection = trusted_object_getattribute(pool_request, "connection")
-            protocol_connection = trusted_object_getattribute(protocol_stream, "_connection")
-            if (
-                type(connection) is not trusted_httpcore_connection_type
-                or connections[0] is not connection
-                or "handle_async_request" in vars(connection)
-                or type(protocol_connection) is not trusted_http11_connection_type
-                or trusted_object_getattribute(connection, "_connection") is not protocol_connection
-                or "handle_async_request" in vars(protocol_connection)
-            ):
-                raise trusted_privacy_error_type(
-                    "provider transport in-flight connection graph is invalid"
-                )
-            current = (
-                response,
-                response_request,
-                response_headers,
-                response_stream,
-                transport_stream,
-                pool_stream,
-                pool_request,
-                connection_acquired,
-                protocol_stream,
-                connection,
-                protocol_connection,
-                connections,
-                requests,
-            )
-        if previous is not None and (
-            len(current) != len(previous)
-            or any(
-                observed is not expected
-                for observed, expected in zip(current, previous, strict=True)
             )
         ):
             raise trusted_privacy_error_type("provider transport in-flight response graph changed")
@@ -5658,23 +6577,16 @@ def _build_provider_transport_attempt_authority(
             raise trusted_privacy_error_type(
                 "provider transport completed response anchor is invalid"
             )
-        response_stream = previous[3]
-        transport_stream = previous[4]
-        pool_stream = previous[5]
-        protocol_stream = previous[8]
-        if (
-            binding.owned_pool is None
-            or vars(response).get("stream") is not response_stream
-            or trusted_object_getattribute(response_stream, "_stream") is not transport_stream
-            or trusted_object_getattribute(transport_stream, "_httpcore_stream") is not pool_stream
-            or trusted_object_getattribute(pool_stream, "_stream") is not protocol_stream
-            or trusted_object_getattribute(pool_stream, "_closed") is not True
-            or trusted_object_getattribute(protocol_stream, "_closed") is not True
-        ):
-            raise trusted_privacy_error_type(
-                "provider transport completed response did not close its exact stream chain"
-            )
-        return previous
+        pool = binding.owned_pool
+        request_lock = binding.request_lock
+        if pool is None or request_lock is None:
+            raise trusted_privacy_error_type("provider transport lacks its owned pool")
+        return trusted_completed_response_graph(
+            owned_pool=pool,
+            request_lock=request_lock,
+            response=response,
+            previous=previous,
+        )
 
     def prepare(
         client: object,
@@ -5688,7 +6600,8 @@ def _build_provider_transport_attempt_authority(
             "COMPLETION",
             "INITIAL_IDENTITY_BIND",
             "CAPABILITY_REFETCH",
-        ],
+        ]
+        | None,
     ) -> _ProviderTransportAttemptReceipt | None:
         with lock:
             registered_issuer = issuer
@@ -5709,6 +6622,9 @@ def _build_provider_transport_attempt_authority(
             _complete_with_evidence,
             _bind_real_completion_identity,
             _fetch_generation_attestations,
+            _terminal_usage_cost_custody,
+            _trusted_prequalification_request,
+            _create_generation_verification,
         ) = registered_issuer
         if execution_evidence_resolver(client) is not trusted_real_evidence:
             return None
@@ -5723,6 +6639,7 @@ def _build_provider_transport_attempt_authority(
             cast(dict[str, object], _isolated_frame_globals) if isolated else module_values
         )
         grant_state = operation_state(operation_grant)
+        effective_purpose = grant_state.get("purpose") if purpose is None else purpose
         next_attempt = cast(int, grant_state["next_attempt"])
         current_task = trusted_current_task()
         grant_generation_id = grant_state.get("generation_id")
@@ -5745,9 +6662,12 @@ def _build_provider_transport_attempt_authority(
             or (method == "POST") is not (type(json_body) is dict)
             or (method == "POST") is not (type(reservation) is trusted_reservation_type)
             or (method == "GET" and (json_body is not None or reservation is not None))
-            or (method == "POST" and purpose != "COMPLETION")
-            or (method == "GET" and purpose not in {"INITIAL_IDENTITY_BIND", "CAPABILITY_REFETCH"})
-            or grant_state.get("purpose") != purpose
+            or (method == "POST" and effective_purpose != "COMPLETION")
+            or (
+                method == "GET"
+                and effective_purpose not in {"INITIAL_IDENTITY_BIND", "CAPABILITY_REFETCH"}
+            )
+            or grant_state.get("purpose") != effective_purpose
             or next_attempt > cast(int, grant_state["maximum_attempts"])
             or (
                 method == "POST"
@@ -5833,8 +6753,8 @@ def _build_provider_transport_attempt_authority(
             "ledger_snapshot_before": snapshot_before,
             "method": method,
             "path": path,
-            "purpose": purpose,
-            "operation_grant": operation_grant,
+            "purpose": effective_purpose,
+            "operation_grant_ref": weakref.ref(operation_grant),
             "operation_nonce": grant_state["nonce"],
             "logical_request_id": grant_state["logical_request_id"],
             "attempt_ordinal": next_attempt,
@@ -5852,18 +6772,37 @@ def _build_provider_transport_attempt_authority(
         }
         try:
             with lock:
-                registry[key] = (reference, state)
-            update_operation_state(
-                operation_grant,
-                expected_next_attempt=next_attempt,
-                expected_nonce=grant_state["nonce"],
-                updates={
+                grant_key = id(operation_grant)
+                registered_grant = grant_registry.get(grant_key)
+                grant_receipts = grant_state.get("receipts")
+                if (
+                    registered_grant is None
+                    or registered_grant[0]() is not operation_grant
+                    or registered_grant[1].get("phase") != "ACTIVE"
+                    or registered_grant[1].get("nonce") is not grant_state["nonce"]
+                    or registered_grant[1].get("next_attempt") != next_attempt
+                    or type(grant_receipts) is not tuple
+                    or len(grant_receipts) != next_attempt - 1
+                    or key in registry
+                ):
+                    raise trusted_privacy_error_type(
+                        "provider transport operation attempt order is invalid"
+                    )
+                next_grant_state = {
+                    **registered_grant[1],
                     "child_task": (
                         current_task if method == "GET" else grant_state.get("child_task")
                     ),
                     "next_attempt": next_attempt + 1,
-                },
-            )
+                    "receipts": (*grant_receipts, receipt),
+                }
+                registry[key] = (reference, state)
+                try:
+                    grant_registry[grant_key] = (registered_grant[0], next_grant_state)
+                except BaseException:
+                    if registry.get(key) == (reference, state):
+                        registry.pop(key, None)
+                    raise
             return receipt
         except BaseException:
             with lock:
@@ -6210,6 +7149,36 @@ def _build_provider_transport_attempt_authority(
             updates=updates,
         )
 
+    def purge_connected_composite(
+        composite_key: int,
+        expected: tuple[
+            weakref.ReferenceType[_ProviderTransportReceiptComposite],
+            ReceiptState,
+        ]
+        | None = None,
+    ) -> bool:
+        """Invalidate one sealed receipt component while the registry lock is held."""
+
+        composite_entry = composite_registry.get(composite_key)
+        if composite_entry is None or (expected is not None and composite_entry is not expected):
+            return False
+        composite_registry.pop(composite_key, None)
+        for sealed_grant in cast(
+            tuple[_ProviderTransportOperationGrant, ...],
+            composite_entry[1].get("grants", ()),
+        ):
+            grant_registry.pop(id(sealed_grant), None)
+        sealed_batch = composite_entry[1].get("batch_grant")
+        if type(sealed_batch) is trusted_batch_grant_type:
+            batch_registry.pop(id(sealed_batch), None)
+        for sealed_vector in cast(
+            tuple[tuple[_ProviderTransportAttemptReceipt, ...], ...],
+            composite_entry[1].get("receipts", ()),
+        ):
+            for sealed_receipt in sealed_vector:
+                registry.pop(id(sealed_receipt), None)
+        return True
+
     def revoke(receipt: _ProviderTransportAttemptReceipt) -> None:
         if type(receipt) is not trusted_receipt_type:
             return
@@ -6217,6 +7186,16 @@ def _build_provider_transport_attempt_authority(
             registered = registry.get(id(receipt))
             if registered is None or registered[0]() is not receipt:
                 return
+            for composite_key, composite_entry in tuple(composite_registry.items()):
+                if any(
+                    receipt in vector
+                    for vector in cast(
+                        tuple[tuple[_ProviderTransportAttemptReceipt, ...], ...],
+                        composite_entry[1].get("receipts", ()),
+                    )
+                ):
+                    purge_connected_composite(composite_key, composite_entry)
+                    return
             registry.pop(id(receipt), None)
 
     def inspect_receipt(
@@ -6300,6 +7279,459 @@ def _build_provider_transport_attempt_authority(
                 and registered[1].get("nonce") is state.get("nonce")
             )
 
+    def seal_vectors(
+        *,
+        kind: Literal["INITIAL_IDENTITY_BIND", "CAPABILITY_REFETCH"],
+        client: object,
+        grants: tuple[_ProviderTransportOperationGrant, ...],
+        vectors: tuple[
+            tuple[tuple[_ProviderTransportAttemptReceipt, ReceiptState], ...],
+            ...,
+        ],
+        custody: Mapping[str, object],
+        batch_grant: _ProviderTransportRefetchBatchGrant | None = None,
+    ) -> _ProviderTransportReceiptComposite:
+        if (
+            not grants
+            or len(grants) != len(vectors)
+            or len({id(grant) for grant in grants}) != len(grants)
+            or any(not vector for vector in vectors)
+        ):
+            raise trusted_privacy_error_type("provider transport composite vector is invalid")
+        composite = trusted_object_new(trusted_composite_type)
+        composite_key = id(composite)
+
+        def discard(reference: weakref.ReferenceType[_ProviderTransportReceiptComposite]) -> None:
+            with lock:
+                registered = composite_registry.get(composite_key)
+                if registered is None or registered[0] is not reference:
+                    return
+                state = registered[1]
+                composite_registry.pop(composite_key, None)
+                for sealed_grant in cast(
+                    tuple[_ProviderTransportOperationGrant, ...],
+                    state.get("grants", ()),
+                ):
+                    grant_registry.pop(id(sealed_grant), None)
+                sealed_batch = state.get("batch_grant")
+                if type(sealed_batch) is trusted_batch_grant_type:
+                    batch_registry.pop(id(sealed_batch), None)
+                for sealed_vector in cast(
+                    tuple[tuple[_ProviderTransportAttemptReceipt, ...], ...],
+                    state.get("receipts", ()),
+                ):
+                    for sealed_receipt in sealed_vector:
+                        registry.pop(id(sealed_receipt), None)
+
+        reference = weakref.ref(composite, discard)
+        with lock:
+            grant_entries: list[
+                tuple[
+                    int,
+                    tuple[weakref.ReferenceType[_ProviderTransportOperationGrant], ReceiptState],
+                ]
+            ] = []
+            receipt_entries: list[
+                tuple[
+                    int,
+                    tuple[weakref.ReferenceType[_ProviderTransportAttemptReceipt], ReceiptState],
+                ]
+            ] = []
+            for grant, vector in zip(grants, vectors, strict=True):
+                grant_entry = grant_registry.get(id(grant))
+                vector_receipts = tuple(receipt for receipt, _state in vector)
+                if (
+                    grant_entry is None
+                    or grant_entry[0]() is not grant
+                    or grant_entry[1].get("phase") != "ACTIVE"
+                    or grant_entry[1].get("client") is not client
+                    or grant_entry[1].get("receipts") != vector_receipts
+                ):
+                    raise trusted_privacy_error_type(
+                        "provider transport composite grant changed before sealing"
+                    )
+                grant_entries.append((id(grant), grant_entry))
+                for receipt, observed_state in vector:
+                    receipt_entry = registry.get(id(receipt))
+                    if (
+                        receipt_entry is None
+                        or receipt_entry[0]() is not receipt
+                        or receipt_entry[1].get("phase") != "CLAIMED"
+                        or receipt_entry[1].get("nonce") is not observed_state.get("nonce")
+                        or not isinstance(
+                            receipt_entry[1].get("operation_grant_ref"),
+                            weakref.ReferenceType,
+                        )
+                        or cast(
+                            weakref.ReferenceType[_ProviderTransportOperationGrant],
+                            receipt_entry[1]["operation_grant_ref"],
+                        )()
+                        is not grant
+                        or receipt_entry[1].get("operation_nonce")
+                        is not grant_entry[1].get("nonce")
+                    ):
+                        raise trusted_privacy_error_type(
+                            "provider transport composite receipt changed before sealing"
+                        )
+                    receipt_entries.append((id(receipt), receipt_entry))
+            batch_entry = batch_registry.get(id(batch_grant)) if batch_grant is not None else None
+            if batch_grant is not None and (
+                batch_entry is None
+                or batch_entry[0]() is not batch_grant
+                or batch_entry[1].get("phase") != "ACTIVE"
+                or batch_entry[1].get("client") is not client
+                or batch_entry[1].get("requests") is not custody.get("requests")
+                or any(
+                    grant_registry[id(grant)][1].get("parent_grant") is not batch_grant
+                    for grant in grants
+                )
+            ):
+                raise trusted_privacy_error_type(
+                    "provider transport composite refetch batch changed before sealing"
+                )
+            composite_state: ReceiptState = {
+                "phase": "ACTIVE",
+                "process_id": trusted_getpid(),
+                "thread_id": trusted_get_ident(),
+                "task": trusted_current_task(),
+                "nonce": trusted_object_new(object),
+                "kind": kind,
+                "client": client,
+                "grants": grants,
+                "batch_grant": batch_grant,
+                "receipts": tuple(
+                    tuple(receipt for receipt, _state in vector) for vector in vectors
+                ),
+                **custody,
+            }
+            installed_receipts: list[int] = []
+            installed_grants: list[int] = []
+            installed_batch = False
+            try:
+                for key, receipt_entry_item in receipt_entries:
+                    prior_receipt_state = receipt_entry_item[1]
+                    registry[key] = (
+                        receipt_entry_item[0],
+                        {
+                            "phase": "CONSUMED",
+                            "process_id": prior_receipt_state.get("process_id"),
+                            "nonce": prior_receipt_state.get("nonce"),
+                            "operation_grant_ref": prior_receipt_state.get("operation_grant_ref"),
+                            "operation_nonce": prior_receipt_state.get("operation_nonce"),
+                            "attempt_ordinal": prior_receipt_state.get("attempt_ordinal"),
+                            "raw_request_sha256": prior_receipt_state.get("raw_request_sha256"),
+                            "response_digest": prior_receipt_state.get("response_digest"),
+                            "outcome": prior_receipt_state.get("outcome"),
+                        },
+                    )
+                    installed_receipts.append(key)
+                for key, grant_entry_item in grant_entries:
+                    prior_grant_state = grant_entry_item[1]
+                    grant_registry[key] = (
+                        grant_entry_item[0],
+                        {
+                            "phase": "CONSUMED",
+                            "process_id": prior_grant_state.get("process_id"),
+                            "nonce": prior_grant_state.get("nonce"),
+                            "parent_grant": prior_grant_state.get("parent_grant"),
+                            "receipts": prior_grant_state.get("receipts"),
+                        },
+                    )
+                    installed_grants.append(key)
+                if batch_grant is not None:
+                    assert batch_entry is not None
+                    batch_registry[id(batch_grant)] = (
+                        batch_entry[0],
+                        {
+                            "phase": "CONSUMED",
+                            "process_id": batch_entry[1].get("process_id"),
+                            "nonce": batch_entry[1].get("nonce"),
+                        },
+                    )
+                    installed_batch = True
+                composite_registry[composite_key] = (reference, composite_state)
+            except BaseException:
+                for key, receipt_entry_item in receipt_entries:
+                    if key in installed_receipts:
+                        registry[key] = receipt_entry_item
+                for key, grant_entry_item in grant_entries:
+                    if key in installed_grants:
+                        grant_registry[key] = grant_entry_item
+                if installed_batch and batch_grant is not None and batch_entry is not None:
+                    batch_registry[id(batch_grant)] = batch_entry
+                composite_registry.pop(composite_key, None)
+                raise
+        return composite
+
+    def seal_initial_composite(
+        client: object,
+        completion_grant: _ProviderTransportOperationGrant,
+        metadata_grant: _ProviderTransportOperationGrant,
+        usage_record: UsageRecord,
+        generation: OpenRouterGenerationEvidence,
+        binding: OpenRouterIdentityBindingResult,
+        *,
+        expectation_sha256: str,
+    ) -> _ProviderTransportReceiptComposite:
+        with lock:
+            registered_issuer = issuer
+        if registered_issuer is None:
+            raise trusted_privacy_error_type("provider transport receipt issuer is not registered")
+        bind_real_completion_identity = registered_issuer[12]
+        bind_kwdefaults = cast(
+            FunctionType,
+            bind_real_completion_identity,
+        ).__kwdefaults__
+        frame = trusted_getframe(1)
+        if (
+            type(bind_kwdefaults) is not dict
+            or frame.f_code is not cast(FunctionType, bind_real_completion_identity).__code__
+            or frame.f_locals.get("self") is not client
+            or frame.f_locals.get("_authrunner_carrier_register")
+            is not bind_kwdefaults.get("_authrunner_carrier_register")
+            or frame.f_locals.get("_authrunner_carrier_revoke")
+            is not bind_kwdefaults.get("_authrunner_carrier_revoke")
+            or frame.f_locals.get("_authrunner_carrier_contains")
+            is not bind_kwdefaults.get("_authrunner_carrier_contains")
+            or frame.f_locals.get("_authrunner_carrier_type")
+            is not bind_kwdefaults.get("_authrunner_carrier_type")
+            or frame.f_locals.get("_authrunner_usage_origin_call_roots")
+            is not bind_kwdefaults.get("_authrunner_usage_origin_call_roots")
+            or frame.f_locals.get("_authrunner_cleanup_call_roots")
+            is not bind_kwdefaults.get("_authrunner_cleanup_call_roots")
+            or type(binding) is not trusted_identity_binding_type
+            or binding.generation is None
+            or binding.generation.generation_id != generation.generation_id
+            or binding.generation.generation_evidence_sha256 != generation.evidence_sha256
+        ):
+            raise trusted_privacy_error_type(
+                "provider transport composite lacks exact bound generation identity"
+            )
+        completion_vector = validate_completion_vector(client, completion_grant, usage_record)
+        metadata_state = operation_state(metadata_grant)
+        custody_expectation = metadata_state.get("expectation")
+        if (
+            type(custody_expectation) is not GenerationReconciliationExpectation
+            or trusted_expectation_sha256(custody_expectation) != expectation_sha256
+        ):
+            raise trusted_privacy_error_type(
+                "provider transport composite metadata expectation changed"
+            )
+        metadata_vector = validate_metadata_vector(
+            client,
+            metadata_grant,
+            usage_record,
+            generation,
+            purpose="INITIAL_IDENTITY_BIND",
+            expected_grant_sha256=expectation_sha256,
+        )
+        if metadata_state.get("parent_grant") is not completion_grant:
+            raise trusted_privacy_error_type(
+                "provider transport composite metadata lacks its completion parent"
+            )
+        return seal_vectors(
+            kind="INITIAL_IDENTITY_BIND",
+            client=client,
+            grants=(completion_grant, metadata_grant),
+            vectors=(completion_vector, metadata_vector),
+            custody={
+                "usage_record": usage_record,
+                "usage_sha256": canonical_sha256(usage_record.model_dump(mode="json")),
+                "generation": generation,
+                "generation_sha256": canonical_sha256(generation.model_dump(mode="json")),
+                "binding": binding,
+                "binding_sha256": canonical_sha256(binding.model_dump(mode="json")),
+                "expectation_sha256": expectation_sha256,
+            },
+        )
+
+    def seal_refetch_composite(
+        client: object,
+        batch_grant: _ProviderTransportRefetchBatchGrant,
+        grants: tuple[_ProviderTransportOperationGrant, ...],
+        requests: tuple[GenerationVerificationRequest, ...],
+        generations: tuple[OpenRouterGenerationEvidence, ...],
+    ) -> _ProviderTransportReceiptComposite:
+        if (
+            type(batch_grant) is not trusted_batch_grant_type
+            or not requests
+            or len(grants) != len(requests)
+            or len(requests) != len(generations)
+            or any(type(request) is not GenerationVerificationRequest for request in requests)
+            or any(
+                trusted_smoke_scope(request.usage_record) not in {"CANDIDATE", "JUDGE"}
+                or trusted_smoke_usage_diagnostics(
+                    request.usage_record,
+                    require_runtime_attestation=True,
+                )
+                for request in requests
+            )
+        ):
+            raise trusted_privacy_error_type(
+                "provider refetch composite requires exact originated smoke requests"
+            )
+        vectors = tuple(
+            validate_metadata_vector(
+                client,
+                grant,
+                request.usage_record,
+                generation,
+                purpose="CAPABILITY_REFETCH",
+                expected_grant_sha256=trusted_verification_request_sha256(request),
+            )
+            for grant, request, generation in zip(
+                grants,
+                requests,
+                generations,
+                strict=True,
+            )
+        )
+        if any(
+            operation_state(grant).get("verification_request") is not request
+            for grant, request in zip(grants, requests, strict=True)
+        ):
+            raise trusted_privacy_error_type("provider refetch composite request custody changed")
+        return seal_vectors(
+            kind="CAPABILITY_REFETCH",
+            client=client,
+            grants=grants,
+            vectors=vectors,
+            batch_grant=batch_grant,
+            custody={
+                "requests": requests,
+                "request_sha256s": tuple(
+                    trusted_verification_request_sha256(request) for request in requests
+                ),
+                "generations": generations,
+                "generation_sha256s": tuple(
+                    canonical_sha256(generation.model_dump(mode="json"))
+                    for generation in generations
+                ),
+            },
+        )
+
+    def consume_composite(
+        composite: _ProviderTransportReceiptComposite,
+        *,
+        client: object,
+        kind: Literal["INITIAL_IDENTITY_BIND", "CAPABILITY_REFETCH"],
+        custody: Mapping[str, object],
+    ) -> bool:
+        if type(composite) is not trusted_composite_type:
+            return False
+        key = id(composite)
+        with lock:
+            registered = composite_registry.get(key)
+            if (
+                registered is None
+                or registered[0]() is not composite
+                or registered[1].get("phase") != "ACTIVE"
+                or registered[1].get("process_id") != trusted_getpid()
+                or registered[1].get("thread_id") != trusted_get_ident()
+                or registered[1].get("task") is not trusted_current_task()
+                or registered[1].get("client") is not client
+                or registered[1].get("kind") != kind
+                or any(
+                    (
+                        registered[1].get(name) is not value
+                        if name
+                        in {
+                            "usage_record",
+                            "generation",
+                            "binding",
+                            "requests",
+                            "generations",
+                        }
+                        else registered[1].get(name) != value
+                    )
+                    for name, value in custody.items()
+                )
+            ):
+                return False
+            grants = cast(
+                tuple[_ProviderTransportOperationGrant, ...],
+                registered[1].get("grants", ()),
+            )
+            vectors = cast(
+                tuple[tuple[_ProviderTransportAttemptReceipt, ...], ...],
+                registered[1].get("receipts", ()),
+            )
+            installed = (
+                registered[0],
+                {
+                    "phase": "CONSUMED",
+                    "process_id": trusted_getpid(),
+                    "nonce": registered[1].get("nonce"),
+                },
+            )
+            composite_registry[key] = installed
+            for grant in grants:
+                grant_registry.pop(id(grant), None)
+            batch_grant = registered[1].get("batch_grant")
+            if type(batch_grant) is trusted_batch_grant_type:
+                batch_registry.pop(id(batch_grant), None)
+            for vector in vectors:
+                for receipt in vector:
+                    registry.pop(id(receipt), None)
+            return composite_registry.get(key) is installed
+
+    def consume_initial_composite(
+        composite: _ProviderTransportReceiptComposite,
+        *,
+        client: object,
+        usage_record: UsageRecord,
+        generation: OpenRouterGenerationEvidence,
+        binding: OpenRouterIdentityBindingResult,
+        expectation_sha256: str,
+    ) -> bool:
+        return consume_composite(
+            composite,
+            client=client,
+            kind="INITIAL_IDENTITY_BIND",
+            custody={
+                "usage_record": usage_record,
+                "usage_sha256": canonical_sha256(usage_record.model_dump(mode="json")),
+                "generation": generation,
+                "generation_sha256": canonical_sha256(generation.model_dump(mode="json")),
+                "binding": binding,
+                "binding_sha256": canonical_sha256(binding.model_dump(mode="json")),
+                "expectation_sha256": expectation_sha256,
+            },
+        )
+
+    def consume_refetch_composite(
+        composite: _ProviderTransportReceiptComposite,
+        *,
+        client: object,
+        requests: tuple[GenerationVerificationRequest, ...],
+        generations: tuple[OpenRouterGenerationEvidence, ...],
+    ) -> bool:
+        return consume_composite(
+            composite,
+            client=client,
+            kind="CAPABILITY_REFETCH",
+            custody={
+                "requests": requests,
+                "request_sha256s": tuple(
+                    trusted_verification_request_sha256(request) for request in requests
+                ),
+                "generations": generations,
+                "generation_sha256s": tuple(
+                    canonical_sha256(generation.model_dump(mode="json"))
+                    for generation in generations
+                ),
+            },
+        )
+
+    def revoke_composite(composite: _ProviderTransportReceiptComposite) -> None:
+        if type(composite) is not trusted_composite_type:
+            return
+        with lock:
+            registered = composite_registry.get(id(composite))
+            if registered is None or registered[0]() is not composite:
+                return
+            purge_connected_composite(id(composite), registered)
+
     def revoke_operation(grant: _ProviderTransportOperationGrant) -> None:
         if type(grant) is not trusted_grant_type:
             return
@@ -6307,14 +7739,324 @@ def _build_provider_transport_attempt_authority(
             registered = grant_registry.get(id(grant))
             if registered is None or registered[0]() is not grant:
                 return
+            for composite_key, composite_entry in tuple(composite_registry.items()):
+                if grant in cast(
+                    tuple[_ProviderTransportOperationGrant, ...],
+                    composite_entry[1].get("grants", ()),
+                ):
+                    purge_connected_composite(composite_key, composite_entry)
+                    return
             operation_nonce = registered[1].get("nonce")
             grant_registry.pop(id(grant), None)
             for key, current in tuple(registry.items()):
                 if (
-                    current[1].get("operation_grant") is grant
+                    isinstance(
+                        current[1].get("operation_grant_ref"),
+                        weakref.ReferenceType,
+                    )
+                    and cast(
+                        weakref.ReferenceType[_ProviderTransportOperationGrant],
+                        current[1]["operation_grant_ref"],
+                    )()
+                    is grant
                     and current[1].get("operation_nonce") is operation_nonce
                 ):
                     registry.pop(key, None)
+
+    def revoke_refetch_batch(grant: _ProviderTransportRefetchBatchGrant) -> None:
+        if type(grant) is not trusted_batch_grant_type:
+            return
+        with lock:
+            registered = batch_registry.get(id(grant))
+            if registered is None or registered[0]() is not grant:
+                return
+            for composite_key, composite_entry in tuple(composite_registry.items()):
+                if composite_entry[1].get("batch_grant") is grant:
+                    purge_connected_composite(composite_key, composite_entry)
+                    return
+            batch_registry.pop(id(grant), None)
+            for key, current in tuple(grant_registry.items()):
+                if current[1].get("parent_grant") is grant:
+                    grant_registry.pop(key, None)
+                    for receipt in cast(
+                        tuple[_ProviderTransportAttemptReceipt, ...],
+                        current[1].get("receipts", ()),
+                    ):
+                        registry.pop(id(receipt), None)
+
+    def seal_isolated_component(
+        client: object,
+        grants: tuple[_ProviderTransportOperationGrant, ...],
+        receipt_vectors: tuple[tuple[_ProviderTransportAttemptReceipt, ...], ...] | None = None,
+    ) -> tuple[_ProviderTransportReceiptComposite, _ProviderTransportRefetchBatchGrant]:
+        """Seal one synthetic component for local registry-invariant tests only."""
+
+        if (
+            not isolated
+            or type(grants) is not tuple
+            or not grants
+            or len({id(grant) for grant in grants}) != len(grants)
+        ):
+            raise trusted_privacy_error_type("isolated provider component sealing is unavailable")
+        vectors = tuple(ordered_operation_receipts(grant, require_claimed=True) for grant in grants)
+        expected_receipts = tuple(
+            tuple(receipt for receipt, _state in vector) for vector in vectors
+        )
+        if receipt_vectors is not None and (
+            type(receipt_vectors) is not tuple
+            or len(receipt_vectors) != len(expected_receipts)
+            or any(type(vector) is not tuple for vector in receipt_vectors)
+            or any(
+                len(observed) != len(expected)
+                or any(
+                    observed_receipt is not expected_receipt
+                    for observed_receipt, expected_receipt in zip(
+                        observed,
+                        expected,
+                        strict=True,
+                    )
+                )
+                for observed, expected in zip(
+                    receipt_vectors,
+                    expected_receipts,
+                    strict=True,
+                )
+            )
+        ):
+            raise trusted_privacy_error_type(
+                "isolated provider component receipt vector differs from grant custody"
+            )
+        batch_grant = trusted_object_new(trusted_batch_grant_type)
+        batch_key = id(batch_grant)
+
+        def discard(reference: weakref.ReferenceType[_ProviderTransportRefetchBatchGrant]) -> None:
+            with lock:
+                current = batch_registry.get(batch_key)
+                if current is not None and current[0] is reference:
+                    batch_registry.pop(batch_key, None)
+
+        reference = weakref.ref(batch_grant, discard)
+        with lock:
+            grant_entries = tuple(grant_registry.get(id(grant)) for grant in grants)
+            if any(
+                entry is None
+                or entry[0]() is not grant
+                or entry[1].get("phase") != "ACTIVE"
+                or entry[1].get("client") is not client
+                for grant, entry in zip(grants, grant_entries, strict=True)
+            ):
+                raise trusted_privacy_error_type(
+                    "isolated provider component grants are unavailable"
+                )
+            first_state = cast(
+                tuple[weakref.ReferenceType[_ProviderTransportOperationGrant], ReceiptState],
+                grant_entries[0],
+            )[1]
+            batch_registry[batch_key] = (
+                reference,
+                {
+                    "phase": "ACTIVE",
+                    "process_id": trusted_getpid(),
+                    "thread_id": trusted_get_ident(),
+                    "task": trusted_current_task(),
+                    "nonce": trusted_object_new(object),
+                    "client": client,
+                    "transport": first_state.get("transport"),
+                    "ledger": first_state.get("ledger"),
+                    "requests": (),
+                    "request_set_sha256": canonical_sha256(()),
+                },
+            )
+            for grant, entry in zip(grants, grant_entries, strict=True):
+                assert entry is not None
+                grant_registry[id(grant)] = (
+                    entry[0],
+                    {**entry[1], "parent_grant": batch_grant},
+                )
+        try:
+            composite = seal_vectors(
+                kind="CAPABILITY_REFETCH",
+                client=client,
+                grants=grants,
+                vectors=vectors,
+                batch_grant=batch_grant,
+                custody={
+                    "requests": (),
+                    "request_sha256s": (),
+                    "generations": (),
+                    "generation_sha256s": (),
+                },
+            )
+            return composite, batch_grant
+        except BaseException:
+            revoke_refetch_batch(batch_grant)
+            raise
+
+    def inspect_isolated_sealed_component_state(
+        composite: _ProviderTransportReceiptComposite,
+    ) -> tuple[
+        tuple[frozenset[str], ...],
+        tuple[frozenset[str], ...],
+        frozenset[str] | None,
+        frozenset[str],
+    ]:
+        """Expose only sealed registry key sets to local retention tests."""
+
+        if not isolated or type(composite) is not trusted_composite_type:
+            raise trusted_privacy_error_type(
+                "isolated provider component inspection is unavailable"
+            )
+        with lock:
+            composite_entry = composite_registry.get(id(composite))
+            if (
+                composite_entry is None
+                or composite_entry[0]() is not composite
+                or composite_entry[1].get("phase") != "ACTIVE"
+                or composite_entry[1].get("process_id") != trusted_getpid()
+            ):
+                raise trusted_privacy_error_type(
+                    "isolated provider component is absent or consumed"
+                )
+            composite_state = composite_entry[1]
+            grants = cast(
+                tuple[_ProviderTransportOperationGrant, ...],
+                composite_state.get("grants", ()),
+            )
+            receipt_vectors = cast(
+                tuple[tuple[_ProviderTransportAttemptReceipt, ...], ...],
+                composite_state.get("receipts", ()),
+            )
+            batch_grant = composite_state.get("batch_grant")
+            grant_entries = tuple(grant_registry.get(id(grant)) for grant in grants)
+            receipt_entries = tuple(
+                registry.get(id(receipt)) for vector in receipt_vectors for receipt in vector
+            )
+            batch_entry = (
+                batch_registry.get(id(batch_grant))
+                if type(batch_grant) is trusted_batch_grant_type
+                else None
+            )
+            if (
+                any(
+                    entry is None or entry[0]() is not grant
+                    for grant, entry in zip(grants, grant_entries, strict=True)
+                )
+                or any(
+                    entry is None or entry[0]() is not receipt
+                    for receipt, entry in zip(
+                        (receipt for vector in receipt_vectors for receipt in vector),
+                        receipt_entries,
+                        strict=True,
+                    )
+                )
+                or (
+                    type(batch_grant) is trusted_batch_grant_type
+                    and (batch_entry is None or batch_entry[0]() is not batch_grant)
+                )
+            ):
+                raise trusted_privacy_error_type(
+                    "isolated provider component registry changed after sealing"
+                )
+            return (
+                tuple(frozenset(entry[1]) for entry in receipt_entries if entry is not None),
+                tuple(frozenset(entry[1]) for entry in grant_entries if entry is not None),
+                (frozenset(batch_entry[1]) if batch_entry is not None else None),
+                frozenset(composite_state),
+            )
+
+    def seal_isolated_completion_component(
+        client: object,
+        grant: _ProviderTransportOperationGrant,
+        usage_record: UsageRecord,
+        receipt_vector: tuple[_ProviderTransportAttemptReceipt, ...] | None = None,
+    ) -> _ProviderTransportReceiptComposite:
+        """Validate and seal one synthetic completion vector without origin authority."""
+
+        if not isolated:
+            raise trusted_privacy_error_type("isolated provider completion sealing is unavailable")
+        vector = validate_completion_vector(client, grant, usage_record)
+        expected_receipts = tuple(receipt for receipt, _state in vector)
+        if receipt_vector is not None and (
+            type(receipt_vector) is not tuple
+            or len(receipt_vector) != len(expected_receipts)
+            or any(
+                observed is not expected
+                for observed, expected in zip(
+                    receipt_vector,
+                    expected_receipts,
+                    strict=True,
+                )
+            )
+        ):
+            raise trusted_privacy_error_type(
+                "isolated provider completion vector differs from grant custody"
+            )
+        return seal_vectors(
+            kind="INITIAL_IDENTITY_BIND",
+            client=client,
+            grants=(grant,),
+            vectors=(vector,),
+            custody={
+                "usage_record": usage_record,
+                "usage_sha256": canonical_sha256(usage_record.model_dump(mode="json")),
+            },
+        )
+
+    def seal_isolated_metadata_component(
+        client: object,
+        grant: _ProviderTransportOperationGrant,
+        usage_record: UsageRecord,
+        generation: OpenRouterGenerationEvidence,
+        *,
+        purpose: Literal["INITIAL_IDENTITY_BIND", "CAPABILITY_REFETCH"],
+        expected_grant_sha256: str,
+        receipt_vector: tuple[_ProviderTransportAttemptReceipt, ...] | None = None,
+    ) -> _ProviderTransportReceiptComposite:
+        """Validate and seal one synthetic metadata vector without origin authority."""
+
+        if not isolated:
+            raise trusted_privacy_error_type("isolated provider metadata sealing is unavailable")
+        vector = validate_metadata_vector(
+            client,
+            grant,
+            usage_record,
+            generation,
+            purpose=purpose,
+            expected_grant_sha256=expected_grant_sha256,
+        )
+        expected_receipts = tuple(receipt for receipt, _state in vector)
+        if receipt_vector is not None and (
+            type(receipt_vector) is not tuple
+            or len(receipt_vector) != len(expected_receipts)
+            or any(
+                observed is not expected
+                for observed, expected in zip(
+                    receipt_vector,
+                    expected_receipts,
+                    strict=True,
+                )
+            )
+        ):
+            raise trusted_privacy_error_type(
+                "isolated provider metadata vector differs from grant custody"
+            )
+        return seal_vectors(
+            kind=(
+                "INITIAL_IDENTITY_BIND"
+                if purpose == "INITIAL_IDENTITY_BIND"
+                else "CAPABILITY_REFETCH"
+            ),
+            client=client,
+            grants=(grant,),
+            vectors=(vector,),
+            custody={
+                "usage_record": usage_record,
+                "usage_sha256": canonical_sha256(usage_record.model_dump(mode="json")),
+                "generation": generation,
+                "generation_sha256": canonical_sha256(generation.model_dump(mode="json")),
+                "expectation_sha256": expected_grant_sha256,
+            },
+        )
 
     return (
         register_issuer,
@@ -6326,6 +8068,18 @@ def _build_provider_transport_attempt_authority(
         inspect_receipt,
         consume_receipt,
         revoke_operation,
+        seal_initial_composite,
+        consume_initial_composite,
+        seal_refetch_composite,
+        consume_refetch_composite,
+        revoke_composite,
+        prepare_refetch_batch,
+        revoke_refetch_batch,
+        seal_isolated_component,
+        finalize_issuer_function_states,
+        inspect_isolated_sealed_component_state,
+        seal_isolated_completion_component,
+        seal_isolated_metadata_component,
     )
 
 
@@ -7397,11 +9151,7 @@ class OpenRouterClient:
             GenerationReconciliationExpectation | GenerationVerificationRequest | None
         ) = None,
         _request_semaphore: asyncio.Semaphore | None = None,
-        _authrunner_receipt_purpose: Literal[
-            "INITIAL_IDENTITY_BIND",
-            "CAPABILITY_REFETCH",
-        ]
-        | None = None,
+        _authrunner_operation_grant: _ProviderTransportOperationGrant | None = None,
     ) -> OpenRouterGenerationEvidence:
         """Poll boundedly for one eventual, content-free generation attestation."""
 
@@ -7455,7 +9205,7 @@ class OpenRouterClient:
                             exact_decimal_json=True,
                             maximum_attempts=1,
                             not_found_is_pending=True,
-                            _authrunner_receipt_purpose=_authrunner_receipt_purpose,
+                            _authrunner_operation_grant=_authrunner_operation_grant,
                         )
                     else:
                         async with _request_semaphore:
@@ -7466,7 +9216,7 @@ class OpenRouterClient:
                                 exact_decimal_json=True,
                                 maximum_attempts=1,
                                 not_found_is_pending=True,
-                                _authrunner_receipt_purpose=_authrunner_receipt_purpose,
+                                _authrunner_operation_grant=_authrunner_operation_grant,
                             )
                 except (
                     OpenRouterGenerationMetadataNotReadyError,
@@ -7579,13 +9329,119 @@ class OpenRouterClient:
         self,
         requests: tuple[GenerationVerificationRequest, ...],
         generation_ids: tuple[str, ...],
-    ) -> tuple[OpenRouterGenerationEvidence, ...]:
+        *,
+        _authrunner_batch_grant: _ProviderTransportRefetchBatchGrant | None = None,
+        _authrunner_cleanup_call_roots: _ProviderCleanupCallRoots | None = None,
+    ) -> tuple[OpenRouterGenerationEvidence, ...] | _GenerationAttestationFetchResult:
         """Fetch an ordered generation set under one shared wall-clock deadline."""
 
+        smoke_scopes = tuple(
+            _TRUSTED_AUTHRUNNER_NONCREDITING_UNKNOWN_TOKEN_SMOKE_SCOPE(request.usage_record)
+            for request in requests
+        )
+        smoke_atomic_ledger: AtomicCostLedger | None = None
+        if any(scope is not None for scope in smoke_scopes):
+            try:
+                smoke_atomic_ledger = _TRUSTED_BUDGET_CURRENT_ATOMIC_LEDGER(self.budget)
+            except (AttributeError, BudgetReservationStateError, TypeError):
+                smoke_atomic_ledger = None
+        exact_smoke = bool(
+            smoke_scopes
+            and len(set(smoke_scopes)) == 1
+            and smoke_scopes[0] in {"CANDIDATE", "JUDGE"}
+            and all(
+                not _TRUSTED_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_DIAGNOSTICS(
+                    request.usage_record,
+                    require_runtime_attestation=True,
+                )
+                and smoke_atomic_ledger is not None
+                and _TRUSTED_HAS_AUTHRUNNER_USAGE_ORIGIN(
+                    request.usage_record,
+                    atomic_ledger=smoke_atomic_ledger,
+                )
+                for request in requests
+            )
+        )
+        if any(scope is not None for scope in smoke_scopes) and not exact_smoke:
+            raise OpenRouterPrivacyError(
+                "generation refetch rejects mixed or invalid NONCREDITING_SMOKE requests"
+            )
+        if exact_smoke and type(_authrunner_batch_grant) is not _ProviderTransportRefetchBatchGrant:
+            raise OpenRouterPrivacyError("generation refetch lacks one-shot parent batch custody")
+        fetch_kwdefaults = (
+            OpenRouterClient._fetch_generation_attestations_with_deadline.__kwdefaults__
+        )
+        if exact_smoke and (
+            type(fetch_kwdefaults) is not dict
+            or fetch_kwdefaults.get("_authrunner_cleanup_call_roots")
+            is not _authrunner_cleanup_call_roots
+            or _authrunner_cleanup_call_roots is None
+        ):
+            raise OpenRouterPrivacyError("generation refetch cleanup roots changed")
+        if not exact_smoke and _authrunner_batch_grant is not None:
+            raise OpenRouterPrivacyError(
+                "generic generation refetch rejects smoke parent batch custody"
+            )
         operation_timeout = _generation_metadata_operation_timeout(
             self.execution.request_timeout_seconds
         )
+        if exact_smoke:
+            operation_timeout *= len(requests)
         tasks: list[asyncio.Task[OpenRouterGenerationEvidence]] = []
+        operation_grants: tuple[_ProviderTransportOperationGrant, ...] = ()
+        receipt_composite: _ProviderTransportReceiptComposite | None = None
+        receipt_transferred = False
+
+        def revoke_exact_grants(
+            grants: Sequence[_ProviderTransportOperationGrant],
+        ) -> None:
+            assert _authrunner_cleanup_call_roots is not None
+            first_error: BaseException | None = None
+            for grant in grants:
+                try:
+                    _authrunner_cleanup_call_roots[0](grant)
+                except BaseException as exc:
+                    if first_error is None:
+                        first_error = exc
+            if first_error is not None:
+                raise first_error
+
+        if exact_smoke:
+            if not self._authentication_validated:
+                raise OpenRouterAuthenticationError("OpenRouter authentication was not validated")
+            OpenRouterClient._validate_transport_provenance(self)
+            prepared_grants: list[_ProviderTransportOperationGrant] = []
+            try:
+                for request, generation_id in zip(requests, generation_ids, strict=True):
+                    expectation = request.reconciliation_expectation()
+                    grant = _TRUSTED_PREPARE_PROVIDER_TRANSPORT_OPERATION(
+                        self,
+                        purpose="CAPABILITY_REFETCH",
+                        logical_request_id=request.usage_record.request_id,
+                        role=request.usage_record.role,
+                        exact_model_id=request.usage_record.requested_model,
+                        maximum_attempts=len(
+                            _generation_metadata_poll_delays(self.execution.request_timeout_seconds)
+                        ),
+                        generation_id=generation_id,
+                        anchor=request.usage_record,
+                        expectation_sha256=(
+                            _TRUSTED_GENERATION_VERIFICATION_REQUEST_SHA256(request)
+                        ),
+                        proof_kind=request.usage_record.routing.get("privacy_source_proof_kind"),
+                        expectation=expectation,
+                        verification_request=request,
+                        parent_grant=_authrunner_batch_grant,
+                    )
+                    if grant is None:
+                        raise OpenRouterPrivacyError(
+                            "generation refetch lacks transport operation custody"
+                        )
+                    prepared_grants.append(grant)
+            except BaseException:
+                revoke_exact_grants(prepared_grants)
+                raise
+            operation_grants = tuple(prepared_grants)
 
         async def cancel_and_wait_for_tasks() -> None:
             for task in tasks:
@@ -7594,29 +9450,50 @@ class OpenRouterClient:
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
 
-        async def fetch_attestations() -> tuple[OpenRouterGenerationEvidence, ...]:
-            await OpenRouterClient.validate_authentication(self)
+        async def fetch_attestations() -> (
+            tuple[OpenRouterGenerationEvidence, ...] | _GenerationAttestationFetchResult
+        ):
+            nonlocal operation_grants
+            nonlocal receipt_composite
+            nonlocal receipt_transferred
+            if exact_smoke:
+                if not self._authentication_validated:
+                    raise OpenRouterAuthenticationError(
+                        "OpenRouter authentication was not validated"
+                    )
+            else:
+                await OpenRouterClient.validate_authentication(self)
             OpenRouterClient._validate_transport_provenance(self)
             if not self._authentication_validated:
                 raise OpenRouterAuthenticationError("OpenRouter authentication was not validated")
-            semaphore = asyncio.Semaphore(self.execution.concurrency)
+            semaphore = asyncio.Semaphore(1 if exact_smoke else self.execution.concurrency)
 
             async def fetch_one(
                 request: GenerationVerificationRequest,
                 generation_id: str,
+                operation_grant: _ProviderTransportOperationGrant | None,
             ) -> OpenRouterGenerationEvidence:
                 return await OpenRouterClient.get_generation_evidence(
                     self,
                     generation_id,
                     reconciliation_request=request.reconciliation_expectation(),
                     _request_semaphore=semaphore,
+                    _authrunner_operation_grant=operation_grant,
                 )
 
             tasks.extend(
-                asyncio.create_task(fetch_one(request, generation_id))
-                for request, generation_id in zip(
+                asyncio.create_task(fetch_one(request, generation_id, operation_grant))
+                for request, generation_id, operation_grant in zip(
                     requests,
                     generation_ids,
+                    (
+                        operation_grants
+                        if exact_smoke
+                        else cast(
+                            tuple[_ProviderTransportOperationGrant | None, ...],
+                            (None,) * len(requests),
+                        )
+                    ),
                     strict=True,
                 )
             )
@@ -7624,7 +9501,23 @@ class OpenRouterClient:
             for result in results:
                 if isinstance(result, BaseException):
                     raise result
-            return tuple(cast(OpenRouterGenerationEvidence, result) for result in results)
+            attestations = tuple(cast(OpenRouterGenerationEvidence, result) for result in results)
+            if exact_smoke:
+                assert _authrunner_batch_grant is not None
+                receipt_composite = _TRUSTED_SEAL_PROVIDER_REFETCH_RECEIPT_COMPOSITE(
+                    self,
+                    _authrunner_batch_grant,
+                    operation_grants,
+                    requests,
+                    attestations,
+                )
+                transfer_result = _GenerationAttestationFetchResult(
+                    attestations=attestations,
+                    receipt_composite=receipt_composite,
+                )
+                receipt_transferred = True
+                return transfer_result
+            return attestations
 
         try:
             async with asyncio.timeout(operation_timeout):
@@ -7643,10 +9536,29 @@ class OpenRouterClient:
             raise OpenRouterGenerationMetadataNotReadyError(
                 "OpenRouter generation verification exceeded the total readiness deadline"
             ) from None
+        finally:
+            if not receipt_transferred:
+                if exact_smoke:
+                    assert _authrunner_cleanup_call_roots is not None
+                    try:
+                        if receipt_composite is not None:
+                            _authrunner_cleanup_call_roots[1](receipt_composite)
+                    finally:
+                        revoke_exact_grants(operation_grants)
+                else:
+                    if receipt_composite is not None:
+                        _TRUSTED_REVOKE_PROVIDER_TRANSPORT_RECEIPT_COMPOSITE(receipt_composite)
+                    for grant in operation_grants:
+                        _TRUSTED_REVOKE_PROVIDER_TRANSPORT_OPERATION(grant)
 
     async def create_trusted_generation_verification(
         self,
         requests: tuple[GenerationVerificationRequest, ...],
+        *,
+        _authrunner_origin_call_roots: _GenerationOriginCallRoots = (
+            _AUTHRUNNER_GENERATION_ORIGIN_CALL_ROOTS
+        ),
+        _authrunner_cleanup_call_roots: _ProviderCleanupCallRoots | None = None,
     ) -> TrustedGenerationVerification:
         """Authenticate and freshly re-fetch an exact generation set without completions."""
 
@@ -7691,55 +9603,166 @@ class OpenRouterClient:
             raise OpenRouterPrivacyError(
                 "trusted generation verification requires an owned REAL provider client"
             )
-        scoped_smoke_usage = tuple(
-            request.usage_record
+        smoke_scopes = tuple(
+            _TRUSTED_AUTHRUNNER_NONCREDITING_UNKNOWN_TOKEN_SMOKE_SCOPE(request.usage_record)
             for request in normalized
-            if _TRUSTED_AUTHRUNNER_NONCREDITING_UNKNOWN_TOKEN_SMOKE_SCOPE(request.usage_record)
-            is not None
         )
-        if scoped_smoke_usage:
-            scoped_usage_diagnostics = tuple(
+        smoke_atomic_ledger: AtomicCostLedger | None = None
+        if any(scope is not None for scope in smoke_scopes):
+            try:
+                smoke_atomic_ledger = _TRUSTED_BUDGET_CURRENT_ATOMIC_LEDGER(self.budget)
+            except (AttributeError, BudgetReservationStateError, TypeError):
+                smoke_atomic_ledger = None
+        scoped_usage_diagnostics = tuple(
+            (
                 _TRUSTED_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_DIAGNOSTICS(
-                    usage_record,
-                    require_runtime_attestation=False,
+                    request.usage_record,
+                    require_runtime_attestation=True,
                 )
-                for usage_record in scoped_smoke_usage
+                if scope is not None
+                else ()
             )
-            if any(
-                type(diagnostics) is not tuple
-                or len(diagnostics) > 1
-                or any(
-                    type(code) is not str or code not in _TRUSTED_STRICT_USAGE_FAILURE_CODES
-                    for code in diagnostics
+            for request, scope in zip(normalized, smoke_scopes, strict=True)
+        )
+        exact_smoke = bool(
+            smoke_scopes
+            and len(set(smoke_scopes)) == 1
+            and smoke_scopes[0] in {"CANDIDATE", "JUDGE"}
+            and not any(scoped_usage_diagnostics)
+            and smoke_atomic_ledger is not None
+            and all(
+                _TRUSTED_HAS_AUTHRUNNER_USAGE_ORIGIN(
+                    request.usage_record,
+                    atomic_ledger=smoke_atomic_ledger,
                 )
-                for diagnostics in scoped_usage_diagnostics
-            ):
-                raise OpenRouterPrivacyError("NONCREDITING_SMOKE usage diagnostic boundary changed")
+                for request in normalized
+            )
+        )
+        if any(
+            type(diagnostics) is not tuple
+            or len(diagnostics) > 1
+            or any(
+                type(code) is not str or code not in _TRUSTED_STRICT_USAGE_FAILURE_CODES
+                for code in diagnostics
+            )
+            for diagnostics in scoped_usage_diagnostics
+        ):
+            raise OpenRouterPrivacyError("NONCREDITING_SMOKE usage diagnostic boundary changed")
+        if any(scope is not None for scope in smoke_scopes) and not exact_smoke:
             usage_diagnostics = tuple(
                 sorted({code for diagnostics in scoped_usage_diagnostics for code in diagnostics})
             )
             raise OpenRouterPrivacyError(
-                "NONCREDITING_SMOKE generation verification awaits immutable metadata receipts "
+                "NONCREDITING_SMOKE generation verification rejects mixed or invalid requests "
                 f"(usage_diagnostics={'|'.join(usage_diagnostics) or 'NONE'})"
             )
-        verification_started_at = datetime.now(UTC)
-        attestations = await OpenRouterClient._fetch_generation_attestations_with_deadline(
-            self,
-            normalized,
-            cast(tuple[str, ...], generation_ids),
-        )
-        if not _openrouter_client_callables_are_pristine():
+        method_kwdefaults = OpenRouterClient.create_trusted_generation_verification.__kwdefaults__
+        if exact_smoke and (
+            type(method_kwdefaults) is not dict
+            or method_kwdefaults.get("_authrunner_origin_call_roots")
+            is not _authrunner_origin_call_roots
+            or method_kwdefaults.get("_authrunner_cleanup_call_roots")
+            is not _authrunner_cleanup_call_roots
+            or _authrunner_origin_call_roots is not _AUTHRUNNER_GENERATION_ORIGIN_CALL_ROOTS
+            or _authrunner_cleanup_call_roots is None
+        ):
             raise OpenRouterPrivacyError(
-                "trusted generation verification runtime changed during provider re-fetch"
+                "NONCREDITING_SMOKE generation publication call roots changed"
             )
-        OpenRouterClient._validate_transport_provenance(self)
+        verification_started_at = datetime.now(UTC)
+        batch_grant: _ProviderTransportRefetchBatchGrant | None = None
+        receipt_composite: _ProviderTransportReceiptComposite | None = None
+        capability: TrustedGenerationVerification | None = None
         try:
-            capability = _issue_trusted_generation_verification(
+            if exact_smoke:
+                batch_grant = _TRUSTED_PREPARE_PROVIDER_REFETCH_BATCH(self, normalized)
+            fetch_result = (
+                await OpenRouterClient._fetch_generation_attestations_with_deadline(
+                    self,
+                    normalized,
+                    cast(tuple[str, ...], generation_ids),
+                    _authrunner_batch_grant=batch_grant,
+                )
+                if exact_smoke
+                else await OpenRouterClient._fetch_generation_attestations_with_deadline(
+                    self,
+                    normalized,
+                    cast(tuple[str, ...], generation_ids),
+                )
+            )
+            if exact_smoke:
+                if type(fetch_result) is not _GenerationAttestationFetchResult:
+                    raise OpenRouterPrivacyError(
+                        "NONCREDITING_SMOKE generation refetch lacks exact receipt transfer"
+                    )
+                receipt_composite = cast(
+                    _ProviderTransportReceiptComposite,
+                    object.__getattribute__(fetch_result, "receipt_composite"),
+                )
+                attestations = cast(
+                    tuple[OpenRouterGenerationEvidence, ...],
+                    object.__getattribute__(fetch_result, "attestations"),
+                )
+            else:
+                if type(fetch_result) is not tuple:
+                    raise OpenRouterPrivacyError(
+                        "generic generation refetch received smoke receipt custody"
+                    )
+                attestations = fetch_result
+            if not _openrouter_client_callables_are_pristine():
+                raise OpenRouterPrivacyError(
+                    "trusted generation verification runtime changed during provider re-fetch"
+                )
+            OpenRouterClient._validate_transport_provenance(self)
+            if exact_smoke and receipt_composite is None:
+                raise OpenRouterPrivacyError(
+                    "NONCREDITING_SMOKE generation refetch receipt is absent"
+                )
+            issue = (
+                _TRUSTED_ISSUE_GENERATION_VERIFICATION
+                if exact_smoke
+                else _issue_trusted_generation_verification
+            )
+            capability = issue(
                 requests=normalized,
                 attestations=attestations,
                 verification_started_at=verification_started_at,
             )
-            return _attest_authrunner_generation_origin(capability, normalized)
+            if exact_smoke:
+                if (
+                    type(method_kwdefaults) is not dict
+                    or method_kwdefaults.get("_authrunner_origin_call_roots")
+                    is not _authrunner_origin_call_roots
+                    or _authrunner_origin_call_roots is not _AUTHRUNNER_GENERATION_ORIGIN_CALL_ROOTS
+                ):
+                    raise OpenRouterPrivacyError(
+                        "NONCREDITING_SMOKE generation-origin call roots changed"
+                    )
+                origin_mark, origin_contains, _origin_revoke = _authrunner_origin_call_roots
+                marked_capability = origin_mark(
+                    capability,
+                    normalized,
+                    receipt_composite=receipt_composite,
+                    attestations=attestations,
+                )
+                if (
+                    marked_capability is not capability
+                    or smoke_atomic_ledger is None
+                    or not origin_contains(
+                        capability,
+                        atomic_ledger=smoke_atomic_ledger,
+                    )
+                ):
+                    raise OpenRouterPrivacyError(
+                        "NONCREDITING_SMOKE generation origin publication is invalid"
+                    )
+                receipt_composite = None
+                batch_grant = None
+                capability = None
+                return marked_capability
+            marked_capability = _attest_authrunner_generation_origin(capability, normalized)
+            capability = None
+            return marked_capability
         except GenerationReconciliationMismatchError as exc:
             raise OpenRouterGenerationReconciliationError(
                 exc.code,
@@ -7750,6 +9773,26 @@ class OpenRouterClient:
             raise OpenRouterSchemaError(
                 "OpenRouter generation metadata did not reconcile benchmark usage"
             ) from None
+        finally:
+            if exact_smoke:
+                assert _authrunner_cleanup_call_roots is not None
+                try:
+                    if capability is not None:
+                        _authrunner_origin_call_roots[2](capability)
+                finally:
+                    try:
+                        if receipt_composite is not None:
+                            _authrunner_cleanup_call_roots[1](receipt_composite)
+                    finally:
+                        if batch_grant is not None:
+                            _authrunner_cleanup_call_roots[2](batch_grant)
+            else:
+                if capability is not None:
+                    _TRUSTED_REVOKE_GENERATION_VERIFICATION(capability)
+                if receipt_composite is not None:
+                    _TRUSTED_REVOKE_PROVIDER_TRANSPORT_RECEIPT_COMPOSITE(receipt_composite)
+                if batch_grant is not None:
+                    _TRUSTED_REVOKE_PROVIDER_REFETCH_BATCH(batch_grant)
 
     def register_certification_endpoint_snapshot(
         self,
@@ -8052,6 +10095,9 @@ class OpenRouterClient:
         usage_record: UsageRecord,
         identity_binding: OpenRouterIdentityBindingResult,
         trusted_issuer: object | None,
+        _authrunner_receipt_composite: _ProviderTransportReceiptComposite | None = None,
+        _authrunner_generation_evidence: OpenRouterGenerationEvidence | None = None,
+        _authrunner_expectation_sha256: str | None = None,
     ) -> UsageRecord:
         return _TRUSTED_USAGE_WITH_IDENTITY_RESULT(
             self,
@@ -8059,6 +10105,9 @@ class OpenRouterClient:
             identity_binding=identity_binding,
             trusted_issuer=trusted_issuer,
             require_bound=True,
+            _authrunner_receipt_composite=_authrunner_receipt_composite,
+            _authrunner_generation_evidence=_authrunner_generation_evidence,
+            _authrunner_expectation_sha256=_authrunner_expectation_sha256,
         )
 
     def _usage_with_unbound_identity(
@@ -8086,6 +10135,12 @@ class OpenRouterClient:
         trusted_issuer: object | None,
         require_bound: bool,
         generation_observation: OpenRouterGenerationEvidence | None = None,
+        _authrunner_receipt_composite: _ProviderTransportReceiptComposite | None = None,
+        _authrunner_generation_evidence: OpenRouterGenerationEvidence | None = None,
+        _authrunner_expectation_sha256: str | None = None,
+        _authrunner_origin_call_roots: _UsageOriginCallRoots = (
+            _AUTHRUNNER_USAGE_ORIGIN_CALL_ROOTS
+        ),
     ) -> UsageRecord:
         if (
             usage_record.execution_evidence is ExecutionEvidenceKind.REAL
@@ -8164,10 +10219,15 @@ class OpenRouterClient:
                 "AUTHRUNNER privacy proof kind does not match its request namespace"
             ) from None
         smoke_scope = _TRUSTED_AUTHRUNNER_NONCREDITING_UNKNOWN_TOKEN_SMOKE_SCOPE(concluded_usage)
+        exact_smoke_transaction = bool(
+            require_bound
+            and concluded_usage.execution_evidence is ExecutionEvidenceKind.REAL
+            and smoke_scope in {"CANDIDATE", "JUDGE"}
+        )
         if (
             require_bound
             and concluded_usage.execution_evidence is ExecutionEvidenceKind.REAL
-            and smoke_scope is not None
+            and (smoke_scope is not None)
         ):
             usage_diagnostics = _TRUSTED_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_DIAGNOSTICS(
                 concluded_usage,
@@ -8182,12 +10242,138 @@ class OpenRouterClient:
                 )
             ):
                 raise OpenRouterPrivacyError("NONCREDITING_SMOKE usage diagnostic boundary changed")
+            if (
+                not exact_smoke_transaction
+                or usage_diagnostics
+                or type(_authrunner_receipt_composite)
+                is not _TRUSTED_PROVIDER_TRANSPORT_RECEIPT_COMPOSITE_TYPE
+                or type(_authrunner_generation_evidence) is not OpenRouterGenerationEvidence
+                or type(_authrunner_expectation_sha256) is not str
+                or _SHA256_PATTERN.fullmatch(_authrunner_expectation_sha256) is None
+            ):
+                raise OpenRouterPrivacyError(
+                    "NONCREDITING_SMOKE identity binding lacks immutable receipt custody "
+                    f"(usage_diagnostics={'|'.join(usage_diagnostics) or 'NONE'})"
+                )
+        elif any(
+            value is not None
+            for value in (
+                _authrunner_receipt_composite,
+                _authrunner_generation_evidence,
+                _authrunner_expectation_sha256,
+            )
+        ):
             raise OpenRouterPrivacyError(
-                "NONCREDITING_SMOKE identity binding awaits immutable completion receipts "
-                f"(usage_diagnostics={'|'.join(usage_diagnostics) or 'NONE'})"
+                "generic identity binding cannot consume AUTHRUNNER receipt custody"
             )
         if concluded_usage.execution_evidence is ExecutionEvidenceKind.REAL:
-            concluded_usage = _attest_owned_real_usage_record(concluded_usage)
+            concluded_usage = (
+                _TRUSTED_ATTEST_OWNED_REAL_USAGE_RECORD(concluded_usage)
+                if exact_smoke_transaction
+                else _attest_owned_real_usage_record(concluded_usage)
+            )
+        if exact_smoke_transaction:
+            assert _authrunner_receipt_composite is not None
+            assert _authrunner_generation_evidence is not None
+            assert _authrunner_expectation_sha256 is not None
+            method_kwdefaults = OpenRouterClient._usage_with_identity_result.__kwdefaults__
+            if (
+                type(method_kwdefaults) is not dict
+                or method_kwdefaults.get("_authrunner_origin_call_roots")
+                is not _authrunner_origin_call_roots
+                or _authrunner_origin_call_roots is not _AUTHRUNNER_USAGE_ORIGIN_CALL_ROOTS
+            ):
+                raise OpenRouterPrivacyError("NONCREDITING_SMOKE usage-origin call roots changed")
+            origin_mark, origin_contains, origin_revoke = _authrunner_origin_call_roots
+            try:
+                atomic_ledger = _TRUSTED_REQUIRE_TERMINAL_USAGE_COST_CUSTODY(
+                    self,
+                    usage_record,
+                )
+            except ValueError:
+                raise OpenRouterPrivacyError(
+                    "NONCREDITING_SMOKE publication lacks terminal ledger custody"
+                ) from None
+            usage_ledger = self.usage
+            if (
+                type(usage_ledger) is not _TRUSTED_USAGE_LEDGER_TYPE
+                or type(usage_ledger._records) is not list
+            ):
+                raise OpenRouterPrivacyError("NONCREDITING_SMOKE usage ledger custody is invalid")
+            records = usage_ledger._records
+            matching_indexes = tuple(
+                index for index, record in enumerate(records) if record is usage_record
+            )
+            request_id_indexes = tuple(
+                index
+                for index, record in enumerate(records)
+                if record.request_id == usage_record.request_id
+            )
+            if len(matching_indexes) != 1 or request_id_indexes != matching_indexes:
+                raise OpenRouterPrivacyError(
+                    "NONCREDITING_SMOKE provisional usage slot changed before publication"
+                )
+            record_index = matching_indexes[0]
+            if (
+                self.usage is not usage_ledger
+                or self.usage._records is not records
+                or records[record_index] is not usage_record
+            ):
+                raise OpenRouterPrivacyError(
+                    "NONCREDITING_SMOKE provisional usage slot changed before publication"
+                )
+            unmarked_usage = concluded_usage
+            try:
+                records[record_index] = unmarked_usage
+                concluded_usage = origin_mark(
+                    unmarked_usage,
+                    receipt_composite=_authrunner_receipt_composite,
+                    provisional_usage=usage_record,
+                    generation=_authrunner_generation_evidence,
+                    binding=identity_binding,
+                    expectation_sha256=_authrunner_expectation_sha256,
+                )
+                if (
+                    concluded_usage is not unmarked_usage
+                    or not origin_contains(
+                        concluded_usage,
+                        atomic_ledger=atomic_ledger,
+                    )
+                    or self.usage is not usage_ledger
+                    or self.usage._records is not records
+                    or records[record_index] is not unmarked_usage
+                ):
+                    raise OpenRouterPrivacyError(
+                        "NONCREDITING_SMOKE usage slot changed during origin publication"
+                    )
+                records[record_index] = concluded_usage
+                return concluded_usage
+            except BaseException as publication_error:
+                rollback_errors: list[BaseException] = []
+                try:
+                    origin_revoke(concluded_usage)
+                except BaseException as rollback_error:
+                    rollback_errors.append(rollback_error)
+                try:
+                    if (
+                        records[record_index] is unmarked_usage
+                        or records[record_index] is concluded_usage
+                    ):
+                        records[record_index] = usage_record
+                    if records[record_index] is not usage_record or origin_contains(
+                        concluded_usage,
+                        atomic_ledger=atomic_ledger,
+                    ):
+                        raise OpenRouterPrivacyError(
+                            "NONCREDITING_SMOKE publication rollback lost usage custody"
+                        )
+                except BaseException as rollback_error:
+                    rollback_errors.append(rollback_error)
+                if rollback_errors:
+                    raise OpenRouterPrivacyError(
+                        "NONCREDITING_SMOKE publication rollback failed closed"
+                    ) from rollback_errors[0]
+                raise publication_error
         try:
             if require_bound:
                 self.usage.replace_with_bound_identity(concluded_usage)
@@ -9945,11 +12131,7 @@ class OpenRouterClient:
         exact_decimal_json: bool = False,
         maximum_attempts: int | None = None,
         not_found_is_pending: bool = False,
-        _authrunner_receipt_purpose: Literal[
-            "INITIAL_IDENTITY_BIND",
-            "CAPABILITY_REFETCH",
-        ]
-        | None = None,
+        _authrunner_operation_grant: _ProviderTransportOperationGrant | None = None,
     ) -> dict[str, Any]:
         attempt_limit = (
             self.execution.max_model_retries + 1 if maximum_attempts is None else maximum_attempts
@@ -9963,42 +12145,52 @@ class OpenRouterClient:
         attempts = 0
         while True:
             attempts += 1
-            # Raw provider receipts are deliberately dormant in production until
-            # an opaque parent grant is threaded through this polling lifecycle.
-            transport_receipt = None
-            try:
-                response = await _TRUSTED_BOUNDED_REQUEST(
+            transport_receipt = (
+                _TRUSTED_PREPARE_PROVIDER_TRANSPORT_ATTEMPT(
                     self,
-                    "GET",
-                    path,
-                    max_bytes=max_bytes,
+                    operation_grant=_authrunner_operation_grant,
+                    method="GET",
+                    path=path,
+                    json_body=None,
+                    reservation=None,
+                    purpose=None,
+                )
+                if _authrunner_operation_grant is not None
+                else None
+            )
+            try:
+                response = (
+                    await _TRUSTED_DISPATCH_PROVIDER_TRANSPORT_ATTEMPT(
+                        self,
+                        transport_receipt,
+                        "GET",
+                        path,
+                        max_bytes=max_bytes,
+                    )
+                    if transport_receipt is not None
+                    else await _TRUSTED_BOUNDED_REQUEST(
+                        self,
+                        "GET",
+                        path,
+                        max_bytes=max_bytes,
+                    )
                 )
             except (httpx.TimeoutException, httpx.NetworkError):
-                if transport_receipt is not None:
-                    _TRUSTED_REVOKE_PROVIDER_TRANSPORT_ATTEMPT(transport_receipt)
                 if attempts >= attempt_limit:
                     raise OpenRouterTimeoutError("OpenRouter metadata request failed") from None
                 await self._backoff(attempts, None)
                 continue
             except httpx.HTTPError:
-                if transport_receipt is not None:
-                    _TRUSTED_REVOKE_PROVIDER_TRANSPORT_ATTEMPT(transport_receipt)
                 raise OpenRouterModelError(
                     "OpenRouter metadata transport response was invalid"
                 ) from None
             if response.status_code in {401, 403}:
-                if transport_receipt is not None:
-                    _TRUSTED_REVOKE_PROVIDER_TRANSPORT_ATTEMPT(transport_receipt)
                 raise OpenRouterAuthenticationError("OpenRouter rejected the API credentials")
             if response.status_code == 404 and not_found_is_pending:
-                if transport_receipt is not None:
-                    _TRUSTED_REVOKE_PROVIDER_TRANSPORT_ATTEMPT(transport_receipt)
                 raise OpenRouterGenerationMetadataNotReadyError(
                     "OpenRouter generation metadata is not ready"
                 )
             if is_retryable_status(response.status_code):
-                if transport_receipt is not None:
-                    _TRUSTED_REVOKE_PROVIDER_TRANSPORT_ATTEMPT(transport_receipt)
                 if attempts >= attempt_limit:
                     if response.status_code == 429:
                         raise OpenRouterRateLimitError(
@@ -10014,8 +12206,6 @@ class OpenRouterClient:
                 await self._backoff(attempts, response.headers.get("Retry-After"))
                 continue
             if response.status_code >= 400:
-                if transport_receipt is not None:
-                    _TRUSTED_REVOKE_PROVIDER_TRANSPORT_ATTEMPT(transport_receipt)
                 raise OpenRouterModelError(
                     f"OpenRouter metadata request failed with HTTP {response.status_code}"
                 )
@@ -10031,14 +12221,10 @@ class OpenRouterClient:
         except ValueError:
             payload = None
         if not isinstance(payload, dict):
-            if transport_receipt is not None:
-                _TRUSTED_REVOKE_PROVIDER_TRANSPORT_ATTEMPT(transport_receipt)
             raise OpenRouterModelError("OpenRouter metadata response was not a valid object")
         _TRUSTED_ENSURE_NO_CREDENTIAL_IN_VALUE(self, payload)
         observation_path = "/" + path.lstrip("/")
         self._metadata_observations[observation_path] = _canonical_sha256(payload)
-        if transport_receipt is not None:
-            _TRUSTED_REVOKE_PROVIDER_TRANSPORT_ATTEMPT(transport_receipt)
         return payload
 
     async def _bounded_request(
@@ -11441,6 +13627,7 @@ class OpenRouterClient:
         expected_request_cost_preview: OpenRouterStructuredRequestCostPreview | None = None,
         _maximum_attempts: int | None = None,
         _expected_resource_preview: ModelSurfaceTaskResourcePreview | None = None,
+        _authrunner_cleanup_call_roots: _ProviderCleanupCallRoots | None = None,
     ) -> StructuredCompletion[ResponseT]:
         """Call only the explicitly supplied models, in order."""
 
@@ -11847,9 +14034,71 @@ class OpenRouterClient:
                 real_dispatch = (
                     trusted_openrouter_execution_evidence(self) is ExecutionEvidenceKind.REAL
                 )
-                # Production raw transport receipts remain dormant until their
-                # completion and metadata composites are transactionally wired.
-                transport_operation_grant = None
+                transport_operation_grant: _ProviderTransportOperationGrant | None = None
+                if real_dispatch:
+                    proof_kind = (
+                        self.effective_privacy_policy.source_proof_kind
+                        if self.effective_privacy_policy is not None
+                        else None
+                    )
+                    smoke_request_scope = _TRUSTED_AUTHRUNNER_NONCREDITING_SMOKE_REQUEST_SCOPE(
+                        request_ids[index],
+                        proof_kind,
+                    )
+                    if smoke_request_scope == "INVALID":
+                        raise OpenRouterPrivacyError(
+                            "REAL request has invalid NONCREDITING_SMOKE scope coordinates"
+                        )
+                    if smoke_request_scope in {"CANDIDATE", "JUDGE"}:
+                        completion_kwdefaults = (
+                            OpenRouterClient.complete_with_evidence.__kwdefaults__
+                        )
+                        if (
+                            type(completion_kwdefaults) is not dict
+                            or completion_kwdefaults.get("_authrunner_cleanup_call_roots")
+                            is not _authrunner_cleanup_call_roots
+                            or _authrunner_cleanup_call_roots is None
+                            or expected_request_cost_preview is None
+                            or expected_request_cost_preview.schema_version != "1.1"
+                            or expected_request_cost_preview.token_detail_accounting_method
+                            != INDEPENDENT_REASONING_COMPONENT_ENVELOPE_METHOD
+                        ):
+                            raise OpenRouterPrivacyError(
+                                "NONCREDITING_SMOKE requires its exact current cost preview"
+                            )
+                        if not _TRUSTED_IS_TRUSTED_PREQUALIFICATION_REQUEST(
+                            self,
+                            role,
+                            system_prompt=system_prompt,
+                            user_prompt=user_prompt,
+                            response_model=response_model,
+                            schema_name=schema_name,
+                            structured_output_mode=self._selected_structured_output_mode(model),
+                            context_package=context_package,
+                        ):
+                            raise OpenRouterPrivacyError(
+                                "NONCREDITING_SMOKE request surface lacks exact source custody"
+                            )
+                        transport_operation_grant = _TRUSTED_PREPARE_PROVIDER_TRANSPORT_OPERATION(
+                            self,
+                            purpose="COMPLETION",
+                            logical_request_id=request_ids[index],
+                            role=role,
+                            exact_model_id=model,
+                            maximum_attempts=maximum_attempts,
+                            expectation_sha256=(expected_request_cost_preview.preview_sha256),
+                            proof_kind=proof_kind,
+                            system_prompt=system_prompt,
+                            user_prompt=user_prompt,
+                            response_model=response_model,
+                            schema_name=schema_name,
+                            structured_output_mode=self._selected_structured_output_mode(model),
+                            context_package=context_package,
+                        )
+                        if transport_operation_grant is None:
+                            raise OpenRouterPrivacyError(
+                                "exact smoke completion lacks transport operation custody"
+                            )
                 complete_one = (
                     _TRUSTED_COMPLETE_ONE.__get__(
                         self,
@@ -11859,29 +14108,35 @@ class OpenRouterClient:
                     or response_model is _TRUSTED_CANDIDATE_REVIEW_FRAMED_DOCUMENT_TYPE
                     else self._complete_one
                 )
-                completion = await complete_one(
-                    request_id=request_ids[index],
-                    role=role,
-                    model=model,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    context_package=context_package,
-                    response_model=response_model,
-                    schema_name=schema_name,
-                    fallback_used=index > 0,
-                    qualification_binding=qualification_bindings[model],
-                    audit_routing_evidence=audit_routing_bindings[model],
-                    refresh_routing_evidence=refresh_routing_bindings[model],
-                    refresh_pricing_routing_evidence=(refresh_pricing_routing_bindings[model]),
-                    refresh_pricing_control=refresh_pricing_controls[model],
-                    qualification_bound_reasoning_plan=(
-                        qualification_bound_reasoning_plans.get(model)
-                    ),
-                    maximum_attempts=maximum_attempts,
-                    expected_resource_preview=_expected_resource_preview,
-                    expected_request_cost_preview=expected_request_cost_preview,
-                    _authrunner_operation_grant=transport_operation_grant,
-                )
+                try:
+                    completion = await complete_one(
+                        request_id=request_ids[index],
+                        role=role,
+                        model=model,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        context_package=context_package,
+                        response_model=response_model,
+                        schema_name=schema_name,
+                        fallback_used=index > 0,
+                        qualification_binding=qualification_bindings[model],
+                        audit_routing_evidence=audit_routing_bindings[model],
+                        refresh_routing_evidence=refresh_routing_bindings[model],
+                        refresh_pricing_routing_evidence=(refresh_pricing_routing_bindings[model]),
+                        refresh_pricing_control=refresh_pricing_controls[model],
+                        qualification_bound_reasoning_plan=(
+                            qualification_bound_reasoning_plans.get(model)
+                        ),
+                        maximum_attempts=maximum_attempts,
+                        expected_resource_preview=_expected_resource_preview,
+                        expected_request_cost_preview=expected_request_cost_preview,
+                        _authrunner_operation_grant=transport_operation_grant,
+                    )
+                except BaseException:
+                    if transport_operation_grant is not None:
+                        assert _authrunner_cleanup_call_roots is not None
+                        _authrunner_cleanup_call_roots[0](transport_operation_grant)
+                    raise
             except (
                 OpenRouterTransientError,
                 OpenRouterModelError,
@@ -11900,24 +14155,13 @@ class OpenRouterClient:
                     extra={"role": role, "status": "fallback"},
                 )
                 continue
-            if _is_repaired_noncreditable_completion(completion):
-                self.logger.warning(
-                    "Syntax-repaired response retained without review credit",
-                    extra={"role": role, "status": "repaired_noncreditable"},
-                )
-                return completion
-            if _is_concluded_unbound_completion(completion):
-                self._retain_unbound_completion(completion)
-                self.logger.warning(
-                    "Completed response identity is unbound; preserving evidence without "
-                    "automatic fallback",
-                    extra={"role": role, "status": "identity_unbound"},
-                )
-                return completion
-            if trusted_openrouter_execution_evidence(self) is ExecutionEvidenceKind.REAL:
-                _TRUSTED_REQUIRE_REAL_COMPLETION_DISPATCH_SURFACE(self)
-                _TRUSTED_VALIDATE_TRANSPORT_PROVENANCE(self)
-                completion = await _TRUSTED_BIND_REAL_COMPLETION_IDENTITY(self, completion)
+            try:
+                if _is_repaired_noncreditable_completion(completion):
+                    self.logger.warning(
+                        "Syntax-repaired response retained without review credit",
+                        extra={"role": role, "status": "repaired_noncreditable"},
+                    )
+                    return completion
                 if _is_concluded_unbound_completion(completion):
                     self._retain_unbound_completion(completion)
                     self.logger.warning(
@@ -11925,8 +14169,29 @@ class OpenRouterClient:
                         "automatic fallback",
                         extra={"role": role, "status": "identity_unbound"},
                     )
+                    return completion
+                if real_dispatch:
+                    _TRUSTED_REQUIRE_REAL_COMPLETION_DISPATCH_SURFACE(self)
+                    _TRUSTED_VALIDATE_TRANSPORT_PROVENANCE(self)
+                    completion = await _TRUSTED_BIND_REAL_COMPLETION_IDENTITY(
+                        self,
+                        completion,
+                        _authrunner_operation_grant=transport_operation_grant,
+                    )
+                    if transport_operation_grant is not None:
+                        transport_operation_grant = None
+                    if _is_concluded_unbound_completion(completion):
+                        self._retain_unbound_completion(completion)
+                        self.logger.warning(
+                            "Completed response identity is unbound; preserving evidence without "
+                            "automatic fallback",
+                            extra={"role": role, "status": "identity_unbound"},
+                        )
                 return completion
-            return completion
+            finally:
+                if transport_operation_grant is not None:
+                    assert _authrunner_cleanup_call_roots is not None
+                    _authrunner_cleanup_call_roots[0](transport_operation_grant)
         assert last_error is not None
         raise last_error
 
@@ -11982,6 +14247,16 @@ class OpenRouterClient:
     async def _bind_real_completion_identity(
         self,
         completion: StructuredCompletion[ResponseT],
+        *,
+        _authrunner_operation_grant: _ProviderTransportOperationGrant | None = None,
+        _authrunner_carrier_register: Callable[..., StructuredCompletion[Any]] | None = None,
+        _authrunner_carrier_revoke: Callable[[StructuredCompletion[Any]], None] | None = None,
+        _authrunner_carrier_contains: Callable[[StructuredCompletion[Any]], bool] | None = None,
+        _authrunner_carrier_type: type[StructuredCompletion[Any]] = StructuredCompletion,
+        _authrunner_usage_origin_call_roots: _UsageOriginCallRoots = (
+            _AUTHRUNNER_USAGE_ORIGIN_CALL_ROOTS
+        ),
+        _authrunner_cleanup_call_roots: _ProviderCleanupCallRoots | None = None,
     ) -> StructuredCompletion[ResponseT]:
         """Fetch generation metadata and upgrade one owned REAL completion atomically."""
 
@@ -12018,6 +14293,7 @@ class OpenRouterClient:
         smoke_scope = _TRUSTED_AUTHRUNNER_NONCREDITING_UNKNOWN_TOKEN_SMOKE_SCOPE(
             completion.usage_record
         )
+        usage_diagnostics: tuple[str, ...] = ()
         if smoke_scope is not None:
             usage_diagnostics = _TRUSTED_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_DIAGNOSTICS(
                 completion.usage_record,
@@ -12032,9 +14308,19 @@ class OpenRouterClient:
                 )
             ):
                 raise OpenRouterPrivacyError("NONCREDITING_SMOKE usage diagnostic boundary changed")
+            if (
+                smoke_scope not in {"CANDIDATE", "JUDGE"}
+                or usage_diagnostics
+                or type(_authrunner_operation_grant)
+                is not _TRUSTED_PROVIDER_TRANSPORT_OPERATION_GRANT_TYPE
+            ):
+                raise OpenRouterPrivacyError(
+                    "NONCREDITING_SMOKE identity binding lacks exact completion receipts "
+                    f"(usage_diagnostics={'|'.join(usage_diagnostics) or 'NONE'})"
+                )
+        elif _authrunner_operation_grant is not None:
             raise OpenRouterPrivacyError(
-                "NONCREDITING_SMOKE identity binding awaits immutable completion receipts "
-                f"(usage_diagnostics={'|'.join(usage_diagnostics) or 'NONE'})"
+                "generic identity binding cannot consume AUTHRUNNER smoke receipts"
             )
 
         def require_usage_custody() -> None:
@@ -12058,6 +14344,11 @@ class OpenRouterClient:
             )
             is None
         )
+        if initial_noncrediting_smoke is not (smoke_scope in {"CANDIDATE", "JUDGE"}):
+            raise OpenRouterPrivacyError(
+                "initial REAL smoke scope differs from its structural usage envelope"
+            )
+        smoke_atomic_ledger: AtomicCostLedger | None = None
         if initial_noncrediting_smoke:
             try:
                 if (
@@ -12065,7 +14356,7 @@ class OpenRouterClient:
                     or type(self.usage) is not UsageLedger
                 ):
                     raise ValueError
-                _TRUSTED_REQUIRE_TERMINAL_USAGE_COST_CUSTODY(
+                smoke_atomic_ledger = _TRUSTED_REQUIRE_TERMINAL_USAGE_COST_CUSTODY(
                     self,
                     completion.usage_record,
                 )
@@ -12125,6 +14416,10 @@ class OpenRouterClient:
                     usage_record=completion.usage_record,
                 )
         except GenerationEvidenceValidationError:
+            if initial_noncrediting_smoke:
+                raise OpenRouterPrivacyError(
+                    "initial REAL smoke reconciliation expectation is invalid"
+                ) from None
             usage = completion.usage_record
             diagnostic_codes = {
                 OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_INTEGRITY_REJECTED,
@@ -12141,6 +14436,211 @@ class OpenRouterClient:
             ):
                 diagnostic_codes.add(OpenRouterIdentityDiagnosticCode.MODEL_CANONICAL_MISMATCH)
             return conclude_unbound(diagnostic_codes)
+        if initial_noncrediting_smoke:
+            assert _authrunner_operation_grant is not None
+            bind_kwdefaults = OpenRouterClient._bind_real_completion_identity.__kwdefaults__
+            usage_kwdefaults = OpenRouterClient._usage_with_identity_result.__kwdefaults__
+            if (
+                _authrunner_carrier_register is None
+                or _authrunner_carrier_revoke is None
+                or _authrunner_carrier_contains is None
+                or type(bind_kwdefaults) is not dict
+                or type(usage_kwdefaults) is not dict
+                or bind_kwdefaults.get("_authrunner_usage_origin_call_roots")
+                is not _authrunner_usage_origin_call_roots
+                or bind_kwdefaults.get("_authrunner_cleanup_call_roots")
+                is not _authrunner_cleanup_call_roots
+                or usage_kwdefaults.get("_authrunner_origin_call_roots")
+                is not _authrunner_usage_origin_call_roots
+                or _authrunner_usage_origin_call_roots is not _AUTHRUNNER_USAGE_ORIGIN_CALL_ROOTS
+                or _authrunner_cleanup_call_roots is None
+            ):
+                raise OpenRouterPrivacyError(
+                    "initial REAL smoke generation carrier authority is unavailable"
+                )
+            _usage_origin_mark, usage_origin_contains, usage_origin_revoke = (
+                _authrunner_usage_origin_call_roots
+            )
+            expectation_sha256 = _TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_SHA256(
+                reconciliation_expectation
+            )
+            proof_kind = completion.usage_record.routing.get("privacy_source_proof_kind")
+            metadata_grant = _TRUSTED_PREPARE_PROVIDER_TRANSPORT_OPERATION(
+                self,
+                purpose="INITIAL_IDENTITY_BIND",
+                logical_request_id=completion.usage_record.request_id,
+                role=completion.usage_record.role,
+                exact_model_id=completion.usage_record.requested_model,
+                maximum_attempts=len(
+                    _generation_metadata_poll_delays(self.execution.request_timeout_seconds)
+                ),
+                generation_id=generation_id,
+                anchor=completion.usage_record,
+                expectation_sha256=expectation_sha256,
+                proof_kind=proof_kind,
+                parent_grant=_authrunner_operation_grant,
+                expectation=reconciliation_expectation,
+            )
+            if metadata_grant is None:
+                raise OpenRouterPrivacyError(
+                    "initial REAL smoke lacks metadata transport operation custody"
+                )
+            receipt_composite: _ProviderTransportReceiptComposite | None = None
+            carrier_published = False
+            try:
+                generation = await OpenRouterClient.get_generation_evidence(
+                    self,
+                    generation_id,
+                    reconciliation_request=reconciliation_expectation,
+                    _authrunner_operation_grant=metadata_grant,
+                )
+                if not _openrouter_client_callables_are_pristine():
+                    raise OpenRouterPrivacyError(
+                        "REAL identity binding runtime changed during generation retrieval"
+                    )
+                OpenRouterClient._validate_transport_provenance(self)
+                _TRUSTED_REQUIRE_REAL_COMPLETION_DISPATCH_SURFACE(self)
+                require_usage_custody()
+                binding = _TRUSTED_BIND_GENERATION_IDENTITY(
+                    self,
+                    usage_record=completion.usage_record,
+                    generation_evidence=generation,
+                    evaluated_at=None,
+                    trusted_issuer=_TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER,
+                )
+                if binding.strength is ModelIdentityStrength.UNBOUND:
+                    raise OpenRouterPrivacyError(
+                        "initial REAL smoke generation identity did not bind"
+                    )
+                receipt_composite = _TRUSTED_SEAL_PROVIDER_INITIAL_RECEIPT_COMPOSITE(
+                    self,
+                    _authrunner_operation_grant,
+                    metadata_grant,
+                    completion.usage_record,
+                    generation,
+                    binding,
+                    expectation_sha256=expectation_sha256,
+                )
+                publication_ledger = self.usage
+                if (
+                    type(publication_ledger) is not _TRUSTED_USAGE_LEDGER_TYPE
+                    or type(publication_ledger._records) is not list
+                    or smoke_atomic_ledger is None
+                ):
+                    raise OpenRouterPrivacyError(
+                        "initial REAL smoke publication ledger custody is invalid"
+                    )
+                publication_records = publication_ledger._records
+                publication_indexes = tuple(
+                    index
+                    for index, record in enumerate(publication_records)
+                    if record is completion.usage_record
+                )
+                if (
+                    len(publication_indexes) != 1
+                    or tuple(
+                        index
+                        for index, record in enumerate(publication_records)
+                        if record.request_id == completion.usage_record.request_id
+                    )
+                    != publication_indexes
+                ):
+                    raise OpenRouterPrivacyError(
+                        "initial REAL smoke publication slot is not unique"
+                    )
+                publication_index = publication_indexes[0]
+                bound_usage = _TRUSTED_USAGE_WITH_BOUND_IDENTITY(
+                    self,
+                    usage_record=completion.usage_record,
+                    identity_binding=binding,
+                    trusted_issuer=_TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER,
+                    _authrunner_receipt_composite=receipt_composite,
+                    _authrunner_generation_evidence=generation,
+                    _authrunner_expectation_sha256=expectation_sha256,
+                )
+                carrier_completion: StructuredCompletion[Any] | None = None
+                result: StructuredCompletion[Any] | None = None
+                try:
+                    carrier_completion = _authrunner_carrier_type(
+                        value=completion.value,
+                        usage_record=bound_usage,
+                    )
+                    result = _authrunner_carrier_register(
+                        carrier_completion,
+                        generation=generation,
+                    )
+                    if (
+                        result is not carrier_completion
+                        or type(result) is not _authrunner_carrier_type
+                        or result.value is not completion.value
+                        or result.usage_record is not bound_usage
+                        or not _authrunner_carrier_contains(result)
+                    ):
+                        raise OpenRouterPrivacyError(
+                            "initial REAL smoke carrier registration is invalid"
+                        )
+                    if (
+                        self.usage is not publication_ledger
+                        or self.usage._records is not publication_records
+                        or publication_records[publication_index] is not bound_usage
+                        or not usage_origin_contains(
+                            bound_usage,
+                            atomic_ledger=smoke_atomic_ledger,
+                        )
+                    ):
+                        raise OpenRouterPrivacyError(
+                            "initial REAL smoke carrier publication changed usage custody"
+                        )
+                    carrier_published = True
+                    return result
+                except BaseException as carrier_error:
+                    rollback_errors: list[BaseException] = []
+                    carrier_targets = tuple(
+                        target
+                        for target in (carrier_completion, result)
+                        if target is not None and type(target) is _authrunner_carrier_type
+                    )
+                    for target_index, target in enumerate(carrier_targets):
+                        if any(target is prior for prior in carrier_targets[:target_index]):
+                            continue
+                        try:
+                            _authrunner_carrier_revoke(target)
+                        except BaseException as rollback_error:
+                            rollback_errors.append(rollback_error)
+                    try:
+                        usage_origin_revoke(bound_usage)
+                    except BaseException as rollback_error:
+                        rollback_errors.append(rollback_error)
+                    try:
+                        if publication_records[publication_index] is bound_usage:
+                            publication_records[publication_index] = completion.usage_record
+                        if (
+                            self.usage is not publication_ledger
+                            or self.usage._records is not publication_records
+                            or publication_records[publication_index] is not completion.usage_record
+                            or usage_origin_contains(
+                                bound_usage,
+                                atomic_ledger=smoke_atomic_ledger,
+                            )
+                        ):
+                            raise OpenRouterPrivacyError(
+                                "initial REAL smoke carrier rollback lost usage custody"
+                            )
+                    except BaseException as rollback_error:
+                        rollback_errors.append(rollback_error)
+                    if rollback_errors:
+                        raise OpenRouterPrivacyError(
+                            "initial REAL smoke carrier publication rollback failed closed"
+                        ) from rollback_errors[0]
+                    raise carrier_error
+            finally:
+                if not carrier_published:
+                    assert _authrunner_cleanup_call_roots is not None
+                    try:
+                        if receipt_composite is not None:
+                            _authrunner_cleanup_call_roots[1](receipt_composite)
+                    finally:
+                        _authrunner_cleanup_call_roots[0](metadata_grant)
         try:
             generation = await OpenRouterClient.get_generation_evidence(
                 self,
@@ -15694,6 +18194,204 @@ def _generation_metadata_failure_diagnostics(
     return diagnostics
 
 
+def _build_structured_completion_generation_carrier_authority() -> tuple[
+    Callable[..., StructuredCompletion[Any]],
+    Callable[[StructuredCompletion[Any]], OpenRouterGenerationEvidence],
+    Callable[[StructuredCompletion[Any]], None],
+    Callable[[StructuredCompletion[Any]], bool],
+]:
+    """Keep exact smoke generation evidence behind one-shot runtime provenance."""
+
+    registry: dict[
+        int,
+        tuple[
+            weakref.ReferenceType[StructuredCompletion[Any]],
+            str,
+            str,
+            AtomicCostLedger,
+            OpenRouterGenerationEvidence,
+        ],
+    ] = {}
+    lock = Lock()
+    trusted_getframe = sys._getframe
+    trusted_getpid = os.getpid
+    trusted_completion_type = StructuredCompletion
+    trusted_usage_type = UsageRecord
+    trusted_generation_type = OpenRouterGenerationEvidence
+    trusted_bind_code = OpenRouterClient._bind_real_completion_identity.__code__
+    trusted_scope = authrunner_noncrediting_unknown_token_smoke_scope
+    trusted_diagnostics = noncrediting_unknown_token_smoke_usage_diagnostics
+    trusted_has_origin = _has_authrunner_owned_real_usage_origin
+    trusted_sha256 = hashlib.sha256
+    trusted_json_dumps = json.dumps
+    process_id = trusted_getpid()
+
+    def validate(
+        completion: StructuredCompletion[Any],
+        generation: OpenRouterGenerationEvidence,
+        atomic_ledger: AtomicCostLedger,
+    ) -> tuple[str, str]:
+        if type(completion) is not trusted_completion_type:
+            raise OpenRouterPrivacyError("structured completion generation carrier is invalid")
+        usage = completion.usage_record
+        if type(usage) is not trusted_usage_type or type(generation) is not trusted_generation_type:
+            raise OpenRouterPrivacyError("structured completion generation carrier is invalid")
+        routing = usage.routing
+        identity_binding = routing.get("identity_binding")
+        generation_identity = (
+            identity_binding.get("generation") if type(identity_binding) is dict else None
+        )
+        if (
+            trusted_getpid() != process_id
+            or trusted_scope(usage) not in {"CANDIDATE", "JUDGE"}
+            or trusted_diagnostics(usage, require_runtime_attestation=True)
+            or type(atomic_ledger) is not AtomicCostLedger
+            or not trusted_has_origin(usage, atomic_ledger=atomic_ledger)
+            or usage.execution_evidence is not ExecutionEvidenceKind.REAL
+            or usage.openrouter_generation_id != generation.generation_id
+            or generation.execution_evidence is not ExecutionEvidenceKind.REAL
+            or type(identity_binding) is not dict
+            or type(generation_identity) is not dict
+            or routing.get("identity_binding_status") != "generation_metadata_bound"
+            or routing.get("identity_binding_sha256") != identity_binding.get("binding_sha256")
+            or generation_identity.get("generation_id") != generation.generation_id
+            or generation_identity.get("execution_evidence") != "real"
+            or generation_identity.get("generation_model_slug") != generation.exact_model_id
+            or generation_identity.get("provider_name") != generation.provider_name
+            or generation_identity.get("provider_request_id") != generation.request_id
+            or generation_identity.get("generation_evidence_sha256") != generation.evidence_sha256
+        ):
+            raise OpenRouterPrivacyError(
+                "structured completion generation carrier lacks exact smoke provenance"
+            )
+        return (
+            trusted_sha256(
+                trusted_json_dumps(
+                    usage.model_dump(mode="json"),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                    allow_nan=False,
+                ).encode()
+            ).hexdigest(),
+            generation.evidence_sha256,
+        )
+
+    def register(
+        completion: StructuredCompletion[Any],
+        *,
+        generation: OpenRouterGenerationEvidence,
+    ) -> StructuredCompletion[Any]:
+        frame = trusted_getframe(1)
+        atomic_ledger = frame.f_locals.get("smoke_atomic_ledger")
+        if (
+            frame.f_code is not trusted_bind_code
+            or type(atomic_ledger) is not AtomicCostLedger
+            or frame.f_locals.get("bound_usage") is not completion.usage_record
+            or frame.f_locals.get("generation") is not generation
+        ):
+            raise OpenRouterPrivacyError(
+                "structured completion generation carrier issuer is invalid"
+            )
+        usage_sha256, generation_sha256 = validate(completion, generation, atomic_ledger)
+        key = id(completion)
+
+        def discard(reference: weakref.ReferenceType[StructuredCompletion[Any]]) -> None:
+            with lock:
+                current = registry.get(key)
+                if current is not None and current[0] is reference:
+                    registry.pop(key, None)
+
+        reference = weakref.ref(completion, discard)
+        with lock:
+            if key in registry:
+                raise OpenRouterPrivacyError(
+                    "structured completion generation carrier is already registered"
+                )
+            registry[key] = (
+                reference,
+                usage_sha256,
+                generation_sha256,
+                atomic_ledger,
+                generation,
+            )
+        try:
+            if validate(completion, generation, atomic_ledger) != (
+                usage_sha256,
+                generation_sha256,
+            ):
+                raise OpenRouterPrivacyError(
+                    "structured completion generation carrier changed during registration"
+                )
+            return completion
+        except BaseException:
+            with lock:
+                current = registry.get(key)
+                if current is not None and current[0] is reference:
+                    registry.pop(key, None)
+            raise
+
+    def resolve(completion: StructuredCompletion[Any]) -> OpenRouterGenerationEvidence:
+        key = id(completion)
+        with lock:
+            registered = registry.get(key)
+            if registered is None or registered[0]() is not completion:
+                raise OpenRouterPrivacyError(
+                    "structured completion generation carrier is absent or replayed"
+                )
+            registry.pop(key, None)
+        generation = registered[4]
+        usage_sha256, generation_sha256 = validate(completion, generation, registered[3])
+        if (usage_sha256, generation_sha256) != registered[1:3]:
+            raise OpenRouterPrivacyError(
+                "structured completion generation carrier changed before consumption"
+            )
+        return generation
+
+    def revoke(completion: StructuredCompletion[Any]) -> None:
+        if type(completion) is not trusted_completion_type:
+            return
+        key = id(completion)
+        with lock:
+            registered = registry.get(key)
+            if registered is not None and registered[0]() is completion:
+                registry.pop(key, None)
+
+    def contains(completion: StructuredCompletion[Any]) -> bool:
+        if type(completion) is not trusted_completion_type:
+            return False
+        with lock:
+            registered = registry.get(id(completion))
+        if registered is None or registered[0]() is not completion:
+            return False
+        try:
+            return validate(completion, registered[4], registered[3]) == registered[1:3]
+        except OpenRouterPrivacyError:
+            return False
+
+    return register, resolve, revoke, contains
+
+
+(
+    _register_structured_completion_generation_evidence,
+    _resolve_structured_completion_generation_evidence,
+    _revoke_structured_completion_generation_evidence,
+    _has_structured_completion_generation_evidence,
+) = _build_structured_completion_generation_carrier_authority()
+del _build_structured_completion_generation_carrier_authority
+
+_bind_identity_kwdefaults = OpenRouterClient._bind_real_completion_identity.__kwdefaults__
+if type(_bind_identity_kwdefaults) is not dict:
+    raise RuntimeError("REAL identity binding keyword defaults are unavailable")
+OpenRouterClient._bind_real_completion_identity.__kwdefaults__ = {
+    **_bind_identity_kwdefaults,
+    "_authrunner_carrier_register": _register_structured_completion_generation_evidence,
+    "_authrunner_carrier_revoke": _revoke_structured_completion_generation_evidence,
+    "_authrunner_carrier_contains": _has_structured_completion_generation_evidence,
+}
+del _bind_identity_kwdefaults
+
+
 _TRUSTED_OPENROUTER_CLIENT_TYPE = OpenRouterClient
 _TRUSTED_CANDIDATE_REVIEW_PROTOCOL_BOUNDARY_IS_PRISTINE = (
     _candidate_review_protocol_boundary_is_pristine
@@ -15703,6 +18401,18 @@ _TRUSTED_REQUIRE_CANDIDATE_REVIEW_DISPATCH_BOUNDARY = (
 )
 _TRUSTED_PUBLIC_CANDIDATE_REVIEW_RESOURCE_PREVIEW = trusted_preview_candidate_review_task_resources
 _TRUSTED_PUBLIC_CANDIDATE_REVIEW_COMPLETION = trusted_complete_candidate_review_with_evidence
+_TRUSTED_REGISTER_STRUCTURED_COMPLETION_GENERATION_EVIDENCE = (
+    _register_structured_completion_generation_evidence
+)
+_TRUSTED_RESOLVE_STRUCTURED_COMPLETION_GENERATION_EVIDENCE = (
+    _resolve_structured_completion_generation_evidence
+)
+_TRUSTED_REVOKE_STRUCTURED_COMPLETION_GENERATION_EVIDENCE = (
+    _revoke_structured_completion_generation_evidence
+)
+_TRUSTED_HAS_STRUCTURED_COMPLETION_GENERATION_EVIDENCE = (
+    _has_structured_completion_generation_evidence
+)
 _TRUSTED_ATTACH_CANDIDATE_REVIEW_TRUNCATION_PROJECTION = (
     OpenRouterTruncatedResponseError._attach_projection
 )
@@ -15765,6 +18475,8 @@ _TRUSTED_STRUCTURALLY_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_ERROR = (
 _TRUSTED_AUTHRUNNER_NONCREDITING_UNKNOWN_TOKEN_SMOKE_SCOPE = (
     authrunner_noncrediting_unknown_token_smoke_scope
 )
+_TRUSTED_AUTHRUNNER_NONCREDITING_SMOKE_REQUEST_SCOPE = _authrunner_noncrediting_smoke_request_scope
+_TRUSTED_AUTHRUNNER_REQUEST_ORIGIN_SCOPE = _authrunner_request_origin_scope
 _TRUSTED_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_DIAGNOSTICS = (
     noncrediting_unknown_token_smoke_usage_diagnostics
 )
@@ -15788,7 +18500,9 @@ _TRUSTED_GET_GENERATION_EVIDENCE = OpenRouterClient.get_generation_evidence
 _TRUSTED_ISSUE_GENERATION_VERIFICATION = _issue_trusted_generation_verification
 _TRUSTED_ATTEST_AUTHRUNNER_GENERATION_ORIGIN = _attest_authrunner_generation_origin
 _TRUSTED_ATTEST_AUTHRUNNER_USAGE_ORIGIN = _attest_authrunner_owned_real_usage_origin
+_TRUSTED_REVOKE_AUTHRUNNER_USAGE_ORIGIN = _revoke_authrunner_owned_real_usage_origin
 _TRUSTED_HAS_AUTHRUNNER_USAGE_ORIGIN = _has_authrunner_owned_real_usage_origin
+_TRUSTED_REVOKE_GENERATION_VERIFICATION = revoke_trusted_generation_verification
 _TRUSTED_ATTEST_OWNED_REAL_USAGE_RECORD = _attest_owned_real_usage_record
 _TRUSTED_HAS_OWNED_REAL_USAGE_ATTESTATION = _has_owned_real_usage_attestation
 _TRUSTED_AUTHRUNNER_USAGE_ORIGIN_SCOPE = _authrunner_usage_origin_scope
@@ -15942,9 +18656,262 @@ _TRUSTED_BUDGET_MANAGER_DESCRIPTOR_SURFACE = _provider_callable_descriptor_surfa
 _TRUSTED_ATOMIC_LEDGER_DESCRIPTOR_SURFACE = _provider_callable_descriptor_surface(AtomicCostLedger)
 
 
-def _openrouter_client_callables_are_pristine() -> bool:
+def _build_provider_authority_function_graph_guard() -> tuple[
+    Callable[[tuple[object, ...], tuple[FunctionType, ...]], None],
+    Callable[[], bool],
+]:
+    """Freeze the finite callable graph that can mint or transfer smoke authority."""
+
+    trusted_function_type = FunctionType
+    empty_cell = object()
+    untracked_snapshot_cell = object()
+    frozen_states: tuple[tuple[object, ...], ...] | None = None
+    frozen_states_seal: tuple[tuple[object, ...], ...] | None = None
+
+    def function_state(function: FunctionType) -> tuple[object, ...]:
+        closure = function.__closure__
+        closure_values: list[tuple[object, object]] = []
+        for name, cell in zip(
+            function.__code__.co_freevars,
+            closure or (),
+            strict=True,
+        ):
+            try:
+                contents = (
+                    untracked_snapshot_cell
+                    if name == "issuer_callable_states"
+                    else cell.cell_contents
+                )
+            except ValueError:
+                contents = empty_cell
+            closure_values.append((cell, contents))
+        kwdefaults = function.__kwdefaults__
+        attributes = function.__dict__
+        return (
+            function,
+            function.__code__,
+            function.__defaults__,
+            kwdefaults,
+            tuple(sorted((name, value) for name, value in (kwdefaults or {}).items())),
+            function.__globals__,
+            closure,
+            tuple(closure_values),
+            attributes,
+            tuple(sorted(attributes.items())),
+        )
+
+    def install(
+        roots: tuple[object, ...],
+        excluded_functions: tuple[FunctionType, ...],
+    ) -> None:
+        nonlocal frozen_states, frozen_states_seal
+        if (
+            frozen_states is not None
+            or frozen_states_seal is not None
+            or type(roots) is not tuple
+            or not roots
+            or type(excluded_functions) is not tuple
+            or any(type(function) is not trusted_function_type for function in excluded_functions)
+        ):
+            raise RuntimeError("provider authority function graph installation is invalid")
+        states: list[tuple[object, ...]] = []
+        seen: set[int] = set()
+
+        def visit_value(value: object) -> None:
+            if value is graph_is_current or any(
+                value is excluded for excluded in excluded_functions
+            ):
+                return
+            if type(value) is trusted_function_type:
+                visit_function(value)
+            elif type(value) is tuple:
+                for item in cast(tuple[object, ...], value):
+                    visit_value(item)
+
+        def visit_function(function: FunctionType) -> None:
+            key = id(function)
+            if key in seen:
+                return
+            seen.add(key)
+            state = function_state(function)
+            states.append(state)
+            for value in function.__defaults__ or ():
+                visit_value(value)
+            for value in (function.__kwdefaults__ or {}).values():
+                visit_value(value)
+            closure_values = cast(tuple[tuple[object, object], ...], state[7])
+            for _cell, value in closure_values:
+                if value is not untracked_snapshot_cell:
+                    visit_value(value)
+            for value in function.__dict__.values():
+                visit_value(value)
+
+        for root in roots:
+            if type(root) is not trusted_function_type:
+                raise RuntimeError("provider authority function graph root is invalid")
+            visit_function(root)
+        if not states:
+            raise RuntimeError("provider authority function graph is empty")
+        frozen_states = tuple(states)
+        frozen_states_seal = frozen_states
+
+    def graph_is_current() -> bool:
+        if (
+            type(frozen_states) is not tuple
+            or not frozen_states
+            or frozen_states_seal is not frozen_states
+        ):
+            return False
+        for state in frozen_states:
+            function = state[0]
+            if type(function) is not trusted_function_type:
+                return False
+            current = function
+            current_kwdefaults = current.__kwdefaults__
+            current_attributes = current.__dict__
+            current_closure = current.__closure__
+            expected_kwdefaults = cast(tuple[tuple[str, object], ...], state[4])
+            expected_closure = cast(tuple[tuple[object, object], ...], state[7])
+            expected_attributes = cast(tuple[tuple[str, object], ...], state[9])
+            if (
+                current.__code__ is not state[1]
+                or current.__defaults__ is not state[2]
+                or current_kwdefaults is not state[3]
+                or current.__globals__ is not state[5]
+                or current_closure is not state[6]
+                or current_attributes is not state[8]
+                or type(current_kwdefaults) not in {dict, type(None)}
+                or type(current_attributes) is not dict
+                or len(current_kwdefaults or {}) != len(expected_kwdefaults)
+                or any(
+                    (current_kwdefaults or {}).get(name) is not value
+                    for name, value in expected_kwdefaults
+                )
+                or len(current_attributes) != len(expected_attributes)
+                or any(
+                    current_attributes.get(name) is not value for name, value in expected_attributes
+                )
+                or len(current_closure or ()) != len(expected_closure)
+            ):
+                return False
+            for current_cell, (expected_cell, expected_value) in zip(
+                current_closure or (), expected_closure, strict=True
+            ):
+                if current_cell is not expected_cell:
+                    return False
+                try:
+                    current_value = current_cell.cell_contents
+                except ValueError:
+                    current_value = empty_cell
+                if (
+                    expected_value is not untracked_snapshot_cell
+                    and current_value is not expected_value
+                ):
+                    return False
+        return True
+
+    return install, graph_is_current
+
+
+(
+    _install_provider_authority_function_graph,
+    _provider_authority_function_graph_is_pristine,
+) = _build_provider_authority_function_graph_guard()
+del _build_provider_authority_function_graph_guard
+
+_provider_authority_graph_guard_code = _provider_authority_function_graph_is_pristine.__code__
+_provider_authority_graph_guard_defaults = (
+    _provider_authority_function_graph_is_pristine.__defaults__
+)
+_provider_authority_graph_guard_kwdefaults = (
+    _provider_authority_function_graph_is_pristine.__kwdefaults__
+)
+_provider_authority_graph_guard_globals = _provider_authority_function_graph_is_pristine.__globals__
+_provider_authority_graph_guard_closure = _provider_authority_function_graph_is_pristine.__closure__
+_provider_authority_graph_guard_closure_cells = tuple(_provider_authority_graph_guard_closure or ())
+_provider_authority_graph_guard_attributes = _provider_authority_function_graph_is_pristine.__dict__
+_provider_authority_graph_guard_attribute_items = tuple(
+    sorted(_provider_authority_graph_guard_attributes.items())
+)
+
+
+def _openrouter_client_callables_are_pristine(
+    *,
+    _carrier_register: Callable[..., StructuredCompletion[Any]] = (
+        _register_structured_completion_generation_evidence
+    ),
+    _carrier_resolve: Callable[
+        [StructuredCompletion[Any]], OpenRouterGenerationEvidence
+    ] = _resolve_structured_completion_generation_evidence,
+    _carrier_revoke: Callable[
+        [StructuredCompletion[Any]], None
+    ] = _revoke_structured_completion_generation_evidence,
+    _carrier_contains: Callable[
+        [StructuredCompletion[Any]], bool
+    ] = _has_structured_completion_generation_evidence,
+    _usage_origin_call_roots: _UsageOriginCallRoots = _AUTHRUNNER_USAGE_ORIGIN_CALL_ROOTS,
+    _generation_origin_call_roots: _GenerationOriginCallRoots = (
+        _AUTHRUNNER_GENERATION_ORIGIN_CALL_ROOTS
+    ),
+    _usage_result_method: Callable[..., UsageRecord] = OpenRouterClient._usage_with_identity_result,
+    _bind_method: Callable[..., object] = OpenRouterClient._bind_real_completion_identity,
+    _complete_method: Callable[..., object] = OpenRouterClient.complete_with_evidence,
+    _fetch_method: Callable[..., object] = (
+        OpenRouterClient._fetch_generation_attestations_with_deadline
+    ),
+    _create_verification_method: Callable[
+        ..., object
+    ] = OpenRouterClient.create_trusted_generation_verification,
+    _inflight_response_graph: Callable[..., tuple[object, ...]] = (
+        _provider_httpx_inflight_response_graph
+    ),
+    _completed_response_graph: Callable[..., tuple[object, ...]] = (
+        _provider_httpx_completed_response_graph
+    ),
+    _provider_cleanup_call_roots: _ProviderCleanupCallRoots | None = None,
+    _provider_composite_call_roots: _ProviderCompositeCallRoots | None = None,
+    _provider_authority_graph_is_pristine: Callable[
+        [], bool
+    ] = _provider_authority_function_graph_is_pristine,
+    _provider_authority_graph_guard_code: CodeType = _provider_authority_graph_guard_code,
+    _provider_authority_graph_guard_defaults: tuple[object, ...]
+    | None = _provider_authority_graph_guard_defaults,
+    _provider_authority_graph_guard_kwdefaults: dict[str, object]
+    | None = _provider_authority_graph_guard_kwdefaults,
+    _provider_authority_graph_guard_globals: dict[str, object] = (
+        _provider_authority_graph_guard_globals
+    ),
+    _provider_authority_graph_guard_closure: tuple[object, ...]
+    | None = _provider_authority_graph_guard_closure,
+    _provider_authority_graph_guard_closure_cells: tuple[
+        object, ...
+    ] = _provider_authority_graph_guard_closure_cells,
+    _provider_authority_graph_guard_attributes: dict[str, object] = (
+        _provider_authority_graph_guard_attributes
+    ),
+    _provider_authority_graph_guard_attribute_items: tuple[
+        tuple[str, object], ...
+    ] = _provider_authority_graph_guard_attribute_items,
+    _provider_authority_graph_frozen_states: tuple[tuple[object, ...], ...] | None = None,
+) -> bool:
     """Verify the client-owned request and evidence dispatch boundary is unchanged."""
 
+    usage_result_kwdefaults = _usage_result_method.__kwdefaults__
+    bind_kwdefaults = _bind_method.__kwdefaults__
+    complete_kwdefaults = _complete_method.__kwdefaults__
+    fetch_kwdefaults = _fetch_method.__kwdefaults__
+    create_verification_kwdefaults = _create_verification_method.__kwdefaults__
+    pristine_kwdefaults = _openrouter_client_callables_are_pristine.__kwdefaults__
+    guard_closure = _provider_authority_graph_is_pristine.__closure__
+    guard_closure_names = _provider_authority_graph_is_pristine.__code__.co_freevars
+    if len(guard_closure or ()) != len(guard_closure_names):
+        return False
+    guard_closure_by_name = dict(zip(guard_closure_names, guard_closure or (), strict=True))
+    try:
+        guard_frozen_states = guard_closure_by_name["frozen_states"].cell_contents
+        guard_frozen_states_seal = guard_closure_by_name["frozen_states_seal"].cell_contents
+    except (KeyError, ValueError):
+        return False
     return (
         _openrouter_client_callables_are_pristine
         is _TRUSTED_OPENROUTER_CLIENT_CALLABLES_ARE_PRISTINE
@@ -15964,6 +18931,128 @@ def _openrouter_client_callables_are_pristine() -> bool:
         and _lookup_trusted_transport_binding is _TRUSTED_LOOKUP_TRANSPORT_BINDING
         and _ProviderTransportAttemptReceipt is _TRUSTED_PROVIDER_TRANSPORT_ATTEMPT_TYPE
         and (_ProviderTransportOperationGrant is _TRUSTED_PROVIDER_TRANSPORT_OPERATION_GRANT_TYPE)
+        and (
+            _ProviderTransportRefetchBatchGrant
+            is _TRUSTED_PROVIDER_TRANSPORT_REFETCH_BATCH_GRANT_TYPE
+        )
+        and (
+            _ProviderTransportReceiptComposite is _TRUSTED_PROVIDER_TRANSPORT_RECEIPT_COMPOSITE_TYPE
+        )
+        and (_register_structured_completion_generation_evidence is _carrier_register)
+        and (_resolve_structured_completion_generation_evidence is _carrier_resolve)
+        and (_revoke_structured_completion_generation_evidence is _carrier_revoke)
+        and (_has_structured_completion_generation_evidence is _carrier_contains)
+        and (_TRUSTED_REGISTER_STRUCTURED_COMPLETION_GENERATION_EVIDENCE is _carrier_register)
+        and (_TRUSTED_RESOLVE_STRUCTURED_COMPLETION_GENERATION_EVIDENCE is _carrier_resolve)
+        and (_TRUSTED_REVOKE_STRUCTURED_COMPLETION_GENERATION_EVIDENCE is _carrier_revoke)
+        and (_TRUSTED_HAS_STRUCTURED_COMPLETION_GENERATION_EVIDENCE is _carrier_contains)
+        and _AUTHRUNNER_USAGE_ORIGIN_CALL_ROOTS is _usage_origin_call_roots
+        and _AUTHRUNNER_GENERATION_ORIGIN_CALL_ROOTS is _generation_origin_call_roots
+        and _usage_origin_call_roots
+        == (
+            _attest_authrunner_owned_real_usage_origin,
+            _has_authrunner_owned_real_usage_origin,
+            _revoke_authrunner_owned_real_usage_origin,
+        )
+        and _generation_origin_call_roots
+        == (
+            _attest_authrunner_generation_origin,
+            _has_authrunner_generation_origin,
+            revoke_trusted_generation_verification,
+        )
+        and OpenRouterClient._usage_with_identity_result is _usage_result_method
+        and OpenRouterClient._bind_real_completion_identity is _bind_method
+        and OpenRouterClient.complete_with_evidence is _complete_method
+        and OpenRouterClient._fetch_generation_attestations_with_deadline is _fetch_method
+        and OpenRouterClient.create_trusted_generation_verification is _create_verification_method
+        and _provider_httpx_inflight_response_graph is _inflight_response_graph
+        and _provider_httpx_completed_response_graph is _completed_response_graph
+        and type(pristine_kwdefaults) is dict
+        and pristine_kwdefaults.get("_provider_authority_graph_is_pristine")
+        is _provider_authority_graph_is_pristine
+        and pristine_kwdefaults.get("_provider_authority_graph_guard_code")
+        is _provider_authority_graph_guard_code
+        and pristine_kwdefaults.get("_provider_authority_graph_guard_defaults")
+        is _provider_authority_graph_guard_defaults
+        and pristine_kwdefaults.get("_provider_authority_graph_guard_kwdefaults")
+        is _provider_authority_graph_guard_kwdefaults
+        and pristine_kwdefaults.get("_provider_authority_graph_guard_globals")
+        is _provider_authority_graph_guard_globals
+        and pristine_kwdefaults.get("_provider_authority_graph_guard_closure")
+        is _provider_authority_graph_guard_closure
+        and pristine_kwdefaults.get("_provider_authority_graph_guard_closure_cells")
+        is _provider_authority_graph_guard_closure_cells
+        and pristine_kwdefaults.get("_provider_authority_graph_guard_attributes")
+        is _provider_authority_graph_guard_attributes
+        and pristine_kwdefaults.get("_provider_authority_graph_guard_attribute_items")
+        is _provider_authority_graph_guard_attribute_items
+        and pristine_kwdefaults.get("_provider_authority_graph_frozen_states")
+        is _provider_authority_graph_frozen_states
+        and _provider_authority_graph_is_pristine.__code__ is _provider_authority_graph_guard_code
+        and _provider_authority_graph_is_pristine.__defaults__
+        is _provider_authority_graph_guard_defaults
+        and _provider_authority_graph_is_pristine.__kwdefaults__
+        is _provider_authority_graph_guard_kwdefaults
+        and _provider_authority_graph_is_pristine.__globals__
+        is _provider_authority_graph_guard_globals
+        and _provider_authority_graph_is_pristine.__closure__
+        is _provider_authority_graph_guard_closure
+        and _provider_authority_graph_is_pristine.__dict__
+        is _provider_authority_graph_guard_attributes
+        and len(_provider_authority_graph_guard_attributes)
+        == len(_provider_authority_graph_guard_attribute_items)
+        and all(
+            _provider_authority_graph_guard_attributes.get(name) is value
+            for name, value in _provider_authority_graph_guard_attribute_items
+        )
+        and len(_provider_authority_graph_is_pristine.__closure__ or ())
+        == len(_provider_authority_graph_guard_closure_cells)
+        and all(
+            current_cell is expected_cell
+            and type(current_cell.cell_contents) not in {list, dict, set}
+            for current_cell, expected_cell in zip(
+                _provider_authority_graph_is_pristine.__closure__ or (),
+                _provider_authority_graph_guard_closure_cells,
+                strict=True,
+            )
+        )
+        and type(_provider_authority_graph_frozen_states) is tuple
+        and bool(_provider_authority_graph_frozen_states)
+        and guard_frozen_states is _provider_authority_graph_frozen_states
+        and guard_frozen_states_seal is _provider_authority_graph_frozen_states
+        and _provider_authority_graph_is_pristine()
+        and type(usage_result_kwdefaults) is dict
+        and usage_result_kwdefaults.get("_authrunner_origin_call_roots") is _usage_origin_call_roots
+        and type(bind_kwdefaults) is dict
+        and bind_kwdefaults.get("_authrunner_usage_origin_call_roots") is _usage_origin_call_roots
+        and type(create_verification_kwdefaults) is dict
+        and create_verification_kwdefaults.get("_authrunner_origin_call_roots")
+        is _generation_origin_call_roots
+        and _provider_cleanup_call_roots is not None
+        and globals().get("_provider_cleanup_call_roots") is _provider_cleanup_call_roots
+        and _provider_cleanup_call_roots
+        == (
+            _revoke_provider_transport_operation,
+            _revoke_provider_transport_receipt_composite,
+            _revoke_provider_refetch_batch,
+        )
+        and bind_kwdefaults.get("_authrunner_cleanup_call_roots") is _provider_cleanup_call_roots
+        and create_verification_kwdefaults.get("_authrunner_cleanup_call_roots")
+        is _provider_cleanup_call_roots
+        and type(complete_kwdefaults) is dict
+        and complete_kwdefaults.get("_authrunner_cleanup_call_roots")
+        is _provider_cleanup_call_roots
+        and type(fetch_kwdefaults) is dict
+        and fetch_kwdefaults.get("_authrunner_cleanup_call_roots") is _provider_cleanup_call_roots
+        and _provider_composite_call_roots is not None
+        and globals().get("_provider_composite_call_roots") is _provider_composite_call_roots
+        and _provider_composite_call_roots
+        == (
+            _seal_provider_initial_receipt_composite,
+            _consume_provider_initial_receipt_composite,
+            _seal_provider_refetch_receipt_composite,
+            _consume_provider_refetch_receipt_composite,
+        )
         and (_prepare_provider_transport_operation is _TRUSTED_PREPARE_PROVIDER_TRANSPORT_OPERATION)
         and (_prepare_provider_transport_attempt is _TRUSTED_PREPARE_PROVIDER_TRANSPORT_ATTEMPT)
         and (_dispatch_provider_transport_attempt is _TRUSTED_DISPATCH_PROVIDER_TRANSPORT_ATTEMPT)
@@ -15976,6 +19065,28 @@ def _openrouter_client_callables_are_pristine() -> bool:
         )
         and (_consume_provider_transport_attempt is _TRUSTED_CONSUME_PROVIDER_TRANSPORT_ATTEMPT)
         and (_revoke_provider_transport_operation is _TRUSTED_REVOKE_PROVIDER_TRANSPORT_OPERATION)
+        and (_prepare_provider_refetch_batch is _TRUSTED_PREPARE_PROVIDER_REFETCH_BATCH)
+        and (_revoke_provider_refetch_batch is _TRUSTED_REVOKE_PROVIDER_REFETCH_BATCH)
+        and (
+            _seal_provider_initial_receipt_composite
+            is _TRUSTED_SEAL_PROVIDER_INITIAL_RECEIPT_COMPOSITE
+        )
+        and (
+            _consume_provider_initial_receipt_composite
+            is _TRUSTED_CONSUME_PROVIDER_INITIAL_RECEIPT_COMPOSITE
+        )
+        and (
+            _seal_provider_refetch_receipt_composite
+            is _TRUSTED_SEAL_PROVIDER_REFETCH_RECEIPT_COMPOSITE
+        )
+        and (
+            _consume_provider_refetch_receipt_composite
+            is _TRUSTED_CONSUME_PROVIDER_REFETCH_RECEIPT_COMPOSITE
+        )
+        and (
+            _revoke_provider_transport_receipt_composite
+            is _TRUSTED_REVOKE_PROVIDER_TRANSPORT_RECEIPT_COMPOSITE
+        )
         and _attempt_request_id is _TRUSTED_ATTEMPT_REQUEST_ID
         and CostEntryStatus is _TRUSTED_COST_ENTRY_STATUS_TYPE
         and tuple(CostEntryStatus) == _TRUSTED_COST_ENTRY_STATUS_VALUES
@@ -16055,6 +19166,11 @@ def _openrouter_client_callables_are_pristine() -> bool:
             is _TRUSTED_AUTHRUNNER_NONCREDITING_UNKNOWN_TOKEN_SMOKE_SCOPE
         )
         and (
+            _authrunner_noncrediting_smoke_request_scope
+            is _TRUSTED_AUTHRUNNER_NONCREDITING_SMOKE_REQUEST_SCOPE
+        )
+        and _authrunner_request_origin_scope is _TRUSTED_AUTHRUNNER_REQUEST_ORIGIN_SCOPE
+        and (
             noncrediting_unknown_token_smoke_usage_diagnostics
             is _TRUSTED_NONCREDITING_UNKNOWN_TOKEN_SMOKE_USAGE_DIAGNOSTICS
         )
@@ -16075,6 +19191,14 @@ def _openrouter_client_callables_are_pristine() -> bool:
         and (
             usage_module.authrunner_noncrediting_unknown_token_smoke_scope
             is _TRUSTED_AUTHRUNNER_NONCREDITING_UNKNOWN_TOKEN_SMOKE_SCOPE
+        )
+        and (
+            usage_module._authrunner_noncrediting_smoke_request_scope
+            is _TRUSTED_AUTHRUNNER_NONCREDITING_SMOKE_REQUEST_SCOPE
+        )
+        and (
+            usage_module._authrunner_request_origin_scope
+            is _TRUSTED_AUTHRUNNER_REQUEST_ORIGIN_SCOPE
         )
         and (
             usage_module.noncrediting_unknown_token_smoke_usage_diagnostics
@@ -16100,7 +19224,15 @@ def _openrouter_client_callables_are_pristine() -> bool:
         and _issue_trusted_generation_verification is _TRUSTED_ISSUE_GENERATION_VERIFICATION
         and (_attest_authrunner_generation_origin is _TRUSTED_ATTEST_AUTHRUNNER_GENERATION_ORIGIN)
         and (_attest_authrunner_owned_real_usage_origin is _TRUSTED_ATTEST_AUTHRUNNER_USAGE_ORIGIN)
+        and (_revoke_authrunner_owned_real_usage_origin is _TRUSTED_REVOKE_AUTHRUNNER_USAGE_ORIGIN)
+        and (
+            usage_module._revoke_authrunner_owned_real_usage_origin
+            is _TRUSTED_REVOKE_AUTHRUNNER_USAGE_ORIGIN
+        )
         and (_has_authrunner_owned_real_usage_origin is _TRUSTED_HAS_AUTHRUNNER_USAGE_ORIGIN)
+        and revoke_trusted_generation_verification is _TRUSTED_REVOKE_GENERATION_VERIFICATION
+        and generation_evidence_module.revoke_trusted_generation_verification
+        is _TRUSTED_REVOKE_GENERATION_VERIFICATION
         and _attest_owned_real_usage_record is _TRUSTED_ATTEST_OWNED_REAL_USAGE_RECORD
         and _has_owned_real_usage_attestation is _TRUSTED_HAS_OWNED_REAL_USAGE_ATTESTATION
         and (_authrunner_usage_origin_scope is _TRUSTED_AUTHRUNNER_USAGE_ORIGIN_SCOPE)
@@ -16410,26 +19542,6 @@ def trusted_openrouter_execution_evidence(client: OpenRouterClient) -> Execution
     return ExecutionEvidenceKind.UNVERIFIED
 
 
-_register_authrunner_owned_real_usage_origin_issuer(
-    module=sys.modules[__name__],
-    client_type=_TRUSTED_OPENROUTER_CLIENT_TYPE,
-    completion_method=OpenRouterClient.complete_with_evidence,
-    bound_origin_method=OpenRouterClient._bind_real_completion_identity,
-    bound_wrapper_method=OpenRouterClient._usage_with_bound_identity,
-    bound_result_method=OpenRouterClient._usage_with_identity_result,
-    trusted_identity_issuer=_TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER,
-    pristine_predicate=_TRUSTED_OPENROUTER_CLIENT_CALLABLES_ARE_PRISTINE,
-    execution_evidence_resolver=trusted_openrouter_execution_evidence,
-)
-_register_authrunner_generation_origin_issuer(
-    module=sys.modules[__name__],
-    client_type=_TRUSTED_OPENROUTER_CLIENT_TYPE,
-    refetch_method=OpenRouterClient.create_trusted_generation_verification,
-    pristine_predicate=_TRUSTED_OPENROUTER_CLIENT_CALLABLES_ARE_PRISTINE,
-    execution_evidence_resolver=trusted_openrouter_execution_evidence,
-)
-
-
 def _mock_httpx_callables_are_pristine(
     client: httpx.AsyncClient,
     transport: object,
@@ -16579,6 +19691,51 @@ def _canonical_sha256(value: Any) -> str:
     ).hexdigest()
 
 
+def _generation_reconciliation_expectation_sha256(
+    expectation: GenerationReconciliationExpectation,
+) -> str:
+    """Hash every semantic coordinate of one generation reconciliation plan."""
+
+    if type(expectation) is not GenerationReconciliationExpectation:
+        raise GenerationEvidenceValidationError(
+            "generation reconciliation expectation has the wrong exact type"
+        )
+    return _canonical_sha256(
+        {
+            "domain": "mmaudit.openrouter.generation-reconciliation-expectation.v1",
+            "exact_model_id": expectation.exact_model_id,
+            "canonical_model_id": expectation.canonical_model_id,
+            "catalog_identity_binding_sha256": (expectation.catalog_identity_binding_sha256),
+            "discovery_evidence_sha256": expectation.discovery_evidence_sha256,
+            "expected_provider_name": expectation.expected_provider_name,
+            "require_certification": expectation.require_certification,
+            "reconciliation_policy": expectation.reconciliation_policy.value,
+            "usage_record": expectation.usage_record.model_dump(mode="json"),
+        }
+    )
+
+
+def _generation_verification_request_sha256(
+    request: GenerationVerificationRequest,
+) -> str:
+    """Bind refetch transport to its report, case, and full reconciliation request."""
+
+    if type(request) is not GenerationVerificationRequest:
+        raise GenerationEvidenceValidationError(
+            "generation verification request has the wrong exact type"
+        )
+    return _canonical_sha256(
+        {
+            "domain": "mmaudit.openrouter.generation-verification-request.v1",
+            "benchmark_report_sha256": request.benchmark_report_sha256,
+            "case_id": request.case_id,
+            "expectation_sha256": _generation_reconciliation_expectation_sha256(
+                request.reconciliation_expectation()
+            ),
+        }
+    )
+
+
 _TRUSTED_COPY_DEEPCOPY = copy.deepcopy
 _TRUSTED_COPY_DEEPCOPY_DISPATCH: Any = copy._deepcopy_dispatch  # type: ignore[attr-defined]
 _TRUSTED_COPY_DEEPCOPY_DISPATCH_ITEMS = tuple(_TRUSTED_COPY_DEEPCOPY_DISPATCH.items())
@@ -16592,6 +19749,10 @@ _TRUSTED_JSON_ENCODE_BASESTRING_ASCII = _TRUSTED_JSON_ENCODER_MODULE.encode_base
 _TRUSTED_JSON_MAKE_ENCODER: Any = _TRUSTED_JSON_ENCODER_MODULE.c_make_encoder
 _TRUSTED_CANDIDATE_REVIEW_CANONICAL_JSON_DUMPS = _CANDIDATE_REVIEW_CANONICAL_JSON_DUMPS
 _TRUSTED_CANONICAL_SHA256 = _canonical_sha256
+_TRUSTED_GENERATION_RECONCILIATION_EXPECTATION_SHA256 = (
+    _generation_reconciliation_expectation_sha256
+)
+_TRUSTED_GENERATION_VERIFICATION_REQUEST_SHA256 = _generation_verification_request_sha256
 _TRUSTED_CANDIDATE_REVIEW_TOKEN_PLAN_PROJECTION_SHA256 = (
     _candidate_review_request_token_plan_projection_sha256
 )
@@ -17948,11 +21109,65 @@ def _ensure_all_fields_supplied(value: Any, path: str = "response") -> None:
     _inspect_provider_transport_attempt,
     _consume_provider_transport_attempt,
     _revoke_provider_transport_operation,
+    _seal_provider_initial_receipt_composite,
+    _consume_provider_initial_receipt_composite,
+    _seal_provider_refetch_receipt_composite,
+    _consume_provider_refetch_receipt_composite,
+    _revoke_provider_transport_receipt_composite,
+    _prepare_provider_refetch_batch,
+    _revoke_provider_refetch_batch,
+    _seal_isolated_provider_transport_component,
+    _finalize_provider_transport_issuer_function_states,
+    _inspect_isolated_provider_transport_component_state,
+    _seal_isolated_provider_completion_component,
+    _seal_isolated_provider_metadata_component,
 ) = _build_provider_transport_attempt_authority()
+del (
+    _inspect_isolated_provider_transport_component_state,
+    _seal_isolated_provider_completion_component,
+    _seal_isolated_provider_metadata_component,
+    _seal_isolated_provider_transport_component,
+)
+
+_provider_cleanup_call_roots: _ProviderCleanupCallRoots = (
+    _revoke_provider_transport_operation,
+    _revoke_provider_transport_receipt_composite,
+    _revoke_provider_refetch_batch,
+)
+_provider_composite_call_roots: _ProviderCompositeCallRoots = (
+    _seal_provider_initial_receipt_composite,
+    _consume_provider_initial_receipt_composite,
+    _seal_provider_refetch_receipt_composite,
+    _consume_provider_refetch_receipt_composite,
+)
+for _cleanup_method in (
+    OpenRouterClient.complete_with_evidence,
+    OpenRouterClient._bind_real_completion_identity,
+    OpenRouterClient._fetch_generation_attestations_with_deadline,
+    OpenRouterClient.create_trusted_generation_verification,
+):
+    _cleanup_kwdefaults = _cleanup_method.__kwdefaults__
+    if type(_cleanup_kwdefaults) is not dict:
+        raise RuntimeError("provider cleanup keyword defaults are unavailable")
+    _cleanup_method.__kwdefaults__ = {
+        **_cleanup_kwdefaults,
+        "_authrunner_cleanup_call_roots": _provider_cleanup_call_roots,
+    }
+_pristine_kwdefaults = _openrouter_client_callables_are_pristine.__kwdefaults__
+if type(_pristine_kwdefaults) is not dict:
+    raise RuntimeError("provider pristine keyword defaults are unavailable")
+_openrouter_client_callables_are_pristine.__kwdefaults__ = {
+    **_pristine_kwdefaults,
+    "_provider_cleanup_call_roots": _provider_cleanup_call_roots,
+    "_provider_composite_call_roots": _provider_composite_call_roots,
+}
+del _cleanup_kwdefaults, _cleanup_method, _pristine_kwdefaults
 
 _provider_transport_attempt_is_claimed = _inspect_provider_transport_attempt
 _TRUSTED_PROVIDER_TRANSPORT_ATTEMPT_TYPE = _ProviderTransportAttemptReceipt
 _TRUSTED_PROVIDER_TRANSPORT_OPERATION_GRANT_TYPE = _ProviderTransportOperationGrant
+_TRUSTED_PROVIDER_TRANSPORT_REFETCH_BATCH_GRANT_TYPE = _ProviderTransportRefetchBatchGrant
+_TRUSTED_PROVIDER_TRANSPORT_RECEIPT_COMPOSITE_TYPE = _ProviderTransportReceiptComposite
 _TRUSTED_PREPARE_PROVIDER_TRANSPORT_OPERATION = _prepare_provider_transport_operation
 _TRUSTED_PREPARE_PROVIDER_TRANSPORT_ATTEMPT = _prepare_provider_transport_attempt
 _TRUSTED_DISPATCH_PROVIDER_TRANSPORT_ATTEMPT = _dispatch_provider_transport_attempt
@@ -17961,6 +21176,13 @@ _TRUSTED_REVOKE_PROVIDER_TRANSPORT_ATTEMPT = _revoke_provider_transport_attempt
 _TRUSTED_PROVIDER_TRANSPORT_ATTEMPT_IS_CLAIMED = _provider_transport_attempt_is_claimed
 _TRUSTED_CONSUME_PROVIDER_TRANSPORT_ATTEMPT = _consume_provider_transport_attempt
 _TRUSTED_REVOKE_PROVIDER_TRANSPORT_OPERATION = _revoke_provider_transport_operation
+_TRUSTED_SEAL_PROVIDER_INITIAL_RECEIPT_COMPOSITE = _seal_provider_initial_receipt_composite
+_TRUSTED_CONSUME_PROVIDER_INITIAL_RECEIPT_COMPOSITE = _consume_provider_initial_receipt_composite
+_TRUSTED_SEAL_PROVIDER_REFETCH_RECEIPT_COMPOSITE = _seal_provider_refetch_receipt_composite
+_TRUSTED_CONSUME_PROVIDER_REFETCH_RECEIPT_COMPOSITE = _consume_provider_refetch_receipt_composite
+_TRUSTED_REVOKE_PROVIDER_TRANSPORT_RECEIPT_COMPOSITE = _revoke_provider_transport_receipt_composite
+_TRUSTED_PREPARE_PROVIDER_REFETCH_BATCH = _prepare_provider_refetch_batch
+_TRUSTED_REVOKE_PROVIDER_REFETCH_BATCH = _revoke_provider_refetch_batch
 
 _register_provider_transport_attempt_issuer(
     module=sys.modules[__name__],
@@ -17975,4 +21197,127 @@ _register_provider_transport_attempt_issuer(
     complete_with_evidence=OpenRouterClient.complete_with_evidence,
     bind_real_completion_identity=OpenRouterClient._bind_real_completion_identity,
     fetch_generation_attestations=(OpenRouterClient._fetch_generation_attestations_with_deadline),
+    terminal_usage_cost_custody=OpenRouterClient._require_terminal_usage_cost_custody,
+    trusted_prequalification_request=OpenRouterClient._is_trusted_prequalification_request,
+    create_generation_verification=OpenRouterClient.create_trusted_generation_verification,
+)
+
+_register_authrunner_owned_real_usage_origin_issuer(
+    module=sys.modules[__name__],
+    client_type=_TRUSTED_OPENROUTER_CLIENT_TYPE,
+    completion_method=OpenRouterClient.complete_with_evidence,
+    bound_origin_method=OpenRouterClient._bind_real_completion_identity,
+    bound_wrapper_method=OpenRouterClient._usage_with_bound_identity,
+    bound_result_method=OpenRouterClient._usage_with_identity_result,
+    trusted_identity_issuer=_TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER,
+    pristine_predicate=_TRUSTED_OPENROUTER_CLIENT_CALLABLES_ARE_PRISTINE,
+    execution_evidence_resolver=trusted_openrouter_execution_evidence,
+    receipt_consumer=_consume_provider_initial_receipt_composite,
+)
+_register_authrunner_generation_origin_issuer(
+    module=sys.modules[__name__],
+    client_type=_TRUSTED_OPENROUTER_CLIENT_TYPE,
+    refetch_method=OpenRouterClient.create_trusted_generation_verification,
+    pristine_predicate=_TRUSTED_OPENROUTER_CLIENT_CALLABLES_ARE_PRISTINE,
+    execution_evidence_resolver=trusted_openrouter_execution_evidence,
+    receipt_consumer=_consume_provider_refetch_receipt_composite,
+)
+
+_install_provider_authority_function_graph(
+    (
+        _register_provider_transport_attempt_issuer,
+        _prepare_provider_transport_operation,
+        _prepare_provider_transport_attempt,
+        _dispatch_provider_transport_attempt,
+        _transition_provider_transport_attempt,
+        _revoke_provider_transport_attempt,
+        _inspect_provider_transport_attempt,
+        _consume_provider_transport_attempt,
+        _revoke_provider_transport_operation,
+        _seal_provider_initial_receipt_composite,
+        _consume_provider_initial_receipt_composite,
+        _seal_provider_refetch_receipt_composite,
+        _consume_provider_refetch_receipt_composite,
+        _revoke_provider_transport_receipt_composite,
+        _prepare_provider_refetch_batch,
+        _revoke_provider_refetch_batch,
+        _register_structured_completion_generation_evidence,
+        _resolve_structured_completion_generation_evidence,
+        _revoke_structured_completion_generation_evidence,
+        _has_structured_completion_generation_evidence,
+        _register_authrunner_owned_real_usage_origin_issuer,
+        _finalize_authrunner_owned_real_usage_origin_issuer,
+        _propagate_authrunner_owned_real_usage_origin,
+        _validated_usage_copy_preserving_owned_attestation,
+        *_AUTHRUNNER_USAGE_ORIGIN_CALL_ROOTS,
+        _register_authrunner_generation_origin_issuer,
+        _finalize_authrunner_generation_origin_issuer,
+        _revoke_authrunner_generation_origin,
+        *_AUTHRUNNER_GENERATION_ORIGIN_CALL_ROOTS,
+        _issue_trusted_generation_verification,
+        OpenRouterClient._bounded_request,
+        OpenRouterClient._complete_one,
+        OpenRouterClient._request_metadata,
+        OpenRouterClient.complete_with_evidence,
+        OpenRouterClient._bind_real_completion_identity,
+        OpenRouterClient._usage_with_bound_identity,
+        OpenRouterClient._usage_with_unbound_identity,
+        OpenRouterClient._usage_with_identity_result,
+        OpenRouterClient._fetch_generation_attestations_with_deadline,
+        OpenRouterClient.create_trusted_generation_verification,
+        _provider_httpx_inflight_response_graph,
+        _provider_httpx_completed_response_graph,
+        _finalize_provider_transport_issuer_function_states,
+    ),
+    (cast(FunctionType, _openrouter_client_callables_are_pristine),),
+)
+_final_graph_kwdefaults = _openrouter_client_callables_are_pristine.__kwdefaults__
+if type(_final_graph_kwdefaults) is not dict:
+    raise RuntimeError("provider authority final graph keyword defaults are unavailable")
+_final_graph_guard = _final_graph_kwdefaults.get("_provider_authority_graph_is_pristine")
+if type(_final_graph_guard) is not FunctionType:
+    raise RuntimeError("provider authority final graph guard is unavailable")
+_final_graph_closure = dict(
+    zip(
+        _final_graph_guard.__code__.co_freevars,
+        _final_graph_guard.__closure__ or (),
+        strict=True,
+    )
+)
+try:
+    _final_graph_states = _final_graph_closure["frozen_states"].cell_contents
+    _final_graph_states_seal = _final_graph_closure["frozen_states_seal"].cell_contents
+except (KeyError, ValueError) as exc:
+    raise RuntimeError("provider authority final graph state is unavailable") from exc
+if (
+    type(_final_graph_states) is not tuple
+    or not _final_graph_states
+    or _final_graph_states_seal is not _final_graph_states
+):
+    raise RuntimeError("provider authority final graph state is invalid")
+_openrouter_client_callables_are_pristine.__kwdefaults__ = {
+    **_final_graph_kwdefaults,
+    "_provider_authority_graph_frozen_states": _final_graph_states,
+}
+_finalize_provider_transport_issuer_function_states()
+_finalize_authrunner_owned_real_usage_origin_issuer()
+_finalize_authrunner_generation_origin_issuer()
+if not _openrouter_client_callables_are_pristine():
+    raise RuntimeError("provider authority function graph failed its initial integrity check")
+del (
+    _install_provider_authority_function_graph,
+    _provider_authority_graph_guard_attribute_items,
+    _provider_authority_graph_guard_attributes,
+    _provider_authority_graph_guard_closure,
+    _provider_authority_graph_guard_closure_cells,
+    _provider_authority_graph_guard_code,
+    _provider_authority_graph_guard_defaults,
+    _provider_authority_graph_guard_globals,
+    _provider_authority_graph_guard_kwdefaults,
+    _final_graph_closure,
+    _final_graph_guard,
+    _final_graph_kwdefaults,
+    _final_graph_states,
+    _final_graph_states_seal,
+    _finalize_provider_transport_issuer_function_states,
 )

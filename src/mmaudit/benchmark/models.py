@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -34,6 +35,8 @@ from mmaudit.models.openrouter import (
     OpenRouterRequestCostPreviewError,
     OpenRouterStructuredRequestCostPreview,
     StructuredCompletion,
+    _openrouter_client_callables_are_pristine,
+    _resolve_structured_completion_generation_evidence,
     strict_json_schema,
     structured_output_prompt_sha256,
 )
@@ -1581,7 +1584,7 @@ async def run_model_benchmark(
     )
 
 
-async def execute_noncrediting_model_benchmark_smoke(
+async def _execute_noncrediting_model_benchmark_smoke_impl(
     *,
     smoke_run_index: int,
     suite: ModelBenchmarkSuite,
@@ -1592,6 +1595,11 @@ async def execute_noncrediting_model_benchmark_smoke(
     client: OpenRouterClient,
     run_kind: AuthenticatedRunnerModelBenchmarkRunKind,
     expected_request_cost_preview: OpenRouterStructuredRequestCostPreview,
+    generation_resolver: Callable[
+        [StructuredCompletion[Any]],
+        OpenRouterGenerationEvidence,
+    ],
+    require_provider_authority_pristine: Callable[[], bool],
 ) -> NoncreditingModelBenchmarkSmokeReport:
     """Execute one exact REAL smoke request while issuing no benchmark credit."""
 
@@ -1692,12 +1700,15 @@ async def execute_noncrediting_model_benchmark_smoke(
             "model benchmark smoke completion is not exact successful REAL evidence "
             f"({', '.join(failure_reasons)})"
         )
-    generation_id = usage_record.openrouter_generation_id
-    if generation_id is None:
-        raise ValueError("model benchmark smoke completion lacks a generation identity")
-    generation = await OpenRouterClient.get_generation_evidence(client, generation_id)
-    if tuple(usage.records) != after or type(generation) is not OpenRouterGenerationEvidence:
-        raise ValueError("model benchmark smoke generation retrieval changed usage custody")
+    if not require_provider_authority_pristine():
+        raise ValueError("model benchmark smoke generation carrier boundary changed")
+    generation = generation_resolver(completion)
+    if (
+        not require_provider_authority_pristine()
+        or tuple(usage.records) != after
+        or type(generation) is not OpenRouterGenerationEvidence
+    ):
+        raise ValueError("model benchmark smoke generation carrier changed usage custody")
     result = ModelBenchmarkCaseResult(
         case_id=case.case_id,
         normalized_response=completion.value,
@@ -1756,6 +1767,239 @@ async def execute_noncrediting_model_benchmark_smoke(
         selection_sha256=selection_sha256,
     )
     return report
+
+
+def _build_noncrediting_model_benchmark_smoke_executor() -> Callable[..., Any]:
+    """Capture the one-shot carrier resolver outside caller-mutable module aliases."""
+
+    namespace = globals()
+    trusted_impl = _execute_noncrediting_model_benchmark_smoke_impl
+    trusted_impl_code = trusted_impl.__code__
+    trusted_impl_defaults = trusted_impl.__defaults__
+    trusted_impl_kwdefaults = trusted_impl.__kwdefaults__
+    trusted_impl_kwdefault_items = tuple(sorted((trusted_impl_kwdefaults or {}).items()))
+    trusted_impl_globals = trusted_impl.__globals__
+    trusted_impl_closure = trusted_impl.__closure__
+    trusted_impl_closure_values = tuple(
+        (cell, cell.cell_contents) for cell in trusted_impl_closure or ()
+    )
+    trusted_impl_attributes = trusted_impl.__dict__
+    trusted_impl_attribute_items = tuple(sorted(trusted_impl_attributes.items()))
+    trusted_resolver = _resolve_structured_completion_generation_evidence
+    trusted_require_provider_authority_pristine = _openrouter_client_callables_are_pristine
+    trusted_pristine_code = trusted_require_provider_authority_pristine.__code__
+    trusted_pristine_defaults = trusted_require_provider_authority_pristine.__defaults__
+    trusted_pristine_kwdefaults = trusted_require_provider_authority_pristine.__kwdefaults__
+    trusted_pristine_kwdefault_items = tuple(sorted((trusted_pristine_kwdefaults or {}).items()))
+    trusted_pristine_globals = trusted_require_provider_authority_pristine.__globals__
+    trusted_pristine_closure = trusted_require_provider_authority_pristine.__closure__
+    trusted_pristine_closure_values = tuple(
+        (cell, cell.cell_contents) for cell in trusted_pristine_closure or ()
+    )
+    trusted_pristine_attributes = trusted_require_provider_authority_pristine.__dict__
+    trusted_pristine_attribute_items = tuple(sorted(trusted_pristine_attributes.items()))
+    public_binding: dict[str, object] = {}
+
+    def provider_authority_is_pristine() -> bool:
+        current_kwdefaults = trusted_require_provider_authority_pristine.__kwdefaults__
+        current_closure = trusted_require_provider_authority_pristine.__closure__
+        current_attributes = trusted_require_provider_authority_pristine.__dict__
+        return bool(
+            trusted_require_provider_authority_pristine.__code__ is trusted_pristine_code
+            and trusted_require_provider_authority_pristine.__defaults__
+            is trusted_pristine_defaults
+            and current_kwdefaults is trusted_pristine_kwdefaults
+            and trusted_require_provider_authority_pristine.__globals__ is trusted_pristine_globals
+            and current_closure is trusted_pristine_closure
+            and current_attributes is trusted_pristine_attributes
+            and len(current_kwdefaults or {}) == len(trusted_pristine_kwdefault_items)
+            and all(
+                (current_kwdefaults or {}).get(name) is value
+                for name, value in trusted_pristine_kwdefault_items
+            )
+            and len(current_attributes) == len(trusted_pristine_attribute_items)
+            and all(
+                current_attributes.get(name) is value
+                for name, value in trusted_pristine_attribute_items
+            )
+            and len(current_closure or ()) == len(trusted_pristine_closure_values)
+            and all(
+                current_cell is expected_cell and current_cell.cell_contents is expected_value
+                for current_cell, (expected_cell, expected_value) in zip(
+                    current_closure or (),
+                    trusted_pristine_closure_values,
+                    strict=True,
+                )
+            )
+            and trusted_require_provider_authority_pristine()
+        )
+
+    provider_authority_checker_code = provider_authority_is_pristine.__code__
+    provider_authority_checker_defaults = provider_authority_is_pristine.__defaults__
+    provider_authority_checker_kwdefaults = provider_authority_is_pristine.__kwdefaults__
+    provider_authority_checker_globals = provider_authority_is_pristine.__globals__
+    provider_authority_checker_closure = provider_authority_is_pristine.__closure__
+    provider_authority_checker_closure_values = tuple(
+        (cell, cell.cell_contents) for cell in provider_authority_checker_closure or ()
+    )
+    provider_authority_checker_attributes = provider_authority_is_pristine.__dict__
+    provider_authority_checker_attribute_items = tuple(
+        sorted(provider_authority_checker_attributes.items())
+    )
+
+    async def execute(
+        *,
+        smoke_run_index: int,
+        suite: ModelBenchmarkSuite,
+        selected_case: ModelBenchmarkCase,
+        selected_ground_truth: ModelBenchmarkGroundTruthCase,
+        selection_sha256: str,
+        target: ModelBenchmarkTarget,
+        client: OpenRouterClient,
+        run_kind: AuthenticatedRunnerModelBenchmarkRunKind,
+        expected_request_cost_preview: OpenRouterStructuredRequestCostPreview,
+    ) -> NoncreditingModelBenchmarkSmokeReport:
+        if (
+            namespace.get("_execute_noncrediting_model_benchmark_smoke_impl") is not trusted_impl
+            or trusted_impl.__code__ is not trusted_impl_code
+            or trusted_impl.__defaults__ is not trusted_impl_defaults
+            or trusted_impl.__kwdefaults__ is not trusted_impl_kwdefaults
+            or trusted_impl.__globals__ is not trusted_impl_globals
+            or trusted_impl.__closure__ is not trusted_impl_closure
+            or trusted_impl.__dict__ is not trusted_impl_attributes
+            or len(trusted_impl_kwdefaults or {}) != len(trusted_impl_kwdefault_items)
+            or any(
+                (trusted_impl_kwdefaults or {}).get(name) is not value
+                for name, value in trusted_impl_kwdefault_items
+            )
+            or len(trusted_impl_attributes) != len(trusted_impl_attribute_items)
+            or any(
+                trusted_impl_attributes.get(name) is not value
+                for name, value in trusted_impl_attribute_items
+            )
+            or len(trusted_impl.__closure__ or ()) != len(trusted_impl_closure_values)
+            or any(
+                current_cell is not expected_cell
+                or current_cell.cell_contents is not expected_value
+                for current_cell, (expected_cell, expected_value) in zip(
+                    trusted_impl.__closure__ or (),
+                    trusted_impl_closure_values,
+                    strict=True,
+                )
+            )
+            or namespace.get("_resolve_structured_completion_generation_evidence")
+            is not trusted_resolver
+            or namespace.get("_openrouter_client_callables_are_pristine")
+            is not trusted_require_provider_authority_pristine
+            or provider_authority_is_pristine.__code__ is not provider_authority_checker_code
+            or provider_authority_is_pristine.__defaults__
+            is not provider_authority_checker_defaults
+            or provider_authority_is_pristine.__kwdefaults__
+            is not provider_authority_checker_kwdefaults
+            or provider_authority_is_pristine.__globals__ is not provider_authority_checker_globals
+            or provider_authority_is_pristine.__closure__ is not provider_authority_checker_closure
+            or provider_authority_is_pristine.__dict__ is not provider_authority_checker_attributes
+            or len(provider_authority_checker_attributes)
+            != len(provider_authority_checker_attribute_items)
+            or any(
+                provider_authority_checker_attributes.get(name) is not value
+                for name, value in provider_authority_checker_attribute_items
+            )
+            or len(provider_authority_is_pristine.__closure__ or ())
+            != len(provider_authority_checker_closure_values)
+            or any(
+                current_cell is not expected_cell
+                or current_cell.cell_contents is not expected_value
+                for current_cell, (expected_cell, expected_value) in zip(
+                    provider_authority_is_pristine.__closure__ or (),
+                    provider_authority_checker_closure_values,
+                    strict=True,
+                )
+            )
+            or not provider_authority_is_pristine()
+            or any(namespace.get(name) is not value for name, value in public_binding.items())
+        ):
+            raise ValueError("model benchmark smoke generation carrier boundary changed")
+        result = cast(
+            NoncreditingModelBenchmarkSmokeReport,
+            await trusted_impl(
+                smoke_run_index=smoke_run_index,
+                suite=suite,
+                selected_case=selected_case,
+                selected_ground_truth=selected_ground_truth,
+                selection_sha256=selection_sha256,
+                target=target,
+                client=client,
+                run_kind=run_kind,
+                expected_request_cost_preview=expected_request_cost_preview,
+                generation_resolver=trusted_resolver,
+                require_provider_authority_pristine=(trusted_require_provider_authority_pristine),
+            ),
+        )
+        if (
+            trusted_impl.__code__ is not trusted_impl_code
+            or trusted_impl.__defaults__ is not trusted_impl_defaults
+            or trusted_impl.__kwdefaults__ is not trusted_impl_kwdefaults
+            or trusted_impl.__globals__ is not trusted_impl_globals
+            or trusted_impl.__closure__ is not trusted_impl_closure
+            or trusted_impl.__dict__ is not trusted_impl_attributes
+            or len(trusted_impl_kwdefaults or {}) != len(trusted_impl_kwdefault_items)
+            or any(
+                (trusted_impl_kwdefaults or {}).get(name) is not value
+                for name, value in trusted_impl_kwdefault_items
+            )
+            or len(trusted_impl_attributes) != len(trusted_impl_attribute_items)
+            or any(
+                trusted_impl_attributes.get(name) is not value
+                for name, value in trusted_impl_attribute_items
+            )
+            or len(trusted_impl.__closure__ or ()) != len(trusted_impl_closure_values)
+            or any(
+                current_cell is not expected_cell
+                or current_cell.cell_contents is not expected_value
+                for current_cell, (expected_cell, expected_value) in zip(
+                    trusted_impl.__closure__ or (),
+                    trusted_impl_closure_values,
+                    strict=True,
+                )
+            )
+            or provider_authority_is_pristine.__code__ is not provider_authority_checker_code
+            or provider_authority_is_pristine.__defaults__
+            is not provider_authority_checker_defaults
+            or provider_authority_is_pristine.__kwdefaults__
+            is not provider_authority_checker_kwdefaults
+            or provider_authority_is_pristine.__globals__ is not provider_authority_checker_globals
+            or provider_authority_is_pristine.__closure__ is not provider_authority_checker_closure
+            or provider_authority_is_pristine.__dict__ is not provider_authority_checker_attributes
+            or len(provider_authority_checker_attributes)
+            != len(provider_authority_checker_attribute_items)
+            or any(
+                provider_authority_checker_attributes.get(name) is not value
+                for name, value in provider_authority_checker_attribute_items
+            )
+            or len(provider_authority_is_pristine.__closure__ or ())
+            != len(provider_authority_checker_closure_values)
+            or any(
+                current_cell is not expected_cell
+                or current_cell.cell_contents is not expected_value
+                for current_cell, (expected_cell, expected_value) in zip(
+                    provider_authority_is_pristine.__closure__ or (),
+                    provider_authority_checker_closure_values,
+                    strict=True,
+                )
+            )
+            or not provider_authority_is_pristine()
+            or any(namespace.get(name) is not value for name, value in public_binding.items())
+        ):
+            raise ValueError("model benchmark smoke executor changed during provider work")
+        return result
+
+    public_binding["execute_noncrediting_model_benchmark_smoke"] = execute
+    return execute
+
+
+execute_noncrediting_model_benchmark_smoke = _build_noncrediting_model_benchmark_smoke_executor()
+del _build_noncrediting_model_benchmark_smoke_executor
 
 
 def verify_noncrediting_model_benchmark_smoke_report(

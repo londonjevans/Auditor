@@ -52,6 +52,8 @@ from mmaudit.models.openrouter import (
     OpenRouterProviderPolicy,
     OpenRouterStructuredRequestCostPreview,
     StructuredCompletion,
+    _openrouter_client_callables_are_pristine,
+    _resolve_structured_completion_generation_evidence,
     preview_openrouter_structured_request_cost,
     strict_json_schema,
     structured_output_prompt_sha256,
@@ -1139,6 +1141,10 @@ type _CrossLineageNoncreditingSmokeGenerationReconcile = Callable[
     ...,
     OpenRouterGenerationEvidence,
 ]
+type _CrossLineageStructuredCompletionGenerationResolver = Callable[
+    [StructuredCompletion[Any]],
+    OpenRouterGenerationEvidence,
+]
 
 
 class _CrossLineageAdjudicationExecutor(Protocol):
@@ -1151,6 +1157,18 @@ class _CrossLineageAdjudicationExecutor(Protocol):
         | None = None,
         generation_evidence_fetcher: CrossLineageGenerationEvidenceFetcher | None = None,
         smoke_run_index: int | None = None,
+    ) -> tuple[CrossLineageAdjudicationCaseResult, ...]: ...
+
+
+class _NoncreditingCrossLineageAdjudicationSmokeExecutor(Protocol):
+    async def __call__(
+        self,
+        *,
+        smoke_run_index: int,
+        client: OpenRouterClient,
+        prepared: CrossLineageAdjudicationPreparedRun,
+        expected_request_cost_previews: tuple[OpenRouterStructuredRequestCostPreview, ...],
+        generation_evidence_fetcher: CrossLineageGenerationEvidenceFetcher | None = None,
     ) -> tuple[CrossLineageAdjudicationCaseResult, ...]: ...
 
 
@@ -1172,6 +1190,9 @@ async def _execute_cross_lineage_adjudication_requests_impl(
     noncrediting_smoke_usage_error: _CrossLineageNoncreditingSmokeUsageError | None = None,
     noncrediting_smoke_generation_reconcile: (
         _CrossLineageNoncreditingSmokeGenerationReconcile | None
+    ) = None,
+    structured_completion_generation_resolver: (
+        _CrossLineageStructuredCompletionGenerationResolver | None
     ) = None,
     request_cost_preview_type: type[OpenRouterStructuredRequestCostPreview] = (
         OpenRouterStructuredRequestCostPreview
@@ -1313,16 +1334,24 @@ async def _execute_cross_lineage_adjudication_requests_impl(
             request=request,
             wire_response=completion.value,
         )
-        generation_id = completion.usage_record.openrouter_generation_id
-        if generation_id is None:
-            raise CrossLineageAdjudicationError(
-                "cross-lineage completion lacks a generation identity"
+        if noncrediting_smoke_generation_reconcile is not None:
+            if structured_completion_generation_resolver is None:
+                raise CrossLineageAdjudicationError(
+                    "cross-lineage smoke completion lacks generation carrier custody"
+                )
+            require_pristine()
+            generation = structured_completion_generation_resolver(completion)
+        else:
+            generation_id = completion.usage_record.openrouter_generation_id
+            if generation_id is None:
+                raise CrossLineageAdjudicationError(
+                    "cross-lineage completion lacks a generation identity"
+                )
+            generation = (
+                await get_generation_evidence(client, generation_id)
+                if generation_evidence_fetcher is None
+                else await generation_evidence_fetcher(request, completion.usage_record)
             )
-        generation = (
-            await get_generation_evidence(client, generation_id)
-            if generation_evidence_fetcher is None
-            else await generation_evidence_fetcher(request, completion.usage_record)
-        )
         require_pristine()
         if tuple(usage.records) != after:
             raise CrossLineageAdjudicationError(
@@ -1560,12 +1589,42 @@ def _build_cross_lineage_adjudication_executor(
     trusted_registered_snapshot = trusted_client_type.registered_model_identity_snapshot
     trusted_source_request = trusted_client_type._is_trusted_prequalification_request
     trusted_impl = _execute_cross_lineage_adjudication_requests_impl
+    trusted_impl_code = trusted_impl.__code__
+    trusted_impl_defaults = trusted_impl.__defaults__
+    trusted_impl_kwdefaults = trusted_impl.__kwdefaults__
+    trusted_impl_kwdefault_items = tuple(sorted((trusted_impl_kwdefaults or {}).items()))
+    trusted_impl_globals = trusted_impl.__globals__
+    trusted_impl_closure = trusted_impl.__closure__
+    trusted_impl_closure_values = tuple(
+        (cell, cell.cell_contents) for cell in trusted_impl_closure or ()
+    )
+    trusted_impl_attributes = trusted_impl.__dict__
+    trusted_impl_attribute_items = tuple(sorted(trusted_impl_attributes.items()))
     trusted_require_transport = _require_exact_cross_lineage_transport
     trusted_require_usage_snapshot = _require_usage_matches_live_judge_snapshot
     trusted_credit_predicate = is_creditable_usage_record
     trusted_noncrediting_smoke_usage_error = noncrediting_unknown_token_smoke_usage_error
     trusted_noncrediting_smoke_generation_reconcile = (
         reconcile_noncrediting_smoke_generation_evidence
+    )
+    trusted_structured_completion_generation_resolver = (
+        _resolve_structured_completion_generation_evidence
+    )
+    trusted_openrouter_pristine = _openrouter_client_callables_are_pristine
+    trusted_openrouter_pristine_code = trusted_openrouter_pristine.__code__
+    trusted_openrouter_pristine_defaults = trusted_openrouter_pristine.__defaults__
+    trusted_openrouter_pristine_kwdefaults = trusted_openrouter_pristine.__kwdefaults__
+    trusted_openrouter_pristine_kwdefault_items = tuple(
+        sorted((trusted_openrouter_pristine_kwdefaults or {}).items())
+    )
+    trusted_openrouter_pristine_globals = trusted_openrouter_pristine.__globals__
+    trusted_openrouter_pristine_closure = trusted_openrouter_pristine.__closure__
+    trusted_openrouter_pristine_closure_values = tuple(
+        (cell, cell.cell_contents) for cell in trusted_openrouter_pristine_closure or ()
+    )
+    trusted_openrouter_pristine_attributes = trusted_openrouter_pristine.__dict__
+    trusted_openrouter_pristine_attribute_items = tuple(
+        sorted(trusted_openrouter_pristine_attributes.items())
     )
     trusted_usage_copy = _validated_usage_copy_preserving_owned_attestation
     trusted_response_hash = cross_lineage_adjudication_validated_response_sha256
@@ -1604,6 +1663,7 @@ def _build_cross_lineage_adjudication_executor(
         "StructuredCompletion": StructuredCompletion,
         "UsageRecord": UsageRecord,
         "require_authenticated_runner_smoke_run_index": trusted_smoke_index_validator,
+        "_openrouter_client_callables_are_pristine": trusted_openrouter_pristine,
     }
     if allow_noncrediting_unknown_token_accounting:
         module_bindings.update(
@@ -1614,9 +1674,58 @@ def _build_cross_lineage_adjudication_executor(
                 "reconcile_noncrediting_smoke_generation_evidence": (
                     trusted_noncrediting_smoke_generation_reconcile
                 ),
+                "_resolve_structured_completion_generation_evidence": (
+                    trusted_structured_completion_generation_resolver
+                ),
             }
         )
     public_binding: dict[str, object] = {}
+
+    def openrouter_authority_is_pristine() -> bool:
+        current_kwdefaults = trusted_openrouter_pristine.__kwdefaults__
+        current_closure = trusted_openrouter_pristine.__closure__
+        current_attributes = trusted_openrouter_pristine.__dict__
+        return bool(
+            trusted_openrouter_pristine.__code__ is trusted_openrouter_pristine_code
+            and trusted_openrouter_pristine.__defaults__ is trusted_openrouter_pristine_defaults
+            and current_kwdefaults is trusted_openrouter_pristine_kwdefaults
+            and trusted_openrouter_pristine.__globals__ is trusted_openrouter_pristine_globals
+            and current_closure is trusted_openrouter_pristine_closure
+            and current_attributes is trusted_openrouter_pristine_attributes
+            and len(current_kwdefaults or {}) == len(trusted_openrouter_pristine_kwdefault_items)
+            and all(
+                (current_kwdefaults or {}).get(name) is value
+                for name, value in trusted_openrouter_pristine_kwdefault_items
+            )
+            and len(current_attributes) == len(trusted_openrouter_pristine_attribute_items)
+            and all(
+                current_attributes.get(name) is value
+                for name, value in trusted_openrouter_pristine_attribute_items
+            )
+            and len(current_closure or ()) == len(trusted_openrouter_pristine_closure_values)
+            and all(
+                current_cell is expected_cell and current_cell.cell_contents is expected_value
+                for current_cell, (expected_cell, expected_value) in zip(
+                    current_closure or (),
+                    trusted_openrouter_pristine_closure_values,
+                    strict=True,
+                )
+            )
+            and trusted_openrouter_pristine()
+        )
+
+    openrouter_authority_checker_code = openrouter_authority_is_pristine.__code__
+    openrouter_authority_checker_defaults = openrouter_authority_is_pristine.__defaults__
+    openrouter_authority_checker_kwdefaults = openrouter_authority_is_pristine.__kwdefaults__
+    openrouter_authority_checker_globals = openrouter_authority_is_pristine.__globals__
+    openrouter_authority_checker_closure = openrouter_authority_is_pristine.__closure__
+    openrouter_authority_checker_closure_values = tuple(
+        (cell, cell.cell_contents) for cell in openrouter_authority_checker_closure or ()
+    )
+    openrouter_authority_checker_attributes = openrouter_authority_is_pristine.__dict__
+    openrouter_authority_checker_attribute_items = tuple(
+        sorted(openrouter_authority_checker_attributes.items())
+    )
 
     def require_pristine(client: OpenRouterClient) -> None:
         try:
@@ -1638,10 +1747,51 @@ def _build_cross_lineage_adjudication_executor(
             or class_state.get("_is_trusted_prequalification_request") is not trusted_source_request
             or any(namespace.get(name) is not value for name, value in module_bindings.items())
             or any(namespace.get(name) is not value for name, value in public_binding.items())
+            or openrouter_authority_is_pristine.__code__ is not openrouter_authority_checker_code
+            or openrouter_authority_is_pristine.__defaults__
+            is not openrouter_authority_checker_defaults
+            or openrouter_authority_is_pristine.__kwdefaults__
+            is not openrouter_authority_checker_kwdefaults
+            or openrouter_authority_is_pristine.__globals__
+            is not openrouter_authority_checker_globals
+            or openrouter_authority_is_pristine.__closure__
+            is not openrouter_authority_checker_closure
+            or openrouter_authority_is_pristine.__dict__
+            is not openrouter_authority_checker_attributes
+            or len(openrouter_authority_checker_attributes)
+            != len(openrouter_authority_checker_attribute_items)
+            or any(
+                openrouter_authority_checker_attributes.get(name) is not value
+                for name, value in openrouter_authority_checker_attribute_items
+            )
+            or len(openrouter_authority_is_pristine.__closure__ or ())
+            != len(openrouter_authority_checker_closure_values)
+            or any(
+                current_cell is not expected_cell
+                or current_cell.cell_contents is not expected_value
+                for current_cell, (expected_cell, expected_value) in zip(
+                    openrouter_authority_is_pristine.__closure__ or (),
+                    openrouter_authority_checker_closure_values,
+                    strict=True,
+                )
+            )
+            or not openrouter_authority_is_pristine()
         ):
             raise CrossLineageAdjudicationError(
                 "cross-lineage provider transport binding changed before provider work"
             )
+
+    require_pristine_code = require_pristine.__code__
+    require_pristine_defaults = require_pristine.__defaults__
+    require_pristine_kwdefaults = require_pristine.__kwdefaults__
+    require_pristine_kwdefault_items = tuple(sorted((require_pristine_kwdefaults or {}).items()))
+    require_pristine_globals = require_pristine.__globals__
+    require_pristine_closure = require_pristine.__closure__
+    require_pristine_closure_values = tuple(
+        (cell, cell.cell_contents) for cell in require_pristine_closure or ()
+    )
+    require_pristine_attributes = require_pristine.__dict__
+    require_pristine_attribute_items = tuple(sorted(require_pristine_attributes.items()))
 
     async def execute(
         *,
@@ -1654,6 +1804,63 @@ def _build_cross_lineage_adjudication_executor(
     ) -> tuple[CrossLineageAdjudicationCaseResult, ...]:
         """Execute one exact inventory without dynamically resolving client callables."""
 
+        if (
+            trusted_impl.__code__ is not trusted_impl_code
+            or trusted_impl.__defaults__ is not trusted_impl_defaults
+            or trusted_impl.__kwdefaults__ is not trusted_impl_kwdefaults
+            or trusted_impl.__globals__ is not trusted_impl_globals
+            or trusted_impl.__closure__ is not trusted_impl_closure
+            or trusted_impl.__dict__ is not trusted_impl_attributes
+            or len(trusted_impl_kwdefaults or {}) != len(trusted_impl_kwdefault_items)
+            or any(
+                (trusted_impl_kwdefaults or {}).get(name) is not value
+                for name, value in trusted_impl_kwdefault_items
+            )
+            or len(trusted_impl_attributes) != len(trusted_impl_attribute_items)
+            or any(
+                trusted_impl_attributes.get(name) is not value
+                for name, value in trusted_impl_attribute_items
+            )
+            or len(trusted_impl.__closure__ or ()) != len(trusted_impl_closure_values)
+            or any(
+                current_cell is not expected_cell
+                or current_cell.cell_contents is not expected_value
+                for current_cell, (expected_cell, expected_value) in zip(
+                    trusted_impl.__closure__ or (),
+                    trusted_impl_closure_values,
+                    strict=True,
+                )
+            )
+            or require_pristine.__code__ is not require_pristine_code
+            or require_pristine.__defaults__ is not require_pristine_defaults
+            or require_pristine.__kwdefaults__ is not require_pristine_kwdefaults
+            or require_pristine.__globals__ is not require_pristine_globals
+            or require_pristine.__closure__ is not require_pristine_closure
+            or require_pristine.__dict__ is not require_pristine_attributes
+            or len(require_pristine_kwdefaults or ()) != len(require_pristine_kwdefault_items)
+            or any(
+                (require_pristine_kwdefaults or {}).get(name) is not value
+                for name, value in require_pristine_kwdefault_items
+            )
+            or len(require_pristine_attributes) != len(require_pristine_attribute_items)
+            or any(
+                require_pristine_attributes.get(name) is not value
+                for name, value in require_pristine_attribute_items
+            )
+            or len(require_pristine.__closure__ or ()) != len(require_pristine_closure_values)
+            or any(
+                current_cell is not expected_cell
+                or current_cell.cell_contents is not expected_value
+                for current_cell, (expected_cell, expected_value) in zip(
+                    require_pristine.__closure__ or (),
+                    require_pristine_closure_values,
+                    strict=True,
+                )
+            )
+        ):
+            raise CrossLineageAdjudicationError(
+                "cross-lineage provider transport guard changed before provider work"
+            )
         require_pristine(client)
         if require_single_request and (
             type(prepared) is not CrossLineageAdjudicationPreparedRun
@@ -1662,6 +1869,10 @@ def _build_cross_lineage_adjudication_executor(
         ):
             raise CrossLineageAdjudicationError(
                 "cross-lineage smoke transport requires one exact cost-bound request"
+            )
+        if allow_noncrediting_unknown_token_accounting and generation_evidence_fetcher is not None:
+            raise CrossLineageAdjudicationError(
+                "cross-lineage smoke transport rejects an external generation fetcher"
             )
         try:
             usage = object.__getattribute__(client, "usage")
@@ -1721,11 +1932,73 @@ def _build_cross_lineage_adjudication_executor(
                 if allow_noncrediting_unknown_token_accounting
                 else None
             ),
+            structured_completion_generation_resolver=(
+                trusted_structured_completion_generation_resolver
+                if allow_noncrediting_unknown_token_accounting
+                else None
+            ),
             request_cost_preview_type=trusted_request_cost_preview_type,
             require_pristine=require_client_pristine,
             logical_request_id=trusted_logical_request_id,
             smoke_run_index=smoke_run_index,
         )
+        if (
+            trusted_impl.__code__ is not trusted_impl_code
+            or trusted_impl.__defaults__ is not trusted_impl_defaults
+            or trusted_impl.__kwdefaults__ is not trusted_impl_kwdefaults
+            or trusted_impl.__globals__ is not trusted_impl_globals
+            or trusted_impl.__closure__ is not trusted_impl_closure
+            or trusted_impl.__dict__ is not trusted_impl_attributes
+            or len(trusted_impl_kwdefaults or {}) != len(trusted_impl_kwdefault_items)
+            or any(
+                (trusted_impl_kwdefaults or {}).get(name) is not value
+                for name, value in trusted_impl_kwdefault_items
+            )
+            or len(trusted_impl_attributes) != len(trusted_impl_attribute_items)
+            or any(
+                trusted_impl_attributes.get(name) is not value
+                for name, value in trusted_impl_attribute_items
+            )
+            or len(trusted_impl.__closure__ or ()) != len(trusted_impl_closure_values)
+            or any(
+                current_cell is not expected_cell
+                or current_cell.cell_contents is not expected_value
+                for current_cell, (expected_cell, expected_value) in zip(
+                    trusted_impl.__closure__ or (),
+                    trusted_impl_closure_values,
+                    strict=True,
+                )
+            )
+            or require_pristine.__code__ is not require_pristine_code
+            or require_pristine.__defaults__ is not require_pristine_defaults
+            or require_pristine.__kwdefaults__ is not require_pristine_kwdefaults
+            or require_pristine.__globals__ is not require_pristine_globals
+            or require_pristine.__closure__ is not require_pristine_closure
+            or require_pristine.__dict__ is not require_pristine_attributes
+            or len(require_pristine_kwdefaults or ()) != len(require_pristine_kwdefault_items)
+            or any(
+                (require_pristine_kwdefaults or {}).get(name) is not value
+                for name, value in require_pristine_kwdefault_items
+            )
+            or len(require_pristine_attributes) != len(require_pristine_attribute_items)
+            or any(
+                require_pristine_attributes.get(name) is not value
+                for name, value in require_pristine_attribute_items
+            )
+            or len(require_pristine.__closure__ or ()) != len(require_pristine_closure_values)
+            or any(
+                current_cell is not expected_cell
+                or current_cell.cell_contents is not expected_value
+                for current_cell, (expected_cell, expected_value) in zip(
+                    require_pristine.__closure__ or (),
+                    require_pristine_closure_values,
+                    strict=True,
+                )
+            )
+        ):
+            raise CrossLineageAdjudicationError(
+                "cross-lineage provider transport guard changed during provider work"
+            )
         require_client_pristine()
         return result
 
@@ -1745,31 +2018,132 @@ _execute_cross_lineage_adjudication_smoke_requests = _build_cross_lineage_adjudi
 del _build_cross_lineage_adjudication_executor
 
 
-async def execute_noncrediting_cross_lineage_adjudication_smoke_requests(
-    *,
-    smoke_run_index: int,
-    client: OpenRouterClient,
-    prepared: CrossLineageAdjudicationPreparedRun,
-    expected_request_cost_previews: tuple[OpenRouterStructuredRequestCostPreview, ...],
-    generation_evidence_fetcher: CrossLineageGenerationEvidenceFetcher | None = None,
-) -> tuple[CrossLineageAdjudicationCaseResult, ...]:
-    """Execute one cost-bound judge smoke request without issuing adjudication credit."""
+def _build_noncrediting_cross_lineage_adjudication_smoke_executor() -> (
+    _NoncreditingCrossLineageAdjudicationSmokeExecutor
+):
+    """Capture the private smoke executor behind the public Python boundary."""
 
-    if (
-        require_authenticated_runner_smoke_run_index(smoke_run_index) != smoke_run_index
-        or type(expected_request_cost_previews) is not tuple
-        or len(expected_request_cost_previews) != 1
-    ):
-        raise CrossLineageAdjudicationError(
-            "cross-lineage smoke transport requires one exact cost preview"
-        )
-    return await _execute_cross_lineage_adjudication_smoke_requests(
-        client=client,
-        prepared=prepared,
-        expected_request_cost_previews=expected_request_cost_previews,
-        generation_evidence_fetcher=generation_evidence_fetcher,
-        smoke_run_index=smoke_run_index,
+    namespace = globals()
+    trusted_executor = cast(Any, _execute_cross_lineage_adjudication_smoke_requests)
+    trusted_executor_code = trusted_executor.__code__
+    trusted_executor_defaults = trusted_executor.__defaults__
+    trusted_executor_kwdefaults = trusted_executor.__kwdefaults__
+    trusted_executor_kwdefault_items = tuple(sorted((trusted_executor_kwdefaults or {}).items()))
+    trusted_executor_globals = trusted_executor.__globals__
+    trusted_executor_closure = trusted_executor.__closure__
+    trusted_executor_closure_values = tuple(
+        (cell, cell.cell_contents) for cell in trusted_executor_closure or ()
     )
+    trusted_executor_attributes = trusted_executor.__dict__
+    trusted_executor_attribute_items = tuple(sorted(trusted_executor_attributes.items()))
+    trusted_smoke_index_validator = require_authenticated_runner_smoke_run_index
+    public_binding: dict[str, object] = {}
+
+    async def execute(
+        *,
+        smoke_run_index: int,
+        client: OpenRouterClient,
+        prepared: CrossLineageAdjudicationPreparedRun,
+        expected_request_cost_previews: tuple[OpenRouterStructuredRequestCostPreview, ...],
+        generation_evidence_fetcher: CrossLineageGenerationEvidenceFetcher | None = None,
+    ) -> tuple[CrossLineageAdjudicationCaseResult, ...]:
+        if (
+            trusted_executor.__code__ is not trusted_executor_code
+            or trusted_executor.__defaults__ is not trusted_executor_defaults
+            or trusted_executor.__kwdefaults__ is not trusted_executor_kwdefaults
+            or trusted_executor.__globals__ is not trusted_executor_globals
+            or trusted_executor.__closure__ is not trusted_executor_closure
+            or trusted_executor.__dict__ is not trusted_executor_attributes
+            or len(trusted_executor_kwdefaults or {}) != len(trusted_executor_kwdefault_items)
+            or any(
+                (trusted_executor_kwdefaults or {}).get(name) is not value
+                for name, value in trusted_executor_kwdefault_items
+            )
+            or len(trusted_executor_attributes) != len(trusted_executor_attribute_items)
+            or any(
+                trusted_executor_attributes.get(name) is not value
+                for name, value in trusted_executor_attribute_items
+            )
+            or len(trusted_executor.__closure__ or ()) != len(trusted_executor_closure_values)
+            or any(
+                current_cell is not expected_cell
+                or current_cell.cell_contents is not expected_value
+                for current_cell, (expected_cell, expected_value) in zip(
+                    trusted_executor.__closure__ or (),
+                    trusted_executor_closure_values,
+                    strict=True,
+                )
+            )
+            or namespace.get("_execute_cross_lineage_adjudication_smoke_requests")
+            is not trusted_executor
+            or namespace.get("require_authenticated_runner_smoke_run_index")
+            is not trusted_smoke_index_validator
+            or any(namespace.get(name) is not value for name, value in public_binding.items())
+        ):
+            raise CrossLineageAdjudicationError("cross-lineage smoke executor boundary changed")
+        active_executor = cast(Any, trusted_executor)
+        if (
+            trusted_smoke_index_validator(smoke_run_index) != smoke_run_index
+            or type(expected_request_cost_previews) is not tuple
+            or len(expected_request_cost_previews) != 1
+        ):
+            raise CrossLineageAdjudicationError(
+                "cross-lineage smoke transport requires one exact cost preview"
+            )
+        result = cast(
+            tuple[CrossLineageAdjudicationCaseResult, ...],
+            await active_executor(
+                client=client,
+                prepared=prepared,
+                expected_request_cost_previews=expected_request_cost_previews,
+                generation_evidence_fetcher=generation_evidence_fetcher,
+                smoke_run_index=smoke_run_index,
+            ),
+        )
+        if (
+            active_executor.__code__ is not trusted_executor_code
+            or active_executor.__defaults__ is not trusted_executor_defaults
+            or active_executor.__kwdefaults__ is not trusted_executor_kwdefaults
+            or active_executor.__globals__ is not trusted_executor_globals
+            or active_executor.__closure__ is not trusted_executor_closure
+            or active_executor.__dict__ is not trusted_executor_attributes
+            or len(trusted_executor_kwdefaults or {}) != len(trusted_executor_kwdefault_items)
+            or any(
+                (trusted_executor_kwdefaults or {}).get(name) is not value
+                for name, value in trusted_executor_kwdefault_items
+            )
+            or len(trusted_executor_attributes) != len(trusted_executor_attribute_items)
+            or any(
+                trusted_executor_attributes.get(name) is not value
+                for name, value in trusted_executor_attribute_items
+            )
+            or len(active_executor.__closure__ or ()) != len(trusted_executor_closure_values)
+            or any(
+                current_cell is not expected_cell
+                or current_cell.cell_contents is not expected_value
+                for current_cell, (expected_cell, expected_value) in zip(
+                    active_executor.__closure__ or (),
+                    trusted_executor_closure_values,
+                    strict=True,
+                )
+            )
+            or namespace.get("_execute_cross_lineage_adjudication_smoke_requests")
+            is not active_executor
+            or any(namespace.get(name) is not value for name, value in public_binding.items())
+        ):
+            raise CrossLineageAdjudicationError(
+                "cross-lineage smoke executor changed during provider work"
+            )
+        return result
+
+    public_binding["execute_noncrediting_cross_lineage_adjudication_smoke_requests"] = execute
+    return execute
+
+
+execute_noncrediting_cross_lineage_adjudication_smoke_requests = (
+    _build_noncrediting_cross_lineage_adjudication_smoke_executor()
+)
+del _build_noncrediting_cross_lineage_adjudication_smoke_executor
 
 
 def build_cross_lineage_adjudication_report(

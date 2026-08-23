@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import os
 import pickle
 import threading
 from collections.abc import Callable
@@ -68,6 +69,7 @@ from mmaudit.models.qualification_workflow import candidate_generation_verificat
 from mmaudit.models.schemas import UsageRecord
 from mmaudit.models.usage import (
     _attest_authrunner_owned_real_usage_origin,
+    _authrunner_usage_origin_process_is_current,
     _has_authrunner_owned_real_usage_origin,
 )
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
@@ -371,6 +373,31 @@ def test_structural_attesters_do_not_mint_authrunner_transport_origin(
     with pytest.raises(ValueError, match="pristine refetch path"):
         _attest_authrunner_generation_origin(raw_generation_capability, ())
     assert not _has_authrunner_generation_origin(raw_generation_capability)
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires a POSIX process boundary")
+def test_authrunner_usage_origin_process_boundary_rejects_parent_pid_after_fork() -> None:
+    parent_pid = os.getpid()
+    assert _authrunner_usage_origin_process_is_current(parent_pid)
+    read_fd, write_fd = os.pipe()
+    child_pid = os.fork()
+    if child_pid == 0:
+        os.close(read_fd)
+        try:
+            observed = _authrunner_usage_origin_process_is_current(parent_pid)
+            os.write(write_fd, b"1" if observed else b"0")
+        finally:
+            os.close(write_fd)
+            os._exit(0)
+    os.close(write_fd)
+    try:
+        observed = os.read(read_fd, 1)
+    finally:
+        os.close(read_fd)
+    waited_pid, status = os.waitpid(child_pid, 0)
+    assert waited_pid == child_pid
+    assert os.waitstatus_to_exitcode(status) == 0
+    assert observed == b"0"
 
 
 def test_transport_origin_rejects_descriptor_retarget_before_forged_invocation(

@@ -69,7 +69,7 @@ _FROZEN_AUDITED_MODULE_PATHS_SHA256 = (
     "f87687d12e0fc37b1cebf2801558aad7db8b177599a3a694c12116ad29db1810"
 )
 _FROZEN_DIRECT_ENVIRONMENT_LOCI_SHA256 = (
-    "40a2c075617a8d723ffca342682973577569e98a5a5f24b1b54363eea0d87aaa"
+    "7cb212331dc6e6f9fd7c5c42e29b8e23ae938440163dff8959fc424f22c01793"
 )
 _FROZEN_PROJECT_SCRIPTS_SHA256 = "9c597fa232065af210cc6b85424e2571d49c6b1ef941c5470602e916ab98c452"
 _FROZEN_FILESYSTEM_INPUT_LOCI_SHA256 = (
@@ -2392,7 +2392,7 @@ def _direct_environment_gate(
     if kind in {"process-identity", "process-identity-binding"}:
         if relative_path == "benchmark/model_portfolio.py":
             return "gate-benchmark-evidence-authority"
-        if relative_path == "models/openrouter.py":
+        if relative_path in {"models/openrouter.py", "models/usage.py"}:
             return "gate-authenticated-real-campaign"
         if relative_path.startswith("models/authenticated_runner"):
             return "gate-authenticated-real-campaign"

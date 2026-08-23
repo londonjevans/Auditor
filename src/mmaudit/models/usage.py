@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import sys
 import threading
@@ -13,7 +14,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from itertools import pairwise
-from typing import Any, Literal
+from types import FunctionType
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ValidationError
 
@@ -70,6 +72,8 @@ def parse_authenticated_runner_smoke_run_index(value: object) -> int:
 def _build_authrunner_usage_origin_scope_validator() -> tuple[
     Callable[[UsageRecord], str | None],
     Callable[[UsageRecord], bool],
+    Callable[[str, object], str | None],
+    Callable[[str, object], AuthrunnerNoncreditingUnknownTokenSmokeScope | None],
 ]:
     """Bind each closed AUTHRUNNER proof kind to its disjoint request namespace."""
 
@@ -117,12 +121,12 @@ def _build_authrunner_usage_origin_scope_validator() -> tuple[
             or (type(proof_kind) is str and proof_kind in smoke_proof_kinds)
         )
 
-    def validate(record: UsageRecord) -> str | None:
-        if type(record) is not usage_record_type:
-            return None
-        proof_kind = record.routing.get("privacy_source_proof_kind")
-        request_uses_closed_namespace = any(
-            pattern.fullmatch(record.request_id) is not None for pattern in namespaces
+    def classify_coordinates(request_id: str, proof_kind: object) -> str | None:
+        """Classify one request/proof pair through the canonical closed route table."""
+
+        request_uses_closed_namespace = bool(
+            type(request_id) is str
+            and any(pattern.fullmatch(request_id) is not None for pattern in namespaces)
         )
         if not isinstance(proof_kind, str):
             if request_uses_closed_namespace:
@@ -143,18 +147,60 @@ def _build_authrunner_usage_origin_scope_validator() -> tuple[
         if route is None:
             raise ValueError("AUTHRUNNER request namespace lacks its closed privacy proof kind")
         scope, request_pattern = route
-        if request_pattern.fullmatch(record.request_id) is None:
+        if type(request_id) is not str or request_pattern.fullmatch(request_id) is None:
             raise ValueError(
                 "AUTHRUNNER privacy proof kind does not match its closed request namespace"
             )
         return scope
 
-    return validate, has_noncrediting_smoke_coordinate
+    def validate(record: UsageRecord) -> str | None:
+        if type(record) is not usage_record_type:
+            return None
+        return classify_coordinates(
+            record.request_id,
+            record.routing.get("privacy_source_proof_kind"),
+        )
+
+    def classify_smoke_coordinates(
+        request_id: str,
+        proof_kind: object,
+    ) -> AuthrunnerNoncreditingUnknownTokenSmokeScope | None:
+        uses_smoke_namespace = bool(
+            type(request_id) is str
+            and any(pattern.fullmatch(request_id) is not None for pattern in smoke_namespaces)
+        )
+        uses_smoke_proof = type(proof_kind) is str and proof_kind in smoke_proof_kinds
+        if not uses_smoke_namespace and not uses_smoke_proof:
+            return None
+        try:
+            scope = classify_coordinates(request_id, proof_kind)
+        except ValueError:
+            return "INVALID"
+        if scope != "NONCREDITING_SMOKE":
+            return "INVALID"
+        return (
+            "CANDIDATE"
+            if proof_kind == "PINNED_NONCREDITING_SMOKE_MODEL_BENCHMARK"
+            else (
+                "JUDGE"
+                if proof_kind == "PINNED_NONCREDITING_SMOKE_CROSS_LINEAGE_ADJUDICATION"
+                else "INVALID"
+            )
+        )
+
+    return (
+        validate,
+        has_noncrediting_smoke_coordinate,
+        classify_coordinates,
+        classify_smoke_coordinates,
+    )
 
 
 (
     _authrunner_usage_origin_scope,
     _has_authrunner_noncrediting_smoke_coordinate,
+    _authrunner_request_origin_scope,
+    _authrunner_noncrediting_smoke_request_scope,
 ) = _build_authrunner_usage_origin_scope_validator()
 del _build_authrunner_usage_origin_scope_validator
 
@@ -1802,11 +1848,28 @@ _attest_owned_real_usage_record, _has_owned_real_usage_attestation = (
 )
 
 
+def _build_authrunner_usage_origin_process_boundary() -> Callable[[int], bool]:
+    """Bind usage-origin membership to the process that inserted it."""
+
+    trusted_getpid = os.getpid
+
+    def is_current_process(registered_pid: int) -> bool:
+        return type(registered_pid) is int and registered_pid == trusted_getpid()
+
+    return is_current_process
+
+
+_authrunner_usage_origin_process_is_current = _build_authrunner_usage_origin_process_boundary()
+del _build_authrunner_usage_origin_process_boundary
+
+
 def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
     Callable[..., None],
-    Callable[[UsageRecord], UsageRecord],
+    Callable[..., UsageRecord],
     Callable[[UsageRecord, UsageRecord], UsageRecord],
     Callable[..., bool],
+    Callable[[UsageRecord], None],
+    Callable[[], None],
 ]:
     """Keep AUTHRUNNER transport origin separate from generic REAL test custody."""
 
@@ -1820,10 +1883,12 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
         object,
         Callable[[], bool],
         Callable[[object], ExecutionEvidenceKind],
+        Callable[..., bool],
     ]
 
-    registry: dict[int, tuple[weakref.ReferenceType[UsageRecord], str, object, str]] = {}
+    registry: dict[int, tuple[weakref.ReferenceType[UsageRecord], str, object, str, int]] = {}
     issuer: Issuer | None = None
+    issuer_callable_states: tuple[tuple[object, ...], ...] | None = None
     lock = threading.RLock()
     trusted_sys = sys
     trusted_self_module = trusted_sys.modules[__name__]
@@ -1831,6 +1896,131 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
     trusted_generic_origin = _has_owned_real_usage_attestation
     trusted_bound_identity = _has_valid_bound_identity
     trusted_origin_scope = _authrunner_usage_origin_scope
+    trusted_getpid = os.getpid
+    trusted_process_is_current = _authrunner_usage_origin_process_is_current
+    empty_cell = object()
+
+    def function_state(function: FunctionType) -> tuple[object, ...]:
+        closure = function.__closure__
+        closure_values: list[tuple[object, object]] = []
+        for cell in closure or ():
+            try:
+                contents = cell.cell_contents
+            except ValueError:
+                contents = empty_cell
+            closure_values.append((cell, contents))
+        kwdefaults = function.__kwdefaults__
+        attributes = function.__dict__
+        return (
+            function,
+            function.__code__,
+            function.__defaults__,
+            kwdefaults,
+            tuple(sorted((name, value) for name, value in (kwdefaults or {}).items())),
+            function.__globals__,
+            closure,
+            tuple(closure_values),
+            attributes,
+            tuple(sorted(attributes.items())),
+        )
+
+    def function_state_is_current(state: tuple[object, ...] | None) -> bool:
+        if state is None or type(state[0]) is not FunctionType:
+            return False
+        function = state[0]
+        assert type(function) is FunctionType
+        current_kwdefaults = function.__kwdefaults__
+        current_attributes = function.__dict__
+        current_closure = function.__closure__
+        expected_kwdefaults = state[4]
+        expected_closure = state[7]
+        expected_attributes = state[9]
+        if (
+            type(expected_kwdefaults) is not tuple
+            or type(expected_closure) is not tuple
+            or type(expected_attributes) is not tuple
+            or function.__code__ is not state[1]
+            or function.__defaults__ is not state[2]
+            or current_kwdefaults is not state[3]
+            or function.__globals__ is not state[5]
+            or current_closure is not state[6]
+            or current_attributes is not state[8]
+            or type(current_kwdefaults) not in {dict, type(None)}
+            or type(current_attributes) is not dict
+            or len(current_kwdefaults or {}) != len(expected_kwdefaults)
+            or any(
+                (current_kwdefaults or {}).get(name) is not value
+                for name, value in expected_kwdefaults
+            )
+            or len(current_attributes) != len(expected_attributes)
+            or any(current_attributes.get(name) is not value for name, value in expected_attributes)
+            or len(current_closure or ()) != len(expected_closure)
+        ):
+            return False
+        for current_cell, expected in zip(
+            current_closure or (),
+            expected_closure,
+            strict=True,
+        ):
+            if type(expected) is not tuple or len(expected) != 2:
+                return False
+            expected_cell, expected_value = expected
+            if current_cell is not expected_cell:
+                return False
+            try:
+                current_value = current_cell.cell_contents
+            except ValueError:
+                current_value = empty_cell
+            if current_value is not expected_value:
+                return False
+        return True
+
+    def function_graph_state(
+        function: FunctionType,
+        *,
+        excluded_functions: tuple[FunctionType, ...] = (),
+    ) -> tuple[tuple[object, ...], ...]:
+        states: list[tuple[object, ...]] = []
+        seen: set[int] = set()
+
+        def visit_value(value: object) -> None:
+            if any(value is excluded for excluded in excluded_functions):
+                return
+            if type(value) is FunctionType:
+                visit_function(value)
+            elif type(value) is tuple:
+                for item in value:
+                    visit_value(item)
+
+        def visit_function(current: FunctionType) -> None:
+            key = id(current)
+            if key in seen:
+                return
+            seen.add(key)
+            state = function_state(current)
+            states.append(state)
+            for value in current.__defaults__ or ():
+                visit_value(value)
+            for value in (current.__kwdefaults__ or {}).values():
+                visit_value(value)
+            closure_values = state[7]
+            if type(closure_values) is not tuple:
+                return
+            for closure_value in closure_values:
+                if type(closure_value) is not tuple or len(closure_value) != 2:
+                    return
+                _cell, value = closure_value
+                visit_value(value)
+            for value in current.__dict__.values():
+                visit_value(value)
+
+        visit_function(function)
+        return tuple(states)
+
+    def function_graph_state_is_current(
+        states: tuple[tuple[object, ...], ...] | None,
+    ) -> bool:
+        return bool(states and all(function_state_is_current(state) for state in states))
 
     def register_issuer(
         *,
@@ -1843,13 +2033,20 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
         trusted_identity_issuer: object,
         pristine_predicate: Callable[[], bool],
         execution_evidence_resolver: Callable[[object], ExecutionEvidenceKind],
+        receipt_consumer: Callable[..., bool],
     ) -> None:
         """Register the exact OpenRouter bound-success call chain once at import time."""
 
-        nonlocal issuer
+        nonlocal issuer, issuer_callable_states
         frame = trusted_sys._getframe(1)
         module_name = getattr(module, "__name__", None)
         module_values = getattr(module, "__dict__", None)
+        pristine_kwdefaults = pristine_predicate.__kwdefaults__
+        graph_guard = (
+            pristine_kwdefaults.get("_provider_authority_graph_is_pristine")
+            if type(pristine_kwdefaults) is dict
+            else None
+        )
         expected_methods = (
             ("complete_with_evidence", completion_method),
             ("_bind_real_completion_identity", bound_origin_method),
@@ -1874,6 +2071,21 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
             is not pristine_predicate
             or getattr(module, "trusted_openrouter_execution_evidence", None)
             is not execution_evidence_resolver
+            or getattr(module, "_consume_provider_initial_receipt_composite", None)
+            is not receipt_consumer
+            or type(graph_guard) is not FunctionType
+            or any(
+                type(function) is not FunctionType
+                for function in (
+                    completion_method,
+                    bound_origin_method,
+                    bound_wrapper_method,
+                    bound_result_method,
+                    pristine_predicate,
+                    execution_evidence_resolver,
+                    receipt_consumer,
+                )
+            )
         ):
             raise RuntimeError("AUTHRUNNER usage-origin issuer registration is invalid")
         with lock:
@@ -1889,9 +2101,84 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
                 trusted_identity_issuer,
                 pristine_predicate,
                 execution_evidence_resolver,
+                receipt_consumer,
+            )
+            registered_functions = (
+                completion_method,
+                bound_origin_method,
+                bound_wrapper_method,
+                bound_result_method,
+                pristine_predicate,
+                execution_evidence_resolver,
+                receipt_consumer,
+            )
+            issuer_callable_states = (
+                *(
+                    function_state(cast(FunctionType, function))
+                    for function in registered_functions[:-1]
+                ),
+                *function_graph_state(
+                    cast(FunctionType, registered_functions[-1]),
+                    excluded_functions=(graph_guard,),
+                ),
             )
 
-    def mark(record: UsageRecord) -> UsageRecord:
+    def finalize_issuer_function_states() -> None:
+        """Refresh the registered predicate graph after its final receipt binding."""
+
+        nonlocal issuer_callable_states
+        frame = trusted_sys._getframe(1)
+        with lock:
+            registered_issuer = issuer
+        if registered_issuer is None:
+            raise RuntimeError("AUTHRUNNER usage-origin issuer is not registered")
+        module = registered_issuer[0]
+        module_values = getattr(module, "__dict__", None)
+        pristine_predicate = registered_issuer[7]
+        pristine_kwdefaults = pristine_predicate.__kwdefaults__
+        graph_guard = (
+            pristine_kwdefaults.get("_provider_authority_graph_is_pristine")
+            if type(pristine_kwdefaults) is dict
+            else None
+        )
+        functions = (
+            registered_issuer[2],
+            registered_issuer[3],
+            registered_issuer[4],
+            registered_issuer[5],
+            registered_issuer[7],
+            registered_issuer[8],
+            registered_issuer[9],
+        )
+        if (
+            type(module_values) is not dict
+            or frame.f_code.co_name != "<module>"
+            or frame.f_globals is not module_values
+            or type(graph_guard) is not FunctionType
+            or any(type(function) is not FunctionType for function in functions)
+        ):
+            raise RuntimeError("AUTHRUNNER usage-origin issuer finalization is invalid")
+        refreshed = (
+            *(function_state(cast(FunctionType, function)) for function in functions[:-1]),
+            *function_graph_state(
+                cast(FunctionType, functions[-1]),
+                excluded_functions=(graph_guard,),
+            ),
+        )
+        with lock:
+            if issuer is not registered_issuer:
+                raise RuntimeError("AUTHRUNNER usage-origin issuer changed during finalization")
+            issuer_callable_states = refreshed
+
+    def mark(
+        record: UsageRecord,
+        *,
+        receipt_composite: object | None = None,
+        provisional_usage: UsageRecord | None = None,
+        generation: object | None = None,
+        binding: object | None = None,
+        expectation_sha256: str | None = None,
+    ) -> UsageRecord:
         """Strong-mark only the registered pristine OpenRouter bound-success stack."""
 
         with lock:
@@ -1908,6 +2195,7 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
             trusted_identity_issuer,
             pristine_predicate,
             execution_evidence_resolver,
+            receipt_consumer,
         ) = registered_issuer
         result_frame = trusted_sys._getframe(1)
         wrapper_frame = result_frame.f_back
@@ -1928,6 +2216,8 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
             is not trusted_bound_identity
             or getattr(trusted_self_module, "_authrunner_usage_origin_scope", None)
             is not trusted_origin_scope
+            or getattr(trusted_self_module, "_authrunner_usage_origin_process_is_current", None)
+            is not trusted_process_is_current
             or trusted_sys.modules.get(module_name) is not module
             or getattr(module, "OpenRouterClient", None) is not client_type
             or vars(client_type).get("complete_with_evidence") is not completion_method
@@ -1938,6 +2228,9 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
             is not pristine_predicate
             or getattr(module, "trusted_openrouter_execution_evidence", None)
             is not execution_evidence_resolver
+            or getattr(module, "_consume_provider_initial_receipt_composite", None)
+            is not receipt_consumer
+            or not function_graph_state_is_current(issuer_callable_states)
             or result_frame.f_globals is not module_values
             or result_frame.f_code is not bound_result_method.__code__
             or wrapper_frame is None
@@ -1987,6 +2280,28 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
             or not trusted_bound_identity(record)
         ):
             raise ValueError("AUTHRUNNER usage origin requires owned REAL bound-success evidence")
+        exact_smoke = origin_scope == "NONCREDITING_SMOKE"
+        if exact_smoke:
+            if type(provisional_usage) is not UsageRecord or not receipt_consumer(
+                receipt_composite,
+                client=client,
+                usage_record=provisional_usage,
+                generation=generation,
+                binding=binding,
+                expectation_sha256=expectation_sha256,
+            ):
+                raise ValueError("AUTHRUNNER smoke usage origin lacks one-shot receipt custody")
+        elif any(
+            value is not None
+            for value in (
+                receipt_composite,
+                provisional_usage,
+                generation,
+                binding,
+                expectation_sha256,
+            )
+        ):
+            raise ValueError("AUTHRUNNER release usage origin rejects smoke receipt custody")
         key = id(record)
         digest = trusted_usage_sha256(record)
 
@@ -2000,7 +2315,13 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
         with lock:
             if key in registry:
                 raise ValueError("AUTHRUNNER usage origin is already registered")
-            registry[key] = (reference, digest, atomic_ledger, origin_scope)
+            registry[key] = (
+                reference,
+                digest,
+                atomic_ledger,
+                origin_scope,
+                trusted_getpid(),
+            )
         return record
 
     def contains(
@@ -2024,6 +2345,7 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
             _trusted_identity_issuer,
             pristine_predicate,
             execution_evidence_resolver,
+            receipt_consumer,
         ) = registered_issuer
         module_name = getattr(module, "__name__", "")
         if (
@@ -2037,6 +2359,8 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
             is not trusted_bound_identity
             or getattr(trusted_self_module, "_authrunner_usage_origin_scope", None)
             is not trusted_origin_scope
+            or getattr(trusted_self_module, "_authrunner_usage_origin_process_is_current", None)
+            is not trusted_process_is_current
             or trusted_sys.modules.get(module_name) is not module
             or getattr(module, "OpenRouterClient", None) is not client_type
             or vars(client_type).get("complete_with_evidence") is not completion_method
@@ -2047,6 +2371,9 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
             is not pristine_predicate
             or getattr(module, "trusted_openrouter_execution_evidence", None)
             is not execution_evidence_resolver
+            or getattr(module, "_consume_provider_initial_receipt_composite", None)
+            is not receipt_consumer
+            or not function_graph_state_is_current(issuer_callable_states)
             or not pristine_predicate()
         ):
             return False
@@ -2062,6 +2389,7 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
             and registered[1] == trusted_usage_sha256(record)
             and (atomic_ledger is None or registered[2] is atomic_ledger)
             and registered[3] == current_scope
+            and trusted_process_is_current(registered[4])
         )
 
     def propagate(source: UsageRecord, normalized: UsageRecord) -> UsageRecord:
@@ -2094,10 +2422,27 @@ def _build_authrunner_owned_real_usage_origin_authority() -> tuple[
                 digest,
                 registry[id(source)][2],
                 registry[id(source)][3],
+                trusted_getpid(),
             )
         return normalized
 
-    return register_issuer, mark, propagate, contains
+    def revoke(record: UsageRecord) -> None:
+        """Remove one exact current origin mark during a failed publication transaction."""
+
+        if type(record) is not UsageRecord:
+            return
+        key = id(record)
+        with lock:
+            registered = registry.get(key)
+            if registered is None or registered[0]() is not record:
+                return
+            if not trusted_process_is_current(registered[4]):
+                raise ValueError("AUTHRUNNER usage origin belongs to another process")
+            removed = registry.pop(key)
+        if removed is not registered:
+            raise ValueError("AUTHRUNNER usage origin changed during revocation")
+
+    return register_issuer, mark, propagate, contains, revoke, finalize_issuer_function_states
 
 
 def _validated_usage_copy_preserving_owned_attestation(
@@ -2459,6 +2804,8 @@ def _has_valid_bound_identity(record: UsageRecord) -> bool:
     _attest_authrunner_owned_real_usage_origin,
     _propagate_authrunner_owned_real_usage_origin,
     _has_authrunner_owned_real_usage_origin,
+    _revoke_authrunner_owned_real_usage_origin,
+    _finalize_authrunner_owned_real_usage_origin_issuer,
 ) = _build_authrunner_owned_real_usage_origin_authority()
 del _build_authrunner_owned_real_usage_origin_authority
 
