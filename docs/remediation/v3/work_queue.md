@@ -2084,6 +2084,9 @@ are invisible to source review by construction.
 - **Dependencies:** Completed `V3-AUTHLINEAGE-PUBLIC-001`, authenticated generation refetch, and closed
   usage/report evidence.
 - **Status:** `PARTIAL`
+- **Current scope-cutoff/strict-diagnostic slice:** `COMPLETE_PROVIDER_FREE_NONAUTHORIZING` at
+  `d2364f6b528f2e839fbef8b878552f95c4b92c9c`; overall AUTHRUNNER remains
+  `PARTIAL / BLOCKED_SAFETY`.
 - **Structured-output eligibility slice 2026-08-21:** The first REAL smoke candidate completion
   reached transport, origin custody, and exact ledger reconciliation, reserving `$0.0547272` and
   reconciling `$0.01680888`, then failed closed on strict response-schema validation. The retained
@@ -2144,12 +2147,24 @@ are invisible to source review by construction.
   `candidate-registry-r10.json` / `authrunner-candidate-20260823-r10`, frozen SHA-256
   `66b620665f4c8911c38b280b36b70eeab9fe4a0ae44259a608ede271f207dd5c`; PRIMARY and REPLAY r8
   remained unchanged. The immediate r10/r8/r8 gate was VALID through 15 logical GETs, but is now
-  historical rather than current freshness evidence. Paid smoke indices 1–9 are permanently occupied.
-  The first four actual/accounted/status tuples are `$0.01680888`/`$0.01680888`/`reconciled`,
+  historical rather than current freshness evidence. At the prior `efab7ac` snapshot, paid smoke
+  indices 1–9 were permanently occupied. The first four actual/accounted/status tuples were
+  `$0.01680888`/`$0.01680888`/`reconciled`,
   `null`/`$0.05225616`/`uncertain_accounted`, `$0.00554796`/`$0.00554796`/`reconciled`, and
   `$0.00537768`/`$0.00537768`/`reconciled`. Runs 5–9 are reconciled, but their authoritative
-  per-index costs are not enumerated. Total accounted exposure is `$0.10457436`, reserved is `$0`,
-  and remaining is `$249.89542564`; no entry may be released, reused, or edited. Run 3 passed
+  per-index costs were not enumerated. That nine-entry snapshot accounted `$0.10457436`, reserved
+  `$0`, and left `$249.89542564`; no entry may be released, reused, or edited. Current operator record
+  SHA-256 `67b40784bce40a9369d721a922d5138a118d833105937219294778f4fc93ce98` is 100,291 bytes /
+  1,817 lines. It reports thirteen ledger entries and total `$0.133173`; all are reconciled except
+  retained r2. Exact per-index costs for r10–r13, current reserved/remaining values, and current
+  aggregate model-call counts are not stated. Indices 1–13 are occupied and index 14 is the next
+  unused namespace. Run 10 followed checkpoint `d2364f6`: an immediately preceding gate with PRIMARY
+  re-frozen as `primary-judge-registry-r14.json` was operator-reported VALID, then the paid run stopped
+  at the intended immutable completion-receipt cutoff with `usage_diagnostics=NONE`. That means zero
+  codes from the exceptional noncrediting-smoke diagnostic, not generic creditability or authority.
+  The live result confirms the candidate cutoff; candidate-and-judge pre-metadata-GET,
+  pre-ledger-replacement, pre-origin, and pre-capability coverage remains provider-free source/test
+  evidence. No bundle, current command, or authority follows. Run 3 passed
   token validation and failed later at the successful-REAL benchmark boundary, but its typed cause
   was discarded. Run 4 retained raw `P=234/C=1280/R=1307/K=0`: this disproves a universal response
   subset assumption for that sample, not a route-wide additive or same-domain convention.
@@ -2158,7 +2173,7 @@ are invisible to source review by construction.
   only to exact owned REAL `NONCREDITING_SMOKE` custody plus authenticated generation reconciliation.
   General creditability and the full campaign remain fail closed. It also emits bounded closed-code
   smoke usage diagnostics; runs 5–7 confirm the token envelope and typed usage error work. Their
-  latest nonauthorizing blocker is `generation_metadata_unbound`: exact canonical model/endpoint
+  historical r5–r9 nonauthorizing blocker was `generation_metadata_unbound`: exact canonical model/endpoint
   identity was provisionally bound, then downgraded only during generation-metadata binding despite
   accepted aliases, Parasail, no fallback, and ZDR. A direct operator query saw complete records but
   cannot distinguish fetch timeout, validation rejection, or reconciliation mismatch. Surfacing a
@@ -2167,22 +2182,44 @@ are invisible to source review by construction.
   Ruff, format, strict mypy, generator write/verify, and independent no-HIGH review passed. Index 9
   reports `GENERATION_METADATA_INVALID|GENERATION_METADATA_MISSING`. Operator-side probes narrow
   aliases, timing/IO budget, and payload validation but remain nonauthorizing. Source inspection
-  identifies a stronger provider-free hypothesis: generic initial generation reconciliation rejects
-  the unknown-token convention before later special `NONCREDITING_SMOKE` reconciliation can run, and
-  that error can produce `INVALID` while the current diagnostic also adds `MISSING`. Index 8's
-  separate `SCHEMA_VALIDATION_FAILED` is candidate reliability evidence, not route-disqualification
-  authority. Audit/wiring of the special smoke path at initial identity binding, preservation of
-  generic credit fail-closed, diagnostic separation, and bounded regressions are next.
-  The committed inventory is raw SHA-256
-  `0f06405d421a10d0264dd97e53f77643668ca02bb610124251c0b6a8437099e4`, self-hash
-  `c0857884300006d5e7ceb9dce4bd08dcb27e46939e6a706aa2ee18f5e63e2ae7`, discovery semantics
-  `3690079580843c5775bcde33836094745ae8c30ccb591cbab2cb4c9b08b0af2e`, source universe
-  `71bff09169358e9365678be37078598e8921eb8b18f2aa7f19f865891d84ed87`, and counts
-  `3628/3631/3585/43/35/29/15`; smoke schema raw SHA-256
+  identified generic initial generation reconciliation rejecting the unknown-token convention before
+  later special `NONCREDITING_SMOKE` reconciliation could run. Historical source checkpoint
+  `8058e7bff88594b44aa42b8695ce5c25442ae73c` selects the special structural policy only for the
+  exact owned REAL v3 unknown-token smoke case while preserving generic credit fail-closed. It also
+  adds a closure-owned isolated raw GET/POST/error receipt state machine, tested for exact request,
+  reservation, transport, lifecycle, one-shot, replay, cross-registry, mutation, and ledger custody.
+  Production receipt dispatch is deliberately dormant and unreachable: normal completion and metadata
+  use their prior path. Historical operator evidence from that checkpoint reports v3 candidate identity
+  reaches
+  `CANONICAL_MODEL_AND_ENDPOINT_BOUND` / `generation_metadata_bound`, is persisted BOUND, traverses the
+  high-level origin-marking path, and then fails the intrinsic strict-usage predicate; the operator
+  evidence cannot independently prove the opaque origin capability and does not surface the exact
+  rejecting clause. The intended candidate receipt cutoff was therefore bypassed; judge verification
+  remains before capability issuance awaiting an immutable metadata receipt. The scaffold grants no
+  provider, credit, certification, runner, or release authority. Its focused provider-free matrix
+  passed 458 tests. Direct-child hotfix
+  `d2364f6b528f2e839fbef8b878552f95c4b92c9c` owns exactly seven paths and replaces validity-based
+  classification with a closed exact candidate/judge smoke-scope classifier. Exact smoke coordinates,
+  including intrinsic-invalid records, now stop before generation-metadata GET, `UsageLedger`
+  replacement, owned-REAL origin marking, or generation-verification capability issuance. Strict
+  rejection exposes at most one code from a closed vocabulary, while generic and RELEASE behavior
+  remains in parity. Parent matrices passed 642 plus 57 tests; independent matrices passed 648 plus
+  125 tests, a 3,488-case differential found zero mismatches, and review found no BLOCKER/HIGH. This
+  is provider-free local evidence, not a live success or launch authority. The exact next slice is a
+  transactional immutable completion-plus-metadata receipt composite and proof of the
+  production transport's in-flight lifecycle; production receipts must remain dormant until then.
+  Index 8's separate `SCHEMA_VALIDATION_FAILED` remains candidate reliability evidence rather than
+  route-disqualification authority.
+  The current `d2364f6` inventory snapshot is raw SHA-256
+  `d27bd3a743c5926afe89e01d3ac4d69170f21b47a03494e6b07284cda5975c2e`, self-hash
+  `186f89a396ba42f4bf2e74e7c9fd0caf711d69a69b2f6f2ec88d341a760a61d1`, discovery semantics
+  `cc7f2d6ce15e210152549e526bf23ab8e8628bad2c5db29d87884f3880fb167f`, source universe
+  `4e2f19d4e2f7b477cd07ecdbfd5c5d656a857235b8a294b23a942edd9a1b97c3`, and counts
+  `3634/3637/3591/43/35/29/15`. Smoke schema raw SHA-256
   `2163642df1d0b7adf463eb04887e2027e462acdd716ec83451d76c49d80db78d`.
-  The latest metadata-only index-10 gate on candidate r10 / primary r12 / replay r8 was VALID but
-  nonauthorizing and is not durable freshness given sub-hour drift. Current command count is zero.
-  Index 10 is only the next unused namespace, not paid authority.
+  The immediate pre-run-10 gate with PRIMARY r14 is historical, nonauthorizing evidence and cannot
+  serve as durable freshness. Current command count is zero. Index 14 is the next unused namespace,
+  not paid authority.
 - **Local revocation-cascade slice:** Pushed checkpoint
   `692eb173f002818b4434b746c8801b4cbeb852e2` adds explicit PID-bound campaign and generation
   revokers, parent-to-child cascade, traceback-safe execution handoff guards, and immediate smoke
@@ -2556,12 +2593,24 @@ are invisible to source review by construction.
   between request and atomic global input-token budgets before provider dispatch. The local parity
   repair is checkpointed and its committed-byte provider-free smoke preflight is valid. Paid smoke #2
   proved constructor parity, and the later metadata-only live-route gate established genuine
-  candidate endpoint-inventory drift. Runs 1–4 are now terminal and permanently occupied. Run 2's
-  unknown actual cost remains conservatively accounted, while runs 3 and 4 reconciled their exact
-  actual costs. Run 3's typed cause was not retained; run 4's raw values do not establish a general
-  additive convention. The current accounting envelope is smoke-only and noncrediting. No successful
-  smoke bundle exists, and the full campaign is independently blocked until a typed policy/evidence
-  gate resolves token-detail reporting convention without inferring it from r3/r4.
+  candidate endpoint-inventory drift. Current evidence records indices 1–13 occupied and index 14 as
+  next unused. Run 2's unknown actual cost remains conservatively accounted; all other entries are
+  reconciled, while the current operator record does not state exact per-index costs for r10–r13,
+  current reserved/remaining values, or current aggregate model-call counts. Run 10 stopped at the
+  intended immutable completion-receipt cutoff with `usage_diagnostics=NONE`; this live-confirms the
+  candidate cutoff only and grants no generic creditability or authority. Run 3's typed cause was not
+  retained; run 4's raw values do not establish a general additive convention. The current accounting
+  envelope is smoke-only and noncrediting. The isolated transport receipt scaffold is not production
+  authority: its raw production receipt issuer remains dormant. At historical checkpoint `8058e7b`,
+  an intrinsic-invalid v3 smoke record bypassed the candidate cutoff, was persisted BOUND, and
+  traversed the high-level origin-marking path before strict validation failed; operator evidence
+  cannot prove the opaque origin capability. Current checkpoint `d2364f6` closes that classifier
+  bypass for exact candidate and judge smoke coordinates before metadata GET, usage replacement,
+  origin, or capability, but it does not activate production receipts. No successful smoke bundle
+  exists, and the full campaign
+  remains blocked on the completion/metadata receipt composite, production in-flight proof, successful
+  smoke evidence, and a typed policy/evidence gate for token-detail reporting convention without
+  inferring it from r3/r4.
   Exact judge admission and the
   full-campaign cost bound cannot exist before both genuine candidate outputs. Current repository
   rules prohibit Codex from reading real credentials or accessing the provider. Judge request bytes
@@ -2575,11 +2624,13 @@ are invisible to source review by construction.
   positive owned-REAL parent issue-consume-revoke-reject assay against the external runtime remain
   absent; the completed provider-free cascade does not substitute for that evidence. External-log
   publication and every benchmark run remain queued.
-- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY`. Provider-free, audit and wire
-  special unknown-token `NONCREDITING_SMOKE` reconciliation at initial REAL identity binding,
-  preserve generic credit fail-closed, distinguish diagnostic branches, add bounded regressions, and
-  checkpoint. Only then refresh or re-freeze drifted route evidence and
-  prepare a fresh metadata-only step A using unused smoke index 10. Paid B may be emitted
+- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY`. Provider-free, implement the
+  immutable completion-plus-metadata
+  receipt composite transactionally and prove the production
+  transport's exact in-flight lifecycle; keep all production receipt preparation, dispatch,
+  consumption, origin, and capability issuance dormant until that boundary is regression-closed.
+  Only afterward refresh or re-freeze drifted route evidence and
+  prepare a fresh metadata-only step A using unused smoke index 14. Paid B may be emitted
   or run only after that A is immediately complete and exact-VALID and the operator separately
   authorizes B. The verifier, normal preflight, discovery, construct-only, and full commands remain
   absent. `V3-AUTONOMY-001` Phase 2 remains paused. AUTHSEAL publication, audits, benchmarks, and
@@ -3392,16 +3443,25 @@ are invisible to source review by construction.
 - **Status:** `IN_PROGRESS`
 - **Current state:** Phase 0 completed at
   `d0402d1c68f0f82d9ee4f8757f7967abda372ac6`; Phase 1 is complete nonauthorizing at local checkpoint
-  `084add8778ef36a2e4c86fdbdea4082eb3a1b332`. The current self-hashed inventory covers 3,628 unique
-  sources / 3,631 occurrences joined to 35 logical gates.
+  `084add8778ef36a2e4c86fdbdea4082eb3a1b332`. The current self-hashed inventory covers 3,634 unique
+  sources / 3,637 occurrences joined to 35 logical gates.
   Twenty-nine gates remain unsatisfied and 15 remain current-manual; the artifact states
   `runtime_authority=false` and `managed_run_ready=false`. The exact 28-role managed declaration
   pins three reviewed package resources and explicitly leaves 25 external roles unresolved.
   AUTHRUNNER's remaining REAL evidence still requires separately authorized external execution and
-  remains `PARTIAL / BLOCKED_SAFETY`. Smoke indices 1–9 are permanently occupied, no successful
-  bundle exists, current command count is zero, and index 10 is only the next unused namespace. The
-  initial generic-versus-special-smoke identity-binding seam must be audited/fixed and checkpointed
-  provider-free before another live sequence. Paid
+  remains `PARTIAL / BLOCKED_SAFETY`. Smoke indices 1–13 are occupied, no successful bundle exists,
+  current command count is zero, and index 14 is the next unused namespace. Operator run 10 against
+  current checkpoint `d2364f6b528f2e839fbef8b878552f95c4b92c9c` reached the intended immutable
+  completion-receipt cutoff with zero exceptional diagnostic codes and no bundle; it grants no
+  authority. The historical operator run at
+  `8058e7bff88594b44aa42b8695ce5c25442ae73c` persisted candidate usage BOUND and traversed the
+  high-level origin-marking path before intrinsic strict-usage rejection; opaque origin is not
+  independently proven. Current provider-free checkpoint
+  `d2364f6b528f2e839fbef8b878552f95c4b92c9c` cuts off exact candidate and judge smoke coordinates,
+  including intrinsic-invalid records, before metadata GET, ledger replacement, origin, or capability.
+  Production receipts remain dormant. The immutable completion-plus-metadata receipt
+  composite and production in-flight proof must be checkpointed provider-free before another live
+  sequence. Paid
   execution remains unauthorized until fresh route evidence and an immediate exact-VALID
   metadata-only step A are inspected and step B is separately authorized.
   Phase 2 working bytes are

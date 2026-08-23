@@ -124,20 +124,20 @@ def test_current_completion_authority_has_no_legacy_human_gate() -> None:
     assert "owns exactly 18 Phase-1 paths" in autonomy_evidence
     assert "excludes operator_results" in autonomy_evidence
     assert "531a9d822e9989bf2eda94530e88cf55f2dd2e0d" in autonomy_evidence
-    assert "77fb4b9a0c03969a9776edf2091dc09d3b67daec" in autonomy_evidence
-    assert "0f06405d421a10d0264dd97e53f77643668ca02bb610124251c0b6a8437099e4" in (autonomy_evidence)
-    assert "c0857884300006d5e7ceb9dce4bd08dcb27e46939e6a706aa2ee18f5e63e2ae7" in (autonomy_evidence)
-    assert "71bff09169358e9365678be37078598e8921eb8b18f2aa7f19f865891d84ed87" in (autonomy_evidence)
-    assert "3690079580843c5775bcde33836094745ae8c30ccb591cbab2cb4c9b08b0af2e" in (autonomy_evidence)
-    assert "3628 unique completion inputs / 3631 occurrences" in autonomy_evidence
-    assert "3585 gate sources" in autonomy_evidence
+    assert "d2364f6b528f2e839fbef8b878552f95c4b92c9c" in autonomy_evidence
+    assert "d27bd3a743c5926afe89e01d3ac4d69170f21b47a03494e6b07284cda5975c2e" in (autonomy_evidence)
+    assert "186f89a396ba42f4bf2e74e7c9fd0caf711d69a69b2f6f2ec88d341a760a61d1" in (autonomy_evidence)
+    assert "4e2f19d4e2f7b477cd07ecdbfd5c5d656a857235b8a294b23a942edd9a1b97c3" in (autonomy_evidence)
+    assert "cc7f2d6ce15e210152549e526bf23ab8e8628bad2c5db29d87884f3880fb167f" in (autonomy_evidence)
+    assert "3634 unique completion inputs / 3637 occurrences" in autonomy_evidence
+    assert "3591 gate sources" in autonomy_evidence
     assert "three package resources are pinned" in autonomy_evidence
     assert "25 external roles remain unresolved" in autonomy_evidence
     assert "Phase 2" in requirements["U"]["remaining_proof"]
     assert "Checkpoint the completed" not in requirements["U"]["remaining_proof"]
-    assert runtime_status["candidate_commit"] == "77fb4b9a0c03969a9776edf2091dc09d3b67daec"
+    assert runtime_status["candidate_commit"] == "d2364f6b528f2e839fbef8b878552f95c4b92c9c"
     assert runtime_status["autonomy_phase_zero_inventory"]["current_reconciliation_commit"] == (
-        "77fb4b9a0c03969a9776edf2091dc09d3b67daec"
+        "d2364f6b528f2e839fbef8b878552f95c4b92c9c"
     )
     assert runtime_status["candidate_commit_pushed"] is False
     assert runtime_status["candidate_commit_remote_resolved"] is False
