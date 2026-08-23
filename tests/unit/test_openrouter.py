@@ -9898,6 +9898,533 @@ def test_cached_prompt_tokens_may_equal_but_not_exceed_total_prompt_tokens(
             openrouter_module._validate_usage(usage)
 
 
+@pytest.mark.parametrize(("reasoning_tokens", "accepted"), [(0, True), (5, True), (6, False)])
+def test_reasoning_tokens_may_equal_but_not_exceed_total_completion_tokens(
+    reasoning_tokens: int,
+    accepted: bool,
+) -> None:
+    usage = _completion('{"answer":"reasoning accounting"}')["usage"]
+    usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
+
+    if accepted:
+        assert openrouter_module._validate_usage(usage) == usage
+    else:
+        with pytest.raises(OpenRouterSchemaError, match="token details are inconsistent"):
+            openrouter_module._validate_usage(usage)
+
+
+@pytest.mark.parametrize(
+    ("direct_field", "detail_field", "token_field", "invalid_value"),
+    [
+        ("reasoning_tokens", None, None, True),
+        ("reasoning_tokens", None, None, "1"),
+        ("reasoning_tokens", None, None, -1),
+        ("cached_tokens", None, None, True),
+        ("cached_tokens", None, None, "1"),
+        ("cached_tokens", None, None, -1),
+        (None, "completion_tokens_details", "reasoning_tokens", True),
+        (None, "completion_tokens_details", "reasoning_tokens", "1"),
+        (None, "completion_tokens_details", "reasoning_tokens", -1),
+        (None, "prompt_tokens_details", "cached_tokens", True),
+        (None, "prompt_tokens_details", "cached_tokens", "1"),
+        (None, "prompt_tokens_details", "cached_tokens", -1),
+    ],
+)
+def test_usage_rejects_every_invalid_direct_or_nested_token_detail_alias(
+    direct_field: str | None,
+    detail_field: str | None,
+    token_field: str | None,
+    invalid_value: object,
+) -> None:
+    usage = _completion('{"answer":"invalid token detail"}')["usage"]
+    if direct_field is not None:
+        usage[direct_field] = invalid_value
+    else:
+        assert detail_field is not None
+        assert token_field is not None
+        usage[detail_field] = {token_field: invalid_value}
+
+    with pytest.raises(OpenRouterSchemaError, match=r"token detail .* is invalid"):
+        openrouter_module._validate_usage(usage)
+
+
+@pytest.mark.parametrize("field", ["prompt_tokens", "completion_tokens", "total_tokens"])
+@pytest.mark.parametrize("accepted", [True, False])
+def test_primary_token_counts_enforce_bounded_maximum(field: str, accepted: bool) -> None:
+    maximum = openrouter_module._MAX_TOKEN_EVIDENCE
+    value = maximum if accepted else maximum + 1
+    if field == "completion_tokens":
+        usage = {
+            "prompt_tokens": 0,
+            "completion_tokens": value,
+            "total_tokens": value,
+            "cost": 0,
+        }
+    elif field == "total_tokens" and not accepted:
+        usage = {
+            "prompt_tokens": maximum,
+            "completion_tokens": 1,
+            "total_tokens": value,
+            "cost": 0,
+        }
+    else:
+        usage = {
+            "prompt_tokens": value,
+            "completion_tokens": 0,
+            "total_tokens": value,
+            "cost": 0,
+        }
+
+    if accepted:
+        assert openrouter_module._validate_usage(usage) == usage
+    else:
+        with pytest.raises(OpenRouterSchemaError) as raised:
+            openrouter_module._validate_usage(usage)
+        assert str(raised.value) == "model response has invalid usage accounting"
+        assert str(value) not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("direct_field", "detail_field", "token_field"),
+    [
+        ("reasoning_tokens", None, None),
+        ("cached_tokens", None, None),
+        (None, "completion_tokens_details", "reasoning_tokens"),
+        (None, "prompt_tokens_details", "cached_tokens"),
+    ],
+)
+def test_usage_rejects_unbounded_token_detail_aliases_without_echoing_values(
+    direct_field: str | None,
+    detail_field: str | None,
+    token_field: str | None,
+) -> None:
+    usage = _completion('{"answer":"unbounded detail count"}')["usage"]
+    too_large = openrouter_module._MAX_TOKEN_EVIDENCE + 1
+    if direct_field is not None:
+        usage[direct_field] = too_large
+    else:
+        assert detail_field is not None
+        assert token_field is not None
+        usage[detail_field] = {token_field: too_large}
+
+    with pytest.raises(OpenRouterSchemaError) as raised:
+        openrouter_module._validate_usage(usage)
+
+    assert "token detail" in str(raised.value)
+    assert "is invalid" in str(raised.value)
+    assert str(too_large) not in str(raised.value)
+    assert len(str(raised.value)) < 128
+
+
+@pytest.mark.parametrize("token_kind", ["reasoning", "cached"])
+def test_usage_accepts_maximum_bounded_token_detail_count(token_kind: str) -> None:
+    maximum = openrouter_module._MAX_TOKEN_EVIDENCE
+    if token_kind == "reasoning":
+        usage = {
+            "prompt_tokens": 0,
+            "completion_tokens": maximum,
+            "total_tokens": maximum,
+            "cost": 0,
+            "reasoning_tokens": maximum,
+            "completion_tokens_details": {"reasoning_tokens": maximum},
+        }
+    else:
+        usage = {
+            "prompt_tokens": maximum,
+            "completion_tokens": 0,
+            "total_tokens": maximum,
+            "cost": 0,
+            "cached_tokens": maximum,
+            "prompt_tokens_details": {"cached_tokens": maximum},
+        }
+
+    assert openrouter_module._validate_usage(usage) == usage
+
+
+@pytest.mark.parametrize(
+    "detail_field",
+    ["completion_tokens_details", "prompt_tokens_details"],
+)
+@pytest.mark.parametrize("invalid_value", [True, 1, "invalid", []])
+def test_usage_rejects_invalid_token_detail_containers(
+    detail_field: str,
+    invalid_value: object,
+) -> None:
+    usage = _completion('{"answer":"invalid detail container"}')["usage"]
+    usage[detail_field] = invalid_value
+
+    with pytest.raises(OpenRouterSchemaError, match=rf"token detail {detail_field} is invalid"):
+        openrouter_module._validate_usage(usage)
+
+
+@pytest.mark.parametrize(
+    ("direct_field", "detail_field", "token_field", "token_count"),
+    [
+        ("reasoning_tokens", "completion_tokens_details", "reasoning_tokens", 3),
+        ("cached_tokens", "prompt_tokens_details", "cached_tokens", 4),
+    ],
+)
+def test_matching_direct_and_nested_token_detail_aliases_are_accepted(
+    direct_field: str,
+    detail_field: str,
+    token_field: str,
+    token_count: int,
+) -> None:
+    usage = _completion('{"answer":"matching aliases"}')["usage"]
+    usage[direct_field] = token_count
+    usage[detail_field] = {token_field: token_count}
+
+    assert openrouter_module._validate_usage(usage) == usage
+
+
+@pytest.mark.parametrize(
+    ("direct_field", "detail_field", "token_field"),
+    [
+        ("reasoning_tokens", "completion_tokens_details", "reasoning_tokens"),
+        ("cached_tokens", "prompt_tokens_details", "cached_tokens"),
+    ],
+)
+def test_conflicting_direct_and_nested_token_detail_aliases_fail_closed(
+    direct_field: str,
+    detail_field: str,
+    token_field: str,
+) -> None:
+    usage = _completion('{"answer":"conflicting aliases"}')["usage"]
+    usage[direct_field] = 1
+    usage[detail_field] = {token_field: 2}
+
+    with pytest.raises(OpenRouterSchemaError) as raised:
+        openrouter_module._validate_usage(usage)
+
+    assert str(raised.value) == (
+        "model response token details are inconsistent "
+        f"({direct_field}=1, {detail_field}.{token_field}=2)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("direct_field", "detail_field", "token_field"),
+    [
+        ("reasoning_tokens", "completion_tokens_details", "reasoning_tokens"),
+        ("cached_tokens", "prompt_tokens_details", "cached_tokens"),
+    ],
+)
+def test_null_token_detail_aliases_remain_unavailable(
+    direct_field: str,
+    detail_field: str,
+    token_field: str,
+) -> None:
+    usage = _completion('{"answer":"null aliases"}')["usage"]
+    usage[direct_field] = None
+    usage[detail_field] = {token_field: None}
+
+    assert openrouter_module._validate_usage(usage) == usage
+
+
+@pytest.mark.parametrize(
+    "detail_field",
+    ["completion_tokens_details", "prompt_tokens_details"],
+)
+@pytest.mark.parametrize("detail_value", [None, {}])
+def test_null_or_empty_token_detail_containers_remain_unavailable(
+    detail_field: str,
+    detail_value: dict[str, object] | None,
+) -> None:
+    usage = _completion('{"answer":"unavailable details"}')["usage"]
+    usage[detail_field] = detail_value
+
+    assert openrouter_module._validate_usage(usage) == usage
+
+
+@pytest.mark.parametrize(
+    ("direct_field", "detail_field", "token_field", "direct_value", "nested_value"),
+    [
+        ("reasoning_tokens", "completion_tokens_details", "reasoning_tokens", None, 3),
+        ("reasoning_tokens", "completion_tokens_details", "reasoning_tokens", 3, None),
+        ("cached_tokens", "prompt_tokens_details", "cached_tokens", None, 4),
+        ("cached_tokens", "prompt_tokens_details", "cached_tokens", 4, None),
+    ],
+)
+def test_null_token_detail_alias_defers_to_available_alias(
+    direct_field: str,
+    detail_field: str,
+    token_field: str,
+    direct_value: int | None,
+    nested_value: int | None,
+) -> None:
+    usage = _completion('{"answer":"one available alias"}')["usage"]
+    usage[direct_field] = direct_value
+    usage[detail_field] = {token_field: nested_value}
+
+    assert openrouter_module._validate_usage(usage) == usage
+    observed = (
+        openrouter_module._reasoning_tokens(usage)
+        if direct_field == "reasoning_tokens"
+        else openrouter_module._cached_tokens(usage)
+    )
+    assert observed == (nested_value if direct_value is None else direct_value)
+
+
+def test_inconsistent_token_detail_error_includes_all_normalized_counts() -> None:
+    usage = _completion('{"answer":"bounded diagnostic"}')["usage"]
+    usage["completion_tokens_details"] = {"reasoning_tokens": 6}
+    usage["prompt_tokens_details"] = {"cached_tokens": 11}
+
+    with pytest.raises(OpenRouterSchemaError) as raised:
+        openrouter_module._validate_usage(usage)
+
+    assert str(raised.value) == (
+        "model response token details are inconsistent "
+        "(prompt_tokens=10, completion_tokens=5, reasoning_tokens=6, cached_tokens=11)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "accepted"),
+    [
+        (Decimal(0), True),
+        (Decimal("1e-18"), True),
+        (Decimal("999999999999.999999999999999999"), True),
+        (Decimal("0.1000000000000000000"), True),
+        (Decimal("-0.01"), False),
+        (Decimal("NaN"), False),
+        (Decimal("Infinity"), False),
+        (Decimal("1e-19"), False),
+        (Decimal("1000000000000"), False),
+        (True, False),
+        ("0.01", False),
+    ],
+)
+def test_reported_cost_parser_matches_durable_decimal_domain(
+    value: object,
+    accepted: bool,
+) -> None:
+    parsed = openrouter_module._optional_cost_decimal(value)
+
+    if accepted:
+        assert parsed == value
+    else:
+        assert parsed is None
+
+
+@pytest.mark.asyncio
+async def test_invalid_token_details_preserve_valid_reported_cost_without_credit(
+    config_factory,
+) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        payload = _completion('{"answer":"invalid token accounting"}', cost=0.0125)
+        payload["usage"]["completion_tokens_details"] = {"reasoning_tokens": 6}
+        return httpx.Response(
+            200,
+            headers={"X-Generation-Id": "generation-test"},
+            json=payload,
+        )
+
+    client, http_client, usage = _client(config_factory(), handler)
+    try:
+        with pytest.raises(OpenRouterSchemaError, match="reasoning_tokens=6"):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    record = usage.records[0]
+    assert record.status != "success"
+    assert record.validation_status is ModelRequestValidationStatus.INVALID_RESPONSE
+    assert record.reported_cost_usd_exact == "0.0125"
+    assert Decimal(record.accounted_cost_usd_exact) == Decimal("0.0125")
+    assert client.budget.spent_usd == pytest.approx(0.0125)
+
+
+@pytest.mark.asyncio
+async def test_invalid_token_details_reconcile_valid_cost_in_persistent_ledger(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    exact_cost = Decimal("0.0125")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        payload = _completion(
+            '{"answer":"invalid token accounting"}',
+            cost=float(exact_cost),
+            provider="Approved Provider",
+        )
+        payload["usage"]["prompt_tokens_details"] = {"cached_tokens": 11}
+        return httpx.Response(
+            200,
+            headers={"X-Generation-Id": "generation-test"},
+            json=payload,
+        )
+
+    config = config_factory(execution={"max_json_repair_attempts": 0})
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "invalid-token-details-cost-ledger.json",
+        cap_usd=Decimal("20"),
+    )
+    budget = BudgetManager(
+        total_usd=20,
+        max_output_tokens=config.execution.max_output_tokens_per_request,
+        conservative_usd_per_million_tokens=10,
+        max_requests_per_agent=2,
+        atomic_ledger=ledger,
+        require_endpoint_cost_bound=True,
+    )
+    endpoint_snapshot = _endpoint_snapshot(
+        pricing={
+            "prompt": "0.000001",
+            "completion": "0.001",
+            "request": "0",
+        }
+    )
+    client, usage, http_client = await _paid_control_client_with_mock_transport(
+        config,
+        budget=budget,
+        handler=handler,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(_qualification_routing_for_endpoint_snapshot(endpoint_snapshot),),
+    )
+    try:
+        client.register_certification_endpoint_snapshot(evidence=endpoint_snapshot)
+        with pytest.raises(OpenRouterSchemaError, match="cached_tokens=11"):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="synthetic local input",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    snapshot = ledger.snapshot()
+    assert snapshot.active_reserved_usd == 0
+    assert snapshot.spent_usd == exact_cost
+    assert len(snapshot.entries) == 1
+    entry = snapshot.entries[0]
+    assert entry.status.value == "reconciled"
+    assert entry.actual_cost_usd == exact_cost
+    assert entry.accounted_cost_usd == exact_cost
+    assert usage.records[0].reported_cost_usd_exact == "0.0125"
+    assert Decimal(usage.records[0].accounted_cost_usd_exact) == exact_cost
+    assert not is_creditable_usage_record(usage.records[0])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cost_kind", "malformed_cost", "raw_cost_literal"),
+    [
+        ("absent", None, None),
+        ("invalid_type", "not-a-cost", None),
+        ("unsupported_magnitude", None, "1000000000000"),
+        ("unsupported_precision", None, "0.1234567890123456789"),
+    ],
+)
+async def test_invalid_or_absent_cost_remains_uncertain_in_persistent_ledger(
+    config_factory,
+    tmp_path: Path,
+    cost_kind: str,
+    malformed_cost: str | None,
+    raw_cost_literal: str | None,
+) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        payload = _completion(
+            '{"answer":"untrusted cost accounting"}',
+            cost=None,
+            provider="Approved Provider",
+        )
+        if malformed_cost is not None:
+            payload["usage"]["cost"] = malformed_cost
+        elif raw_cost_literal is not None:
+            payload["usage"]["cost"] = 0
+        payload["usage"]["completion_tokens_details"] = {"reasoning_tokens": 6}
+        if raw_cost_literal is not None:
+            serialized = json.dumps(payload, sort_keys=True).replace(
+                '"cost": 0',
+                f'"cost": {raw_cost_literal}',
+                1,
+            )
+            return httpx.Response(
+                200,
+                headers={"X-Generation-Id": "generation-test"},
+                content=serialized.encode(),
+            )
+        return httpx.Response(
+            200,
+            headers={"X-Generation-Id": "generation-test"},
+            json=payload,
+        )
+
+    config = config_factory(execution={"max_json_repair_attempts": 0})
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / f"{cost_kind}-cost-ledger.json",
+        cap_usd=Decimal("20"),
+    )
+    budget = BudgetManager(
+        total_usd=20,
+        max_output_tokens=config.execution.max_output_tokens_per_request,
+        conservative_usd_per_million_tokens=10,
+        max_requests_per_agent=2,
+        atomic_ledger=ledger,
+        require_endpoint_cost_bound=True,
+    )
+    endpoint_snapshot = _endpoint_snapshot(
+        pricing={
+            "prompt": "0.000001",
+            "completion": "0.001",
+            "request": "0",
+        }
+    )
+    client, usage, http_client = await _paid_control_client_with_mock_transport(
+        config,
+        budget=budget,
+        handler=handler,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(_qualification_routing_for_endpoint_snapshot(endpoint_snapshot),),
+    )
+    try:
+        client.register_certification_endpoint_snapshot(evidence=endpoint_snapshot)
+        with pytest.raises(OpenRouterSchemaError, match="invalid cost accounting"):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="synthetic local input",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    snapshot = ledger.snapshot()
+    assert snapshot.active_reserved_usd == 0
+    assert len(snapshot.entries) == 1
+    entry = snapshot.entries[0]
+    assert entry.status.value == "uncertain_accounted"
+    assert entry.actual_cost_usd is None
+    assert entry.accounted_cost_usd == entry.reserved_usd
+    assert snapshot.spent_usd == entry.reserved_usd
+    record = usage.records[0]
+    assert record.status != "success"
+    assert record.reported_cost_usd is None
+    assert Decimal(record.accounted_cost_usd_exact) == entry.reserved_usd
+    assert not is_creditable_usage_record(record)
+
+
 def test_token_route_intersection_uses_exact_endpoint_minima_and_snapshot_provenance(
     config_factory,
 ) -> None:

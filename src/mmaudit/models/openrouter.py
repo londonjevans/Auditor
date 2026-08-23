@@ -391,6 +391,8 @@ _BASE_ENDPOINT_REQUEST_PARAMETERS = frozenset({"max_tokens", "temperature"})
 _ROUTE_SENSITIVE_REQUEST_PARAMETERS = frozenset({"reasoning", "response_format"})
 _LOCAL_MOCK_PROVIDER_ENDPOINT = "mmaudit-local-mock"
 _MAX_TOKEN_EVIDENCE = 2**31 - 1
+_REPORTED_COST_USD_QUANTUM = Decimal("1e-18")
+_REPORTED_COST_USD_MAGNITUDE_LIMIT = Decimal("1e12")
 _CHAT_TEMPLATE_FRAMING_RESERVE_TOKENS = 256
 _CONTEXT_PREVIEW_ENVELOPE_RESERVE_TOKENS = 16_384
 
@@ -10951,7 +10953,11 @@ class OpenRouterClient:
             raw_content = _response_content_if_string(payload)
             if raw_content is not None:
                 response_hash = hashlib.sha256(raw_content.encode()).hexdigest()
-            initial_usage = _validate_usage(payload.get("usage"))
+            raw_usage = payload.get("usage")
+            if isinstance(raw_usage, dict):
+                initial_cost = _optional_cost_decimal(raw_usage.get("cost"))
+                active_actual_cost = initial_cost
+            initial_usage = _validate_usage(raw_usage)
             initial_cost = _optional_cost_decimal(initial_usage.get("cost"))
             assert initial_cost is not None
             active_actual_cost = initial_cost
@@ -14278,31 +14284,43 @@ def _validate_usage(value: Any) -> dict[str, Any]:
     fields: dict[str, int] = {}
     for field in ("prompt_tokens", "completion_tokens", "total_tokens"):
         item = value.get(field)
-        if not isinstance(item, int) or isinstance(item, bool) or item < 0:
+        if (
+            not isinstance(item, int)
+            or isinstance(item, bool)
+            or item < 0
+            or item > _MAX_TOKEN_EVIDENCE
+        ):
             raise OpenRouterSchemaError("model response has invalid usage accounting")
         fields[field] = item
     if fields["total_tokens"] != fields["prompt_tokens"] + fields["completion_tokens"]:
         raise OpenRouterSchemaError("model response usage totals are inconsistent")
     if _optional_cost_decimal(value.get("cost")) is None:
         raise OpenRouterSchemaError("model response has invalid cost accounting")
-    for detail_field, token_field in (
-        ("completion_tokens_details", "reasoning_tokens"),
-        ("prompt_tokens_details", "cached_tokens"),
+    reasoning_tokens = _validate_token_detail_aliases(
+        value,
+        direct_field="reasoning_tokens",
+        detail_field="completion_tokens_details",
+        token_field="reasoning_tokens",
+    )
+    cached_tokens = _validate_token_detail_aliases(
+        value,
+        direct_field="cached_tokens",
+        detail_field="prompt_tokens_details",
+        token_field="cached_tokens",
+    )
+    normalized_reasoning_tokens = reasoning_tokens or 0
+    normalized_cached_tokens = cached_tokens or 0
+    if (
+        normalized_reasoning_tokens > fields["completion_tokens"]
+        or normalized_cached_tokens > fields["prompt_tokens"]
     ):
-        details = value.get(detail_field)
-        if details is None:
-            continue
-        if not isinstance(details, dict):
-            raise OpenRouterSchemaError("model response token details are invalid")
-        token_count = details.get(token_field)
-        if token_count is not None and (
-            not isinstance(token_count, int) or isinstance(token_count, bool) or token_count < 0
-        ):
-            raise OpenRouterSchemaError("model response token details are invalid")
-    reasoning_tokens = _reasoning_tokens(value)
-    cached_tokens = _cached_tokens(value)
-    if reasoning_tokens > fields["completion_tokens"] or cached_tokens > fields["prompt_tokens"]:
-        raise OpenRouterSchemaError("model response token details are inconsistent")
+        raise OpenRouterSchemaError(
+            "model response token details are inconsistent "
+            f"(prompt_tokens={fields['prompt_tokens']}, "
+            f"completion_tokens={fields['completion_tokens']}, "
+            f"reasoning_tokens={normalized_reasoning_tokens}, "
+            f"cached_tokens={normalized_cached_tokens})"
+        )
     return value
 
 
@@ -14579,9 +14597,21 @@ def _optional_cost_decimal(value: Any) -> Decimal | None:
         normalized = value if isinstance(value, Decimal) else Decimal(str(value))
     except (ArithmeticError, ValueError):
         return None
-    if normalized.is_finite() and normalized >= 0:
-        return normalized
-    return None
+    if not normalized.is_finite() or normalized < 0:
+        return None
+    if normalized == 0:
+        return Decimal(0)
+    if normalized >= _REPORTED_COST_USD_MAGNITUDE_LIMIT:
+        return None
+    try:
+        with localcontext() as context:
+            context.prec = 64
+            quantized = normalized.quantize(_REPORTED_COST_USD_QUANTUM)
+    except InvalidOperation:
+        return None
+    if normalized != quantized:
+        return None
+    return normalized
 
 
 def _nonnegative_int(value: Any) -> int:
@@ -14590,32 +14620,77 @@ def _nonnegative_int(value: Any) -> int:
     return 0
 
 
+def _validate_token_detail_aliases(
+    usage: Mapping[str, Any],
+    *,
+    direct_field: str,
+    detail_field: str,
+    token_field: str,
+) -> int | None:
+    """Resolve provider aliases; explicit null means the optional count is unavailable."""
+
+    direct_value = _validate_optional_token_detail_count(
+        usage.get(direct_field),
+        field=direct_field,
+    )
+
+    nested_value: int | None = None
+    details = usage.get(detail_field)
+    if details is not None:
+        if not isinstance(details, dict):
+            raise OpenRouterSchemaError(f"model response token detail {detail_field} is invalid")
+        nested_value = _validate_optional_token_detail_count(
+            details.get(token_field),
+            field=f"{detail_field}.{token_field}",
+        )
+
+    if direct_value is not None and nested_value is not None and direct_value != nested_value:
+        raise OpenRouterSchemaError(
+            "model response token details are inconsistent "
+            f"({direct_field}={direct_value}, "
+            f"{detail_field}.{token_field}={nested_value})"
+        )
+    if direct_value is not None:
+        return direct_value
+    return nested_value
+
+
+def _validate_optional_token_detail_count(value: Any, *, field: str) -> int | None:
+    if value is None:
+        return None
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < 0
+        or value > _MAX_TOKEN_EVIDENCE
+    ):
+        raise OpenRouterSchemaError(f"model response token detail {field} is invalid")
+    return value
+
+
 def _reasoning_tokens(usage: Mapping[str, Any]) -> int:
     return _observed_reasoning_tokens(usage) or 0
 
 
 def _observed_reasoning_tokens(usage: Mapping[str, Any]) -> int | None:
-    direct = usage.get("reasoning_tokens")
-    if isinstance(direct, int) and not isinstance(direct, bool) and direct >= 0:
-        return direct
-    details = usage.get("completion_tokens_details")
-    if isinstance(details, dict):
-        nested = details.get("reasoning_tokens")
-        if isinstance(nested, int) and not isinstance(nested, bool) and nested >= 0:
-            return nested
-    return None
+    return _validate_token_detail_aliases(
+        usage,
+        direct_field="reasoning_tokens",
+        detail_field="completion_tokens_details",
+        token_field="reasoning_tokens",
+    )
 
 
 def _cached_tokens(usage: Mapping[str, Any]) -> int:
-    direct = usage.get("cached_tokens")
-    if isinstance(direct, int) and not isinstance(direct, bool) and direct >= 0:
-        return direct
-    details = usage.get("prompt_tokens_details")
-    if isinstance(details, dict):
-        nested = details.get("cached_tokens")
-        if isinstance(nested, int) and not isinstance(nested, bool) and nested >= 0:
-            return nested
-    return 0
+    return (
+        _validate_token_detail_aliases(
+            usage,
+            direct_field="cached_tokens",
+            detail_field="prompt_tokens_details",
+            token_field="cached_tokens",
+        )
+        or 0
+    )
 
 
 def _accepted_response_models(
