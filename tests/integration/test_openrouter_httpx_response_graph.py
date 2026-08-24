@@ -48,6 +48,7 @@ async def test_pinned_httpx_response_graph_is_stable_inflight_and_idle_after_exh
             writer.write(
                 b"HTTP/1.1 200 OK\r\n"
                 b"Content-Type: application/json\r\n"
+                b"Set-Cookie: route=synthetic; Path=/; HttpOnly\r\n"
                 b"Transfer-Encoding: chunked\r\n"
                 b"Connection: close\r\n\r\n"
                 b"5\r\nhello\r\n"
@@ -117,6 +118,15 @@ async def test_pinned_httpx_response_graph_is_stable_inflight_and_idle_after_exh
                         assert object.__getattribute__(request, "_content") == b""
                         assert connections is pool_values["_connections"]
                         assert requests is pool_values["_requests"]
+                        cookie_jar = object.__getattribute__(
+                            object.__getattribute__(client, "_cookies"),
+                            "jar",
+                        )
+                        cookie_store = object.__getattribute__(cookie_jar, "_cookies")
+                        cookie_policy = object.__getattribute__(cookie_jar, "_policy")
+                        assert type(cookie_store) is dict and cookie_store
+                        assert type(vars(cookie_jar).get("_now")) is int
+                        assert type(vars(cookie_policy).get("_now")) is int
 
                         if exercise_negative_projections:
                             response_values = vars(response)
@@ -196,6 +206,17 @@ async def test_pinned_httpx_response_graph_is_stable_inflight_and_idle_after_exh
                         )
                         assert completed is anchor
                         assert content == b"hello world"
+                        cookie_store.clear()
+                        if hasattr(cookie_jar, "_now"):
+                            object.__delattr__(cookie_jar, "_now")
+                        if hasattr(cookie_policy, "_now"):
+                            object.__delattr__(cookie_policy, "_now")
+                        assert frozenset(vars(cookie_jar)) == {
+                            "_cookies",
+                            "_cookies_lock",
+                            "_policy",
+                        }
+                        assert "_now" not in vars(cookie_policy)
 
                 finally:
                     exchange.release_second_chunk.set()
@@ -208,6 +229,8 @@ async def test_pinned_httpx_response_graph_is_stable_inflight_and_idle_after_exh
             second_request = await run_exchange(exercise_negative_projections=False)
             assert first_request.startswith(b"GET /generation?id=synthetic HTTP/1.1\r\n")
             assert second_request.startswith(b"GET /generation?id=synthetic HTTP/1.1\r\n")
+            assert b"\r\nCookie:" not in first_request
+            assert b"\r\nCookie:" not in second_request
     finally:
         server.close()
         await server.wait_closed()

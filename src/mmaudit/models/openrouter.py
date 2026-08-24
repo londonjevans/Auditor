@@ -21,10 +21,11 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation, localcontext
 from functools import lru_cache
+from http.cookiejar import Cookie, CookieJar, DefaultCookiePolicy
 from pathlib import Path
 from threading import Lock, get_ident
 from types import CodeType, FunctionType, ModuleType
-from typing import TYPE_CHECKING, Any, Literal, Protocol, Self, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Literal, Never, Protocol, Self, TypeVar, cast
 from urllib.parse import quote
 from weakref import WeakKeyDictionary
 
@@ -4615,6 +4616,8 @@ def _build_provider_transport_attempt_authority(
 ]:
     """Keep REAL POST/GET transport receipts behind captured live-I/O frames."""
 
+    import http.cookiejar as http_cookiejar_module
+
     import h11 as h11_module
     import httpcore._async.connection as httpcore_async_connection_module
     import httpcore._async.connection_pool as httpcore_async_connection_pool_module
@@ -4698,15 +4701,23 @@ def _build_provider_transport_attempt_authority(
     trusted_reject_nonfinite = _reject_nonfinite_json_constant
     trusted_unique_object = _unique_json_object
     trusted_finite_numbers = _require_finite_json_numbers
+    trusted_object_delattr = object.__delattr__
     trusted_object_new = object.__new__
     trusted_object_getattribute = object.__getattribute__
     trusted_async_client_type = httpx.AsyncClient
     trusted_async_client_stream = httpx.AsyncClient.stream
     trusted_async_client_build_request = httpx.AsyncClient.build_request
+    trusted_async_http_transport_type = httpx.AsyncHTTPTransport
     trusted_response_type = httpx.Response
     trusted_response_aiter_bytes = httpx.Response.aiter_bytes
     trusted_request_type = httpx.Request
     trusted_headers_type = httpx.Headers
+    trusted_cookies_type = httpx.Cookies
+    trusted_cookies_init = httpx.Cookies.__init__
+    trusted_cookies_extract = httpx.Cookies.extract_cookies
+    trusted_cookie_type = Cookie
+    trusted_cookie_jar_type = CookieJar
+    trusted_cookie_policy_type = DefaultCookiePolicy
     trusted_timeout_type = httpx.Timeout
     trusted_url_type = httpx.URL
     trusted_query_params_type = httpx.QueryParams
@@ -4746,6 +4757,75 @@ def _build_provider_transport_attempt_authority(
     trusted_has_usage_origin = _has_authrunner_owned_real_usage_origin
     trusted_inflight_response_graph = _provider_httpx_inflight_response_graph
     trusted_completed_response_graph = _provider_httpx_completed_response_graph
+    trusted_dict_clear = dict.clear
+    trusted_dict_items = dict.items
+    trusted_cookie_header_name_hex = b"cookie".hex()
+    trusted_supported_receipt_python_runtimes = frozenset({("cpython", 3, 12), ("cpython", 3, 13)})
+    try:
+        trusted_receipt_python_runtime = (
+            trusted_sys.implementation.name,
+            trusted_sys.version_info.major,
+            trusted_sys.version_info.minor,
+        )
+    except (AttributeError, TypeError):
+        trusted_receipt_python_runtime = ("UNSUPPORTED", 0, 0)
+    trusted_receipt_python_runtime_supported = (
+        trusted_receipt_python_runtime in trusted_supported_receipt_python_runtimes
+    )
+    trusted_cookie_jar_attribute_names: frozenset[str] = frozenset()
+    trusted_cookie_lock_type: type[object] | None = None
+    trusted_cookie_policy_template: object | None = None
+    trusted_cookie_policy_attribute_names: frozenset[str] = frozenset()
+    trusted_receipt_cookie_template_supported = False
+    if trusted_receipt_python_runtime_supported:
+        try:
+            candidate_cookie_template = trusted_object_new(trusted_cookies_type)
+            trusted_cookies_init(candidate_cookie_template)
+            candidate_cookie_jar = trusted_object_getattribute(candidate_cookie_template, "jar")
+            if type(candidate_cookie_jar) is not trusted_cookie_jar_type:
+                raise TypeError("HTTPX constructed an unexpected cookie jar type")
+            candidate_cookie_jar_values = trusted_object_getattribute(
+                candidate_cookie_jar,
+                "__dict__",
+            )
+            candidate_cookie_jar_attribute_names = frozenset(candidate_cookie_jar_values)
+            if candidate_cookie_jar_attribute_names != {
+                "_cookies",
+                "_cookies_lock",
+                "_policy",
+            }:
+                raise TypeError("HTTPX constructed an unexpected cookie jar shape")
+            candidate_cookie_lock_type = type(candidate_cookie_jar_values["_cookies_lock"])
+            candidate_cookie_policy = candidate_cookie_jar_values["_policy"]
+            if type(candidate_cookie_policy) is not trusted_cookie_policy_type:
+                raise TypeError("HTTPX constructed an unexpected cookie policy type")
+            candidate_cookie_policy_attribute_names = frozenset(
+                trusted_object_getattribute(candidate_cookie_policy, "__dict__")
+            )
+            if candidate_cookie_policy_attribute_names != {
+                "_allowed_domains",
+                "_blocked_domains",
+                "hide_cookie2",
+                "netscape",
+                "rfc2109_as_netscape",
+                "rfc2965",
+                "secure_protocols",
+                "strict_domain",
+                "strict_ns_domain",
+                "strict_ns_set_initial_dollar",
+                "strict_ns_set_path",
+                "strict_ns_unverifiable",
+                "strict_rfc2965_unverifiable",
+            }:
+                raise TypeError("HTTPX constructed an unexpected cookie policy shape")
+        except Exception:
+            trusted_receipt_cookie_template_supported = False
+        else:
+            trusted_cookie_jar_attribute_names = candidate_cookie_jar_attribute_names
+            trusted_cookie_lock_type = candidate_cookie_lock_type
+            trusted_cookie_policy_template = candidate_cookie_policy
+            trusted_cookie_policy_attribute_names = candidate_cookie_policy_attribute_names
+            trusted_receipt_cookie_template_supported = True
 
     def canonical_sha256(value: object) -> str:
         return trusted_sha256(
@@ -4758,6 +4838,341 @@ def _build_provider_transport_attempt_authority(
                 default=trusted_debug_json_default,
             ).encode("utf-8")
         ).hexdigest()
+
+    def bounded_owner_type_name(owner: object) -> str:
+        """Render only bounded code-owned type metadata for receipt diagnostics."""
+
+        try:
+            owner_type = type(owner)
+            module_name = trusted_object_getattribute(owner_type, "__module__")
+            qualified_name = trusted_object_getattribute(owner_type, "__qualname__")
+        except (AttributeError, TypeError):
+            return "UNREPORTABLE"
+        rendered = f"{module_name}.{qualified_name}"
+        allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._<>"
+        if (
+            type(module_name) is not str
+            or type(qualified_name) is not str
+            or not 1 <= len(rendered) <= 160
+            or any(character not in allowed for character in rendered)
+        ):
+            return "UNREPORTABLE"
+        return rendered
+
+    def receipt_seal_failure(*, stage: str, field: str, owner: object) -> Never:
+        raise trusted_privacy_error_type(
+            "provider transport receipt cannot seal owned request state "
+            f"(stage={stage}; field={field}; owner_type={bounded_owner_type_name(owner)})"
+        )
+
+    def seal_attribute(owner: object, attribute: str, *, field: str) -> object:
+        try:
+            return trusted_object_getattribute(owner, attribute)
+        except (AttributeError, TypeError):
+            receipt_seal_failure(stage="LOOKUP", field=field, owner=owner)
+
+    def cookie_policy_projection(policy: object) -> str:
+        """Hash an exact primitive DefaultCookiePolicy state, excluding its transient clock."""
+
+        if type(policy) is not trusted_cookie_policy_type:
+            raise TypeError("cookie policy has the wrong exact type")
+        policy_values = trusted_object_getattribute(policy, "__dict__")
+        observed_names = frozenset(policy_values)
+        if observed_names not in {
+            trusted_cookie_policy_attribute_names,
+            trusted_cookie_policy_attribute_names | {"_now"},
+        }:
+            raise TypeError("cookie policy shape is invalid")
+        if "_now" in policy_values and type(policy_values["_now"]) is not int:
+            raise TypeError("cookie policy clock is invalid")
+        secure_protocols = policy_values.get("secure_protocols")
+        blocked_domains = policy_values.get("_blocked_domains")
+        allowed_domains = policy_values.get("_allowed_domains")
+        if (
+            type(policy_values.get("netscape")) is not bool
+            or type(policy_values.get("rfc2965")) is not bool
+            or type(policy_values.get("rfc2109_as_netscape")) not in {bool, type(None)}
+            or type(policy_values.get("hide_cookie2")) is not bool
+            or type(policy_values.get("strict_domain")) is not bool
+            or type(policy_values.get("strict_rfc2965_unverifiable")) is not bool
+            or type(policy_values.get("strict_ns_unverifiable")) is not bool
+            or type(policy_values.get("strict_ns_domain")) is not int
+            or type(policy_values.get("strict_ns_set_initial_dollar")) is not bool
+            or type(policy_values.get("strict_ns_set_path")) is not bool
+            or type(secure_protocols) is not tuple
+            or any(type(protocol) is not str for protocol in secure_protocols)
+            or type(blocked_domains) not in {tuple, type(None)}
+            or (
+                type(blocked_domains) is tuple
+                and any(type(domain) is not str for domain in blocked_domains)
+            )
+            or type(allowed_domains) not in {tuple, type(None)}
+            or (
+                type(allowed_domains) is tuple
+                and any(type(domain) is not str for domain in allowed_domains)
+            )
+        ):
+            raise TypeError("cookie policy material is invalid")
+        primitive = (
+            policy_values["netscape"],
+            policy_values["rfc2965"],
+            policy_values["rfc2109_as_netscape"],
+            policy_values["hide_cookie2"],
+            policy_values["strict_domain"],
+            policy_values["strict_rfc2965_unverifiable"],
+            policy_values["strict_ns_unverifiable"],
+            policy_values["strict_ns_domain"],
+            policy_values["strict_ns_set_initial_dollar"],
+            policy_values["strict_ns_set_path"],
+            secure_protocols,
+            blocked_domains,
+            allowed_domains,
+        )
+        return canonical_sha256(primitive)
+
+    trusted_cookie_policy_sha256: str | None = None
+    trusted_receipt_cookie_runtime_shape_supported = False
+    if trusted_receipt_cookie_template_supported:
+        try:
+            trusted_cookie_policy_sha256 = cookie_policy_projection(trusted_cookie_policy_template)
+        except Exception:
+            trusted_cookie_jar_attribute_names = frozenset()
+            trusted_cookie_lock_type = None
+            trusted_cookie_policy_template = None
+            trusted_cookie_policy_attribute_names = frozenset()
+            trusted_cookie_policy_sha256 = None
+        else:
+            trusted_receipt_cookie_runtime_shape_supported = True
+
+    def cookie_store_projection(store: object) -> tuple[tuple[str, str, str, str], ...]:
+        """Project exact cookie material for equality without retaining or reporting values."""
+
+        if type(store) is not dict:
+            raise TypeError("cookie store has the wrong exact type")
+        projected: list[tuple[str, str, str, str]] = []
+        for domain, paths in trusted_dict_items(store):
+            if type(domain) is not str or type(paths) is not dict:
+                raise TypeError("cookie domain state is invalid")
+            for path, names in trusted_dict_items(paths):
+                if type(path) is not str or type(names) is not dict:
+                    raise TypeError("cookie path state is invalid")
+                for name, cookie in trusted_dict_items(names):
+                    if type(name) is not str or type(cookie) is not trusted_cookie_type:
+                        raise TypeError("cookie entry state is invalid")
+                    cookie_values = trusted_object_getattribute(cookie, "__dict__")
+                    expected_names = {
+                        "_rest",
+                        "comment",
+                        "comment_url",
+                        "discard",
+                        "domain",
+                        "domain_initial_dot",
+                        "domain_specified",
+                        "expires",
+                        "name",
+                        "path",
+                        "path_specified",
+                        "port",
+                        "port_specified",
+                        "rfc2109",
+                        "secure",
+                        "value",
+                        "version",
+                    }
+                    rest = cookie_values.get("_rest")
+                    if (
+                        frozenset(cookie_values) != expected_names
+                        or type(cookie_values.get("version")) is not int
+                        or type(cookie_values.get("name")) is not str
+                        or type(cookie_values.get("value")) is not str
+                        or type(cookie_values.get("port")) not in {str, type(None)}
+                        or type(cookie_values.get("port_specified")) is not bool
+                        or type(cookie_values.get("domain")) is not str
+                        or type(cookie_values.get("domain_specified")) is not bool
+                        or type(cookie_values.get("domain_initial_dot")) is not bool
+                        or type(cookie_values.get("path")) is not str
+                        or type(cookie_values.get("path_specified")) is not bool
+                        or type(cookie_values.get("secure")) is not bool
+                        or type(cookie_values.get("expires")) not in {int, type(None)}
+                        or type(cookie_values.get("discard")) is not bool
+                        or type(cookie_values.get("comment")) not in {str, type(None)}
+                        or type(cookie_values.get("comment_url")) not in {str, type(None)}
+                        or type(cookie_values.get("rfc2109")) is not bool
+                        or type(rest) is not dict
+                        or any(
+                            type(rest_name) is not str or type(rest_value) not in {str, type(None)}
+                            for rest_name, rest_value in trusted_dict_items(rest)
+                        )
+                        or cookie_values["domain"] != domain
+                        or cookie_values["path"] != path
+                        or cookie_values["name"] != name
+                    ):
+                        raise TypeError("cookie entry material is invalid")
+                    primitive = (
+                        cookie_values["version"],
+                        cookie_values["name"],
+                        cookie_values["value"],
+                        cookie_values["port"],
+                        cookie_values["port_specified"],
+                        cookie_values["domain"],
+                        cookie_values["domain_specified"],
+                        cookie_values["domain_initial_dot"],
+                        cookie_values["path"],
+                        cookie_values["path_specified"],
+                        cookie_values["secure"],
+                        cookie_values["expires"],
+                        cookie_values["discard"],
+                        cookie_values["comment"],
+                        cookie_values["comment_url"],
+                        cookie_values["rfc2109"],
+                        tuple(sorted(trusted_dict_items(rest))),
+                    )
+                    projected.append((domain, path, name, canonical_sha256(primitive)))
+        return tuple(sorted(projected))
+
+    def normalize_cookie_jar_clock(jar: object, *, stage: str) -> None:
+        """Remove HTTPX's response-derived CookieJar clock without accepting other drift."""
+
+        jar_values = trusted_object_getattribute(jar, "__dict__")
+        observed_names = frozenset(jar_values)
+        if observed_names not in {
+            trusted_cookie_jar_attribute_names,
+            trusted_cookie_jar_attribute_names | {"_now"},
+        }:
+            receipt_seal_failure(stage=stage, field="COOKIE_JAR_SHAPE", owner=jar)
+        if "_now" in jar_values:
+            if type(jar_values["_now"]) is not int:
+                receipt_seal_failure(stage=stage, field="COOKIE_JAR_CLOCK", owner=jar)
+            trusted_object_delattr(jar, "_now")
+        if (
+            frozenset(trusted_object_getattribute(jar, "__dict__"))
+            != trusted_cookie_jar_attribute_names
+        ):
+            receipt_seal_failure(stage=stage, field="COOKIE_JAR_NORMALIZE", owner=jar)
+
+    def normalize_cookie_policy_clock(policy: object, *, stage: str) -> None:
+        """Remove the response-derived policy clock while preserving exact default policy state."""
+
+        try:
+            current_projection = cookie_policy_projection(policy)
+        except (AttributeError, TypeError, ValueError):
+            receipt_seal_failure(stage=stage, field="COOKIE_POLICY_SHAPE", owner=policy)
+        if current_projection != trusted_cookie_policy_sha256:
+            receipt_seal_failure(stage=stage, field="COOKIE_POLICY_STATE", owner=policy)
+        policy_values = trusted_object_getattribute(policy, "__dict__")
+        if "_now" in policy_values:
+            trusted_object_delattr(policy, "_now")
+        if (
+            frozenset(trusted_object_getattribute(policy, "__dict__"))
+            != trusted_cookie_policy_attribute_names
+            or cookie_policy_projection(policy) != trusted_cookie_policy_sha256
+        ):
+            receipt_seal_failure(stage=stage, field="COOKIE_POLICY_NORMALIZE", owner=policy)
+
+    def neutralize_authenticated_response_cookies(
+        client: object,
+        response: object,
+    ) -> None:
+        """Discard only cookies proven to have arrived on this exact receipted response."""
+
+        with lock:
+            receipt_seal = receipt_seals.get(client)
+        if receipt_seal is None:
+            receipt_seal_failure(stage="RESPONSE_COOKIE", field="SEAL", owner=client)
+        try:
+            current_http_client = trusted_object_getattribute(client, "_client")
+            current_cookies = trusted_object_getattribute(current_http_client, "_cookies")
+            current_jar = trusted_object_getattribute(current_cookies, "jar")
+            current_store = trusted_object_getattribute(current_jar, "_cookies")
+            current_lock = trusted_object_getattribute(current_jar, "_cookies_lock")
+            current_policy = trusted_object_getattribute(current_jar, "_policy")
+        except (AttributeError, TypeError):
+            receipt_seal_failure(stage="RESPONSE_COOKIE", field="OWNED_STORE", owner=client)
+        if (
+            receipt_seal.get("http_client_cookies") is not current_cookies
+            or receipt_seal.get("http_client_cookie_jar") is not current_jar
+            or receipt_seal.get("http_client_cookie_store") is not current_store
+            or type(current_cookies) is not trusted_cookies_type
+            or type(current_jar) is not trusted_cookie_jar_type
+            or type(current_store) is not dict
+        ):
+            receipt_seal_failure(
+                stage="RESPONSE_COOKIE",
+                field="OWNED_STORE_IDENTITY",
+                owner=current_store,
+            )
+        if type(response) is not trusted_response_type:
+            receipt_seal_failure(stage="RESPONSE_COOKIE", field="RESPONSE", owner=response)
+        primary_failure: tuple[str, object] | None = None
+        try:
+            cookie_callable_surface_is_current = (
+                trusted_httpx.Cookies is trusted_cookies_type
+                and trusted_httpx.Cookies.__init__ is trusted_cookies_init
+                and trusted_httpx.Cookies.extract_cookies is trusted_cookies_extract
+                and all(
+                    module_dispatch_surface_is_current(module, expected_surface)
+                    for module, expected_surface in trusted_library_surfaces
+                )
+                and all(
+                    class_dispatch_surface_is_current(subject_type, expected_surface)
+                    for subject_type, expected_surface in trusted_httpx_descriptor_surfaces
+                )
+            )
+        except (AttributeError, TypeError, ValueError):
+            cookie_callable_surface_is_current = False
+        if not cookie_callable_surface_is_current:
+            primary_failure = ("COOKIE_CALLABLE_SURFACE", current_policy)
+        try:
+            current_policy_projection = cookie_policy_projection(current_policy)
+        except (AttributeError, TypeError, ValueError):
+            current_policy_projection = None
+        if primary_failure is None and (
+            receipt_seal.get("http_client_cookie_lock") is not current_lock
+            or type(current_lock) is not trusted_cookie_lock_type
+            or receipt_seal.get("http_client_cookie_policy") is not current_policy
+            or type(current_policy) is not trusted_cookie_policy_type
+            or current_policy_projection != trusted_cookie_policy_sha256
+        ):
+            primary_failure = ("OWNED_COOKIE_GRAPH", current_jar)
+        if primary_failure is None:
+            expected_cookies = trusted_object_new(trusted_cookies_type)
+            try:
+                trusted_cookies_init(expected_cookies)
+                trusted_cookies_extract(expected_cookies, response)
+                expected_jar = trusted_object_getattribute(expected_cookies, "jar")
+                expected_store = trusted_object_getattribute(expected_jar, "_cookies")
+                current_projection = cookie_store_projection(current_store)
+                expected_projection = cookie_store_projection(expected_store)
+            except (AttributeError, TypeError, ValueError):
+                primary_failure = ("RESPONSE_EXTRACTION", response)
+            else:
+                if current_projection != expected_projection:
+                    primary_failure = ("RESPONSE_PROJECTION", current_store)
+
+        # Once the exact sealed store is recovered, no response-derived cookie may remain
+        # available to a later legacy request, including on projection or extraction failure.
+        trusted_dict_clear(current_store)
+        if current_store:
+            receipt_seal_failure(
+                stage="RESPONSE_COOKIE",
+                field="CLEAR",
+                owner=current_store,
+            )
+        cleanup_error: OpenRouterPrivacyError | None = None
+        try:
+            normalize_cookie_jar_clock(current_jar, stage="RESPONSE_COOKIE")
+        except trusted_privacy_error_type as error:
+            cleanup_error = error
+        try:
+            normalize_cookie_policy_clock(current_policy, stage="RESPONSE_COOKIE")
+        except trusted_privacy_error_type as error:
+            if cleanup_error is None:
+                cleanup_error = error
+        if primary_failure is not None:
+            field, owner = primary_failure
+            receipt_seal_failure(stage="RESPONSE_COOKIE", field=field, owner=owner)
+        if cleanup_error is not None:
+            raise cleanup_error
 
     empty_cell = trusted_object_new(object)
 
@@ -4932,6 +5347,7 @@ def _build_provider_transport_attempt_authority(
     trusted_library_modules = (
         trusted_httpx,
         ssl,
+        http_cookiejar_module,
         httpx_client_module,
         httpx_config_module,
         httpx_models_module,
@@ -4956,6 +5372,7 @@ def _build_provider_transport_attempt_authority(
             trusted_url_type,
             trusted_query_params_type,
             trusted_timeout_type,
+            trusted_cookie_policy_type,
         )
     )
     isolated_values = (
@@ -5041,7 +5458,12 @@ def _build_provider_transport_attempt_authority(
                     "provider response headers cannot be decoded safely"
                 ) from None
             grouped.setdefault(name, []).append(value)
-        removed = {"content-encoding", "content-length", "transfer-encoding"}
+        removed = {
+            "content-encoding",
+            "content-length",
+            "set-cookie",
+            "transfer-encoding",
+        }
         redacted = {"authorization", "proxy-authorization", "x-api-key"}
         return {
             name: "[REDACTED]" if name in redacted else ", ".join(values)
@@ -5760,6 +6182,22 @@ def _build_provider_transport_attempt_authority(
         ) = registered_issuer
         if execution_evidence_resolver(client) is not trusted_real_evidence:
             return None
+        try:
+            operation_scope = (
+                None if isolated else trusted_smoke_request_scope(logical_request_id, proof_kind)
+            )
+        except ValueError:
+            operation_scope = "INVALID"
+        if not isolated and operation_scope is None:
+            return None
+        if not trusted_receipt_python_runtime_supported:
+            raise trusted_privacy_error_type(
+                "provider transport receipts require CPython 3.12 or 3.13"
+            )
+        if not trusted_receipt_cookie_runtime_shape_supported:
+            raise trusted_privacy_error_type(
+                "provider transport receipt private cookie shape is unsupported"
+            )
         frame = trusted_getframe(1)
         captured_codes = issuer_codes
         expected_code = (
@@ -5789,14 +6227,6 @@ def _build_provider_transport_attempt_authority(
             )
         except GenerationEvidenceValidationError:
             validated_generation_id = None
-        try:
-            operation_scope = (
-                None if isolated else trusted_smoke_request_scope(logical_request_id, proof_kind)
-            )
-        except ValueError:
-            operation_scope = "INVALID"
-        if not isolated and operation_scope is None:
-            return None
         anchor_scope = (
             trusted_smoke_scope(anchor) if type(anchor) is trusted_usage_record_type else None
         )
@@ -6161,6 +6591,14 @@ def _build_provider_transport_attempt_authority(
     def ensure_receipt_seal(client: object) -> None:
         """Capture receipt-only HTTPX/TLS state lazily for this isolated authority."""
 
+        if not trusted_receipt_python_runtime_supported:
+            raise trusted_privacy_error_type(
+                "provider transport receipts require CPython 3.12 or 3.13"
+            )
+        if not trusted_receipt_cookie_runtime_shape_supported:
+            raise trusted_privacy_error_type(
+                "provider transport receipt private cookie shape is unsupported"
+            )
         with lock:
             registered_issuer = issuer
             existing = receipt_seals.get(client)
@@ -6170,60 +6608,244 @@ def _build_provider_transport_attempt_authority(
             raise trusted_privacy_error_type("provider transport receipt issuer is not registered")
         transport_lookup = registered_issuer[6]
         binding = transport_lookup(client)
-        try:
-            current_http_client = trusted_object_getattribute(client, "_client")
-            current_base_url = trusted_object_getattribute(current_http_client, "_base_url")
-            current_headers = trusted_object_getattribute(client, "_headers")
-            current_http_headers = trusted_object_getattribute(current_http_client, "_headers")
-            current_cookies = trusted_object_getattribute(current_http_client, "_cookies")
-            current_params = trusted_object_getattribute(current_http_client, "_params")
-            current_timeout = trusted_object_getattribute(current_http_client, "_timeout")
-            current_header_list = trusted_object_getattribute(current_http_headers, "_list")
-            current_cookie_jar = trusted_object_getattribute(current_cookies, "jar")
-            current_cookie_store = trusted_object_getattribute(current_cookie_jar, "_cookies")
-            current_cookie_policy = trusted_object_getattribute(current_cookie_jar, "_policy")
-            current_params_dict = trusted_object_getattribute(current_params, "_dict")
-            current_pool = (
-                trusted_object_getattribute(binding.transport, "_pool")
-                if binding is not None and binding.execution_evidence is trusted_real_evidence
-                else None
+        current_http_client = seal_attribute(client, "_client", field="HTTP_CLIENT")
+        if binding is None:
+            receipt_seal_failure(stage="VALIDATE", field="BINDING", owner=client)
+        if binding.http_client is not current_http_client:
+            receipt_seal_failure(
+                stage="VALIDATE",
+                field="HTTP_CLIENT_IDENTITY",
+                owner=current_http_client,
             )
-            current_tls_context = (
-                trusted_object_getattribute(current_pool, "_ssl_context")
-                if current_pool is not None
-                else None
+        if type(current_http_client) is not trusted_async_client_type:
+            receipt_seal_failure(
+                stage="VALIDATE",
+                field="HTTP_CLIENT_TYPE",
+                owner=current_http_client,
             )
-        except (AttributeError, TypeError):
-            raise trusted_privacy_error_type(
-                "provider transport receipt cannot seal owned request state"
-            ) from None
+        current_transport = seal_attribute(
+            current_http_client,
+            "_transport",
+            field="HTTP_TRANSPORT",
+        )
+        if binding.transport is not current_transport:
+            receipt_seal_failure(
+                stage="VALIDATE",
+                field="HTTP_TRANSPORT_IDENTITY",
+                owner=current_transport,
+            )
+        current_base_url = seal_attribute(
+            current_http_client,
+            "_base_url",
+            field="BASE_URL",
+        )
+        if type(current_base_url) is not trusted_url_type:
+            receipt_seal_failure(stage="VALIDATE", field="BASE_URL_TYPE", owner=current_base_url)
+        if frozenset(vars(current_base_url)) != {"_uri_reference"}:
+            receipt_seal_failure(stage="VALIDATE", field="BASE_URL_SHAPE", owner=current_base_url)
+        current_headers = seal_attribute(client, "_headers", field="PROVIDER_HEADERS")
+        if type(current_headers) is not dict:
+            receipt_seal_failure(
+                stage="VALIDATE",
+                field="PROVIDER_HEADERS_TYPE",
+                owner=current_headers,
+            )
+        current_http_headers = seal_attribute(
+            current_http_client,
+            "_headers",
+            field="HTTP_HEADERS",
+        )
+        if type(current_http_headers) is not trusted_headers_type:
+            receipt_seal_failure(
+                stage="VALIDATE",
+                field="HTTP_HEADERS_TYPE",
+                owner=current_http_headers,
+            )
+        if frozenset(vars(current_http_headers)) != {"_list", "_encoding"}:
+            receipt_seal_failure(
+                stage="VALIDATE",
+                field="HTTP_HEADERS_SHAPE",
+                owner=current_http_headers,
+            )
+        current_header_list = seal_attribute(
+            current_http_headers,
+            "_list",
+            field="HTTP_HEADER_LIST",
+        )
+        if type(current_header_list) is not list:
+            receipt_seal_failure(
+                stage="VALIDATE",
+                field="HTTP_HEADER_LIST_TYPE",
+                owner=current_header_list,
+            )
+        current_cookies = seal_attribute(current_http_client, "_cookies", field="COOKIES")
+        if type(current_cookies) is not trusted_cookies_type:
+            receipt_seal_failure(
+                stage="VALIDATE",
+                field="COOKIES_TYPE",
+                owner=current_cookies,
+            )
+        if frozenset(vars(current_cookies)) != {"jar"}:
+            receipt_seal_failure(stage="VALIDATE", field="COOKIES_SHAPE", owner=current_cookies)
+        current_cookie_jar = seal_attribute(current_cookies, "jar", field="COOKIE_JAR")
+        if type(current_cookie_jar) is not trusted_cookie_jar_type:
+            receipt_seal_failure(
+                stage="VALIDATE",
+                field="COOKIE_JAR_TYPE",
+                owner=current_cookie_jar,
+            )
+        current_cookie_jar_values = trusted_object_getattribute(
+            current_cookie_jar,
+            "__dict__",
+        )
+        current_cookie_jar_names = frozenset(current_cookie_jar_values)
+        if current_cookie_jar_names not in {
+            trusted_cookie_jar_attribute_names,
+            trusted_cookie_jar_attribute_names | {"_now"},
+        }:
+            receipt_seal_failure(
+                stage="VALIDATE",
+                field="COOKIE_JAR_SHAPE",
+                owner=current_cookie_jar,
+            )
         if (
-            binding is None
-            or binding.http_client is not current_http_client
-            or type(current_base_url) is not trusted_url_type
-            or frozenset(vars(current_base_url)) != {"_uri_reference"}
-            or type(current_headers) is not dict
-            or type(current_http_headers) is not trusted_headers_type
-            or frozenset(vars(current_http_headers)) != {"_list", "_encoding"}
-            or type(current_header_list) is not list
-            or type(current_cookies) is not trusted_httpx.Cookies
-            or frozenset(vars(current_cookies)) != {"jar"}
-            or type(current_cookie_store) is not dict
-            or bool(current_cookie_store)
-            or current_cookie_policy is None
-            or type(current_params) is not trusted_query_params_type
-            or frozenset(vars(current_params)) != {"_dict"}
-            or type(current_params_dict) is not dict
-            or bool(current_params_dict)
-            or type(current_timeout) is not trusted_timeout_type
-            or frozenset(vars(current_timeout)) != {"connect", "read", "write", "pool"}
-            or (
-                binding.execution_evidence is trusted_real_evidence
-                and type(current_tls_context) is not ssl.SSLContext
-            )
+            "_now" in current_cookie_jar_values
+            and type(current_cookie_jar_values["_now"]) is not int
         ):
-            raise trusted_privacy_error_type(
-                "provider transport receipt cannot seal owned request state"
+            receipt_seal_failure(
+                stage="VALIDATE",
+                field="COOKIE_JAR_CLOCK",
+                owner=current_cookie_jar,
+            )
+        current_cookie_store = seal_attribute(
+            current_cookie_jar,
+            "_cookies",
+            field="COOKIE_STORE",
+        )
+        if type(current_cookie_store) is not dict:
+            receipt_seal_failure(
+                stage="VALIDATE",
+                field="COOKIE_STORE_TYPE",
+                owner=current_cookie_store,
+            )
+        current_cookie_lock = seal_attribute(
+            current_cookie_jar,
+            "_cookies_lock",
+            field="COOKIE_LOCK",
+        )
+        if type(current_cookie_lock) is not trusted_cookie_lock_type:
+            receipt_seal_failure(
+                stage="VALIDATE",
+                field="COOKIE_LOCK_TYPE",
+                owner=current_cookie_lock,
+            )
+        current_cookie_policy = seal_attribute(
+            current_cookie_jar,
+            "_policy",
+            field="COOKIE_POLICY",
+        )
+        if type(current_cookie_policy) is not trusted_cookie_policy_type:
+            receipt_seal_failure(
+                stage="VALIDATE",
+                field="COOKIE_POLICY_TYPE",
+                owner=current_cookie_policy,
+            )
+        try:
+            current_cookie_policy_sha256 = cookie_policy_projection(current_cookie_policy)
+        except (AttributeError, TypeError, ValueError):
+            receipt_seal_failure(
+                stage="VALIDATE",
+                field="COOKIE_POLICY_SHAPE",
+                owner=current_cookie_policy,
+            )
+        if current_cookie_policy_sha256 != trusted_cookie_policy_sha256:
+            receipt_seal_failure(
+                stage="VALIDATE",
+                field="COOKIE_POLICY_STATE",
+                owner=current_cookie_policy,
+            )
+        current_params = seal_attribute(current_http_client, "_params", field="PARAMS")
+        if type(current_params) is not trusted_query_params_type:
+            receipt_seal_failure(stage="VALIDATE", field="PARAMS_TYPE", owner=current_params)
+        if frozenset(vars(current_params)) != {"_dict"}:
+            receipt_seal_failure(stage="VALIDATE", field="PARAMS_SHAPE", owner=current_params)
+        current_params_dict = seal_attribute(current_params, "_dict", field="PARAMS_STORE")
+        if type(current_params_dict) is not dict:
+            receipt_seal_failure(
+                stage="VALIDATE",
+                field="PARAMS_STORE_TYPE",
+                owner=current_params_dict,
+            )
+        if current_params_dict:
+            receipt_seal_failure(
+                stage="VALIDATE",
+                field="PARAMS_STORE_NONEMPTY",
+                owner=current_params_dict,
+            )
+        current_timeout = seal_attribute(current_http_client, "_timeout", field="TIMEOUT")
+        if type(current_timeout) is not trusted_timeout_type:
+            receipt_seal_failure(stage="VALIDATE", field="TIMEOUT_TYPE", owner=current_timeout)
+        if frozenset(vars(current_timeout)) != {"connect", "read", "write", "pool"}:
+            receipt_seal_failure(stage="VALIDATE", field="TIMEOUT_SHAPE", owner=current_timeout)
+        current_pool = None
+        current_tls_context = None
+        if binding.execution_evidence is trusted_real_evidence:
+            current_pool = seal_attribute(binding.transport, "_pool", field="TRANSPORT_POOL")
+            if type(current_transport) is not trusted_async_http_transport_type:
+                receipt_seal_failure(
+                    stage="VALIDATE",
+                    field="HTTP_TRANSPORT_TYPE",
+                    owner=current_transport,
+                )
+            if current_pool is not binding.owned_pool:
+                receipt_seal_failure(
+                    stage="VALIDATE",
+                    field="TRANSPORT_POOL_IDENTITY",
+                    owner=current_pool,
+                )
+            current_tls_context = seal_attribute(
+                current_pool,
+                "_ssl_context",
+                field="POOL_TLS_CONTEXT",
+            )
+            if type(current_tls_context) is not ssl.SSLContext:
+                receipt_seal_failure(
+                    stage="VALIDATE",
+                    field="TLS_CONTEXT_TYPE",
+                    owner=current_tls_context,
+                )
+            if not pool_graph_is_current(binding, require_idle=True):
+                receipt_seal_failure(
+                    stage="VALIDATE",
+                    field="TRANSPORT_POOL_GRAPH",
+                    owner=current_pool,
+                )
+        # The exact smoke client performs authenticated metadata GETs before its first
+        # receipted request. Only after every owner/shape check succeeds, validate the
+        # exact primitive cookie projection and discard that non-authorizing response state.
+        if current_cookie_store:
+            try:
+                initial_cookie_projection = cookie_store_projection(current_cookie_store)
+            except (AttributeError, TypeError, ValueError):
+                receipt_seal_failure(
+                    stage="INITIAL_COOKIE",
+                    field="PROJECTION",
+                    owner=current_cookie_store,
+                )
+            if not initial_cookie_projection:
+                receipt_seal_failure(
+                    stage="INITIAL_COOKIE",
+                    field="PROJECTION_EMPTY",
+                    owner=current_cookie_store,
+                )
+        normalize_cookie_jar_clock(current_cookie_jar, stage="INITIAL_COOKIE")
+        normalize_cookie_policy_clock(current_cookie_policy, stage="INITIAL_COOKIE")
+        trusted_dict_clear(current_cookie_store)
+        if current_cookie_store:
+            receipt_seal_failure(
+                stage="INITIAL_COOKIE",
+                field="CLEAR",
+                owner=current_cookie_store,
             )
         sealed = {
             "http_client_base_url": current_base_url,
@@ -6237,9 +6859,18 @@ def _build_provider_transport_attempt_authority(
             "http_client_cookies_attribute_names": frozenset(vars(current_cookies)),
             "http_client_cookie_jar": current_cookie_jar,
             "http_client_cookie_jar_type": type(current_cookie_jar),
-            "http_client_cookie_jar_attribute_names": frozenset(vars(current_cookie_jar)),
+            "http_client_cookie_jar_attribute_names": frozenset(
+                trusted_object_getattribute(current_cookie_jar, "__dict__")
+            ),
             "http_client_cookie_store": current_cookie_store,
+            "http_client_cookie_lock": current_cookie_lock,
+            "http_client_cookie_lock_type": type(current_cookie_lock),
             "http_client_cookie_policy": current_cookie_policy,
+            "http_client_cookie_policy_type": type(current_cookie_policy),
+            "http_client_cookie_policy_attribute_names": frozenset(
+                trusted_object_getattribute(current_cookie_policy, "__dict__")
+            ),
+            "http_client_cookie_policy_sha256": cookie_policy_projection(current_cookie_policy),
             "http_client_params": current_params,
             "http_client_params_attribute_names": frozenset(vars(current_params)),
             "http_client_params_dict": current_params_dict,
@@ -6310,6 +6941,10 @@ def _build_provider_transport_attempt_authority(
             current_header_list = trusted_object_getattribute(current_http_headers, "_list")
             current_cookie_jar = trusted_object_getattribute(current_cookies, "jar")
             current_cookie_store = trusted_object_getattribute(current_cookie_jar, "_cookies")
+            current_cookie_lock = trusted_object_getattribute(
+                current_cookie_jar,
+                "_cookies_lock",
+            )
             current_cookie_policy = trusted_object_getattribute(current_cookie_jar, "_policy")
             current_params_dict = trusted_object_getattribute(current_params, "_dict")
         except (AttributeError, TypeError):
@@ -6326,8 +6961,13 @@ def _build_provider_transport_attempt_authority(
             current_header_list = None
             current_cookie_jar = None
             current_cookie_store = None
+            current_cookie_lock = None
             current_cookie_policy = None
             current_params_dict = None
+        try:
+            current_cookie_policy_sha256 = cookie_policy_projection(current_cookie_policy)
+        except (AttributeError, TypeError, ValueError):
+            current_cookie_policy_sha256 = None
         if (
             type(module_values) is not dict
             or receipt_seal is None
@@ -6344,6 +6984,9 @@ def _build_provider_transport_attempt_authority(
             or module_values.get("httpcore") is not httpcore
             or module_values.get("get_ident") is not trusted_get_ident
             or module_values.get("quote") is not quote
+            or module_values.get("Cookie") is not trusted_cookie_type
+            or module_values.get("CookieJar") is not trusted_cookie_jar_type
+            or module_values.get("DefaultCookiePolicy") is not trusted_cookie_policy_type
             or getattr(trusted_sys, "_getframe", None) is not trusted_getframe
             or module_values.get("Reservation") is not trusted_reservation_type
             or module_values.get("BudgetManager") is not trusted_budget_manager_type
@@ -6390,6 +7033,7 @@ def _build_provider_transport_attempt_authority(
             )
             or trusted_httpx.AsyncClient is not trusted_async_client_type
             or trusted_httpx.AsyncClient.build_request is not trusted_async_client_build_request
+            or trusted_httpx.AsyncHTTPTransport is not trusted_async_http_transport_type
             or (
                 not isolated and trusted_httpx.AsyncClient.stream is not trusted_async_client_stream
             )
@@ -6397,6 +7041,9 @@ def _build_provider_transport_attempt_authority(
             or trusted_httpx.Response.aiter_bytes is not trusted_response_aiter_bytes
             or trusted_httpx.Request is not trusted_request_type
             or trusted_httpx.Headers is not trusted_headers_type
+            or trusted_httpx.Cookies is not trusted_cookies_type
+            or trusted_httpx.Cookies.__init__ is not trusted_cookies_init
+            or trusted_httpx.Cookies.extract_cookies is not trusted_cookies_extract
             or trusted_httpx.Timeout is not trusted_timeout_type
             or trusted_httpx.URL is not trusted_url_type
             or trusted_httpx.QueryParams is not trusted_query_params_type
@@ -6457,12 +7104,21 @@ def _build_provider_transport_attempt_authority(
             != receipt_seal.get("http_client_cookies_attribute_names")
             or receipt_seal.get("http_client_cookie_jar") is not current_cookie_jar
             or type(current_cookie_jar) is not receipt_seal.get("http_client_cookie_jar_type")
-            or frozenset(vars(current_cookie_jar))
+            or frozenset(trusted_object_getattribute(current_cookie_jar, "__dict__"))
             != receipt_seal.get("http_client_cookie_jar_attribute_names")
             or receipt_seal.get("http_client_cookie_store") is not current_cookie_store
             or type(current_cookie_store) is not dict
             or bool(current_cookie_store)
+            or receipt_seal.get("http_client_cookie_lock") is not current_cookie_lock
+            or type(current_cookie_lock) is not receipt_seal.get("http_client_cookie_lock_type")
+            or type(current_cookie_lock) is not trusted_cookie_lock_type
             or receipt_seal.get("http_client_cookie_policy") is not current_cookie_policy
+            or type(current_cookie_policy) is not receipt_seal.get("http_client_cookie_policy_type")
+            or type(current_cookie_policy) is not trusted_cookie_policy_type
+            or frozenset(trusted_object_getattribute(current_cookie_policy, "__dict__"))
+            != receipt_seal.get("http_client_cookie_policy_attribute_names")
+            or current_cookie_policy_sha256 != receipt_seal.get("http_client_cookie_policy_sha256")
+            or current_cookie_policy_sha256 != trusted_cookie_policy_sha256
             or receipt_seal.get("http_client_params") is not current_params
             or type(current_params) is not trusted_query_params_type
             or frozenset(vars(current_params))
@@ -6724,6 +7380,13 @@ def _build_provider_transport_attempt_authority(
         ) = exact_request_projection(expected_request)
         if expected_request_method != method:
             raise trusted_privacy_error_type("provider transport request plan method changed")
+        if any(
+            normalized_name == trusted_cookie_header_name_hex
+            for _raw_name, normalized_name, _value_sha256 in expected_request_headers
+        ):
+            raise trusted_privacy_error_type(
+                "provider transport receipt request plan contains a Cookie header"
+            )
         receipt = trusted_object_new(trusted_receipt_type)
         key = id(receipt)
 
@@ -6868,6 +7531,7 @@ def _build_provider_transport_attempt_authority(
             chunks: list[bytes] = []
             total = 0
             active_inflight_anchor: tuple[object, ...] | None = None
+            receipt_boundary_failure = False
             if trusted_pre_transport_check is not None:
                 await trusted_pre_transport_check()
             live_binding(client)
@@ -6891,12 +7555,31 @@ def _build_provider_transport_attempt_authority(
                         raise trusted_privacy_error_type(
                             "provider transport returned an untrusted response object"
                         )
+                    actual_request = trusted_object_getattribute(live_response, "_request")
+                    try:
+                        (
+                            _actual_method,
+                            _actual_url,
+                            actual_request_headers,
+                            _actual_content,
+                        ) = exact_request_projection(actual_request)
+                        if any(
+                            normalized_name == trusted_cookie_header_name_hex
+                            for _raw_name, normalized_name, _value_sha256 in actual_request_headers
+                        ):
+                            raise trusted_privacy_error_type(
+                                "provider transport receipt outgoing request contains a Cookie "
+                                "header"
+                            )
+                        neutralize_authenticated_response_cookies(client, live_response)
+                    except trusted_privacy_error_type:
+                        receipt_boundary_failure = True
+                        raise
                     active_inflight_anchor = inflight_response_anchor(
                         client,
                         live_response,
                         active_inflight_anchor,
                     )
-                    actual_request = trusted_object_getattribute(live_response, "_request")
                     live_headers = trusted_object_getattribute(live_response, "headers")
                     raw_headers = header_multiset_projection(live_headers)
                     async for chunk in trusted_response_aiter_bytes(live_response):
@@ -6942,6 +7625,8 @@ def _build_provider_transport_attempt_authority(
                 except trusted_privacy_error_type:
                     raise io_error from None
                 if current.get("phase") == "DISPATCHED":
+                    if receipt_boundary_failure:
+                        raise io_error from None
                     live_binding(client)
                     actual_error_request = vars(io_error).get("_request")
                     transition(

@@ -5,6 +5,7 @@ import gzip
 import hashlib
 import json
 import ssl
+import sys
 import traceback
 import weakref
 from collections.abc import Callable
@@ -2192,12 +2193,26 @@ async def test_isolated_transport_receipt_authority_claims_consumes_and_cannot_c
             url,
             headers=kwargs["headers"],
         )
-        yield httpx.Response(
+        assert "cookie" not in request.headers
+        response = httpx.Response(
             200,
-            headers=[("x-synthetic", "one"), ("x-synthetic", "two")],
+            headers=[
+                ("x-synthetic", "one"),
+                ("set-cookie", "route=synthetic; Path=/; Secure; HttpOnly"),
+                ("set-cookie", "affinity=synthetic-two; Path=/; Secure; SameSite=Strict"),
+                ("x-synthetic", "two"),
+            ],
             json=_generation_payload(),
             request=request,
         )
+        http_client.cookies.extract_cookies(response)
+        assert http_client.cookies.jar._cookies
+        for paths in http_client.cookies.jar._cookies.values():
+            for names in paths.values():
+                reversed_items = tuple(reversed(tuple(names.items())))
+                names.clear()
+                names.update(reversed_items)
+        yield response
 
     prepare_operation: Callable[..., Any]
     prepare_attempt: Callable[..., Any]
@@ -2254,6 +2269,9 @@ async def test_isolated_transport_receipt_authority_claims_consumes_and_cannot_c
 
     def build_authority(
         stream: Callable[..., object] = synthetic_stream,
+        execution_evidence_resolver: Callable[[object], ExecutionEvidenceKind] = (
+            openrouter_module.trusted_openrouter_execution_evidence
+        ),
     ) -> tuple[Callable[..., Any], ...]:
         authority = openrouter_module._build_provider_transport_attempt_authority(
             _isolated_stream=stream,
@@ -2269,7 +2287,7 @@ async def test_isolated_transport_receipt_authority_claims_consumes_and_cannot_c
             request_metadata=OpenRouterClient._request_metadata,
             transport_lookup=openrouter_module._lookup_trusted_transport_binding,
             pristine_predicate=openrouter_module._openrouter_client_callables_are_pristine,
-            execution_evidence_resolver=openrouter_module.trusted_openrouter_execution_evidence,
+            execution_evidence_resolver=execution_evidence_resolver,
             ledger_snapshot=openrouter_module._TRUSTED_ATOMIC_LEDGER_SNAPSHOT,
             complete_with_evidence=OpenRouterClient.complete_with_evidence,
             bind_real_completion_identity=OpenRouterClient._bind_real_completion_identity,
@@ -2303,8 +2321,137 @@ async def test_isolated_transport_receipt_authority_claims_consumes_and_cannot_c
 
     try:
         before = atomic_ledger.snapshot()
+
+        class UnsupportedPythonVersion:
+            major = 3
+            minor = 14
+
+        cookie_constructor_calls = 0
+
+        def failing_cookie_constructor(
+            _self: object,
+            *_args: object,
+            **_kwargs: object,
+        ) -> None:
+            nonlocal cookie_constructor_calls
+            cookie_constructor_calls += 1
+            raise AssertionError("synthetic private cookie constructor failure")
+
+        with monkeypatch.context() as context:
+            context.setattr(sys, "version_info", UnsupportedPythonVersion())
+            context.setattr(httpx.Cookies, "__init__", failing_cookie_constructor)
+            unsupported_minor_authority = build_authority()
+        assert cookie_constructor_calls == 0
+        with monkeypatch.context() as context:
+            context.setattr(sys.implementation, "name", "synthetic-unsupported")
+            context.setattr(httpx.Cookies, "__init__", failing_cookie_constructor)
+            unsupported_implementation_authority = build_authority()
+        assert cookie_constructor_calls == 0
+        with monkeypatch.context() as context:
+            context.setattr(httpx.Cookies, "__init__", failing_cookie_constructor)
+            unsupported_cookie_shape_authority = build_authority()
+        assert cookie_constructor_calls == 1
+        unsupported_authorities = (
+            (
+                unsupported_minor_authority,
+                r"receipts require CPython 3\.12 or 3\.13",
+            ),
+            (
+                unsupported_implementation_authority,
+                r"receipts require CPython 3\.12 or 3\.13",
+            ),
+            (
+                unsupported_cookie_shape_authority,
+                r"receipt private cookie shape is unsupported",
+            ),
+        )
+        for unsupported_authority, error_pattern in unsupported_authorities:
+            supported_prepare_operation = prepare_operation
+            before_unsupported_grants = len(observed_grants)
+            before_unsupported_receipts = len(observed_receipts)
+            before_unsupported_dispatches = stream_dispatches
+            prepare_operation = unsupported_authority[1]
+            try:
+                with pytest.raises(
+                    OpenRouterPrivacyError,
+                    match=error_pattern,
+                ):
+                    await execute_operation(client, anchor)
+            finally:
+                prepare_operation = supported_prepare_operation
+            assert len(observed_grants) == before_unsupported_grants
+            assert len(observed_receipts) == before_unsupported_receipts
+            assert stream_dispatches == before_unsupported_dispatches
+            assert atomic_ledger.snapshot() == before
+
+        malformed_initial_canary = "synthetic-initial-cookie-must-not-escape"
+        client._client.cookies.set(
+            "metadata-route",
+            malformed_initial_canary,
+            domain="openrouter.ai",
+            path="/",
+        )
+        trusted_binding = openrouter_module._lookup_trusted_transport_binding(client)
+        assert trusted_binding is not None
+        original_transport = trusted_binding.transport
+
+        def classify_diagnostic_client(subject: object) -> ExecutionEvidenceKind:
+            assert subject is client
+            return ExecutionEvidenceKind.REAL
+
+        initial_cookie = next(iter(client._client.cookies.jar))
+        initial_cookie._rest["Malformed"] = object()
+        original_prepare_operation = prepare_operation
+        malformed_initial_authority = build_authority()
+        prepare_operation = malformed_initial_authority[1]
+        try:
+            with pytest.raises(
+                OpenRouterPrivacyError,
+                match=(
+                    r"stage=INITIAL_COOKIE; field=PROJECTION; "
+                    r"owner_type=builtins.dict"
+                ),
+            ) as malformed_initial:
+                await execute_operation(client, anchor)
+        finally:
+            prepare_operation = original_prepare_operation
+        assert client._client.cookies.jar._cookies
+        assert malformed_initial_canary not in str(malformed_initial.value)
+        assert malformed_initial_canary not in repr(malformed_initial.value.__context__)
+        initial_cookie._rest.pop("Malformed")
+
+        class WrappedReceiptTransport:
+            pass
+
+        wrapped_transport = WrappedReceiptTransport()
+        object.__setattr__(trusted_binding, "transport", wrapped_transport)
+        object.__setattr__(client._client, "_transport", wrapped_transport)
+
+        diagnostic_authority = build_authority(
+            execution_evidence_resolver=classify_diagnostic_client,
+        )
+        prepare_operation = diagnostic_authority[1]
+        try:
+            with pytest.raises(
+                OpenRouterPrivacyError,
+                match=(
+                    r"stage=LOOKUP; field=TRANSPORT_POOL; "
+                    r"owner_type=.*\.WrappedReceiptTransport"
+                ),
+            ):
+                await execute_operation(client, anchor)
+        finally:
+            prepare_operation = original_prepare_operation
+            object.__setattr__(trusted_binding, "transport", original_transport)
+            object.__setattr__(client._client, "_transport", original_transport)
+        assert client._client.cookies.jar._cookies
+
         grant, receipt, response = await execute_operation(client, anchor)
         assert response.status_code == 200
+        assert "set-cookie" not in response.headers
+        assert client._client.cookies.jar._cookies == {}
+        assert "_now" not in vars(client._client.cookies.jar)
+        assert "_now" not in vars(client._client.cookies.jar._policy)
         assert inspect_attempt(
             receipt,
             client=client,
@@ -2811,6 +2958,29 @@ async def test_isolated_transport_receipt_authority_claims_consumes_and_cannot_c
             await execute_operation(client, anchor)
         cookie_store.clear()
 
+        cookie_jar = client._client._cookies.jar
+        original_cookie_lock = cookie_jar._cookies_lock
+        before_cookie_graph_mutation_dispatches = stream_dispatches
+        cookie_jar._cookies_lock = type(original_cookie_lock)()
+        with pytest.raises(OpenRouterPrivacyError, match="pristine owned REAL client"):
+            await execute_operation(client, anchor)
+        assert stream_dispatches == before_cookie_graph_mutation_dispatches
+        cookie_jar._cookies_lock = original_cookie_lock
+
+        cookie_policy = cookie_jar._policy
+        original_netscape_policy = cookie_policy.netscape
+        cookie_policy.netscape = not original_netscape_policy
+        with pytest.raises(OpenRouterPrivacyError, match="pristine owned REAL client"):
+            await execute_operation(client, anchor)
+        assert stream_dispatches == before_cookie_graph_mutation_dispatches
+        cookie_policy.netscape = original_netscape_policy
+
+        vars(cookie_policy)["set_ok"] = lambda *_args, **_kwargs: True
+        with pytest.raises(OpenRouterPrivacyError, match="pristine owned REAL client"):
+            await execute_operation(client, anchor)
+        assert stream_dispatches == before_cookie_graph_mutation_dispatches
+        vars(cookie_policy).pop("set_ok")
+
         params_dict = vars(client._client._params)["_dict"]
         params_dict["unexpected"] = ["query"]
         with pytest.raises(OpenRouterPrivacyError, match="pristine owned REAL client"):
@@ -2852,16 +3022,41 @@ async def test_isolated_transport_receipt_authority_claims_consumes_and_cannot_c
             (httpx.Response, "content", property(lambda _response: b"changed")),
             (httpx.Response, "request", property(lambda _response: object())),
             (httpx.Headers, "multi_items", lambda _headers: []),
+            (type(cookie_policy), "set_ok", lambda *_args: True),
             (BoundAsyncStream, "__aiter__", lambda _self: ()),
             (AsyncResponseStream, "__aiter__", lambda _self: ()),
             (PoolByteStream, "__aiter__", lambda _self: ()),
             (ssl.SSLContext, "get_ciphers", lambda _self: []),
         )
         for subject_type, name, replacement in descriptor_mutations:
+            before_descriptor_mutation_dispatches = stream_dispatches
             with monkeypatch.context() as context:
                 context.setattr(subject_type, name, replacement)
                 with pytest.raises(OpenRouterPrivacyError, match="pristine owned REAL client"):
                     await execute_operation(client, anchor)
+            assert stream_dispatches == before_descriptor_mutation_dispatches
+
+        policy_set_ok = type(cookie_policy).set_ok
+        original_policy_set_ok_code = policy_set_ok.__code__
+
+        def changed_policy_set_ok(
+            _policy: object,
+            _cookie: object,
+            _request: object,
+        ) -> bool:
+            return True
+
+        before_policy_code_mutation_dispatches = stream_dispatches
+        policy_set_ok.__code__ = changed_policy_set_ok.__code__
+        try:
+            with pytest.raises(
+                OpenRouterPrivacyError,
+                match=r"pristine|provider transport provenance",
+            ):
+                await execute_operation(client, anchor)
+        finally:
+            policy_set_ok.__code__ = original_policy_set_ok_code
+        assert stream_dispatches == before_policy_code_mutation_dispatches
 
         original_stream_code = httpx.AsyncClient.stream.__code__
 
@@ -2995,6 +3190,216 @@ async def test_isolated_transport_receipt_authority_claims_consumes_and_cannot_c
             method="GET",
             require_response=False,
         )
+
+        def empty_cookie_stream_factory(
+            response_headers: list[tuple[str, str]],
+        ) -> Callable[..., object]:
+            @asynccontextmanager
+            async def empty_cookie_stream(
+                http_client: httpx.AsyncClient,
+                method: str,
+                url: str,
+                **kwargs: Any,
+            ):
+                request = http_client.build_request(method, url, headers=kwargs["headers"])
+                assert "cookie" not in request.headers
+                response = httpx.Response(
+                    200,
+                    headers=response_headers,
+                    json=_generation_payload(),
+                    request=request,
+                )
+                http_client.cookies.extract_cookies(response)
+                cookie_jar = http_client.cookies.jar
+                assert cookie_jar._cookies == {}
+                assert type(vars(cookie_jar).get("_now")) is int
+                assert type(vars(cookie_jar._policy).get("_now")) is int
+                yield response
+
+            return empty_cookie_stream
+
+        empty_cookie_response_headers = (
+            [],
+            [("set-cookie", "expired=synthetic; Path=/; Max-Age=0; Secure")],
+        )
+        for response_headers in empty_cookie_response_headers:
+            empty_cookie_authority = build_authority(empty_cookie_stream_factory(response_headers))
+            (
+                _register_empty_cookie,
+                prepare_operation,
+                prepare_attempt,
+                dispatch_attempt,
+                _transition_empty_cookie,
+                revoke_attempt,
+                inspect_attempt,
+                consume_attempt,
+                revoke_operation,
+                *_,
+            ) = empty_cookie_authority
+            empty_grant, _empty_receipt, empty_response = await execute_operation(
+                client,
+                anchor,
+            )
+            assert empty_response.status_code == 200
+            assert "set-cookie" not in empty_response.headers
+            assert client._client.cookies.jar._cookies == {}
+            assert "_now" not in vars(client._client.cookies.jar)
+            assert "_now" not in vars(client._client.cookies.jar._policy)
+            revoke_operation(empty_grant)
+
+        @asynccontextmanager
+        async def post_await_policy_mutation_stream(
+            http_client: httpx.AsyncClient,
+            method: str,
+            url: str,
+            **kwargs: Any,
+        ):
+            request = http_client.build_request(method, url, headers=kwargs["headers"])
+            assert "cookie" not in request.headers
+            response = httpx.Response(
+                200,
+                json=_generation_payload(),
+                request=request,
+            )
+            policy_type = type(http_client.cookies.jar._policy)
+            with monkeypatch.context() as context:
+                context.setattr(policy_type, "set_ok", lambda *_args: True)
+                yield response
+
+        post_await_policy_authority = build_authority(post_await_policy_mutation_stream)
+        (
+            _register_post_await_policy,
+            prepare_operation,
+            prepare_attempt,
+            dispatch_attempt,
+            _transition_post_await_policy,
+            revoke_attempt,
+            inspect_attempt,
+            consume_attempt,
+            revoke_operation,
+            *_,
+        ) = post_await_policy_authority
+        with pytest.raises(
+            OpenRouterPrivacyError,
+            match=(
+                r"stage=RESPONSE_COOKIE; field=COOKIE_CALLABLE_SURFACE; "
+                r"owner_type=http.cookiejar.DefaultCookiePolicy"
+            ),
+        ):
+            await execute_operation(client, anchor)
+        assert client._client.cookies.jar._cookies == {}
+        assert "_now" not in vars(client._client.cookies.jar)
+        assert "_now" not in vars(client._client.cookies.jar._policy)
+        revoke_operation(observed_grants[-1])
+
+        mismatch_cookie_canary = "synthetic-mismatched-cookie-must-not-escape"
+
+        @asynccontextmanager
+        async def mismatched_cookie_stream(
+            http_client: httpx.AsyncClient,
+            method: str,
+            url: str,
+            **kwargs: Any,
+        ):
+            request = http_client.build_request(method, url, headers=kwargs["headers"])
+            assert "cookie" not in request.headers
+            response = httpx.Response(
+                200,
+                headers=[("set-cookie", "expected=synthetic; Path=/; Secure")],
+                json=_generation_payload(),
+                request=request,
+            )
+            http_client.cookies.extract_cookies(response)
+            http_client.cookies.set(
+                "mismatch",
+                mismatch_cookie_canary,
+                domain="openrouter.ai",
+                path="/",
+            )
+            yield response
+
+        mismatch_authority = build_authority(mismatched_cookie_stream)
+        (
+            _register_mismatch,
+            prepare_operation,
+            prepare_attempt,
+            dispatch_attempt,
+            _transition_mismatch,
+            revoke_attempt,
+            inspect_attempt,
+            consume_attempt,
+            revoke_operation,
+            *_,
+        ) = mismatch_authority
+        with pytest.raises(
+            OpenRouterPrivacyError,
+            match=(
+                r"stage=RESPONSE_COOKIE; field=RESPONSE_PROJECTION; "
+                r"owner_type=builtins.dict"
+            ),
+        ) as mismatch_caught:
+            await execute_operation(client, anchor)
+        assert mismatch_cookie_canary not in str(mismatch_caught.value)
+        assert mismatch_cookie_canary not in repr(mismatch_caught.value.__context__)
+        assert client._client.cookies.jar._cookies == {}
+        assert "_now" not in vars(client._client.cookies.jar)
+        assert "_now" not in vars(client._client.cookies.jar._policy)
+        revoke_operation(observed_grants[-1])
+
+        malformed_cookie_canary = "synthetic-cookie-value-must-not-escape"
+
+        @asynccontextmanager
+        async def malformed_cookie_stream(
+            http_client: httpx.AsyncClient,
+            method: str,
+            url: str,
+            **kwargs: Any,
+        ):
+            request = http_client.build_request(method, url, headers=kwargs["headers"])
+            assert "cookie" not in request.headers
+            response = httpx.Response(
+                200,
+                headers=[
+                    (
+                        "set-cookie",
+                        f"malformed={malformed_cookie_canary}; Path=/; Secure; HttpOnly",
+                    )
+                ],
+                json=_generation_payload(),
+                request=request,
+            )
+            http_client.cookies.extract_cookies(response)
+            cookie = next(iter(http_client.cookies.jar))
+            cookie._rest["Malformed"] = object()
+            yield response
+
+        malformed_authority = build_authority(malformed_cookie_stream)
+        (
+            _register_malformed,
+            prepare_operation,
+            prepare_attempt,
+            dispatch_attempt,
+            _transition_malformed,
+            revoke_attempt,
+            inspect_attempt,
+            consume_attempt,
+            revoke_operation,
+            *_,
+        ) = malformed_authority
+        with pytest.raises(
+            OpenRouterPrivacyError,
+            match=(
+                r"stage=RESPONSE_COOKIE; field=RESPONSE_EXTRACTION; "
+                r"owner_type=httpx.Response"
+            ),
+        ) as caught:
+            await execute_operation(client, anchor)
+        assert malformed_cookie_canary not in str(caught.value)
+        assert malformed_cookie_canary not in repr(caught.value.__context__)
+        assert client._client.cookies.jar._cookies == {}
+        assert "_now" not in vars(client._client.cookies.jar)
+        assert "_now" not in vars(client._client.cookies.jar._policy)
+        revoke_operation(observed_grants[-1])
     finally:
         await client.close()
 

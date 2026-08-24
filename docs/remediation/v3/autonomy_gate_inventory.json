@@ -12,7 +12,7 @@
   "discovery_scope": "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_OPAQUE_AUTHORITIES_EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES",
   "environment_override_count": 28,
   "gate_source_count": 3606,
-  "inventory_sha256": "a707251be193acba6b33723e84babee2f27eb40d1dcb83c7273be358cd49ba3a",
+  "inventory_sha256": "1809bede23d9ec7ea1af420bd74b6880cb82c48b1d555eebb3c1aacb6839dddf",
   "logical_gate_count": 35,
   "logical_gates": [
     {
@@ -9661,7 +9661,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/openrouter.py",
-      "source_semantics_sha256": "f33e0dcaf00a18a8925249d45a91c9a6a6ab033b3ef1f9d8f5413bf11d8c21d7"
+      "source_semantics_sha256": "6f51545b6246dfcf30c688f65a6d3440293717e00ec2f90608621a48c911800a"
     },
     {
       "classification": "GATE",
@@ -36879,7 +36879,7 @@
     "REQUIRED_MISSING_GATE": 14
   },
   "source_occurrence_count": 3652,
-  "source_universe_sha256": "0c42c4124cebc1cae4ff7dc71473b207f440ab0050d03e7409d97f61e8593f64",
+  "source_universe_sha256": "a36a1e5c2f74009a9b47bef3fc0ee3b91fdcebc67beba08ece582de079508b89",
   "status": "PARTIAL_NONAUTHORIZING",
   "unsatisfied_gate_count": 29
 }
