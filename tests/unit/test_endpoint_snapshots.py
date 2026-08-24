@@ -25,7 +25,9 @@ from mmaudit.models.route_constraints import (
     ExactRouteConstraint,
     ExactRouteRole,
     RoutePredicateDisposition,
+    RoutePredicateId,
     RoutePredicateProfile,
+    RoutePredicateReason,
 )
 from mmaudit.orchestration.budgets import EndpointRequestCostBound
 
@@ -771,47 +773,103 @@ def test_constrained_slug_only_snapshot_embeds_complete_discovery_report() -> No
     )
 
 
-def test_constrained_snapshot_rejects_ambiguous_provider_display_inventory() -> None:
-    selected = _constrained_endpoint(provider_name="Repeated Provider")
-    unrelated = _constrained_endpoint(
-        "unrelated-provider",
-        provider_name="repeated provider",
+@pytest.mark.parametrize(
+    ("endpoint_id", "selected_provider_name"),
+    (
+        ("sail-research/fp8", "Sail Research"),
+        ("modal/mxfp4", "Modal"),
+    ),
+)
+def test_generic_and_constrained_snapshots_reject_selected_display_name_ambiguity(
+    endpoint_id: str,
+    selected_provider_name: str,
+) -> None:
+    selected = _constrained_endpoint(
+        endpoint_id,
+        use_slug=True,
+        provider_name=selected_provider_name,
     )
-    _, _, context = _route_bundle()
+    duplicate = _constrained_endpoint(
+        f"{endpoint_id}-duplicate",
+        use_slug=True,
+        provider_name=selected_provider_name.swapcase(),
+    )
+    _, _, context = _route_bundle(endpoint_id=endpoint_id)
+    endpoint_payload = _endpoint_payload(selected, duplicate)
 
+    with pytest.raises(EndpointSnapshotValidationError, match="display name is ambiguous"):
+        _validate(
+            endpoint_payload=endpoint_payload,
+            zdr_payload=_zdr_payload(selected),
+            configured=(endpoint_id,),
+        )
     with pytest.raises(EndpointSnapshotValidationError, match="display name is ambiguous"):
         _validate_constrained(
             selected,
             context=context,
-            endpoint_payload=_endpoint_payload(selected, unrelated),
+            endpoint_id=endpoint_id,
+            endpoint_payload=endpoint_payload,
         )
 
 
-def test_constrained_snapshot_rejects_ambiguity_only_between_unselected_providers() -> None:
-    selected = _constrained_endpoint(provider_name="Selected Provider")
-    first_unselected = _constrained_endpoint(
-        "first-unselected",
-        provider_name="Repeated Other Provider",
+@pytest.mark.parametrize(
+    ("endpoint_id", "selected_provider_name"),
+    (
+        ("sail-research/fp8", "Sail Research"),
+        ("modal/mxfp4", "Modal"),
+    ),
+)
+def test_constrained_snapshot_allows_unrelated_duplicate_provider_display_names(
+    endpoint_id: str,
+    selected_provider_name: str,
+) -> None:
+    selected = _constrained_endpoint(
+        endpoint_id,
+        use_slug=True,
+        provider_name=selected_provider_name,
     )
-    second_unselected = _constrained_endpoint(
-        "second-unselected",
-        provider_name="repeated other provider",
+    unrelated = (
+        _constrained_endpoint("fireworks/a", provider_name="Fireworks"),
+        _constrained_endpoint("fireworks/b", provider_name="fireworks"),
+        _constrained_endpoint("fireworks/c", provider_name="FIREWORKS"),
+        _constrained_endpoint("alibaba/a", provider_name="Alibaba"),
+        _constrained_endpoint("alibaba/b", provider_name="alibaba"),
+        _constrained_endpoint("morph/a", provider_name="Morph"),
+        _constrained_endpoint("morph/b", provider_name="morph"),
     )
-    _, _, context = _route_bundle()
+    _, _, context = _route_bundle(endpoint_id=endpoint_id)
+    endpoint_payload = _endpoint_payload(selected, *unrelated)
 
-    with pytest.raises(
-        EndpointSnapshotValidationError,
-        match="DISPLAY_NAME_NOT_INJECTIVE",
-    ):
-        _validate_constrained(
-            selected,
-            context=context,
-            endpoint_payload=_endpoint_payload(
-                selected,
-                first_unselected,
-                second_unselected,
-            ),
-        )
+    generic_evidence = _validate(
+        endpoint_payload=endpoint_payload,
+        zdr_payload=_zdr_payload(selected),
+        configured=(endpoint_id,),
+    )
+
+    evidence = _validate_constrained(
+        selected,
+        context=context,
+        endpoint_id=endpoint_id,
+        endpoint_payload=endpoint_payload,
+    )
+
+    assert generic_evidence.endpoints[0].provider_name == selected_provider_name
+    assert evidence.normalized_route_facts is not None
+    assert evidence.normalized_route_facts.selected_provider_display_name == selected_provider_name
+    normalized_inventory = tuple(
+        name.casefold() for name in evidence.normalized_route_facts.provider_display_names
+    )
+    assert normalized_inventory.count("fireworks") == 3
+    assert normalized_inventory.count("alibaba") == 2
+    assert normalized_inventory.count("morph") == 2
+    assert evidence.route_predicate_report is not None
+    result = next(
+        result
+        for result in evidence.route_predicate_report.results
+        if result.predicate_id is RoutePredicateId.PROVIDER_DISPLAY_NAME_INJECTIVITY
+    )
+    assert result.disposition is RoutePredicateDisposition.SATISFIED
+    assert result.reason is RoutePredicateReason.SATISFIED
 
 
 def test_constrained_reasoning_inventory_uses_endpoint_first_and_model_fallback() -> None:

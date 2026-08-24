@@ -55,6 +55,8 @@ from mmaudit.models.reasoning import (
 from mmaudit.models.route_constraints import (
     ExactRouteConstraint,
     ExactRouteRole,
+    RoutePredicateDisposition,
+    RoutePredicateId,
     RoutePredicateProfile,
 )
 from mmaudit.models.usage import UsageLedger
@@ -300,6 +302,7 @@ def _constrained_discover(
     *,
     model: dict[str, Any] | None = None,
     endpoint: dict[str, Any] | None = None,
+    endpoint_inventory: tuple[dict[str, Any], ...] | None = None,
     automatic_fallbacks_allowed: bool = False,
 ) -> tuple[
     OpenRouterModelDiscoveryPayload,
@@ -311,6 +314,7 @@ def _constrained_discover(
         max_prompt_tokens=180_000,
         max_completion_tokens=20_000,
     )
+    observed_endpoints = endpoint_inventory or (selected_endpoint,)
     policy, profile, constraint = _constrained_route_bundle()
     payload = validate_openrouter_constrained_model_discovery(
         exact_model_id="alpha/atlas-secure",
@@ -322,7 +326,8 @@ def _constrained_discover(
             "data": {
                 "id": "alpha/atlas-secure",
                 "endpoints": [
-                    {key: value for key, value in selected_endpoint.items() if key != "model_id"}
+                    {key: value for key, value in item.items() if key != "model_id"}
+                    for item in observed_endpoints
                 ],
             }
         },
@@ -456,6 +461,35 @@ def test_constrained_discovery_custodies_and_rechecks_complete_route_report() ->
     assert snapshot.route_predicate_report == report
     assert report.facts_sha256 == snapshot.normalized_route_facts.facts_sha256
     assert OpenRouterModelDiscoveryPayload.model_validate_json(payload.model_dump_json()) == payload
+
+
+def test_constrained_discovery_allows_unrelated_provider_display_name_duplicates() -> None:
+    selected = _endpoint(
+        max_prompt_tokens=180_000,
+        max_completion_tokens=20_000,
+    )
+    selected["provider_name"] = "Sail Research"
+    first_unrelated = _endpoint(endpoint_id="fireworks/a")
+    first_unrelated["provider_name"] = "Fireworks"
+    second_unrelated = _endpoint(endpoint_id="fireworks/b")
+    second_unrelated["provider_name"] = "fireworks"
+
+    payload, _, _ = _constrained_discover(
+        endpoint=selected,
+        endpoint_inventory=(selected, first_unrelated, second_unrelated),
+    )
+
+    report = payload.endpoint_snapshot.route_predicate_report
+    assert report is not None
+    facts = payload.endpoint_snapshot.normalized_route_facts
+    assert facts is not None
+    assert tuple(name.casefold() for name in facts.provider_display_names).count("fireworks") == 2
+    result = next(
+        result
+        for result in report.results
+        if result.predicate_id is RoutePredicateId.PROVIDER_DISPLAY_NAME_INJECTIVITY
+    )
+    assert result.disposition is RoutePredicateDisposition.SATISFIED
 
 
 def test_constrained_discovery_observation_replay_preserves_route_custody() -> None:

@@ -1028,8 +1028,7 @@ def evaluate_route_predicates(
     else:
         record(
             RoutePredicateId.PROVIDER_DISPLAY_NAME_INJECTIVITY,
-            display_count == 1
-            and len(normalized_display_names) == len(set(normalized_display_names)),
+            display_count == 1,
             RoutePredicateReason.DISPLAY_NAME_NOT_INJECTIVE,
         )
     record(

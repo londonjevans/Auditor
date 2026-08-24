@@ -1074,7 +1074,7 @@ def test_emitted_parameter_inventory_requires_model_and_endpoint_support(
     )
 
 
-def test_provider_display_injectivity_covers_the_whole_exact_model_inventory() -> None:
+def test_provider_display_injectivity_requires_only_the_selected_name_to_be_unique() -> None:
     profile = _profile()
     constraint = _constraint(profile)
     report = evaluate_route_predicates(
@@ -1092,8 +1092,8 @@ def test_provider_display_injectivity_covers_the_whole_exact_model_inventory() -
     )
 
     assert _result(report, RoutePredicateId.PROVIDER_DISPLAY_NAME_INJECTIVITY) == (
-        RoutePredicateDisposition.REJECTED,
-        RoutePredicateReason.DISPLAY_NAME_NOT_INJECTIVE,
+        RoutePredicateDisposition.SATISFIED,
+        RoutePredicateReason.SATISFIED,
     )
 
 
