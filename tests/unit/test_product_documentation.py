@@ -74,8 +74,10 @@ HISTORICAL_AUTHRUNNER_REQUIRED_PROVIDER_PARAMETERS_CHECKPOINT = (
 HISTORICAL_AUTHRUNNER_REPLAY_CHECKPOINT = "c627f2debfa18df7d9567cd7c3300d19a9e9f5ce"
 HISTORICAL_PLANCONSTRAINTS_BASE_CHECKPOINT = "7ef471744adfce557edf612a74b2847aafb3e8bc"
 HISTORICAL_PLANCONSTRAINTS_BASE_PARENT_CHECKPOINT = "85c06b07ccc3905af4e0231497276934f7ae142a"
-CURRENT_PLANCONSTRAINTS_CHECKPOINT = "425502c5cbc173578053423d946ef24843f26285"
-CURRENT_PLANCONSTRAINTS_PARENT_CHECKPOINT = "390e9b29e748e38d511da9f0a54cfc4fa1a2c0a8"
+PLANCONSTRAINTS_REPAIR_CHECKPOINT = "425502c5cbc173578053423d946ef24843f26285"
+PLANCONSTRAINTS_REPAIR_PARENT_CHECKPOINT = "390e9b29e748e38d511da9f0a54cfc4fa1a2c0a8"
+CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT = "721d17a4ff08cc52ccdf0aa92ed04258e4137807"
+CURRENT_TRUNCATION_SPECIALIST_PARENT_CHECKPOINT = "847e7180923e95768271c6fe7e8b06732a7d919a"
 HISTORICAL_C627_AUTONOMY_INVENTORY_RAW_SHA256 = (
     "6fd2608825a5dff950f8c0a0239a446857c82783603ec81a15b060391c3d4778"
 )
@@ -87,12 +89,12 @@ AUTONOMY_WORKTREE_INDEPENDENCE_CHECKPOINT = "3d4a43ac026547dd8652796b6186c48891f
 HISTORICAL_PHASE_ZERO_INVENTORY_RAW_SHA256 = (
     "6a3c54258dd1f0c25fc8861c8298cf51d187b33bd5528ec25b1549c0e0021980"
 )
-AUTONOMY_INVENTORY_RAW_SHA256 = "7a0655597bf161bd3f90c67beba1845f9783626661b11ba8162acd1623b46965"
+AUTONOMY_INVENTORY_RAW_SHA256 = "82274345013e650e2bb94cced64f951d64c91ace389ac190b16c34555e681dc2"
 AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256 = (
     "c302b155d7dd138adc150d9f398da279f130dd696a321fb9e0d287c089012bcf"
 )
-AUTONOMY_INVENTORY_SHA256 = "a1556b6f2b816af1562401a646fcea61e34dadc069140cbe7b40d0447bae3fb1"
-AUTONOMY_SOURCE_UNIVERSE_SHA256 = "acf4bb31570e028336e572560d5348a30013070d2335c157a467dfae05c98b83"
+AUTONOMY_INVENTORY_SHA256 = "349af767d9e07bb44a7483a5ab3e309ee7d8f739d49902f5143508901d79f90e"
+AUTONOMY_SOURCE_UNIVERSE_SHA256 = "c0d55db7f01762a1f014290af40544fc1a20842a8bbff72e053b379792d17fa5"
 AUTONOMY_DISCOVERY_SEMANTICS_SHA256 = (
     "4f1adb9e0bc8db7899fa4eb2928ee03f87d4d61d4113a0555fcdae750e260042"
 )
@@ -289,6 +291,26 @@ PLANCONSTRAINTS_SOURCE_PATHS = frozenset(
         "tests/unit/test_endpoint_snapshots.py",
         "tests/unit/test_model_discovery.py",
         "tests/unit/test_route_constraints.py",
+    }
+)
+TRUNCATION_SPECIALIST_SOURCE_PATHS = frozenset(
+    {
+        "docs/remediation/v3/autonomy_gate_inventory.json",
+        "schemas/scheduler_state.schema.json",
+        "src/mmaudit/agents/specialists.py",
+        "src/mmaudit/models/scheduler.py",
+        "src/mmaudit/models/truncation_recovery_journal.py",
+        "src/mmaudit/orchestration/assurance.py",
+        "src/mmaudit/orchestration/pipeline.py",
+        "src/mmaudit/orchestration/scheduler.py",
+        "src/mmaudit/orchestration/truncation_recovery_evidence.py",
+        "tests/fake_openrouter.py",
+        "tests/integration/test_pipeline.py",
+        "tests/integration/test_scheduler_truncation_recovery_pipeline.py",
+        "tests/unit/test_assurance.py",
+        "tests/unit/test_model_coverage.py",
+        "tests/unit/test_specialists.py",
+        "tests/unit/test_truncation_recovery_journal.py",
     }
 )
 AUTHRUNNER_UNCHANGED_IMPLEMENTATION_PATHS = (
@@ -963,42 +985,74 @@ def test_autonomy_checkpoints_have_exact_historical_and_successor_custody() -> N
         cwd=ROOT,
         check=False,
     )
-    planconstraints_resolved = subprocess.run(
-        ["git", "rev-parse", f"{CURRENT_PLANCONSTRAINTS_CHECKPOINT}^{{commit}}"],
+    planconstraints_repair_resolved = subprocess.run(
+        ["git", "rev-parse", f"{PLANCONSTRAINTS_REPAIR_CHECKPOINT}^{{commit}}"],
         cwd=ROOT,
         check=True,
         capture_output=True,
         text=True,
     )
-    planconstraints_parent = subprocess.run(
-        ["git", "rev-parse", f"{CURRENT_PLANCONSTRAINTS_CHECKPOINT}^"],
+    planconstraints_repair_parent = subprocess.run(
+        ["git", "rev-parse", f"{PLANCONSTRAINTS_REPAIR_CHECKPOINT}^"],
         cwd=ROOT,
         check=True,
         capture_output=True,
         text=True,
     )
-    planconstraints_changed = subprocess.run(
+    planconstraints_repair_changed = subprocess.run(
         [
             "git",
             "diff-tree",
             "--no-commit-id",
             "--name-only",
             "-r",
-            CURRENT_PLANCONSTRAINTS_CHECKPOINT,
+            PLANCONSTRAINTS_REPAIR_CHECKPOINT,
         ],
         cwd=ROOT,
         check=True,
         capture_output=True,
         text=True,
     )
-    planconstraints_current_match = subprocess.run(
+    truncation_specialist_resolved = subprocess.run(
+        [
+            "git",
+            "rev-parse",
+            f"{CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT}^{{commit}}",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    truncation_specialist_parent = subprocess.run(
+        ["git", "rev-parse", f"{CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT}^"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    truncation_specialist_changed = subprocess.run(
+        [
+            "git",
+            "diff-tree",
+            "--no-commit-id",
+            "--name-only",
+            "-r",
+            CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT,
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    truncation_specialist_current_match = subprocess.run(
         [
             "git",
             "diff",
             "--quiet",
-            CURRENT_PLANCONSTRAINTS_CHECKPOINT,
+            CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT,
             "--",
-            *sorted(PLANCONSTRAINTS_SOURCE_PATHS),
+            *sorted(TRUNCATION_SPECIALIST_SOURCE_PATHS),
         ],
         cwd=ROOT,
         check=False,
@@ -1148,13 +1202,28 @@ def test_autonomy_checkpoints_have_exact_historical_and_successor_custody() -> N
     assert OPERATOR_RESULTS_RELATIVE_PATH not in AUTHRUNNER_CANONICAL_REPLAY_PATHS
     assert not (AUTHRUNNER_CANONICAL_REPLAY_PATHS & CURRENT_COMMAND_GOVERNANCE_SUCCESSOR_PATHS)
     assert canonical_replay_current_match.returncode == 0
-    assert planconstraints_resolved.stdout.strip() == CURRENT_PLANCONSTRAINTS_CHECKPOINT
-    assert planconstraints_parent.stdout.strip() == CURRENT_PLANCONSTRAINTS_PARENT_CHECKPOINT
-    assert frozenset(planconstraints_changed.stdout.splitlines()) == PLANCONSTRAINTS_SOURCE_PATHS
+    assert planconstraints_repair_resolved.stdout.strip() == PLANCONSTRAINTS_REPAIR_CHECKPOINT
+    assert planconstraints_repair_parent.stdout.strip() == PLANCONSTRAINTS_REPAIR_PARENT_CHECKPOINT
+    assert (
+        frozenset(planconstraints_repair_changed.stdout.splitlines())
+        == PLANCONSTRAINTS_SOURCE_PATHS
+    )
     assert len(PLANCONSTRAINTS_SOURCE_PATHS) == 5
     assert OPERATOR_RESULTS_RELATIVE_PATH not in PLANCONSTRAINTS_SOURCE_PATHS
     assert not (PLANCONSTRAINTS_SOURCE_PATHS & CURRENT_COMMAND_GOVERNANCE_SUCCESSOR_PATHS)
-    assert planconstraints_current_match.returncode == 0
+    assert truncation_specialist_resolved.stdout.strip() == CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT
+    assert (
+        truncation_specialist_parent.stdout.strip()
+        == CURRENT_TRUNCATION_SPECIALIST_PARENT_CHECKPOINT
+    )
+    assert (
+        frozenset(truncation_specialist_changed.stdout.splitlines())
+        == TRUNCATION_SPECIALIST_SOURCE_PATHS
+    )
+    assert len(TRUNCATION_SPECIALIST_SOURCE_PATHS) == 16
+    assert OPERATOR_RESULTS_RELATIVE_PATH not in TRUNCATION_SPECIALIST_SOURCE_PATHS
+    assert not (TRUNCATION_SPECIALIST_SOURCE_PATHS & CURRENT_COMMAND_GOVERNANCE_SUCCESSOR_PATHS)
+    assert truncation_specialist_current_match.returncode == 0
 
 
 def test_combined_queue_unfinished_count_is_derived() -> None:
@@ -1185,9 +1254,15 @@ def test_truncation_resumes_after_planconstraints_regression_repair() -> None:
         assert match is not None
         section = " ".join(match.group().split())
         assert "**Status:** `PARTIAL`" in section
-        assert "Resume only the bounded provider-free specialist-role recovery gap" in section
-        assert "repair checkpoint `425502c` is complete" in section
-        assert "before" in section and "recursive child recovery" in section
+        assert CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT in section
+        assert "specialist" in section and "v1.2" in section
+        assert "MOCK recovery remains unpromoted" in section
+        assert "Recursive consumption of a truncated recovery child is not implemented." in section
+        assert (
+            "Implement only bounded provider-free recursive recovery of one truncated recovery "
+            "child." in section
+        )
+        assert "Resume only the bounded provider-free specialist-role recovery gap" not in section
         assert "Pause this ticket while" not in section
 
 
@@ -1232,7 +1307,7 @@ def test_planconstraints_ticket_is_mirrored_and_fail_closed() -> None:
         assert "necessary but never proves behavioral schema reliability" in section
         assert "Runtime schema conformance remains a separate empirical" in section
         assert "Item 5" in section and "`ADOPTED_NONAUTHORIZING / IMPLEMENTED`" in section
-        assert CURRENT_PLANCONSTRAINTS_CHECKPOINT in section
+        assert PLANCONSTRAINTS_REPAIR_CHECKPOINT in section
         assert "five-path checkpoint" in section
         assert "case-insensitive `display_count == 1` selected-name rule" in section
         assert "unrelated Fireworks/Alibaba/Morph collisions" in section
@@ -1337,6 +1412,31 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
     assert "then-current 29375-byte operator log" in traceability_text
     assert "then-current 35771-byte operator record" in traceability_text
     assert "global 25-entry ledger / 0.396223 USD" in traceability_text
+    requirements_by_id = {requirement["id"]: requirement for requirement in requirements}
+    truncation_evidence = " ".join(requirements_by_id["J"]["evidence"])
+    assert CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT in truncation_evidence
+    assert CURRENT_TRUNCATION_SPECIALIST_PARENT_CHECKPOINT in truncation_evidence
+    assert "private v1.2 successful specialist child" in truncation_evidence
+    assert "public v1.1 recovery evidence exposes only that hash" in truncation_evidence
+    assert "92 schema/inventory/specialist tests" in truncation_evidence
+    assert "4 promoted-specialist tests" in truncation_evidence
+    assert "2 journal/resume tests" in truncation_evidence
+    assert "1 MOCK integration" in truncation_evidence
+    assert "162-test adjacent matrix" in truncation_evidence
+    assert "INCONCLUSIVE with no pass credit" in truncation_evidence
+    assert (
+        "bounded fail-closed recursive recovery-child consumption next"
+        in (requirements_by_id["J"]["remaining_proof"])
+    )
+    autonomy_evidence = " ".join(requirements_by_id["U"]["evidence"])
+    assert CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT in autonomy_evidence
+    assert CURRENT_TRUNCATION_SPECIALIST_PARENT_CHECKPOINT in autonomy_evidence
+    assert AUTONOMY_INVENTORY_RAW_SHA256 in autonomy_evidence
+    assert AUTONOMY_INVENTORY_SHA256 in autonomy_evidence
+    assert AUTONOMY_DISCOVERY_SEMANTICS_SHA256 in autonomy_evidence
+    assert AUTONOMY_SOURCE_UNIVERSE_SHA256 in autonomy_evidence
+    assert "recursive-child recovery is next" in autonomy_evidence
+    assert "INCONCLUSIVE after 602.86 seconds" in autonomy_evidence
     for requirement in requirements:
         tickets = requirement["tickets"]
         assert isinstance(tickets, list) and all(isinstance(ticket, str) for ticket in tickets)
@@ -1391,7 +1491,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         [
             "git",
             "show",
-            f"{CURRENT_PLANCONSTRAINTS_PARENT_CHECKPOINT}:{OPERATOR_RESULTS_RELATIVE_PATH}",
+            f"{PLANCONSTRAINTS_REPAIR_PARENT_CHECKPOINT}:{OPERATOR_RESULTS_RELATIVE_PATH}",
         ],
         cwd=ROOT,
         check=True,
@@ -1408,9 +1508,16 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     )
     for worklog in worklogs:
         assert (
-            "AUTORUN_STATUS: V3_PLANCONSTRAINTS_001_REGRESSION_REPAIR_COMPLETE_PROVIDER_FREE_"
-            "NONAUTHORIZING_ZERO_PROVIDER_COMMANDS"
+            "AUTORUN_STATUS: V3_TRUNCATION_001_SPECIALIST_ROLE_RECOVERY_CHECKPOINTED_"
+            "PROVIDER_FREE_NONAUTHORIZING_RECURSIVE_CHILD_RECOVERY_NEXT"
         ) in worklog
+        assert "CURRENT_TICKET: V3-TRUNCATION-001" in worklog
+        assert (
+            "CURRENT_LOCAL_SLICE_STATUS: SPECIALIST_ROLE_RECOVERY_COMPLETE_PROVIDER_FREE_"
+            "NONAUTHORIZING_RECURSIVE_CHILD_RECOVERY_PENDING"
+        ) in worklog
+        assert CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT in worklog
+        assert "recursive recovery of one truncated recovery child" in worklog
         assert (
             "OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: USER_OWNED_DRIFT_DETECTED_NOT_OPENED_"
             "OR_RECONCILED_FOR_CURRENT_PROVIDER_FREE_SOURCE_TICKET"
@@ -1771,7 +1878,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         f"Historical selection-plan checkpoint `{HISTORICAL_DCABE_SELECTION_CHECKPOINT}`" in queue
         for queue in normalized_queues
     )
-    assert all(CURRENT_PLANCONSTRAINTS_CHECKPOINT in queue for queue in normalized_queues)
+    assert all(PLANCONSTRAINTS_REPAIR_CHECKPOINT in queue for queue in normalized_queues)
     assert all(
         f"Current selection-plan checkpoint `{HISTORICAL_DCABE_SELECTION_CHECKPOINT}`" not in queue
         for queue in normalized_queues
@@ -1970,24 +2077,29 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert "authrunner-candidate-20260821-r6" in model_selection
     assert "primary-judge-registry-r6.json" in model_selection
     assert "authrunner-primary-judge-20260821-r6" in model_selection
-    assert runtime_status["updated_at"] == "2026-08-24T12:53:58Z"
-    assert runtime_status["candidate_commit"] == CURRENT_PLANCONSTRAINTS_CHECKPOINT
+    assert runtime_status["updated_at"] == "2026-08-24T14:43:31Z"
+    assert runtime_status["candidate_commit"] == CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT
+    assert (
+        runtime_status["candidate_commit_parent"] == CURRENT_TRUNCATION_SPECIALIST_PARENT_CHECKPOINT
+    )
     assert runtime_status["candidate_commit_pushed"] is False
     assert runtime_status["candidate_commit_remote_resolved"] is False
-    assert runtime_status["candidate_successor_commit"] == CURRENT_PLANCONSTRAINTS_CHECKPOINT
+    assert runtime_status["candidate_successor_commit"] == CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT
     assert runtime_status["candidate_successor_status"] == (
         "LOCAL_COMMIT_NOT_PUSHED_OR_REMOTE_RESOLVED"
     )
     assert (
-        "Exact five-path provider-free V3-PLANCONSTRAINTS-001 regression repair"
+        "Exact 16-path provider-free V3-TRUNCATION-001 specialist-role recovery slice"
         in runtime_status["candidate_commit_scope"]
     )
     assert (
-        "whole-inventory display-name uniqueness conjunct"
-        in (runtime_status["candidate_commit_scope"])
+        "private successful specialist recovery children"
+        in runtime_status["candidate_commit_scope"]
     )
-    assert "selected display_count == 1" in runtime_status["candidate_commit_scope"]
-    assert "Sail Research and Modal" in runtime_status["candidate_commit_scope"]
+    assert "public v1.1 evidence" in runtime_status["candidate_commit_scope"]
+    assert "live REAL promotion" in runtime_status["candidate_commit_scope"]
+    assert "byte-stable zero-transport resume" in runtime_status["candidate_commit_scope"]
+    assert "recursive recovery-child consumption" in runtime_status["candidate_commit_scope"]
     assert "operator_results" in runtime_status["candidate_commit_scope"]
     assert "operator action are excluded" in runtime_status["candidate_commit_scope"]
     assert (
@@ -1996,27 +2108,35 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert runtime_status["historical_paid_diagnostic_base_commit"] == (
         HISTORICAL_PAID_DIAGNOSTIC_BASE_CHECKPOINT
     )
-    assert runtime_status["last_checkpoint_commit"] == CURRENT_PLANCONSTRAINTS_CHECKPOINT
-    assert "exact five-path" in runtime_status["last_checkpoint_commit_scope"]
+    assert runtime_status["last_checkpoint_commit"] == CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT
+    assert "exact 16-path" in runtime_status["last_checkpoint_commit_scope"]
     assert (
-        "V3_PLANCONSTRAINTS_001_SELECTED_PROVIDER_DISPLAY_NAME_PARITY_REPAIR_COMPLETE_"
-        "PROVIDER_FREE_NONAUTHORIZING" in (runtime_status["last_checkpoint_commit_scope"])
+        "V3_TRUNCATION_001_SPECIALIST_ROLE_RECOVERY_SLICE_COMPLETE_TICKET_PARTIAL_"
+        "PROVIDER_FREE_NONAUTHORIZING" in runtime_status["last_checkpoint_commit_scope"]
     )
     assert (
-        "selected name remains uniquely matched" in runtime_status["last_checkpoint_commit_scope"]
+        CURRENT_TRUNCATION_SPECIALIST_PARENT_CHECKPOINT
+        in runtime_status["last_checkpoint_commit_scope"]
     )
     assert (
-        "unrelated duplicate names are allowed" in (runtime_status["last_checkpoint_commit_scope"])
+        "private v1.2 successful specialist children"
+        in runtime_status["last_checkpoint_commit_scope"]
     )
+    assert (
+        "public v1.1 evidence exposes only the outcome hash"
+        in runtime_status["last_checkpoint_commit_scope"]
+    )
+    assert "recursive child consumption" in runtime_status["last_checkpoint_commit_scope"]
+    assert "425502c PLANCONSTRAINTS repair" in runtime_status["last_checkpoint_commit_scope"]
     assert "operator_results" in runtime_status["last_checkpoint_commit_scope"]
     assert "provider/network execution" in runtime_status["last_checkpoint_commit_scope"]
     assert "operator action are excluded" in runtime_status["last_checkpoint_commit_scope"]
     planconstraints_status = runtime_status["planconstraints_provider_free_route_admission"]
     assert planconstraints_status == {
         "ticket": "V3-PLANCONSTRAINTS-001",
-        "status": "COMPLETE_PROVIDER_FREE_NONAUTHORIZING_REGRESSION_REPAIRED",
-        "source_checkpoint_commit": CURRENT_PLANCONSTRAINTS_CHECKPOINT,
-        "source_checkpoint_parent": CURRENT_PLANCONSTRAINTS_PARENT_CHECKPOINT,
+        "status": "HISTORICAL_COMPLETE_PROVIDER_FREE_NONAUTHORIZING_REGRESSION_REPAIRED",
+        "source_checkpoint_commit": PLANCONSTRAINTS_REPAIR_CHECKPOINT,
+        "source_checkpoint_parent": PLANCONSTRAINTS_REPAIR_PARENT_CHECKPOINT,
         "source_checkpoint_subject": "Restore selected endpoint name parity",
         "source_checkpoint_exact_path_count": 5,
         "historical_base_source_checkpoint_commit": HISTORICAL_PLANCONSTRAINTS_BASE_CHECKPOINT,
@@ -2074,16 +2194,66 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "historical_repository_full_suite_skipped": 25,
         "historical_repository_full_suite_failed": 1,
     }
+    assert runtime_status["truncation_provider_free_recovery"] == {
+        "ticket": "V3-TRUNCATION-001",
+        "status": "PARTIAL_SPECIALIST_ROLE_RECOVERY_SLICE_COMPLETE_PROVIDER_FREE_NONAUTHORIZING",
+        "source_checkpoint_commit": CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT,
+        "source_checkpoint_parent": CURRENT_TRUNCATION_SPECIALIST_PARENT_CHECKPOINT,
+        "source_checkpoint_subject": "Add specialist truncation recovery custody",
+        "source_checkpoint_exact_path_count": 16,
+        "prior_retained_parent_recovery_checkpoint": PLANCONSTRAINTS_REPAIR_PARENT_CHECKPOINT,
+        "historical_planconstraints_repair_checkpoint": PLANCONSTRAINTS_REPAIR_CHECKPOINT,
+        "historical_planconstraints_base_checkpoint": HISTORICAL_PLANCONSTRAINTS_BASE_CHECKPOINT,
+        "historical_authrunner_replay_checkpoint": HISTORICAL_AUTHRUNNER_REPLAY_CHECKPOINT,
+        "private_successful_child_schema_version": "1.2",
+        "private_specialist_accepted_outcome_required_for_exact_specialist_child": True,
+        "private_specialist_accepted_outcome_sha256_bound": True,
+        "public_recovery_request_evidence_schema_version": "1.1",
+        "public_specialist_outcome_projection": "SHA256_ONLY",
+        "public_specialist_outcome_body_exposed": False,
+        "specialist_credit_requires_live_real_promotion": True,
+        "specialist_credit_requires_exact_revalidated_usage": True,
+        "selected_parent_remains_truncated": True,
+        "serialized_child_is_authority": False,
+        "mock_child_is_creditable": False,
+        "mock_pipeline_specialist_child_count": 2,
+        "mock_pipeline_promotion_count": 0,
+        "mock_pipeline_specialist_credit_count": 0,
+        "mock_resume_provider_transport_count": 0,
+        "mock_resume_journal_byte_stable": True,
+        "recursive_child_recovery_complete": False,
+        "positive_nonempty_full_pipeline_real_promotion_available": False,
+        "final_schema_inventory_specialist_tests_passed": 92,
+        "promoted_specialist_assurance_tests_passed": 4,
+        "journal_resume_tests_passed": 2,
+        "mock_pipeline_integration_tests_passed": 1,
+        "earlier_adjacent_tests_passed": 162,
+        "ruff_check": "PASS",
+        "ruff_format_check": "PASS",
+        "strict_mypy": "PASS",
+        "canonical_generator_write_and_verify": "PASS",
+        "diff_integrity": "PASS",
+        "independent_review": "PASS_NO_BLOCKER_OR_HIGH",
+        "maximum_assurance_attempt_status": "INCONCLUSIVE_NO_TERMINAL_RESULT_NO_PASS_CREDIT",
+        "maximum_assurance_attempt_elapsed_seconds": 602.86,
+        "provider_or_network_accessed": False,
+        "secret_material_read": False,
+        "operator_private_ledger_accessed_or_mutated": False,
+        "campaign_or_operator_action_executed": False,
+        "runtime_authority": False,
+        "next_provider_free_slice": "BOUNDED_RECURSIVE_RECOVERY_CHILD_CONSUMPTION",
+    }
     assert runtime_status["autorun_status"] == (
-        "V3_PLANCONSTRAINTS_001_REGRESSION_REPAIR_COMPLETE_PROVIDER_FREE_NONAUTHORIZING_"
-        "NEXT_TRUNCATION_SPECIALIST_RECOVERY_ZERO_CURRENT_EXTERNAL_COMMANDS"
+        "V3_TRUNCATION_001_SPECIALIST_RECOVERY_SLICE_COMPLETE_TICKET_PARTIAL_PROVIDER_FREE_"
+        "NONAUTHORIZING_NEXT_RECURSIVE_CHILD_RECOVERY_ZERO_CURRENT_EXTERNAL_COMMANDS"
     )
     assert runtime_status["autorun_status_evidence_scope"] == (
-        "LOCAL_PROVIDER_FREE_PLANCONSTRAINTS_REPAIR_CHECKPOINT_425502C_PLUS_PRIOR_RETAINED_"
-        "PARENT_RECOVERY_CHECKPOINT_390E9B2_PLUS_HISTORICAL_PLANCONSTRAINTS_BASE_7EF4717_"
-        "PLUS_LAST_RECONCILED_AUTHRUNNER_OPERATOR_REPLAY_EVIDENCE_NONAUTHORIZING_NOT_"
-        "INDEPENDENTLY_AUTHENTICATED_BY_CODEX; CURRENT_USER_OWNED_OPERATOR_FILE_DRIFTED_"
-        "AND_WAS_NOT_OPENED_OR_RECONCILED_FOR_CURRENT_PROVIDER_FREE_SOURCE_TICKET"
+        "LOCAL_PROVIDER_FREE_TRUNCATION_SPECIALIST_RECOVERY_CHECKPOINT_721D17A_PLUS_PRIOR_"
+        "RETAINED_PARENT_RECOVERY_CHECKPOINT_390E9B2_PLUS_HISTORICAL_PLANCONSTRAINTS_REPAIR_"
+        "CHECKPOINT_425502C_AND_BASE_7EF4717_PLUS_HISTORICAL_AUTHRUNNER_REPLAY_CHECKPOINT_"
+        "C627F2D; LAST_RECONCILED_OPERATOR_EVIDENCE_REMAINS_NONAUTHORIZING_AND_NOT_"
+        "INDEPENDENTLY_AUTHENTICATED_BY_CODEX; CURRENT_USER_OWNED_OPERATOR_FILE_DRIFTED_AND_"
+        "WAS_NOT_OPENED_OR_RECONCILED_FOR_CURRENT_PROVIDER_FREE_SOURCE_TICKET"
     )
     assert (
         runtime_status["autorun_status_operator_evidence_independently_authenticated_by_codex"]
@@ -2093,17 +2263,18 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "PAUSED_AFTER_C627F2D_INDEX_19_VALID_NONCREDITING_NONAUTHORIZING_OFFLINE_REPLAY_"
         "ZERO_CURRENT_COMMANDS_NEXT_INDEX_NOT_STATED"
     )
-    assert runtime_status["current_ticket"] == "V3-PLANCONSTRAINTS-001"
+    assert runtime_status["current_ticket"] == "V3-TRUNCATION-001"
     assert runtime_status["last_completed_provider_free_work"] == {
-        "ticket": "V3-PLANCONSTRAINTS-001",
-        "slice": "SELECTED_PROVIDER_DISPLAY_NAME_PARITY_REPAIR_COMPLETE_AT_425502C",
+        "ticket": "V3-TRUNCATION-001",
+        "slice": "SPECIALIST_ROLE_RECOVERY_COMPLETE_AT_721D17A_WITHIN_PARTIAL_TICKET",
         "status": (
-            "COMPLETE_PROVIDER_FREE_NONAUTHORIZING; SELECTED_NAME_MUST_BE_UNIQUE; "
-            "UNRELATED_DUPLICATE_NAMES_ALLOWED; FULL_CAMPAIGN_STILL_BLOCKED_TYPED_UNAVAILABLE"
+            "PARTIAL_PROVIDER_FREE_NONAUTHORIZING; SPECIALIST_CHILD_PRIVATE_V1_2_AND_PUBLIC_"
+            "HASH_ONLY_V1_1_CUSTODY_COMPLETE; CREDIT_REQUIRES_LIVE_REAL_PROMOTION; MOCK_AND_"
+            "SERIALIZED_EVIDENCE_NONCREDITING"
         ),
         "next_slice": (
-            "RESUME_BOUNDED_PROVIDER_FREE_V3_TRUNCATION_001_SPECIALIST_ROLE_RECOVERY_ONLY_"
-            "THEN_RECORD_BEFORE_RECURSIVE_CHILD_RECOVERY"
+            "IMPLEMENT_BOUNDED_PROVIDER_FREE_RECURSIVE_RECOVERY_CHILD_CONSUMPTION_THEN_RECORD_"
+            "BEFORE_POSITIVE_NONEMPTY_FULL_PIPELINE_REAL_PROMOTION"
         ),
         "provider_access_authorized": False,
         "secret_access_authorized": False,
@@ -2121,12 +2292,13 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     }
     assert runtime_status["prior_provider_free_work"] == {
         "ticket": "V3-TRUNCATION-001",
-        "source_checkpoint_commit": CURRENT_PLANCONSTRAINTS_PARENT_CHECKPOINT,
+        "source_checkpoint_commit": PLANCONSTRAINTS_REPAIR_PARENT_CHECKPOINT,
         "source_checkpoint_parent": "b1f8ba9eba7efef94388ab185529f1248fb608c3",
         "source_checkpoint_exact_path_count": 14,
         "completed_slice": "RETAINED_PARENT_SURFACE_RECOVERY",
         "ticket_status": "PARTIAL",
-        "specialist_role_recovery_complete": False,
+        "specialist_role_recovery_complete": True,
+        "specialist_role_recovery_checkpoint": CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT,
         "recursive_child_recovery_complete": False,
         "positive_nonempty_full_pipeline_real_promotion_available": False,
         "provider_or_network_accessed": False,
@@ -2138,16 +2310,14 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         "implementation_commit": HISTORICAL_PHASE_ZERO_CHECKPOINT,
         "implementation_commit_pushed": False,
         "implementation_commit_remote_resolved": False,
-        "current_reconciliation_commit": CURRENT_PLANCONSTRAINTS_CHECKPOINT,
+        "current_reconciliation_commit": CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT,
         "current_reconciliation_commit_pushed": False,
         "current_reconciliation_commit_remote_resolved": False,
         "historical_c627_authrunner_entrypoint_successor_path_count": 3,
-        "current_reconciliation_exact_path_count": 5,
+        "current_reconciliation_exact_path_count": 16,
         "artifact_path": "docs/remediation/v3/autonomy_gate_inventory.json",
         "schema_path": "schemas/autonomy_gate_inventory.schema.json",
-        "artifact_reconciled_for_slice": (
-            "V3_PLANCONSTRAINTS_SELECTED_PROVIDER_DISPLAY_NAME_PARITY_REPAIR"
-        ),
+        "artifact_reconciled_for_slice": "V3_TRUNCATION_SPECIALIST_ROLE_RECOVERY",
         "artifact_raw_sha256": AUTONOMY_INVENTORY_RAW_SHA256,
         "schema_raw_sha256": AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256,
         "source_discovery_semantics_sha256": AUTONOMY_DISCOVERY_SEMANTICS_SHA256,
@@ -2176,11 +2346,11 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
             "EXECUTION_NEXT_ACTION"
         ),
         "current_execution_status": (
-            "PLANCONSTRAINTS_REPAIR_COMPLETE_PROVIDER_FREE_NONAUTHORIZING; AUTONOMY_PHASE_2_"
-            "PAUSED; NO_EXTERNAL_SEQUENCE_COMMAND_OR_INDEX"
+            "TRUNCATION_SPECIALIST_RECOVERY_SLICE_COMPLETE_TICKET_PARTIAL_PROVIDER_FREE_"
+            "NONAUTHORIZING; AUTONOMY_PHASE_2_PAUSED; NO_EXTERNAL_SEQUENCE_COMMAND_OR_INDEX"
         ),
         "current_execution_next_action": (
-            "RESUME_PROVIDER_FREE_V3_TRUNCATION_001_SPECIALIST_RECOVERY; KEEP_AUTHRUNNER_"
+            "IMPLEMENT_PROVIDER_FREE_V3_TRUNCATION_001_RECURSIVE_CHILD_RECOVERY; KEEP_AUTHRUNNER_"
             "PARTIAL_BLOCKED_SAFETY; NO_CURRENT_COMMAND_OR_INDEX_INFERENCE"
         ),
     }
@@ -2218,11 +2388,11 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
             "EXECUTION_NEXT_ACTION"
         ),
         "current_execution_status": (
-            "PLANCONSTRAINTS_REPAIR_COMPLETE_PROVIDER_FREE_NONAUTHORIZING; AUTONOMY_PHASE_2_"
-            "PAUSED; NO_EXTERNAL_SEQUENCE_COMMAND_OR_INDEX"
+            "TRUNCATION_SPECIALIST_RECOVERY_SLICE_COMPLETE_TICKET_PARTIAL_PROVIDER_FREE_"
+            "NONAUTHORIZING; AUTONOMY_PHASE_2_PAUSED; NO_EXTERNAL_SEQUENCE_COMMAND_OR_INDEX"
         ),
         "current_execution_next_action": (
-            "RESUME_PROVIDER_FREE_V3_TRUNCATION_001_SPECIALIST_RECOVERY; KEEP_AUTHRUNNER_"
+            "IMPLEMENT_PROVIDER_FREE_V3_TRUNCATION_001_RECURSIVE_CHILD_RECOVERY; KEEP_AUTHRUNNER_"
             "PARTIAL_BLOCKED_SAFETY; NO_CURRENT_COMMAND_OR_INDEX_INFERENCE"
         ),
     }
@@ -2305,29 +2475,37 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
         is False
     )
     assert runtime_status["last_validation"]["post_c627_new_spend"] is False
-    resume_action = runtime_status["pause_state"]["resume_action_v3_authrunner"]
-    assert CURRENT_PLANCONSTRAINTS_CHECKPOINT in resume_action
-    assert HISTORICAL_AUTHRUNNER_REPLAY_CHECKPOINT in resume_action
-    assert "V3-PLANCONSTRAINTS-001 is already complete provider-free" in resume_action
-    assert "FULL remains fail-closed on typed UNAVAILABLE" in resume_action
-    assert "separate authoritative AUTHRUNNER evidence" in resume_action
-    assert "no next index is stated or inferred" in resume_action
-    assert "No AUTHRUNNER/operator command is current" in resume_action
-    assert "V3-AUTONOMY-001 Phase 2 is paused" in resume_action
     pause_state = runtime_status["pause_state"]
+    current_action = pause_state["next_action_after_v3_truncation_specialist_recovery"]
+    resume_action = pause_state["resume_action_v3_truncation_recursive_child_recovery"]
+    assert "bounded provider-free recursive recovery-child consumption" in current_action
+    assert "original TRUNCATED parent" in current_action
+    assert "live-REAL-only promotion credit" in current_action
+    assert PLANCONSTRAINTS_REPAIR_CHECKPOINT in current_action
+    assert HISTORICAL_PLANCONSTRAINTS_BASE_CHECKPOINT in current_action
+    assert HISTORICAL_AUTHRUNNER_REPLAY_CHECKPOINT in current_action
+    assert "Do not infer or issue any operator/provider command" in current_action
+    assert "bounded provider-free recursive recovery-child consumption only" in resume_action
+    assert "keep the ticket PARTIAL" in resume_action
+    assert "positive nonempty full-pipeline REAL promotion evidence" in resume_action
+    assert "No operator/provider authority exists" in resume_action
     assert pause_state["non_allowlisted_pause_journal_fields_are_historical"] is True
     assert pause_state["non_allowlisted_pause_journal_fields_are_current_actions"] is False
     assert pause_state["current_semantic_field_allowlist"] == [
-        "next_action_after_v3_authrunner_provider_free",
-        "resume_action_v3_authrunner",
+        "next_action_after_v3_truncation_specialist_recovery",
+        "resume_action_v3_truncation_recursive_child_recovery",
     ]
     assert "Every field in this object" in pause_state["historical_pause_journal_scope"]
     assert "validation*" in pause_state["historical_pause_journal_scope"]
     assert "checkpoint*" in pause_state["historical_pause_journal_scope"]
     assert "timestamped_pause_journal_scope" not in pause_state
     assert "timestamped_pause_journal_entries_are_current_actions" not in pause_state
-    assert pause_state["current_action_field"] == ("next_action_after_v3_authrunner_provider_free")
-    assert pause_state["current_resume_field"] == "resume_action_v3_authrunner"
+    assert pause_state["current_action_field"] == (
+        "next_action_after_v3_truncation_specialist_recovery"
+    )
+    assert pause_state["current_resume_field"] == (
+        "resume_action_v3_truncation_recursive_child_recovery"
+    )
     assert "result_v3_authrunner_current_r2_r5_r2_preflight" not in pause_state
     assert "result_v3_authrunner_historical_r2_r5_r2_preflight" in pause_state
     assert (
@@ -2781,7 +2959,7 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     assert historical_c627_receipt["paid_authority"] is False
     assert historical_c627_receipt["runtime_authority"] is False
     assert runtime_status["last_validation"]["terminal_full_suite_run"] is False
-    assert runtime_status["last_validation"]["terminal_full_suite_attempt_started"] is True
+    assert runtime_status["last_validation"]["terminal_full_suite_attempt_started"] is False
     operator_reconciliation = runtime_status["last_validation"]["last_reconciled_operator_evidence"]
     assert (
         operator_reconciliation["operator_results_sha256"]
@@ -3759,32 +3937,57 @@ def test_operator_command_results_have_a_persistent_reconciliation_contract() ->
     )
     assert replay_successor["authority"] is False
     assert runtime_status["last_validation"]["terminal_full_suite_run"] is False
-    assert runtime_status["last_validation"]["terminal_full_suite_attempt_started"] is True
+    assert runtime_status["last_validation"]["terminal_full_suite_attempt_started"] is False
     assert runtime_status["last_validation"]["status"] == (
-        "V3_PLANCONSTRAINTS_001_SELECTED_PROVIDER_DISPLAY_NAME_PARITY_REGRESSION_REPAIRED_"
-        "TICKET_COMPLETE_PROVIDER_FREE_NONAUTHORIZING_FULL_FAIL_CLOSED_TYPED_UNAVAILABLE_"
-        "AUTHRUNNER_PARTIAL_BLOCKED_SAFETY_HISTORICAL_FULL_SUITE_INCOMPLETE"
+        "V3_TRUNCATION_001_SPECIALIST_ROLE_RECOVERY_SLICE_COMPLETE_TICKET_PARTIAL_PROVIDER_FREE_"
+        "NONAUTHORIZING_RECURSIVE_CHILD_RECOVERY_PENDING_MAXIMUM_ASSURANCE_INCONCLUSIVE"
     )
-    assert "921 PASS" in runtime_status["last_validation"]["command"]
-    assert "250 PASS" in runtime_status["last_validation"]["command"]
-    assert "32 PASS" in runtime_status["last_validation"]["command"]
+    assert "92 PASS" in runtime_status["last_validation"]["command"]
+    assert "4 PASS" in runtime_status["last_validation"]["command"]
+    assert "2 PASS" in runtime_status["last_validation"]["command"]
+    assert "1 PASS" in runtime_status["last_validation"]["command"]
+    assert "162 PASS" in runtime_status["last_validation"]["command"]
+    assert "INCONCLUSIVE after 602.86 seconds" in runtime_status["last_validation"]["command"]
     assert (
-        "V3-PLANCONSTRAINTS-001 is COMPLETE_PROVIDER_FREE_NONAUTHORIZING after the exact "
-        "five-path repair checkpoint 425502c" in (runtime_status["last_validation"]["result"])
-    )
-    assert (
-        "selected provider display name must occur exactly once"
-        in (runtime_status["last_validation"]["result"])
-    )
-    assert (
-        "duplicates among unrelated endpoints do not reject"
-        in (runtime_status["last_validation"]["result"])
+        "V3-TRUNCATION-001 remains PARTIAL after exact 16-path provider-free specialist recovery "
+        f"checkpoint {CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT}"
+        in runtime_status["last_validation"]["result"]
     )
     assert (
-        "Historical c627f2d replay and operator evidence remain separate"
-        in (runtime_status["last_validation"]["result"])
+        "Private successful specialist children use schema v1.2"
+        in runtime_status["last_validation"]["result"]
     )
-    terminal_full_suite_attempt = runtime_status["last_validation"]["terminal_full_suite_attempt"]
+    assert (
+        "public recovery request evidence uses v1.1 and exposes only that hash"
+        in runtime_status["last_validation"]["result"]
+    )
+    assert (
+        "only live REAL promotion with exact revalidated usage can produce specialist credit"
+        in runtime_status["last_validation"]["result"]
+    )
+    assert (
+        "two successful child terminals remain unpromoted and noncrediting"
+        in runtime_status["last_validation"]["result"]
+    )
+    assert "resume performs zero transport" in runtime_status["last_validation"]["result"]
+    assert (
+        "Recursive recovery-child consumption and positive nonempty full-pipeline REAL promotion "
+        "remain absent" in runtime_status["last_validation"]["result"]
+    )
+    assert (
+        "Historical 425502c PLANCONSTRAINTS repair" in runtime_status["last_validation"]["result"]
+    )
+    assert "7ef4717 implementation base" in runtime_status["last_validation"]["result"]
+    assert "c627f2d AUTHRUNNER replay" in runtime_status["last_validation"]["result"]
+    assert runtime_status["last_validation"]["maximum_assurance_attempt"] == {
+        "status": "INCONCLUSIVE_NO_TERMINAL_RESULT_NO_PASS_CREDIT",
+        "elapsed_seconds": 602.86,
+        "terminal_result_available": False,
+        "pass_credit": False,
+    }
+    terminal_full_suite_attempt = runtime_status["last_validation"][
+        "historical_planconstraints_terminal_full_suite_attempt"
+    ]
     assert terminal_full_suite_attempt == {
         "command": ".venv/bin/pytest -q",
         "status": "INCOMPLETE_PREEXISTING_DETERMINISTIC_FAILURE_NO_PASS_CREDIT",

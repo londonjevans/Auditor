@@ -249,14 +249,23 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   serialized-only, forged, ambiguous, swapped, or MOCK recovery remain non-creditable. The
   retained-parent validation passed `510` affected tests, full Ruff/format, strict mypy, canonical
   generator, dependency, import, and diff gates; independent red-team review found no remaining
-  blocker/HIGH.
-- **Remaining limitation:** Specialist-role recovery and recursive consumption of a truncated
-  recovery child are not implemented. A positive nonempty full-pipeline REAL promotion remains an
-  external criterion; synthetic live-custody unit evidence and MOCK pipeline execution are not
-  relabeled as provider evidence.
-- **Current action:** Resume only the bounded provider-free specialist-role recovery gap now that
-  `V3-PLANCONSTRAINTS-001` repair checkpoint `425502c` is complete. Record and validate that slice
-  before attempting recursive child recovery.
+  blocker/HIGH. Checkpoint `721d17a4ff08cc52ccdf0aa92ed04258e4137807` additionally admits an
+  exact specialist investigator root into the same bounded direct family, binds each successful
+  child to a v1.2 `SpecialistAcceptedOutcome`, and exposes only its hash in v1.1 public recovery
+  evidence. Serialized outcomes remain nonauthorizing: specialist completion requires the exact
+  promoted live parent/child usage identities, recovery coordinates, contexts, artifacts, and
+  public hashes. The still-truncated parent is superseded in role failure accounting only by that
+  live promotion; unrelated failures remain failures. MOCK recovery remains unpromoted,
+  noncreditable, and byte-stable across zero-transport resume.
+- **Remaining limitation:** Recursive consumption of a truncated recovery child is not implemented.
+  A positive nonempty full-pipeline REAL promotion remains an external criterion; synthetic
+  live-custody unit evidence and MOCK pipeline execution are not relabeled as provider evidence.
+  The broad maximum-assurance integration remained CPU-bound for a bounded `602.86s` and is
+  `INCONCLUSIVE`, not a pass.
+- **Current action:** Implement only bounded provider-free recursive recovery of one truncated
+  recovery child. Preserve exact depth, parent-family, surface partition, request/token/USD,
+  append-order, live-authority, and zero-transport resume custody; keep unpromoted, serialized-only,
+  MOCK, ambiguous, over-depth, and budget-exhausted paths noncreditable.
 
 ### V3-COVERAGE-001 — Risk-tiered feasible surface coverage
 

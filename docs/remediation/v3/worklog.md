@@ -4,20 +4,20 @@ The objective source is `docs/remediation/v3/product_completion_goal.txt`, with 
 `e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-HISTORICAL_ENTRY_SCOPE: Every timestamped entry below the newest `2026-08-24T12:53:58Z` entry is a
+HISTORICAL_ENTRY_SCOPE: Every timestamped entry below the newest `2026-08-24T14:38:31Z` entry is a
 boundary-local historical snapshot. Any `current`, `latest`, `next`, or command wording inside those
 older entries applies only at that recorded boundary and is not present authority or current action.
 
-AUTORUN_STATUS: V3_PLANCONSTRAINTS_001_REGRESSION_REPAIR_COMPLETE_PROVIDER_FREE_NONAUTHORIZING_ZERO_PROVIDER_COMMANDS
+AUTORUN_STATUS: V3_TRUNCATION_001_SPECIALIST_ROLE_RECOVERY_CHECKPOINTED_PROVIDER_FREE_NONAUTHORIZING_RECURSIVE_CHILD_RECOVERY_NEXT
 OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: USER_OWNED_DRIFT_DETECTED_NOT_OPENED_OR_RECONCILED_FOR_CURRENT_PROVIDER_FREE_SOURCE_TICKET
 LAST_RECONCILED_OPERATOR_RESULTS: `4616c5a143db158f3af12d0a4d58306e0da6ca9dd4bbb54e6c7484dfc2de0251` / 115171 bytes / 2111 lines; operator-reported, nonauthorizing, and not independently authenticated by Codex.
 CURRENT_MILESTONE: M1-DETERMINISTIC-PRODUCT (REACHED)
-CURRENT_TICKET: V3-PLANCONSTRAINTS-001
-CURRENT_LOCAL_SLICE_STATUS: SELECTED_PROVIDER_DISPLAY_NAME_PARITY_REGRESSION_REPAIRED_COMPLETE_PROVIDER_FREE_NONAUTHORIZING
+CURRENT_TICKET: V3-TRUNCATION-001
+CURRENT_LOCAL_SLICE_STATUS: SPECIALIST_ROLE_RECOVERY_COMPLETE_PROVIDER_FREE_NONAUTHORIZING_RECURSIVE_CHILD_RECOVERY_PENDING
 LAST_COMPLETED_TICKET: V3-PLANCONSTRAINTS-001 (COMPLETE)
-NEXT_ACTION: Resume only the bounded provider-free V3-TRUNCATION-001 specialist-role recovery gap, then record it before recursive child recovery. Preserve no credit for unsupported, unpromoted, serialized-only, MOCK, or non-REAL paths. No provider, operator, or inferred run-index action is authorized.
-LAST_COMMAND: PLANCONSTRAINTS repair checkpoint `425502c` passed the `921`-test adjacent runner matrix with two known code-retarget warnings, the overlapping `250`-test route/snapshot/discovery/admission matrix, and `32` canonical inventory tests. Ruff check/format, strict mypy on the changed source, canonical generator write/verify, and diff-check passed. Independent latest-byte review found no blocker/HIGH. No provider, network, credential, private-ledger, operator-record, or run-index action occurred.
-LAST_RESULT: SELECTED_PROVIDER_DISPLAY_NAME_PARITY_REPAIRED_COMPLETE_PROVIDER_FREE_NONAUTHORIZING — the selected name must occur exactly once in the complete casefold inventory; unrelated duplicate display names are allowed. Exact Sail Research and Modal positives/negatives cover generic and constrained snapshots plus full discovery, and downstream registry/live/runtime admission reuses the same guarded evaluator. FULL remains blocked by typed UNAVAILABLE empirical-schema and token-detail evidence.
+NEXT_ACTION: Implement only bounded provider-free recursive recovery of one truncated recovery child with exact depth, parent-family, surface partition, request/token/USD, append-order, live-authority, and zero-transport resume custody. Preserve no credit for unpromoted, serialized-only, MOCK, ambiguous, over-depth, or budget-exhausted paths. No provider, operator, or inferred run-index action is authorized.
+LAST_COMMAND: Specialist recovery checkpoint `721d17a` passed `92` final release-schema/inventory/specialist tests, `4` promoted coverage/assurance tests, `2` focused v1.2 journal tests, and `1` frozen-byte MOCK/no-credit/zero-transport-resume integration. An earlier adjacent recovery/journal/evidence/promotion matrix passed `162` tests. Ruff check/format, strict mypy on `7` production files, canonical generator write/verify, py_compile, and diff-check passed. Independent latest-byte red team found no blocker/HIGH. The broad maximum-assurance integration remained CPU-bound for `602.86s` and was interrupted; it is `INCONCLUSIVE`, not a pass. No provider, network, credential, private-ledger, operator-record, or run-index action occurred.
+LAST_RESULT: SPECIALIST_TRUNCATION_RECOVERY_CHECKPOINTED_PARTIAL_PROVIDER_FREE_NONAUTHORIZING — exact investigator roots may open bounded direct recovery; successful children carry v1.2 accepted-outcome custody and public hash-only v1.1 evidence. Specialist completion requires exact promoted live parent/child identities, contexts, recovery coordinates, artifacts, and public hashes. The truncated parent is superseded only under that live promotion; unrelated failures remain failures. MOCK and serialized-only evidence remain noncreditable and resume with zero transport.
 REAL_MODEL_CALLS_ATTEMPTED: NOT_RECONCILED_FOR_CURRENT_USER_OWNED_FILE; LAST_RECONCILED_RECORD_NOT_STATED
 REAL_MODEL_CALLS_SUCCEEDED: NOT_RECONCILED_FOR_CURRENT_USER_OWNED_FILE; LAST_RECONCILED_RECORD_NOT_STATED
 REAL_MODEL_CALLS_REJECTED: NOT_RECONCILED_FOR_CURRENT_USER_OWNED_FILE; LAST_RECONCILED_RECORD_NOT_STATED
@@ -29,7 +29,44 @@ OPENROUTER_BUDGET_REMAINING_USD: NOT_STATED_IN_LAST_RECONCILED_25_ENTRY_LEDGER; 
 HISTORICAL_GOVERNED_LEDGER_USED_USD: 0.0034764325
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable. A private holdout and independently adjudicated professional comparison are not supplied, but those optional human/private tiers are objective-out-of-scope and are not current completion blockers.
-LAST_CHECKPOINT_COMMIT: 425502c5cbc173578053423d946ef24843f26285, direct child of 390e9b29e748e38d511da9f0a54cfc4fa1a2c0a8, owns exactly five PLANCONSTRAINTS source, canonical-inventory, and unit-test paths; `git diff-tree --no-commit-id --name-only -r 425502c5cbc173578053423d946ef24843f26285` is the exact path manifest. It excludes governance, operator results, `.gitignore`, provider execution, secrets, and private-ledger access. Current inventory raw/self/discovery/universe hashes are 7a0655597bf161bd3f90c67beba1845f9783626661b11ba8162acd1623b46965, a1556b6f2b816af1562401a646fcea61e34dadc069140cbe7b40d0447bae3fb1, 4f1adb9e0bc8db7899fa4eb2928ee03f87d4d61d4113a0555fcdae750e260042, and acf4bb31570e028336e572560d5348a30013070d2335c157a467dfae05c98b83; counts are 3,657 sources / 3,660 occurrences / 3,614 gate sources / 43 non-gating controls / 13 source kinds / 35 logical gates / 29 unsatisfied / 15 current-manual. Prior retained-parent checkpoint: 390e9b2; historical PLANCONSTRAINTS base: 7ef4717; historical replay checkpoint: c627f2d; paused Phase-2 stash: 31b8d30f14a012c1c7fe1b7e2d5647c874fbbd50.
+LAST_CHECKPOINT_COMMIT: 721d17a4ff08cc52ccdf0aa92ed04258e4137807, direct child of 847e7180923e95768271c6fe7e8b06732a7d919a, owns exactly 16 specialist-recovery source, generated-schema/inventory, fake-provider, unit-test, and local-integration paths; `git diff-tree --no-commit-id --name-only -r 721d17a4ff08cc52ccdf0aa92ed04258e4137807` is the exact path manifest. It excludes governance, operator results, `.gitignore`, provider execution, secrets, and private-ledger access. Current inventory raw/self/discovery/universe hashes are 82274345013e650e2bb94cced64f951d64c91ace389ac190b16c34555e681dc2, 349af767d9e07bb44a7483a5ab3e309ee7d8f739d49902f5143508901d79f90e, 4f1adb9e0bc8db7899fa4eb2928ee03f87d4d61d4113a0555fcdae750e260042, and c0d55db7f01762a1f014290af40544fc1a20842a8bbff72e053b379792d17fa5; counts remain 3,657 sources / 3,660 occurrences / 3,614 gate sources / 43 non-gating controls / 13 source kinds / 35 logical gates / 29 unsatisfied / 15 current-manual. Prior retained-parent checkpoint: 390e9b2; PLANCONSTRAINTS repair checkpoint: 425502c; historical PLANCONSTRAINTS base: 7ef4717; historical replay checkpoint: c627f2d; paused Phase-2 stash: 31b8d30f14a012c1c7fe1b7e2d5647c874fbbd50.
+
+## 2026-08-24T14:38:31Z — specialist-role truncation recovery checkpointed
+
+- Current ticket: `V3-TRUNCATION-001` remains `PARTIAL`; the bounded specialist-role recovery
+  slice is complete provider-free and nonauthorizing at
+  `721d17a4ff08cc52ccdf0aa92ed04258e4137807`.
+- Completed changes: exact specialist roots may enter direct bounded recovery. Successful children
+  use v1.2 private journal custody for one exact `SpecialistAcceptedOutcome`; public evidence exposes
+  only its hash. Live promotion is required before the children can complete the role, and only the
+  exact promoted live truncated parent is superseded in failure accounting. Serialized/copy, MOCK,
+  unpromoted, swapped, missing, overlapping, and unrelated-failure cases fail closed. Resume order
+  is canonical and the MOCK path performs zero transport.
+- Files changed: exact 16-path source checkpoint plus this separate governance reconciliation.
+  User-owned `.gitignore` and `docs/remediation/v3/operator_results.md` remain excluded and unread.
+- Commands run / results: final `92`-test schema/inventory/specialist gate, `4` promoted
+  coverage/assurance tests, `2` focused journal tests, and `1` frozen-byte MOCK integration passed.
+  An earlier adjacent recovery matrix passed `162` tests. Ruff/format, strict mypy over `7`
+  production files, canonical generator write/verify, py_compile, and diff-check passed. Independent
+  red-team review ended `PASS` with no blocker/HIGH. The broad maximum-assurance test was interrupted
+  after `602.86s` CPU-bound work and remains `INCONCLUSIVE`.
+- Remaining limitations: recursive recovery of a truncated recovery child remains unsupported.
+  Positive nonempty full-pipeline REAL promotion remains an external campaign criterion; synthetic
+  live-custody and MOCK evidence are not provider evidence.
+- Next safe action: implement only bounded provider-free recursive child recovery with exact
+  depth/resource/partition/journal/live-authority/resume custody and no-credit negatives.
+
+## 2026-08-24T13:22:50Z — specialist-role truncation recovery opened
+
+- Current ticket: `V3-TRUNCATION-001` is `IN_PROGRESS` on the bounded provider-free specialist-role
+  recovery gap.
+- Planned change: preserve the truncated specialist parent's exact role, context, request, cost,
+  and live authority through deterministic child recovery and resume without making the parent or
+  serialized/MOCK evidence creditable.
+- Scope boundary: recursive recovery of a truncated recovery child remains a later slice. Positive
+  nonempty full-pipeline REAL promotion remains external and cannot be fabricated.
+- External effects: none authorized or required; no provider, network, credential, private-ledger,
+  operator-record, or run-index action.
 
 ## 2026-08-24T12:53:58Z — selected-provider display-name parity repaired
 

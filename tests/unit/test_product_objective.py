@@ -125,16 +125,20 @@ def test_current_completion_authority_has_no_legacy_human_gate() -> None:
     assert "not pushed or remote-resolved" in autonomy_evidence
     assert "owns exactly 18 Phase-1 paths" in autonomy_evidence
     assert "excludes operator_results" in autonomy_evidence
-    assert "7a0655597bf161bd3f90c67beba1845f9783626661b11ba8162acd1623b46965" in (autonomy_evidence)
-    assert "a1556b6f2b816af1562401a646fcea61e34dadc069140cbe7b40d0447bae3fb1" in (autonomy_evidence)
+    assert "82274345013e650e2bb94cced64f951d64c91ace389ac190b16c34555e681dc2" in (autonomy_evidence)
+    assert "349af767d9e07bb44a7483a5ab3e309ee7d8f739d49902f5143508901d79f90e" in (autonomy_evidence)
     assert "4f1adb9e0bc8db7899fa4eb2928ee03f87d4d61d4113a0555fcdae750e260042" in (autonomy_evidence)
-    assert "acf4bb31570e028336e572560d5348a30013070d2335c157a467dfae05c98b83" in (autonomy_evidence)
+    assert "c0d55db7f01762a1f014290af40544fc1a20842a8bbff72e053b379792d17fa5" in (autonomy_evidence)
     assert "3657 unique completion inputs / 3660 occurrences" in autonomy_evidence
     assert "3614 gate sources" in autonomy_evidence
+    assert "721d17a4ff08cc52ccdf0aa92ed04258e4137807" in autonomy_evidence
     assert "425502c5cbc173578053423d946ef24843f26285" in autonomy_evidence
-    assert "921 adjacent runner tests" in autonomy_evidence
-    assert "250-test focused parity matrix" in autonomy_evidence
-    assert "32 inventory tests" in autonomy_evidence
+    assert "92 schema/inventory/specialist tests" in autonomy_evidence
+    assert "4 promoted-specialist tests" in autonomy_evidence
+    assert "2 journal/resume tests" in autonomy_evidence
+    assert "1 MOCK integration" in autonomy_evidence
+    assert "earlier 162-test adjacent matrix" in autonomy_evidence
+    assert "maximum-assurance attempt remained INCONCLUSIVE" in autonomy_evidence
     assert "repository-wide suite remains INCOMPLETE, not a pass" in autonomy_evidence
     assert "VALID / NONCREDITING / NONAUTHORIZING" in autonomy_evidence
     assert "without rerun or new spend" in autonomy_evidence
@@ -146,9 +150,9 @@ def test_current_completion_authority_has_no_legacy_human_gate() -> None:
     assert "leaves 25 external roles unresolved" in autonomy_evidence
     assert "Phase 2" in requirements["U"]["remaining_proof"]
     assert "Checkpoint the completed" not in requirements["U"]["remaining_proof"]
-    assert runtime_status["candidate_commit"] == "425502c5cbc173578053423d946ef24843f26285"
+    assert runtime_status["candidate_commit"] == "721d17a4ff08cc52ccdf0aa92ed04258e4137807"
     assert runtime_status["autonomy_phase_zero_inventory"]["current_reconciliation_commit"] == (
-        "425502c5cbc173578053423d946ef24843f26285"
+        "721d17a4ff08cc52ccdf0aa92ed04258e4137807"
     )
     assert runtime_status["candidate_commit_pushed"] is False
     assert runtime_status["candidate_commit_remote_resolved"] is False
