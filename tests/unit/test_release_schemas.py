@@ -533,15 +533,24 @@ def test_scheduler_recovery_schema_is_hash_only_versioned_and_terminal_discrimin
         "delivered_source_inventory_sha256",
         "direct_child_result_sha256s",
         "evidence_authority",
+        "nested_child_result_sha256s",
+        "nested_family_closure_id",
+        "nested_family_closure_sha256",
+        "nested_family_id",
+        "nested_family_root_sha256",
+        "nested_recovery_plan_sha256",
         "original_truncated_result_sha256",
         "parent_task_id",
         "promotion_entry_sha256",
+        "promoted_leaf_result_sha256s",
         "provider_dispatch_authorized",
         "recovered_output_artifact_sha256",
         "release_authorized",
         "review_credit_authorized",
         "schema_version",
+        "superseded_bridge_result_sha256",
     }
+    assert promotion["properties"]["schema_version"]["enum"] == ["1.0", "1.1"]
     for field_name in (
         "original_truncated_result_sha256",
         "promotion_entry_sha256",
@@ -558,6 +567,50 @@ def test_scheduler_recovery_schema_is_hash_only_versioned_and_terminal_discrimin
         {"pattern": sha256_pattern, "type": "string"},
         {"pattern": sha256_pattern, "type": "string"},
     ]
+    recursive_promotion_fields = (
+        "nested_family_id",
+        "nested_family_root_sha256",
+        "nested_recovery_plan_sha256",
+        "nested_family_closure_id",
+        "nested_family_closure_sha256",
+        "nested_child_result_sha256s",
+        "superseded_bridge_result_sha256",
+        "promoted_leaf_result_sha256s",
+    )
+    for field_name, expected_count in (
+        ("nested_child_result_sha256s", 2),
+        ("promoted_leaf_result_sha256s", 3),
+    ):
+        recursive_results = promotion["properties"][field_name]["anyOf"][0]
+        assert recursive_results["minItems"] == expected_count
+        assert recursive_results["maxItems"] == expected_count
+        assert recursive_results["uniqueItems"] is True
+        assert (
+            recursive_results["prefixItems"]
+            == [{"pattern": sha256_pattern, "type": "string"}] * expected_count
+        )
+    assert promotion["allOf"] == [
+        {
+            "if": {
+                "properties": {"schema_version": {"const": "1.1"}},
+                "required": ["schema_version"],
+            },
+            "then": {
+                "properties": {
+                    field_name: {"not": {"type": "null"}}
+                    for field_name in recursive_promotion_fields
+                },
+                "required": list(recursive_promotion_fields),
+            },
+            "else": {
+                "not": {
+                    "anyOf": [
+                        {"required": [field_name]} for field_name in recursive_promotion_fields
+                    ]
+                }
+            },
+        }
+    ]
     for field_name in (
         "provider_dispatch_authorized",
         "review_credit_authorized",
@@ -569,6 +622,7 @@ def test_scheduler_recovery_schema_is_hash_only_versioned_and_terminal_discrimin
 
     request = definitions["SchedulerTruncationRecoveryModelRequestEvidence"]
     assert request["additionalProperties"] is False
+    assert request["properties"]["schema_version"]["enum"] == ["1.0", "1.1", "1.2"]
     assert request["properties"]["terminal_status"]["enum"] == ["SUCCEEDED", "TRUNCATED"]
     completion_fields = (
         "runtime_completion_evidence_sha256",
@@ -582,6 +636,23 @@ def test_scheduler_recovery_schema_is_hash_only_versioned_and_terminal_discrimin
             {"type": "null"},
         ]
         assert field_name not in request["required"]
+    recursive_request_fields = (
+        "promotion_disposition",
+        "global_request_ordinal",
+        "recovery_family_id",
+        "family_root_sha256",
+        "recovery_plan_sha256",
+        "family_closure_id",
+        "family_closure_sha256",
+    )
+    assert request["properties"]["promotion_disposition"]["anyOf"] == [
+        {"$ref": "#/$defs/SchedulerTruncationRecoveryPromotionDisposition"},
+        {"type": "null"},
+    ]
+    assert definitions["SchedulerTruncationRecoveryPromotionDisposition"]["enum"] == [
+        "SUCCESSFUL_LEAF",
+        "SUPERSEDED_TRUNCATED_BRIDGE",
+    ]
     assert request["allOf"] == [
         {
             "if": {
@@ -595,14 +666,64 @@ def test_scheduler_recovery_schema_is_hash_only_versioned_and_terminal_discrimin
                 "required": list(completion_fields),
             },
             "else": {
+                "not": {"anyOf": [{"required": [field_name]} for field_name in completion_fields]}
+            },
+        },
+        {
+            "if": {
+                "properties": {"schema_version": {"const": "1.2"}},
+                "required": ["schema_version"],
+            },
+            "then": {
+                "properties": {
+                    field_name: {"not": {"type": "null"}}
+                    for field_name in ("promotion_entry_sha256", *recursive_request_fields)
+                },
+                "required": ["promotion_entry_sha256", *recursive_request_fields],
+            },
+            "else": {
                 "not": {
-                    "anyOf": [
-                        {"required": [field_name]}
-                        for field_name in (*completion_fields, "promotion_entry_sha256")
-                    ]
+                    "anyOf": [{"required": [field_name]} for field_name in recursive_request_fields]
                 }
             },
-        }
+        },
+        {
+            "if": {
+                "properties": {"promotion_disposition": {"const": "SUCCESSFUL_LEAF"}},
+                "required": ["promotion_disposition"],
+            },
+            "then": {
+                "properties": {"terminal_status": {"const": "SUCCEEDED"}},
+                "required": ["terminal_status"],
+            },
+        },
+        {
+            "if": {
+                "properties": {"promotion_disposition": {"const": "SUPERSEDED_TRUNCATED_BRIDGE"}},
+                "required": ["promotion_disposition"],
+            },
+            "then": {
+                "properties": {"terminal_status": {"const": "TRUNCATED"}},
+                "required": ["terminal_status"],
+            },
+        },
+        {
+            "if": {
+                "allOf": [
+                    {
+                        "not": {
+                            "properties": {"schema_version": {"const": "1.2"}},
+                            "required": ["schema_version"],
+                        }
+                    },
+                    {
+                        "properties": {"terminal_status": {"const": "TRUNCATED"}},
+                        "required": ["terminal_status"],
+                    },
+                ]
+            },
+            "then": {"not": {"required": ["promotion_entry_sha256"]}},
+        },
     ]
     for field_name in (
         "provider_dispatch_authorized",

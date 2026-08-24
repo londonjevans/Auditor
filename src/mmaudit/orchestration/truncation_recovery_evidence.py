@@ -36,9 +36,12 @@ from mmaudit.models.truncation import (
 from mmaudit.models.truncation_closure import (
     MAX_TRUNCATION_CLOSURE_SURFACES,
     TruncationClosureError,
+    TruncationRecoveredRecursiveSurfaceReviewArtifact,
     TruncationRecoveredSurfaceReviewArtifact,
+    TruncationRecoveryBridgeAttemptEvidence,
     TruncationRecoveryChildCompletionEvidence,
     TruncationRecoveryParentAttemptEvidence,
+    build_truncation_recovered_recursive_surface_artifact,
     build_truncation_recovered_surface_artifact,
 )
 from mmaudit.models.truncation_recovery import (
@@ -61,6 +64,7 @@ from mmaudit.models.truncation_recovery_journal import (
 from mmaudit.models.usage import (
     atomic_request_limit_reservations_from_usage,
     is_accountable_usage_record,
+    is_recovery_accountable_usage_record,
     is_recovery_creditable_usage_record,
 )
 from mmaudit.orchestration.budgets import AtomicRequestLimitReservationEvidence
@@ -150,6 +154,72 @@ class VerifiedPromotedTruncationRecoverySurfaceCoverage:
         raise TypeError("promoted truncation surface coverage capabilities cannot be serialized")
 
 
+class VerifiedRecursiveTruncationRecoveryTree:
+    """Opaque PID-local proof of the admitted zero-retained one-level tree."""
+
+    __slots__ = ("__weakref__",)
+
+    def __new__(cls, *_args: object, **_kwargs: object) -> Never:
+        del cls, _args, _kwargs
+        raise TypeError(
+            "verified recursive truncation recovery tree cannot be constructed directly"
+        )
+
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        del self, _args, _kwargs
+
+    def __copy__(self) -> Never:
+        raise TypeError("recursive truncation recovery tree capabilities cannot be copied")
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> Never:
+        del memo
+        raise TypeError("recursive truncation recovery tree capabilities cannot be copied")
+
+    def __reduce__(self) -> Never:
+        raise TypeError("recursive truncation recovery tree capabilities cannot be serialized")
+
+    def __reduce_ex__(self, protocol: SupportsIndex) -> Never:
+        del protocol
+        raise TypeError("recursive truncation recovery tree capabilities cannot be serialized")
+
+
+class VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage:
+    """Opaque journal-owned promotion of one verified recursive tree."""
+
+    __slots__ = ("__weakref__",)
+
+    def __new__(cls, *_args: object, **_kwargs: object) -> Never:
+        del cls, _args, _kwargs
+        raise TypeError(
+            "promoted recursive truncation surface coverage cannot be constructed directly"
+        )
+
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        del self, _args, _kwargs
+
+    def __copy__(self) -> Never:
+        raise TypeError(
+            "promoted recursive truncation surface coverage capabilities cannot be copied"
+        )
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> Never:
+        del memo
+        raise TypeError(
+            "promoted recursive truncation surface coverage capabilities cannot be copied"
+        )
+
+    def __reduce__(self) -> Never:
+        raise TypeError(
+            "promoted recursive truncation surface coverage capabilities cannot be serialized"
+        )
+
+    def __reduce_ex__(self, protocol: SupportsIndex) -> Never:
+        del protocol
+        raise TypeError(
+            "promoted recursive truncation surface coverage capabilities cannot be serialized"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class VerifiedTruncationRecoveryClosureProjection:
     """Fresh closure output plus exact request-scoped scanner fingerprints."""
@@ -183,6 +253,62 @@ class VerifiedPromotedTruncationRecoverySurfaceCoverageProjection:
     child_usage_records: tuple[UsageRecord, ...]
     parent_context: ContextPackage
     child_contexts: tuple[ContextPackage, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedRecursiveTruncationRecoveryTreeProjection:
+    """Fresh exact full-tree replay with all five live request identities."""
+
+    family_id: str
+    family_root_sha256: str
+    family_closure_id: str
+    family_closure_sha256: str
+    direct_child_result_sha256s: tuple[str, str]
+    nested_family_id: str
+    nested_family_root_sha256: str
+    nested_recovery_plan_sha256: str
+    nested_family_closure_id: str
+    nested_family_closure_sha256: str
+    nested_child_result_sha256s: tuple[str, str]
+    superseded_bridge_result_sha256: str
+    promoted_leaf_result_sha256s: tuple[str, str, str]
+    artifact: TruncationRecoveredRecursiveSurfaceReviewArtifact
+    scanner_fingerprints_by_request: tuple[tuple[str, tuple[str, ...]], ...]
+    parent_usage_record: UsageRecord
+    bridge_usage_record: UsageRecord
+    leaf_usage_records: tuple[UsageRecord, UsageRecord, UsageRecord]
+    parent_context: ContextPackage
+    bridge_context: ContextPackage
+    leaf_contexts: tuple[ContextPackage, ContextPackage, ContextPackage]
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection:
+    """Fresh journal-owned promoted projection of one exact recursive tree."""
+
+    promotion_entry_sha256: str
+    recovered_output_artifact_sha256: str
+    family_id: str
+    family_root_sha256: str
+    family_closure_id: str
+    family_closure_sha256: str
+    direct_child_result_sha256s: tuple[str, str]
+    nested_family_id: str
+    nested_family_root_sha256: str
+    nested_recovery_plan_sha256: str
+    nested_family_closure_id: str
+    nested_family_closure_sha256: str
+    nested_child_result_sha256s: tuple[str, str]
+    superseded_bridge_result_sha256: str
+    promoted_leaf_result_sha256s: tuple[str, str, str]
+    artifact: TruncationRecoveredRecursiveSurfaceReviewArtifact
+    scanner_fingerprints_by_request: tuple[tuple[str, tuple[str, ...]], ...]
+    parent_usage_record: UsageRecord
+    bridge_usage_record: UsageRecord
+    leaf_usage_records: tuple[UsageRecord, UsageRecord, UsageRecord]
+    parent_context: ContextPackage
+    bridge_context: ContextPackage
+    leaf_contexts: tuple[ContextPackage, ContextPackage, ContextPackage]
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,6 +346,62 @@ class _VerifiedPromotedTruncationRecoverySurfaceCoverageState:
     journal_reference: weakref.ReferenceType[object]
     family_id: str
     closure_capability: VerifiedTruncationRecoveryClosure
+    promotion_json: str
+
+
+@dataclass(frozen=True, slots=True)
+class _VerifiedRecursiveTruncationRecoveryMaterial:
+    root_family: SchedulerTruncationRecoveryFamilyRoot
+    nested_family: SchedulerTruncationRecoveryFamilyRoot
+    root_closure: SchedulerTruncationRecoveryFamilyClosure
+    nested_closure: SchedulerTruncationRecoveryFamilyClosure
+    root_child_results: tuple[
+        SchedulerTruncationRecoveryChildResult,
+        SchedulerTruncationRecoveryChildResult,
+    ]
+    nested_child_results: tuple[
+        SchedulerTruncationRecoveryChildResult,
+        SchedulerTruncationRecoveryChildResult,
+    ]
+    parent_usage_record: UsageRecord
+    bridge_usage_record: UsageRecord
+    leaf_usage_records: tuple[UsageRecord, UsageRecord, UsageRecord]
+    parent_context: ContextPackage
+    bridge_context: ContextPackage
+    leaf_contexts: tuple[ContextPackage, ContextPackage, ContextPackage]
+    requests: tuple[ModelSurfaceReviewRequest, ...]
+    artifact: TruncationRecoveredRecursiveSurfaceReviewArtifact
+    scanner_fingerprints_by_request: tuple[tuple[str, tuple[str, ...]], ...]
+    superseded_bridge_result_sha256: str
+    promoted_leaf_result_sha256s: tuple[str, str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class _VerifiedRecursiveTruncationRecoveryState:
+    process_id: int
+    root_family_json: str
+    nested_family_json: str
+    root_closure_json: str
+    nested_closure_json: str
+    root_child_result_jsons: tuple[str, str]
+    nested_child_result_jsons: tuple[str, str]
+    parent_usage_record: UsageRecord
+    bridge_usage_record: UsageRecord
+    leaf_usage_records: tuple[UsageRecord, UsageRecord, UsageRecord]
+    parent_context_json: str
+    bridge_context_json: str
+    leaf_context_jsons: tuple[str, str, str]
+    request_jsons: tuple[str, ...]
+    artifact_json: str
+    scanner_fingerprints_by_request: tuple[tuple[str, tuple[str, ...]], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageState:
+    process_id: int
+    journal_reference: weakref.ReferenceType[object]
+    family_id: str
+    tree_capability: VerifiedRecursiveTruncationRecoveryTree
     promotion_json: str
 
 
@@ -265,6 +447,53 @@ class _RequirePromotedTruncationRecoverySurfaceCoverage(Protocol):
     ) -> VerifiedPromotedTruncationRecoverySurfaceCoverageProjection: ...
 
 
+class _VerifyRecursiveTruncationRecoveryTree(Protocol):
+    def __call__(
+        self,
+        *,
+        root_family: SchedulerTruncationRecoveryFamilyRoot,
+        nested_family: SchedulerTruncationRecoveryFamilyRoot,
+        root_closure: SchedulerTruncationRecoveryFamilyClosure,
+        nested_closure: SchedulerTruncationRecoveryFamilyClosure,
+        root_child_results: Iterable[SchedulerTruncationRecoveryChildResult],
+        nested_child_results: Iterable[SchedulerTruncationRecoveryChildResult],
+        parent_usage_record: UsageRecord,
+        bridge_usage_record: UsageRecord,
+        leaf_usage_records: Iterable[UsageRecord],
+        parent_context: ContextPackage,
+        bridge_context: ContextPackage,
+        leaf_contexts: Iterable[ContextPackage],
+        requests: Iterable[ModelSurfaceReviewRequest],
+    ) -> tuple[
+        VerifiedRecursiveTruncationRecoveryTree,
+        TruncationRecoveredRecursiveSurfaceReviewArtifact,
+    ]: ...
+
+
+class _RequireRecursiveTruncationRecoveryTree(Protocol):
+    def __call__(
+        self,
+        capability: VerifiedRecursiveTruncationRecoveryTree,
+    ) -> VerifiedRecursiveTruncationRecoveryTreeProjection: ...
+
+
+class _IssuePromotedRecursiveTruncationRecoverySurfaceCoverage(Protocol):
+    def __call__(
+        self,
+        *,
+        journal: object,
+        family_id: str,
+        tree_capability: VerifiedRecursiveTruncationRecoveryTree,
+    ) -> VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage: ...
+
+
+class _RequirePromotedRecursiveTruncationRecoverySurfaceCoverage(Protocol):
+    def __call__(
+        self,
+        capability: VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage,
+    ) -> VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection: ...
+
+
 class _AccountableUsagePredicate(Protocol):
     def __call__(
         self,
@@ -283,6 +512,17 @@ class _RecoveryCreditableUsagePredicate(Protocol):
         request_limit_count_before: int,
         require_real: bool = False,
         require_certification: bool = False,
+    ) -> bool: ...
+
+
+class _RecoveryAccountableUsagePredicate(Protocol):
+    def __call__(
+        self,
+        record: UsageRecord,
+        *,
+        request_limit_scope: str,
+        request_limit_count_before: int,
+        require_real: bool = False,
     ) -> bool: ...
 
 
@@ -795,6 +1035,626 @@ def _verify_live_truncation_recovery_material(
     )
 
 
+def _verify_live_recursive_truncation_recovery_material(
+    *,
+    root_family: SchedulerTruncationRecoveryFamilyRoot,
+    nested_family: SchedulerTruncationRecoveryFamilyRoot,
+    root_closure: SchedulerTruncationRecoveryFamilyClosure,
+    nested_closure: SchedulerTruncationRecoveryFamilyClosure,
+    root_child_results: Iterable[SchedulerTruncationRecoveryChildResult],
+    nested_child_results: Iterable[SchedulerTruncationRecoveryChildResult],
+    parent_usage_record: UsageRecord,
+    bridge_usage_record: UsageRecord,
+    leaf_usage_records: Iterable[UsageRecord],
+    parent_context: ContextPackage,
+    bridge_context: ContextPackage,
+    leaf_contexts: Iterable[ContextPackage],
+    requests: Iterable[ModelSurfaceReviewRequest],
+    _accountable_usage_predicate: _AccountableUsagePredicate = is_accountable_usage_record,
+    _recovery_accountable_usage_predicate: _RecoveryAccountableUsagePredicate = (
+        is_recovery_accountable_usage_record
+    ),
+    _recovery_creditable_usage_predicate: _RecoveryCreditableUsagePredicate = (
+        is_recovery_creditable_usage_record
+    ),
+    _parent_request_limit_parser: _AtomicRequestLimitParser = (
+        atomic_request_limit_reservations_from_usage
+    ),
+) -> _VerifiedRecursiveTruncationRecoveryMaterial:
+    """Rebuild only the admitted zero-retained one-level tree from live custody."""
+
+    roots = (root_family, nested_family)
+    closures = (root_closure, nested_closure)
+    if any(type(family) is not SchedulerTruncationRecoveryFamilyRoot for family in roots):
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery family has an invalid exact type"
+        )
+    if any(type(closure) is not SchedulerTruncationRecoveryFamilyClosure for closure in closures):
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery closure has an invalid exact type"
+        )
+    if type(parent_usage_record) is not UsageRecord or type(bridge_usage_record) is not UsageRecord:
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery parent or bridge usage has an invalid exact type"
+        )
+    if type(parent_context) is not ContextPackage or type(bridge_context) is not ContextPackage:
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery parent or bridge context has an invalid exact type"
+        )
+
+    root_result_inputs = _bounded_tuple(
+        root_child_results,
+        limit=2,
+        label="recursive root child results",
+    )
+    nested_result_inputs = _bounded_tuple(
+        nested_child_results,
+        limit=2,
+        label="recursive nested child results",
+    )
+    leaf_usage_inputs = _bounded_tuple(
+        leaf_usage_records,
+        limit=3,
+        label="recursive leaf usage records",
+    )
+    leaf_context_inputs = _bounded_tuple(
+        leaf_contexts,
+        limit=3,
+        label="recursive leaf contexts",
+    )
+    request_inputs = _bounded_tuple(
+        requests,
+        limit=MAX_TRUNCATION_CLOSURE_SURFACES,
+        label="recursive requested surfaces",
+    )
+    if (
+        len(root_result_inputs) != 2
+        or len(nested_result_inputs) != 2
+        or len(leaf_usage_inputs) != 3
+        or len(leaf_context_inputs) != 3
+        or not request_inputs
+    ):
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery requires root two, nested two, and leaf three"
+        )
+    if any(
+        type(result) is not SchedulerTruncationRecoveryChildResult
+        for result in (*root_result_inputs, *nested_result_inputs)
+    ):
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery child result has an invalid exact type"
+        )
+    if any(type(usage) is not UsageRecord for usage in leaf_usage_inputs):
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery leaf usage has an invalid exact type"
+        )
+    if any(type(context) is not ContextPackage for context in leaf_context_inputs):
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery leaf context has an invalid exact type"
+        )
+    if any(type(request) is not ModelSurfaceReviewRequest for request in request_inputs):
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery requested surface has an invalid exact type"
+        )
+
+    try:
+        exact_root_family = SchedulerTruncationRecoveryFamilyRoot.model_validate_json(
+            _canonical_model_json(root_family),
+            strict=True,
+        )
+        exact_nested_family = SchedulerTruncationRecoveryFamilyRoot.model_validate_json(
+            _canonical_model_json(nested_family),
+            strict=True,
+        )
+        exact_root_closure = SchedulerTruncationRecoveryFamilyClosure.model_validate_json(
+            _canonical_model_json(root_closure),
+            strict=True,
+        )
+        exact_nested_closure = SchedulerTruncationRecoveryFamilyClosure.model_validate_json(
+            _canonical_model_json(nested_closure),
+            strict=True,
+        )
+        exact_root_results = tuple(
+            SchedulerTruncationRecoveryChildResult.model_validate_json(
+                _canonical_model_json(result),
+                strict=True,
+            )
+            for result in root_result_inputs
+        )
+        exact_nested_results = tuple(
+            SchedulerTruncationRecoveryChildResult.model_validate_json(
+                _canonical_model_json(result),
+                strict=True,
+            )
+            for result in nested_result_inputs
+        )
+        exact_requests = tuple(
+            ModelSurfaceReviewRequest.model_validate_json(
+                _canonical_model_json(request),
+                strict=True,
+            )
+            for request in request_inputs
+        )
+        sealed_parent_context = revalidate_model_surface_context_package(parent_context)
+        sealed_bridge_context = revalidate_model_surface_context_package(bridge_context)
+        sealed_leaf_contexts = tuple(
+            revalidate_model_surface_context_package(context) for context in leaf_context_inputs
+        )
+    except (AttributeError, ContextBoundaryError, TypeError, ValueError) as exc:
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery evidence failed exact reconstruction"
+        ) from exc
+
+    root_plan = exact_root_family.recovery_plan
+    nested_plan = exact_nested_family.recovery_plan
+    root_result_pair = (exact_root_results[0], exact_root_results[1])
+    nested_result_pair = (exact_nested_results[0], exact_nested_results[1])
+    leaf_usage_triplet = (
+        leaf_usage_inputs[0],
+        leaf_usage_inputs[1],
+        leaf_usage_inputs[2],
+    )
+    leaf_context_triplet = (
+        sealed_leaf_contexts[0],
+        sealed_leaf_contexts[1],
+        sealed_leaf_contexts[2],
+    )
+
+    if (
+        exact_root_family.parent_kind is not SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK
+        or exact_root_family.parent_family_id is not None
+        or root_plan.parent.current_depth != 0
+        or exact_nested_family.parent_kind
+        is not SchedulerTruncationRecoveryParentKind.RECOVERY_CHILD
+        or exact_nested_family.parent_family_id != exact_root_family.family_id
+        or exact_nested_family.family_index != exact_root_family.family_index + 1
+        or nested_plan.parent.current_depth != 1
+        or len(root_plan.children) != 2
+        or len(nested_plan.children) != 2
+        or any(child.depth != 1 for child in root_plan.children)
+        or any(child.depth != 2 for child in nested_plan.children)
+        or any(
+            child.channel is not TruncationRecoveryChannel.COVERAGE
+            for child in (*root_plan.children, *nested_plan.children)
+        )
+        or exact_root_family.truncation_projection.findings_state
+        is not CandidateReviewChannelState.COMPLETE
+        or exact_nested_family.truncation_projection.findings_state
+        is not CandidateReviewChannelState.COMPLETE
+        or exact_nested_family.truncation_projection.surface_reviews
+        or exact_nested_family.request_limit_id != exact_root_family.request_limit_id
+        or exact_nested_family.request_limit_binding_sha256
+        != exact_root_family.request_limit_binding_sha256
+        or exact_nested_family.requested_surface_manifest
+        != exact_root_family.requested_surface_manifest
+        or exact_nested_family.request_count_before_family
+        != exact_root_family.request_count_after_family
+        or exact_nested_family.request_limit_count_before_family
+        != exact_root_family.request_limit_count_after_family
+    ):
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery is outside the exact generic one-level tree"
+        )
+
+    root_findings_bindings = tuple(
+        binding
+        for binding in root_plan.parent.channel_bindings
+        if binding.channel is TruncationRecoveryChannel.FINDINGS
+    )
+    bridge_findings_bindings = tuple(
+        binding
+        for binding in nested_plan.parent.channel_bindings
+        if binding.channel is TruncationRecoveryChannel.FINDINGS
+    )
+    if (
+        len(root_findings_bindings) != 1
+        or len(bridge_findings_bindings) != 1
+        or root_findings_bindings[0].state is not TruncationRecoveryChannelState.COMPLETE
+        or bridge_findings_bindings[0].state is not TruncationRecoveryChannelState.COMPLETE
+    ):
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery root or bridge findings are incomplete"
+        )
+
+    if (
+        exact_nested_closure.schema_version != "1.1"
+        or exact_nested_closure.closure_status
+        is not SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
+        or exact_nested_closure.campaign_id != exact_nested_family.campaign_id
+        or exact_nested_closure.request_limit_id != exact_nested_family.request_limit_id
+        or exact_nested_closure.request_limit_binding_sha256
+        != exact_nested_family.request_limit_binding_sha256
+        or exact_nested_closure.family_index != exact_nested_family.family_index
+        or exact_nested_closure.family_id != exact_nested_family.family_id
+        or exact_nested_closure.family_root_sha256 != exact_nested_family.entry_sha256
+        or exact_nested_closure.recovery_plan_sha256 != nested_plan.plan_sha256
+        or exact_nested_closure.nested_family_closure_sha256s
+        or exact_nested_closure.covered_unfinished_surface_ids
+        != nested_plan.parent.unfinished_surface_ids
+        or exact_nested_closure.child_result_sha256s
+        != tuple(result.entry_sha256 for result in nested_result_pair)
+        or exact_root_closure.schema_version != "1.2"
+        or exact_root_closure.closure_status
+        is not (
+            SchedulerTruncationRecoveryClosureStatus.RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING
+        )
+        or exact_root_closure.campaign_id != exact_root_family.campaign_id
+        or exact_root_closure.request_limit_id != exact_root_family.request_limit_id
+        or exact_root_closure.request_limit_binding_sha256
+        != exact_root_family.request_limit_binding_sha256
+        or exact_root_closure.family_index != exact_root_family.family_index
+        or exact_root_closure.family_id != exact_root_family.family_id
+        or exact_root_closure.family_root_sha256 != exact_root_family.entry_sha256
+        or exact_root_closure.recovery_plan_sha256 != root_plan.plan_sha256
+        or exact_root_closure.child_result_sha256s
+        != tuple(result.entry_sha256 for result in root_result_pair)
+        or exact_root_closure.nested_family_closure_sha256s != (exact_nested_closure.entry_sha256,)
+        or exact_root_closure.covered_unfinished_surface_ids
+        != root_plan.parent.unfinished_surface_ids
+    ):
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery closures differ from their exact tree"
+        )
+    if tuple(result.child_plan_sha256 for result in root_result_pair) != tuple(
+        child.child_plan_sha256 for child in root_plan.children
+    ) or tuple(result.child_plan_sha256 for result in nested_result_pair) != tuple(
+        child.child_plan_sha256 for child in nested_plan.children
+    ):
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery result order differs from the frozen plans"
+        )
+    for family, plans, results in (
+        (exact_root_family, root_plan.children, root_result_pair),
+        (exact_nested_family, nested_plan.children, nested_result_pair),
+    ):
+        for child, result in zip(plans, results, strict=True):
+            if (
+                result.family_id != family.family_id
+                or result.family_root_sha256 != family.entry_sha256
+                or result.child_task_id != child.child_task_id
+                or result.child_logical_request_id != child.child_logical_request_id
+                or result.child_surface_ids != child.surface_ids
+            ):
+                raise TruncationRecoveryEvidenceError(
+                    "recursive truncation recovery child is detached from its exact family"
+                )
+
+    bridge_results = tuple(
+        result
+        for result in root_result_pair
+        if result.terminal_status is SchedulerTruncationRecoveryTerminalStatus.TRUNCATED
+    )
+    direct_results = tuple(
+        result
+        for result in root_result_pair
+        if result.terminal_status is SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED
+    )
+    if len(bridge_results) != 1 or len(direct_results) != 1:
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery root lacks one bridge and one successful leaf"
+        )
+    bridge_result = bridge_results[0]
+    direct_result = direct_results[0]
+    root_children_by_sha256 = {child.child_plan_sha256: child for child in root_plan.children}
+    bridge_plan = root_children_by_sha256.get(bridge_result.child_plan_sha256)
+    direct_plan = root_children_by_sha256.get(direct_result.child_plan_sha256)
+    if bridge_plan is None or direct_plan is None or bridge_plan == direct_plan:
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery bridge and direct leaf plans are ambiguous"
+        )
+    if (
+        exact_nested_family.parent_terminal_result_sha256 != bridge_result.entry_sha256
+        or nested_plan.parent.parent_task_id != bridge_plan.child_task_id
+        or nested_plan.parent.parent_logical_request_id != bridge_plan.child_logical_request_id
+        or nested_plan.parent.parent_task_plan_sha256 != bridge_plan.child_plan_sha256
+        or nested_plan.parent.requested_surface_ids != bridge_plan.surface_ids
+        or nested_plan.parent.unfinished_surface_ids != bridge_plan.surface_ids
+        or nested_plan.parent.retained_surface_ids
+        or nested_plan.parent.parent_path != bridge_plan.path
+        or nested_plan.parent.current_depth != bridge_plan.depth
+        or exact_nested_family.truncation_projection != bridge_result.truncation_projection
+    ):
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery nested root is detached from its bridge"
+        )
+
+    successful_results = (direct_result, *nested_result_pair)
+    for result in successful_results:
+        if (
+            result.schema_version != "1.1"
+            or result.result_origin is not SchedulerTruncationRecoveryResultOrigin.RUNTIME
+            or result.terminal_status is not SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED
+            or result.runtime_activation is None
+            or result.runtime_request_limit_reservation is None
+            or result.runtime_usage_record is None
+            or result.runtime_normalization_evidence is None
+            or result.runtime_normalized_batch is None
+            or result.runtime_requested_surface_requests is None
+            or result.runtime_output_artifact is None
+            or result.runtime_specialist_accepted_outcome is not None
+            or result.runtime_truncated_envelope_evidence is not None
+            or result.truncation_projection is not None
+        ):
+            raise TruncationRecoveryEvidenceError(
+                "recursive truncation recovery contains a non-generic successful leaf"
+            )
+    if (
+        bridge_result.schema_version != "1.1"
+        or bridge_result.result_origin is not SchedulerTruncationRecoveryResultOrigin.RUNTIME
+        or bridge_result.runtime_activation is None
+        or bridge_result.runtime_request_limit_reservation is None
+        or bridge_result.runtime_usage_record is None
+        or bridge_result.runtime_truncated_envelope_evidence is None
+        or bridge_result.truncation_projection is None
+        or bridge_result.runtime_normalization_evidence is not None
+        or bridge_result.runtime_normalized_batch is not None
+        or bridge_result.runtime_requested_surface_requests is not None
+        or bridge_result.runtime_output_artifact is not None
+        or bridge_result.runtime_specialist_accepted_outcome is not None
+        or bridge_result.completed_surface_ids
+        or bridge_result.retained_surface_ids
+        or bridge_result.truncation_projection.surface_reviews
+        or bridge_result.truncation_projection.findings_state
+        is not CandidateReviewChannelState.COMPLETE
+    ):
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery bridge is not exact zero-retained runtime custody"
+        )
+
+    if (
+        tuple(sealed_parent_context.requested_model_surfaces) != exact_requests
+        or exact_root_family.requested_surface_manifest.requests != exact_requests
+        or tuple(sealed_bridge_context.requested_model_surfaces)
+        != tuple(
+            request
+            for request in exact_requests
+            if request.surface_id in set(bridge_plan.surface_ids)
+        )
+    ):
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery contexts differ from the frozen manifest"
+        )
+    _require_usage_context(usage=parent_usage_record, context=sealed_parent_context)
+    if not _accountable_usage_predicate(parent_usage_record, require_real=True):
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery parent lacks live re-attested accountable custody"
+        )
+    try:
+        parent_reservations = _parent_request_limit_parser(parent_usage_record)
+    except ValueError as exc:
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery parent request-limit custody is invalid"
+        ) from exc
+    if parent_reservations != (
+        exact_root_family.request_limit_binding.parent_request_limit_reservation,
+    ):
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery parent request-limit custody differs from root"
+        )
+    try:
+        parent = TruncationRecoveryParentAttemptEvidence.build(
+            parent_task_id=root_plan.parent.parent_task_id,
+            parent_activation_sha256=root_plan.parent.parent_activation_sha256,
+            provider_attempt_evidence_sha256=(root_plan.parent.provider_attempt_evidence_sha256),
+            usage_record=parent_usage_record,
+            envelope=_truncated_envelope_from_usage(parent_usage_record),
+            projection=exact_root_family.truncation_projection,
+        )
+    except (TypeError, ValueError) as exc:
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery parent differs from root custody"
+        ) from exc
+    if not _models_are_byte_equal(parent_usage_record, parent.usage_record):
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery live parent differs from structural custody"
+        )
+
+    bridge_activation = bridge_result.runtime_activation
+    structural_bridge_usage = bridge_result.runtime_usage_record
+    bridge_envelope = bridge_result.runtime_truncated_envelope_evidence
+    bridge_projection = bridge_result.truncation_projection
+    if (
+        bridge_activation is None
+        or structural_bridge_usage is None
+        or bridge_envelope is None
+        or bridge_projection is None
+        or bridge_result.provider_attempt_evidence_sha256 is None
+        or not _models_are_byte_equal(bridge_usage_record, structural_bridge_usage)
+    ):
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery bridge lacks exact typed structural custody"
+        )
+    expected_bridge_context = build_truncation_recovery_child_context(
+        parent_context=sealed_parent_context,
+        child=bridge_plan,
+    )
+    if sealed_bridge_context != expected_bridge_context:
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery bridge context drifted from its root shard"
+        )
+    _require_usage_context(usage=bridge_usage_record, context=sealed_bridge_context)
+    if not _recovery_accountable_usage_predicate(
+        bridge_usage_record,
+        request_limit_scope=bridge_activation.request_limit_id,
+        request_limit_count_before=bridge_activation.request_limit_count_before_child,
+        require_real=True,
+    ):
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery bridge lacks live re-attested accountable custody"
+        )
+    analysis_context_sha256 = model_surface_analysis_context_sha256(sealed_parent_context)
+    try:
+        bridge = TruncationRecoveryBridgeAttemptEvidence.build(
+            child_plan=bridge_plan,
+            activation_sha256=bridge_activation.entry_sha256,
+            provider_attempt_evidence_sha256=bridge_result.provider_attempt_evidence_sha256,
+            analysis_context_sha256=analysis_context_sha256,
+            request_limit_scope=bridge_activation.request_limit_id,
+            request_limit_count_before=bridge_activation.request_limit_count_before_child,
+            usage_record=structural_bridge_usage,
+            envelope=bridge_envelope,
+            projection=bridge_projection,
+        )
+    except (TypeError, ValueError) as exc:
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery bridge typed custody is inconsistent"
+        ) from exc
+    if not _models_are_byte_equal(bridge_usage_record, bridge.usage_record):
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery live bridge differs from structural custody"
+        )
+
+    request_by_id = {request.surface_id: request for request in exact_requests}
+    for record in parent.projection.surface_reviews:
+        request = request_by_id.get(record.surface_id)
+        if request is None:
+            raise TruncationRecoveryEvidenceError(
+                "recursive truncation recovery parent retained an unrequested surface"
+            )
+        _validate_surface_record(
+            context=sealed_parent_context,
+            request=request,
+            record=record,
+            expected_role=parent_usage_record.role,
+        )
+
+    leaf_plans = (direct_plan, *nested_plan.children)
+    completions: list[TruncationRecoveryChildCompletionEvidence] = []
+    for child, result, live_usage, sealed_context in zip(
+        leaf_plans,
+        successful_results,
+        leaf_usage_triplet,
+        leaf_context_triplet,
+        strict=True,
+    ):
+        activation = result.runtime_activation
+        structural_usage = result.runtime_usage_record
+        normalization = result.runtime_normalization_evidence
+        normalized_batch = result.runtime_normalized_batch
+        child_requests = result.runtime_requested_surface_requests
+        output_artifact = result.runtime_output_artifact
+        if (
+            activation is None
+            or structural_usage is None
+            or normalization is None
+            or normalized_batch is None
+            or child_requests is None
+            or output_artifact is None
+            or result.child_plan_sha256 != child.child_plan_sha256
+            or result.child_task_id != child.child_task_id
+            or result.child_logical_request_id != child.child_logical_request_id
+            or result.child_surface_ids != child.surface_ids
+            or not _models_are_byte_equal(live_usage, structural_usage)
+        ):
+            raise TruncationRecoveryEvidenceError(
+                "recursive truncation recovery leaf differs from typed structural custody"
+            )
+        if not _recovery_creditable_usage_predicate(
+            live_usage,
+            request_limit_scope=activation.request_limit_id,
+            request_limit_count_before=activation.request_limit_count_before_child,
+            require_real=True,
+        ):
+            raise TruncationRecoveryEvidenceError(
+                "recursive truncation recovery leaf lacks live re-attested creditable custody"
+            )
+        expected_context = build_truncation_recovery_child_context(
+            parent_context=(
+                sealed_parent_context if child is direct_plan else sealed_bridge_context
+            ),
+            child=child,
+        )
+        if (
+            sealed_context != expected_context
+            or tuple(sealed_context.requested_model_surfaces) != child_requests
+            or model_surface_analysis_context_sha256(sealed_context) != analysis_context_sha256
+        ):
+            raise TruncationRecoveryEvidenceError(
+                "recursive truncation recovery leaf context drifted from its exact shard"
+            )
+        _require_usage_context(usage=live_usage, context=sealed_context)
+        try:
+            completion = TruncationRecoveryChildCompletionEvidence.build(
+                child_plan=child,
+                analysis_context_sha256=analysis_context_sha256,
+                requests=child_requests,
+                request_limit_scope=activation.request_limit_id,
+                request_limit_count_before=activation.request_limit_count_before_child,
+                usage_record=structural_usage,
+                normalization=normalization,
+                normalized_batch=normalized_batch,
+                surface_artifact=output_artifact,
+            )
+        except (TypeError, ValueError) as exc:
+            raise TruncationRecoveryEvidenceError(
+                "recursive truncation recovery leaf typed custody is inconsistent"
+            ) from exc
+        child_requests_by_id = {request.surface_id: request for request in child_requests}
+        for record in output_artifact.records:
+            request = child_requests_by_id.get(record.surface_id)
+            if request is None:
+                raise TruncationRecoveryEvidenceError(
+                    "recursive truncation recovery leaf retained an unrequested surface"
+                )
+            _validate_surface_record(
+                context=sealed_context,
+                request=request,
+                record=record,
+                expected_role=live_usage.role,
+            )
+        completions.append(completion)
+
+    completion_triplet = (completions[0], completions[1], completions[2])
+    try:
+        artifact = build_truncation_recovered_recursive_surface_artifact(
+            recovery_plan=root_plan,
+            nested_recovery_plan=nested_plan,
+            analysis_context_sha256=analysis_context_sha256,
+            requests=exact_requests,
+            parent=parent,
+            bridge=bridge,
+            children=completion_triplet,
+        )
+    except TruncationClosureError as exc:
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery typed tree failed exact surface closure"
+        ) from exc
+
+    scanner_fingerprints_by_request = _scanner_fingerprint_projection(
+        parent_request_id=parent_usage_record.request_id,
+        parent_context=sealed_parent_context,
+        child_request_ids=(
+            bridge_usage_record.request_id,
+            *(usage.request_id for usage in leaf_usage_triplet),
+        ),
+        child_contexts=(sealed_bridge_context, *leaf_context_triplet),
+    )
+    promoted_leaf_result_sha256s = (
+        direct_result.entry_sha256,
+        nested_result_pair[0].entry_sha256,
+        nested_result_pair[1].entry_sha256,
+    )
+    return _VerifiedRecursiveTruncationRecoveryMaterial(
+        root_family=exact_root_family,
+        nested_family=exact_nested_family,
+        root_closure=exact_root_closure,
+        nested_closure=exact_nested_closure,
+        root_child_results=root_result_pair,
+        nested_child_results=nested_result_pair,
+        parent_usage_record=parent_usage_record,
+        bridge_usage_record=bridge_usage_record,
+        leaf_usage_records=leaf_usage_triplet,
+        parent_context=sealed_parent_context,
+        bridge_context=sealed_bridge_context,
+        leaf_contexts=leaf_context_triplet,
+        requests=exact_requests,
+        artifact=artifact,
+        scanner_fingerprints_by_request=scanner_fingerprints_by_request,
+        superseded_bridge_result_sha256=bridge_result.entry_sha256,
+        promoted_leaf_result_sha256s=promoted_leaf_result_sha256s,
+    )
+
+
 def build_truncation_recovery_child_context(
     *,
     parent_context: ContextPackage,
@@ -1276,6 +2136,258 @@ _verify_truncation_recovery_closure, _require_truncation_recovery_closure = (
 )
 
 
+def _build_recursive_truncation_recovery_runtime_authority() -> tuple[
+    _VerifyRecursiveTruncationRecoveryTree,
+    _RequireRecursiveTruncationRecoveryTree,
+]:
+    """Capture the exact recursive replay helpers in a distinct PID-local registry."""
+
+    capability_type = VerifiedRecursiveTruncationRecoveryTree
+    projection_type = VerifiedRecursiveTruncationRecoveryTreeProjection
+    state_type = _VerifiedRecursiveTruncationRecoveryState
+    verify_material = _verify_live_recursive_truncation_recovery_material
+    canonical_model_json = _canonical_model_json
+    current_process_id = os.getpid
+    owner_process_id = current_process_id()
+    make_weakref = weakref.ref
+    registry: dict[
+        int,
+        tuple[
+            weakref.ReferenceType[VerifiedRecursiveTruncationRecoveryTree],
+            _VerifiedRecursiveTruncationRecoveryState,
+        ],
+    ] = {}
+    lock = threading.RLock()
+
+    def project(
+        material: _VerifiedRecursiveTruncationRecoveryMaterial,
+    ) -> VerifiedRecursiveTruncationRecoveryTreeProjection:
+        return projection_type(
+            family_id=material.root_family.family_id,
+            family_root_sha256=material.root_family.entry_sha256,
+            family_closure_id=material.root_closure.closure_id,
+            family_closure_sha256=material.root_closure.entry_sha256,
+            direct_child_result_sha256s=(
+                material.root_child_results[0].entry_sha256,
+                material.root_child_results[1].entry_sha256,
+            ),
+            nested_family_id=material.nested_family.family_id,
+            nested_family_root_sha256=material.nested_family.entry_sha256,
+            nested_recovery_plan_sha256=material.nested_family.recovery_plan.plan_sha256,
+            nested_family_closure_id=material.nested_closure.closure_id,
+            nested_family_closure_sha256=material.nested_closure.entry_sha256,
+            nested_child_result_sha256s=(
+                material.nested_child_results[0].entry_sha256,
+                material.nested_child_results[1].entry_sha256,
+            ),
+            superseded_bridge_result_sha256=(material.superseded_bridge_result_sha256),
+            promoted_leaf_result_sha256s=material.promoted_leaf_result_sha256s,
+            artifact=material.artifact,
+            scanner_fingerprints_by_request=material.scanner_fingerprints_by_request,
+            parent_usage_record=material.parent_usage_record,
+            bridge_usage_record=material.bridge_usage_record,
+            leaf_usage_records=material.leaf_usage_records,
+            parent_context=material.parent_context,
+            bridge_context=material.bridge_context,
+            leaf_contexts=material.leaf_contexts,
+        )
+
+    def replay(
+        state: _VerifiedRecursiveTruncationRecoveryState,
+    ) -> VerifiedRecursiveTruncationRecoveryTreeProjection:
+        try:
+            root_family = SchedulerTruncationRecoveryFamilyRoot.model_validate_json(
+                state.root_family_json,
+                strict=True,
+            )
+            nested_family = SchedulerTruncationRecoveryFamilyRoot.model_validate_json(
+                state.nested_family_json,
+                strict=True,
+            )
+            root_closure = SchedulerTruncationRecoveryFamilyClosure.model_validate_json(
+                state.root_closure_json,
+                strict=True,
+            )
+            nested_closure = SchedulerTruncationRecoveryFamilyClosure.model_validate_json(
+                state.nested_closure_json,
+                strict=True,
+            )
+            root_results = tuple(
+                SchedulerTruncationRecoveryChildResult.model_validate_json(
+                    payload,
+                    strict=True,
+                )
+                for payload in state.root_child_result_jsons
+            )
+            nested_results = tuple(
+                SchedulerTruncationRecoveryChildResult.model_validate_json(
+                    payload,
+                    strict=True,
+                )
+                for payload in state.nested_child_result_jsons
+            )
+            parent_context = ContextPackage.model_validate_json(
+                state.parent_context_json,
+                strict=True,
+            )
+            bridge_context = ContextPackage.model_validate_json(
+                state.bridge_context_json,
+                strict=True,
+            )
+            leaf_contexts = tuple(
+                ContextPackage.model_validate_json(payload, strict=True)
+                for payload in state.leaf_context_jsons
+            )
+            requests = tuple(
+                ModelSurfaceReviewRequest.model_validate_json(payload, strict=True)
+                for payload in state.request_jsons
+            )
+        except (TypeError, ValueError) as exc:
+            raise TruncationRecoveryEvidenceError(
+                "verified recursive truncation recovery state failed exact replay"
+            ) from exc
+        material = verify_material(
+            root_family=root_family,
+            nested_family=nested_family,
+            root_closure=root_closure,
+            nested_closure=nested_closure,
+            root_child_results=root_results,
+            nested_child_results=nested_results,
+            parent_usage_record=state.parent_usage_record,
+            bridge_usage_record=state.bridge_usage_record,
+            leaf_usage_records=state.leaf_usage_records,
+            parent_context=parent_context,
+            bridge_context=bridge_context,
+            leaf_contexts=leaf_contexts,
+            requests=requests,
+        )
+        if (
+            canonical_model_json(material.artifact) != state.artifact_json
+            or material.scanner_fingerprints_by_request != state.scanner_fingerprints_by_request
+        ):
+            raise TruncationRecoveryEvidenceError(
+                "verified recursive truncation recovery artifact changed during replay"
+            )
+        return project(material)
+
+    def verify(
+        *,
+        root_family: SchedulerTruncationRecoveryFamilyRoot,
+        nested_family: SchedulerTruncationRecoveryFamilyRoot,
+        root_closure: SchedulerTruncationRecoveryFamilyClosure,
+        nested_closure: SchedulerTruncationRecoveryFamilyClosure,
+        root_child_results: Iterable[SchedulerTruncationRecoveryChildResult],
+        nested_child_results: Iterable[SchedulerTruncationRecoveryChildResult],
+        parent_usage_record: UsageRecord,
+        bridge_usage_record: UsageRecord,
+        leaf_usage_records: Iterable[UsageRecord],
+        parent_context: ContextPackage,
+        bridge_context: ContextPackage,
+        leaf_contexts: Iterable[ContextPackage],
+        requests: Iterable[ModelSurfaceReviewRequest],
+    ) -> tuple[
+        VerifiedRecursiveTruncationRecoveryTree,
+        TruncationRecoveredRecursiveSurfaceReviewArtifact,
+    ]:
+        if current_process_id() != owner_process_id:
+            raise TruncationRecoveryEvidenceError(
+                "recursive truncation recovery verifier cannot cross a process fork"
+            )
+        material = verify_material(
+            root_family=root_family,
+            nested_family=nested_family,
+            root_closure=root_closure,
+            nested_closure=nested_closure,
+            root_child_results=root_child_results,
+            nested_child_results=nested_child_results,
+            parent_usage_record=parent_usage_record,
+            bridge_usage_record=bridge_usage_record,
+            leaf_usage_records=leaf_usage_records,
+            parent_context=parent_context,
+            bridge_context=bridge_context,
+            leaf_contexts=leaf_contexts,
+            requests=requests,
+        )
+        capability = object.__new__(capability_type)
+        state = state_type(
+            process_id=current_process_id(),
+            root_family_json=canonical_model_json(material.root_family),
+            nested_family_json=canonical_model_json(material.nested_family),
+            root_closure_json=canonical_model_json(material.root_closure),
+            nested_closure_json=canonical_model_json(material.nested_closure),
+            root_child_result_jsons=(
+                canonical_model_json(material.root_child_results[0]),
+                canonical_model_json(material.root_child_results[1]),
+            ),
+            nested_child_result_jsons=(
+                canonical_model_json(material.nested_child_results[0]),
+                canonical_model_json(material.nested_child_results[1]),
+            ),
+            parent_usage_record=material.parent_usage_record,
+            bridge_usage_record=material.bridge_usage_record,
+            leaf_usage_records=material.leaf_usage_records,
+            parent_context_json=canonical_model_json(material.parent_context),
+            bridge_context_json=canonical_model_json(material.bridge_context),
+            leaf_context_jsons=(
+                canonical_model_json(material.leaf_contexts[0]),
+                canonical_model_json(material.leaf_contexts[1]),
+                canonical_model_json(material.leaf_contexts[2]),
+            ),
+            request_jsons=tuple(canonical_model_json(request) for request in material.requests),
+            artifact_json=canonical_model_json(material.artifact),
+            scanner_fingerprints_by_request=material.scanner_fingerprints_by_request,
+        )
+        key = id(capability)
+
+        def discard(
+            reference: weakref.ReferenceType[VerifiedRecursiveTruncationRecoveryTree],
+        ) -> None:
+            with lock:
+                current = registry.get(key)
+                if current is not None and current[0] is reference:
+                    registry.pop(key, None)
+
+        reference = make_weakref(capability, discard)
+        with lock:
+            registry[key] = (reference, state)
+        return capability, material.artifact
+
+    def require(
+        capability: VerifiedRecursiveTruncationRecoveryTree,
+    ) -> VerifiedRecursiveTruncationRecoveryTreeProjection:
+        process_id = current_process_id()
+        if process_id != owner_process_id:
+            raise TruncationRecoveryEvidenceError(
+                "verified recursive truncation recovery tree cannot cross a process fork"
+            )
+        with lock:
+            registered = registry.get(id(capability))
+        state = (
+            registered[1]
+            if type(capability) is capability_type
+            and registered is not None
+            and registered[0]() is capability
+            else None
+        )
+        if state is None:
+            raise TruncationRecoveryEvidenceError(
+                "verified recursive truncation recovery tree is absent or forged"
+            )
+        if state.process_id != process_id:
+            raise TruncationRecoveryEvidenceError(
+                "verified recursive truncation recovery tree cannot cross a process fork"
+            )
+        return replay(state)
+
+    return verify, require
+
+
+(
+    _verify_recursive_truncation_recovery_tree,
+    _require_recursive_truncation_recovery_tree,
+) = _build_recursive_truncation_recovery_runtime_authority()
+
+
 def _validated_promoted_surface_projection(
     *,
     closure: VerifiedTruncationRecoveryClosureProjection,
@@ -1453,6 +2565,222 @@ def _build_promoted_truncation_recovery_surface_coverage_authority() -> tuple[
 ) = _build_promoted_truncation_recovery_surface_coverage_authority()
 
 
+def _validated_promoted_recursive_surface_projection(
+    *,
+    tree: VerifiedRecursiveTruncationRecoveryTreeProjection,
+    promotion: SchedulerTruncationRecoveryFamilyPromotion,
+) -> VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection:
+    output = promotion.recovered_output
+    artifact = tree.artifact
+    expected_capability_binding_sha256 = scheduler_canonical_sha256(
+        {
+            "domain": ("mmaudit.scheduler.recursive-truncation-recovery-promotion-capability.v1"),
+            "family_id": tree.family_id,
+            "family_root_sha256": tree.family_root_sha256,
+            "family_closure_id": tree.family_closure_id,
+            "family_closure_sha256": tree.family_closure_sha256,
+            "nested_family_id": tree.nested_family_id,
+            "nested_family_root_sha256": tree.nested_family_root_sha256,
+            "nested_family_closure_id": tree.nested_family_closure_id,
+            "nested_family_closure_sha256": tree.nested_family_closure_sha256,
+            "direct_child_result_sha256s": tree.direct_child_result_sha256s,
+            "nested_child_result_sha256s": tree.nested_child_result_sha256s,
+            "superseded_bridge_result_sha256": tree.superseded_bridge_result_sha256,
+            "promoted_leaf_result_sha256s": tree.promoted_leaf_result_sha256s,
+            "structural_surface_artifact_sha256": artifact.artifact_sha256,
+            "scanner_fingerprints_by_request": tree.scanner_fingerprints_by_request,
+            "recovered_output_sha256": output.output_artifact_sha256,
+        }
+    )
+    if (
+        promotion.schema_version != "1.1"
+        or promotion.family_id != tree.family_id
+        or promotion.family_root_sha256 != tree.family_root_sha256
+        or promotion.family_closure_id != tree.family_closure_id
+        or promotion.family_closure_sha256 != tree.family_closure_sha256
+        or promotion.direct_child_result_sha256s != tree.direct_child_result_sha256s
+        or promotion.nested_family_id != tree.nested_family_id
+        or promotion.nested_family_root_sha256 != tree.nested_family_root_sha256
+        or promotion.nested_recovery_plan_sha256 != tree.nested_recovery_plan_sha256
+        or promotion.nested_family_closure_id != tree.nested_family_closure_id
+        or promotion.nested_family_closure_sha256 != tree.nested_family_closure_sha256
+        or promotion.nested_child_result_sha256s != tree.nested_child_result_sha256s
+        or promotion.superseded_bridge_result_sha256 != tree.superseded_bridge_result_sha256
+        or promotion.promoted_leaf_result_sha256s != tree.promoted_leaf_result_sha256s
+        or output.schema_version != "1.1"
+        or output.recovery_family_id != tree.family_id
+        or output.family_root_sha256 != tree.family_root_sha256
+        or output.family_closure_sha256 != tree.family_closure_sha256
+        or output.structural_surface_artifact_sha256 != artifact.artifact_sha256
+        or output.parent_task_id != artifact.parent_task_id
+        or output.parent_logical_request_id != artifact.parent_logical_request_id
+        or output.recovered_batch.surface_reviews != artifact.records
+        or output.scanner_fingerprints_by_request != tree.scanner_fingerprints_by_request
+        or promotion.capability_binding_sha256 != expected_capability_binding_sha256
+    ):
+        raise TruncationRecoveryEvidenceError(
+            "recursive truncation recovery promotion differs from its live full tree"
+        )
+    return VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection(
+        promotion_entry_sha256=promotion.entry_sha256,
+        recovered_output_artifact_sha256=output.output_artifact_sha256,
+        family_id=tree.family_id,
+        family_root_sha256=tree.family_root_sha256,
+        family_closure_id=tree.family_closure_id,
+        family_closure_sha256=tree.family_closure_sha256,
+        direct_child_result_sha256s=tree.direct_child_result_sha256s,
+        nested_family_id=tree.nested_family_id,
+        nested_family_root_sha256=tree.nested_family_root_sha256,
+        nested_recovery_plan_sha256=tree.nested_recovery_plan_sha256,
+        nested_family_closure_id=tree.nested_family_closure_id,
+        nested_family_closure_sha256=tree.nested_family_closure_sha256,
+        nested_child_result_sha256s=tree.nested_child_result_sha256s,
+        superseded_bridge_result_sha256=tree.superseded_bridge_result_sha256,
+        promoted_leaf_result_sha256s=tree.promoted_leaf_result_sha256s,
+        artifact=artifact,
+        scanner_fingerprints_by_request=tree.scanner_fingerprints_by_request,
+        parent_usage_record=tree.parent_usage_record,
+        bridge_usage_record=tree.bridge_usage_record,
+        leaf_usage_records=tree.leaf_usage_records,
+        parent_context=tree.parent_context,
+        bridge_context=tree.bridge_context,
+        leaf_contexts=tree.leaf_contexts,
+    )
+
+
+def _build_promoted_recursive_truncation_recovery_surface_coverage_authority() -> tuple[
+    _IssuePromotedRecursiveTruncationRecoverySurfaceCoverage,
+    _RequirePromotedRecursiveTruncationRecoverySurfaceCoverage,
+]:
+    """Bind one live recursive tree to the exact retained v1.1 promotion."""
+
+    capability_type = VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage
+    state_type = _VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageState
+    canonical_model_json = _canonical_model_json
+    require_tree = _require_recursive_truncation_recovery_tree
+    validate_projection = _validated_promoted_recursive_surface_projection
+    current_process_id = os.getpid
+    owner_process_id = current_process_id()
+    make_weakref = weakref.ref
+    registry: dict[
+        int,
+        tuple[
+            weakref.ReferenceType[VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage],
+            _VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageState,
+        ],
+    ] = {}
+    lock = threading.RLock()
+
+    def current_promotion(
+        journal: object,
+        family_id: str,
+    ) -> SchedulerTruncationRecoveryFamilyPromotion:
+        # Imported lazily because the scheduler owns this module's tree verifier.
+        from mmaudit.orchestration.scheduler import SchedulerJournal
+
+        if type(journal) is not SchedulerJournal:
+            raise TruncationRecoveryEvidenceError(
+                "promoted recursive truncation surface coverage lacks exact scheduler custody"
+            )
+        try:
+            promotion = journal._require_current_promoted_truncation_recovery_family(family_id)
+        except ValueError as exc:
+            raise TruncationRecoveryEvidenceError(
+                "promoted recursive truncation surface coverage lacks a retained promotion"
+            ) from exc
+        if type(promotion) is not SchedulerTruncationRecoveryFamilyPromotion:
+            raise TruncationRecoveryEvidenceError(
+                "promoted recursive truncation surface coverage has invalid promotion custody"
+            )
+        return promotion
+
+    def issue(
+        *,
+        journal: object,
+        family_id: str,
+        tree_capability: VerifiedRecursiveTruncationRecoveryTree,
+    ) -> VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage:
+        if current_process_id() != owner_process_id:
+            raise TruncationRecoveryEvidenceError(
+                "promoted recursive truncation surface coverage cannot cross a process fork"
+            )
+        promotion = current_promotion(journal, family_id)
+        tree = require_tree(tree_capability)
+        validate_projection(tree=tree, promotion=promotion)
+        capability = object.__new__(capability_type)
+        try:
+            journal_reference = make_weakref(journal)
+        except TypeError as exc:
+            raise TruncationRecoveryEvidenceError(
+                "promoted recursive truncation surface coverage journal cannot be retained"
+            ) from exc
+        state = state_type(
+            process_id=current_process_id(),
+            journal_reference=journal_reference,
+            family_id=family_id,
+            tree_capability=tree_capability,
+            promotion_json=canonical_model_json(promotion),
+        )
+        key = id(capability)
+
+        def discard(
+            reference: weakref.ReferenceType[
+                VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage
+            ],
+        ) -> None:
+            with lock:
+                current = registry.get(key)
+                if current is not None and current[0] is reference:
+                    registry.pop(key, None)
+
+        reference = make_weakref(capability, discard)
+        with lock:
+            registry[key] = (reference, state)
+        return capability
+
+    def require(
+        capability: VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage,
+    ) -> VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection:
+        process_id = current_process_id()
+        if process_id != owner_process_id:
+            raise TruncationRecoveryEvidenceError(
+                "promoted recursive truncation surface coverage cannot cross a process fork"
+            )
+        with lock:
+            registered = registry.get(id(capability))
+        state = (
+            registered[1]
+            if type(capability) is capability_type
+            and registered is not None
+            and registered[0]() is capability
+            else None
+        )
+        if state is None:
+            raise TruncationRecoveryEvidenceError(
+                "promoted recursive truncation surface coverage is absent or forged"
+            )
+        journal = state.journal_reference()
+        if state.process_id != process_id or journal is None:
+            raise TruncationRecoveryEvidenceError(
+                "promoted recursive truncation surface coverage lost live journal custody"
+            )
+        promotion = current_promotion(journal, state.family_id)
+        if canonical_model_json(promotion) != state.promotion_json:
+            raise TruncationRecoveryEvidenceError(
+                "promoted recursive truncation surface coverage journal state changed"
+            )
+        tree = require_tree(state.tree_capability)
+        return validate_projection(tree=tree, promotion=promotion)
+
+    return issue, require
+
+
+(
+    _issue_verified_promoted_recursive_truncation_recovery_surface_coverage,
+    _require_verified_promoted_recursive_truncation_recovery_surface_coverage,
+) = _build_promoted_recursive_truncation_recovery_surface_coverage_authority()
+
+
 def verify_truncation_recovery_closure(
     *,
     family: SchedulerTruncationRecoveryFamilyRoot,
@@ -1512,9 +2840,86 @@ def require_verified_truncation_recovery_closure_projection(
     return fresh
 
 
+def verify_recursive_truncation_recovery_tree(
+    *,
+    root_family: SchedulerTruncationRecoveryFamilyRoot,
+    nested_family: SchedulerTruncationRecoveryFamilyRoot,
+    root_closure: SchedulerTruncationRecoveryFamilyClosure,
+    nested_closure: SchedulerTruncationRecoveryFamilyClosure,
+    root_child_results: Iterable[SchedulerTruncationRecoveryChildResult],
+    nested_child_results: Iterable[SchedulerTruncationRecoveryChildResult],
+    parent_usage_record: UsageRecord,
+    bridge_usage_record: UsageRecord,
+    leaf_usage_records: Iterable[UsageRecord],
+    parent_context: ContextPackage,
+    bridge_context: ContextPackage,
+    leaf_contexts: Iterable[ContextPackage],
+    requests: Iterable[ModelSurfaceReviewRequest],
+) -> tuple[
+    VerifiedRecursiveTruncationRecoveryTree,
+    TruncationRecoveredRecursiveSurfaceReviewArtifact,
+]:
+    """Issue PID-local authority for the exact admitted one-level recovery tree."""
+
+    return _verify_recursive_truncation_recovery_tree(
+        root_family=root_family,
+        nested_family=nested_family,
+        root_closure=root_closure,
+        nested_closure=nested_closure,
+        root_child_results=root_child_results,
+        nested_child_results=nested_child_results,
+        parent_usage_record=parent_usage_record,
+        bridge_usage_record=bridge_usage_record,
+        leaf_usage_records=leaf_usage_records,
+        parent_context=parent_context,
+        bridge_context=bridge_context,
+        leaf_contexts=leaf_contexts,
+        requests=requests,
+    )
+
+
+def require_verified_recursive_truncation_recovery_tree(
+    capability: VerifiedRecursiveTruncationRecoveryTree,
+    artifact: TruncationRecoveredRecursiveSurfaceReviewArtifact | None = None,
+) -> TruncationRecoveredRecursiveSurfaceReviewArtifact:
+    """Replay all five live requests and return a fresh recursive artifact."""
+
+    return require_verified_recursive_truncation_recovery_tree_projection(
+        capability,
+        artifact,
+    ).artifact
+
+
+def require_verified_recursive_truncation_recovery_tree_projection(
+    capability: VerifiedRecursiveTruncationRecoveryTree,
+    artifact: TruncationRecoveredRecursiveSurfaceReviewArtifact | None = None,
+) -> VerifiedRecursiveTruncationRecoveryTreeProjection:
+    """Return a fresh exact full-tree projection for durable promotion."""
+
+    fresh = _require_recursive_truncation_recovery_tree(capability)
+    if artifact is not None:
+        if type(artifact) is not TruncationRecoveredRecursiveSurfaceReviewArtifact:
+            raise TruncationRecoveryEvidenceError(
+                "recursive truncation recovery artifact has an invalid exact type"
+            )
+        if not _models_are_byte_equal(fresh.artifact, artifact):
+            raise TruncationRecoveryEvidenceError(
+                "recursive truncation recovery artifact differs from verified tree state"
+            )
+    return fresh
+
+
 def require_verified_promoted_truncation_recovery_surface_coverage(
     capability: VerifiedPromotedTruncationRecoverySurfaceCoverage,
 ) -> VerifiedPromotedTruncationRecoverySurfaceCoverageProjection:
     """Replay one journal-owned promoted surface union without serialized authority."""
 
     return _require_verified_promoted_truncation_recovery_surface_coverage(capability)
+
+
+def require_verified_promoted_recursive_truncation_recovery_surface_coverage(
+    capability: VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage,
+) -> VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection:
+    """Replay one journal-owned recursive promotion without serialized authority."""
+
+    return _require_verified_promoted_recursive_truncation_recovery_surface_coverage(capability)

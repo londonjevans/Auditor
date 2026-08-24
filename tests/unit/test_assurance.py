@@ -69,6 +69,7 @@ from mmaudit.models.scheduler import (
     SchedulerTaskOutput,
     SchedulerTaskPlan,
     SchedulerTruncationRecoveryModelRequestEvidence,
+    SchedulerTruncationRecoveryPromotionDisposition,
     scheduler_canonical_sha256,
 )
 from mmaudit.models.schemas import (
@@ -262,9 +263,11 @@ from tests.unit.test_model_coverage import (
 )
 from tests.unit.test_model_coverage import (
     _build_promoted_parent_surface_fixture,
+    _build_promoted_recursive_parent_surface_fixture,
     _promoted_surface_context,
     _promoted_surface_inputs,
     _PromotedParentSurfaceFixture,
+    _PromotedRecursiveParentSurfaceFixture,
 )
 from tests.unit.test_model_coverage import (
     _record as _promoted_surface_record,
@@ -2578,6 +2581,7 @@ def _assurance_promoted_surface_fixture(
     authorities: _AssurancePolicySelectionFixture,
     root: Path,
     specialist_role: str | None = None,
+    parent_retained_count: int = 1,
 ) -> tuple[
     _PromotedParentSurfaceFixture,
     SoliditySymbolIndex,
@@ -2656,7 +2660,79 @@ def _assurance_promoted_surface_fixture(
         orientation_root_lineage=orientation_root,
         usage_transform=lambda usage: _bind_promoted_assurance_usage(usage, authorities),
         include_scheduler_test_refresh_pricing=False,
+        direct_parent_retained_count=parent_retained_count,
         **specialist_fixture_args,
+    )
+    return fixture, index, graphs, invariants, audited_suite
+
+
+def _assurance_promoted_recursive_surface_fixture(
+    *,
+    config: AuditConfig,
+    runtime: AssuranceRuntime,
+    authorities: _AssurancePolicySelectionFixture,
+    root: Path,
+    parent_retained_count: int = 0,
+) -> tuple[
+    _PromotedRecursiveParentSurfaceFixture,
+    SoliditySymbolIndex,
+    SolidityGraphSet,
+    InvariantSuite,
+    AuditedSuiteCoverage,
+]:
+    """Issue one exact REAL generic recursive promotion under assurance authorities."""
+
+    assert runtime.scheduler_artifact is not None
+    manifest = runtime.scheduler_artifact.summary.manifest
+    analysis_inputs = scheduler_test_analysis_input_inventory("maximum-assurance-runtime")
+    assert analysis_inputs.analysis_input_sha256 == manifest.bindings.analysis_input_sha256
+    journal = create_scheduler_journal(
+        root,
+        bindings=manifest.bindings,
+        analysis_input_inventory=analysis_inputs,
+        shard_inventory=manifest.shard_inventory,
+        cost_ledger_baseline=manifest.cost_ledger_baseline,
+        privacy_evidence_custody=manifest.privacy_evidence_custody,
+        audit_model_refresh_evidence=runtime.audit_model_refresh_evidence,
+        audit_model_refresh_guard=runtime.audit_model_refresh_guard,
+        audit_model_refresh_pricing_evidence=runtime.audit_model_refresh_pricing_evidence,
+        audit_model_refresh_pricing_authority=runtime.audit_model_refresh_pricing_authority,
+        production_qualification=runtime.production_qualification,
+        audit_model_selection=runtime.verified_audit_model_selection,
+    )
+    index, graphs, invariants, audited_suite, requests = _promoted_surface_inputs()
+    parent_model_id = config.models.source_audit.primary
+    orientation_model_id = config.models.threat_model.primary
+    assert runtime.production_qualification is not None
+    parent_root = runtime.production_qualification.model_for(
+        parent_model_id,
+        now=authorities.refresh_runtime.verified_at,
+    ).root_lineage
+    orientation_root = runtime.production_qualification.model_for(
+        orientation_model_id,
+        now=authorities.refresh_runtime.verified_at,
+    ).root_lineage
+    context_seed = _promoted_surface_usage(
+        "source_audit",
+        parent_model_id,
+        "promoted-recursive-assurance-context-only",
+    )
+    context = _promoted_surface_context(requests, context_seed, index, graphs)
+    records = tuple(
+        _promoted_surface_record(request, "source_audit", index, graphs) for request in requests
+    )
+    fixture = _build_promoted_recursive_parent_surface_fixture(
+        journal,
+        requests=requests,
+        records=records,
+        parent_context=context,
+        parent_model_id=parent_model_id,
+        parent_root_lineage=parent_root,
+        orientation_model_id=orientation_model_id,
+        orientation_root_lineage=orientation_root,
+        usage_transform=lambda usage: _bind_promoted_assurance_usage(usage, authorities),
+        include_scheduler_test_refresh_pricing=False,
+        recursive_parent_retained_count=parent_retained_count,
     )
     return fixture, index, graphs, invariants, audited_suite
 
@@ -2668,6 +2744,7 @@ def _runtime_with_promoted_parent_surface(
     authorities: _AssurancePolicySelectionFixture,
     root: Path,
     specialist_role: str | None = None,
+    parent_retained_count: int = 1,
 ) -> tuple[AssuranceRuntime, _PromotedParentSurfaceFixture]:
     fixture, index, graphs, invariants, audited_suite = _assurance_promoted_surface_fixture(
         config=config,
@@ -2675,6 +2752,7 @@ def _runtime_with_promoted_parent_surface(
         authorities=authorities,
         root=root,
         specialist_role=specialist_role,
+        parent_retained_count=parent_retained_count,
     )
     ordinary_model_id = config.models.business_logic.primary
     ordinary_usage = _promoted_surface_usage(
@@ -2790,6 +2868,109 @@ def _runtime_with_promoted_parent_surface(
     return promoted_runtime, fixture
 
 
+def _runtime_with_promoted_recursive_parent_surface(
+    *,
+    config: AuditConfig,
+    runtime: AssuranceRuntime,
+    authorities: _AssurancePolicySelectionFixture,
+    root: Path,
+    parent_retained_count: int = 0,
+) -> tuple[AssuranceRuntime, _PromotedRecursiveParentSurfaceFixture]:
+    fixture, index, graphs, invariants, audited_suite = (
+        _assurance_promoted_recursive_surface_fixture(
+            config=config,
+            runtime=runtime,
+            authorities=authorities,
+            root=root,
+            parent_retained_count=parent_retained_count,
+        )
+    )
+    ordinary_usage = _promoted_surface_usage(
+        "business_logic",
+        config.models.business_logic.primary,
+        "promoted-recursive-assurance-ordinary-review",
+    )
+    ordinary_context = _promoted_surface_context(
+        fixture.requests,
+        ordinary_usage,
+        index,
+        graphs,
+    )
+    _bind_promoted_usage_to_context(ordinary_usage, ordinary_context)
+    ordinary_usage = _bind_promoted_assurance_usage(ordinary_usage, authorities)
+    ordinary_artifact = _promoted_ordinary_artifact(
+        list(fixture.requests),
+        ordinary_usage,
+        index,
+        graphs,
+        context=ordinary_context,
+    )
+    coverage_usages = [
+        fixture.parent_usage,
+        fixture.bridge_usage,
+        *fixture.leaf_usages,
+        ordinary_usage,
+    ]
+    coverage_artifacts = [*fixture.leaf_artifacts, ordinary_artifact]
+    coverage_contexts = {
+        fixture.parent_usage.request_id: [fixture.parent_context],
+        fixture.bridge_usage.request_id: [fixture.bridge_context],
+        **{
+            usage.request_id: [context]
+            for usage, context in zip(
+                fixture.leaf_usages,
+                fixture.leaf_contexts,
+                strict=True,
+            )
+        },
+        ordinary_usage.request_id: [ordinary_context],
+    }
+    recovery_coordinates = tuple(
+        (
+            request.logical_request_id,
+            request.request_limit_scope,
+            request.request_limit_count_before,
+        )
+        for request in fixture.scheduler_artifact.recovery_model_requests
+        if request.terminal_status.value == "SUCCEEDED"
+    )
+    coverage = build_model_review_coverage(
+        config,
+        usage_records=coverage_usages,
+        review_artifacts=coverage_artifacts,
+        review_contexts_by_request=coverage_contexts,
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+        minimum_critical_root_lineages=2,
+        audited_suite_coverage=audited_suite,
+        source_contents_by_path={_PROMOTED_SURFACE_PATH: _PROMOTED_SURFACE_SOURCE},
+        recovery_usage_coordinates=recovery_coordinates,
+        promoted_recursive_recovery_surface_coverages=(fixture.surface_capability,),
+    )
+    assert coverage.critical_gate_passed
+    promoted_runtime = replace(
+        runtime,
+        scheduler_artifact=fixture.scheduler_artifact,
+        expected_scheduler_bindings=fixture.scheduler_artifact.summary.manifest.bindings,
+        expected_scheduler_analysis_input_sha256=(
+            fixture.scheduler_artifact.summary.manifest.bindings.analysis_input_sha256
+        ),
+        expected_scheduler_shard_inventory=(
+            fixture.scheduler_artifact.summary.manifest.shard_inventory
+        ),
+        expected_scheduler_cost_ledger_baseline=(
+            fixture.scheduler_artifact.summary.manifest.cost_ledger_baseline
+        ),
+        model_review_coverage=coverage,
+        model_surface_review_artifacts=coverage_artifacts,
+        promoted_recursive_recovery_surface_coverages=[fixture.surface_capability],
+        model_usage=[*runtime.model_usage, *coverage_usages],
+    )
+    return promoted_runtime, fixture
+
+
 def _critical_surface_requirement(
     runtime: AssuranceRuntime,
     config: AuditConfig,
@@ -2799,6 +2980,27 @@ def _critical_surface_requirement(
         for requirement in MaximumAssuranceContract(config).evaluate(runtime).requirements
         if requirement.engine == "critical_model_surface_review"
     )
+
+
+def _coverage_without_artifact_surface_pairs(
+    coverage: ModelReviewCoverage,
+    excluded_pairs: set[tuple[str, str]],
+) -> ModelReviewCoverage:
+    surfaces = []
+    for surface in coverage.surfaces:
+        surface_values = surface.model_dump(
+            mode="python",
+            exclude={"reviewer_roles", "root_lineages", "reviewed", "evidence_references"},
+        )
+        surface_values["evidence_references"] = [
+            reference
+            for reference in surface.evidence_references
+            if (reference.artifact_sha256, reference.surface_id) not in excluded_pairs
+        ]
+        surfaces.append(ModelReviewSurface.model_validate(surface_values))
+    coverage_values = coverage.model_dump(mode="python", exclude={"surfaces"})
+    coverage_values["surfaces"] = surfaces
+    return ModelReviewCoverage.model_validate(coverage_values)
 
 
 def _scheduler_artifact_with_swapped_recovery_result_associations(
@@ -2824,6 +3026,107 @@ def _scheduler_artifact_with_swapped_recovery_result_associations(
     return type(artifact).build(
         summary=artifact.summary,
         journal_evidence=artifact.journal_evidence,
+        model_requests=artifact.model_requests,
+        recovery_model_requests=swapped_requests,
+    )
+
+
+def _scheduler_artifact_with_swapped_recursive_leaf_result_associations(
+    fixture: _PromotedRecursiveParentSurfaceFixture,
+) -> SchedulerArtifact:
+    artifact = fixture.scheduler_artifact
+    ordered_leaf_items = tuple(
+        sorted(
+            (
+                (index, request)
+                for index, request in enumerate(artifact.recovery_model_requests)
+                if request.promotion_disposition
+                is SchedulerTruncationRecoveryPromotionDisposition.SUCCESSFUL_LEAF
+            ),
+            key=lambda item: item[1].global_request_ordinal or 0,
+        )
+    )
+    assert len(ordered_leaf_items) == 3
+    nested_leaf_items = ordered_leaf_items[1:]
+    swapped_requests = list(artifact.recovery_model_requests)
+    for (target_index, request), (_, source) in zip(
+        nested_leaf_items,
+        reversed(nested_leaf_items),
+        strict=True,
+    ):
+        payload = request.model_dump(mode="python", exclude={"request_evidence_sha256"})
+        payload["child_result_entry_sha256"] = source.child_result_entry_sha256
+        swapped_requests[target_index] = (
+            SchedulerTruncationRecoveryModelRequestEvidence.model_validate(
+                {
+                    **payload,
+                    "request_evidence_sha256": scheduler_canonical_sha256(payload),
+                }
+            )
+        )
+
+    target_pass = next(
+        pass_result
+        for pass_result in artifact.summary.pass_results
+        if pass_result.recovery_promotion_bindings
+    )
+    binding = next(
+        binding
+        for binding in target_pass.recovery_promotion_bindings
+        if binding.promotion_entry_sha256 == fixture.promotion.entry_sha256
+    )
+    assert binding.nested_child_result_sha256s is not None
+    assert binding.promoted_leaf_result_sha256s is not None
+    binding_values = binding.model_dump(mode="python", exclude={"binding_sha256"})
+    swapped_nested_hashes = tuple(reversed(binding.nested_child_result_sha256s))
+    binding_values.update(
+        {
+            "nested_child_result_sha256s": swapped_nested_hashes,
+            "promoted_leaf_result_sha256s": (
+                binding.promoted_leaf_result_sha256s[0],
+                *swapped_nested_hashes,
+            ),
+        }
+    )
+    swapped_binding = type(binding)(
+        **binding_values,
+        binding_sha256=scheduler_canonical_sha256(binding_values),
+    )
+    swapped_pass_results = []
+    for pass_result in artifact.summary.pass_results:
+        if pass_result is target_pass:
+            swapped_pass_results.append(
+                type(pass_result).build(
+                    plan=pass_result.plan,
+                    task_results=pass_result.task_results,
+                    recovery_promotion_bindings=(swapped_binding,),
+                )
+            )
+        else:
+            swapped_pass_results.append(pass_result)
+    swapped_summary = type(artifact.summary).build(
+        manifest=artifact.summary.manifest,
+        pass_results=swapped_pass_results,
+    )
+    journal_values = artifact.journal_evidence.model_dump(
+        mode="python",
+        exclude={"evidence_sha256"},
+    )
+    journal_values.update(
+        {
+            "summary_sha256": swapped_summary.summary_sha256,
+            "pass_result_sha256s": tuple(
+                pass_result.pass_result_sha256 for pass_result in swapped_summary.pass_results
+            ),
+        }
+    )
+    swapped_journal_evidence = type(artifact.journal_evidence)(
+        **journal_values,
+        evidence_sha256=scheduler_canonical_sha256(journal_values),
+    )
+    return type(artifact).build(
+        summary=swapped_summary,
+        journal_evidence=swapped_journal_evidence,
         model_requests=artifact.model_requests,
         recovery_model_requests=swapped_requests,
     )
@@ -4529,6 +4832,429 @@ def test_assurance_accepts_only_exact_promoted_parent_and_child_custody(
     for label, invalid_runtime in variants.items():
         requirement = _critical_surface_requirement(invalid_runtime, config)
         assert not requirement.passed, label
+
+    fixture.journal.close()
+
+
+@pytest.mark.parametrize("parent_retained_count", (0, 2))
+def test_assurance_direct_consumption_requires_complete_parent_and_child_partitions(
+    config_factory,
+    tmp_path: Path,
+    parent_retained_count: int,
+) -> None:
+    config = _maximum_config(config_factory)
+    base_runtime = _complete_runtime(config)
+    authorities = _assurance_policy_selection(
+        config,
+        datetime.now(UTC).replace(microsecond=0),
+    )
+    runtime, fixture = _runtime_with_promoted_parent_surface(
+        config=config,
+        runtime=base_runtime,
+        authorities=authorities,
+        root=tmp_path / f"direct-partition-assurance-{parent_retained_count}",
+        parent_retained_count=parent_retained_count,
+    )
+    parent_surface_ids = {
+        review.surface_id
+        for review in fixture.structural_artifact.parent.projection.surface_reviews
+    }
+    assert len(parent_surface_ids) == parent_retained_count
+
+    index, graphs, invariants, audited_suite, requests = _promoted_surface_inputs()
+    assert fixture.requests == requests
+    ordinary_material = []
+    for role, model_id, seed in (
+        (
+            "source_audit",
+            config.models.source_audit.primary,
+            f"direct-substitute-source-{parent_retained_count}",
+        ),
+        (
+            "business_logic",
+            config.models.business_logic.primary,
+            f"direct-substitute-business-{parent_retained_count}",
+        ),
+    ):
+        usage = _promoted_surface_usage(role, model_id, seed)
+        context = _promoted_surface_context(fixture.requests, usage, index, graphs)
+        _bind_promoted_usage_to_context(usage, context)
+        usage = _bind_promoted_assurance_usage(usage, authorities)
+        artifact = _promoted_ordinary_artifact(
+            list(fixture.requests),
+            usage,
+            index,
+            graphs,
+            context=context,
+        )
+        ordinary_material.append((usage, context, artifact))
+
+    coverage_usages = [
+        fixture.parent_usage,
+        *fixture.child_usages,
+        *(item[0] for item in ordinary_material),
+    ]
+    coverage_artifacts = [
+        *fixture.child_artifacts,
+        *(item[2] for item in ordinary_material),
+    ]
+    coverage_contexts = {
+        fixture.parent_usage.request_id: [fixture.parent_context],
+        **{
+            usage.request_id: [context]
+            for usage, context in zip(
+                fixture.child_usages,
+                fixture.child_contexts,
+                strict=True,
+            )
+        },
+        **{item[0].request_id: [item[1]] for item in ordinary_material},
+    }
+    recovery_coordinates = tuple(
+        (
+            request.logical_request_id,
+            request.request_limit_scope,
+            request.request_limit_count_before,
+        )
+        for request in fixture.scheduler_artifact.recovery_model_requests
+        if request.terminal_status.value == "SUCCEEDED"
+    )
+    exact_coverage = build_model_review_coverage(
+        config,
+        usage_records=coverage_usages,
+        review_artifacts=coverage_artifacts,
+        review_contexts_by_request=coverage_contexts,
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+        minimum_critical_root_lineages=2,
+        audited_suite_coverage=audited_suite,
+        source_contents_by_path={_PROMOTED_SURFACE_PATH: _PROMOTED_SURFACE_SOURCE},
+        recovery_usage_coordinates=recovery_coordinates,
+        promoted_recovery_surface_coverages=(fixture.surface_capability,),
+    )
+    assert exact_coverage.critical_gate_passed
+    if parent_retained_count == 0:
+        assert all(
+            reference.artifact_sha256 != fixture.structural_artifact.artifact_sha256
+            for surface in exact_coverage.surfaces
+            for reference in surface.evidence_references
+        )
+    exact_runtime = replace(
+        runtime,
+        model_review_coverage=exact_coverage,
+        model_surface_review_artifacts=[
+            *runtime.model_surface_review_artifacts,
+            *(item[2] for item in ordinary_material),
+        ],
+        model_usage=[*runtime.model_usage, *(item[0] for item in ordinary_material)],
+    )
+    assert _critical_surface_requirement(exact_runtime, config).passed
+
+    child_pairs = {
+        (artifact.artifact_sha256, record.surface_id)
+        for artifact in fixture.child_artifacts
+        for record in artifact.records
+    }
+    substituted_child_coverage = _coverage_without_artifact_surface_pairs(
+        exact_coverage,
+        child_pairs,
+    )
+    assert substituted_child_coverage.critical_gate_passed
+    assert not _critical_surface_requirement(
+        replace(exact_runtime, model_review_coverage=substituted_child_coverage),
+        config,
+    ).passed
+
+    if parent_surface_ids:
+        incomplete_parent_coverage = _coverage_without_artifact_surface_pairs(
+            exact_coverage,
+            {(fixture.structural_artifact.artifact_sha256, min(parent_surface_ids))},
+        )
+        assert incomplete_parent_coverage.critical_gate_passed
+        assert not _critical_surface_requirement(
+            replace(exact_runtime, model_review_coverage=incomplete_parent_coverage),
+            config,
+        ).passed
+
+    fixture.journal.close()
+
+
+def test_assurance_accepts_only_exact_promoted_recursive_tree_custody(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    config = _maximum_config(config_factory)
+    base_runtime = _complete_runtime(config)
+    authorities = _assurance_policy_selection(
+        config,
+        datetime.now(UTC).replace(microsecond=0),
+    )
+    runtime, fixture = _runtime_with_promoted_recursive_parent_surface(
+        config=config,
+        runtime=base_runtime,
+        authorities=authorities,
+        root=tmp_path / "promoted-recursive-assurance-runtime",
+    )
+
+    assert not fixture.structural_artifact.parent.projection.surface_reviews
+    assert runtime.model_review_coverage is not None
+    assert all(
+        reference.artifact_sha256 != fixture.structural_artifact.artifact_sha256
+        and reference.request_id
+        not in {fixture.parent_usage.request_id, fixture.bridge_usage.request_id}
+        for surface in runtime.model_review_coverage.surfaces
+        for reference in surface.evidence_references
+    )
+    assert _critical_surface_requirement(runtime, config).passed
+    promoted_coordinates = assurance_module._promoted_recovery_request_coordinates(
+        fixture.scheduler_artifact
+    )
+    assert fixture.bridge_usage.request_id not in promoted_coordinates
+    assert set(promoted_coordinates) == {usage.request_id for usage in fixture.leaf_usages}
+    assert not _is_real_model_usage(
+        fixture.bridge_usage,
+        config,
+        runtime.production_qualification,
+        runtime.provider_session,
+        _current_audit_model_selection(
+            runtime.audit_model_selection_evidence,
+            runtime.verified_audit_model_selection,
+            runtime.production_qualification,
+        ),
+        None,
+        None,
+    )
+
+    serialized_bridge = UsageRecord.model_validate_json(fixture.bridge_usage.model_dump_json())
+    swapped_leaf_results = _scheduler_artifact_with_swapped_recursive_leaf_result_associations(
+        fixture
+    )
+    critical_variants = {
+        "missing recursive capability": replace(
+            runtime,
+            promoted_recursive_recovery_surface_coverages=[],
+        ),
+        "serialized bridge identity": replace(
+            runtime,
+            model_usage=[
+                serialized_bridge if usage.request_id == serialized_bridge.request_id else usage
+                for usage in runtime.model_usage
+            ],
+        ),
+        "missing leaf artifact": replace(
+            runtime,
+            model_surface_review_artifacts=[
+                artifact
+                for artifact in runtime.model_surface_review_artifacts
+                if artifact.request_id != fixture.leaf_artifacts[0].request_id
+            ],
+        ),
+        "swapped public leaf-result associations": replace(
+            runtime,
+            scheduler_artifact=swapped_leaf_results,
+        ),
+    }
+    for label, invalid_runtime in critical_variants.items():
+        assert not _critical_surface_requirement(invalid_runtime, config).passed, label
+
+    exact_scheduler_runtime = replace(
+        runtime,
+        model_usage=list(fixture.scheduler_live_usages),
+        model_surface_review_artifacts=list(fixture.leaf_artifacts),
+    )
+
+    def scheduler_errors(candidate: AssuranceRuntime) -> tuple[str, ...]:
+        selection = _current_audit_model_selection(
+            candidate.audit_model_selection_evidence,
+            candidate.verified_audit_model_selection,
+            candidate.production_qualification,
+        )
+        refresh = _current_audit_model_refresh(
+            candidate.audit_model_refresh_evidence,
+            candidate.audit_model_refresh_guard,
+            candidate.production_qualification,
+            selection,
+        )
+        pricing = _current_audit_model_refresh_pricing(
+            candidate.audit_model_refresh_pricing_evidence,
+            candidate.audit_model_refresh_pricing_authority,
+            candidate.production_qualification,
+            selection,
+            refresh,
+            candidate.audit_model_refresh_guard,
+        )
+        return assurance_module._scheduler_assurance_errors(
+            config,
+            candidate,
+            selection,
+            refresh,
+            pricing,
+        )
+
+    exact_errors = scheduler_errors(exact_scheduler_runtime)
+    assert not any("recursive recovery promotion" in error for error in exact_errors)
+    assert not any("recursive bridge" in error for error in exact_errors)
+    without_cap_errors = scheduler_errors(
+        replace(
+            exact_scheduler_runtime,
+            promoted_recursive_recovery_surface_coverages=[],
+        )
+    )
+    assert any("public recursive recovery promotions" in error for error in without_cap_errors)
+    cloned_bridge_errors = scheduler_errors(
+        replace(
+            exact_scheduler_runtime,
+            model_usage=[
+                serialized_bridge if usage.request_id == serialized_bridge.request_id else usage
+                for usage in exact_scheduler_runtime.model_usage
+            ],
+        )
+    )
+    assert any("exact live usage custody" in error for error in cloned_bridge_errors)
+    swapped_leaf_errors = scheduler_errors(
+        replace(
+            exact_scheduler_runtime,
+            scheduler_artifact=swapped_leaf_results,
+        )
+    )
+    assert any("exact public tree" in error for error in swapped_leaf_errors)
+
+    fixture.journal.close()
+
+
+def test_assurance_recursive_consumption_requires_complete_parent_and_leaf_partitions(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    config = _maximum_config(config_factory)
+    base_runtime = _complete_runtime(config)
+    authorities = _assurance_policy_selection(
+        config,
+        datetime.now(UTC).replace(microsecond=0),
+    )
+    runtime, fixture = _runtime_with_promoted_recursive_parent_surface(
+        config=config,
+        runtime=base_runtime,
+        authorities=authorities,
+        root=tmp_path / "retained-recursive-partition-assurance-runtime",
+        parent_retained_count=2,
+    )
+    parent_surface_ids = {
+        review.surface_id
+        for review in fixture.structural_artifact.parent.projection.surface_reviews
+    }
+    assert len(parent_surface_ids) == 2
+
+    index, graphs, invariants, audited_suite, requests = _promoted_surface_inputs()
+    assert fixture.requests == requests
+    ordinary_material = []
+    for role, model_id, seed in (
+        ("source_audit", config.models.source_audit.primary, "retained-substitute-source"),
+        (
+            "business_logic",
+            config.models.business_logic.primary,
+            "retained-substitute-business",
+        ),
+    ):
+        usage = _promoted_surface_usage(role, model_id, seed)
+        context = _promoted_surface_context(fixture.requests, usage, index, graphs)
+        _bind_promoted_usage_to_context(usage, context)
+        usage = _bind_promoted_assurance_usage(usage, authorities)
+        artifact = _promoted_ordinary_artifact(
+            list(fixture.requests),
+            usage,
+            index,
+            graphs,
+            context=context,
+        )
+        ordinary_material.append((usage, context, artifact))
+
+    coverage_usages = [
+        fixture.parent_usage,
+        fixture.bridge_usage,
+        *fixture.leaf_usages,
+        *(item[0] for item in ordinary_material),
+    ]
+    coverage_artifacts = [
+        *fixture.leaf_artifacts,
+        *(item[2] for item in ordinary_material),
+    ]
+    coverage_contexts = {
+        fixture.parent_usage.request_id: [fixture.parent_context],
+        fixture.bridge_usage.request_id: [fixture.bridge_context],
+        **{
+            usage.request_id: [context]
+            for usage, context in zip(
+                fixture.leaf_usages,
+                fixture.leaf_contexts,
+                strict=True,
+            )
+        },
+        **{item[0].request_id: [item[1]] for item in ordinary_material},
+    }
+    recovery_coordinates = tuple(
+        (
+            request.logical_request_id,
+            request.request_limit_scope,
+            request.request_limit_count_before,
+        )
+        for request in fixture.scheduler_artifact.recovery_model_requests
+        if request.terminal_status.value == "SUCCEEDED"
+    )
+    exact_coverage = build_model_review_coverage(
+        config,
+        usage_records=coverage_usages,
+        review_artifacts=coverage_artifacts,
+        review_contexts_by_request=coverage_contexts,
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+        minimum_critical_root_lineages=2,
+        audited_suite_coverage=audited_suite,
+        source_contents_by_path={_PROMOTED_SURFACE_PATH: _PROMOTED_SURFACE_SOURCE},
+        recovery_usage_coordinates=recovery_coordinates,
+        promoted_recursive_recovery_surface_coverages=(fixture.surface_capability,),
+    )
+    assert exact_coverage.critical_gate_passed
+    exact_runtime = replace(
+        runtime,
+        model_review_coverage=exact_coverage,
+        model_surface_review_artifacts=[
+            *runtime.model_surface_review_artifacts,
+            *(item[2] for item in ordinary_material),
+        ],
+        model_usage=[*runtime.model_usage, *(item[0] for item in ordinary_material)],
+    )
+    assert _critical_surface_requirement(exact_runtime, config).passed
+
+    leaf_pairs = {
+        (artifact.artifact_sha256, record.surface_id)
+        for artifact in fixture.leaf_artifacts
+        for record in artifact.records
+    }
+    substituted_leaf_coverage = _coverage_without_artifact_surface_pairs(
+        exact_coverage,
+        leaf_pairs,
+    )
+    assert substituted_leaf_coverage.critical_gate_passed
+    assert not _critical_surface_requirement(
+        replace(exact_runtime, model_review_coverage=substituted_leaf_coverage),
+        config,
+    ).passed
+
+    missing_parent_pair = {(fixture.structural_artifact.artifact_sha256, min(parent_surface_ids))}
+    incomplete_parent_coverage = _coverage_without_artifact_surface_pairs(
+        exact_coverage,
+        missing_parent_pair,
+    )
+    assert incomplete_parent_coverage.critical_gate_passed
+    assert not _critical_surface_requirement(
+        replace(exact_runtime, model_review_coverage=incomplete_parent_coverage),
+        config,
+    ).passed
 
     fixture.journal.close()
 

@@ -19,6 +19,7 @@ from mmaudit.models.scheduler import (
     SchedulerScope,
     SchedulerTaskResult,
     SchedulerTerminalStatus,
+    SchedulerTruncationRecoveryPromotionDisposition,
 )
 from mmaudit.models.schemas import (
     CandidateReviewBatch,
@@ -51,15 +52,20 @@ from mmaudit.models.truncation_recovery_journal import (
     SchedulerTruncationRecoveryEntryKind,
     SchedulerTruncationRecoveryFamilyClosure,
     SchedulerTruncationRecoveryRequestedSurfaceManifest,
+    SchedulerTruncationRecoveryTerminalStatus,
     rebuild_truncation_recovery_parent_from_projection,
 )
 from mmaudit.orchestration.context import render_context
 from mmaudit.orchestration.scheduler_runtime import PipelineScheduler
 from mmaudit.orchestration.truncation_recovery_evidence import (
+    VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage,
     VerifiedPromotedTruncationRecoverySurfaceCoverage,
+    VerifiedRecursiveTruncationRecoveryTree,
     VerifiedTruncationRecoveryClosure,
     build_truncation_recovery_child_context,
+    require_verified_promoted_recursive_truncation_recovery_surface_coverage,
     require_verified_promoted_truncation_recovery_surface_coverage,
+    verify_recursive_truncation_recovery_tree,
     verify_truncation_recovery_closure,
 )
 from tests.identity_fixtures import reattest_synthetic_real_usage
@@ -93,10 +99,12 @@ from tests.unit.test_truncation_closure import (
     _requests,
 )
 from tests.unit.test_truncation_recovery_journal import (
+    _nested_plan_for_typed_truncated_child,
     _placeholder_channels,
     _projection,
     _resources,
     _success_custody,
+    _truncated_custody,
 )
 
 
@@ -331,6 +339,43 @@ def _bind_child_to_parent_invariant(
             }
         )
     )
+
+
+def _bind_bridge_to_parent_invariant(
+    usage: UsageRecord,
+    *,
+    journal: object,
+    parent_usage: UsageRecord,
+) -> UsageRecord:
+    """Align a truncated recovery bridge without granting successful-use credit."""
+
+    from mmaudit.orchestration.scheduler import SchedulerJournal
+
+    assert isinstance(journal, SchedulerJournal)
+    selection = journal.manifest.bindings.audit_model_selection
+    refresh = journal.manifest.bindings.audit_model_refresh
+    pricing = journal.manifest.bindings.audit_model_refresh_pricing
+    assert selection is not None and refresh is not None and pricing is not None
+    bound = bind_scheduler_test_usage_to_audit_selection(usage, selection)
+    bound = bind_scheduler_test_usage_to_audit_model_refresh(bound, selection, refresh)
+    bound = bind_scheduler_test_usage_to_audit_model_refresh_pricing(
+        bound,
+        selection,
+        refresh,
+        pricing,
+    )
+    routing = dict(bound.routing)
+    for key in _INVARIANT_ROUTING_KEYS:
+        routing.pop(key, None)
+        if key in parent_usage.routing:
+            routing[key] = parent_usage.routing[key]
+    rebound = bound.model_copy(
+        update={
+            "model_family": parent_usage.model_family,
+            "routing": routing,
+        }
+    )
+    return reattest_synthetic_real_usage(rebound)
 
 
 def _recovery_plan(
@@ -763,4 +808,416 @@ def test_live_closure_promotes_truncated_blind_task_and_replays_history(
             truncation_projection=projection,
             requested_surface_manifest=surface_manifest,
         )
+    resumed.close()
+
+
+def test_live_recursive_tree_promotes_only_three_leaves_and_replays_history(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "promoted-recursive-recovery"
+    bindings = _one_shard_bindings()
+    inventory = _inventory(one_shard=True)
+    journal = create_scheduler_journal(
+        path,
+        bindings=bindings,
+        shard_inventory=inventory,
+        privacy_evidence_custody=_privacy_custody(source_sha256=inventory.source_tree_sha256),
+    )
+    _complete_real_orientation(journal)
+
+    requests: tuple[ModelSurfaceReviewRequest, ...] = _requests()
+    records: tuple[ModelSurfaceReviewRecord, ...] = tuple(_record(item) for item in requests)
+    parent_context = _context(requests)
+    projection = _projection(records, retained_count=1)
+    assert projection.findings_state.value == "COMPLETE"
+    surface_manifest = SchedulerTruncationRecoveryRequestedSurfaceManifest.build(requests)
+
+    planner = PipelineScheduler(journal)
+    audit_selection = journal.manifest.bindings.audit_model_selection
+    assert audit_selection is not None
+    model_id = audit_selection.selected_model_ids[0]
+    blind_task = planner.model_task(
+        pass_kind=SchedulerPassKind.BLIND_SHARD_REVIEW,
+        scope=SchedulerScope.single_shard(SHARDS[0]),
+        task_key="recursive-promotion-source-audit",
+        role="source_audit",
+        requested_model=model_id,
+        root_lineage=audit_selection.route_for(model_id).root_lineage,
+        system_prompt_sha256="a" * 64,
+        response_schema_sha256=candidate_review_frame_wire_schema_sha256(),
+    )
+    blind_plan = planner.prepare_pass(SchedulerPassKind.BLIND_SHARD_REVIEW, (blind_task,))
+    parent_activation = journal.activate_task(
+        blind_task.task_id,
+        actual_input_sha256=blind_task.input_sha256,
+        system_prompt_sha256=blind_task.system_prompt_sha256,
+        user_prompt_sha256=hashlib.sha256(render_context(parent_context).encode()).hexdigest(),
+        provider_prompt_sha256="2" * 64,
+        response_schema_sha256=blind_task.response_schema_sha256,
+        delivered_source_descriptor_sha256s=(
+            scheduler_test_delivered_source_descriptor_sha256s(blind_plan, blind_task)
+        ),
+    )
+    journal.mark_dispatched(blind_task.task_id)
+    envelope, parent_usage = _typed_parent_truncation(
+        journal=journal,
+        task=blind_task,
+        activation=parent_activation,
+        context=parent_context,
+        projection=projection,
+        full_batch=CandidateReviewBatch(findings=(), surface_reviews=records),
+    )
+    parent_attempt = journal.persist_truncated_provider_attempt(
+        blind_task.task_id,
+        parent_usage,
+        truncated_envelope_evidence=envelope,
+        truncation_projection=projection,
+    )
+    original_result = SchedulerTaskResult.build(
+        plan=blind_plan,
+        task=blind_task,
+        activation=parent_activation,
+        terminal_status=SchedulerTerminalStatus.TRUNCATED,
+        terminal_evidence_sha256=projection.evidence_sha256,
+    )
+    journal.record_terminal(original_result)
+    root_plan = _recovery_plan(
+        journal=journal,
+        pass_plan=blind_plan,
+        task=blind_task,
+        activation=parent_activation,
+        attempt=parent_attempt,
+        projection=projection,
+        manifest=surface_manifest,
+        parent_usage=parent_usage,
+    )
+    root_family = journal.open_truncation_recovery_family(
+        recovery_plan=root_plan,
+        truncation_projection=projection,
+        requested_surface_manifest=surface_manifest,
+    )
+    bridge_child = max(root_plan.children, key=lambda child: len(child.surface_ids))
+    direct_leaf_child = next(child for child in root_plan.children if child != bridge_child)
+    assert len(bridge_child.surface_ids) == 2
+
+    root_results_by_child: dict[str, SchedulerTruncationRecoveryChildResult] = {}
+    root_contexts_by_child: dict[str, ContextPackage] = {}
+    leaf_usages_by_child: dict[str, UsageRecord] = {}
+    bridge_usage: UsageRecord | None = None
+    bridge_projection: CandidateReviewTruncationProjection | None = None
+    bridge_activation = None
+    for child in root_plan.children:
+        child_context = build_truncation_recovery_child_context(
+            parent_context=parent_context,
+            child=child,
+        )
+        root_contexts_by_child[child.child_task_id] = child_context
+        activation = journal.activate_truncation_recovery_child(
+            child.child_task_id,
+            actual_input_sha256=_digest(f"input:{child.child_task_id}"),
+            system_prompt_sha256=_digest(f"system:{child.child_task_id}"),
+            user_prompt_sha256=hashlib.sha256(render_context(child_context).encode()).hexdigest(),
+            provider_prompt_sha256=_digest(f"provider:{child.child_task_id}"),
+            response_schema_sha256=candidate_review_frame_wire_schema_sha256(),
+        )
+        journal.mark_truncation_recovery_child_dispatched(child.child_task_id)
+        if child == bridge_child:
+            failed_usage, child_envelope, child_projection = _truncated_custody(
+                child=child,
+                activation=activation,
+                surfaces=records,
+            )
+            failed_usage = _bind_bridge_to_parent_invariant(
+                failed_usage.model_copy(update={"execution_evidence": ExecutionEvidenceKind.REAL}),
+                journal=journal,
+                parent_usage=parent_usage,
+            )
+            bridge_usage = failed_usage
+            bridge_projection = child_projection
+            bridge_activation = activation
+            root_results_by_child[child.child_task_id] = (
+                journal.record_truncation_recovery_child_truncated(
+                    child.child_task_id,
+                    failed_usage_record=failed_usage,
+                    truncated_envelope_evidence=child_envelope,
+                    truncation_projection=child_projection,
+                )
+            )
+        else:
+            usage, normalization, batch, child_requests, artifact = _success_custody(
+                child=child,
+                activation=activation,
+                surface_manifest=surface_manifest,
+                surfaces=records,
+                execution_evidence=ExecutionEvidenceKind.REAL,
+            )
+            usage = _bind_child_to_parent_invariant(
+                usage,
+                journal=journal,
+                parent_usage=parent_usage,
+            )
+            leaf_usages_by_child[child.child_task_id] = usage
+            root_results_by_child[child.child_task_id] = (
+                journal.record_truncation_recovery_child_success(
+                    child.child_task_id,
+                    usage_record=usage,
+                    normalization_evidence=normalization,
+                    normalized_batch=batch,
+                    requested_surface_requests=child_requests,
+                    output_artifact=artifact,
+                )
+            )
+    assert bridge_usage is not None
+    assert bridge_projection is not None
+    assert bridge_activation is not None
+    bridge_result = root_results_by_child[bridge_child.child_task_id]
+    direct_leaf_result = root_results_by_child[direct_leaf_child.child_task_id]
+    nested_plan = _nested_plan_for_typed_truncated_child(
+        root=root_family,
+        root_plan=root_plan,
+        child=bridge_child,
+        activation=bridge_activation,
+        result=bridge_result,
+        projection=bridge_projection,
+        other_direct_results=(direct_leaf_result,),
+    )
+    nested_family = journal.open_truncation_recovery_family(
+        recovery_plan=nested_plan,
+        truncation_projection=bridge_projection,
+        requested_surface_manifest=surface_manifest,
+    )
+    bridge_context = root_contexts_by_child[bridge_child.child_task_id]
+    nested_results: list[SchedulerTruncationRecoveryChildResult] = []
+    nested_contexts: list[ContextPackage] = []
+    for child in nested_plan.children:
+        child_context = build_truncation_recovery_child_context(
+            parent_context=bridge_context,
+            child=child,
+        )
+        nested_contexts.append(child_context)
+        activation = journal.activate_truncation_recovery_child(
+            child.child_task_id,
+            actual_input_sha256=_digest(f"input:{child.child_task_id}"),
+            system_prompt_sha256=_digest(f"system:{child.child_task_id}"),
+            user_prompt_sha256=hashlib.sha256(render_context(child_context).encode()).hexdigest(),
+            provider_prompt_sha256=_digest(f"provider:{child.child_task_id}"),
+            response_schema_sha256=candidate_review_frame_wire_schema_sha256(),
+        )
+        journal.mark_truncation_recovery_child_dispatched(child.child_task_id)
+        usage, normalization, batch, child_requests, artifact = _success_custody(
+            child=child,
+            activation=activation,
+            surface_manifest=surface_manifest,
+            surfaces=records,
+            execution_evidence=ExecutionEvidenceKind.REAL,
+        )
+        usage = _bind_child_to_parent_invariant(
+            usage,
+            journal=journal,
+            parent_usage=parent_usage,
+        )
+        leaf_usages_by_child[child.child_task_id] = usage
+        nested_results.append(
+            journal.record_truncation_recovery_child_success(
+                child.child_task_id,
+                usage_record=usage,
+                normalization_evidence=normalization,
+                normalized_batch=batch,
+                requested_surface_requests=child_requests,
+                output_artifact=artifact,
+            )
+        )
+
+    nested_closure = journal.seal_truncation_recovery_family(nested_family.family_id)
+    root_closure = journal.seal_truncation_recovery_family(root_family.family_id)
+    assert nested_closure.closure_status is SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
+    assert (
+        root_closure.closure_status
+        is SchedulerTruncationRecoveryClosureStatus.RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING
+    )
+    root_results = tuple(root_results_by_child[child.child_task_id] for child in root_plan.children)
+    leaf_usages = (
+        leaf_usages_by_child[direct_leaf_child.child_task_id],
+        *(leaf_usages_by_child[child.child_task_id] for child in nested_plan.children),
+    )
+    leaf_contexts = (
+        root_contexts_by_child[direct_leaf_child.child_task_id],
+        *nested_contexts,
+    )
+    capability, structural_artifact = verify_recursive_truncation_recovery_tree(
+        root_family=root_family,
+        nested_family=nested_family,
+        root_closure=root_closure,
+        nested_closure=nested_closure,
+        root_child_results=root_results,
+        nested_child_results=nested_results,
+        parent_usage_record=parent_usage,
+        bridge_usage_record=bridge_usage,
+        leaf_usage_records=leaf_usages,
+        parent_context=parent_context,
+        bridge_context=bridge_context,
+        leaf_contexts=leaf_contexts,
+        requests=requests,
+    )
+    assert structural_artifact.records == records
+    with pytest.raises(ValueError, match="live closure custody"):
+        journal.promote_truncation_recovery_family(
+            root_family.family_id,
+            object.__new__(VerifiedRecursiveTruncationRecoveryTree),
+        )
+    with pytest.raises(TypeError, match="cannot be serialized"):
+        pickle.dumps(capability)
+
+    promotion = journal.promote_truncation_recovery_family(
+        root_family.family_id,
+        capability,
+    )
+    assert promotion.schema_version == "1.1"
+    assert promotion.recovered_output.schema_version == "1.1"
+    assert promotion.superseded_bridge_result_sha256 == bridge_result.entry_sha256
+    assert promotion.promoted_leaf_result_sha256s == (
+        direct_leaf_result.entry_sha256,
+        *(result.entry_sha256 for result in nested_results),
+    )
+    surface_coverage = journal.issue_promoted_recursive_truncation_recovery_surface_coverage(
+        root_family.family_id,
+        capability,
+    )
+    assert type(surface_coverage) is VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage
+    fresh_projection = require_verified_promoted_recursive_truncation_recovery_surface_coverage(
+        surface_coverage
+    )
+    assert fresh_projection.artifact == structural_artifact
+    assert fresh_projection.bridge_usage_record is bridge_usage
+    assert fresh_projection.leaf_usage_records == leaf_usages
+
+    public_requests = journal.recovery_model_requests
+    assert len(public_requests) == 4
+    assert {request.promotion_entry_sha256 for request in public_requests} == {
+        promotion.entry_sha256
+    }
+    bridge_requests = tuple(
+        request
+        for request in public_requests
+        if request.promotion_disposition
+        is SchedulerTruncationRecoveryPromotionDisposition.SUPERSEDED_TRUNCATED_BRIDGE
+    )
+    leaf_requests = tuple(
+        request
+        for request in public_requests
+        if request.promotion_disposition
+        is SchedulerTruncationRecoveryPromotionDisposition.SUCCESSFUL_LEAF
+    )
+    assert len(bridge_requests) == 1
+    assert bridge_requests[0].child_result_entry_sha256 == bridge_result.entry_sha256
+    assert len(leaf_requests) == 3
+    assert tuple(sorted(request.global_request_ordinal for request in public_requests)) == (
+        1,
+        2,
+        3,
+        4,
+    )
+    successful_recovery_ids = {
+        record.request_id for record in journal.structurally_successful_review_usage_records
+    }
+    assert {usage.request_id for usage in leaf_usages} <= successful_recovery_ids
+    assert bridge_usage.request_id not in successful_recovery_ids
+
+    blind_result = journal.seal_pass_result(SchedulerPassKind.BLIND_SHARD_REVIEW)
+    assert blind_result.status is SchedulerPassStatus.COMPLETE
+    assert len(blind_result.recovery_promotion_bindings) == 1
+    assert blind_result.recovery_promotion_bindings[0].promotion_entry_sha256 == (
+        promotion.entry_sha256
+    )
+    evidence = journal.journal_evidence
+    durable_entries = journal.truncation_recovery_entries
+    planner.close()
+    monkeypatch.setattr(
+        scheduler_module,
+        "_validate_live_scheduler_model_refresh",
+        lambda **_values: (True, True),
+    )
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=bindings,
+        expected_shard_inventory=inventory,
+        expected_journal_evidence=evidence,
+    )
+    assert resumed.truncation_recovery_entries == durable_entries
+    recovered_usage = {item.request_id: item for item in resumed.claim_restorable_usage_records()}
+    resumed_families = resumed.truncation_recovery_families
+    resumed_root = next(item for item in resumed_families if item.parent_family_id is None)
+    resumed_nested = next(item for item in resumed_families if item.parent_family_id is not None)
+    resumed_closures = {
+        item.family_id: item
+        for item in resumed.truncation_recovery_entries
+        if isinstance(item, SchedulerTruncationRecoveryFamilyClosure)
+    }
+    resumed_results = {
+        item.child_task_id: item
+        for item in resumed.truncation_recovery_entries
+        if isinstance(item, SchedulerTruncationRecoveryChildResult)
+    }
+    resumed_root_results = tuple(
+        resumed_results[child.child_task_id] for child in resumed_root.recovery_plan.children
+    )
+    resumed_nested_results = tuple(
+        resumed_results[child.child_task_id] for child in resumed_nested.recovery_plan.children
+    )
+    resumed_root_contexts = tuple(
+        build_truncation_recovery_child_context(parent_context=parent_context, child=child)
+        for child in resumed_root.recovery_plan.children
+    )
+    resumed_bridge_index = next(
+        index
+        for index, result in enumerate(resumed_root_results)
+        if result.terminal_status is SchedulerTruncationRecoveryTerminalStatus.TRUNCATED
+    )
+    resumed_direct_index = 1 - resumed_bridge_index
+    resumed_bridge_context = resumed_root_contexts[resumed_bridge_index]
+    resumed_nested_contexts = tuple(
+        build_truncation_recovery_child_context(
+            parent_context=resumed_bridge_context,
+            child=child,
+        )
+        for child in resumed_nested.recovery_plan.children
+    )
+    resumed_tree_capability, resumed_artifact = verify_recursive_truncation_recovery_tree(
+        root_family=resumed_root,
+        nested_family=resumed_nested,
+        root_closure=resumed_closures[resumed_root.family_id],
+        nested_closure=resumed_closures[resumed_nested.family_id],
+        root_child_results=resumed_root_results,
+        nested_child_results=resumed_nested_results,
+        parent_usage_record=recovered_usage[parent_usage.request_id],
+        bridge_usage_record=recovered_usage[bridge_usage.request_id],
+        leaf_usage_records=(
+            recovered_usage[resumed_root_results[resumed_direct_index].child_logical_request_id],
+            *(
+                recovered_usage[result.child_logical_request_id]
+                for result in resumed_nested_results
+            ),
+        ),
+        parent_context=parent_context,
+        bridge_context=resumed_bridge_context,
+        leaf_contexts=(
+            resumed_root_contexts[resumed_direct_index],
+            *resumed_nested_contexts,
+        ),
+        requests=requests,
+    )
+    assert resumed_artifact == structural_artifact
+    resumed_surface_coverage = (
+        resumed.issue_promoted_recursive_truncation_recovery_surface_coverage(
+            resumed_root.family_id,
+            resumed_tree_capability,
+        )
+    )
+    assert (
+        require_verified_promoted_recursive_truncation_recovery_surface_coverage(
+            resumed_surface_coverage
+        )
+        == fresh_projection
+    )
     resumed.close()

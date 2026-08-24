@@ -26,6 +26,10 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator,
 from pydantic_core import SchemaValidator
 
 from mmaudit.constants import SEVERITY_ORDER, SPECIALIST_INVESTIGATOR_ROLES
+from mmaudit.models.candidate_review_stamping import (
+    CandidateReviewStampingError,
+    stamp_candidate_review_findings,
+)
 from mmaudit.models.openrouter import strict_json_schema_sha256
 from mmaudit.models.schemas import (
     CandidateCrossExaminationDecision,
@@ -64,6 +68,7 @@ from mmaudit.models.schemas import (
 from mmaudit.models.truncation import (
     CandidateReviewChannelState,
     CandidateReviewFramedDocument,
+    CandidateReviewFramePhase,
     CandidateReviewNormalizationEvidence,
     CandidateReviewTruncatedEnvelopeEvidence,
     CandidateReviewTruncationProjection,
@@ -77,6 +82,7 @@ from mmaudit.models.truncation_recovery import (
 )
 from mmaudit.models.truncation_recovery_journal import (
     SCHEDULER_TRUNCATION_RECOVERY_MAX_ENTRIES,
+    SchedulerRecoveredCandidateOriginKind,
     SchedulerTruncationRecoveryChildActivation,
     SchedulerTruncationRecoveryChildDispatch,
     SchedulerTruncationRecoveryChildPreflightResult,
@@ -552,6 +558,13 @@ class SchedulerTerminalStatus(StrEnum):
     UNBOUND = "UNBOUND"
     INCONCLUSIVE = "INCONCLUSIVE"
     UNCERTAIN = "UNCERTAIN"
+
+
+class SchedulerTruncationRecoveryPromotionDisposition(StrEnum):
+    """How one recursive recovery request participates in an effective promotion."""
+
+    SUCCESSFUL_LEAF = "SUCCESSFUL_LEAF"
+    SUPERSEDED_TRUNCATED_BRIDGE = "SUPERSEDED_TRUNCATED_BRIDGE"
 
 
 class SchedulerPassStatus(StrEnum):
@@ -6616,7 +6629,7 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0", "1.1"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
     evidence_authority: Literal["comparison_required"] = "comparison_required"
     provider_dispatch_authorized: Literal[False] = False
     review_credit_authorized: Literal[False] = False
@@ -6626,6 +6639,41 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
     campaign_id: str = Field(pattern=r"^scheduler-campaign-[0-9a-f]{64}$")
     parent_task_id: str = Field(pattern=r"^scheduler-task-[0-9a-f]{64}$")
     promotion_entry_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    promotion_disposition: SchedulerTruncationRecoveryPromotionDisposition | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    global_request_ordinal: int | None = Field(
+        default=None,
+        ge=1,
+        le=TRUNCATION_RECOVERY_MAX_CHILD_REQUESTS,
+        exclude_if=lambda value: value is None,
+    )
+    recovery_family_id: str | None = Field(
+        default=None,
+        pattern=r"^scheduler-recovery-family-[0-9a-f]{64}$",
+        exclude_if=lambda value: value is None,
+    )
+    family_root_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    recovery_plan_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    family_closure_id: str | None = Field(
+        default=None,
+        pattern=r"^scheduler-recovery-closure-[0-9a-f]{64}$",
+        exclude_if=lambda value: value is None,
+    )
+    family_closure_sha256: str | None = Field(
         default=None,
         pattern=_SHA256_PATTERN,
         exclude_if=lambda value: value is None,
@@ -6929,6 +6977,21 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
         requires_specialist_outcome = (
             succeeded and exact_parent.role in _SPECIALIST_INVESTIGATOR_REQUEST_ROLES
         )
+        recursive_promotion = (
+            exact_promotion is not None and exact_promotion.schema_version == "1.1"
+        )
+        promotion_disposition = (
+            SchedulerTruncationRecoveryPromotionDisposition.SUPERSEDED_TRUNCATED_BRIDGE
+            if recursive_promotion
+            and exact_promotion is not None
+            and exact_result.entry_sha256 == exact_promotion.superseded_bridge_result_sha256
+            else SchedulerTruncationRecoveryPromotionDisposition.SUCCESSFUL_LEAF
+            if recursive_promotion
+            and exact_promotion is not None
+            and exact_promotion.promoted_leaf_result_sha256s is not None
+            and exact_result.entry_sha256 in exact_promotion.promoted_leaf_result_sha256s
+            else None
+        )
         if (
             exact_result.schema_version != ("1.2" if requires_specialist_outcome else "1.1")
             or exact_result.terminal_status
@@ -6949,7 +7012,23 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
                 and exact_result.runtime_output_artifact_sha256 is not None
                 and usage.validated_response_sha256 is not None
             )
-            or (exact_promotion is not None and not succeeded)
+            or (
+                exact_promotion is not None
+                and (
+                    (not recursive_promotion and not succeeded)
+                    or (
+                        recursive_promotion
+                        and (
+                            promotion_disposition is None
+                            or (
+                                promotion_disposition
+                                is SchedulerTruncationRecoveryPromotionDisposition.SUCCESSFUL_LEAF
+                            )
+                            != succeeded
+                        )
+                    )
+                )
+            )
             or requires_specialist_outcome
             != (
                 specialist_outcome is not None
@@ -6961,7 +7040,17 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
             )
             or (
                 exact_promotion is not None
-                and exact_result.entry_sha256 not in exact_promotion.direct_child_result_sha256s
+                and (
+                    exact_result.entry_sha256
+                    not in (
+                        exact_promotion.direct_child_result_sha256s
+                        if exact_promotion.schema_version == "1.0"
+                        else (
+                            exact_promotion.superseded_bridge_result_sha256,
+                            *(exact_promotion.promoted_leaf_result_sha256s or ()),
+                        )
+                    )
+                )
             )
         ):
             raise ValueError("recovery public request lacks one typed runtime usage")
@@ -7364,6 +7453,234 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
             if len(truncated_root_branches) == 1
             else None
         )
+        ordered_root_results = (
+            tuple(matches[0] for _child, matches in root_results_by_child)
+            if exact_root_result_partition
+            else ()
+        )
+        root_closure = closure_by_family_id.get(exact_root_family.family_id)
+        root_nested_families = tuple(
+            item for item in chain_families if item.parent_family_id == exact_root_family.family_id
+        )
+        recursive_nested_family = (
+            root_nested_families[0] if len(root_nested_families) == 1 else None
+        )
+        recursive_nested_closure = (
+            closure_by_family_id.get(recursive_nested_family.family_id)
+            if recursive_nested_family is not None
+            else None
+        )
+        nested_results_by_child = (
+            tuple(
+                (
+                    child,
+                    tuple(
+                        item
+                        for item in chain_results
+                        if item.family_id == recursive_nested_family.family_id
+                        and item.family_root_sha256 == recursive_nested_family.entry_sha256
+                        and item.child_task_id == child.child_task_id
+                        and item.child_logical_request_id == child.child_logical_request_id
+                        and item.child_plan_sha256 == child.child_plan_sha256
+                        and item.child_surface_ids == child.surface_ids
+                        and chain_lifecycle_matches(
+                            family_item=recursive_nested_family,
+                            child=child,
+                            result_item=item,
+                        )
+                    ),
+                )
+                for child in recursive_nested_family.recovery_plan.children
+            )
+            if recursive_nested_family is not None
+            else ()
+        )
+        exact_nested_result_partition = (
+            recursive_nested_family is not None
+            and len(recursive_nested_family.recovery_plan.children) == 2
+            and all(len(matches) == 1 for _child, matches in nested_results_by_child)
+            and len(
+                {
+                    matches[0].entry_sha256
+                    for _child, matches in nested_results_by_child
+                    if len(matches) == 1
+                }
+            )
+            == 2
+        )
+        ordered_nested_results = (
+            tuple(matches[0] for _child, matches in nested_results_by_child)
+            if exact_nested_result_partition
+            else ()
+        )
+        successful_direct_result = (
+            successful_root_branches[0][1] if len(successful_root_branches) == 1 else None
+        )
+        truncated_bridge_result = (
+            truncated_root_branches[0][1] if len(truncated_root_branches) == 1 else None
+        )
+        promoted_leaf_results = (
+            (successful_direct_result, *ordered_nested_results)
+            if successful_direct_result is not None and len(ordered_nested_results) == 2
+            else ()
+        )
+        promoted_leaf_ordinals = tuple(
+            item.global_request_ordinal for item in promoted_leaf_results
+        )
+        recursive_output_bridge_is_exact = True
+        if exact_promotion is not None and exact_promotion.schema_version == "1.1":
+            recursive_output_bridge_is_exact = False
+            bridge_usage = (
+                truncated_bridge_result.runtime_usage_record
+                if truncated_bridge_result is not None
+                else None
+            )
+            bridge_projection = (
+                truncated_bridge_result.truncation_projection
+                if truncated_bridge_result is not None
+                else None
+            )
+            scanner_items = exact_promotion.recovered_output.scanner_fingerprints_by_request
+            scanner_projection = dict(scanner_items)
+            tree_results = (*ordered_root_results, *ordered_nested_results)
+            tree_usages = tuple(item.runtime_usage_record for item in tree_results)
+            expected_scanner_request_ids = {exact_parent_attempt.usage_record.request_id} | {
+                usage_item.request_id for usage_item in tree_usages if usage_item is not None
+            }
+            bridge_origins = tuple(
+                origin
+                for origin in exact_promotion.recovered_output.candidate_origins
+                if origin.origin_kind is SchedulerRecoveredCandidateOriginKind.TRUNCATED_CHILD_FRAME
+            )
+            if (
+                truncated_bridge_result is not None
+                and bridge_usage is not None
+                and bridge_projection is not None
+                and truncated_bridge_result.runtime_usage_record_sha256 is not None
+                and len(scanner_projection) == len(scanner_items)
+                and set(scanner_projection) == expected_scanner_request_ids
+                and len(tree_usages) == 4
+                and all(usage_item is not None for usage_item in tree_usages)
+                and len(bridge_origins) == len(bridge_projection.findings)
+            ):
+                raw_findings = tuple(bridge_projection.findings)
+                context_sha256 = bridge_usage.routing.get("context_request_evidence_sha256")
+                try:
+                    stamped_findings = stamp_candidate_review_findings(
+                        request_role=bridge_usage.role,
+                        usage_record=bridge_usage,
+                        trusted_scanner_fingerprints=scanner_projection[bridge_usage.request_id],
+                        raw_findings=raw_findings,
+                    )
+                except (CandidateReviewStampingError, KeyError):
+                    stamped_findings = ()
+                stamped_pairs = (
+                    tuple(zip(raw_findings, stamped_findings, strict=True))
+                    if len(stamped_findings) == len(raw_findings)
+                    else ()
+                )
+                exact_origin_count = 0
+                for raw_finding, stamped_finding in stamped_pairs:
+                    raw_sha256 = scheduler_canonical_sha256(raw_finding.model_dump(mode="json"))
+                    stamped_sha256 = scheduler_canonical_sha256(
+                        stamped_finding.model_dump(mode="json")
+                    )
+                    frames = tuple(
+                        frame
+                        for frame in bridge_projection.accepted_frames
+                        if frame.phase is CandidateReviewFramePhase.FINDING
+                        and frame.record_id == raw_finding.candidate_id
+                        and frame.normalized_value_sha256 == raw_sha256
+                    )
+                    origins = tuple(
+                        origin
+                        for origin in bridge_origins
+                        if origin.raw_candidate_id == raw_finding.candidate_id
+                    )
+                    if (
+                        len(frames) == 1
+                        and len(origins) == 1
+                        and isinstance(context_sha256, str)
+                        and origins[0].accepted_candidate_id == stamped_finding.candidate_id
+                        and origins[0].accepted_candidate_sha256 == stamped_sha256
+                        and origins[0].raw_candidate_sha256 == raw_sha256
+                        and origins[0].request_id == bridge_usage.request_id
+                        and origins[0].request_role == bridge_usage.role
+                        and origins[0].usage_record_sha256
+                        == truncated_bridge_result.runtime_usage_record_sha256
+                        and origins[0].context_request_evidence_sha256 == context_sha256
+                        and origins[0].truncation_projection_sha256
+                        == bridge_projection.evidence_sha256
+                        and origins[0].accepted_frame_sequence == frames[0].sequence
+                        and origins[0].accepted_frame_sha256 == frames[0].frame_sha256
+                        and origins[0].child_task_id == truncated_bridge_result.child_task_id
+                        and origins[0].child_result_sha256 == truncated_bridge_result.entry_sha256
+                    ):
+                        exact_origin_count += 1
+                recursive_output_bridge_is_exact = len(stamped_findings) == len(
+                    raw_findings
+                ) and exact_origin_count == len(raw_findings)
+        recursive_promotion_tree_is_exact = (
+            True
+            if exact_promotion is None
+            else (
+                exact_promotion.family_id == exact_root_family.family_id
+                and exact_promotion.family_root_sha256 == exact_root_family.entry_sha256
+                and exact_promotion.recovery_plan_sha256
+                == exact_root_family.recovery_plan.plan_sha256
+                and root_closure is not None
+                and exact_promotion.family_closure_id == root_closure.closure_id
+                and exact_promotion.family_closure_sha256 == root_closure.entry_sha256
+                and exact_promotion.direct_child_result_sha256s
+                == tuple(item.entry_sha256 for item in ordered_root_results)
+                and (
+                    (
+                        exact_promotion.schema_version == "1.0"
+                        and not root_nested_families
+                        and root_closure.schema_version == "1.1"
+                        and root_closure.closure_status
+                        is SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
+                    )
+                    or (
+                        exact_promotion.schema_version == "1.1"
+                        and recursive_nested_family is not None
+                        and recursive_nested_closure is not None
+                        and root_closure.schema_version == "1.2"
+                        and root_closure.closure_status
+                        is SchedulerTruncationRecoveryClosureStatus.RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING
+                        and root_closure.nested_family_closure_sha256s
+                        == (recursive_nested_closure.entry_sha256,)
+                        and recursive_nested_closure.schema_version == "1.1"
+                        and recursive_nested_closure.closure_status
+                        is SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
+                        and exact_promotion.nested_family_id == recursive_nested_family.family_id
+                        and exact_promotion.nested_family_root_sha256
+                        == recursive_nested_family.entry_sha256
+                        and exact_promotion.nested_recovery_plan_sha256
+                        == recursive_nested_family.recovery_plan.plan_sha256
+                        and exact_promotion.nested_family_closure_id
+                        == recursive_nested_closure.closure_id
+                        and exact_promotion.nested_family_closure_sha256
+                        == recursive_nested_closure.entry_sha256
+                        and exact_promotion.nested_child_result_sha256s
+                        == tuple(item.entry_sha256 for item in ordered_nested_results)
+                        and truncated_bridge_result is not None
+                        and exact_promotion.superseded_bridge_result_sha256
+                        == truncated_bridge_result.entry_sha256
+                        and exact_promotion.promoted_leaf_result_sha256s
+                        == tuple(item.entry_sha256 for item in promoted_leaf_results)
+                        and len(promoted_leaf_ordinals) == 3
+                        and promoted_leaf_ordinals == tuple(sorted(promoted_leaf_ordinals))
+                        and recursive_output_bridge_is_exact
+                        and all(
+                            item.terminal_status
+                            is SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED
+                            for item in ordered_nested_results
+                        )
+                    )
+                )
+            )
+        )
         nested_parent = exact_family.recovery_plan.parent
         family_membership_is_exact = (
             sum(item == exact_family for item in chain_families) == 1
@@ -7381,7 +7698,15 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
         result_promotions = tuple(
             item
             for item in chain_promotions
-            if exact_result.entry_sha256 in item.direct_child_result_sha256s
+            if exact_result.entry_sha256
+            in (
+                item.direct_child_result_sha256s
+                if item.schema_version == "1.0"
+                else (
+                    item.superseded_bridge_result_sha256,
+                    *(item.promoted_leaf_result_sha256s or ()),
+                )
+            )
         )
         promotion_membership_is_exact = (
             result_promotions == ()
@@ -7429,7 +7754,10 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
             == exact_root_family.request_limit_count_after_family
             and all(child.depth == 2 for child in exact_family.recovery_plan.children)
             and exact_parent.role not in _SPECIALIST_INVESTIGATOR_REQUEST_ROLES
-            and exact_promotion is None
+            and (
+                exact_promotion is None
+                or (exact_promotion.schema_version == "1.1" and recursive_promotion_tree_is_exact)
+            )
         )
         if (
             exact_manifest.campaign_id != exact_parent.campaign_id
@@ -7441,6 +7769,7 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
             or not family_membership_is_exact
             or not projected_lifecycle_is_exact
             or not promotion_membership_is_exact
+            or not recursive_promotion_tree_is_exact
             or not (direct_family or nested_family)
             or exact_result.family_id != exact_family.family_id
             or exact_result.family_root_sha256 != exact_family.entry_sha256
@@ -7538,8 +7867,13 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
                 binding=exact_manifest.bindings.audit_model_refresh_pricing,
                 refresh_binding=exact_manifest.bindings.audit_model_refresh,
             )
+        projected_family_closure = closure_by_family_id.get(exact_family.family_id)
+        if recursive_promotion and projected_family_closure is None:
+            raise ValueError("recursive recovery public request lacks its family closure")
         values: dict[str, Any] = {
-            "schema_version": "1.1" if specialist_outcome is not None else "1.0",
+            "schema_version": (
+                "1.2" if recursive_promotion else "1.1" if specialist_outcome is not None else "1.0"
+            ),
             "evidence_authority": "comparison_required",
             "provider_dispatch_authorized": False,
             "review_credit_authorized": False,
@@ -7551,6 +7885,21 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
             **(
                 {"promotion_entry_sha256": exact_promotion.entry_sha256}
                 if exact_promotion is not None
+                else {}
+            ),
+            **(
+                {
+                    "promotion_disposition": promotion_disposition,
+                    "global_request_ordinal": exact_activation.global_request_ordinal,
+                    "recovery_family_id": exact_family.family_id,
+                    "family_root_sha256": exact_family.entry_sha256,
+                    "recovery_plan_sha256": exact_family.recovery_plan.plan_sha256,
+                    "family_closure_id": projected_family_closure.closure_id,
+                    "family_closure_sha256": projected_family_closure.entry_sha256,
+                }
+                if recursive_promotion
+                and promotion_disposition is not None
+                and projected_family_closure is not None
                 else {}
             ),
             "child_task_id": exact_activation.child_task_id,
@@ -7640,13 +7989,41 @@ class SchedulerTruncationRecoveryModelRequestEvidence(StrictModel):
         requires_specialist_outcome = (
             succeeded and self.role in _SPECIALIST_INVESTIGATOR_REQUEST_ROLES
         )
+        recursive_promotion = self.schema_version == "1.2"
+        recursive_fields = (
+            self.promotion_disposition,
+            self.global_request_ordinal,
+            self.recovery_family_id,
+            self.family_root_sha256,
+            self.recovery_plan_sha256,
+            self.family_closure_id,
+            self.family_closure_sha256,
+        )
+        bridge = (
+            self.promotion_disposition
+            is SchedulerTruncationRecoveryPromotionDisposition.SUPERSEDED_TRUNCATED_BRIDGE
+        )
         if (
             self.request_limit_count_after <= self.request_limit_count_before
             or self.request_limit_count_after > self.request_limit_maximum
             or self.response_schema_sha256 != candidate_review_frame_wire_schema_sha256()
             or succeeded != all(item is not None for item in completion_fields)
             or (not succeeded and any(item is not None for item in completion_fields))
-            or (self.promotion_entry_sha256 is not None and not succeeded)
+            or (
+                self.promotion_entry_sha256 is not None
+                and not succeeded
+                and not (recursive_promotion and bridge)
+            )
+            or recursive_promotion
+            != (
+                self.promotion_entry_sha256 is not None
+                and all(item is not None for item in recursive_fields)
+            )
+            or (
+                recursive_promotion
+                and (bridge == succeeded or self.role in _SPECIALIST_INVESTIGATOR_REQUEST_ROLES)
+            )
+            or (not recursive_promotion and any(item is not None for item in recursive_fields))
             or (self.schema_version == "1.1")
             != (self.specialist_accepted_outcome_sha256 is not None)
             or requires_specialist_outcome != (self.specialist_accepted_outcome_sha256 is not None)
@@ -7856,7 +8233,18 @@ def build_scheduler_truncation_recovery_model_request_evidence(
         raise ValueError("scheduler recovery public projection repeats a promoted parent")
     promotion_by_result_sha256: dict[str, SchedulerTruncationRecoveryFamilyPromotion] = {}
     for promotion in promotions:
-        for result_sha256 in promotion.direct_child_result_sha256s:
+        promoted_result_sha256s = (
+            promotion.direct_child_result_sha256s
+            if promotion.schema_version == "1.0"
+            else (
+                promotion.superseded_bridge_result_sha256,
+                *(promotion.promoted_leaf_result_sha256s or ()),
+            )
+        )
+        if any(result_sha256 is None for result_sha256 in promoted_result_sha256s):
+            raise ValueError("scheduler recursive recovery promotion lacks its exact result tree")
+        for result_sha256 in promoted_result_sha256s:
+            assert result_sha256 is not None
             if result_sha256 in promotion_by_result_sha256:
                 raise ValueError("scheduler recovery promotions repeat a typed child result")
             promotion_by_result_sha256[result_sha256] = promotion
@@ -9313,6 +9701,17 @@ class SchedulerArtifact(StrictModel):
             or not set(recovery_promotion_entry_sha256s)
             <= set(evidence.truncation_recovery_entry_sha256s)
             or any(
+                binding.schema_version == "1.1"
+                and (
+                    binding.nested_family_root_sha256 not in recovery_chain_sha256s
+                    or binding.nested_family_closure_sha256 not in recovery_chain_sha256s
+                    or not set(binding.direct_child_result_sha256s) <= recovery_chain_sha256s
+                    or binding.nested_child_result_sha256s is None
+                    or not set(binding.nested_child_result_sha256s) <= recovery_chain_sha256s
+                )
+                for binding in recovery_promotions
+            )
+            or any(
                 item.campaign_id != self.summary.manifest.campaign_id
                 or item.manifest_sha256 != self.summary.manifest.manifest_sha256
                 for item in self.model_requests
@@ -9325,6 +9724,13 @@ class SchedulerArtifact(StrictModel):
                 )
                 or item.activation_entry_sha256 not in recovery_chain_sha256s
                 or item.child_result_entry_sha256 not in recovery_chain_sha256s
+                or (
+                    item.schema_version == "1.2"
+                    and (
+                        item.family_root_sha256 not in recovery_chain_sha256s
+                        or item.family_closure_sha256 not in recovery_chain_sha256s
+                    )
+                )
                 for item in self.recovery_model_requests
             )
         ):
@@ -9376,25 +9782,117 @@ class SchedulerArtifact(StrictModel):
                 if parent is not None
                 else None
             )
+            common_children_are_exact = parent is not None and all(
+                item.parent_task_id == parent.task_id
+                and item.role == parent.role
+                and item.requested_model == parent.requested_model
+                and item.root_lineage == parent.root_lineage
+                and item.response_schema_sha256 == parent.response_schema_sha256
+                and item.request_limit_scope == parent.logical_request_id
+                and item.delivered_source_inventory_sha256
+                == binding.delivered_source_inventory_sha256
+                for item in children
+            )
+            if binding.schema_version == "1.0":
+                exact_promoted_request_tree = (
+                    len(children) == 2
+                    and {item.child_result_entry_sha256 for item in children}
+                    == set(binding.direct_child_result_sha256s)
+                    and all(
+                        item.promotion_disposition is None and item.global_request_ordinal is None
+                        for item in children
+                    )
+                )
+            else:
+                bridge_hash = binding.superseded_bridge_result_sha256
+                leaf_hashes = binding.promoted_leaf_result_sha256s
+                nested_hashes = binding.nested_child_result_sha256s
+                bridge_children = tuple(
+                    item
+                    for item in children
+                    if item.promotion_disposition
+                    is SchedulerTruncationRecoveryPromotionDisposition.SUPERSEDED_TRUNCATED_BRIDGE
+                )
+                leaf_children = tuple(
+                    sorted(
+                        (
+                            item
+                            for item in children
+                            if item.promotion_disposition
+                            is SchedulerTruncationRecoveryPromotionDisposition.SUCCESSFUL_LEAF
+                        ),
+                        key=lambda item: item.global_request_ordinal or 0,
+                    )
+                )
+                root_children = (
+                    (*bridge_children, leaf_children[0])
+                    if len(bridge_children) == 1 and len(leaf_children) == 3
+                    else ()
+                )
+                ordered_root_children = tuple(
+                    sorted(root_children, key=lambda item: item.global_request_ordinal or 0)
+                )
+                ordinals = tuple(
+                    sorted(
+                        item.global_request_ordinal
+                        for item in children
+                        if item.global_request_ordinal is not None
+                    )
+                )
+                exact_promoted_request_tree = (
+                    len(children) == 4
+                    and len(ordinals) == 4
+                    and len(set(ordinals)) == 4
+                    and ordinals == tuple(range(ordinals[0], ordinals[0] + 4))
+                    and len(bridge_children) == 1
+                    and bridge_hash is not None
+                    and bridge_children[0].child_result_entry_sha256 == bridge_hash
+                    and bridge_children[0].terminal_status is SchedulerTerminalStatus.TRUNCATED
+                    and len(leaf_children) == 3
+                    and leaf_hashes is not None
+                    and tuple(item.child_result_entry_sha256 for item in leaf_children)
+                    == leaf_hashes
+                    and all(
+                        item.terminal_status is SchedulerTerminalStatus.SUCCEEDED
+                        for item in leaf_children
+                    )
+                    and tuple(item.child_result_entry_sha256 for item in ordered_root_children)
+                    == binding.direct_child_result_sha256s
+                    and nested_hashes is not None
+                    and tuple(item.child_result_entry_sha256 for item in leaf_children[1:])
+                    == nested_hashes
+                    and len(
+                        {
+                            (
+                                item.recovery_family_id,
+                                item.family_root_sha256,
+                                item.recovery_plan_sha256,
+                                item.family_closure_id,
+                                item.family_closure_sha256,
+                            )
+                            for item in ordered_root_children
+                        }
+                    )
+                    == 1
+                    and all(
+                        item.recovery_family_id == binding.nested_family_id
+                        and item.family_root_sha256 == binding.nested_family_root_sha256
+                        and item.recovery_plan_sha256 == binding.nested_recovery_plan_sha256
+                        and item.family_closure_id == binding.nested_family_closure_id
+                        and item.family_closure_sha256 == binding.nested_family_closure_sha256
+                        for item in leaf_children[1:]
+                    )
+                    and ordered_root_children[0].recovery_family_id != binding.nested_family_id
+                    and max(item.global_request_ordinal or 0 for item in ordered_root_children)
+                    < min(item.global_request_ordinal or 0 for item in leaf_children[1:])
+                )
             if (
                 parent is None
                 or parent.terminal_status is not SchedulerTerminalStatus.TRUNCATED
                 or parent.result_sha256 != binding.original_truncated_result_sha256
                 or binding.delivered_source_inventory_sha256 != expected_source_inventory_sha256
-                or len(children) != 2
-                or {item.child_result_entry_sha256 for item in children}
-                != set(binding.direct_child_result_sha256s)
-                or any(
-                    item.parent_task_id != parent.task_id
-                    or item.role != parent.role
-                    or item.requested_model != parent.requested_model
-                    or item.root_lineage != parent.root_lineage
-                    or item.response_schema_sha256 != parent.response_schema_sha256
-                    or item.request_limit_scope != parent.logical_request_id
-                    or item.delivered_source_inventory_sha256
-                    != binding.delivered_source_inventory_sha256
-                    for item in children
-                )
+                or not common_children_are_exact
+                or not exact_promoted_request_tree
             ):
                 raise ValueError("scheduler recovery requests differ from their promoted parent")
         for request in self.model_requests:

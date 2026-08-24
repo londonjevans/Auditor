@@ -11,8 +11,8 @@
   "current_manual_gate_count": 15,
   "discovery_scope": "TYPED_BOUNDARIES_REGISTERED_ENTRYPOINTS_RUNTIME_PACKAGE_RESOURCES_UNSEALED_ENV_HOST_WALL_CLOCK_AUTHORITY_ENTROPY_FILESYSTEM_INTERACTIVE_OPAQUE_AUTHORITIES_EXPLICIT_MISSING_OBJECTIVE_BOUNDARIES",
   "environment_override_count": 28,
-  "gate_source_count": 3614,
-  "inventory_sha256": "701ff7994152cc5a8fc0174341a3e8963573741f200e24f0ff3566720a069140",
+  "gate_source_count": 3624,
+  "inventory_sha256": "1cf5af44108c390eebd88f02b88cf0b8ae79c48a99c8a2f6b400400de3e14cda",
   "logical_gate_count": 35,
   "logical_gates": [
     {
@@ -2834,11 +2834,21 @@
         "direct-env-ast:orchestration.manifest:validate_manifest_artifacts:working-directory:1",
         "direct-env-ast:orchestration.replay:_repository_suite_replay_identity:working-directory:1",
         "direct-env-ast:orchestration.replay:_repository_suite_replay_identity:working-directory:2",
+        "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_recursive_truncation_recovery_surface_coverage_authority.issue:process-identity:1",
+        "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_recursive_truncation_recovery_surface_coverage_authority.issue:process-identity:2",
+        "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_recursive_truncation_recovery_surface_coverage_authority.require:process-identity:1",
+        "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_recursive_truncation_recovery_surface_coverage_authority:process-identity-binding:1",
+        "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_recursive_truncation_recovery_surface_coverage_authority:process-identity:1",
         "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_truncation_recovery_surface_coverage_authority.issue:process-identity:1",
         "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_truncation_recovery_surface_coverage_authority.issue:process-identity:2",
         "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_truncation_recovery_surface_coverage_authority.require:process-identity:1",
         "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_truncation_recovery_surface_coverage_authority:process-identity-binding:1",
         "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_truncation_recovery_surface_coverage_authority:process-identity:1",
+        "direct-env-ast:orchestration.truncation_recovery_evidence:_build_recursive_truncation_recovery_runtime_authority.require:process-identity:1",
+        "direct-env-ast:orchestration.truncation_recovery_evidence:_build_recursive_truncation_recovery_runtime_authority.verify:process-identity:1",
+        "direct-env-ast:orchestration.truncation_recovery_evidence:_build_recursive_truncation_recovery_runtime_authority.verify:process-identity:2",
+        "direct-env-ast:orchestration.truncation_recovery_evidence:_build_recursive_truncation_recovery_runtime_authority:process-identity-binding:1",
+        "direct-env-ast:orchestration.truncation_recovery_evidence:_build_recursive_truncation_recovery_runtime_authority:process-identity:1",
         "direct-env-ast:orchestration.truncation_recovery_evidence:_build_truncation_recovery_runtime_authority.require:process-identity:1",
         "direct-env-ast:orchestration.truncation_recovery_evidence:_build_truncation_recovery_runtime_authority.verify:process-identity:1",
         "direct-env-ast:orchestration.truncation_recovery_evidence:_build_truncation_recovery_runtime_authority.verify:process-identity:2",
@@ -4026,7 +4036,7 @@
   "runtime_authority": false,
   "schema_version": "1.0",
   "secret_material_read": false,
-  "source_count": 3657,
+  "source_count": 3667,
   "source_coverage": [
     {
       "classification": "GATE",
@@ -9849,7 +9859,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/scheduler.py",
-      "source_semantics_sha256": "a70563d3845a8387c4d55c4765266cc7d7969629468a311df588d294e51802c2"
+      "source_semantics_sha256": "6f3e4be9d8e072821883eb1248496297d6e9193638516aec50a1bbcf5175f247"
     },
     {
       "classification": "GATE",
@@ -9903,7 +9913,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/truncation_closure.py",
-      "source_semantics_sha256": "1003baba02d51327f1de553043e664dae8b6a3ac767b3573af62a1e7ece81316"
+      "source_semantics_sha256": "59bebf0184c081349c42aff7d910cc428dd9a8d367ae3fd3ff3e3d6c13ed9b35"
     },
     {
       "classification": "GATE",
@@ -9921,7 +9931,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/models/truncation_recovery_journal.py",
-      "source_semantics_sha256": "2da83b7588792c874531ad8299525a4187b11ae70c25d559be2261abbc0abbfd"
+      "source_semantics_sha256": "50fc71396ae4d504841bc972751a457b5dfb9f058c412154a350b54b8f51e1f3"
     },
     {
       "classification": "GATE",
@@ -9957,7 +9967,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/assurance.py",
-      "source_semantics_sha256": "d234117c6e1be0a8ba5e7a5a03c92b2944d8afbf8999c7fff80eb876cd032c0a"
+      "source_semantics_sha256": "eb934461839ca69d7ad3f7b6edb2d6f639d139bac939ec0d350c505419f34727"
     },
     {
       "classification": "GATE",
@@ -9984,7 +9994,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/autonomy_gate_inventory.py",
-      "source_semantics_sha256": "d091bdd965e01cf2eeba7ff7cbbf6a2fb4f29d645755a68ca493e92fdaa46fb9"
+      "source_semantics_sha256": "75f09456574142f1018e3cff6ef8a914b539b6ba7fe8ad45a57929e22d4c9f54"
     },
     {
       "classification": "GATE",
@@ -10101,7 +10111,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/model_coverage.py",
-      "source_semantics_sha256": "2511376ace6d708e9971e333735e89be2ac97079061421165d1a3f7c90f9b7b5"
+      "source_semantics_sha256": "9099ac4421d0abc0c0146d7e6e475864dba8221e41cb4d4388ea2f7a5833e138"
     },
     {
       "classification": "GATE",
@@ -10119,7 +10129,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/pipeline.py",
-      "source_semantics_sha256": "47a8687bde30cb22accad5015362b1d3fa8ce41b2c0b235774a6db2da8a42488"
+      "source_semantics_sha256": "c5bc2babe4c635d46b613cdb2a0dc48fa4460217c766405d5840bf6fe7a7d265"
     },
     {
       "classification": "GATE",
@@ -10164,7 +10174,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/scheduler.py",
-      "source_semantics_sha256": "5c1e0a38bcf7839bbb5e36b1507d1ea6d92cdcdfa19ac2182c1eff5500bd2b65"
+      "source_semantics_sha256": "6233265873440f5435a17dcaf3e101f5f0da38a60f2ca22bda69a4d90688f48d"
     },
     {
       "classification": "GATE",
@@ -10191,7 +10201,7 @@
       "source_kind": "AUDITED_MODULE_UNIVERSE",
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/truncation_recovery_evidence.py",
-      "source_semantics_sha256": "71c24d35f047c63c6f62b7eea3835a100abbe3a6f980c468daff543648f8540d"
+      "source_semantics_sha256": "231eb41db98ab6c86822ad2f10b5ce35e88ba548a3920a0530c5c71ebf54af31"
     },
     {
       "classification": "GATE",
@@ -16793,6 +16803,51 @@
     {
       "classification": "GATE",
       "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_recursive_truncation_recovery_surface_coverage_authority.issue:process-identity:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/truncation_recovery_evidence.py:_build_promoted_recursive_truncation_recovery_surface_coverage_authority.issue:process-identity:1",
+      "source_semantics_sha256": "8127afc5a75c2e49eb5908b9bdeda7518e1c6df8c1a060bdaec10b2df3a5a3e8"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_recursive_truncation_recovery_surface_coverage_authority.issue:process-identity:2",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/truncation_recovery_evidence.py:_build_promoted_recursive_truncation_recovery_surface_coverage_authority.issue:process-identity:2",
+      "source_semantics_sha256": "8127afc5a75c2e49eb5908b9bdeda7518e1c6df8c1a060bdaec10b2df3a5a3e8"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_recursive_truncation_recovery_surface_coverage_authority.require:process-identity:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/truncation_recovery_evidence.py:_build_promoted_recursive_truncation_recovery_surface_coverage_authority.require:process-identity:1",
+      "source_semantics_sha256": "08b68cda07125447d7286aa1c1adcd333d52af7f40479b2a703c518dc5029ea5"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_recursive_truncation_recovery_surface_coverage_authority:process-identity-binding:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/truncation_recovery_evidence.py:_build_promoted_recursive_truncation_recovery_surface_coverage_authority:process-identity-binding:1",
+      "source_semantics_sha256": "fa60d6fc43f257f02554f656be1527bc2acbd1bc4a2f6140341ef6676c90ed72"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_recursive_truncation_recovery_surface_coverage_authority:process-identity:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/truncation_recovery_evidence.py:_build_promoted_recursive_truncation_recovery_surface_coverage_authority:process-identity:1",
+      "source_semantics_sha256": "fa8dfb414140b6847dad8fc11ab6d8bc33e97e04e93879e2fe5bc8618042e10b"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
       "source_id": "direct-env-ast:orchestration.truncation_recovery_evidence:_build_promoted_truncation_recovery_surface_coverage_authority.issue:process-identity:1",
       "source_kind": "DIRECT_ENVIRONMENT_INPUT",
       "source_occurrence_count": 1,
@@ -16834,6 +16889,51 @@
       "source_occurrence_count": 1,
       "source_path": "src/mmaudit/orchestration/truncation_recovery_evidence.py:_build_promoted_truncation_recovery_surface_coverage_authority:process-identity:1",
       "source_semantics_sha256": "72edfbb4b74fea970a9fef70ec859db295afb12a01fe78c1046d9d8124affe20"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "direct-env-ast:orchestration.truncation_recovery_evidence:_build_recursive_truncation_recovery_runtime_authority.require:process-identity:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/truncation_recovery_evidence.py:_build_recursive_truncation_recovery_runtime_authority.require:process-identity:1",
+      "source_semantics_sha256": "f8460d3e7da9c304bef68abb541d33b2629887309cfb5efc54207850018febd9"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "direct-env-ast:orchestration.truncation_recovery_evidence:_build_recursive_truncation_recovery_runtime_authority.verify:process-identity:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/truncation_recovery_evidence.py:_build_recursive_truncation_recovery_runtime_authority.verify:process-identity:1",
+      "source_semantics_sha256": "5d38b459aee0c4efa5d236aed88fe18372351ebb5a23a2e1d54f682d6cae5320"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "direct-env-ast:orchestration.truncation_recovery_evidence:_build_recursive_truncation_recovery_runtime_authority.verify:process-identity:2",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/truncation_recovery_evidence.py:_build_recursive_truncation_recovery_runtime_authority.verify:process-identity:2",
+      "source_semantics_sha256": "5d38b459aee0c4efa5d236aed88fe18372351ebb5a23a2e1d54f682d6cae5320"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "direct-env-ast:orchestration.truncation_recovery_evidence:_build_recursive_truncation_recovery_runtime_authority:process-identity-binding:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/truncation_recovery_evidence.py:_build_recursive_truncation_recovery_runtime_authority:process-identity-binding:1",
+      "source_semantics_sha256": "b6270a181183a136faca315b13ee37bf09d950a14267555527470e9b216ded65"
+    },
+    {
+      "classification": "GATE",
+      "logical_gate_id": "gate-release-evidence-pipeline",
+      "source_id": "direct-env-ast:orchestration.truncation_recovery_evidence:_build_recursive_truncation_recovery_runtime_authority:process-identity:1",
+      "source_kind": "DIRECT_ENVIRONMENT_INPUT",
+      "source_occurrence_count": 1,
+      "source_path": "src/mmaudit/orchestration/truncation_recovery_evidence.py:_build_recursive_truncation_recovery_runtime_authority:process-identity:1",
+      "source_semantics_sha256": "45d34fd9f02441e0ab27b3db94ad5d0fa42dfef0bf2d21cc984f6241a7282ffe"
     },
     {
       "classification": "GATE",
@@ -19164,7 +19264,7 @@
       "source_kind": "EXPLICIT_NON_FIELD_GATE",
       "source_occurrence_count": 1,
       "source_path": "mmaudit.orchestration.pipeline.AuditPipeline._run_with_provider",
-      "source_semantics_sha256": "983f9cf24ea17495b9936c32fc2846945b6eaf19b77715e0a9cef0caf7923027"
+      "source_semantics_sha256": "8be3c3df7e3a21ad33a39621058d81e5f42fb6a0294190cb5154874738f4f722"
     },
     {
       "classification": "GATE",
@@ -36942,7 +37042,7 @@
       "source_semantics_sha256": "41cc76819710e44e2710187482c5d8058883cf4e3a1087ec84837720818b44c1"
     }
   ],
-  "source_discovery_semantics_sha256": "4f1adb9e0bc8db7899fa4eb2928ee03f87d4d61d4113a0555fcdae750e260042",
+  "source_discovery_semantics_sha256": "4af6458862d94af02d77db5f25ff9bdb24ced56c665d2a7402111af795138e99",
   "source_kind_counts": {
     "AUDITED_MODULE_UNIVERSE": 232,
     "AUDIT_CONFIG_LEAF": 505,
@@ -36950,7 +37050,7 @@
     "AUDIT_RUN_OPTION_LEAF": 13,
     "CLI_RUN_PARAMETER": 50,
     "COMPLETION_ENTRYPOINT_PARAMETER": 300,
-    "DIRECT_ENVIRONMENT_INPUT": 481,
+    "DIRECT_ENVIRONMENT_INPUT": 491,
     "ENTROPY_INPUT": 17,
     "ENVIRONMENT_OVERRIDE": 28,
     "EXPLICIT_NON_FIELD_GATE": 1932,
@@ -36958,8 +37058,8 @@
     "PIPELINE_RUN_PARAMETER": 15,
     "REQUIRED_MISSING_GATE": 14
   },
-  "source_occurrence_count": 3660,
-  "source_universe_sha256": "9fc20c8097d38f719169e360836806f8ffec0d175a1941aa942089163fed53e5",
+  "source_occurrence_count": 3670,
+  "source_universe_sha256": "6fdfd55652cb8776263ef969f168b34ffd5c557aece263cd70a4b7b545888913",
   "status": "PARTIAL_NONAUTHORIZING",
   "unsatisfied_gate_count": 29
 }

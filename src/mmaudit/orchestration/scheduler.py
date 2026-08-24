@@ -157,9 +157,13 @@ from mmaudit.orchestration.cost_ledger import (
 )
 from mmaudit.orchestration.truncation_recovery_evidence import (
     TruncationRecoveryEvidenceError,
+    VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage,
     VerifiedPromotedTruncationRecoverySurfaceCoverage,
+    VerifiedRecursiveTruncationRecoveryTree,
     VerifiedTruncationRecoveryClosure,
+    _issue_verified_promoted_recursive_truncation_recovery_surface_coverage,
     _issue_verified_promoted_truncation_recovery_surface_coverage,
+    require_verified_recursive_truncation_recovery_tree_projection,
     require_verified_truncation_recovery_closure_projection,
 )
 from mmaudit.reporting.json_report import stable_json
@@ -869,6 +873,226 @@ class _RecoveredCandidateReviewContent:
     child_results: tuple[SchedulerTruncationRecoveryChildResult, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _RecursiveRecoveryTreeInventory:
+    """Exact durable shape of the single supported recursive recovery tree."""
+
+    bridge_child: TruncationRecoveryChildPlan
+    bridge_result: SchedulerTruncationRecoveryChildResult
+    direct_leaf_child: TruncationRecoveryChildPlan
+    direct_leaf_result: SchedulerTruncationRecoveryChildResult
+    root_results: tuple[
+        SchedulerTruncationRecoveryChildResult,
+        SchedulerTruncationRecoveryChildResult,
+    ]
+    nested_family: SchedulerTruncationRecoveryFamilyRoot
+    nested_closure: SchedulerTruncationRecoveryFamilyClosure
+    nested_leaf_results: tuple[
+        SchedulerTruncationRecoveryChildResult,
+        SchedulerTruncationRecoveryChildResult,
+    ]
+
+    @property
+    def root_result_sha256s(self) -> tuple[str, str]:
+        return (self.root_results[0].entry_sha256, self.root_results[1].entry_sha256)
+
+    @property
+    def direct_child_result_sha256s(self) -> tuple[str, str]:
+        return self.root_result_sha256s
+
+    @property
+    def nested_result_sha256s(self) -> tuple[str, str]:
+        return (
+            self.nested_leaf_results[0].entry_sha256,
+            self.nested_leaf_results[1].entry_sha256,
+        )
+
+    @property
+    def nested_child_result_sha256s(self) -> tuple[str, str]:
+        return self.nested_result_sha256s
+
+    @property
+    def promoted_leaf_results(
+        self,
+    ) -> tuple[
+        SchedulerTruncationRecoveryChildResult,
+        SchedulerTruncationRecoveryChildResult,
+        SchedulerTruncationRecoveryChildResult,
+    ]:
+        return (self.direct_leaf_result, *self.nested_leaf_results)
+
+    @property
+    def promoted_leaf_result_sha256s(self) -> tuple[str, str, str]:
+        return (
+            self.promoted_leaf_results[0].entry_sha256,
+            self.promoted_leaf_results[1].entry_sha256,
+            self.promoted_leaf_results[2].entry_sha256,
+        )
+
+    @property
+    def tree_results(
+        self,
+    ) -> tuple[
+        SchedulerTruncationRecoveryChildResult,
+        SchedulerTruncationRecoveryChildResult,
+        SchedulerTruncationRecoveryChildResult,
+        SchedulerTruncationRecoveryChildResult,
+    ]:
+        return (*self.root_results, *self.nested_leaf_results)
+
+
+def _recursive_recovery_tree_inventory(
+    *,
+    family: SchedulerTruncationRecoveryFamilyRoot,
+    closure: SchedulerTruncationRecoveryFamilyClosure,
+    indexes: _SchedulerTruncationRecoveryIndexes,
+) -> _RecursiveRecoveryTreeInventory:
+    """Reconstruct the one-level zero-retained tree from durable journal indexes."""
+
+    if (
+        family.parent_kind is not SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK
+        or family.parent_family_id is not None
+        or closure.schema_version != "1.2"
+        or closure.closure_status
+        is not SchedulerTruncationRecoveryClosureStatus.RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING
+        or len(family.recovery_plan.children) != 2
+        or len(closure.child_result_sha256s) != 2
+        or len(closure.nested_family_closure_sha256s) != 1
+    ):
+        raise ValueError("scheduler recursive promotion lacks one exact root closure")
+    root_results: list[
+        tuple[TruncationRecoveryChildPlan, SchedulerTruncationRecoveryChildResult]
+    ] = []
+    for child in family.recovery_plan.children:
+        result = indexes.results.get(child.child_task_id)
+        if (
+            not isinstance(result, SchedulerTruncationRecoveryChildResult)
+            or result.schema_version != "1.1"
+            or result.result_origin is not SchedulerTruncationRecoveryResultOrigin.RUNTIME
+            or result.family_id != family.family_id
+            or result.family_root_sha256 != family.entry_sha256
+            or result.child_task_id != child.child_task_id
+            or result.child_logical_request_id != child.child_logical_request_id
+            or result.child_plan_sha256 != child.child_plan_sha256
+            or result.child_surface_ids != child.surface_ids
+            or result.runtime_specialist_accepted_outcome is not None
+            or result.runtime_specialist_accepted_outcome_sha256 is not None
+        ):
+            raise ValueError("scheduler recursive promotion root child custody is not exact")
+        root_results.append((child, result))
+    if closure.child_result_sha256s != tuple(
+        result.entry_sha256 for _child, result in root_results
+    ):
+        raise ValueError("scheduler recursive promotion root result order is inconsistent")
+    bridges = tuple(
+        (child, result)
+        for child, result in root_results
+        if result.terminal_status is SchedulerTruncationRecoveryTerminalStatus.TRUNCATED
+        and result.truncation_projection is not None
+        and result.truncation_projection.findings_state is CandidateReviewChannelState.COMPLETE
+        and not result.retained_surface_ids
+        and not result.truncation_projection.surface_reviews
+    )
+    direct_leaves = tuple(
+        (child, result)
+        for child, result in root_results
+        if result.terminal_status is SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED
+        and result.completed_surface_ids == child.surface_ids
+        and result.runtime_usage_record is not None
+        and result.runtime_normalized_batch is not None
+        and result.runtime_output_artifact is not None
+    )
+    if len(bridges) != 1 or len(direct_leaves) != 1:
+        raise ValueError("scheduler recursive promotion requires one bridge and one direct leaf")
+    bridge_child, bridge_result = bridges[0]
+    direct_leaf_child, direct_leaf_result = direct_leaves[0]
+    nested_family_id = indexes.nested_family_by_parent_child.get(bridge_child.child_task_id)
+    nested_family = indexes.families.get(nested_family_id) if nested_family_id is not None else None
+    nested_closure = (
+        indexes.closures.get(nested_family_id) if nested_family_id is not None else None
+    )
+    if (
+        nested_family is None
+        or nested_closure is None
+        or nested_family.parent_kind is not SchedulerTruncationRecoveryParentKind.RECOVERY_CHILD
+        or nested_family.parent_family_id != family.family_id
+        or nested_family.recovery_plan.parent.parent_task_id != bridge_child.child_task_id
+        or nested_family.parent_terminal_result_sha256 != bridge_result.entry_sha256
+        or nested_family.recovery_plan.parent.current_depth != 1
+        or nested_family.recovery_plan.parent.parent_path != bridge_child.path
+        or nested_closure.schema_version != "1.1"
+        or nested_closure.closure_status
+        is not SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
+        or nested_closure.entry_sha256 not in closure.nested_family_closure_sha256s
+        or len(nested_family.recovery_plan.children) != 2
+    ):
+        raise ValueError("scheduler recursive promotion lacks one exact nested closure")
+    nested_results_list: list[SchedulerTruncationRecoveryChildResult] = []
+    for child in nested_family.recovery_plan.children:
+        result = indexes.results.get(child.child_task_id)
+        if (
+            not isinstance(result, SchedulerTruncationRecoveryChildResult)
+            or result.schema_version != "1.1"
+            or result.result_origin is not SchedulerTruncationRecoveryResultOrigin.RUNTIME
+            or result.terminal_status is not SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED
+            or result.family_id != nested_family.family_id
+            or result.family_root_sha256 != nested_family.entry_sha256
+            or result.child_task_id != child.child_task_id
+            or result.child_logical_request_id != child.child_logical_request_id
+            or result.child_plan_sha256 != child.child_plan_sha256
+            or result.child_surface_ids != child.surface_ids
+            or result.completed_surface_ids != child.surface_ids
+            or result.runtime_usage_record is None
+            or result.runtime_normalized_batch is None
+            or result.runtime_output_artifact is None
+            or result.runtime_specialist_accepted_outcome is not None
+            or result.runtime_specialist_accepted_outcome_sha256 is not None
+        ):
+            raise ValueError("scheduler recursive promotion nested leaf custody is not exact")
+        nested_results_list.append(result)
+    nested_results = tuple(nested_results_list)
+    if len(nested_results) != 2 or nested_closure.child_result_sha256s != tuple(
+        result.entry_sha256 for result in nested_results
+    ):
+        raise ValueError("scheduler recursive promotion nested result order is inconsistent")
+    inventory = _RecursiveRecoveryTreeInventory(
+        bridge_child=bridge_child,
+        bridge_result=bridge_result,
+        direct_leaf_child=direct_leaf_child,
+        direct_leaf_result=direct_leaf_result,
+        root_results=cast(
+            tuple[
+                SchedulerTruncationRecoveryChildResult,
+                SchedulerTruncationRecoveryChildResult,
+            ],
+            tuple(result for _child, result in root_results),
+        ),
+        nested_family=nested_family,
+        nested_closure=nested_closure,
+        nested_leaf_results=nested_results,
+    )
+    activations = tuple(
+        indexes.activations[result.child_task_id] for result in inventory.tree_results
+    )
+    expected_ordinals = tuple(
+        range(family.request_count_before_family + 1, nested_family.request_count_after_family + 1)
+    )
+    if tuple(item.global_request_ordinal for item in activations) != expected_ordinals:
+        raise ValueError("scheduler recursive promotion leaf order is not globally canonical")
+    if (
+        len(
+            {
+                result.runtime_usage_record.request_id
+                for result in inventory.tree_results
+                if result.runtime_usage_record is not None
+            }
+        )
+        != 4
+    ):
+        raise ValueError("scheduler recursive promotion repeats a live request identity")
+    return inventory
+
+
 def _rebuild_recovered_candidate_review_content(
     *,
     family: SchedulerTruncationRecoveryFamilyRoot,
@@ -1030,6 +1254,230 @@ def _rebuild_recovered_candidate_review_content(
     )
 
 
+def _rebuild_recursive_recovered_candidate_review_content(
+    *,
+    family: SchedulerTruncationRecoveryFamilyRoot,
+    closure: SchedulerTruncationRecoveryFamilyClosure,
+    indexes: _SchedulerTruncationRecoveryIndexes,
+    scheduler: _SchedulerJournalIndexes,
+    scanner_fingerprints_by_request: tuple[tuple[str, tuple[str, ...]], ...],
+) -> tuple[_RecoveredCandidateReviewContent, _RecursiveRecoveryTreeInventory]:
+    """Replay all five request sources in the supported one-level recovery tree."""
+
+    tree = _recursive_recovery_tree_inventory(
+        family=family,
+        closure=closure,
+        indexes=indexes,
+    )
+    parent_task_id = family.recovery_plan.parent.parent_task_id
+    parent_attempt = scheduler.provider_attempts.get(parent_task_id)
+    if (
+        parent_attempt is None
+        or parent_attempt.schema_version != "1.1"
+        or parent_attempt.truncation_projection != family.truncation_projection
+    ):
+        raise ValueError("scheduler recursive promotion lacks a typed root parent attempt")
+
+    expected_surface_records = list(family.truncation_projection.surface_reviews)
+    raw_candidates: dict[tuple[str, str], tuple[CandidateFinding, dict[str, Any]]] = {}
+    usage_by_request: dict[str, UsageRecord] = {}
+    parent_usage = parent_attempt.usage_record
+    usage_by_request[parent_usage.request_id] = parent_usage
+    for finding in family.truncation_projection.findings:
+        finding_sha256 = scheduler_canonical_sha256(finding.model_dump(mode="json"))
+        frames = tuple(
+            frame
+            for frame in family.truncation_projection.accepted_frames
+            if frame.phase is CandidateReviewFramePhase.FINDING
+            and frame.record_id == finding.candidate_id
+            and frame.normalized_value_sha256 == finding_sha256
+        )
+        if len(frames) != 1:
+            raise ValueError("scheduler recursive root finding lacks one accepted frame")
+        frame = frames[0]
+        raw_candidates[(parent_usage.request_id, finding.candidate_id)] = (
+            finding,
+            {
+                "origin_kind": SchedulerRecoveredCandidateOriginKind.PARENT_FRAME,
+                "usage_record_sha256": parent_attempt.usage_record_sha256,
+                "context_request_evidence_sha256": (parent_attempt.context_request_evidence_sha256),
+                "parent_projection_sha256": family.truncation_projection.evidence_sha256,
+                "accepted_frame_sequence": frame.sequence,
+                "accepted_frame_sha256": frame.frame_sha256,
+            },
+        )
+
+    bridge = tree.bridge_result
+    bridge_usage = bridge.runtime_usage_record
+    bridge_projection = bridge.truncation_projection
+    if bridge_usage is None or bridge_projection is None:
+        raise ValueError("scheduler recursive promotion bridge lacks typed runtime custody")
+    bridge_context_sha256 = bridge_usage.routing.get("context_request_evidence_sha256")
+    if not isinstance(bridge_context_sha256, str):
+        raise ValueError("scheduler recursive promotion bridge lacks context-request custody")
+    usage_by_request[bridge_usage.request_id] = bridge_usage
+    for finding in bridge_projection.findings:
+        finding_sha256 = scheduler_canonical_sha256(finding.model_dump(mode="json"))
+        frames = tuple(
+            frame
+            for frame in bridge_projection.accepted_frames
+            if frame.phase is CandidateReviewFramePhase.FINDING
+            and frame.record_id == finding.candidate_id
+            and frame.normalized_value_sha256 == finding_sha256
+        )
+        if len(frames) != 1:
+            raise ValueError("scheduler recursive bridge finding lacks one accepted frame")
+        frame = frames[0]
+        key = (bridge_usage.request_id, finding.candidate_id)
+        if key in raw_candidates:
+            raise ValueError("scheduler recursive raw bridge candidate is duplicated")
+        raw_candidates[key] = (
+            finding,
+            {
+                "origin_kind": SchedulerRecoveredCandidateOriginKind.TRUNCATED_CHILD_FRAME,
+                "usage_record_sha256": bridge.runtime_usage_record_sha256,
+                "context_request_evidence_sha256": bridge_context_sha256,
+                "child_task_id": bridge.child_task_id,
+                "child_result_sha256": bridge.entry_sha256,
+                "truncation_projection_sha256": bridge_projection.evidence_sha256,
+                "accepted_frame_sequence": frame.sequence,
+                "accepted_frame_sha256": frame.frame_sha256,
+            },
+        )
+
+    for result in tree.promoted_leaf_results:
+        usage = result.runtime_usage_record
+        normalized_batch = result.runtime_normalized_batch
+        output_artifact = result.runtime_output_artifact
+        normalization = result.runtime_normalization_evidence
+        child_match = indexes.children.get(result.child_task_id)
+        if (
+            usage is None
+            or normalized_batch is None
+            or output_artifact is None
+            or normalization is None
+            or child_match is None
+        ):
+            raise ValueError("scheduler recursive promotion leaf lacks typed runtime custody")
+        child, _family_id = child_match
+        if usage.request_id in usage_by_request:
+            raise ValueError("scheduler recursive promotion reused a request identity")
+        usage_by_request[usage.request_id] = usage
+        expected_surface_records.extend(output_artifact.records)
+        context_sha256 = usage.routing.get("context_request_evidence_sha256")
+        if not isinstance(context_sha256, str):
+            raise ValueError("scheduler recursive promotion leaf lacks context-request custody")
+        for finding in normalized_batch.findings:
+            key = (usage.request_id, finding.candidate_id)
+            if key in raw_candidates:
+                raise ValueError("scheduler recursive raw leaf candidate is duplicated")
+            raw_candidates[key] = (
+                finding,
+                {
+                    "origin_kind": SchedulerRecoveredCandidateOriginKind.CHILD_BATCH,
+                    "usage_record_sha256": result.runtime_usage_record_sha256,
+                    "context_request_evidence_sha256": context_sha256,
+                    "child_task_id": child.child_task_id,
+                    "child_result_sha256": result.entry_sha256,
+                    "normalization_evidence_sha256": normalization.evidence_sha256,
+                    "surface_artifact_sha256": output_artifact.artifact_sha256,
+                },
+            )
+
+    scanner_projection = dict(scanner_fingerprints_by_request)
+    if (
+        len(usage_by_request) != 5
+        or len(scanner_projection) != len(scanner_fingerprints_by_request)
+        or set(scanner_projection) != set(usage_by_request)
+    ):
+        raise ValueError("scheduler recursive promotion lacks exact five-request scanner custody")
+    raw_by_request: dict[str, list[tuple[CandidateFinding, dict[str, Any]]]] = {
+        request_id: [] for request_id in usage_by_request
+    }
+    for (request_id, _raw_candidate_id), raw in raw_candidates.items():
+        raw_by_request[request_id].append(raw)
+
+    expected_findings: list[CandidateFinding] = []
+    expected_origins: list[SchedulerRecoveredCandidateOrigin] = []
+    for request_id in sorted(usage_by_request):
+        usage = usage_by_request[request_id]
+        entries = tuple(sorted(raw_by_request[request_id], key=lambda item: item[0].candidate_id))
+        raw_findings = tuple(item[0] for item in entries)
+        try:
+            stamped = stamp_candidate_review_findings(
+                request_role=usage.role,
+                usage_record=usage,
+                trusted_scanner_fingerprints=scanner_projection[request_id],
+                raw_findings=raw_findings,
+            )
+        except CandidateReviewStampingError as exc:
+            raise ValueError("scheduler recursive candidate stamping failed exact replay") from exc
+        for (raw_finding, expected), accepted in zip(entries, stamped, strict=True):
+            origin_kind = cast(SchedulerRecoveredCandidateOriginKind, expected["origin_kind"])
+            common: dict[str, Any] = {
+                "origin_kind": origin_kind,
+                "accepted_candidate_id": accepted.candidate_id,
+                "accepted_candidate_sha256": scheduler_canonical_sha256(
+                    accepted.model_dump(mode="json")
+                ),
+                "raw_candidate_id": raw_finding.candidate_id,
+                "raw_candidate_sha256": scheduler_canonical_sha256(
+                    raw_finding.model_dump(mode="json")
+                ),
+                "request_id": request_id,
+                "request_role": usage.role,
+                "usage_record_sha256": cast(str, expected["usage_record_sha256"]),
+                "context_request_evidence_sha256": cast(
+                    str,
+                    expected["context_request_evidence_sha256"],
+                ),
+            }
+            if origin_kind is SchedulerRecoveredCandidateOriginKind.PARENT_FRAME:
+                origin = SchedulerRecoveredCandidateOrigin.build(
+                    **common,
+                    parent_projection_sha256=cast(str, expected["parent_projection_sha256"]),
+                    accepted_frame_sequence=cast(int, expected["accepted_frame_sequence"]),
+                    accepted_frame_sha256=cast(str, expected["accepted_frame_sha256"]),
+                )
+            elif origin_kind is SchedulerRecoveredCandidateOriginKind.TRUNCATED_CHILD_FRAME:
+                origin = SchedulerRecoveredCandidateOrigin.build(
+                    **common,
+                    child_task_id=cast(str, expected["child_task_id"]),
+                    child_result_sha256=cast(str, expected["child_result_sha256"]),
+                    truncation_projection_sha256=cast(
+                        str,
+                        expected["truncation_projection_sha256"],
+                    ),
+                    accepted_frame_sequence=cast(int, expected["accepted_frame_sequence"]),
+                    accepted_frame_sha256=cast(str, expected["accepted_frame_sha256"]),
+                )
+            else:
+                origin = SchedulerRecoveredCandidateOrigin.build(
+                    **common,
+                    child_task_id=cast(str, expected["child_task_id"]),
+                    child_result_sha256=cast(str, expected["child_result_sha256"]),
+                    normalization_evidence_sha256=cast(
+                        str,
+                        expected["normalization_evidence_sha256"],
+                    ),
+                    surface_artifact_sha256=cast(str, expected["surface_artifact_sha256"]),
+                )
+            expected_findings.append(accepted)
+            expected_origins.append(origin)
+
+    return (
+        _RecoveredCandidateReviewContent(
+            findings=tuple(sorted(expected_findings, key=lambda item: item.candidate_id)),
+            surface_reviews=tuple(
+                sorted(expected_surface_records, key=lambda item: item.surface_id)
+            ),
+            origins=tuple(sorted(expected_origins, key=lambda item: item.accepted_candidate_id)),
+            child_results=tree.tree_results,
+        ),
+        tree,
+    )
+
+
 def _validate_durable_recovery_promotion(
     *,
     promotion: SchedulerTruncationRecoveryFamilyPromotion,
@@ -1057,8 +1505,6 @@ def _validate_durable_recovery_promotion(
         or parent_result is None
         or parent_result.terminal_status is not SchedulerTerminalStatus.TRUNCATED
         or family.truncation_projection.findings_state is not CandidateReviewChannelState.COMPLETE
-        or closure.schema_version != "1.1"
-        or closure.closure_status is not SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
         or promotion.family_id != family.family_id
         or promotion.family_index != family.family_index
         or promotion.family_root_sha256 != family.entry_sha256
@@ -1068,9 +1514,36 @@ def _validate_durable_recovery_promotion(
         or promotion.previous_entry_sha256 != closure.entry_sha256
         or promotion.parent_task_id != parent_task_id
         or promotion.original_truncated_result_sha256 != parent_result.result_sha256
-        or promotion.direct_child_result_sha256s != closure.child_result_sha256s
     ):
         raise ValueError("scheduler recovery promotion lacks exact typed parent closure")
+
+    recursive = promotion.schema_version == "1.1"
+    tree: _RecursiveRecoveryTreeInventory | None = None
+    if recursive:
+        tree = _recursive_recovery_tree_inventory(
+            family=family,
+            closure=closure,
+            indexes=indexes,
+        )
+        if (
+            promotion.direct_child_result_sha256s != tree.direct_child_result_sha256s
+            or promotion.nested_family_id != tree.nested_family.family_id
+            or promotion.nested_family_root_sha256 != tree.nested_family.entry_sha256
+            or promotion.nested_recovery_plan_sha256 != tree.nested_family.recovery_plan.plan_sha256
+            or promotion.nested_family_closure_id != tree.nested_closure.closure_id
+            or promotion.nested_family_closure_sha256 != tree.nested_closure.entry_sha256
+            or promotion.nested_child_result_sha256s != tree.nested_child_result_sha256s
+            or promotion.superseded_bridge_result_sha256 != tree.bridge_result.entry_sha256
+            or promotion.promoted_leaf_result_sha256s != tree.promoted_leaf_result_sha256s
+        ):
+            raise ValueError("scheduler recursive promotion differs from its exact tree")
+    elif (
+        closure.schema_version != "1.1"
+        or closure.closure_status is not SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
+        or closure.nested_family_closure_sha256s
+        or promotion.direct_child_result_sha256s != closure.child_result_sha256s
+    ):
+        raise ValueError("scheduler direct promotion differs from its exact closure")
 
     task, pass_plan = task_and_plan
     output = promotion.recovered_output
@@ -1086,17 +1559,33 @@ def _validate_durable_recovery_promotion(
         or output.parent_provider_attempt_sha256 != parent_attempt.attempt_evidence_sha256
         or output.delivered_source_descriptor_sha256s
         != parent_activation.delivered_source_descriptor_sha256s
+        or output.schema_version != promotion.schema_version
     ):
         raise ValueError("scheduler recovery promotion output differs from its parent task")
 
-    content = _rebuild_recovered_candidate_review_content(
-        family=family,
-        indexes=indexes,
-        scheduler=scheduler,
-        scanner_fingerprints_by_request=output.scanner_fingerprints_by_request,
-    )
-    if tuple(item.entry_sha256 for item in content.child_results) != closure.child_result_sha256s:
-        raise ValueError("scheduler recovery promotion child order differs from its closure")
+    if recursive:
+        content, rebuilt_tree = _rebuild_recursive_recovered_candidate_review_content(
+            family=family,
+            closure=closure,
+            indexes=indexes,
+            scheduler=scheduler,
+            scanner_fingerprints_by_request=output.scanner_fingerprints_by_request,
+        )
+        assert tree is not None
+        if rebuilt_tree != tree:
+            raise ValueError("scheduler recursive promotion tree changed during replay")
+    else:
+        content = _rebuild_recovered_candidate_review_content(
+            family=family,
+            indexes=indexes,
+            scheduler=scheduler,
+            scanner_fingerprints_by_request=output.scanner_fingerprints_by_request,
+        )
+        if (
+            tuple(item.entry_sha256 for item in content.child_results)
+            != closure.child_result_sha256s
+        ):
+            raise ValueError("scheduler recovery promotion child order differs from its closure")
     if tuple(output.recovered_batch.surface_reviews) != content.surface_reviews:
         raise ValueError("scheduler recovery promotion changed its exact surface partition")
     if (
@@ -1104,18 +1593,35 @@ def _validate_durable_recovery_promotion(
         or output.candidate_origins != content.origins
     ):
         raise ValueError("scheduler recovery promotion changed a host-stamped finding")
-    expected_capability_binding_sha256 = scheduler_canonical_sha256(
-        {
-            "domain": "mmaudit.scheduler.truncation-recovery-promotion-capability.v1",
-            "family_id": family.family_id,
-            "family_root_sha256": family.entry_sha256,
-            "family_closure_id": closure.closure_id,
-            "family_closure_sha256": closure.entry_sha256,
-            "structural_surface_artifact_sha256": (output.structural_surface_artifact_sha256),
-            "scanner_fingerprints_by_request": (output.scanner_fingerprints_by_request),
-            "recovered_output_sha256": output.output_artifact_sha256,
-        }
-    )
+    capability_payload: dict[str, Any] = {
+        "domain": (
+            "mmaudit.scheduler.recursive-truncation-recovery-promotion-capability.v1"
+            if recursive
+            else "mmaudit.scheduler.truncation-recovery-promotion-capability.v1"
+        ),
+        "family_id": family.family_id,
+        "family_root_sha256": family.entry_sha256,
+        "family_closure_id": closure.closure_id,
+        "family_closure_sha256": closure.entry_sha256,
+        "structural_surface_artifact_sha256": output.structural_surface_artifact_sha256,
+        "scanner_fingerprints_by_request": output.scanner_fingerprints_by_request,
+        "recovered_output_sha256": output.output_artifact_sha256,
+    }
+    if recursive:
+        assert tree is not None
+        capability_payload.update(
+            {
+                "nested_family_id": tree.nested_family.family_id,
+                "nested_family_root_sha256": tree.nested_family.entry_sha256,
+                "nested_family_closure_id": tree.nested_closure.closure_id,
+                "nested_family_closure_sha256": tree.nested_closure.entry_sha256,
+                "direct_child_result_sha256s": tree.direct_child_result_sha256s,
+                "nested_child_result_sha256s": tree.nested_child_result_sha256s,
+                "superseded_bridge_result_sha256": tree.bridge_result.entry_sha256,
+                "promoted_leaf_result_sha256s": tree.promoted_leaf_result_sha256s,
+            }
+        )
+    expected_capability_binding_sha256 = scheduler_canonical_sha256(capability_payload)
     if promotion.capability_binding_sha256 != expected_capability_binding_sha256:
         raise ValueError("scheduler recovery promotion capability binding is inconsistent")
 
@@ -2083,7 +2589,7 @@ class SchedulerJournal:
     def promote_truncation_recovery_family(
         self,
         family_id: str,
-        capability: VerifiedTruncationRecoveryClosure,
+        capability: VerifiedTruncationRecoveryClosure | VerifiedRecursiveTruncationRecoveryTree,
     ) -> SchedulerTruncationRecoveryFamilyPromotion:
         """Append one effective recovery derived solely from a live closure capability."""
 
@@ -2099,15 +2605,25 @@ class SchedulerJournal:
             raise ValueError(
                 "scheduler recovery promotion requires one unpromoted terminal family closure"
             )
+        recursive = (
+            closure.schema_version == "1.2"
+            and closure.closure_status
+            is SchedulerTruncationRecoveryClosureStatus.RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING
+        )
         if (
             family.parent_kind is not SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK
             or family.parent_family_id is not None
-            or closure.schema_version != "1.1"
-            or closure.closure_status
-            is not SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
-            or closure.nested_family_closure_sha256s
+            or (
+                not recursive
+                and (
+                    closure.schema_version != "1.1"
+                    or closure.closure_status
+                    is not SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
+                    or closure.nested_family_closure_sha256s
+                )
+            )
         ):
-            raise ValueError("scheduler recovery promotion requires one direct v1.1 closure")
+            raise ValueError("scheduler recovery promotion requires one supported root closure")
         parent_task_id = family.recovery_plan.parent.parent_task_id
         task_and_plan = self._indexes.tasks.get(parent_task_id)
         if task_and_plan is None:
@@ -2123,15 +2639,60 @@ class SchedulerJournal:
         if parent_pass_ordinals[0] < len(self._pass_results):
             raise ValueError("scheduler cannot promote a recovery family after its pass is sealed")
         try:
-            verified = require_verified_truncation_recovery_closure_projection(capability)
-        except TruncationRecoveryEvidenceError as exc:
+            if recursive:
+                recursive_verified = require_verified_recursive_truncation_recovery_tree_projection(
+                    cast(VerifiedRecursiveTruncationRecoveryTree, capability)
+                )
+                direct_verified = None
+            else:
+                direct_verified = require_verified_truncation_recovery_closure_projection(
+                    cast(VerifiedTruncationRecoveryClosure, capability)
+                )
+                recursive_verified = None
+        except (TruncationRecoveryEvidenceError, TypeError) as exc:
             raise ValueError("scheduler recovery promotion lacks live closure custody") from exc
+        verified_family_id = (
+            recursive_verified.family_id
+            if recursive_verified is not None
+            else direct_verified.family_id
+            if direct_verified is not None
+            else ""
+        )
+        verified_family_root_sha256 = (
+            recursive_verified.family_root_sha256
+            if recursive_verified is not None
+            else direct_verified.family_root_sha256
+            if direct_verified is not None
+            else ""
+        )
+        verified_closure_id = (
+            recursive_verified.family_closure_id
+            if recursive_verified is not None
+            else direct_verified.family_closure_id
+            if direct_verified is not None
+            else ""
+        )
+        verified_closure_sha256 = (
+            recursive_verified.family_closure_sha256
+            if recursive_verified is not None
+            else direct_verified.family_closure_sha256
+            if direct_verified is not None
+            else ""
+        )
+        verified_artifact = (
+            recursive_verified.artifact
+            if recursive_verified is not None
+            else direct_verified.artifact
+            if direct_verified is not None
+            else None
+        )
         if (
-            verified.family_id != family.family_id
-            or verified.family_root_sha256 != family.entry_sha256
-            or verified.family_closure_id != closure.closure_id
-            or verified.family_closure_sha256 != closure.entry_sha256
-            or verified.artifact.recovery_plan != family.recovery_plan
+            verified_artifact is None
+            or verified_family_id != family.family_id
+            or verified_family_root_sha256 != family.entry_sha256
+            or verified_closure_id != closure.closure_id
+            or verified_closure_sha256 != closure.entry_sha256
+            or verified_artifact.recovery_plan != family.recovery_plan
         ):
             raise ValueError("scheduler recovery promotion capability is bound to another family")
 
@@ -2141,12 +2702,47 @@ class SchedulerJournal:
         if parent_attempt is None or parent_activation is None or parent_result is None:
             raise ValueError("scheduler recovery promotion lacks its durable parent inventory")
         task, pass_plan = task_and_plan
-        content = _rebuild_recovered_candidate_review_content(
-            family=family,
-            indexes=self._truncation_recovery_indexes,
-            scheduler=self._indexes,
-            scanner_fingerprints_by_request=verified.scanner_fingerprints_by_request,
-        )
+        if recursive:
+            assert recursive_verified is not None
+            content, tree = _rebuild_recursive_recovered_candidate_review_content(
+                family=family,
+                closure=closure,
+                indexes=self._truncation_recovery_indexes,
+                scheduler=self._indexes,
+                scanner_fingerprints_by_request=(
+                    recursive_verified.scanner_fingerprints_by_request
+                ),
+            )
+            if (
+                recursive_verified.direct_child_result_sha256s != tree.direct_child_result_sha256s
+                or recursive_verified.nested_family_id != tree.nested_family.family_id
+                or recursive_verified.nested_family_root_sha256 != tree.nested_family.entry_sha256
+                or recursive_verified.nested_recovery_plan_sha256
+                != tree.nested_family.recovery_plan.plan_sha256
+                or recursive_verified.nested_family_closure_id != tree.nested_closure.closure_id
+                or recursive_verified.nested_family_closure_sha256
+                != tree.nested_closure.entry_sha256
+                or recursive_verified.nested_child_result_sha256s
+                != tree.nested_child_result_sha256s
+                or recursive_verified.superseded_bridge_result_sha256
+                != tree.bridge_result.entry_sha256
+                or recursive_verified.promoted_leaf_result_sha256s
+                != tree.promoted_leaf_result_sha256s
+                or recursive_verified.artifact.nested_recovery_plan
+                != tree.nested_family.recovery_plan
+            ):
+                raise ValueError("scheduler recursive promotion capability changed its tree")
+            scanner_fingerprints = recursive_verified.scanner_fingerprints_by_request
+        else:
+            assert direct_verified is not None
+            content = _rebuild_recovered_candidate_review_content(
+                family=family,
+                indexes=self._truncation_recovery_indexes,
+                scheduler=self._indexes,
+                scanner_fingerprints_by_request=(direct_verified.scanner_fingerprints_by_request),
+            )
+            tree = None
+            scanner_fingerprints = direct_verified.scanner_fingerprints_by_request
         recovered_batch = CandidateReviewBatch(
             findings=content.findings,
             surface_reviews=content.surface_reviews,
@@ -2162,30 +2758,52 @@ class SchedulerJournal:
             recovery_family_id=family.family_id,
             family_root_sha256=family.entry_sha256,
             family_closure_sha256=closure.entry_sha256,
-            structural_surface_artifact_sha256=verified.artifact.artifact_sha256,
+            structural_surface_artifact_sha256=verified_artifact.artifact_sha256,
             recovered_batch=recovered_batch,
             candidate_origins=content.origins,
-            scanner_fingerprints_by_request=(verified.scanner_fingerprints_by_request),
+            scanner_fingerprints_by_request=scanner_fingerprints,
             delivered_source_descriptor_sha256s=(
                 parent_activation.delivered_source_descriptor_sha256s
             ),
+            recursive_tree=recursive,
         )
-        capability_binding_sha256 = scheduler_canonical_sha256(
-            {
-                "domain": "mmaudit.scheduler.truncation-recovery-promotion-capability.v1",
-                "family_id": verified.family_id,
-                "family_root_sha256": verified.family_root_sha256,
-                "family_closure_id": verified.family_closure_id,
-                "family_closure_sha256": verified.family_closure_sha256,
-                "structural_surface_artifact_sha256": verified.artifact.artifact_sha256,
-                "scanner_fingerprints_by_request": (verified.scanner_fingerprints_by_request),
-                "recovered_output_sha256": output.output_artifact_sha256,
-            }
-        )
-        child_result_hashes = tuple(result.entry_sha256 for result in content.child_results)
-        if len(child_result_hashes) != 2:
-            raise ValueError("scheduler recovery promotion requires exactly two direct children")
-        direct_child_result_sha256s = (child_result_hashes[0], child_result_hashes[1])
+        capability_payload: dict[str, Any] = {
+            "domain": (
+                "mmaudit.scheduler.recursive-truncation-recovery-promotion-capability.v1"
+                if recursive
+                else "mmaudit.scheduler.truncation-recovery-promotion-capability.v1"
+            ),
+            "family_id": verified_family_id,
+            "family_root_sha256": verified_family_root_sha256,
+            "family_closure_id": verified_closure_id,
+            "family_closure_sha256": verified_closure_sha256,
+            "structural_surface_artifact_sha256": verified_artifact.artifact_sha256,
+            "scanner_fingerprints_by_request": scanner_fingerprints,
+            "recovered_output_sha256": output.output_artifact_sha256,
+        }
+        if recursive:
+            assert tree is not None
+            capability_payload.update(
+                {
+                    "nested_family_id": tree.nested_family.family_id,
+                    "nested_family_root_sha256": tree.nested_family.entry_sha256,
+                    "nested_family_closure_id": tree.nested_closure.closure_id,
+                    "nested_family_closure_sha256": tree.nested_closure.entry_sha256,
+                    "direct_child_result_sha256s": tree.direct_child_result_sha256s,
+                    "nested_child_result_sha256s": tree.nested_child_result_sha256s,
+                    "superseded_bridge_result_sha256": tree.bridge_result.entry_sha256,
+                    "promoted_leaf_result_sha256s": tree.promoted_leaf_result_sha256s,
+                }
+            )
+            direct_child_result_sha256s = tree.direct_child_result_sha256s
+        else:
+            child_result_hashes = tuple(result.entry_sha256 for result in content.child_results)
+            if len(child_result_hashes) != 2:
+                raise ValueError(
+                    "scheduler recovery promotion requires exactly two direct children"
+                )
+            direct_child_result_sha256s = (child_result_hashes[0], child_result_hashes[1])
+        capability_binding_sha256 = scheduler_canonical_sha256(capability_payload)
         entry = SchedulerTruncationRecoveryFamilyPromotion.build(
             family=family,
             closure=closure,
@@ -2194,6 +2812,17 @@ class SchedulerJournal:
             capability_binding_sha256=capability_binding_sha256,
             entry_index=len(self._truncation_recovery_entries),
             previous_entry_sha256=self._truncation_recovery_chain_head,
+            nested_family=tree.nested_family if tree is not None else None,
+            nested_closure=tree.nested_closure if tree is not None else None,
+            nested_child_result_sha256s=(
+                tree.nested_child_result_sha256s if tree is not None else None
+            ),
+            superseded_bridge_result_sha256=(
+                tree.bridge_result.entry_sha256 if tree is not None else None
+            ),
+            promoted_leaf_result_sha256s=(
+                tree.promoted_leaf_result_sha256s if tree is not None else None
+            ),
         )
         self._append_truncation_recovery_entry(entry)
         return entry
@@ -2240,6 +2869,22 @@ class SchedulerJournal:
             journal=self,
             family_id=family_id,
             closure_capability=closure_capability,
+        )
+
+    def issue_promoted_recursive_truncation_recovery_surface_coverage(
+        self,
+        family_id: str,
+        tree_capability: VerifiedRecursiveTruncationRecoveryTree,
+    ) -> VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage:
+        """Issue live recursive coverage custody after the exact root promotion append."""
+
+        promotion = self._require_current_promoted_truncation_recovery_family(family_id)
+        if promotion.schema_version != "1.1":
+            raise ValueError("scheduler recursive surface coverage requires a recursive promotion")
+        return _issue_verified_promoted_recursive_truncation_recovery_surface_coverage(
+            journal=self,
+            family_id=family_id,
+            tree_capability=tree_capability,
         )
 
     @property
@@ -2658,7 +3303,12 @@ class SchedulerJournal:
         promoted_result_sha256s = tuple(
             result_sha256
             for promotion in self._truncation_recovery_indexes.promotions.values()
-            for result_sha256 in promotion.direct_child_result_sha256s
+            for result_sha256 in (
+                promotion.promoted_leaf_result_sha256s
+                if promotion.schema_version == "1.1"
+                and promotion.promoted_leaf_result_sha256s is not None
+                else promotion.direct_child_result_sha256s
+            )
         )
         if len(promoted_result_sha256s) != len(set(promoted_result_sha256s)):
             raise ValueError("scheduler recovery promotions repeat a child result")

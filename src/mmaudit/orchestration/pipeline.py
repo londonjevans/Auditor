@@ -172,6 +172,7 @@ from mmaudit.models.scheduler import (
     SchedulerTaskPlan,
     SchedulerTaskResult,
     SchedulerTerminalStatus,
+    SchedulerTruncationRecoveryPromotionDisposition,
     scheduler_canonical_sha256,
     scheduler_response_schema_sha256,
     scheduler_role_requires_specialist_accepted_outcome,
@@ -291,6 +292,7 @@ from mmaudit.models.truncation_recovery_journal import (
     SchedulerTruncationRecoveryFamilyClosure,
     SchedulerTruncationRecoveryFamilyPromotion,
     SchedulerTruncationRecoveryFamilyRoot,
+    SchedulerTruncationRecoveryParentKind,
     SchedulerTruncationRecoveryRequestedSurfaceManifest,
     SchedulerTruncationRecoveryResultOrigin,
     SchedulerTruncationRecoveryTerminalStatus,
@@ -413,9 +415,12 @@ from mmaudit.orchestration.scope import (
 )
 from mmaudit.orchestration.truncation_recovery_evidence import (
     TruncationRecoveryEvidenceError,
+    VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage,
     VerifiedPromotedTruncationRecoverySurfaceCoverage,
     build_truncation_recovery_child_context,
+    require_verified_promoted_recursive_truncation_recovery_surface_coverage,
     require_verified_promoted_truncation_recovery_surface_coverage,
+    verify_recursive_truncation_recovery_tree,
     verify_truncation_recovery_closure,
 )
 from mmaudit.privacy import (
@@ -3279,6 +3284,9 @@ class AuditPipeline:
         model_surface_review_artifacts: list[ModelSurfaceReviewArtifact] = []
         promoted_truncation_surface_coverages: list[
             VerifiedPromotedTruncationRecoverySurfaceCoverage
+        ] = []
+        promoted_recursive_truncation_surface_coverages: list[
+            VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage
         ] = []
         model_surface_review_contexts: dict[str, list[ContextPackage]] = {}
         model_surface_review_assignments: dict[str, list[ModelSurfaceReviewRequest]] = {}
@@ -6895,6 +6903,14 @@ class AuditPipeline:
                         promoted_surface_capability: (
                             VerifiedPromotedTruncationRecoverySurfaceCoverage | None
                         ) = None
+                        promoted_recursive_surface_capability: (
+                            VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage | None
+                        ) = None
+                        promoted_leaf_results: tuple[
+                            SchedulerTruncationRecoveryChildResult, ...
+                        ] = ()
+                        promoted_leaf_contexts: tuple[ContextPackage, ...] = ()
+                        context_by_request_id: dict[str, ContextPackage] = {}
                         if closure.closure_status is (
                             SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
                         ):
@@ -6986,18 +7002,250 @@ class AuditPipeline:
                                 budget_halted = True
                                 terminal_code = ExitCode.INCOMPLETE
                                 break
+                            promoted_leaf_results = typed_results
+                            promoted_leaf_contexts = child_contexts
+                            context_by_request_id = {
+                                parent_runtime_usage[0].request_id: parent_context,
+                                **{
+                                    result.child_logical_request_id: child_context
+                                    for result, child_context in zip(
+                                        typed_results,
+                                        child_contexts,
+                                        strict=True,
+                                    )
+                                },
+                            }
+                        elif closure.closure_status is (
+                            SchedulerTruncationRecoveryClosureStatus.RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING
+                        ):
+                            root_results_raw = tuple(
+                                terminal_entries[child.child_task_id]
+                                for child in family.recovery_plan.children
+                            )
+                            if not all(
+                                isinstance(result, SchedulerTruncationRecoveryChildResult)
+                                for result in root_results_raw
+                            ):
+                                raise OpenRouterSchemaError(
+                                    "recursive recovery lacks typed root child results"
+                                )
+                            root_results = cast(
+                                tuple[
+                                    SchedulerTruncationRecoveryChildResult,
+                                    SchedulerTruncationRecoveryChildResult,
+                                ],
+                                root_results_raw,
+                            )
+                            bridge_matches = tuple(
+                                (index, result)
+                                for index, result in enumerate(root_results)
+                                if result.terminal_status
+                                is SchedulerTruncationRecoveryTerminalStatus.TRUNCATED
+                            )
+                            direct_leaf_matches = tuple(
+                                (index, result)
+                                for index, result in enumerate(root_results)
+                                if result.terminal_status
+                                is SchedulerTruncationRecoveryTerminalStatus.SUCCEEDED
+                            )
+                            nested_families = tuple(
+                                candidate
+                                for candidate in scheduler.journal.truncation_recovery_families
+                                if candidate.parent_kind
+                                is SchedulerTruncationRecoveryParentKind.RECOVERY_CHILD
+                                and candidate.parent_family_id == family.family_id
+                            )
+                            if (
+                                len(bridge_matches) != 1
+                                or len(direct_leaf_matches) != 1
+                                or len(nested_families) != 1
+                            ):
+                                raise OpenRouterSchemaError(
+                                    "recursive recovery lacks one bridge, direct leaf, and nested family"
+                                )
+                            bridge_index, bridge_result = bridge_matches[0]
+                            direct_leaf_index, direct_leaf_result = direct_leaf_matches[0]
+                            nested_family = nested_families[0]
+                            nested_closures = tuple(
+                                entry
+                                for entry in scheduler.journal.truncation_recovery_entries
+                                if isinstance(entry, SchedulerTruncationRecoveryFamilyClosure)
+                                and entry.family_id == nested_family.family_id
+                            )
+                            nested_results_raw = tuple(
+                                entry
+                                for child in nested_family.recovery_plan.children
+                                for entry in scheduler.journal.truncation_recovery_entries
+                                if isinstance(entry, SchedulerTruncationRecoveryChildResult)
+                                and entry.child_task_id == child.child_task_id
+                            )
+                            if len(nested_closures) != 1 or len(nested_results_raw) != 2:
+                                raise OpenRouterSchemaError(
+                                    "recursive recovery lacks one exact nested closure inventory"
+                                )
+                            nested_closure = nested_closures[0]
+                            nested_results = nested_results_raw
+                            bridge_context = child_contexts[bridge_index]
+                            direct_leaf_context = child_contexts[direct_leaf_index]
+                            nested_contexts = tuple(
+                                build_truncation_recovery_child_context(
+                                    parent_context=bridge_context,
+                                    child=child,
+                                )
+                                for child in nested_family.recovery_plan.children
+                            )
+                            for nested_context in nested_contexts:
+                                if nested_context not in packages:
+                                    packages.append(nested_context)
+                            recursive_runtime_usage_by_request: dict[str, list[UsageRecord]] = {}
+                            for runtime_usage in usage.records:
+                                recursive_runtime_usage_by_request.setdefault(
+                                    runtime_usage.request_id,
+                                    [],
+                                ).append(runtime_usage)
+                            retained_tree_usage = (
+                                parent_attempt.usage_record,
+                                bridge_result.runtime_usage_record,
+                                direct_leaf_result.runtime_usage_record,
+                                *(result.runtime_usage_record for result in nested_results),
+                            )
+                            if any(record is None for record in retained_tree_usage):
+                                raise OpenRouterSchemaError(
+                                    "recursive recovery lacks exact retained runtime usage"
+                                )
+                            exact_tree_usage = cast(
+                                tuple[
+                                    UsageRecord,
+                                    UsageRecord,
+                                    UsageRecord,
+                                    UsageRecord,
+                                    UsageRecord,
+                                ],
+                                retained_tree_usage,
+                            )
+                            live_tree_usage = tuple(
+                                recursive_runtime_usage_by_request.get(record.request_id, [])
+                                for record in exact_tree_usage
+                            )
+                            if any(len(records) != 1 for records in live_tree_usage) or any(
+                                records[0] != retained
+                                for records, retained in zip(
+                                    live_tree_usage,
+                                    exact_tree_usage,
+                                    strict=True,
+                                )
+                            ):
+                                raise OpenRouterSchemaError(
+                                    "recursive recovery lacks exact reattested tree usage"
+                                )
+                            try:
+                                tree_capability, _recursive_artifact = (
+                                    verify_recursive_truncation_recovery_tree(
+                                        root_family=family,
+                                        nested_family=nested_family,
+                                        root_closure=closure,
+                                        nested_closure=nested_closure,
+                                        root_child_results=root_results,
+                                        nested_child_results=nested_results,
+                                        parent_usage_record=live_tree_usage[0][0],
+                                        bridge_usage_record=live_tree_usage[1][0],
+                                        leaf_usage_records=(
+                                            live_tree_usage[2][0],
+                                            live_tree_usage[3][0],
+                                            live_tree_usage[4][0],
+                                        ),
+                                        parent_context=parent_context,
+                                        bridge_context=bridge_context,
+                                        leaf_contexts=(direct_leaf_context, *nested_contexts),
+                                        requests=family.requested_surface_manifest.requests,
+                                    )
+                                )
+                                if promotion is None:
+                                    promotion = (
+                                        scheduler.journal.promote_truncation_recovery_family(
+                                            family.family_id,
+                                            tree_capability,
+                                        )
+                                    )
+                                promoted_recursive_surface_capability = scheduler.journal.issue_promoted_recursive_truncation_recovery_surface_coverage(
+                                    family.family_id,
+                                    tree_capability,
+                                )
+                                recursive_projection = require_verified_promoted_recursive_truncation_recovery_surface_coverage(
+                                    promoted_recursive_surface_capability
+                                )
+                            except TruncationRecoveryEvidenceError:
+                                promotion_denied_family_ids.add(family.family_id)
+                                reason = (
+                                    f"{request_role}: recursive recovery tree lacked genuine "
+                                    "REAL runtime custody; no review or coverage credit was granted"
+                                )
+                                if reason not in incomplete:
+                                    incomplete.append(reason)
+                                scheduler_halted = True
+                                budget_halted = True
+                                terminal_code = ExitCode.INCOMPLETE
+                                break
+                            promoted_recursive_truncation_surface_coverages.append(
+                                promoted_recursive_surface_capability
+                            )
+                            promoted_leaf_results = (
+                                direct_leaf_result,
+                                *nested_results,
+                            )
+                            promoted_leaf_contexts = (direct_leaf_context, *nested_contexts)
+                            context_by_request_id = {
+                                recursive_projection.parent_usage_record.request_id: (
+                                    recursive_projection.parent_context
+                                ),
+                                recursive_projection.bridge_usage_record.request_id: (
+                                    recursive_projection.bridge_context
+                                ),
+                                **{
+                                    usage_record.request_id: context
+                                    for usage_record, context in zip(
+                                        recursive_projection.leaf_usage_records,
+                                        recursive_projection.leaf_contexts,
+                                        strict=True,
+                                    )
+                                },
+                            }
+                            for usage_record, exact_context in (
+                                (
+                                    recursive_projection.parent_usage_record,
+                                    recursive_projection.parent_context,
+                                ),
+                                (
+                                    recursive_projection.bridge_usage_record,
+                                    recursive_projection.bridge_context,
+                                ),
+                            ):
+                                retained_contexts = model_surface_review_contexts.setdefault(
+                                    usage_record.request_id,
+                                    [],
+                                )
+                                if retained_contexts and retained_contexts != [exact_context]:
+                                    raise OpenRouterSchemaError(
+                                        "recursive recovery has ambiguous live context custody"
+                                    )
+                                if not retained_contexts:
+                                    retained_contexts.append(exact_context)
                         if promotion is None:
                             reason = f"{request_role}: truncation recovery closed without promotion"
                             if reason not in incomplete:
                                 incomplete.append(reason)
                             terminal_code = ExitCode.INCOMPLETE
                             continue
-                        if promoted_surface_capability is None:
+                        if (
+                            promoted_surface_capability is None
+                            and promoted_recursive_surface_capability is None
+                        ):
                             raise OpenRouterSchemaError(
                                 "promoted recovery lacks live surface-coverage custody"
                             )
                         promoted_child_outcomes = tuple(
-                            result.runtime_specialist_accepted_outcome for result in typed_results
+                            result.runtime_specialist_accepted_outcome
+                            for result in promoted_leaf_results
                         )
                         requires_specialist_outcomes = (
                             scheduler_role_requires_specialist_accepted_outcome(scheduler_task.role)
@@ -7011,39 +7259,31 @@ class AuditPipeline:
                         accepted_specialist_outcomes.extend(
                             outcome for outcome in promoted_child_outcomes if outcome is not None
                         )
-                        promoted_surface_projection = (
-                            require_verified_promoted_truncation_recovery_surface_coverage(
+                        if promoted_surface_capability is not None:
+                            promoted_surface_projection = (
+                                require_verified_promoted_truncation_recovery_surface_coverage(
+                                    promoted_surface_capability
+                                )
+                            )
+                            parent_review_contexts = model_surface_review_contexts.setdefault(
+                                promoted_surface_projection.parent_usage_record.request_id,
+                                [],
+                            )
+                            if parent_review_contexts and parent_review_contexts != [
+                                promoted_surface_projection.parent_context
+                            ]:
+                                raise OpenRouterSchemaError(
+                                    "promoted recovery parent has ambiguous live context custody"
+                                )
+                            if not parent_review_contexts:
+                                parent_review_contexts.append(
+                                    promoted_surface_projection.parent_context
+                                )
+                            promoted_truncation_surface_coverages.append(
                                 promoted_surface_capability
                             )
-                        )
-                        parent_review_contexts = model_surface_review_contexts.setdefault(
-                            promoted_surface_projection.parent_usage_record.request_id,
-                            [],
-                        )
-                        if parent_review_contexts and parent_review_contexts != [
-                            promoted_surface_projection.parent_context
-                        ]:
-                            raise OpenRouterSchemaError(
-                                "promoted recovery parent has ambiguous live context custody"
-                            )
-                        if not parent_review_contexts:
-                            parent_review_contexts.append(
-                                promoted_surface_projection.parent_context
-                            )
-                        promoted_truncation_surface_coverages.append(promoted_surface_capability)
 
                         recovered_output = promotion.recovered_output
-                        context_by_request_id = {
-                            scheduler_task.logical_request_id: parent_context,
-                            **{
-                                child.child_logical_request_id: child_context
-                                for child, child_context in zip(
-                                    family.recovery_plan.children,
-                                    child_contexts,
-                                    strict=True,
-                                )
-                            },
-                        }
                         for origin in recovered_output.candidate_origins:
                             origin_context = context_by_request_id.get(origin.request_id)
                             if origin_context is None:
@@ -7056,13 +7296,9 @@ class AuditPipeline:
                                 context=origin_context,
                             )
                         candidates.extend(recovered_output.recovered_batch.findings)
-                        promoted_results = tuple(
-                            terminal_entries[child.child_task_id]
-                            for child in family.recovery_plan.children
-                        )
                         for child_result, child_context in zip(
-                            promoted_results,
-                            child_contexts,
+                            promoted_leaf_results,
+                            promoted_leaf_contexts,
                             strict=True,
                         ):
                             if (
@@ -7105,6 +7341,8 @@ class AuditPipeline:
                             is not SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
                             or family.family_id in recovery_promotions
                             or family.family_id in promotion_denied_family_ids
+                            or family.parent_kind
+                            is SchedulerTruncationRecoveryParentKind.RECOVERY_CHILD
                         )
                         for family in scheduler.journal.truncation_recovery_families
                     )
@@ -9733,14 +9971,18 @@ class AuditPipeline:
             require_verified_promoted_truncation_recovery_surface_coverage(capability)
             for capability in promoted_truncation_surface_coverages
         )
-        if promoted_surface_projections:
+        promoted_recursive_surface_projections = tuple(
+            require_verified_promoted_recursive_truncation_recovery_surface_coverage(capability)
+            for capability in promoted_recursive_truncation_surface_coverages
+        )
+        if promoted_surface_projections or promoted_recursive_surface_projections:
             private_promoted_surface_path = (
                 run_dir / "private" / "truncation-recovered-surface-artifacts.json"
             )
             write_json(
                 private_promoted_surface_path,
                 {
-                    "schema_version": "1.0",
+                    "schema_version": ("1.1" if promoted_recursive_surface_projections else "1.0"),
                     "promotions": [
                         {
                             "promotion_entry_sha256": projection.promotion_entry_sha256,
@@ -9751,6 +9993,20 @@ class AuditPipeline:
                         }
                         for projection in sorted(
                             promoted_surface_projections,
+                            key=lambda item: item.promotion_entry_sha256,
+                        )
+                    ]
+                    + [
+                        {
+                            "promotion_entry_sha256": projection.promotion_entry_sha256,
+                            "recovered_output_artifact_sha256": (
+                                projection.recovered_output_artifact_sha256
+                            ),
+                            "recursive_tree": True,
+                            "artifact": projection.artifact.model_dump(mode="json"),
+                        }
+                        for projection in sorted(
+                            promoted_recursive_surface_projections,
                             key=lambda item: item.promotion_entry_sha256,
                         )
                     ],
@@ -9772,6 +10028,8 @@ class AuditPipeline:
                 request
                 for request in self._active_scheduler.journal.recovery_model_requests
                 if request.promotion_entry_sha256 is not None
+                and request.promotion_disposition
+                is not (SchedulerTruncationRecoveryPromotionDisposition.SUPERSEDED_TRUNCATED_BRIDGE)
             )
             if self._active_scheduler is not None
             else ()
@@ -9796,6 +10054,9 @@ class AuditPipeline:
                 for request in promoted_recovery_requests_for_coverage
             ),
             promoted_recovery_surface_coverages=tuple(promoted_truncation_surface_coverages),
+            promoted_recursive_recovery_surface_coverages=tuple(
+                promoted_recursive_truncation_surface_coverages
+            ),
         )
         if solidity_coverage is not None and language_capability.evm_portfolio_applicable:
             solidity_coverage = with_model_review_coverage(
@@ -10139,12 +10400,21 @@ class AuditPipeline:
         promoted_parent_usage_ids = {
             projection.parent_usage_record.request_id for projection in promoted_surface_projections
         }
+        promoted_recursive_tree_usage_ids = {
+            request_id
+            for projection in promoted_recursive_surface_projections
+            for request_id in (
+                projection.parent_usage_record.request_id,
+                projection.bridge_usage_record.request_id,
+            )
+        }
         model_review_accounting_usage = (
             [
                 record
                 for record in usage.records
                 if record.request_id in structurally_successful_scheduler_review_ids
                 or record.request_id in promoted_parent_usage_ids
+                or record.request_id in promoted_recursive_tree_usage_ids
             ]
             if (
                 scheduler_usage_accounting_consistent
@@ -10177,8 +10447,13 @@ class AuditPipeline:
                     request.request_limit_count_before,
                 )
                 for request in promoted_recovery_requests
+                if request.promotion_disposition
+                is not (SchedulerTruncationRecoveryPromotionDisposition.SUPERSEDED_TRUNCATED_BRIDGE)
             ),
             promoted_recovery_surface_coverages=tuple(promoted_truncation_surface_coverages),
+            promoted_recursive_recovery_surface_coverages=tuple(
+                promoted_recursive_truncation_surface_coverages
+            ),
         )
         if solidity_coverage is not None and language_capability.evm_portfolio_applicable:
             solidity_coverage = with_model_review_coverage(
@@ -10448,6 +10723,9 @@ class AuditPipeline:
                 model_surface_review_artifacts=model_surface_review_artifacts,
                 promoted_truncation_recovery_surface_coverages=(
                     promoted_truncation_surface_coverages
+                ),
+                promoted_recursive_recovery_surface_coverages=(
+                    promoted_recursive_truncation_surface_coverages
                 ),
                 model_usage=usage.records,
                 provider_session=provider_session,

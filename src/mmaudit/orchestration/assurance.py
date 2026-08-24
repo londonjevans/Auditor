@@ -6,6 +6,7 @@ module converts actual engine results into explicit, machine-readable clauses.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections import Counter
@@ -63,6 +64,7 @@ from mmaudit.models.scheduler import (
     SchedulerShardInventory,
     SchedulerTerminalStatus,
     SchedulerTruncationRecoveryModelRequestEvidence,
+    SchedulerTruncationRecoveryPromotionDisposition,
     scheduler_canonical_sha256,
 )
 from mmaudit.models.schemas import (
@@ -72,6 +74,7 @@ from mmaudit.models.schemas import (
     AuditScopeAssessment,
     CandidateReproductionResolution,
     CompilationStatus,
+    ContextPackage,
     ContextRequestEvidence,
     EconomicSimulationPlan,
     ExecutionEvidenceKind,
@@ -119,6 +122,7 @@ from mmaudit.models.usage import (
     candidate_falsifier_role_prefix,
     is_accountable_usage_record,
     is_creditable_usage_record,
+    is_recovery_accountable_usage_record,
     is_recovery_creditable_usage_record,
     source_backed_whole_protocol_context,
     usage_requires_audit_policy_evidence,
@@ -137,6 +141,8 @@ from mmaudit.traceability import (
 
 if TYPE_CHECKING:
     from mmaudit.orchestration.truncation_recovery_evidence import (
+        VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage,
+        VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection,
         VerifiedPromotedTruncationRecoverySurfaceCoverage,
         VerifiedPromotedTruncationRecoverySurfaceCoverageProjection,
     )
@@ -288,6 +294,9 @@ class AssuranceRuntime:
     model_surface_review_artifacts: list[ModelSurfaceReviewArtifact] = field(default_factory=list)
     promoted_truncation_recovery_surface_coverages: list[
         VerifiedPromotedTruncationRecoverySurfaceCoverage
+    ] = field(default_factory=list)
+    promoted_recursive_recovery_surface_coverages: list[
+        VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage
     ] = field(default_factory=list)
     model_usage: list[UsageRecord] = field(default_factory=list)
     provider_session: ProviderSessionProvenance | None = None
@@ -968,6 +977,218 @@ def _scheduler_assurance_errors(
         if sealed_artifact.request_id in surface_artifacts:
             duplicate_surface_artifact = True
         surface_artifacts[sealed_artifact.request_id] = sealed_artifact
+
+    from mmaudit.orchestration.truncation_recovery_evidence import (
+        TruncationRecoveryEvidenceError,
+        require_verified_promoted_recursive_truncation_recovery_surface_coverage,
+    )
+
+    recursive_bindings = tuple(
+        binding
+        for pass_result in artifact.summary.pass_results
+        for binding in pass_result.recovery_promotion_bindings
+        if binding.schema_version == "1.1"
+    )
+    recursive_projections: list[
+        VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection
+    ] = []
+    if len(runtime.promoted_recursive_recovery_surface_coverages) > 32:
+        errors.append("live recursive recovery promotions exceed their compiled bound")
+    else:
+        for capability in runtime.promoted_recursive_recovery_surface_coverages:
+            try:
+                recursive_projections.append(
+                    require_verified_promoted_recursive_truncation_recovery_surface_coverage(
+                        capability
+                    )
+                )
+            except (TypeError, TruncationRecoveryEvidenceError):
+                errors.append("live recursive recovery promotion custody is invalid")
+    recursive_binding_ids = tuple(binding.promotion_entry_sha256 for binding in recursive_bindings)
+    recursive_projection_ids = tuple(
+        projection.promotion_entry_sha256 for projection in recursive_projections
+    )
+    if (
+        len(recursive_binding_ids) != len(set(recursive_binding_ids))
+        or len(recursive_projection_ids) != len(set(recursive_projection_ids))
+        or set(recursive_binding_ids) != set(recursive_projection_ids)
+    ):
+        errors.append(
+            "public recursive recovery promotions differ from exact live promotion custody"
+        )
+
+    recursive_parent_custody: dict[str, tuple[UsageRecord, ContextPackage]] = {}
+    recursive_bridge_custody: dict[str, tuple[UsageRecord, ContextPackage]] = {}
+    recursive_leaf_custody: dict[str, tuple[UsageRecord, ContextPackage]] = {}
+    seen_recursive_artifacts: set[str] = set()
+    for projection in recursive_projections:
+        matching_bindings = tuple(
+            binding
+            for binding in recursive_bindings
+            if binding.promotion_entry_sha256 == projection.promotion_entry_sha256
+        )
+        if len(matching_bindings) != 1:
+            continue
+        binding = matching_bindings[0]
+        promoted_artifact = projection.artifact
+        promotion_requests = tuple(
+            request
+            for request in artifact.recovery_model_requests
+            if request.promotion_entry_sha256 == projection.promotion_entry_sha256
+        )
+        bridge_requests = tuple(
+            request
+            for request in promotion_requests
+            if request.promotion_disposition
+            is SchedulerTruncationRecoveryPromotionDisposition.SUPERSEDED_TRUNCATED_BRIDGE
+        )
+        leaf_requests = tuple(
+            sorted(
+                (
+                    request
+                    for request in promotion_requests
+                    if request.promotion_disposition
+                    is SchedulerTruncationRecoveryPromotionDisposition.SUCCESSFUL_LEAF
+                ),
+                key=lambda request: request.global_request_ordinal or 0,
+            )
+        )
+        parent_requests = tuple(
+            request
+            for request in artifact.model_requests
+            if request.task_id == binding.parent_task_id
+        )
+        projected_usage = (
+            projection.parent_usage_record,
+            projection.bridge_usage_record,
+            *projection.leaf_usage_records,
+        )
+        exact_tree = (
+            binding.parent_task_id == promoted_artifact.parent_task_id
+            and binding.recovered_output_artifact_sha256
+            == projection.recovered_output_artifact_sha256
+            and binding.direct_child_result_sha256s == projection.direct_child_result_sha256s
+            and binding.nested_family_id == projection.nested_family_id
+            and binding.nested_family_root_sha256 == projection.nested_family_root_sha256
+            and binding.nested_recovery_plan_sha256 == projection.nested_recovery_plan_sha256
+            and binding.nested_family_closure_id == projection.nested_family_closure_id
+            and binding.nested_family_closure_sha256 == projection.nested_family_closure_sha256
+            and binding.nested_child_result_sha256s == projection.nested_child_result_sha256s
+            and binding.superseded_bridge_result_sha256
+            == projection.superseded_bridge_result_sha256
+            and binding.promoted_leaf_result_sha256s == projection.promoted_leaf_result_sha256s
+            and len(parent_requests) == 1
+            and parent_requests[0].logical_request_id == projection.parent_usage_record.request_id
+            and len(promotion_requests) == 4
+            and len(bridge_requests) == 1
+            and len(leaf_requests) == 3
+            and bridge_requests[0].child_result_entry_sha256
+            == projection.superseded_bridge_result_sha256
+            and bridge_requests[0].terminal_status is SchedulerTerminalStatus.TRUNCATED
+            and bridge_requests[0].recovery_family_id == projection.family_id
+            and bridge_requests[0].family_root_sha256 == projection.family_root_sha256
+            and bridge_requests[0].recovery_plan_sha256
+            == promoted_artifact.recovery_plan.plan_sha256
+            and bridge_requests[0].family_closure_id == projection.family_closure_id
+            and bridge_requests[0].family_closure_sha256 == projection.family_closure_sha256
+            and tuple(request.child_result_entry_sha256 for request in leaf_requests)
+            == projection.promoted_leaf_result_sha256s
+            and all(
+                request.terminal_status is SchedulerTerminalStatus.SUCCEEDED
+                for request in leaf_requests
+            )
+            and len(projected_usage) == 5
+            and len({usage.request_id for usage in projected_usage}) == 5
+            and len(projection.leaf_contexts) == 3
+            and len(promoted_artifact.children) == 3
+            and promoted_artifact.artifact_sha256 not in seen_recursive_artifacts
+            and leaf_requests[0].recovery_family_id == projection.family_id
+            and leaf_requests[0].family_root_sha256 == projection.family_root_sha256
+            and leaf_requests[0].recovery_plan_sha256 == promoted_artifact.recovery_plan.plan_sha256
+            and leaf_requests[0].family_closure_id == projection.family_closure_id
+            and leaf_requests[0].family_closure_sha256 == projection.family_closure_sha256
+            and all(
+                request.recovery_family_id == projection.nested_family_id
+                and request.family_root_sha256 == projection.nested_family_root_sha256
+                and request.recovery_plan_sha256 == projection.nested_recovery_plan_sha256
+                and request.family_closure_id == projection.nested_family_closure_id
+                and request.family_closure_sha256 == projection.nested_family_closure_sha256
+                for request in leaf_requests[1:]
+            )
+        )
+        if not exact_tree:
+            errors.append("recursive recovery promotion differs from its exact public tree")
+            continue
+        seen_recursive_artifacts.add(promoted_artifact.artifact_sha256)
+        bridge_request = bridge_requests[0]
+        exact_live_tree = (
+            usages.get(projection.parent_usage_record.request_id) is projection.parent_usage_record
+            and usages.get(projection.bridge_usage_record.request_id)
+            is projection.bridge_usage_record
+            and promoted_artifact.parent.usage_record == projection.parent_usage_record
+            and promoted_artifact.bridge.usage_record == projection.bridge_usage_record
+            and bridge_request.logical_request_id == projection.bridge_usage_record.request_id
+            and bridge_request.output_artifact_sha256 is None
+            and bridge_request.logical_request_id not in surface_artifacts
+        )
+        leaf_custody_items: list[tuple[str, UsageRecord, ContextPackage]] = []
+        for child, leaf_usage, leaf_context, leaf_request in zip(
+            promoted_artifact.children,
+            projection.leaf_usage_records,
+            projection.leaf_contexts,
+            leaf_requests,
+            strict=True,
+        ):
+            if (
+                usages.get(leaf_usage.request_id) is not leaf_usage
+                or child.usage_record != leaf_usage
+                or leaf_request.logical_request_id != leaf_usage.request_id
+                or surface_artifacts.get(leaf_usage.request_id) != child.surface_artifact
+            ):
+                exact_live_tree = False
+            leaf_custody_items.append((leaf_usage.request_id, leaf_usage, leaf_context))
+        if not exact_live_tree:
+            errors.append("recursive recovery promotion differs from exact live usage custody")
+            continue
+        parent_request = parent_requests[0]
+        if (
+            not _promoted_recovery_context_matches_request(
+                context=projection.parent_context,
+                usage=projection.parent_usage_record,
+                request=parent_request,
+                allow_missing_request_binding=True,
+            )
+            or not _promoted_recovery_context_matches_request(
+                context=projection.bridge_context,
+                usage=projection.bridge_usage_record,
+                request=bridge_request,
+            )
+            or any(
+                not _promoted_recovery_context_matches_request(
+                    context=leaf_context,
+                    usage=leaf_usage,
+                    request=leaf_request,
+                )
+                for leaf_usage, leaf_context, leaf_request in zip(
+                    projection.leaf_usage_records,
+                    projection.leaf_contexts,
+                    leaf_requests,
+                    strict=True,
+                )
+            )
+        ):
+            errors.append("recursive recovery promotion differs from exact live context custody")
+            continue
+        recursive_parent_custody[parent_request.logical_request_id] = (
+            projection.parent_usage_record,
+            projection.parent_context,
+        )
+        recursive_bridge_custody[bridge_request.logical_request_id] = (
+            projection.bridge_usage_record,
+            projection.bridge_context,
+        )
+        for leaf_request_id, leaf_usage, leaf_context in leaf_custody_items:
+            recursive_leaf_custody[leaf_request_id] = (leaf_usage, leaf_context)
     scheduler_surface_requests = {
         request_id
         for request_id, request in requests.items()
@@ -1035,6 +1256,88 @@ def _scheduler_assurance_errors(
         if isinstance(request, SchedulerTruncationRecoveryModelRequestEvidence):
             if request.promotion_entry_sha256 is None:
                 errors.append(f"scheduler recovery request {request_id} lacks a guarded promotion")
+                continue
+            if (
+                request.promotion_disposition
+                is SchedulerTruncationRecoveryPromotionDisposition.SUPERSEDED_TRUNCATED_BRIDGE
+            ):
+                bridge_custody = recursive_bridge_custody.get(request_id)
+                if bridge_custody is None or bridge_custody[0] is not usage:
+                    errors.append(
+                        f"scheduler recursive bridge {request_id} lacks exact live promotion "
+                        "custody"
+                    )
+                    continue
+                if (
+                    request.schema_version != "1.2"
+                    or request.terminal_status is not SchedulerTerminalStatus.TRUNCATED
+                    or request.runtime_completion_evidence_sha256 is not None
+                    or request.validated_response_sha256 is not None
+                    or request.normalization_evidence_sha256 is not None
+                    or request.output_artifact_sha256 is not None
+                    or request.specialist_accepted_outcome_sha256 is not None
+                ):
+                    errors.append(
+                        f"scheduler recursive bridge {request_id} claimed successful review custody"
+                    )
+                    continue
+                if not is_recovery_accountable_usage_record(
+                    usage,
+                    request_limit_scope=request.request_limit_scope,
+                    request_limit_count_before=request.request_limit_count_before,
+                    require_real=True,
+                ):
+                    errors.append(
+                        f"scheduler recursive bridge {request_id} lacks real accountable usage"
+                    )
+                    continue
+                if not _usage_matches_real_model_route(
+                    usage,
+                    config,
+                    production_qualification,
+                    runtime.provider_session,
+                    audit_selection,
+                    audit_refresh,
+                    audit_refresh_pricing,
+                    recovery_request_limit_scope=request.request_limit_scope,
+                    recovery_request_limit_count_before=request.request_limit_count_before,
+                ):
+                    errors.append(
+                        f"scheduler recursive bridge {request_id} lacks current qualified "
+                        "accounting route"
+                    )
+                    continue
+                if (
+                    usage.role != request.role
+                    or usage.requested_model != request.requested_model
+                    or usage.prompt_sha256 != request.provider_prompt_sha256
+                    or usage.user_prompt_sha256 != request.user_prompt_sha256
+                    or usage.schema_sha256 != request.response_schema_sha256
+                    or request.usage_record_sha256
+                    != scheduler_canonical_sha256(usage.model_dump(mode="json"))
+                    or request.provider_response_sha256 != usage.response_sha256
+                    or usage.fallback_used
+                    or usage.substitution_detected
+                    or routed_lineage != request.root_lineage
+                    or not _promoted_recovery_context_matches_request(
+                        context=bridge_custody[1],
+                        usage=usage,
+                        request=request,
+                    )
+                ):
+                    errors.append(
+                        f"scheduler recursive bridge {request_id} differs from exact provider "
+                        "accounting evidence"
+                    )
+                continue
+            if request.promotion_disposition is not None and (
+                request.promotion_disposition
+                is not SchedulerTruncationRecoveryPromotionDisposition.SUCCESSFUL_LEAF
+                or request_id not in recursive_leaf_custody
+            ):
+                errors.append(
+                    f"scheduler recursive leaf {request_id} lacks exact live promotion custody"
+                )
                 continue
             if request.terminal_status is not SchedulerTerminalStatus.SUCCEEDED:
                 errors.append(f"scheduler recovery request {request_id} did not succeed")
@@ -1220,6 +1523,32 @@ def _scheduler_assurance_errors(
             if request.terminal_status is not SchedulerTerminalStatus.TRUNCATED:
                 errors.append(
                     f"promoted scheduler parent {request_id} did not retain its truncation"
+                )
+            recursive_parent = recursive_parent_custody.get(request_id)
+            if recursive_parent is not None and (
+                recursive_parent[0] is not usage
+                or not is_accountable_usage_record(usage, require_real=True)
+                or not _usage_matches_real_model_route(
+                    usage,
+                    config,
+                    production_qualification,
+                    runtime.provider_session,
+                    audit_selection,
+                    audit_refresh,
+                    audit_refresh_pricing,
+                    recovery_request_limit_scope=None,
+                    recovery_request_limit_count_before=None,
+                )
+                or not _promoted_recovery_context_matches_request(
+                    context=recursive_parent[1],
+                    usage=usage,
+                    request=request,
+                    allow_missing_request_binding=True,
+                )
+            ):
+                errors.append(
+                    f"promoted recursive scheduler parent {request_id} lacks exact live "
+                    "accounting custody"
                 )
             continue
         if request.terminal_status is not SchedulerTerminalStatus.SUCCEEDED:
@@ -1950,6 +2279,7 @@ class MaximumAssuranceContract:
             runtime.model_usage,
             runtime.model_surface_review_artifacts,
             runtime.promoted_truncation_recovery_surface_coverages,
+            runtime.promoted_recursive_recovery_surface_coverages,
             self.config,
             production_qualification,
             runtime.provider_session,
@@ -3746,7 +4076,55 @@ def _promoted_recovery_request_coordinates(
         )
         for request in validated.recovery_model_requests
         if request.promotion_entry_sha256 is not None
+        and request.promotion_disposition
+        is not SchedulerTruncationRecoveryPromotionDisposition.SUPERSEDED_TRUNCATED_BRIDGE
     }
+
+
+def _promoted_recovery_context_matches_request(
+    *,
+    context: ContextPackage,
+    usage: UsageRecord,
+    request: SchedulerModelRequestEvidence | SchedulerTruncationRecoveryModelRequestEvidence,
+    allow_missing_request_binding: bool = False,
+) -> bool:
+    """Bind one live capability context to its public request and usage routing."""
+
+    from mmaudit.orchestration.context import render_context, revalidate_context_package
+
+    if type(context) is not ContextPackage:
+        return False
+    try:
+        validated = revalidate_context_package(context)
+        rendered = render_context(validated)
+        expected = ContextRequestEvidence.build(
+            request_id=request.logical_request_id,
+            request_role=request.role,
+            context_role=validated.role,
+            byte_budget=validated.byte_budget,
+            declared_bytes_used=validated.bytes_used,
+            rendered_bytes=len(rendered.encode()),
+            source_bytes=sum(len(item.content.encode()) for item in validated.excerpts),
+            configured_maximum_source_tokens_per_request=(
+                validated.configured_maximum_source_tokens_per_request
+            ),
+            effective_source_byte_ceiling=validated.effective_source_byte_ceiling,
+            rendered_sha256=hashlib.sha256(rendered.encode()).hexdigest(),
+        )
+        routed = ContextRequestEvidence.model_validate(
+            usage.routing.get("context_request_evidence")
+        )
+    except (TypeError, ValueError):
+        return False
+    return (
+        validated == context
+        and routed == expected
+        and (
+            request.context_request_evidence_sha256 == expected.evidence_sha256
+            or (allow_missing_request_binding and request.context_request_evidence_sha256 is None)
+        )
+        and usage.routing.get("context_request_evidence_sha256") == expected.evidence_sha256
+    )
 
 
 def _real_provider_session_is_qualifying(
@@ -3955,6 +4333,9 @@ def _model_coverage_is_backed_by_real_usage(
     records: list[UsageRecord],
     artifacts: list[ModelSurfaceReviewArtifact],
     promoted_surface_coverages: list[VerifiedPromotedTruncationRecoverySurfaceCoverage],
+    promoted_recursive_surface_coverages: list[
+        VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverage
+    ],
     config: AuditConfig,
     qualification: VerifiedProductionQualification | None,
     provider_session: ProviderSessionProvenance | None,
@@ -3970,6 +4351,7 @@ def _model_coverage_is_backed_by_real_usage(
 
     from mmaudit.orchestration.truncation_recovery_evidence import (
         TruncationRecoveryEvidenceError,
+        require_verified_promoted_recursive_truncation_recovery_surface_coverage,
         require_verified_promoted_truncation_recovery_surface_coverage,
     )
 
@@ -3980,7 +4362,7 @@ def _model_coverage_is_backed_by_real_usage(
     for artifact in artifacts:
         artifacts_by_request.setdefault(artifact.request_id, []).append(artifact)
 
-    if len(promoted_surface_coverages) > 32:
+    if len(promoted_surface_coverages) + len(promoted_recursive_surface_coverages) > 32:
         return False
     validated_scheduler_artifact: SchedulerArtifact | None = None
     if scheduler_artifact is not None:
@@ -4008,8 +4390,12 @@ def _model_coverage_is_backed_by_real_usage(
     if len(public_promotion_entry_sha256s) != len(set(public_promotion_entry_sha256s)):
         return False
     composite_by_artifact_sha256: dict[
-        str, VerifiedPromotedTruncationRecoverySurfaceCoverageProjection
+        str,
+        VerifiedPromotedTruncationRecoverySurfaceCoverageProjection
+        | VerifiedPromotedRecursiveTruncationRecoverySurfaceCoverageProjection,
     ] = {}
+    promoted_parent_partitions: dict[str, set[tuple[str, str]]] = {}
+    promoted_child_partitions: dict[str, set[tuple[str, str]]] = {}
     seen_promotion_entries: set[str] = set()
     for capability in promoted_surface_coverages:
         try:
@@ -4033,7 +4419,8 @@ def _model_coverage_is_backed_by_real_usage(
             return False
         binding = matching_bindings[0]
         if (
-            binding.parent_task_id != promoted_artifact.parent_task_id
+            binding.schema_version != "1.0"
+            or binding.parent_task_id != promoted_artifact.parent_task_id
             or binding.recovered_output_artifact_sha256
             != projection.recovered_output_artifact_sha256
             or binding.direct_child_result_sha256s != projection.child_result_entry_sha256s
@@ -4087,11 +4474,14 @@ def _model_coverage_is_backed_by_real_usage(
             strict=True,
         ):
             matching_child_usage = usage_by_request.get(live_child_usage.request_id, [])
+            matching_child_artifacts = artifacts_by_request.get(live_child_usage.request_id, [])
             request = recovery_requests_by_id.get(live_child_usage.request_id)
             if (
                 len(matching_child_usage) != 1
                 or matching_child_usage[0] is not live_child_usage
                 or child.usage_record != live_child_usage
+                or len(matching_child_artifacts) != 1
+                or matching_child_artifacts[0] != child.surface_artifact
                 or request is None
                 or request.child_result_entry_sha256 != expected_child_result_sha256
                 or not _is_real_model_usage(
@@ -4107,12 +4497,301 @@ def _model_coverage_is_backed_by_real_usage(
                 )
             ):
                 return False
+        parent_surface_ids = {
+            origin.surface_id for origin in promoted_artifact.origins if origin.provisional
+        }
+        projected_parent_surface_ids = {
+            review.surface_id for review in promoted_artifact.parent.projection.surface_reviews
+        }
+        child_partition = {
+            (child.surface_artifact.artifact_sha256, record.surface_id)
+            for child in promoted_artifact.children
+            for record in child.surface_artifact.records
+        }
+        child_surface_ids = {surface_id for _, surface_id in child_partition}
+        request_surface_ids = {request.surface_id for request in promoted_artifact.requests}
+        if (
+            not child_partition
+            or parent_surface_ids != projected_parent_surface_ids
+            or parent_surface_ids & child_surface_ids
+            or parent_surface_ids | child_surface_ids != request_surface_ids
+            or len(parent_surface_ids) + len(child_partition) != len(request_surface_ids)
+        ):
+            return False
+        promoted_parent_partitions[promoted_artifact.artifact_sha256] = {
+            (promoted_artifact.artifact_sha256, surface_id) for surface_id in parent_surface_ids
+        }
+        promoted_child_partitions[promoted_artifact.artifact_sha256] = child_partition
         composite_by_artifact_sha256[promoted_artifact.artifact_sha256] = projection
+
+    for recursive_capability in promoted_recursive_surface_coverages:
+        try:
+            recursive_projection = (
+                require_verified_promoted_recursive_truncation_recovery_surface_coverage(
+                    recursive_capability
+                )
+            )
+        except (TypeError, TruncationRecoveryEvidenceError):
+            return False
+        recursive_artifact = recursive_projection.artifact
+        if (
+            recursive_projection.promotion_entry_sha256 in seen_promotion_entries
+            or recursive_artifact.artifact_sha256 in composite_by_artifact_sha256
+            or recursive_artifact.artifact_sha256 in {item.artifact_sha256 for item in artifacts}
+        ):
+            return False
+        seen_promotion_entries.add(recursive_projection.promotion_entry_sha256)
+        matching_bindings = tuple(
+            binding
+            for binding in public_promotion_bindings
+            if binding.promotion_entry_sha256 == recursive_projection.promotion_entry_sha256
+        )
+        if len(matching_bindings) != 1:
+            return False
+        binding = matching_bindings[0]
+        if (
+            binding.schema_version != "1.1"
+            or binding.parent_task_id != recursive_artifact.parent_task_id
+            or binding.recovered_output_artifact_sha256
+            != recursive_projection.recovered_output_artifact_sha256
+            or binding.direct_child_result_sha256s
+            != recursive_projection.direct_child_result_sha256s
+            or binding.nested_family_id != recursive_projection.nested_family_id
+            or binding.nested_family_root_sha256 != recursive_projection.nested_family_root_sha256
+            or binding.nested_recovery_plan_sha256
+            != recursive_projection.nested_recovery_plan_sha256
+            or binding.nested_family_closure_id != recursive_projection.nested_family_closure_id
+            or binding.nested_family_closure_sha256
+            != recursive_projection.nested_family_closure_sha256
+            or binding.nested_child_result_sha256s
+            != recursive_projection.nested_child_result_sha256s
+            or binding.superseded_bridge_result_sha256
+            != recursive_projection.superseded_bridge_result_sha256
+            or binding.promoted_leaf_result_sha256s
+            != recursive_projection.promoted_leaf_result_sha256s
+        ):
+            return False
+
+        parent_usage_matches = usage_by_request.get(
+            recursive_artifact.parent_logical_request_id,
+            [],
+        )
+        parent_requests = tuple(
+            request
+            for request in (
+                validated_scheduler_artifact.model_requests
+                if validated_scheduler_artifact is not None
+                else ()
+            )
+            if request.task_id == binding.parent_task_id
+        )
+        if (
+            len(parent_usage_matches) != 1
+            or parent_usage_matches[0] is not recursive_projection.parent_usage_record
+            or recursive_artifact.parent.usage_record != recursive_projection.parent_usage_record
+            or len(parent_requests) != 1
+            or parent_requests[0].logical_request_id
+            != recursive_projection.parent_usage_record.request_id
+            or not is_accountable_usage_record(parent_usage_matches[0], require_real=True)
+            or parent_usage_matches[0].routing.get("certification_request") is not True
+            or not _usage_matches_real_model_route(
+                parent_usage_matches[0],
+                config,
+                qualification,
+                provider_session,
+                audit_selection,
+                audit_refresh,
+                audit_refresh_pricing,
+                recovery_request_limit_scope=None,
+                recovery_request_limit_count_before=None,
+            )
+            or not _promoted_recovery_context_matches_request(
+                context=recursive_projection.parent_context,
+                usage=parent_usage_matches[0],
+                request=parent_requests[0],
+                allow_missing_request_binding=True,
+            )
+        ):
+            return False
+
+        recovery_requests = tuple(
+            request
+            for request in (
+                validated_scheduler_artifact.recovery_model_requests
+                if validated_scheduler_artifact is not None
+                else ()
+            )
+            if request.promotion_entry_sha256 == recursive_projection.promotion_entry_sha256
+        )
+        bridge_requests = tuple(
+            request
+            for request in recovery_requests
+            if request.promotion_disposition
+            is SchedulerTruncationRecoveryPromotionDisposition.SUPERSEDED_TRUNCATED_BRIDGE
+        )
+        leaf_requests = tuple(
+            sorted(
+                (
+                    request
+                    for request in recovery_requests
+                    if request.promotion_disposition
+                    is SchedulerTruncationRecoveryPromotionDisposition.SUCCESSFUL_LEAF
+                ),
+                key=lambda request: request.global_request_ordinal or 0,
+            )
+        )
+        if (
+            len(recovery_requests) != 4
+            or len(bridge_requests) != 1
+            or len(leaf_requests) != 3
+            or bridge_requests[0].child_result_entry_sha256
+            != recursive_projection.superseded_bridge_result_sha256
+            or bridge_requests[0].terminal_status is not SchedulerTerminalStatus.TRUNCATED
+            or bridge_requests[0].recovery_family_id != recursive_projection.family_id
+            or bridge_requests[0].family_root_sha256 != recursive_projection.family_root_sha256
+            or bridge_requests[0].recovery_plan_sha256
+            != recursive_artifact.recovery_plan.plan_sha256
+            or bridge_requests[0].family_closure_id != recursive_projection.family_closure_id
+            or bridge_requests[0].family_closure_sha256
+            != recursive_projection.family_closure_sha256
+            or tuple(request.child_result_entry_sha256 for request in leaf_requests)
+            != recursive_projection.promoted_leaf_result_sha256s
+            or any(
+                request.terminal_status is not SchedulerTerminalStatus.SUCCEEDED
+                for request in leaf_requests
+            )
+            or {request.child_result_entry_sha256 for request in recovery_requests}
+            != {
+                *recursive_projection.direct_child_result_sha256s,
+                *recursive_projection.nested_child_result_sha256s,
+            }
+            or leaf_requests[0].recovery_family_id != recursive_projection.family_id
+            or leaf_requests[0].family_root_sha256 != recursive_projection.family_root_sha256
+            or leaf_requests[0].recovery_plan_sha256 != recursive_artifact.recovery_plan.plan_sha256
+            or leaf_requests[0].family_closure_id != recursive_projection.family_closure_id
+            or leaf_requests[0].family_closure_sha256 != recursive_projection.family_closure_sha256
+            or any(
+                request.recovery_family_id != recursive_projection.nested_family_id
+                or request.family_root_sha256 != recursive_projection.nested_family_root_sha256
+                or request.recovery_plan_sha256 != recursive_projection.nested_recovery_plan_sha256
+                or request.family_closure_id != recursive_projection.nested_family_closure_id
+                or request.family_closure_sha256
+                != recursive_projection.nested_family_closure_sha256
+                for request in leaf_requests[1:]
+            )
+        ):
+            return False
+
+        bridge_request = bridge_requests[0]
+        bridge_usage_matches = usage_by_request.get(
+            recursive_projection.bridge_usage_record.request_id,
+            [],
+        )
+        if (
+            len(bridge_usage_matches) != 1
+            or bridge_usage_matches[0] is not recursive_projection.bridge_usage_record
+            or recursive_artifact.bridge.usage_record != recursive_projection.bridge_usage_record
+            or bridge_request.logical_request_id
+            != recursive_projection.bridge_usage_record.request_id
+            or artifacts_by_request.get(bridge_request.logical_request_id)
+            or not is_recovery_accountable_usage_record(
+                recursive_projection.bridge_usage_record,
+                request_limit_scope=bridge_request.request_limit_scope,
+                request_limit_count_before=bridge_request.request_limit_count_before,
+                require_real=True,
+            )
+            or not _usage_matches_real_model_route(
+                recursive_projection.bridge_usage_record,
+                config,
+                qualification,
+                provider_session,
+                audit_selection,
+                audit_refresh,
+                audit_refresh_pricing,
+                recovery_request_limit_scope=bridge_request.request_limit_scope,
+                recovery_request_limit_count_before=bridge_request.request_limit_count_before,
+            )
+            or not _promoted_recovery_context_matches_request(
+                context=recursive_projection.bridge_context,
+                usage=recursive_projection.bridge_usage_record,
+                request=bridge_request,
+            )
+        ):
+            return False
+
+        if (
+            len(recursive_projection.leaf_usage_records) != 3
+            or len(recursive_projection.leaf_contexts) != 3
+            or len(recursive_artifact.children) != 3
+        ):
+            return False
+        for child, live_leaf_usage, leaf_context, request in zip(
+            recursive_artifact.children,
+            recursive_projection.leaf_usage_records,
+            recursive_projection.leaf_contexts,
+            leaf_requests,
+            strict=True,
+        ):
+            matching_leaf_usage = usage_by_request.get(live_leaf_usage.request_id, [])
+            matching_leaf_artifacts = artifacts_by_request.get(live_leaf_usage.request_id, [])
+            if (
+                len(matching_leaf_usage) != 1
+                or matching_leaf_usage[0] is not live_leaf_usage
+                or child.usage_record != live_leaf_usage
+                or request.logical_request_id != live_leaf_usage.request_id
+                or len(matching_leaf_artifacts) != 1
+                or matching_leaf_artifacts[0] != child.surface_artifact
+                or not _is_real_model_usage(
+                    live_leaf_usage,
+                    config,
+                    qualification,
+                    provider_session,
+                    audit_selection,
+                    audit_refresh,
+                    audit_refresh_pricing,
+                    recovery_request_limit_scope=request.request_limit_scope,
+                    recovery_request_limit_count_before=request.request_limit_count_before,
+                )
+                or not _promoted_recovery_context_matches_request(
+                    context=leaf_context,
+                    usage=live_leaf_usage,
+                    request=request,
+                )
+            ):
+                return False
+        parent_surface_ids = {
+            origin.surface_id for origin in recursive_artifact.origins if origin.provisional
+        }
+        projected_parent_surface_ids = {
+            review.surface_id for review in recursive_artifact.parent.projection.surface_reviews
+        }
+        leaf_partition = {
+            (child.surface_artifact.artifact_sha256, record.surface_id)
+            for child in recursive_artifact.children
+            for record in child.surface_artifact.records
+        }
+        leaf_surface_ids = {surface_id for _, surface_id in leaf_partition}
+        request_surface_ids = {request.surface_id for request in recursive_artifact.requests}
+        if (
+            not leaf_partition
+            or parent_surface_ids != projected_parent_surface_ids
+            or parent_surface_ids & leaf_surface_ids
+            or parent_surface_ids | leaf_surface_ids != request_surface_ids
+            or len(parent_surface_ids) + len(leaf_partition) != len(request_surface_ids)
+        ):
+            return False
+        promoted_parent_partitions[recursive_artifact.artifact_sha256] = {
+            (recursive_artifact.artifact_sha256, surface_id) for surface_id in parent_surface_ids
+        }
+        promoted_child_partitions[recursive_artifact.artifact_sha256] = leaf_partition
+        composite_by_artifact_sha256[recursive_artifact.artifact_sha256] = recursive_projection
     if seen_promotion_entries != set(public_promotion_entry_sha256s):
         return False
 
     lineage_by_model = model_lineage_index(config)
     credited_reference_count = 0
+    credited_composite_artifact_surfaces: set[tuple[str, str]] = set()
+    credited_ordinary_artifact_surfaces: set[tuple[str, str]] = set()
     for surface in coverage.surfaces:
         credited_references = [
             reference for reference in surface.evidence_references if reference.credited
@@ -4135,16 +4814,16 @@ def _model_coverage_is_backed_by_real_usage(
         for reference in credited_references:
             promoted_projection = composite_by_artifact_sha256.get(reference.artifact_sha256)
             if promoted_projection is not None:
-                promoted_artifact = promoted_projection.artifact
+                composite_artifact = promoted_projection.artifact
                 usage = promoted_projection.parent_usage_record
                 matching_origins = tuple(
                     origin
-                    for origin in promoted_artifact.origins
+                    for origin in composite_artifact.origins
                     if origin.surface_id == reference.surface_id and origin.provisional
                 )
                 promoted_records = tuple(
                     record
-                    for record in promoted_artifact.records
+                    for record in composite_artifact.records
                     if record.surface_id == reference.surface_id
                 )
                 try:
@@ -4182,6 +4861,9 @@ def _model_coverage_is_backed_by_real_usage(
                     or matching_origins[0].request_id != usage.request_id
                 ):
                     return False
+                credited_composite_artifact_surfaces.add(
+                    (reference.artifact_sha256, reference.surface_id)
+                )
                 continue
             matching_usage = usage_by_request.get(reference.request_id, [])
             if len(matching_usage) != 1:
@@ -4265,7 +4947,18 @@ def _model_coverage_is_backed_by_real_usage(
                 or sealed_artifact.response_schema_sha256 != usage.schema_sha256
             ):
                 return False
-    return credited_reference_count > 0
+            credited_ordinary_artifact_surfaces.add(
+                (ordinary_artifact.artifact_sha256, reference.surface_id)
+            )
+    consumed_composite_artifact_sha256s = {
+        artifact_sha256
+        for artifact_sha256, child_partition in promoted_child_partitions.items()
+        if child_partition <= credited_ordinary_artifact_surfaces
+        and promoted_parent_partitions[artifact_sha256] <= credited_composite_artifact_surfaces
+    }
+    return credited_reference_count > 0 and consumed_composite_artifact_sha256s == set(
+        composite_by_artifact_sha256
+    )
 
 
 def _compilation_failure_detail(

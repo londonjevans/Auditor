@@ -90,7 +90,7 @@ _SURFACE_ID_PATTERN = r"^model-surface:[0-9a-f]{64}$"
 _USD_EXACT_PATTERN = r"^(?:0|[1-9][0-9]{0,12})(?:\.[0-9]{1,36})?$"
 _MAX_SURFACES = 10_000
 _MAX_SOURCE_DESCRIPTORS = 100_000
-_MAX_PROMOTED_CANDIDATES = MAX_CANDIDATE_REVIEW_FINDINGS * 3
+_MAX_PROMOTED_CANDIDATES = MAX_CANDIDATE_REVIEW_FINDINGS * 5
 _SPECIALIST_INVESTIGATOR_REQUEST_ROLES = frozenset(
     f"specialist:{role}" for role in SPECIALIST_INVESTIGATOR_ROLES
 )
@@ -156,6 +156,7 @@ class SchedulerRecoveredCandidateOriginKind(StrEnum):
 
     PARENT_FRAME = "PARENT_FRAME"
     CHILD_BATCH = "CHILD_BATCH"
+    TRUNCATED_CHILD_FRAME = "TRUNCATED_CHILD_FRAME"
 
 
 class _NonAuthorizingRecoveryJournalModel(StrictModel):
@@ -2429,7 +2430,7 @@ class SchedulerTruncationRecoveryFamilyClosure(_SchedulerTruncationRecoveryEntry
 
 
 class SchedulerRecoveredCandidateOrigin(StrictModel):
-    """Exact parent frame or child batch that supplied one promoted candidate."""
+    """Exact parent frame, complete bridge frame, or child batch supplying a candidate."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -2445,6 +2446,11 @@ class SchedulerRecoveredCandidateOrigin(StrictModel):
     usage_record_sha256: str = Field(pattern=_SHA256_PATTERN)
     context_request_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
     parent_projection_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    truncation_projection_sha256: str | None = Field(
         default=None,
         pattern=_SHA256_PATTERN,
         exclude_if=lambda value: value is None,
@@ -2495,6 +2501,7 @@ class SchedulerRecoveredCandidateOrigin(StrictModel):
         usage_record_sha256: str,
         context_request_evidence_sha256: str,
         parent_projection_sha256: str | None = None,
+        truncation_projection_sha256: str | None = None,
         accepted_frame_sequence: int | None = None,
         accepted_frame_sha256: str | None = None,
         child_task_id: str | None = None,
@@ -2512,13 +2519,42 @@ class SchedulerRecoveredCandidateOrigin(StrictModel):
             "request_role": request_role,
             "usage_record_sha256": usage_record_sha256,
             "context_request_evidence_sha256": context_request_evidence_sha256,
-            "parent_projection_sha256": parent_projection_sha256,
-            "accepted_frame_sequence": accepted_frame_sequence,
-            "accepted_frame_sha256": accepted_frame_sha256,
-            "child_task_id": child_task_id,
-            "child_result_sha256": child_result_sha256,
-            "normalization_evidence_sha256": normalization_evidence_sha256,
-            "surface_artifact_sha256": surface_artifact_sha256,
+            **(
+                {"parent_projection_sha256": parent_projection_sha256}
+                if parent_projection_sha256 is not None
+                else {}
+            ),
+            **(
+                {"truncation_projection_sha256": truncation_projection_sha256}
+                if truncation_projection_sha256 is not None
+                else {}
+            ),
+            **(
+                {"accepted_frame_sequence": accepted_frame_sequence}
+                if accepted_frame_sequence is not None
+                else {}
+            ),
+            **(
+                {"accepted_frame_sha256": accepted_frame_sha256}
+                if accepted_frame_sha256 is not None
+                else {}
+            ),
+            **({"child_task_id": child_task_id} if child_task_id is not None else {}),
+            **(
+                {"child_result_sha256": child_result_sha256}
+                if child_result_sha256 is not None
+                else {}
+            ),
+            **(
+                {"normalization_evidence_sha256": normalization_evidence_sha256}
+                if normalization_evidence_sha256 is not None
+                else {}
+            ),
+            **(
+                {"surface_artifact_sha256": surface_artifact_sha256}
+                if surface_artifact_sha256 is not None
+                else {}
+            ),
         }
         return cls(**values, origin_sha256=_canonical_sha256(values))
 
@@ -2533,6 +2569,13 @@ class SchedulerRecoveredCandidateOrigin(StrictModel):
             self.accepted_frame_sequence,
             self.accepted_frame_sha256,
         )
+        truncated_child_fields = (
+            self.truncation_projection_sha256,
+            self.accepted_frame_sequence,
+            self.accepted_frame_sha256,
+            self.child_task_id,
+            self.child_result_sha256,
+        )
         child_fields = (
             self.child_task_id,
             self.child_result_sha256,
@@ -2540,12 +2583,23 @@ class SchedulerRecoveredCandidateOrigin(StrictModel):
             self.surface_artifact_sha256,
         )
         if self.origin_kind is SchedulerRecoveredCandidateOriginKind.PARENT_FRAME:
-            valid_shape = all(item is not None for item in parent_fields) and all(
-                item is None for item in child_fields
+            valid_shape = (
+                all(item is not None for item in parent_fields)
+                and self.truncation_projection_sha256 is None
+                and all(item is None for item in child_fields)
+            )
+        elif self.origin_kind is SchedulerRecoveredCandidateOriginKind.CHILD_BATCH:
+            valid_shape = (
+                all(item is None for item in parent_fields)
+                and self.truncation_projection_sha256 is None
+                and all(item is not None for item in child_fields)
             )
         else:
-            valid_shape = all(item is None for item in parent_fields) and all(
-                item is not None for item in child_fields
+            valid_shape = (
+                self.parent_projection_sha256 is None
+                and all(item is not None for item in truncated_child_fields)
+                and self.normalization_evidence_sha256 is None
+                and self.surface_artifact_sha256 is None
             )
         if not valid_shape:
             raise ValueError("recovered candidate origin fields are not an exact one-of")
@@ -2557,7 +2611,7 @@ class SchedulerRecoveredCandidateOrigin(StrictModel):
 class SchedulerRecoveredCandidateReviewOutput(_NonAuthorizingRecoveryJournalModel):
     """Durable recovered batch; credit still requires the live promotion capability."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     campaign_id: str = Field(pattern=_CAMPAIGN_ID_PATTERN)
     pass_plan_id: str = Field(pattern=r"^scheduler-plan-[0-9a-f]{64}$")
     parent_task_id: str = Field(pattern=_ROOT_TASK_ID_PATTERN)
@@ -2601,7 +2655,10 @@ class SchedulerRecoveredCandidateReviewOutput(_NonAuthorizingRecoveryJournalMode
         candidate_origins: Iterable[SchedulerRecoveredCandidateOrigin],
         scanner_fingerprints_by_request: Iterable[tuple[str, tuple[str, ...]]],
         delivered_source_descriptor_sha256s: Iterable[str],
+        recursive_tree: bool = False,
     ) -> SchedulerRecoveredCandidateReviewOutput:
+        if type(recursive_tree) is not bool:
+            raise TypeError("recovered candidate output recursive-tree marker is invalid")
         batch = CandidateReviewBatch.model_validate_json(recovered_batch.model_dump_json())
         origins = tuple(
             sorted(
@@ -2637,10 +2694,23 @@ class SchedulerRecoveredCandidateReviewOutput(_NonAuthorizingRecoveryJournalMode
         ):
             raise ValueError("recovered source descriptor inventory is invalid or duplicated")
         delivered_sources = tuple(sorted(raw_delivered_sources))
+        schema_version: Literal["1.0", "1.1"] = (
+            "1.1"
+            if recursive_tree
+            or any(
+                origin.origin_kind is SchedulerRecoveredCandidateOriginKind.TRUNCATED_CHILD_FRAME
+                for origin in origins
+            )
+            else "1.0"
+        )
         output_sha256 = _canonical_sha256(batch.model_dump(mode="json"))
         output_id = "scheduler-recovered-output-" + _canonical_sha256(
             {
-                "domain": "mmaudit.scheduler.recovered-candidate-output.v1",
+                "domain": (
+                    "mmaudit.scheduler.recovered-candidate-output.v2"
+                    if schema_version == "1.1"
+                    else "mmaudit.scheduler.recovered-candidate-output.v1"
+                ),
                 "family_id": recovery_family_id,
                 "parent_task_id": parent_task_id,
                 "output_sha256": output_sha256,
@@ -2653,7 +2723,7 @@ class SchedulerRecoveredCandidateReviewOutput(_NonAuthorizingRecoveryJournalMode
             "coverage_credit_authorized": False,
             "completion_authorized": False,
             "release_authorized": False,
-            "schema_version": "1.0",
+            "schema_version": schema_version,
             "campaign_id": campaign_id,
             "pass_plan_id": pass_plan_id,
             "parent_task_id": parent_task_id,
@@ -2734,13 +2804,21 @@ class SchedulerRecoveredCandidateReviewOutput(_NonAuthorizingRecoveryJournalMode
         expected_output_sha256 = _canonical_sha256(self.recovered_batch.model_dump(mode="json"))
         expected_output_id = "scheduler-recovered-output-" + _canonical_sha256(
             {
-                "domain": "mmaudit.scheduler.recovered-candidate-output.v1",
+                "domain": (
+                    "mmaudit.scheduler.recovered-candidate-output.v2"
+                    if self.schema_version == "1.1"
+                    else "mmaudit.scheduler.recovered-candidate-output.v1"
+                ),
                 "family_id": self.recovery_family_id,
                 "parent_task_id": self.parent_task_id,
                 "output_sha256": expected_output_sha256,
             }
         )
-        if (
+        has_truncated_child_origin = any(
+            origin.origin_kind is SchedulerRecoveredCandidateOriginKind.TRUNCATED_CHILD_FRAME
+            for origin in self.candidate_origins
+        )
+        if (self.schema_version == "1.0" and has_truncated_child_origin) or (
             self.output_sha256 != expected_output_sha256
             or self.output_id != expected_output_id
             or self.output_artifact_sha256
@@ -2753,7 +2831,7 @@ class SchedulerRecoveredCandidateReviewOutput(_NonAuthorizingRecoveryJournalMode
 class SchedulerTruncationRecoveryFamilyPromotion(_SchedulerTruncationRecoveryEntry):
     """Append-only effective recovery; self-hashed bytes never authorize appending it."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     entry_kind: Literal[SchedulerTruncationRecoveryEntryKind.FAMILY_PROMOTED] = (
         SchedulerTruncationRecoveryEntryKind.FAMILY_PROMOTED
     )
@@ -2766,6 +2844,44 @@ class SchedulerTruncationRecoveryFamilyPromotion(_SchedulerTruncationRecoveryEnt
     parent_task_id: str = Field(pattern=_ROOT_TASK_ID_PATTERN)
     original_truncated_result_sha256: str = Field(pattern=_SHA256_PATTERN)
     direct_child_result_sha256s: tuple[str, str]
+    nested_family_id: str | None = Field(
+        default=None,
+        pattern=_RECOVERY_FAMILY_ID_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    nested_family_root_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    nested_recovery_plan_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    nested_family_closure_id: str | None = Field(
+        default=None,
+        pattern=_RECOVERY_CLOSURE_ID_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    nested_family_closure_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    nested_child_result_sha256s: tuple[str, str] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    superseded_bridge_result_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    promoted_leaf_result_sha256s: tuple[str, str, str] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     recovered_output: SchedulerRecoveredCandidateReviewOutput
     capability_binding_sha256: str = Field(pattern=_SHA256_PATTERN)
     promotion_status: Literal["RECOVERED"] = "RECOVERED"
@@ -2782,7 +2898,73 @@ class SchedulerTruncationRecoveryFamilyPromotion(_SchedulerTruncationRecoveryEnt
         capability_binding_sha256: str,
         entry_index: int,
         previous_entry_sha256: str | None,
+        nested_family: SchedulerTruncationRecoveryFamilyRoot | None = None,
+        nested_closure: SchedulerTruncationRecoveryFamilyClosure | None = None,
+        nested_child_result_sha256s: tuple[str, str] | None = None,
+        superseded_bridge_result_sha256: str | None = None,
+        promoted_leaf_result_sha256s: tuple[str, str, str] | None = None,
     ) -> SchedulerTruncationRecoveryFamilyPromotion:
+        if (
+            closure.family_id != family.family_id
+            or closure.family_root_sha256 != family.entry_sha256
+            or closure.recovery_plan_sha256 != family.recovery_plan.plan_sha256
+            or closure.child_result_sha256s != direct_child_result_sha256s
+        ):
+            raise ValueError("recovery promotion closure differs from its root family")
+        recursive_arguments = (
+            nested_family,
+            nested_closure,
+            nested_child_result_sha256s,
+            superseded_bridge_result_sha256,
+            promoted_leaf_result_sha256s,
+        )
+        recursive = any(item is not None for item in recursive_arguments)
+        if recursive and not all(item is not None for item in recursive_arguments):
+            raise ValueError("recursive recovery promotion fields are incomplete")
+        if recursive:
+            assert nested_family is not None
+            assert nested_closure is not None
+            assert nested_child_result_sha256s is not None
+            assert superseded_bridge_result_sha256 is not None
+            assert promoted_leaf_result_sha256s is not None
+            direct_success_hashes = tuple(
+                result_sha256
+                for result_sha256 in direct_child_result_sha256s
+                if result_sha256 != superseded_bridge_result_sha256
+            )
+            if (
+                family.parent_kind is not SchedulerTruncationRecoveryParentKind.SCHEDULER_TASK
+                or family.parent_family_id is not None
+                or closure.schema_version != "1.2"
+                or closure.closure_status
+                is not (
+                    SchedulerTruncationRecoveryClosureStatus.RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING
+                )
+                or nested_family.parent_kind
+                is not SchedulerTruncationRecoveryParentKind.RECOVERY_CHILD
+                or nested_family.parent_family_id != family.family_id
+                or nested_family.family_index != family.family_index + 1
+                or nested_family.request_limit_binding != family.request_limit_binding
+                or nested_family.requested_surface_manifest != family.requested_surface_manifest
+                or nested_family.request_count_before_family != family.request_count_after_family
+                or nested_family.request_limit_count_before_family
+                != family.request_limit_count_after_family
+                or nested_family.parent_terminal_result_sha256 != superseded_bridge_result_sha256
+                or nested_family.recovery_plan.parent.current_depth != 1
+                or nested_closure.family_id != nested_family.family_id
+                or nested_closure.family_root_sha256 != nested_family.entry_sha256
+                or nested_closure.recovery_plan_sha256 != nested_family.recovery_plan.plan_sha256
+                or nested_closure.schema_version != "1.1"
+                or nested_closure.closure_status
+                is not SchedulerTruncationRecoveryClosureStatus.COVERAGE_CLOSED
+                or closure.nested_family_closure_sha256s != (nested_closure.entry_sha256,)
+                or nested_closure.child_result_sha256s != nested_child_result_sha256s
+                or len(direct_success_hashes) != 1
+                or promoted_leaf_result_sha256s
+                != (direct_success_hashes[0], *nested_child_result_sha256s)
+            ):
+                raise ValueError("recursive recovery promotion tree is inconsistent")
+        schema_version: Literal["1.0", "1.1"] = "1.1" if recursive else "1.0"
         values: dict[str, Any] = {
             **_entry_values(
                 campaign_id=family.campaign_id,
@@ -2792,6 +2974,7 @@ class SchedulerTruncationRecoveryFamilyPromotion(_SchedulerTruncationRecoveryEnt
                 entry_index=entry_index,
                 previous_entry_sha256=previous_entry_sha256,
             ),
+            "schema_version": schema_version,
             "family_index": family.family_index,
             "family_id": family.family_id,
             "family_root_sha256": family.entry_sha256,
@@ -2801,13 +2984,31 @@ class SchedulerTruncationRecoveryFamilyPromotion(_SchedulerTruncationRecoveryEnt
             "parent_task_id": family.recovery_plan.parent.parent_task_id,
             "original_truncated_result_sha256": (family.parent_terminal_result_sha256),
             "direct_child_result_sha256s": direct_child_result_sha256s,
+            **(
+                {
+                    "nested_family_id": nested_family.family_id,
+                    "nested_family_root_sha256": nested_family.entry_sha256,
+                    "nested_recovery_plan_sha256": nested_family.recovery_plan.plan_sha256,
+                    "nested_family_closure_id": nested_closure.closure_id,
+                    "nested_family_closure_sha256": nested_closure.entry_sha256,
+                    "nested_child_result_sha256s": nested_child_result_sha256s,
+                    "superseded_bridge_result_sha256": superseded_bridge_result_sha256,
+                    "promoted_leaf_result_sha256s": promoted_leaf_result_sha256s,
+                }
+                if recursive and nested_family is not None and nested_closure is not None
+                else {}
+            ),
             "recovered_output": recovered_output,
             "capability_binding_sha256": capability_binding_sha256,
             "promotion_status": "RECOVERED",
         }
         promotion_id = "scheduler-recovery-promotion-" + _canonical_sha256(
             {
-                "domain": "mmaudit.scheduler.truncation-recovery-promotion.v1",
+                "domain": (
+                    "mmaudit.scheduler.truncation-recovery-promotion.v2"
+                    if schema_version == "1.1"
+                    else "mmaudit.scheduler.truncation-recovery-promotion.v1"
+                ),
                 "family_id": family.family_id,
                 "closure_sha256": closure.entry_sha256,
                 "recovered_output_sha256": recovered_output.output_artifact_sha256,
@@ -2820,11 +3021,56 @@ class SchedulerTruncationRecoveryFamilyPromotion(_SchedulerTruncationRecoveryEnt
     def promotion_identity_output_and_hash_are_exact(self) -> Self:
         expected_id = "scheduler-recovery-promotion-" + _canonical_sha256(
             {
-                "domain": "mmaudit.scheduler.truncation-recovery-promotion.v1",
+                "domain": (
+                    "mmaudit.scheduler.truncation-recovery-promotion.v2"
+                    if self.schema_version == "1.1"
+                    else "mmaudit.scheduler.truncation-recovery-promotion.v1"
+                ),
                 "family_id": self.family_id,
                 "closure_sha256": self.family_closure_sha256,
                 "recovered_output_sha256": self.recovered_output.output_artifact_sha256,
             }
+        )
+        recursive_fields = (
+            self.nested_family_id,
+            self.nested_family_root_sha256,
+            self.nested_recovery_plan_sha256,
+            self.nested_family_closure_id,
+            self.nested_family_closure_sha256,
+            self.nested_child_result_sha256s,
+            self.superseded_bridge_result_sha256,
+            self.promoted_leaf_result_sha256s,
+        )
+        recursive = self.schema_version == "1.1"
+        direct_success_hashes = tuple(
+            result_sha256
+            for result_sha256 in self.direct_child_result_sha256s
+            if result_sha256 != self.superseded_bridge_result_sha256
+        )
+        truncated_child_origins = tuple(
+            origin
+            for origin in self.recovered_output.candidate_origins
+            if origin.origin_kind is SchedulerRecoveredCandidateOriginKind.TRUNCATED_CHILD_FRAME
+        )
+        recursive_shape_is_exact = (
+            all(item is None for item in recursive_fields)
+            and self.recovered_output.schema_version == "1.0"
+            if not recursive
+            else all(item is not None for item in recursive_fields)
+            and self.recovered_output.schema_version == "1.1"
+            and len(direct_success_hashes) == 1
+            and self.nested_child_result_sha256s is not None
+            and self.promoted_leaf_result_sha256s
+            == (direct_success_hashes[0], *self.nested_child_result_sha256s)
+            and len(set(self.nested_child_result_sha256s)) == 2
+            and len(set(self.promoted_leaf_result_sha256s or ())) == 3
+            and not set(self.direct_child_result_sha256s).intersection(
+                set(self.nested_child_result_sha256s)
+            )
+            and all(
+                origin.child_result_sha256 == self.superseded_bridge_result_sha256
+                for origin in truncated_child_origins
+            )
         )
         if (
             len(set(self.direct_child_result_sha256s)) != len(self.direct_child_result_sha256s)
@@ -2839,6 +3085,7 @@ class SchedulerTruncationRecoveryFamilyPromotion(_SchedulerTruncationRecoveryEnt
             or self.recovered_output.family_closure_sha256 != self.family_closure_sha256
             or self.recovered_output.original_truncated_result_sha256
             != self.original_truncated_result_sha256
+            or not recursive_shape_is_exact
             or self.promotion_id != expected_id
         ):
             raise ValueError("scheduler recovery promotion is detached from its exact output")
@@ -2848,16 +3095,59 @@ class SchedulerTruncationRecoveryFamilyPromotion(_SchedulerTruncationRecoveryEnt
 class SchedulerTruncationRecoveryPromotionBinding(_NonAuthorizingRecoveryJournalModel):
     """Hash-only public binding to one private recovery promotion."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     parent_task_id: str = Field(pattern=_ROOT_TASK_ID_PATTERN)
     original_truncated_result_sha256: str = Field(pattern=_SHA256_PATTERN)
     promotion_entry_sha256: str = Field(pattern=_SHA256_PATTERN)
     direct_child_result_sha256s: tuple[str, str]
+    nested_family_id: str | None = Field(
+        default=None,
+        pattern=_RECOVERY_FAMILY_ID_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    nested_family_root_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    nested_recovery_plan_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    nested_family_closure_id: str | None = Field(
+        default=None,
+        pattern=_RECOVERY_CLOSURE_ID_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    nested_family_closure_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    nested_child_result_sha256s: tuple[str, str] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    superseded_bridge_result_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    promoted_leaf_result_sha256s: tuple[str, str, str] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     recovered_output_artifact_sha256: str = Field(pattern=_SHA256_PATTERN)
     delivered_source_inventory_sha256: str = Field(pattern=_SHA256_PATTERN)
     binding_sha256: str = Field(pattern=_SHA256_PATTERN)
 
-    @field_validator("direct_child_result_sha256s", mode="before")
+    @field_validator(
+        "direct_child_result_sha256s",
+        "nested_child_result_sha256s",
+        "promoted_leaf_result_sha256s",
+        mode="before",
+    )
     @classmethod
     def recover_json_child_result_tuple(cls, value: object) -> object:
         """Recover the fixed tuple emitted as a JSON array by the durable journal."""
@@ -2889,11 +3179,25 @@ class SchedulerTruncationRecoveryPromotionBinding(_NonAuthorizingRecoveryJournal
             "coverage_credit_authorized": False,
             "completion_authorized": False,
             "release_authorized": False,
-            "schema_version": "1.0",
+            "schema_version": exact.schema_version,
             "parent_task_id": exact.parent_task_id,
             "original_truncated_result_sha256": exact.original_truncated_result_sha256,
             "promotion_entry_sha256": exact.entry_sha256,
             "direct_child_result_sha256s": exact.direct_child_result_sha256s,
+            **(
+                {
+                    "nested_family_id": exact.nested_family_id,
+                    "nested_family_root_sha256": exact.nested_family_root_sha256,
+                    "nested_recovery_plan_sha256": exact.nested_recovery_plan_sha256,
+                    "nested_family_closure_id": exact.nested_family_closure_id,
+                    "nested_family_closure_sha256": exact.nested_family_closure_sha256,
+                    "nested_child_result_sha256s": exact.nested_child_result_sha256s,
+                    "superseded_bridge_result_sha256": (exact.superseded_bridge_result_sha256),
+                    "promoted_leaf_result_sha256s": exact.promoted_leaf_result_sha256s,
+                }
+                if exact.schema_version == "1.1"
+                else {}
+            ),
             "recovered_output_artifact_sha256": output.output_artifact_sha256,
             "delivered_source_inventory_sha256": source_inventory_sha256,
         }
@@ -2901,12 +3205,43 @@ class SchedulerTruncationRecoveryPromotionBinding(_NonAuthorizingRecoveryJournal
 
     @model_validator(mode="after")
     def public_binding_is_self_hashed(self) -> Self:
+        recursive_fields = (
+            self.nested_family_id,
+            self.nested_family_root_sha256,
+            self.nested_recovery_plan_sha256,
+            self.nested_family_closure_id,
+            self.nested_family_closure_sha256,
+            self.nested_child_result_sha256s,
+            self.superseded_bridge_result_sha256,
+            self.promoted_leaf_result_sha256s,
+        )
+        recursive = self.schema_version == "1.1"
+        direct_success_hashes = tuple(
+            result_sha256
+            for result_sha256 in self.direct_child_result_sha256s
+            if result_sha256 != self.superseded_bridge_result_sha256
+        )
+        recursive_shape_is_exact = (
+            all(item is None for item in recursive_fields)
+            if not recursive
+            else all(item is not None for item in recursive_fields)
+            and len(direct_success_hashes) == 1
+            and self.nested_child_result_sha256s is not None
+            and self.promoted_leaf_result_sha256s
+            == (direct_success_hashes[0], *self.nested_child_result_sha256s)
+            and len(set(self.nested_child_result_sha256s)) == 2
+            and len(set(self.promoted_leaf_result_sha256s or ())) == 3
+            and not set(self.direct_child_result_sha256s).intersection(
+                set(self.nested_child_result_sha256s)
+            )
+        )
         if (
             len(set(self.direct_child_result_sha256s)) != 2
             or any(
                 re.fullmatch(_SHA256_PATTERN, item) is None
                 for item in self.direct_child_result_sha256s
             )
+            or not recursive_shape_is_exact
             or self.binding_sha256 != _model_sha256(self, exclude={"binding_sha256"})
         ):
             raise ValueError("scheduler recovery promotion public binding hash is inconsistent")

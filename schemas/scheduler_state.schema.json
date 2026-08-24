@@ -3312,11 +3312,6 @@
                   "required": [
                     "output_artifact_sha256"
                   ]
-                },
-                {
-                  "required": [
-                    "promotion_entry_sha256"
-                  ]
                 }
               ]
             }
@@ -3360,6 +3355,192 @@
               "normalization_evidence_sha256",
               "output_artifact_sha256"
             ]
+          }
+        },
+        {
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "promotion_disposition"
+                  ]
+                },
+                {
+                  "required": [
+                    "global_request_ordinal"
+                  ]
+                },
+                {
+                  "required": [
+                    "recovery_family_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "family_root_sha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "recovery_plan_sha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "family_closure_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "family_closure_sha256"
+                  ]
+                }
+              ]
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.2"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "family_closure_id": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "family_closure_sha256": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "family_root_sha256": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "global_request_ordinal": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "promotion_disposition": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "promotion_entry_sha256": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "recovery_family_id": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "recovery_plan_sha256": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            },
+            "required": [
+              "promotion_entry_sha256",
+              "promotion_disposition",
+              "global_request_ordinal",
+              "recovery_family_id",
+              "family_root_sha256",
+              "recovery_plan_sha256",
+              "family_closure_id",
+              "family_closure_sha256"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "promotion_disposition": {
+                "const": "SUCCESSFUL_LEAF"
+              }
+            },
+            "required": [
+              "promotion_disposition"
+            ]
+          },
+          "then": {
+            "properties": {
+              "terminal_status": {
+                "const": "SUCCEEDED"
+              }
+            },
+            "required": [
+              "terminal_status"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "promotion_disposition": {
+                "const": "SUPERSEDED_TRUNCATED_BRIDGE"
+              }
+            },
+            "required": [
+              "promotion_disposition"
+            ]
+          },
+          "then": {
+            "properties": {
+              "terminal_status": {
+                "const": "TRUNCATED"
+              }
+            },
+            "required": [
+              "terminal_status"
+            ]
+          }
+        },
+        {
+          "if": {
+            "allOf": [
+              {
+                "not": {
+                  "properties": {
+                    "schema_version": {
+                      "const": "1.2"
+                    }
+                  },
+                  "required": [
+                    "schema_version"
+                  ]
+                }
+              },
+              {
+                "properties": {
+                  "terminal_status": {
+                    "const": "TRUNCATED"
+                  }
+                },
+                "required": [
+                  "terminal_status"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "promotion_entry_sha256"
+              ]
+            }
           }
         }
       ],
@@ -3533,6 +3714,59 @@
           "title": "Evidence Authority",
           "type": "string"
         },
+        "family_closure_id": {
+          "anyOf": [
+            {
+              "pattern": "^scheduler-recovery-closure-[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Family Closure Id"
+        },
+        "family_closure_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Family Closure Sha256"
+        },
+        "family_root_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Family Root Sha256"
+        },
+        "global_request_ordinal": {
+          "anyOf": [
+            {
+              "maximum": 32,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Global Request Ordinal"
+        },
         "logical_request_id": {
           "pattern": "^scheduler-recovery-request-[0-9a-f]{64}$",
           "title": "Logical Request Id",
@@ -3569,6 +3803,17 @@
           "title": "Parent Task Id",
           "type": "string"
         },
+        "promotion_disposition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SchedulerTruncationRecoveryPromotionDisposition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "promotion_entry_sha256": {
           "anyOf": [
             {
@@ -3597,6 +3842,32 @@
           "pattern": "^[0-9a-f]{64}$",
           "title": "Provider Response Sha256",
           "type": "string"
+        },
+        "recovery_family_id": {
+          "anyOf": [
+            {
+              "pattern": "^scheduler-recovery-family-[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recovery Family Id"
+        },
+        "recovery_plan_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recovery Plan Sha256"
         },
         "release_authorized": {
           "const": false,
@@ -3680,7 +3951,8 @@
           "default": "1.0",
           "enum": [
             "1.0",
-            "1.1"
+            "1.1",
+            "1.2"
           ],
           "title": "Schema Version",
           "type": "string"
@@ -3774,6 +4046,120 @@
     },
     "SchedulerTruncationRecoveryPromotionBinding": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "nested_family_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "nested_family_root_sha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "nested_recovery_plan_sha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "nested_family_closure_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "nested_family_closure_sha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "nested_child_result_sha256s"
+                  ]
+                },
+                {
+                  "required": [
+                    "superseded_bridge_result_sha256"
+                  ]
+                },
+                {
+                  "required": [
+                    "promoted_leaf_result_sha256s"
+                  ]
+                }
+              ]
+            }
+          },
+          "if": {
+            "properties": {
+              "schema_version": {
+                "const": "1.1"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          },
+          "then": {
+            "properties": {
+              "nested_child_result_sha256s": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "nested_family_closure_id": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "nested_family_closure_sha256": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "nested_family_id": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "nested_family_root_sha256": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "nested_recovery_plan_sha256": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "promoted_leaf_result_sha256s": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "superseded_bridge_result_sha256": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            },
+            "required": [
+              "nested_family_id",
+              "nested_family_root_sha256",
+              "nested_recovery_plan_sha256",
+              "nested_family_closure_id",
+              "nested_family_closure_sha256",
+              "nested_child_result_sha256s",
+              "superseded_bridge_result_sha256",
+              "promoted_leaf_result_sha256s"
+            ]
+          }
+        }
+      ],
       "description": "Hash-only public binding to one private recovery promotion.",
       "properties": {
         "binding_sha256": {
@@ -3821,6 +4207,96 @@
           "title": "Evidence Authority",
           "type": "string"
         },
+        "nested_child_result_sha256s": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              ],
+              "type": "array",
+              "uniqueItems": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nested Child Result Sha256S"
+        },
+        "nested_family_closure_id": {
+          "anyOf": [
+            {
+              "pattern": "^scheduler-recovery-closure-[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nested Family Closure Id"
+        },
+        "nested_family_closure_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nested Family Closure Sha256"
+        },
+        "nested_family_id": {
+          "anyOf": [
+            {
+              "pattern": "^scheduler-recovery-family-[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nested Family Id"
+        },
+        "nested_family_root_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nested Family Root Sha256"
+        },
+        "nested_recovery_plan_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nested Recovery Plan Sha256"
+        },
         "original_truncated_result_sha256": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Original Truncated Result Sha256",
@@ -3830,6 +4306,35 @@
           "pattern": "^scheduler-task-[0-9a-f]{64}$",
           "title": "Parent Task Id",
           "type": "string"
+        },
+        "promoted_leaf_result_sha256s": {
+          "anyOf": [
+            {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              ],
+              "type": "array",
+              "uniqueItems": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Promoted Leaf Result Sha256S"
         },
         "promotion_entry_sha256": {
           "pattern": "^[0-9a-f]{64}$",
@@ -3860,10 +4365,26 @@
           "type": "boolean"
         },
         "schema_version": {
-          "const": "1.0",
           "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1"
+          ],
           "title": "Schema Version",
           "type": "string"
+        },
+        "superseded_bridge_result_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Superseded Bridge Result Sha256"
         }
       },
       "required": [
@@ -3877,6 +4398,15 @@
       ],
       "title": "SchedulerTruncationRecoveryPromotionBinding",
       "type": "object"
+    },
+    "SchedulerTruncationRecoveryPromotionDisposition": {
+      "description": "How one recursive recovery request participates in an effective promotion.",
+      "enum": [
+        "SUCCESSFUL_LEAF",
+        "SUPERSEDED_TRUNCATED_BRIDGE"
+      ],
+      "title": "SchedulerTruncationRecoveryPromotionDisposition",
+      "type": "string"
     }
   },
   "$id": "https://mmaudit.local/schemas/scheduler_state.schema.json",

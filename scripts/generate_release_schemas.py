@@ -641,6 +641,25 @@ _SCHEDULER_RECOVERY_COMPLETION_FIELDS = (
     "normalization_evidence_sha256",
     "output_artifact_sha256",
 )
+_SCHEDULER_RECURSIVE_PROMOTION_FIELDS = (
+    "nested_family_id",
+    "nested_family_root_sha256",
+    "nested_recovery_plan_sha256",
+    "nested_family_closure_id",
+    "nested_family_closure_sha256",
+    "nested_child_result_sha256s",
+    "superseded_bridge_result_sha256",
+    "promoted_leaf_result_sha256s",
+)
+_SCHEDULER_RECURSIVE_REQUEST_FIELDS = (
+    "promotion_disposition",
+    "global_request_ordinal",
+    "recovery_family_id",
+    "family_root_sha256",
+    "recovery_plan_sha256",
+    "family_closure_id",
+    "family_closure_sha256",
+)
 _PUBLIC_LINEAGE_ROOT_PATTERN = r"^sha256:[0-9a-f]{64}$"
 _PUBLIC_LINEAGE_REQUESTED_SOURCE_PATTERN = (
     r"^https://(?:huggingface\.co/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/resolve/"
@@ -898,6 +917,34 @@ def _strengthen_scheduler_recovery_contract(schema: dict[str, Any]) -> None:
     child_results["uniqueItems"] = True
     for child_result in child_results["prefixItems"]:
         child_result["pattern"] = r"^[0-9a-f]{64}$"
+    for field_name in ("nested_child_result_sha256s", "promoted_leaf_result_sha256s"):
+        recursive_results = promotion["properties"][field_name]["anyOf"][0]
+        recursive_results["uniqueItems"] = True
+        for child_result in recursive_results["prefixItems"]:
+            child_result["pattern"] = r"^[0-9a-f]{64}$"
+    promotion["allOf"] = [
+        {
+            "if": {
+                "properties": {"schema_version": {"const": "1.1"}},
+                "required": ["schema_version"],
+            },
+            "then": {
+                "properties": {
+                    field_name: {"not": {"type": "null"}}
+                    for field_name in _SCHEDULER_RECURSIVE_PROMOTION_FIELDS
+                },
+                "required": list(_SCHEDULER_RECURSIVE_PROMOTION_FIELDS),
+            },
+            "else": {
+                "not": {
+                    "anyOf": [
+                        {"required": [field_name]}
+                        for field_name in _SCHEDULER_RECURSIVE_PROMOTION_FIELDS
+                    ]
+                }
+            },
+        }
+    ]
 
     request = schema["$defs"]["SchedulerTruncationRecoveryModelRequestEvidence"]
     request["allOf"] = [
@@ -917,14 +964,75 @@ def _strengthen_scheduler_recovery_contract(schema: dict[str, Any]) -> None:
                 "not": {
                     "anyOf": [
                         {"required": [field_name]}
-                        for field_name in (
-                            *_SCHEDULER_RECOVERY_COMPLETION_FIELDS,
-                            "promotion_entry_sha256",
-                        )
+                        for field_name in _SCHEDULER_RECOVERY_COMPLETION_FIELDS
                     ]
                 }
             },
-        }
+        },
+        {
+            "if": {
+                "properties": {"schema_version": {"const": "1.2"}},
+                "required": ["schema_version"],
+            },
+            "then": {
+                "properties": {
+                    field_name: {"not": {"type": "null"}}
+                    for field_name in (
+                        "promotion_entry_sha256",
+                        *_SCHEDULER_RECURSIVE_REQUEST_FIELDS,
+                    )
+                },
+                "required": [
+                    "promotion_entry_sha256",
+                    *_SCHEDULER_RECURSIVE_REQUEST_FIELDS,
+                ],
+            },
+            "else": {
+                "not": {
+                    "anyOf": [
+                        {"required": [field_name]}
+                        for field_name in _SCHEDULER_RECURSIVE_REQUEST_FIELDS
+                    ]
+                }
+            },
+        },
+        {
+            "if": {
+                "properties": {"promotion_disposition": {"const": "SUCCESSFUL_LEAF"}},
+                "required": ["promotion_disposition"],
+            },
+            "then": {
+                "properties": {"terminal_status": {"const": "SUCCEEDED"}},
+                "required": ["terminal_status"],
+            },
+        },
+        {
+            "if": {
+                "properties": {"promotion_disposition": {"const": "SUPERSEDED_TRUNCATED_BRIDGE"}},
+                "required": ["promotion_disposition"],
+            },
+            "then": {
+                "properties": {"terminal_status": {"const": "TRUNCATED"}},
+                "required": ["terminal_status"],
+            },
+        },
+        {
+            "if": {
+                "allOf": [
+                    {
+                        "not": {
+                            "properties": {"schema_version": {"const": "1.2"}},
+                            "required": ["schema_version"],
+                        }
+                    },
+                    {
+                        "properties": {"terminal_status": {"const": "TRUNCATED"}},
+                        "required": ["terminal_status"],
+                    },
+                ]
+            },
+            "then": {"not": {"required": ["promotion_entry_sha256"]}},
+        },
     ]
 
 

@@ -43,8 +43,8 @@ def inventory() -> AutonomyGateInventory:
 def test_inventory_freezes_the_exact_recursive_source_universe(
     inventory: AutonomyGateInventory,
 ) -> None:
-    assert inventory.source_count == 3657
-    assert inventory.source_occurrence_count == 3660
+    assert inventory.source_count == 3667
+    assert inventory.source_occurrence_count == 3670
     assert inventory.audit_config_leaf_locator_count == 505
     assert inventory.audit_config_leaf_occurrence_count == 508
     assert inventory.audit_config_shared_locator_count == 3
@@ -64,14 +64,14 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         "PIPELINE_INIT_PARAMETER": 25,
         "PIPELINE_RUN_PARAMETER": 15,
         "COMPLETION_ENTRYPOINT_PARAMETER": 300,
-        "DIRECT_ENVIRONMENT_INPUT": 481,
+        "DIRECT_ENVIRONMENT_INPUT": 491,
         "ENTROPY_INPUT": 17,
         "AUDITED_MODULE_UNIVERSE": 232,
         "EXPLICIT_NON_FIELD_GATE": 1932,
         "REQUIRED_MISSING_GATE": 14,
     }
     assert Counter(source.classification for source in inventory.source_coverage) == {
-        SourceCoverageClassification.GATE: 3614,
+        SourceCoverageClassification.GATE: 3624,
         SourceCoverageClassification.NON_GATING_CONTROL: 43,
     }
     assert {item.value for item in SourceCoverageClassification} == {
@@ -84,7 +84,7 @@ def test_inventory_freezes_the_exact_recursive_source_universe(
         == 111
     )
     assert (
-        sum(":process-identity" in source.source_path for source in inventory.source_coverage) == 70
+        sum(":process-identity" in source.source_path for source in inventory.source_coverage) == 80
     )
     assert (
         sum(

@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from mmaudit.models.candidate_review_stamping import stamp_candidate_review_findings
 from mmaudit.models.scheduler import (
     SchedulerCampaignManifest,
     SchedulerJournalEvidence,
@@ -23,10 +24,12 @@ from mmaudit.models.scheduler import (
     SchedulerTaskPlan,
     SchedulerTaskResult,
     SchedulerTerminalStatus,
+    SchedulerTruncationRecoveryPromotionDisposition,
     build_scheduler_truncation_recovery_model_request_evidence,
     scheduler_canonical_sha256,
 )
 from mmaudit.models.schemas import (
+    CandidateFinding,
     CandidateReviewBatch,
     ContextRequestEvidence,
     ExecutionEvidenceKind,
@@ -42,6 +45,7 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.models.truncation import (
     CandidateReviewChannelState,
+    CandidateReviewFramePhase,
     CandidateReviewNormalizationEvidence,
     CandidateReviewTruncatedEnvelopeEvidence,
     CandidateReviewTruncationProjection,
@@ -65,6 +69,9 @@ from mmaudit.models.truncation_recovery_journal import (
     SCHEDULER_TRUNCATION_RECOVERY_ENTRY_TYPES,
     SCHEDULER_TRUNCATION_RECOVERY_MAX_ENTRIES,
     SCHEDULER_TRUNCATION_RECOVERY_MAX_FAMILIES,
+    SchedulerRecoveredCandidateOrigin,
+    SchedulerRecoveredCandidateOriginKind,
+    SchedulerRecoveredCandidateReviewOutput,
     SchedulerTruncationRecoveryChildActivation,
     SchedulerTruncationRecoveryChildDispatch,
     SchedulerTruncationRecoveryChildPreflightResult,
@@ -73,6 +80,7 @@ from mmaudit.models.truncation_recovery_journal import (
     SchedulerTruncationRecoveryEntry,
     SchedulerTruncationRecoveryEntryKind,
     SchedulerTruncationRecoveryFamilyClosure,
+    SchedulerTruncationRecoveryFamilyPromotion,
     SchedulerTruncationRecoveryFamilyRoot,
     SchedulerTruncationRecoveryParentKind,
     SchedulerTruncationRecoveryRequestedSurfaceManifest,
@@ -105,7 +113,7 @@ from tests.unit.test_scheduler_journal import (
     open_scheduler_journal_for_verification,
     resume_scheduler_journal,
 )
-from tests.unit.test_truncation import _frame_json, _frames, _surface
+from tests.unit.test_truncation import _candidate, _frame_json, _frames, _surface
 
 
 def _digest(label: str) -> str:
@@ -153,9 +161,10 @@ def _projection(
     surfaces: tuple[ModelSurfaceReviewRecord, ...],
     *,
     retained_count: int,
+    findings: tuple[CandidateFinding, ...] = (),
 ) -> CandidateReviewTruncationProjection:
-    frames = _frames((), surfaces)
-    accepted_frame_count = 2 + retained_count
+    frames = _frames(findings, surfaces)
+    accepted_frame_count = 2 + len(findings) + retained_count
     accepted = ",".join(_frame_json(frame) for frame in frames[:accepted_frame_count])
     sequence = accepted_frame_count
     partial = (
@@ -900,6 +909,7 @@ def _truncated_custody(
     child: TruncationRecoveryChildPlan,
     activation: SchedulerTruncationRecoveryChildActivation,
     surfaces: tuple[ModelSurfaceReviewRecord, ...],
+    findings: tuple[CandidateFinding, ...] = (),
 ) -> tuple[
     UsageRecord,
     CandidateReviewTruncatedEnvelopeEvidence,
@@ -907,7 +917,7 @@ def _truncated_custody(
 ]:
     records_by_id = {record.surface_id: record for record in surfaces}
     child_records = tuple(records_by_id[surface_id] for surface_id in child.surface_ids)
-    projection = _projection(child_records, retained_count=0)
+    projection = _projection(child_records, retained_count=0, findings=findings)
     assert activation.requested_model is not None
     model_id = activation.requested_model
     provider_name = "Synthetic Provider"
@@ -1037,6 +1047,109 @@ class _RecursivePublicProjectionBase:
     wrong_pass_plan_id: str
 
 
+def _recursive_promotion_for_public_projection(
+    base: _RecursivePublicProjectionBase,
+) -> SchedulerTruncationRecoveryFamilyPromotion:
+    parent_request = next(
+        item
+        for item in base.model_requests
+        if item.task_id == base.root_family.recovery_plan.parent.parent_task_id
+    )
+    parent_attempt = next(
+        item for item in base.provider_attempts if item.task_id == parent_request.task_id
+    )
+    bridge_projection = base.truncated_result.truncation_projection
+    bridge_usage = base.truncated_result.runtime_usage_record
+    assert bridge_projection is not None
+    assert bridge_usage is not None
+    assert base.truncated_result.runtime_usage_record_sha256 is not None
+    assert len(bridge_projection.findings) == 1
+    bridge_raw_finding = bridge_projection.findings[0]
+    bridge_accepted_finding = stamp_candidate_review_findings(
+        request_role=bridge_usage.role,
+        usage_record=bridge_usage,
+        trusted_scanner_fingerprints=(),
+        raw_findings=(bridge_raw_finding,),
+    )[0]
+    bridge_frame = next(
+        frame
+        for frame in bridge_projection.accepted_frames
+        if frame.phase is CandidateReviewFramePhase.FINDING
+        and frame.record_id == bridge_raw_finding.candidate_id
+    )
+    bridge_context_sha256 = bridge_usage.routing.get("context_request_evidence_sha256")
+    assert isinstance(bridge_context_sha256, str)
+    tree_request_ids = {
+        item.runtime_usage_record.request_id
+        for item in base.entries
+        if isinstance(item, SchedulerTruncationRecoveryChildResult)
+        and item.runtime_usage_record is not None
+    }
+    scanner_request_ids = tuple(sorted({parent_attempt.usage_record.request_id, *tree_request_ids}))
+    assert len(scanner_request_ids) == 5
+    bridge_origin = SchedulerRecoveredCandidateOrigin.build(
+        origin_kind=SchedulerRecoveredCandidateOriginKind.TRUNCATED_CHILD_FRAME,
+        accepted_candidate_id=bridge_accepted_finding.candidate_id,
+        accepted_candidate_sha256=scheduler_canonical_sha256(
+            bridge_accepted_finding.model_dump(mode="json")
+        ),
+        raw_candidate_id=bridge_raw_finding.candidate_id,
+        raw_candidate_sha256=scheduler_canonical_sha256(bridge_raw_finding.model_dump(mode="json")),
+        request_id=bridge_usage.request_id,
+        request_role=bridge_usage.role,
+        usage_record_sha256=base.truncated_result.runtime_usage_record_sha256,
+        context_request_evidence_sha256=bridge_context_sha256,
+        truncation_projection_sha256=bridge_projection.evidence_sha256,
+        accepted_frame_sequence=bridge_frame.sequence,
+        accepted_frame_sha256=bridge_frame.frame_sha256,
+        child_task_id=base.truncated_result.child_task_id,
+        child_result_sha256=base.truncated_result.entry_sha256,
+    )
+    output = SchedulerRecoveredCandidateReviewOutput.build(
+        campaign_id=base.root_family.campaign_id,
+        pass_plan_id=base.root_family.recovery_plan.parent.pass_plan_id,
+        parent_task_id=parent_request.task_id,
+        parent_logical_request_id=parent_request.logical_request_id,
+        parent_activation_sha256=parent_request.activation_sha256,
+        original_truncated_result_sha256=base.root_family.parent_terminal_result_sha256,
+        parent_provider_attempt_sha256=parent_attempt.attempt_evidence_sha256,
+        recovery_family_id=base.root_family.family_id,
+        family_root_sha256=base.root_family.entry_sha256,
+        family_closure_sha256=base.root_closure.entry_sha256,
+        structural_surface_artifact_sha256=_digest("recursive-public-structural-artifact"),
+        recovered_batch=CandidateReviewBatch(
+            findings=(bridge_accepted_finding,),
+            surface_reviews=(),
+        ),
+        candidate_origins=(bridge_origin,),
+        scanner_fingerprints_by_request=tuple(
+            (request_id, ()) for request_id in scanner_request_ids
+        ),
+        delivered_source_descriptor_sha256s=parent_request.delivered_source_descriptor_sha256s,
+        recursive_tree=True,
+    )
+    direct_hashes = base.root_closure.child_result_sha256s
+    nested_hashes = base.nested_closure.child_result_sha256s
+    return SchedulerTruncationRecoveryFamilyPromotion.build(
+        family=base.root_family,
+        closure=base.root_closure,
+        direct_child_result_sha256s=(direct_hashes[0], direct_hashes[1]),
+        nested_family=base.nested_family,
+        nested_closure=base.nested_closure,
+        nested_child_result_sha256s=(nested_hashes[0], nested_hashes[1]),
+        superseded_bridge_result_sha256=base.truncated_result.entry_sha256,
+        promoted_leaf_result_sha256s=(
+            base.successful_result.entry_sha256,
+            nested_hashes[0],
+            nested_hashes[1],
+        ),
+        recovered_output=output,
+        capability_binding_sha256=_digest("recursive-public-capability"),
+        entry_index=len(base.entries),
+        previous_entry_sha256=base.root_closure.entry_sha256,
+    )
+
+
 def _recursive_public_projection_base(path: Path) -> _RecursivePublicProjectionBase:
     journal, plan, projection, surfaces, surface_manifest = _journal_with_truncated_parent(
         path,
@@ -1051,10 +1164,12 @@ def _recursive_public_projection_base(path: Path) -> _RecursivePublicProjectionB
     truncated_child, successful_child = plan.children
     truncated_activation = _activate_child(journal, truncated_child.child_task_id)
     journal.mark_truncation_recovery_child_dispatched(truncated_child.child_task_id)
+    bridge_raw_finding = _candidate("recursive-bridge-finding")
     failed_usage, envelope, nested_projection = _truncated_custody(
         child=truncated_child,
         activation=truncated_activation,
         surfaces=surfaces,
+        findings=(bridge_raw_finding,),
     )
     truncated_result = journal.record_truncation_recovery_child_truncated(
         truncated_child.child_task_id,
@@ -1971,7 +2086,7 @@ def test_one_generic_typed_truncated_child_closes_one_depth_two_family(
     assert journal.artifact().recovery_model_requests == public_requests
 
     entries_before_forged_promotion = journal.truncation_recovery_entries
-    with pytest.raises(ValueError, match=r"direct v1\.1 closure"):
+    with pytest.raises(ValueError, match="live closure custody"):
         journal.promote_truncation_recovery_family(
             root.family_id,
             root_closure,  # type: ignore[arg-type]
@@ -2013,6 +2128,122 @@ def _assert_recursive_public_projection_rejected(
             truncation_recovery_entries=entries,
             provider_attempts=base.provider_attempts,
         )
+
+
+def test_recursive_public_projection_binds_bridge_and_three_ordered_leaves(
+    recursive_public_projection_base: _RecursivePublicProjectionBase,
+) -> None:
+    base = recursive_public_projection_base
+    promotion = _recursive_promotion_for_public_projection(base)
+    entries = (*base.entries, promotion)
+
+    requests = build_scheduler_truncation_recovery_model_request_evidence(
+        manifest=base.manifest,
+        model_requests=base.model_requests,
+        truncation_recovery_entries=entries,
+        provider_attempts=base.provider_attempts,
+    )
+
+    assert len(requests) == 4
+    assert all(item.schema_version == "1.2" for item in requests)
+    assert {item.promotion_entry_sha256 for item in requests} == {promotion.entry_sha256}
+    bridge = tuple(
+        item
+        for item in requests
+        if item.promotion_disposition
+        is SchedulerTruncationRecoveryPromotionDisposition.SUPERSEDED_TRUNCATED_BRIDGE
+    )
+    leaves = tuple(
+        sorted(
+            (
+                item
+                for item in requests
+                if item.promotion_disposition
+                is SchedulerTruncationRecoveryPromotionDisposition.SUCCESSFUL_LEAF
+            ),
+            key=lambda item: item.global_request_ordinal or 0,
+        )
+    )
+    assert len(bridge) == 1
+    assert bridge[0].terminal_status is SchedulerTerminalStatus.TRUNCATED
+    assert bridge[0].child_result_entry_sha256 == promotion.superseded_bridge_result_sha256
+    assert len(leaves) == 3
+    assert all(item.terminal_status is SchedulerTerminalStatus.SUCCEEDED for item in leaves)
+    assert tuple(item.child_result_entry_sha256 for item in leaves) == (
+        promotion.promoted_leaf_result_sha256s
+    )
+    assert tuple(item.global_request_ordinal for item in leaves) == tuple(
+        sorted(item.global_request_ordinal for item in leaves if item.global_request_ordinal)
+    )
+    assert all(item.recovery_family_id == base.nested_family.family_id for item in leaves[1:])
+    assert all(item.family_root_sha256 == base.nested_family.entry_sha256 for item in leaves[1:])
+
+
+@pytest.mark.parametrize(
+    "field_name,replacement_attribute",
+    (
+        ("nested_family_id", "family_id"),
+        ("nested_family_root_sha256", "entry_sha256"),
+        ("nested_recovery_plan_sha256", "recovery_plan.plan_sha256"),
+        ("nested_family_closure_id", "closure_id"),
+        ("nested_family_closure_sha256", "entry_sha256"),
+    ),
+)
+def test_recursive_public_projection_rejects_swapped_nested_tree_binding(
+    recursive_public_projection_base: _RecursivePublicProjectionBase,
+    field_name: str,
+    replacement_attribute: str,
+) -> None:
+    base = recursive_public_projection_base
+    promotion = _recursive_promotion_for_public_projection(base)
+    replacement_model: object = base.root_closure if "closure" in field_name else base.root_family
+    replacement: object = replacement_model
+    for component in replacement_attribute.split("."):
+        replacement = getattr(replacement, component)
+    payload = promotion.model_dump(mode="json")
+    payload[field_name] = replacement
+    payload["entry_sha256"] = _canonical_payload_sha256(
+        {key: value for key, value in payload.items() if key != "entry_sha256"}
+    )
+    forged = SchedulerTruncationRecoveryFamilyPromotion.model_validate_json(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")),
+        strict=True,
+    )
+
+    _assert_recursive_public_projection_rejected(base, (*base.entries, forged))
+
+
+def test_recursive_public_projection_rejects_duplicate_root_promotion(
+    recursive_public_projection_base: _RecursivePublicProjectionBase,
+) -> None:
+    base = recursive_public_projection_base
+    promotion = _recursive_promotion_for_public_projection(base)
+    forged = _reseal_recovery_chain((*base.entries, promotion, promotion))
+
+    _assert_recursive_public_projection_rejected(base, forged)
+
+
+def test_recursive_public_projection_rejects_swapped_nested_result_binding(
+    recursive_public_projection_base: _RecursivePublicProjectionBase,
+) -> None:
+    base = recursive_public_projection_base
+    promotion = _recursive_promotion_for_public_projection(base)
+    payload = promotion.model_dump(mode="json")
+    nested_hashes = tuple(reversed(promotion.nested_child_result_sha256s or ()))
+    leaf_hashes = promotion.promoted_leaf_result_sha256s
+    assert len(nested_hashes) == 2
+    assert leaf_hashes is not None
+    payload["nested_child_result_sha256s"] = nested_hashes
+    payload["promoted_leaf_result_sha256s"] = (leaf_hashes[0], *nested_hashes)
+    payload["entry_sha256"] = _canonical_payload_sha256(
+        {key: value for key, value in payload.items() if key != "entry_sha256"}
+    )
+    forged = SchedulerTruncationRecoveryFamilyPromotion.model_validate_json(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")),
+        strict=True,
+    )
+
+    _assert_recursive_public_projection_rejected(base, (*base.entries, forged))
 
 
 def test_recursive_public_projection_rejects_missing_dispatch(
