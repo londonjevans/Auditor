@@ -4,26 +4,406 @@ The objective source is `docs/remediation/v3/product_completion_goal.txt`, with 
 `e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_FOR_AUTHRUNNER_IMMUTABLE_RECEIPT_COMPOSITE_BEFORE_INDEX_14_GATE
+HISTORICAL_ENTRY_SCOPE: Every timestamped entry below the newest `2026-08-24T03:23:00Z` entry is a
+boundary-local historical snapshot. Any `current`, `latest`, `next`, or command wording inside those
+older entries applies only at that recorded boundary and is not present authority or current action.
+
+AUTORUN_STATUS: PAUSED_AFTER_INDEX_19_OPERATOR_REPORTED_VALID_NONCREDITING_NONAUTHORIZING_OFFLINE_REPLAY_ZERO_CURRENT_COMMANDS
 CURRENT_MILESTONE: M1-DETERMINISTIC-PRODUCT (REACHED)
 CURRENT_TICKET: V3-AUTHRUNNER-001
-CURRENT_LOCAL_SLICE_STATUS: COMPLETE_PROVIDER_FREE_NONAUTHORIZING_SCOPE_CUTOFF_STRICT_DIAGNOSTICS
+CURRENT_LOCAL_SLICE_STATUS: COMPLETE_NONAUTHORIZING_PROVIDER_FREE_CANONICAL_REPLAY_REPAIR_OVERALL_PARTIAL_BLOCKED_SAFETY
 LAST_COMPLETED_TICKET: V3-AUTHLINEAGE-PUBLIC-001 (COMPLETE)
-NEXT_ACTION: Complete the immutable completion-plus-metadata receipt composite and prove the production transport's exact in-flight lifecycle before activating any receipt path. Only afterward refresh/re-freeze route evidence and prepare metadata-only step A under unused `--smoke-run-index 14`; paid B remains separately authorized only after an immediate complete exact-VALID A. A successful sealed/offline-verified smoke and queued `V3-PLANCONSTRAINTS-001` remain mandatory before the 24-case campaign; `V3-AUTONOMY-001` Phase 2 stays paused.
-LAST_COMMAND: Source checkpoint validation passed parent matrices of 642 plus 57 tests and independent matrices of 648 plus 125 tests, with 3,488 differential cases and zero mismatches; governance validation is recorded in the newest entry. Codex emitted or executed no AUTHRUNNER command.
-LAST_RESULT: PARTIAL — checkpoint `d2364f6b528f2e839fbef8b878552f95c4b92c9c` closes the 8058 scope-classifier bypass provider-free for exact candidate and judge smoke coordinates, including intrinsic-invalid records. They now stop before generation-metadata GET, `UsageLedger` replacement, owned-REAL origin marking, or generation-verification capability issuance; strict diagnostics emit at most one closed code and generic/RELEASE behavior remains in parity. Production receipt dispatch remains dormant and unreachable, the immutable completion-plus-metadata composite and production in-flight proof are absent, and no live success is claimed. Current operator record SHA-256 `67b40784bce40a9369d721a922d5138a118d833105937219294778f4fc93ce98` is 100,291 bytes / 1,817 lines and reports indices 1–13 occupied, thirteen ledger entries, and total `$0.133173`; all entries are reconciled except retained r2, while exact r10–r13 per-index costs, current reserved/remaining values, and current aggregate model-call counts are not stated. Run 10 stopped at the intended immutable completion-receipt cutoff with `usage_diagnostics=NONE`, confirming the candidate cutoff without proving generic creditability or authority. Index 14 is next unused. No bundle or current command/paid/runtime/release authority exists.
+NEXT_ACTION: No provider or AUTHRUNNER action is authorized. Preserve checkpoint `c627f2debfa18df7d9567cd7c3300d19a9e9f5ce`, the operator-owned index-19 bundle, and the current ledger. Begin only provider-free `V3-PLANCONSTRAINTS-001` before any 24-case campaign. The next unused index is NOT_STATED and must not be inferred. No command is current.
+LAST_COMMAND: Current checkpoint gates are separate overlapping results: smoke runtime 95 PASS; adjacent CLI/durable/inventory/release-schema 111 PASS; retained exact AUTHRUNNER matrix 789 PASS with two known warnings; Ruff format/check, strict mypy over `authenticated_runner_smoke.py`, canonical release-schema/inventory generator verify, `pip check`, and diff integrity PASS. Independent exact-byte review of the committed three-path slice found no blocker/HIGH/MEDIUM; a genuine synthetic 265,244-byte sealed v1.2 bundle with two runs / four usages round-tripped and coercive string/whitespace variants rejected canonically. Historical `03d6e8a` retains 19 request-cost-preview, 26 model-benchmark, overlapping 185 usage-plus-preview, and 47-root / 1,073-state evidence; historical `3a1246d` retains 564 tests / 47 roots / 1,072 states. The last repository-wide `.venv/bin/pytest -q` attempt remains INCOMPLETE with 1,492 passed / 25 skipped / 1 failed at 3,878.41 seconds; the exact failing test reproduces on untouched parent `4e035a9d58b98284e7cceecf1fb844bc84e0dbe6` and receives no full-suite pass credit. Codex emitted or executed no AUTHRUNNER command.
+LAST_RESULT: PARTIAL / BLOCKED_SAFETY — checkpoint `c627f2debfa18df7d9567cd7c3300d19a9e9f5ce` completes the bounded provider-free replay repair. The current operator record reports that the same historical index-19 bundle now verifies offline as `VALID / NONCREDITING / NONAUTHORIZING`, without another provider call or new spend. This is one-case operator-supplied evidence and not runner, audit, benchmark, AUTHSEAL, release, runtime, readiness, or campaign authority. Completed real audits remain zero. No next unused index is stated; no current command exists.
 REAL_MODEL_CALLS_ATTEMPTED: NOT_STATED_FOR_CURRENT_OPERATOR_RECORD
 REAL_MODEL_CALLS_SUCCEEDED: NOT_STATED_FOR_CURRENT_OPERATOR_RECORD
 REAL_MODEL_CALLS_REJECTED: NOT_STATED_FOR_CURRENT_OPERATOR_RECORD
 HISTORICAL_REAL_MODEL_CALLS_THROUGH_R9: 20 attempted / 2 succeeded / 18 rejected
-OPENROUTER_COST_USED_USD: 0.133173 (operator-reported total; exact r10–r13 mapping unavailable)
-OPENROUTER_COST_RESERVED_USD: NOT_STATED_FOR_CURRENT_13_ENTRY_LEDGER
+OPENROUTER_COST_USED_USD: 0.396223 (current operator-reported 25-entry total; exact per-entry mapping remains incomplete)
+OPENROUTER_COST_RESERVED_USD: NOT_STATED_FOR_CURRENT_25_ENTRY_LEDGER
 
-OPENROUTER_BUDGET_REMAINING_USD: NOT_STATED_FOR_CURRENT_13_ENTRY_LEDGER
+OPENROUTER_BUDGET_REMAINING_USD: NOT_STATED_FOR_CURRENT_25_ENTRY_LEDGER
 HISTORICAL_GOVERNED_LEDGER_USED_USD: 0.0034764325
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable. A private holdout and independently adjudicated professional comparison are not supplied, but those optional human/private tiers are objective-out-of-scope and are not current completion blockers.
-LAST_CHECKPOINT_COMMIT: d2364f6b528f2e839fbef8b878552f95c4b92c9c, a direct child of historical scaffold 8058e7bff88594b44aa42b8695ce5c25442ae73c, owns exactly seven source/inventory/test paths. Current inventory raw/self/discovery/universe hashes are d27bd3a743c5926afe89e01d3ac4d69170f21b47a03494e6b07284cda5975c2e, 186f89a396ba42f4bf2e74e7c9fd0caf711d69a69b2f6f2ec88d341a760a61d1, cc7f2d6ce15e210152549e526bf23ab8e8628bad2c5db29d87884f3880fb167f, and 4e2f19d4e2f7b477cd07ecdbfd5c5d656a857235b8a294b23a942edd9a1b97c3; counts are 3634/3637/3591/43/35/29/15. Historical bounded-identity checkpoint: 77fb4b9a0c03969a9776edf2091dc09d3b67daec; worktree-independent inventory checkpoint: 3d4a43ac026547dd8652796b6186c48891fd7622; smoke-run-index checkpoint: 9c61871502abbd19ff13278893f9c7785c5b28ba; V3-AUTONOMY Phase-1 checkpoint: 084add8778ef36a2e4c86fdbdea4082eb3a1b332; paused Phase-2 stash: 31b8d30f14a012c1c7fe1b7e2d5647c874fbbd50.
+LAST_CHECKPOINT_COMMIT: c627f2debfa18df7d9567cd7c3300d19a9e9f5ce, direct child of 03d6e8a644dd4a807860bfcc4dfc9d004cff3cbc, owns exactly three paths: `src/mmaudit/models/authenticated_runner_smoke.py`, `tests/unit/test_authenticated_runner_smoke_runtime.py`, and `docs/remediation/v3/autonomy_gate_inventory.json`; it excludes governance, operator results, `.gitignore`, and provider execution. Frozen path hashes are 27e70a3c17ef5f03c503e594bca2c3e433fb2c4193de772eb7be829592c3555a, 58eab4a75a0a944a2290789570aa410f26b2e0471b215cce45622076ad892d0f, and 6fd2608825a5dff950f8c0a0239a446857c82783603ec81a15b060391c3d4778. Current inventory raw/self/discovery/universe hashes are 6fd2608825a5dff950f8c0a0239a446857c82783603ec81a15b060391c3d4778, d92f5848dd854f9f3884221422f48e3e083f6d847e3efebc47e3769b5e69b432, bed305fc0f024b01742d29f1229665bde283361e41e7d64f278860b1601faaf8, and b169d98547d70f9398447eedab073989e49f38fe8d943ec8171bfb2fcce766ed; counts are 3,649 sources / 3,652 occurrences / 3,606 gate sources / 43 non-gating controls / 13 source kinds / 35 logical gates / 29 unsatisfied / 15 current-manual. Historical join checkpoint: 03d6e8a; historical diagnostic checkpoint: 3a1246d; historical receipt-state-seal checkpoint: 68126e0; historical receipt-composite checkpoint: 48ea635; paused Phase-2 stash: 31b8d30f14a012c1c7fe1b7e2d5647c874fbbd50.
+
+## 2026-08-24T03:23:00Z — canonical replay repaired and same sealed bundle operator-reported offline-valid
+
+- Checkpoint custody: `c627f2debfa18df7d9567cd7c3300d19a9e9f5ce`, direct parent
+  `03d6e8a644dd4a807860bfcc4dfc9d004cff3cbc`, owns exactly three paths. SHA-256 values are
+  `27e70a3c17ef5f03c503e594bca2c3e433fb2c4193de772eb7be829592c3555a` for
+  `src/mmaudit/models/authenticated_runner_smoke.py`,
+  `58eab4a75a0a944a2290789570aa410f26b2e0471b215cce45622076ad892d0f` for
+  `tests/unit/test_authenticated_runner_smoke_runtime.py`, and
+  `6fd2608825a5dff950f8c0a0239a446857c82783603ec81a15b060391c3d4778` for the autonomy inventory.
+  The repair omits the call-level strict override, retains strict model contracts and exact type,
+  and rejects any bytes that do not reproduce the exact canonical representation.
+- Provider-free validation / exact commands:
+  `.venv/bin/pytest -q tests/unit/test_authenticated_runner_smoke_runtime.py` returned 95 PASS.
+  `.venv/bin/pytest -q tests/unit/test_authenticated_runner_smoke_cli.py tests/unit/test_authenticated_runner_durable_bundle.py tests/unit/test_autonomy_gate_inventory.py tests/unit/test_release_schemas.py`
+  returned 111 PASS. The retained exact AUTHRUNNER command
+  `.venv/bin/pytest -q tests/unit/test_openrouter.py tests/unit/test_authenticated_runner.py tests/unit/test_authenticated_runner_smoke_benchmark.py tests/unit/test_cross_lineage_adjudication.py tests/unit/test_usage.py tests/unit/test_generation_evidence.py tests/unit/test_autonomy_gate_inventory.py tests/unit/test_release_schemas.py`
+  returned 789 PASS with two known deprecation warnings. Ruff format/check over the two changed Python
+  paths, `.venv/bin/mypy src/mmaudit/models/authenticated_runner_smoke.py`,
+  `.venv/bin/python scripts/generate_release_schemas.py`, `.venv/bin/python -m pip check`, and
+  `git diff --check` passed. Independent exact-byte review found no blocker/HIGH/MEDIUM; its exact
+  ad-hoc command was not retained. A genuine provider-free 265,244-byte sealed v1.2 bundle exercised
+  two runs and four usages through the real seal/serializer/parser; coercive string and whitespace
+  variants rejected canonically. No provider, public/external network, secret, spend,
+  AUTHRUNNER/operator command, or authority was used for these local gates.
+- Governance reconciliation validation / exact commands:
+  `.venv/bin/pytest -q tests/unit/test_product_documentation.py tests/unit/test_product_objective.py`
+  returned 18 PASS. `.venv/bin/ruff format tests/unit/test_product_documentation.py tests/unit/test_product_objective.py`
+  formatted only the two owned product tests; `.venv/bin/ruff check tests/unit/test_product_documentation.py tests/unit/test_product_objective.py`
+  and `.venv/bin/ruff format --check tests/unit/test_product_documentation.py tests/unit/test_product_objective.py`
+  passed on the resulting bytes. Strict duplicate-key and non-finite parsing passed with
+  `.venv/bin/python -c 'import json; from pathlib import Path; reject = lambda value: (_ for _ in ()).throw(ValueError(f"non-finite JSON constant: {value}")); dedupe = lambda pairs: dict(pairs) if len({key for key, _ in pairs}) == len(pairs) else (_ for _ in ()).throw(ValueError("duplicate JSON key")); [json.loads(Path(path).read_text(), object_pairs_hook=dedupe, parse_constant=reject) for path in ("docs/remediation/v3/review_traceability.json", "docs/remediation/v3/runtime_status.json")]; print("strict JSON PASS")'`.
+  `git diff --check` passed after reconciliation.
+- Inventory custody: raw/self/discovery/universe SHA-256 values are
+  `6fd2608825a5dff950f8c0a0239a446857c82783603ec81a15b060391c3d4778`,
+  `d92f5848dd854f9f3884221422f48e3e083f6d847e3efebc47e3769b5e69b432`,
+  `bed305fc0f024b01742d29f1229665bde283361e41e7d64f278860b1601faaf8`, and
+  `b169d98547d70f9398447eedab073989e49f38fe8d943ec8171bfb2fcce766ed`. Counts remain 3,649 /
+  3,652 / 3,606 / 43 / 13 / 35 / 29 / 15 as labeled in the header.
+- Operator reconciliation: fully reread the 115,171-byte / 2,111-line user-owned record at SHA-256
+  `4616c5a143db158f3af12d0a4d58306e0da6ca9dd4bbb54e6c7484dfc2de0251`.
+  Its new 53-line entry is the only drift: preserving the five-line header and removing that entry
+  reproduces exact prior SHA-256 `a87ca7efaf4adf0af60479fa5b26fcbfe80ad6d3aa58a92c9e18fab1a70eabce`,
+  112,294 bytes / 2,058 lines. The current entry operator-reports that `c627f2d` verifies the unchanged
+  index-19 bundle as `VALID / NONCREDITING / NONAUTHORIZING`; no rerun or new spend occurred. Bundle,
+  closed-run ledger, and global-ledger values remain e7537a2f… / 282,802 bytes, four / `$0.39622262`,
+  and 25 / `$0.396223`. The next unused index is not stated and is not inferred.
+- Honest boundary / next action: this closes only the bounded provider-free replay defect and supplies
+  operator-reported one-case offline verification. Completed real audits remain zero; no 24-case
+  aggregation/scoring, audit-quality, calibration, qualification, benchmark, AUTHSEAL, release,
+  runtime authority, readiness, or campaign authority follows. Preserve `c627f2d`, the bundle, and
+  ledger. Begin only provider-free `V3-PLANCONSTRAINTS-001`; do not emit or infer an operator command
+  or new run index.
+
+## 2026-08-24T02:17:00Z — complete nonauthorizing smoke bundle fails canonical replay
+
+- Operator reconciliation: fully reread all 2,058 lines of the 112,294-byte user-owned record at
+  SHA-256 `a87ca7efaf4adf0af60479fa5b26fcbfe80ad6d3aa58a92c9e18fab1a70eabce`.
+  Exact reconstruction of its header plus the prior section reproduces former `dd6019db...`
+  custody, so the newly read 79-line entry is the only drift.
+- Then-current result at this historical pre-`c627f2d` boundary: the operator reported checkpoint
+  `03d6e8a`, index 19, as
+  `COMPLETE / NONCREDITING / NONAUTHORIZING`; a sealed 282,802-byte bundle at SHA-256
+  `e7537a2fc5aed79d274101364442faf0e515dd5879cfd8f6670784fcc2595703`; a closed four-entry run
+  ledger with final spend `$0.39622262`; and a global 25-entry ledger totaling `$0.396223`.
+- Replay blocker: canonical verification failed safely with
+  `authenticated runner smoke bundle failed canonical replay`; the reported underlying error is
+  `AuthenticatedRunnerSmokeError: authenticated runner smoke bytes do not validate`. The record's
+  15-error strict-datetime diagnosis and non-strict validation result remain operator-supplied.
+  Independent local reproduction confirms a narrower three-datetime report-level failure caused by
+  the mode-before validator copying the JSON mapping into strict Python validation. Durable bundle
+  replay already uses non-strict JSON parsing plus exact canonical byte equality. This does not
+  independently validate the private bundle or establish the final fix.
+- Ledger/index custody: index 17 ended after an operator-side timeout with one `uncertain_accounted`
+  judge entry, index 18 failed `SCHEMA_VALIDATION_FAILED`, and index 19 completed. The next unused
+  index is NOT_STATED and is not inferred. No current command, authority, readiness, offline-verifier
+  credit, or release authority exists.
+- Then-required safe action, now superseded by `c627f2d`: preserve `03d6e8a`, the operator-owned
+  bundle, and ledger state. Hold while
+  the bounded provider-free datetime-contract fix is implemented, frozen, and independently
+  validated. Do not run another operator sequence or infer a new index.
+- Historical provisional source state, now superseded by committed `c627f2d`: the bounded fix was
+  WIP in exactly
+  `src/mmaudit/models/authenticated_runner_smoke.py` and
+  `tests/unit/test_authenticated_runner_smoke_runtime.py`, with the generated autonomy inventory
+  expected to reconcile separately. Root reports three targeted tests plus Ruff and strict mypy
+  clean on evolving bytes. These are provisional results, not a checkpoint or completed fix; this
+  governance slice does not edit those paths and remains unfrozen pending final source custody and
+  independent review.
+
+## 2026-08-24T02:08:37Z — required-provider-parameter reasoning join fixed provider-free
+
+- Defensive slice: checkpoint `03d6e8a644dd4a807860bfcc4dfc9d004cff3cbc`, direct parent
+  `3a1246daf19ffa4a772be7806bd903199634ab0b`, owns exactly five paths. It captures a
+  smoke-scope classifier and reasoning-identity join validator inside the strict evaluator. The join
+  fails closed outside exact CANDIDATE/JUDGE NONCREDITING_SMOKE coordinates, preserves generic and
+  RELEASE exact equality, accepts a dynamic `reasoning` extension only when active reasoning is
+  plan-valid and identity-supported, and exposes no unbounded values.
+- Checkpoint and inventory custody: frozen path SHA-256 values in path order `usage.py`,
+  `test_usage.py`, `test_openrouter.py`, `test_openrouter_request_cost_preview.py`, and autonomy
+  inventory are `e5f5ef892f88edf95008d6919c0291afa2379caa3cebffc235ba225df48b6af5`,
+  `d6c283f7724307b0ebc130b8bb8849ca5b503b08c808345731719da23c462363`,
+  `d8e14439252c0b3088ee039b9bf7496ddb2977422b4a0d11a0b7a66867534ec2`,
+  `b3a3f9dc3eebe1873a118a7619922907a83b334f128b11c303b02021616d3482`, and
+  `fb101900c8ef83ef49d32f25b49b7d7b841b1107c1fdb417e1e86f72935a4d26`. Inventory
+  self/discovery/universe hashes are `bab10efc4a5472ce6dacddbb5133505a59a0813df9200679d34badcf6fa7072d`,
+  `bed305fc0f024b01742d29f1229665bde283361e41e7d64f278860b1601faaf8`, and
+  `421e6ac9925388fc5c81baf43f4e50dda83d6c567a473a35bc2c47906c8dbb78`.
+- Validation and exact retained commands: the final 12-row candidate/judge matrix and retained exact
+  AUTHRUNNER matrix passed; the latter command was
+  `.venv/bin/pytest -q tests/unit/test_openrouter.py tests/unit/test_authenticated_runner.py tests/unit/test_authenticated_runner_smoke_benchmark.py tests/unit/test_cross_lineage_adjudication.py tests/unit/test_usage.py tests/unit/test_generation_evidence.py tests/unit/test_autonomy_gate_inventory.py tests/unit/test_release_schemas.py`
+  and returned 789 PASS with two known warnings.
+  `.venv/bin/pytest -q tests/unit/test_openrouter_request_cost_preview.py` returned 19 PASS, and
+  `.venv/bin/pytest -q tests/unit/test_model_benchmark.py` returned 26 PASS. Root independent,
+  overlapping final-byte validation
+  `.venv/bin/pytest -q tests/unit/test_usage.py tests/unit/test_openrouter_request_cost_preview.py`
+  returned 185 PASS; 166 usage tests overlap the 789 matrix, so no summed unique total is inferred.
+  `.venv/bin/mypy src/mmaudit/models/usage.py`,
+  `.venv/bin/python scripts/generate_release_schemas.py` (the canonical release-schema/inventory
+  generator), Ruff
+  format/check over the changed Python paths, staged-scope inspection, and `git diff --check` passed.
+  Independent recursive mutation review covered 47 roots / 1,073 reachable function states. No
+  provider, public/external network, secret, spend, AUTHRUNNER/operator command, or authority was used.
+- Historical operator reconciliation / limitation (superseded by the 02:17 entry): at this
+  checkpoint boundary, the operator file was SHA-256
+  `dd6019db5bdf4e1c9b528b5f2949a81b9944336bef370be822ba52baf5a618fc`, 108,633 bytes /
+  1,980 lines. Its index-16 negative used parent checkpoint `3a1246d` and therefore cannot prove the
+  `03d6e8a` fix live. The record's exact route artifacts, detailed gate counters, r16 terminal
+  status/reserved/remaining, aggregate call counters, authenticated metadata GET count, and bundle
+  publication remain unstated. No post-fix live provider call, genuine production strong-origin
+  positive, complete publication rollback join, successful bundle, current command, or authority exists.
+- Historical next safe action (superseded by the 02:17 entry): no operator action was authorized.
+  Preserve `03d6e8a`; only after separate
+  authorization may exact routes be freshly discovered and re-frozen and an immediate metadata-only
+  index-17 gate be run. Paid execution requires distinct later authorization after an exact-VALID
+  gate. Reconcile any later result before resuming Phase 2.
+
+## 2026-08-24T01:10:00Z — clause-specific live negative reopens provider-free request-shape construction
+
+- Operator reconciliation: fully reread the 108,633-byte / 1,980-line user-owned operator record at
+  SHA-256 `dd6019db5bdf4e1c9b528b5f2949a81b9944336bef370be822ba52baf5a618fc`.
+  It reports a green gate and paid run at index 16 against `3a1246d` failing safely at
+  `NONCREDITING_SMOKE identity binding lacks immutable receipt custody` with exact closed code
+  `STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS`.
+- Ledger/index custody: the record reports sixteen entries / `$0.151976`; r16 cost `$0.006281` and
+  index 17 is next unused. Exact current route artifact identities, detailed gate counters, r16
+  reserved/remaining and terminal status, current aggregate model-call/provider-completion counts,
+  authenticated metadata GET count, and bundle publication are not stated and are not inferred.
+- Bounded diagnosis: the operator explicitly retracts the prior requested-mode hypothesis and reports
+  that endpoint-snapshot, output-capability, mode, and parameter-subset clauses precede and pass the
+  failing exact set equality. Its proposed construction asymmetry and request to print both sets are
+  nonauthorizing analysis, not independent source proof. The safe continuation is a provider-free
+  proof and fix that preserves exact equality and emits only a closed, value-free diagnostic;
+  unbounded expected/observed sets must not be logged.
+- Ticket state / next action: `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`. Preserve
+  `3a1246d`; the bounded construction-asymmetry source checkpoint is pending. No provider action or
+  command is authorized. Any later sequence requires separate authorization, fresh route
+  discovery/refreeze, and an immediate metadata-only index-17 gate; paid execution remains a
+  distinct later authorization after an exact-VALID gate.
+
+## 2026-08-24T01:11:00Z — clause-level structured-output diagnostics committed and validated provider-free
+
+- Defensive slice: checkpoint `3a1246daf19ffa4a772be7806bd903199634ab0b`, direct parent
+  `68126e0fe438f853fb9b75582023f807a208bdae`, owns exactly five paths. It refines the single
+  strict `STRUCTURED_OUTPUT_ROUTING` diagnostic into the first matching member of a closed set of
+  35 ordered, unique, value-free clause codes while preserving the previous boolean predicate,
+  optional and unbound behavior, generic/RELEASE parity, and production call-root scope. Both the
+  legacy bool helper and diagnostic helper are captured and covered by pristine/retarget checks.
+- Checkpoint and inventory custody: frozen source/test/inventory SHA-256 values, in path order
+  `usage.py`, `test_usage.py`, `test_openrouter.py`, `test_authenticated_runner_smoke_benchmark.py`,
+  and autonomy inventory, are `04b5f19104d9de00ddb5d711cdef853754f537470e482190d4b427be55f4d9b9`,
+  `83042d9528ff8415481950d434e85e154011a9b1fff60d682d2f1e793bfb1f6b`,
+  `0487e3427c93948faee88fea255ca74cafa7974d05851537184d73d5c3658a4a`,
+  `6ca174a79407de4913b7b8dfb4f09b99d6ea8b5ccd82d9fee709e8898fb7eac6`, and
+  `f1bdf7f4317e706d6452599640cd1b34942e52935cfe9aabbc643fe83dbc57a2`. Inventory
+  raw/self/discovery/universe values are `f1bdf7f4317e706d6452599640cd1b34942e52935cfe9aabbc643fe83dbc57a2`,
+  `c446ea73cbad4a0acf812746bbee30e4cdd8821416a9bd0f9df10450e2bd6a33`,
+  `bed305fc0f024b01742d29f1229665bde283361e41e7d64f278860b1601faaf8`, and
+  `b865186b4a21b3219cb20a84a224255d802b28e89d5aa28b2350f4977ae254e2`; source semantics are
+  `67f1ff32913327913ab19adbe60ff54263bf0fcb347304b151bd009311cfe1b0`; counts remain
+  `3649/3652/3606/43/35/29/15`.
+- Validation: the exact AUTHRUNNER matrix passed 789 tests with two known warnings in 79.79s;
+  the adjacent model-benchmark module passed 26 tests in 2.50s; an independent three-module matrix
+  passed 564 tests. Independent clean-process mutation review covered 47 guard roots / 1,072
+  recursively frozen function states and rejected, restored, and recovered from all 1,072
+  identity-distinct `CodeType.replace(co_name=...)` mutations. Two independent semantic reviews
+  reported no blocker/HIGH. Ruff format/check, strict mypy over `usage.py`, the canonical
+  release-schema generator including autonomy inventory, and diff integrity passed.
+- Exact retained commands:
+  - `.venv/bin/pytest -q tests/unit/test_openrouter.py tests/unit/test_authenticated_runner.py tests/unit/test_authenticated_runner_smoke_benchmark.py tests/unit/test_cross_lineage_adjudication.py tests/unit/test_usage.py tests/unit/test_generation_evidence.py tests/unit/test_autonomy_gate_inventory.py tests/unit/test_release_schemas.py` — `789 passed`, two known warnings.
+  - `.venv/bin/pytest -q tests/unit/test_model_benchmark.py` — `26 passed`.
+  - `.venv/bin/pytest -q tests/unit/test_usage.py tests/unit/test_openrouter.py tests/unit/test_authenticated_runner_smoke_benchmark.py` — independent `564 passed`.
+  - `.venv/bin/ruff format --check src/mmaudit/models/usage.py tests/unit/test_usage.py tests/unit/test_openrouter.py tests/unit/test_authenticated_runner_smoke_benchmark.py` and the corresponding `.venv/bin/ruff check` invocation — PASS.
+  - `.venv/bin/mypy src/mmaudit/models/usage.py` — PASS.
+  - `.venv/bin/python scripts/generate_release_schemas.py` — canonical release-schema generator,
+    including autonomy-inventory verification, PASS.
+  - `git diff --check -- src/mmaudit/models/usage.py tests/unit/test_usage.py tests/unit/test_openrouter.py tests/unit/test_authenticated_runner_smoke_benchmark.py docs/remediation/v3/autonomy_gate_inventory.json` — PASS.
+  The exact inline mutation-loop shell command is retained only in the parent turn; this durable log
+  records its mechanics and result without fabricating a shorter command.
+- Repository-suite honesty: the last repository-wide `.venv/bin/pytest -q` remains `INCOMPLETE`,
+  not a pass: 1,492 passed / 25 skipped / 1 failed at 3,878.41 seconds on
+  `tests/unit/test_candidate_benchmark.py::test_authenticated_runner_candidate_consumes_exact_cost_preview_inventory`
+  with `candidate benchmark request accounting is inconsistent`; benchmark cases reported
+  `ReasoningPolicyError` with zero observed usage, and the exact node also fails on untouched parent
+  `4e035a9d58b98284e7cceecf1fb844bc84e0dbe6`. No full-suite pass is claimed for `3a1246d`.
+- Operator reconciliation / limitation: at this checkpoint boundary, the then-current 105,210-byte /
+  1,905-line operator record at
+  SHA-256 `1e3fcf0870686ebfe292103faf6a15111a415e2003f3de293f0ab674cdee4972`
+  predates `3a1246d`; it records only the prior composite-code live negative and cannot prove which
+  clause the committed diagnostic would emit. No post-checkpoint provider call, genuine production
+  strong-origin positive, complete provider TLS/private-response graph, behavioral execution of
+  either complete production publication rollback join, successful bundle, current command, or
+  authority exists.
+- Exact next safe action at that boundary: preserve `3a1246d`. No provider or AUTHRUNNER action was
+  authorized. Only
+  after separate authorization may exact route evidence be freshly discovered/re-frozen and an
+  immediate metadata-only index-16 gate be run; paid execution requires distinct later authorization
+  after an exact-VALID gate.
+
+## 2026-08-24T00:15:00Z — post-hotfix live receipt traversal reaches structured-output routing failure
+
+- Operator reconciliation: fully reread the then-current user-owned operator record at SHA-256
+  `1e3fcf0870686ebfe292103faf6a15111a415e2003f3de293f0ab674cdee4972`, 105,210 bytes / 1,905
+  lines. It reports that checkpoint `68126e0fe438f853fb9b75582023f807a208bdae` cleared
+  `provider transport receipt cannot seal owned request state`; the route gate was still green after
+  90 minutes with no drift in that cycle.
+- Then-current live negative: paid index 14 failed later with
+  `NONCREDITING_SMOKE identity binding lacks immutable receipt custody` and the bounded code
+  `usage_diagnostics=STRUCTURED_OUTPUT_ROUTING`. A follow-up instrumented index-15 run also charged
+  but produced no narrower clause because the predicate reference is captured at import. This is
+  live positive evidence for the repaired receipt-seal boundary and live negative evidence at the
+  later strict structured-output-routing boundary; it is not a strong-origin positive, sealed bundle,
+  runner result, or release evidence.
+- Ledger/index custody: the record reports fifteen entries and total `$0.145695`; index 14 charged
+  `$0.004044`, index 15 charged `$0.008478`, indices 1–15 are consumed, and index 16 is next unused.
+  Exact entry statuses, reserved/remaining values, aggregate model-call counts, route artifact
+  identities, and bundle publication are not stated in the new entry and are not inferred.
+- Diagnostic boundary: `STRUCTURED_OUTPUT_ROUTING` is a composite predicate family. The operator's
+  suggestion that `requested_mode` may be the failing clause is explicitly a guess and receives no
+  evidence credit. The bounded provider-free continuation is clause-level diagnostics; its source
+  checkpoint is pending and these governance bytes remain provisional.
+- Provisional governance check:
+  `.venv/bin/pytest -q tests/unit/test_product_documentation.py tests/unit/test_product_objective.py`
+  reported 15 passed / 2 failed while the diagnostic source and generated inventory were actively
+  changing. The failures were the intentional current-worktree-vs-`68126e0` four-path equality
+  assertion and the expected committed inventory raw hash versus the WIP inventory bytes. They
+  receive no failure or pass credit for the eventual checkpoint; final gates and freeze remain held.
+- Exact next safe action at that boundary: complete and independently validate the provider-free clause-level
+  diagnostic source slice. No provider or AUTHRUNNER command is current. Any later operator sequence
+  requires separate authorization, fresh route discovery/refreeze, and an immediate metadata-only
+  gate for index 16; a paid run requires distinct later authorization after an exact-VALID gate.
+
+## 2026-08-24T00:13:30Z — receipt-state-seal hotfix committed and validated provider-free
+
+- Defensive slice: direct-child checkpoint `68126e0fe438f853fb9b75582023f807a208bdae`
+  owns exactly four paths and preserves the checkpoint-`48ea635` exact-smoke receipt composite. It
+  validates and neutralizes structurally exact response-derived HTTPX cookie state, rejects
+  Cookie-bearing request plans and outgoing requests, removes Set-Cookie from safe response
+  projections, and pins cookie store/lock/policy identity and state. Exact receipt use is fail-closed
+  to CPython 3.12/3.13 and the pinned private cookie shape; non-REAL and REAL generic/RELEASE scope
+  returns before this gate, and unsupported runtime/shape stops before seal, grant, reservation,
+  receipt, or stream dispatch.
+- Checkpoint custody: parent is `48ea635ab5a2fa778d6b5ce5c9a1592f0f27b375`. Frozen path SHA-256
+  values are `bb7824e3a13299af37610e5f186f2cfe8338d11bb922eb4339de668b8fb41a97`
+  (`src/mmaudit/models/openrouter.py`),
+  `d32760399784f414119a24f8e3cfcd7a600397066ae06bda048d925787b42fa7`
+  (`tests/unit/test_openrouter.py`),
+  `504f5b5251c75914b35b5f799f4afcfec780cc0bfe73101da399d57ba94c798e`
+  (`tests/integration/test_openrouter_httpx_response_graph.py`), and
+  `9b513c9269437d7a0c9d4bec8e8887613eae338b787b9da59092d8a7f4beeac0`
+  (`docs/remediation/v3/autonomy_gate_inventory.json`).
+- Validation: 785 focused tests and one actual pinned-HTTPX local numeric-loopback lifecycle passed.
+  Independent recursive review covered 47 roots / 1,071 reachable function states; a clean
+  subprocess mutation loop replaced every unique function's code with an identity-distinct
+  same-semantics `code.replace(co_name=...)`, observed the pristine guard fail, restored the code,
+  and observed recovery for all 1,071 states. Ruff, strict mypy, canonical release-schema generator
+  verification including autonomy inventory, `pip check`, and diff integrity passed. The last
+  repository-wide suite attempt remains `INCOMPLETE`, not a pass: 1,492 passed / 25 skipped / 1
+  failed after 3,878.41 seconds at
+  `tests/unit/test_candidate_benchmark.py::test_authenticated_runner_candidate_consumes_exact_cost_preview_inventory`
+  with `candidate benchmark request accounting is inconsistent`; benchmark cases reported
+  `ReasoningPolicyError` with zero observed usage, and the exact node also fails on untouched parent
+  `4e035a9d58b98284e7cceecf1fb844bc84e0dbe6`.
+- Exact retained commands:
+  - `.venv/bin/pytest -q tests/unit/test_openrouter.py tests/unit/test_authenticated_runner.py tests/unit/test_authenticated_runner_smoke_benchmark.py tests/unit/test_cross_lineage_adjudication.py tests/unit/test_usage.py tests/unit/test_generation_evidence.py tests/unit/test_autonomy_gate_inventory.py tests/unit/test_release_schemas.py` — `785 passed`.
+  - `.venv/bin/pytest -q tests/integration/test_openrouter_httpx_response_graph.py` — `1 passed`
+    under numeric `127.0.0.1` bind permission; no provider or public/external network access.
+  - `.venv/bin/ruff format --check src/mmaudit/benchmark/cross_lineage_adjudication.py src/mmaudit/benchmark/models.py src/mmaudit/models/generation_evidence.py src/mmaudit/models/openrouter.py src/mmaudit/models/usage.py src/mmaudit/orchestration/autonomy_gate_inventory.py tests/integration/test_openrouter_httpx_response_graph.py tests/unit/test_authenticated_runner.py tests/unit/test_authenticated_runner_smoke_benchmark.py tests/unit/test_autonomy_gate_inventory.py tests/unit/test_cross_lineage_adjudication.py tests/unit/test_openrouter.py` — PASS.
+  - `.venv/bin/ruff check src/mmaudit/benchmark/cross_lineage_adjudication.py src/mmaudit/benchmark/models.py src/mmaudit/models/generation_evidence.py src/mmaudit/models/openrouter.py src/mmaudit/models/usage.py src/mmaudit/orchestration/autonomy_gate_inventory.py tests/integration/test_openrouter_httpx_response_graph.py tests/unit/test_authenticated_runner.py tests/unit/test_authenticated_runner_smoke_benchmark.py tests/unit/test_autonomy_gate_inventory.py tests/unit/test_cross_lineage_adjudication.py tests/unit/test_openrouter.py` — PASS.
+  - `.venv/bin/mypy src/mmaudit/benchmark/cross_lineage_adjudication.py src/mmaudit/benchmark/models.py src/mmaudit/models/generation_evidence.py src/mmaudit/models/openrouter.py src/mmaudit/models/usage.py src/mmaudit/orchestration/autonomy_gate_inventory.py` — PASS.
+  - `.venv/bin/python scripts/generate_release_schemas.py` — canonical release-schema generator,
+    including autonomy-inventory verification, PASS.
+  - `.venv/bin/python -m pip check` and `git diff --check` — PASS.
+  - `.venv/bin/pytest -q` — retained repository-wide attempt is `INCOMPLETE` at the exact
+    historical result above; no full-suite pass credit is inferred.
+  The exact independent 47-root / 1,071-state mutation-loop invocation was ad hoc and not retained;
+  it is not fabricated here.
+- Operator reconciliation / limitations: at this checkpoint boundary, the operator file was the
+  102,651-byte / 1,863-line record at SHA-256
+  `7ae7a108144a3d6800b0a708dfa4d16c0f7fcba1c1bb2ceb2667f5ec1faac59b`. It records the
+  pre-hotfix index-14 live negative against `48ea635`: both judges were re-frozen at r15, the gate
+  reported VALID, and paid launch failed safely pretransport; the ledger remained thirteen entries /
+  `$0.133173`, no charge or bundle occurred, and index 14 was not consumed. No post-hotfix provider
+  call, genuine production strong-origin positive, provider response graph, or behavioral proof of
+  either complete production publication rollback join exists. The accepted pure-Python threat
+  boundary remains bounded exactly as recorded in the preceding receipt-composite entry. No command
+  or authority is current.
+- Exact next safe action: preserve the committed provider-free checkpoint and wait for separate
+  operator authorization. Only then may route evidence be freshly discovered/re-frozen and an
+  immediate metadata-only index-14 gate be prepared. A paid relaunch requires distinct later
+  authorization after an exact-VALID gate. Reconcile any later operator result before resuming
+  paused `V3-AUTONOMY-001` Phase 2.
+
+## 2026-08-23T22:40:00Z — index-14 live negative reopens receipt-state sealing provider-free
+
+- Operator reconciliation: at this timestamp, fully reread the 102,651-byte / 1,863-line operator
+  record at
+  SHA-256 `7ae7a108144a3d6800b0a708dfa4d16c0f7fcba1c1bb2ceb2667f5ec1faac59b`.
+  After source checkpoint `48ea635`, both judge routes drifted and were re-frozen at r15. The
+  metadata gate for index 14 reported VALID nonauthorizingly, then paid launch failed safely before
+  provider transport with `provider transport receipt cannot seal owned request state`.
+- Custody/result: the ledger stayed unchanged at thirteen entries / `$0.133173`; indices 1–13 remain
+  occupied, index 14 was not consumed, no provider charge or bundle occurred, and no current command
+  or authority exists. The operator's hypothesis that a wrapped/custom transport caused the mismatch
+  is unverified analysis, not source proof.
+- Ticket state / limitation: `V3-AUTHRUNNER-001` remains `PARTIAL / BLOCKED_SAFETY`. The provider-free
+  checkpoint gates remain historical evidence, but production-constructed transport compatibility is
+  now negatively evidenced. No strong-origin positive, provider response graph, publication rollback
+  join, offline verifier result, runner authority, or release authority exists.
+- Exact next safe action: reproduce the pre-transport receipt-state-seal failure provider-free against
+  the production-constructed transport, diagnose it from source/local state, and implement a bounded
+  local/synthetic regression hotfix. Do not reissue index 14 until a committed independently validated
+  fix, fresh route evidence, an immediate exact-VALID metadata gate, and separate paid authorization
+  exist. Current hotfix checkpoint: pending.
+
+## 2026-08-23T22:35:53Z — immutable receipt composite reconciled provider-free
+
+- Defensive slice: checkpoint `48ea635ab5a2fa778d6b5ce5c9a1592f0f27b375` owns exactly 14
+  source/test/dependency/inventory paths. Exact canonical candidate/judge v3 `NONCREDITING_SMOKE`
+  coordinates now receive completion POST and metadata GET receipt vectors, all-or-none composite
+  consumption, same client/transport/task/thread/PID/ledger custody, rollback, and post-seal raw-state
+  scrubbing. Generic and RELEASE behavior retain the historical path.
+- Validation: 785 focused tests and one actual pinned-HTTPX local numeric-loopback lifecycle test
+  passed. Independent recursive review covered 47 roots / 998 reachable function states. Ruff,
+  strict mypy, the canonical release-schema generator (including autonomy inventory) verify,
+  `pip check`, and diff integrity passed. The full
+  suite is `INCOMPLETE`, not a pass: 1,492 passed / 25 skipped / 1 failed in 3,878.41 seconds at
+  `test_authenticated_runner_candidate_consumes_exact_cost_preview_inventory`; the same exact node
+  fails on untouched parent `4e035a9d58b98284e7cceecf1fb844bc84e0dbe6` with `candidate benchmark
+  request accounting is inconsistent` while benchmark cases report `ReasoningPolicyError` and zero
+  observed usage.
+- Exact retained commands:
+  - `.venv/bin/pytest -q tests/unit/test_openrouter.py tests/unit/test_authenticated_runner.py tests/unit/test_authenticated_runner_smoke_benchmark.py tests/unit/test_cross_lineage_adjudication.py tests/unit/test_usage.py tests/unit/test_generation_evidence.py tests/unit/test_autonomy_gate_inventory.py tests/unit/test_release_schemas.py` — `785 passed`.
+  - `.venv/bin/pytest -q tests/integration/test_openrouter_httpx_response_graph.py` — `1 passed`
+    under numeric `127.0.0.1` bind permission; no provider or public/external network access.
+  - `.venv/bin/ruff format --check src/mmaudit/benchmark/cross_lineage_adjudication.py src/mmaudit/benchmark/models.py src/mmaudit/models/generation_evidence.py src/mmaudit/models/openrouter.py src/mmaudit/models/usage.py src/mmaudit/orchestration/autonomy_gate_inventory.py tests/integration/test_openrouter_httpx_response_graph.py tests/unit/test_authenticated_runner.py tests/unit/test_authenticated_runner_smoke_benchmark.py tests/unit/test_autonomy_gate_inventory.py tests/unit/test_cross_lineage_adjudication.py tests/unit/test_openrouter.py` — PASS.
+  - `.venv/bin/ruff check src/mmaudit/benchmark/cross_lineage_adjudication.py src/mmaudit/benchmark/models.py src/mmaudit/models/generation_evidence.py src/mmaudit/models/openrouter.py src/mmaudit/models/usage.py src/mmaudit/orchestration/autonomy_gate_inventory.py tests/integration/test_openrouter_httpx_response_graph.py tests/unit/test_authenticated_runner.py tests/unit/test_authenticated_runner_smoke_benchmark.py tests/unit/test_autonomy_gate_inventory.py tests/unit/test_cross_lineage_adjudication.py tests/unit/test_openrouter.py` — PASS.
+  - `.venv/bin/mypy src/mmaudit/benchmark/cross_lineage_adjudication.py src/mmaudit/benchmark/models.py src/mmaudit/models/generation_evidence.py src/mmaudit/models/openrouter.py src/mmaudit/models/usage.py src/mmaudit/orchestration/autonomy_gate_inventory.py` — PASS.
+  - `.venv/bin/python scripts/generate_release_schemas.py` — canonical release-schema generator,
+    including autonomy-inventory verification, PASS.
+  - `.venv/bin/python -m pip check` and `git diff --check` — PASS.
+  - `.venv/bin/pytest -q` — `INCOMPLETE`, stopped at the exact failure/result above; no pass credit.
+  The independent 47-root / 998-state audit was an ad-hoc read-only reviewer enumeration; its exact
+  invocation was not retained and is not fabricated here.
+- Boundary: no genuine production strong-origin candidate/judge positive, actual provider TLS/private
+  response graph, or behavioral execution of the two complete production publication rollback joins
+  is claimed. The pure-Python guard covers persistent ordinary subordinate drift and reachable
+  guard-state-holder mutation/replacement; it excludes deliberate introspective writes to live
+  closure authority registries/cells, coordinated outermost-checker/expected-reference mutation, and
+  tracing/profiling/native-memory or equivalent runtime compromise.
+- Operator reconciliation / result: the full 100,291-byte / 1,817-line operator record at
+  `67b40784bce40a9369d721a922d5138a118d833105937219294778f4fc93ce98` predates checkpoint 48ea
+  and grants it no live proof. Indices 1–13 remain occupied; index 14 is next unused; the thirteen
+  entries total `$0.133173` and all are reconciled except retained r2. No bundle, current command,
+  provider permission, paid authority, runtime authority, or release authority exists. Ticket result
+  is `PARTIAL / BLOCKED_SAFETY`; await separate operator direction before any metadata gate.
 
 ## 2026-08-23T16:55:20Z — exact smoke-scope cutoff reconciled; receipt composite remains
 

@@ -112,7 +112,9 @@ def test_current_completion_authority_has_no_legacy_human_gate() -> None:
     assert "`084add8778ef36a2e4c86fdbdea4082eb3a1b332`" in normalized_autonomy
     assert "exact 28-role managed declaration" in normalized_autonomy
     assert "25 external roles unresolved" in normalized_autonomy
-    assert "next provider-free slice is Phase 2's" in normalized_autonomy
+    assert "Phase 2's typed idempotent provisioning-state/refusal contract stays paused" in (
+        normalized_autonomy
+    )
     assert "`runtime_authority=false`" in normalized_autonomy
     assert "`managed_run_ready=false`" in normalized_autonomy
 
@@ -123,21 +125,31 @@ def test_current_completion_authority_has_no_legacy_human_gate() -> None:
     assert "not pushed or remote-resolved" in autonomy_evidence
     assert "owns exactly 18 Phase-1 paths" in autonomy_evidence
     assert "excludes operator_results" in autonomy_evidence
-    assert "531a9d822e9989bf2eda94530e88cf55f2dd2e0d" in autonomy_evidence
-    assert "d2364f6b528f2e839fbef8b878552f95c4b92c9c" in autonomy_evidence
-    assert "d27bd3a743c5926afe89e01d3ac4d69170f21b47a03494e6b07284cda5975c2e" in (autonomy_evidence)
-    assert "186f89a396ba42f4bf2e74e7c9fd0caf711d69a69b2f6f2ec88d341a760a61d1" in (autonomy_evidence)
-    assert "4e2f19d4e2f7b477cd07ecdbfd5c5d656a857235b8a294b23a942edd9a1b97c3" in (autonomy_evidence)
-    assert "cc7f2d6ce15e210152549e526bf23ab8e8628bad2c5db29d87884f3880fb167f" in (autonomy_evidence)
-    assert "3634 unique completion inputs / 3637 occurrences" in autonomy_evidence
-    assert "3591 gate sources" in autonomy_evidence
-    assert "three package resources are pinned" in autonomy_evidence
+    assert "6fd2608825a5dff950f8c0a0239a446857c82783603ec81a15b060391c3d4778" in (autonomy_evidence)
+    assert "d92f5848dd854f9f3884221422f48e3e083f6d847e3efebc47e3769b5e69b432" in (autonomy_evidence)
+    assert "b169d98547d70f9398447eedab073989e49f38fe8d943ec8171bfb2fcce766ed" in (autonomy_evidence)
+    assert "bed305fc0f024b01742d29f1229665bde283361e41e7d64f278860b1601faaf8" in (autonomy_evidence)
+    assert "3649 unique completion inputs / 3652 occurrences" in autonomy_evidence
+    assert "3606 gate sources" in autonomy_evidence
+    assert "c627f2debfa18df7d9567cd7c3300d19a9e9f5ce" in autonomy_evidence
+    assert "95 authenticated-runner smoke runtime tests" in autonomy_evidence
+    assert "111 adjacent CLI/durable/inventory/release-schema tests" in autonomy_evidence
+    assert "retained 789-test exact AUTHRUNNER matrix" in autonomy_evidence
+    assert "47-root / 1073-state evidence" in autonomy_evidence
+    assert "repository-wide suite remains INCOMPLETE, not a pass" in autonomy_evidence
+    assert "VALID / NONCREDITING / NONAUTHORIZING" in autonomy_evidence
+    assert "without rerun or new spend" in autonomy_evidence
+    assert "25-entry ledger / 0.396223 USD" in autonomy_evidence
+    assert "next unused index is not stated" in autonomy_evidence
+    assert "not independently authenticated by Codex" in autonomy_evidence
+    assert "No current AUTHRUNNER/operator command" in autonomy_evidence
+    assert "Three package resources are pinned" in autonomy_evidence
     assert "25 external roles remain unresolved" in autonomy_evidence
     assert "Phase 2" in requirements["U"]["remaining_proof"]
     assert "Checkpoint the completed" not in requirements["U"]["remaining_proof"]
-    assert runtime_status["candidate_commit"] == "d2364f6b528f2e839fbef8b878552f95c4b92c9c"
+    assert runtime_status["candidate_commit"] == "c627f2debfa18df7d9567cd7c3300d19a9e9f5ce"
     assert runtime_status["autonomy_phase_zero_inventory"]["current_reconciliation_commit"] == (
-        "d2364f6b528f2e839fbef8b878552f95c4b92c9c"
+        "c627f2debfa18df7d9567cd7c3300d19a9e9f5ce"
     )
     assert runtime_status["candidate_commit_pushed"] is False
     assert runtime_status["candidate_commit_remote_resolved"] is False

@@ -391,10 +391,65 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Dependencies:** Completed `V3-AUTHLINEAGE-PUBLIC-001`, existing authenticated generation
   refetch, and closed usage/report evidence.
 - **Status:** `PARTIAL`
-- **Current scope-cutoff/strict-diagnostic slice:** `COMPLETE_PROVIDER_FREE_NONAUTHORIZING` at
-  `d2364f6b528f2e839fbef8b878552f95c4b92c9c`; overall AUTHRUNNER remains
-  `PARTIAL / BLOCKED_SAFETY`.
-- **Current local slice:** The first REAL smoke candidate completion proved transport-origin custody
+- **Historical required-provider-parameter join continuation:** Checkpoint
+  `03d6e8a644dd4a807860bfcc4dfc9d004cff3cbc`, direct child of historical clause-diagnostic
+  checkpoint `3a1246daf19ffa4a772be7806bd903199634ab0b`, closes the provider-free
+  required-provider-parameter construction asymmetry while retaining closed, value-free
+  `STRUCTURED_OUTPUT_ROUTING` diagnostics. It is the source checkpoint that produced the operator's
+  index-19 bundle; it is now the direct parent of the replay repair.
+- **Bounded canonical-replay continuation:** `COMPLETE_NONAUTHORIZING` at checkpoint
+  `c627f2debfa18df7d9567cd7c3300d19a9e9f5ce`, direct child of `03d6e8a`. The exact three-path
+  repair removes only the call-level strict override that was propagated into nested mapping-copy
+  validators, retains every model-level strict contract, requires the exact bundle type, and keeps
+  exact canonical-byte equality as the coercion/noncanonical encoding boundary. A genuine synthetic
+  265,244-byte sealed v1.2 bundle with two runs and four usages round-trips provider-free; coercive
+  string and whitespace variants reject canonically. This is a completed local replay mechanism, not
+  provider, qualification, runner, audit, benchmark, AUTHSEAL, release, or campaign authority.
+- **Current checkpoint result:** Exact canonical candidate/judge v3 `NONCREDITING_SMOKE` uses an
+  all-or-none immutable completion-plus-metadata receipt composite across completion retry and
+  metadata polling vectors under same client/transport/task/thread/PID/ledger custody. Generic and
+  RELEASE behavior retain the historical path. The four-path hotfix validates and neutralizes
+  response-derived HTTPX cookie state, rejects outgoing Cookie headers, strips Set-Cookie from safe
+  responses, and fails before grant/reservation/transport on unsupported CPython/private-cookie
+  shapes. Historical `3a1246d` exposes the first of 35 ordered, unique, closed, value-free clause
+  codes without changing boolean creditability, optional/unbound behavior, generic/RELEASE parity,
+  or production call-root scope. Historical five-path `03d6e8a` captures the exact CANDIDATE/JUDGE
+  `NONCREDITING_SMOKE` reasoning-identity join: disabled reasoning requires neither the evidence nor
+  identity required-parameter set to contain `reasoning`; active reasoning requires evidence `reasoning` plus identity
+  reasoning capability/support, while only exact CANDIDATE/JUDGE v3 smoke may omit `reasoning` from
+  the identity required-parameter set. Generic/RELEASE exact equality is unchanged. Current `c627f2d`
+  validation passed 95 smoke-runtime tests, 111 adjacent CLI/durable/inventory/release-schema tests,
+  and the retained 789-test AUTHRUNNER matrix as separate, overlapping results. Ruff format/check,
+  strict mypy over the changed source, the canonical umbrella release-schema/inventory generator,
+  `pip check`, and diff integrity passed. Independent exact-byte audit found no blocker, HIGH, or
+  MEDIUM. Historical `03d6e8a` retains its separate 19 request-cost-preview, 26 model-benchmark,
+  overlapping 185 usage-plus-preview, and 47-root/1,073-state guard evidence.
+  Historical `3a1246d` retains its independent 564-test / 47-root / 1,072-state evidence. Historical
+  `68126e0` retains 785 focused
+  tests, one actual pinned-HTTPX local numeric-loopback integration, and `pip check`. The last repository-wide
+  suite remains
+  `INCOMPLETE`, not a pass: 1,492 passed / 25 skipped / 1 failed after 3,878.41 seconds at
+  `test_authenticated_runner_candidate_consumes_exact_cost_preview_inventory`; the same exact test
+  fails on untouched parent `4e035a9d58b98284e7cceecf1fb844bc84e0dbe6`.
+- **Current operator-reported offline result / limitation:** Operator record
+  `4616c5a143db158f3af12d0a4d58306e0da6ca9dd4bbb54e6c7484dfc2de0251` is 115,171 bytes / 2,111
+  lines. It reports that the `c627f2d` offline verifier returned the same 282,802-byte index-19
+  bundle at SHA-256 `e7537a2fc5aed79d274101364442faf0e515dd5879cfd8f6670784fcc2595703`
+  as `VALID / NONCREDITING / NONAUTHORIZING`, without another provider run or new spend. The closed
+  four-entry run ledger remains `$0.39622262` and the global 25-entry ledger remains `$0.396223`.
+  This is operator-supplied evidence for one case and an offline replay. No post-`c627f2d` provider
+  call or independent authentication of the private artifact by Codex occurred. Completed real
+  audits remain zero; no 24-case aggregation,
+  scoring, audit-quality, calibration, qualification, benchmark, AUTHSEAL, or release result exists.
+  Exact per-index costs for r10-r13/r17-r19, current reserved/remaining/aggregate counters, and the
+  next unused index remain unstated and are not inferred. Broad provider compatibility and both full
+  production publication rollback joins remain unexecuted. The pure-Python threat exclusions remain
+  unchanged, and no runtime authority, readiness, or campaign authority exists.
+- **Next action:** Preserve `c627f2d`, the operator-owned bundle, and ledger state; no operator action
+  is authorized and no new index may be inferred. Take only the provider-free
+  `V3-PLANCONSTRAINTS-001` slice before considering any 24-case campaign. No command is
+  current.
+- **Historical structured-output eligibility slice:** The first REAL smoke candidate completion proved transport-origin custody
   and exact reserve/spend reconciliation (`$0.0547272` reserved; `$0.01680888` actual), then failed
   closed because the selected DeepSeek/`novita/fp8` route lacks native `structured_outputs`. No
   bundle was published. That paid-attempt record was 54,081 bytes / 979 lines / SHA-256
@@ -427,7 +482,8 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   froze DeepSeek/`parasail/fp8` at
   `4e08e6496952e817e39d6872684a4e69cfb05cf74374870f51c234a6513b7306`, while replay
   Kimi/`wafer` failed closed at status `-5`; no replay registry, live-route gate, completion, new
-  spend, or bundle followed. Current checkpoint `dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d`
+  spend, or bundle followed. Current selection-plan checkpoint
+  `dcabe3128ba1aca84c3df90d8a64b1a6bc77db1d`
   binds nonauthorizing plan v1.3
   `ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f`, retaining candidate
   `parasail/fp8` and PRIMARY `sail-research/fp8` while replacing the failed replay singleton with
@@ -443,7 +499,7 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   provider completion or new spend because cumulative ledger request ID
   `authrunner.smoke.r1.candidate.primary:721f058726cf9509c07cb2aae662fb6ac23b5c30a363db40229faf8895034497`
   already exists. The ledger remains one reconciled `$0.01680888` entry and no bundle exists.
-  Current operator custody is 74,562 bytes / 1,330 lines / SHA-256
+  At that historical boundary, operator custody was 74,562 bytes / 1,330 lines / SHA-256
   `302679f3e8e9281cdf9e0ec3d6d1d566d172cb54b389fbac607180d1f0911940`. Local checkpoint
   `9c61871502abbd19ff13278893f9c7785c5b28ba` makes a canonical positive smoke run index explicit,
   seals it through every durable layer, and rejects reused ledger namespaces provider-free. Its 385
@@ -462,18 +518,23 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `$0.00537768`/`$0.00537768`/`reconciled`. Runs 5–9 are also reconciled, but the current operator
   record did not enumerate an authoritative per-index cost mapping for them. That nine-entry snapshot
   accounted `$0.10457436`, reserved `$0`, and left `$249.89542564`; none may be released, reused, or
-  edited. Current operator record SHA-256
-  `67b40784bce40a9369d721a922d5138a118d833105937219294778f4fc93ce98` is 100,291 bytes / 1,817
-  lines. It reports thirteen ledger entries and total `$0.133173`; all are reconciled except retained
-  r2, while exact per-index costs for r10–r13, current reserved/remaining values, and current aggregate
-  model-call counts are not stated. Indices 1–13 are occupied and 14 is the next unused namespace.
+  edited. At the pre-hotfix `48ea635` live-negative boundary, operator record SHA-256
+  `7ae7a108144a3d6800b0a708dfa4d16c0f7fcba1c1bb2ceb2667f5ec1faac59b` is 102,651 bytes / 1,863
+  lines. It reported thirteen ledger entries and total `$0.133173`; all were reconciled except retained
+  r2, while exact per-index costs for r10–r13, reserved/remaining values, and aggregate model-call
+  counts were not stated. At that boundary, indices 1–13 were occupied and 14 was the next unused
+  namespace.
   Run 10 followed checkpoint `d2364f6`: an immediately preceding gate with PRIMARY re-frozen as
   `primary-judge-registry-r14.json` was operator-reported VALID, then the paid run stopped at the
   intended immutable completion-receipt cutoff with `usage_diagnostics=NONE`. That means zero codes
   from the exceptional noncrediting-smoke diagnostic, not generic creditability or authority. The
   live run confirms the candidate cutoff; complete candidate-and-judge pre-metadata-GET,
   pre-ledger-replacement, pre-origin, and pre-capability coverage remains provider-free source/test
-  evidence. No bundle, current command, or authority follows. Run 3 passed token
+  evidence. After checkpoint `48ea635`, both judges were re-frozen at r15 and the index-14 gate
+  reported VALID, but paid launch failed safely pre-transport with `provider transport receipt cannot
+  seal owned request state`. The ledger stayed unchanged, there was no provider charge or bundle,
+  and index 14 was not consumed. The operator's wrapped-transport diagnosis is unverified analysis.
+  No current command or authority follows. Run 3 passed token
   validation and failed later at the successful-REAL benchmark boundary, but the historical caller
   discarded its typed cause. Run 4 recorded raw provider counters
   `prompt=234`, `completion=1280`, `reasoning=1307`, `cached=0`; those values disprove a universal
@@ -502,14 +563,15 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   exact owned REAL v3 unknown-token smoke case while preserving generic credit fail-closed. It also
   adds a closure-owned isolated raw GET/POST/error receipt state machine, tested for exact request,
   reservation, transport, lifecycle, one-shot, replay, cross-registry, mutation, and ledger custody.
-  Production receipt dispatch is deliberately dormant and unreachable: normal completion and metadata
-  use their prior path. Historical operator evidence from that checkpoint reports v3 candidate identity
+  Production receipt dispatch was deliberately dormant and unreachable at that historical boundary:
+  normal completion and metadata used their prior path. Historical operator evidence from that
+  checkpoint reports v3 candidate identity
   reaches
   `CANONICAL_MODEL_AND_ENDPOINT_BOUND` / `generation_metadata_bound`, is persisted BOUND, traverses the
   high-level origin-marking path, and then fails the intrinsic strict-usage predicate; the operator
   evidence cannot independently prove the opaque origin capability and does not surface the exact
   rejecting clause. The intended candidate receipt cutoff was therefore bypassed; judge verification
-  remains before capability issuance awaiting an immutable metadata receipt. The scaffold grants no
+  then remained before capability issuance awaiting an immutable metadata receipt. The scaffold grants no
   provider, credit, certification, runner, or release authority. Its focused provider-free matrix
   passed 458 tests. Direct-child hotfix
   `d2364f6b528f2e839fbef8b878552f95c4b92c9c` owns exactly seven paths and replaces validity-based
@@ -519,21 +581,25 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   rejection exposes at most one code from a closed vocabulary, while generic and RELEASE behavior
   remains in parity. Parent matrices passed 642 plus 57 tests; independent matrices passed 648 plus
   125 tests, a 3,488-case differential found zero mismatches, and review found no BLOCKER/HIGH. This
-  is provider-free local evidence, not a live success or launch authority. The exact next slice is a
-  transactional immutable completion-plus-metadata receipt composite and proof of the
-  production transport's in-flight lifecycle; production receipts must remain dormant until then.
+  is historical provider-free local evidence, not a live success or launch authority.
   Index 8's separate `SCHEMA_VALIDATION_FAILED` remains candidate reliability evidence rather than
   route-disqualification authority.
-  The current `d2364f6` inventory snapshot is raw SHA-256
-  `d27bd3a743c5926afe89e01d3ac4d69170f21b47a03494e6b07284cda5975c2e`, self-hash
-  `186f89a396ba42f4bf2e74e7c9fd0caf711d69a69b2f6f2ec88d341a760a61d1`, discovery semantics
-  `cc7f2d6ce15e210152549e526bf23ab8e8628bad2c5db29d87884f3880fb167f`, and source universe
-  `4e2f19d4e2f7b477cd07ecdbfd5c5d656a857235b8a294b23a942edd9a1b97c3`, with counts
-  `3634/3637/3591/43/35/29/15`. The smoke schema raw SHA-256 is
+  At the historical `03d6e8a` generation boundary, the inventory snapshot was raw SHA-256
+  `fb101900c8ef83ef49d32f25b49b7d7b841b1107c1fdb417e1e86f72935a4d26`, self-hash
+  `bab10efc4a5472ce6dacddbb5133505a59a0813df9200679d34badcf6fa7072d`, discovery semantics
+  `bed305fc0f024b01742d29f1229665bde283361e41e7d64f278860b1601faaf8`, and source universe
+  `421e6ac9925388fc5c81baf43f4e50dda83d6c567a473a35bc2c47906c8dbb78`, with counts
+  `3649/3652/3606/43/13/35/29/15` (sources/occurrences/gate sources/non-gating
+  controls/source kinds/logical/unsatisfied/current-manual). The smoke schema raw SHA-256 is
   `2163642df1d0b7adf463eb04887e2027e462acdd716ec83451d76c49d80db78d`.
   The immediate pre-run-10 gate with PRIMARY r14 is historical, nonauthorizing evidence and cannot
-  serve as durable launch freshness. Current command count is zero. Index 14 is the next unused
-  namespace, not paid authority.
+  serve as durable launch freshness. At that historical pre-`c627f2d` boundary, command count was
+  zero. Paid indices 14–16 were consumed; checkpoint `3a1246d` made index 16's exact live negative
+  `STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS`, and child `03d6e8a` closed that
+  construction asymmetry before producing the index-19 bundle. Its first canonical replay failed;
+  current child `c627f2d` repairs that reader, and the current operator record reports the unchanged
+  bundle valid/noncrediting/nonauthorizing offline without rerun or new spend. The next unused index
+  remains NOT_STATED.
 - **Local revocation-cascade slice:** Pushed checkpoint
   `692eb173f002818b4434b746c8801b4cbeb852e2` adds explicit PID-bound campaign and generation
   revokers, parent-to-child cascade, traceback-safe execution handoff guards, and immediate smoke
@@ -626,7 +692,8 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   ledger. The locally verified preflight contract stops before secret selection, completion, or
   durable output publication; transient private write probes are created and removed during path
   preflight. No authority transition occurred.
-- **Exact-cost admission WIP 2026-08-21:** The current provider-free path derives two exact,
+- **Historical exact-cost admission slice 2026-08-21:** The then-current provider-free path derived
+  two exact,
   self-hashed 24-request candidate cost plans from the retained singleton route, request, token,
   reasoning, pricing, retry, and discovery evidence. Preflight reports their plan hashes and exact
   retry-inclusive candidate interval/final caps. Judge admission is deliberately
@@ -635,7 +702,7 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   retains both judge routes, derives both exact 24-request judge plans, and admits their aggregate
   remaining cost below the USD 250 ledger ceiling before any judge POST. Operator-supplied manual
   per-attempt caps are additional tripwires that every exact plan must fit; they are not pricing
-  evidence or substitutes for derived caps. Current durable output is schema v1.1 and exact-joins
+  evidence or substitutes for derived caps. Then-current durable output was schema v1.1 and exact-joined
   both stage plans through reports, usage, token/reasoning plans, route/pricing hashes, attempt IDs,
   and per-attempt ledger reservations. Legacy v1.0 remains readable only as historical evidence;
   the verifier refuses to label it current `VALID`. The base exact-cost implementation passed its
@@ -704,15 +771,15 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `7c6dd26743733ae46aa94b7171ff2ca42f967ac8323b7f2d0aa95cf66f2dbc68`, binding 16 sources,
   421,754 bytes, 15 aliases, 17 claims, 11 confirmed identities across 10 roots, four unchanged
   unconfirmed identities, and seven negative-only constraints. Tencent Hy3 is confirmed, the
-  Tencent/Hunyuan organizational constraint remains negative-only, and all six directed current-triple
+  Tencent/Hunyuan organizational constraint remains negative-only, and all six directed then-selected-triple
   independence pairs replay successfully. Implementer validation passed 176 tests; root lineage passed
-  108; independent red-team passed 117, plus 22 schema and 16 runner tests. Current root affected
+  108; independent red-team passed 117, plus 22 schema and 16 runner tests. Then-current root affected
   validation passed 120/120 in 43.91s and 22 release-schema checks in 0.59s; schema verification,
   Ruff, strict mypy, strict governance JSON, and diff integrity passed. No terminal full-suite result
   is claimed. The reseal is durably checkpointed, pushed, and remote-verified at
   `a1ace778afcf308b57fe436271cdc16a2bb8e156` (`Confirm Tencent documentary lineage`). No authority
   or governed counter changed.
-- **Provider-free r2/r5/r2 preflight 2026-08-21:** The current 29,375-byte operator-supplied log at
+- **Provider-free r2/r5/r2 preflight 2026-08-21:** The then-current 29,375-byte operator-supplied log at
   raw SHA-256 `911081e8d6121896ae4edb4514855431b7024b164307e5bb808b7f4099cc85c4`
   records the exact post-`a1ace778afcf308b57fe436271cdc16a2bb8e156` preflight as
   `VALID / NONAUTHORIZING / NO PROVIDER EGRESS`. It binds two runs, 24 cases, 48 candidate and 48
@@ -774,8 +841,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   evidence completes. No operator paid command ran; the dedicated ledger remains `$0`. Safety
   withdrawal checkpoint `ca63b924f244cc9bcee2d2405d20b000ce0bb9d6` removes both smoke commands.
   The then-current 35,771-byte operator record at SHA-256
-  `612943ec6e7f138d7a85ce7f4439a5054127b385f008fb1d1af25134890ebfb9` independently confirms the
-  source mismatch, withdrawal-before-execution, zero provider completions, and `$0` ledger. Smoke and
+  `612943ec6e7f138d7a85ce7f4439a5054127b385f008fb1d1af25134890ebfb9` operator-reports
+  withdrawal-before-execution, zero provider completions, and a `$0` ledger; the source mismatch was
+  independently source-reviewed. Smoke and
   full REAL commands are absent; the ticket remains `PARTIAL / BLOCKED_SAFETY`.
 - **Origin-custody correction checkpoint 2026-08-21:** Checkpoint
   `c9a8923064ef1bb606a67b14641c4c8df55bc9ea` (`Bind smoke REAL origin custody`) is pushed and
@@ -815,7 +883,7 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   one-case command from historical checkpoint `7b2db061ceb7449674399d6133428b97b74b4b96`.
   `OpenRouterClient` construction rejected `request and atomic global input token budgets differ`
   before any provider request. The dedicated ledger remained empty at `$0`, and no bundle was
-  published, so its conditional verifier has no input and was not run. The current 44,808-byte,
+  published, so its conditional verifier has no input and was not run. The then-current 44,808-byte,
   807-line operator record has raw SHA-256
   `5b9d455d1a82c8ae70dedfb2b38ad17bcd2a881c5d3ca7a9e56bac1379cd7c19`. Both commands were
   withdrawn at that boundary;
@@ -831,7 +899,7 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   passed 122 tests and was `CLEAN` with no blocker/HIGH; seven focused ordering tests passed. Ruff,
   tracked-Python format over 510 files, strict mypy over 206 source files, schema verification, 12
   product-documentation/objective tests, strict governance JSON, and diff integrity passed. The
-  operator ran the exact fresh provider-free preflight after this checkpoint; the current
+  operator ran the exact fresh provider-free preflight after this checkpoint; the then-current
   44,808-byte, 807-line record at raw SHA-256
   `5b9d455d1a82c8ae70dedfb2b38ad17bcd2a881c5d3ca7a9e56bac1379cd7c19` reports
   `VALID / NONCREDITING / NONAUTHORIZING / NO PROVIDER EGRESS`, four logical requests, at most eight
@@ -850,7 +918,7 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   post-`59f9f40` paid smoke. The token-budget mismatch was gone, but authenticated live metadata
   refresh rejected `smoke current discovery differs from its frozen exact route` before any model
   completion. The ledger remained empty at `$0` and no bundle was published, so the conditional
-  verifier did not run. The current 44,808-byte, 807-line operator record has raw SHA-256
+  verifier did not run. The then-current 44,808-byte, 807-line operator record has raw SHA-256
   `5b9d455d1a82c8ae70dedfb2b38ad17bcd2a881c5d3ca7a9e56bac1379cd7c19`.
   The operator's normalization-versus-drift analysis is advisory and used a naive recursive scan;
   root cause remains `INCONCLUSIVE` until the actual typed frozen and live objects are compared.
@@ -864,10 +932,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   inventory had 12 endpoints and the live inventory had 13, adding `sail-research/fp4`, while the
   selected `novita/fp8` route remained unchanged. This refutes the earlier normalization hypothesis
   and establishes genuine candidate provider drift. No model completion ran and no bundle was
-  published. The gate stopped on candidate, so both judge roles remain untested. The current
+  published. The gate stopped on candidate, so both judge roles remained untested. The then-current
   47,422-byte, 855-line operator record has raw SHA-256
-  `074c9f16a580473ac930f48715e737b6951ddc34cde7cd951e0b24373a3fcc16`. All current
-  At that evidence boundary, AUTHRUNNER paid, verifier, normal-preflight, fresh-discovery, and full
+  `074c9f16a580473ac930f48715e737b6951ddc34cde7cd951e0b24373a3fcc16`. At that evidence
+  boundary, AUTHRUNNER paid, verifier, normal-preflight, fresh-discovery, and full
   commands remained absent.
   Aggregate successor `9f5c94d97b3d79d51c10e250b99244591461e959` is pushed and remote-resolved;
   owner/root each passed 164 tests, independent validation passed 237 plus seven focused tests with
@@ -881,7 +949,8 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `7b2f11aed42a7d1c5c79b68339682eb21c7f57c765db0ea0d83004a717d8fa8c`; REPLAY kept r2.
   The r6/r6/r2 live-route preflight then validated all three exact routes through 15 authenticated
   logical GETs with at most 30 attempts: zero completion, zero usage, unchanged budget and atomic
-  ledger, no output, unchanged effective config, and operator-reported `$0`. The current 50,211-byte,
+  ledger, no output, unchanged effective config, and operator-reported `$0`. The then-current
+  50,211-byte,
   906-line operator record has raw SHA-256
   `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd`. PRIMARY drifted in
   under seven hours, so discovery freshness is measured in hours.
@@ -907,10 +976,12 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   between request and atomic global input-token budgets before provider dispatch. The local parity
   repair is checkpointed and its committed-byte provider-free smoke preflight is valid. Paid smoke #2
   proved constructor parity, and the later metadata-only live-route gate established genuine
-  candidate endpoint-inventory drift. Current evidence records indices 1–13 occupied and index 14 as
-  next unused. The thirteen-entry ledger totals `$0.133173`; all entries are reconciled except r2,
-  while exact per-index costs for r10–r13, current reserved/remaining values, and current aggregate
-  call counts are unstated. Run 10 stopped at the intended immutable completion-receipt cutoff with
+  candidate endpoint-inventory drift. Current evidence reports outcomes through index 19 and a
+  25-entry global ledger totaling `$0.396223`; the next unused index is not stated. Historical
+  r14/r15/r16 cost `$0.004044`/`$0.008478`/`$0.006281`, while exact r16 terminal status, current reserved/remaining
+  values, aggregate model-call/provider-completion counts, authenticated metadata GET count, route
+  artifact identities/composition, and bundle publication are unstated. Run 10
+  stopped at the intended immutable completion-receipt cutoff with
   `usage_diagnostics=NONE`; this live-confirms only the candidate cutoff and grants no generic
   creditability or authority. Run 3's typed
   post-validation cause is unavailable because the historical caller discarded it. Run 4 proves
@@ -919,16 +990,23 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   and typed usage error worked, while exposing `generation_metadata_unbound` as the next closed
   blocker at that historical r5–r9 boundary.
   The current typed envelope is deliberately smoke-only and noncrediting. The isolated transport
-  receipt scaffold is not production authority: its raw production receipt issuer remains dormant.
+  receipt scaffold is not production authority. Its production issuer was dormant only at the
+  historical `8058e7b` boundary; checkpoint `48ea635` later activated the exact-smoke receipt
+  composite, historical child `68126e0` repaired receipt-state sealing provider-free, historical
+  checkpoint `3a1246d` supplies the closed clause diagnostic without changing
+  creditability truth, and historical `03d6e8a` closes the required-provider-parameter join
+  provider-free without widening generic/RELEASE behavior.
   At historical checkpoint `8058e7b`, an intrinsic-invalid v3 smoke record bypassed the candidate
   cutoff, was persisted BOUND, and traversed the high-level origin-marking path before strict
-  validation failed; operator evidence cannot prove the opaque origin capability. Current checkpoint
-  `d2364f6` closes that classifier bypass for exact candidate and judge smoke coordinates before
-  metadata GET, usage replacement, origin, or capability, but it does not activate production
-  receipts. No successful
-  smoke bundle exists, and the full campaign remains blocked on the completion/metadata receipt
-  composite, production in-flight proof, successful smoke evidence, and an explicit evidence-backed
-  token-detail convention policy rather than an inferred additive/subset rule.
+  validation failed; operator evidence cannot prove the opaque origin capability. Historical
+  checkpoint `d2364f6` closed that classifier bypass before metadata GET, usage replacement, origin,
+  or capability. Current replay checkpoint `c627f2d` repairs the datetime asymmetry provider-free,
+  and the latest operator record reports that the unchanged index-19 bundle now verifies offline as
+  `VALID / NONCREDITING / NONAUTHORIZING` without another provider call or new spend. That one-case
+  evidence does not establish 24-case aggregation/scoring, audit quality, calibration, qualification,
+  benchmark, AUTHSEAL, release, broad provider compatibility, or either complete production
+  publication rollback join. An explicit evidence-backed token-detail convention policy remains
+  required rather than an inferred additive/subset rule.
   Exact judge admission and the
   full-campaign cost bound cannot exist before both genuine candidate outputs. Current repository
   rules prohibit Codex from reading real credentials or accessing the provider. Judge request bytes
@@ -942,15 +1020,15 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   positive owned-REAL parent issue-consume-revoke-reject assay against the external runtime remain
   absent; the completed provider-free cascade does not substitute for that evidence. External-log
   publication and every benchmark run remain queued.
-- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY`. Provider-free, implement the
-  immutable completion-plus-metadata
-  receipt composite transactionally and prove the production
-  transport's exact in-flight lifecycle; keep all production receipt preparation, dispatch,
-  consumption, origin, and capability issuance dormant until that boundary is regression-closed.
-  Only afterward re-freeze drifted route evidence at `$0` and
-  prepare one fresh metadata-only step A under unused smoke run index 14. Only if A returns the
-  complete exact-VALID result immediately and no state changes may the operator
-  separately authorize paid B. No command is current. `V3-AUTONOMY-001` Phase 2 remains paused;
+- **Next action:** Keep `V3-AUTHRUNNER-001` `PARTIAL / BLOCKED_SAFETY`. Checkpoint `48ea635` activated
+  the receipt composite; historical child `68126e0` repaired the index-14 receipt-state-seal
+  incompatibility provider-free; historical checkpoint `3a1246d` maps index 16's live failure to
+  exact closed code `IDENTITY_REQUIRED_PROVIDER_PARAMETERS`; historical `03d6e8a` closes that
+  construction asymmetry provider-free; and current `c627f2d` completes the provider-free replay
+  repair. The latest operator record reports the unchanged index-19 bundle offline-valid,
+  noncrediting, and nonauthorizing. No operator action is authorized, no next index is stated, and no
+  command is current. Take only provider-free `V3-PLANCONSTRAINTS-001` before any campaign.
+  `V3-AUTONOMY-001` Phase 2 remains paused;
   AUTHSEAL publication, audits, benchmarks, the 24-case campaign, and release remain unauthorized.
 
 ### V3-PLANCONSTRAINTS-001 — Enforce selection/runtime route-constraint parity
@@ -990,8 +1068,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Tests:** Provider-free profile construction, route-reason sweep, plan/runtime parity, missing-
   predicate mutation, ambiguous display identity, output-parameter, reasoning-effort precedence,
   capacity, and runtime-only convention-`UNAVAILABLE` regressions.
-- **Dependencies:** A successfully sealed and offline-verified `V3-AUTHRUNNER-001` smoke. This ticket
-  is mandatory before the 24-case campaign.
+- **Dependencies:** The operator-reported, nonauthorizing `c627f2d` offline-valid sealed one-case
+  `V3-AUTHRUNNER-001` smoke satisfies only this provider-free prerequisite; it is not independent
+  bundle authentication or campaign authority. This ticket is mandatory before the 24-case campaign.
 - **Status:** `QUEUED`
 - **Operator proposal disposition:** Proposal item 1 is converted into this bounded ticket without
   adopting the operator-supplied direct-reference count as proof that these predicates are wholly
@@ -1005,8 +1084,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   bounded typed successful-usage errors preserve the cause, keep case mismatch separate, and do not
   fetch generation evidence prematurely. Items 2, 3, 4, and 6 remain
   `OPERATOR_SUPPLIED_NONAUTHORIZING_ANALYSIS`; none grants command or launch authority.
-- **Next action:** Keep queued until AUTHRUNNER produces a successful smoke bundle; then implement
-  before authoring or launching the 24-case campaign.
+- **Next action:** This queued ticket is the current actionable provider-free slice: implement it
+  before authoring or launching the 24-case campaign. It authorizes no operator action, provider
+  access, command, or campaign.
 
 ### V3-MODELREFRESH-001 — Provider-free model-refresh runtime and pricing custody
 
@@ -1031,10 +1111,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Result:** The provider-free refresh/runtime/pricing custody slice is green. The
   final full suite passed `5392` tests with `21` explicit unavailable/opt-in skips;
   independent review found no remaining provider-free blocker or HIGH.
-- **Next action:** Use the canonical nonauthorizing selection plan with an operator-run authenticated
-  metadata discovery. The resulting rootless pending registries still do not complete refresh or
-  grant selection, pricing, qualification, or promotion authority. Full completion requires fresh
-  exact provider evidence and the stock live authority quartet.
+- **Next action:** No provider or operator action is current. Preserve the provider-free mechanism;
+  the repository's current actionable slice is provider-free `V3-PLANCONSTRAINTS-001`. Resume this
+  ticket only under separate future authorization with fresh exact provider evidence and the stock
+  live authority quartet; do not emit or rerun an authenticated refresh command from this ticket.
 
 ### QUEUE-BOOTSTRAP-001
 
@@ -1779,36 +1859,41 @@ and report serialization.
 
 ## Next action
 
-### V3-AUTHRUNNER-001 — immutable receipt composite before fresh index-14 gate
+### V3-AUTHRUNNER-001 — provider-free canonical-replay datetime continuation complete
 
-- **Objective:** Complete the immutable completion-plus-metadata receipt composite and prove the
-  production transport's exact in-flight lifecycle, then re-establish a fresh exact route gate under
-  the next unused smoke namespace without granting paid authority.
+- **Objective:** Preserve historical checkpoint `03d6e8a` and the operator-owned bundle while fixing
+  the provider-free canonical-replay datetime contract without weakening strict validation or exact
+  canonical byte equality; retain zero operator commands.
 - **Dependencies:** Exact current operator evidence
-  `67b40784bce40a9369d721a922d5138a118d833105937219294778f4fc93ce98`, current source checkpoint
-  `d2364f6b528f2e839fbef8b878552f95c4b92c9c`, nonauthorizing plan
-  `ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f`, current route evidence,
-  and the operator-reported thirteen-entry ledger total `$0.133173`; all entries are reconciled
-  except r2, while exact r10–r13 per-entry costs, current reserved/remaining values, and current
-  aggregate model-call counts are not stated.
-- **Status:** `PARTIAL / BLOCKED_SAFETY`
-- **Boundary:** Every earlier command is historical; current command count is zero and indices 1–13
-  are occupied. Do not release, reuse, or edit any recorded ledger entry, infer actual r2 cost, or
-  invent r10–r13 per-index costs or current aggregate counters. Index 14 is the next unused namespace
-  only. The immediate pre-run-10 gate and PRIMARY-r14 refreeze are nonauthorizing historical evidence;
-  route evidence must be refreshed after the receipt
-  composite checkpoint. Paid B remains unauthorized until a
-  freshly emitted A
-  returns the complete exact-VALID result immediately and the operator separately authorizes B. No
-  verifier, full runner, qualification, seal, audit, benchmark, or release command is emitted.
-- **Current evidence:** `V3-AUTONOMY-001` remains `IN_PROGRESS`, but its Phase 2 working bytes are
-  paused and excluded from the clean command worktree. After the operator result is reconciled,
-  resume the typed idempotent provisioning-state/refusal slice. The exact 28-role bundle pins three
-  reviewed package resources and
-  explicitly leaves 25 external roles unresolved.
-- **Next action:** Implement the transactional immutable completion-plus-metadata receipt composite
-  and prove the production transport's exact in-flight lifecycle while receipt authority stays
-  dormant. Only afterward refresh or re-freeze
-  drifted route evidence and prepare one fresh metadata-only step A with index 14. Only after an
-  immediate complete exact-VALID A and separate explicit post-A authorization may paid B be emitted
-  or run. Reconcile that result before resuming Phase 2; do not grant runner or release authority.
+  `4616c5a143db158f3af12d0a4d58306e0da6ca9dd4bbb54e6c7484dfc2de0251`, historical negative
+  checkpoint `48ea635ab5a2fa778d6b5ce5c9a1592f0f27b375`, historical receipt-seal hotfix
+  `68126e0fe438f853fb9b75582023f807a208bdae`, historical diagnostic checkpoint
+  `3a1246daf19ffa4a772be7806bd903199634ab0b`, historical join-fix checkpoint
+  `03d6e8a644dd4a807860bfcc4dfc9d004cff3cbc`, current replay checkpoint
+  `c627f2debfa18df7d9567cd7c3300d19a9e9f5ce`, and nonauthorizing plan
+  `ecb8f621846fec735de5f541f6fc7a28f40b0bdac8c49dbbd57e37384e18b71f`. The operator reports a
+  25-entry global ledger / `$0.396223`, a complete index-19 four-entry closed run ledger /
+  `$0.39622262`, and the unchanged sealed bundle offline-valid at `c627f2d` with no new spend.
+- **Status:** `COMPLETE_NONAUTHORIZING` provider-free continuation within overall
+  `PARTIAL / BLOCKED_SAFETY`.
+- **Boundary:** Historical post-`3a1246d` operator evidence traverses receipt sealing and four earlier
+  structured-output identity clauses, then paid index 16 fails at the exact closed
+  `IDENTITY_REQUIRED_PROVIDER_PARAMETERS` clause. Historical `03d6e8a` produced the index-19 bundle;
+  current `c627f2d` repairs replay without changing those bytes. Do not release, reuse, or edit any recorded
+  ledger entry or infer unstated statuses, costs, counters, artifacts, or bundle state. The operator
+  explicitly retracts its `requested_mode` hypothesis. The next unused index is NOT_STATED. No current command or provider access is
+  authorized. No verifier, full runner, qualification, seal,
+  audit, benchmark, or release command is emitted.
+- **Current evidence:** Exact three-path replay checkpoint `c627f2d` passed 95 runtime tests, 111
+  adjacent CLI/durable/inventory/release-schema tests, and the retained 789-test AUTHRUNNER matrix as
+  separate overlapping results, plus Ruff, format, strict mypy, canonical generator, `pip check`,
+  diff integrity, and exact-byte review with no blocker/HIGH/MEDIUM. Historical `03d6e8a` retains
+  19 request-cost-preview, 26 model-benchmark, overlapping 185 usage-plus-preview, and 47-root/1,073-state
+  evidence; historical `3a1246d` retains 564 tests / 47 roots / 1,072 states. The current operator
+  file reports the same index-19 bundle offline-valid, noncrediting, and nonauthorizing with no rerun
+  or new spend. This is not runner or release authority. `V3-AUTONOMY-001` remains
+  `IN_PROGRESS`, but its Phase 2 working bytes are paused. The exact 28-role bundle pins three
+  reviewed package resources and explicitly leaves 25 external roles unresolved.
+- **Next action:** Preserve `c627f2d`, the operator-owned bundle, and ledger state. No operator action
+  is authorized; do not infer another run index or grant runner/release authority. Begin only
+  provider-free `V3-PLANCONSTRAINTS-001` before any 24-case campaign.

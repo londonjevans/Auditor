@@ -189,7 +189,7 @@ through the frozen catalog fallback while the endpoint-level effort inventory re
 candidate and replay r2 pairs were not rerun or overwritten.
 
 The capture was adopted only after exact-byte reconciliation, claim extraction, and independent
-replay. The current 57,621-byte canonical manifest has raw SHA-256
+replay. The then-current 57,621-byte canonical manifest had raw SHA-256
 `90389d27f553d6f167a21aab364cebdb40ca5afbdbcc977d9127338ace4a3008` and semantic bundle
 SHA-256 `7c6dd26743733ae46aa94b7171ff2ca42f967ac8323b7f2d0aa95cf66f2dbc68`. It binds 16 sources
 totaling 421,754 bytes, 15 aliases, 17 exact nonoverlapping claims, 11 confirmed identities across
@@ -202,7 +202,8 @@ Verification is anchored at `2026-08-21T11:47:00Z` and expires at `2027-02-17T11
 This is documentary identity/root authority only; it does not qualify a model or authorize a provider
 call, runner, seal, benchmark, audit, or release.
 
-The current r6/r6/r2 input composition and the planned smoke boundary are:
+The historical r6/r6/r2 input composition and its then-planned smoke boundary are retained below
+for custody only. They are not a current plan, command, or reusable output target:
 
 | Role/artifact | Exact path |
 | --- | --- |
@@ -215,7 +216,7 @@ The current r6/r6/r2 input composition and the planned smoke boundary are:
 | Parent 24-case corpus | `benchmarks/model_corpus/manifest.json` |
 | One-case smoke bundle | `benchmarks/model_corpus_smoke/` |
 | Retained cost ledger | `$HOME/.mmaudit/private/openrouter-cost-ledger.json` |
-| Fresh smoke output | `$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260821-s1.json` |
+| Historical smoke output (do not reuse) | `$HOME/.mmaudit/private/authrunner/authenticated-runner-smoke-evidence-20260821-s1.json` |
 
 The exact provider-free r2/r5/r2 preflight emitted from checkpoint
 `a1ace778afcf308b57fe436271cdc16a2bb8e156` has now completed and is historical; do not rerun it.
@@ -344,8 +345,9 @@ post-response issuer boundary.
 
 At safety checkpoint `ca63b924f244cc9bcee2d2405d20b000ce0bb9d6`, the unsafe launch was withdrawn before
 execution. The then-current 35,771-byte operator record at raw SHA-256
-`612943ec6e7f138d7a85ce7f4439a5054127b385f008fb1d1af25134890ebfb9` independently confirms no
-paid smoke attempt, provider completion, or spend occurred and the dedicated ledger remains `$0`.
+`612943ec6e7f138d7a85ce7f4439a5054127b385f008fb1d1af25134890ebfb9` operator-reports that no
+paid smoke attempt, provider completion, or spend occurred and that the dedicated ledger remained
+`$0`; the source mismatch was independently source-reviewed.
 
 The narrow origin-custody correction is committed, pushed, and remote-resolved at
 `c9a8923064ef1bb606a67b14641c4c8df55bc9ea` (`Bind smoke REAL origin custody`). It binds each of
@@ -461,9 +463,9 @@ EGRESS ONLY / NO MODEL COMPLETION`. All three exact routes completed 15 authenti
 within a maximum of 30 attempts. It produced zero usage records; budget and the atomic ledger were
 unchanged; output was not published; effective-config SHA-256 remained
 `42dfc90d29f68562120e35714dfe7c09b60a8b234316d2ceb520a02611e75a54`; operator-reported spend was
-`$0`. This validates the full current pre-transport metadata path, not any completion request or
-response. The PRIMARY evidence drifted in under seven hours, so the observed discovery-freshness
-window is operationally measured in hours.
+`$0`. This validates the then-current r6/r6/r2 pre-transport metadata path at that historical
+boundary, not any completion request or response. The PRIMARY evidence drifted in under seven
+hours, so the observed discovery-freshness window is operationally measured in hours.
 
 The then-current 50,211-byte, 906-line operator record had raw SHA-256
 `e7e631be16b5502f6e16b1d2aeae9ac226d8d79050263f27555f5ff8f812b0fd`. The stale r2/r5/r2
@@ -605,11 +607,12 @@ transport. Its 385-test implementer matrix and independent 363-test review passe
 format, strict mypy, schema write/verify, and diff gates. That r9/index-2 command pair is historical
 and has been removed from the current guide after execution.
 
-### Current r1–r13 accounting and immutable transport-receipt cutoff
+### Current r1–r19 accounting and canonical-replay boundary
 
-The current operator record is 100,291 bytes / 1,817 lines / SHA-256
-`67b40784bce40a9369d721a922d5138a118d833105937219294778f4fc93ce98`. Smoke indices 1–13 are
-occupied and index 14 is the next unused namespace.
+The current operator record is 115,171 bytes / 2,111 lines / SHA-256
+`4616c5a143db158f3af12d0a4d58306e0da6ca9dd4bbb54e6c7484dfc2de0251`. It reports outcomes for
+indices 17–19 after the previously occupied 1–16 and a later offline verification of the unchanged
+index-19 bundle at checkpoint `c627f2d`; the next unused index is not stated and is not inferred.
 The first four entries were individually enumerated at the prior snapshot:
 
 | index | actual USD | accounted USD | terminal status |
@@ -622,16 +625,22 @@ The first four entries were individually enumerated at the prior snapshot:
 Runs 5–9 were all `reconciled`, but the prior operator snapshot did not provide an authoritative per-index
 cost mapping for them; directly queried generation totals are not a complete ledger table and are not
 assigned to indices here. That nine-entry snapshot accounted `$0.10457436`, reserved `$0`, and left
-`$249.89542564`. The current record reports thirteen ledger entries and total `$0.133173`; all are
-reconciled except retained r2. Exact per-index costs for r10–r13, current reserved/remaining values,
-and current aggregate model-call counts are not stated. No entry may be released, superseded, reused,
-or hand-edited. Run 10 followed checkpoint `d2364f6`: an immediately preceding gate with PRIMARY
+`$249.89542564`. The pre-hotfix operator record reported thirteen ledger entries and total
+`$0.133173`, all reconciled except retained r2. The post-hotfix record then reported fifteen entries
+and total `$0.145695`, with index 14
+charged `$0.004044` and index 15 charged `$0.008478`; its per-entry status and budget fields were
+unstated. The prior record reported sixteen entries and total `$0.151976`, with index 16 charged
+`$0.006281`. The current record reports a 25-entry global ledger totaling `$0.396223`; its completed
+index-19 run has a separate closed four-entry ledger at `$0.39622262`. Exact per-index costs for
+r10–r13 and r17–r19, current reserved/remaining, terminal-entry count, and aggregate counters remain
+unstated. No entry may
+be released, superseded, reused, or hand-edited. Run 10 followed checkpoint `d2364f6`: an immediately preceding gate with PRIMARY
 re-frozen as `primary-judge-registry-r14.json` was operator-reported VALID, then the paid run stopped
 at the intended immutable completion-receipt cutoff with `usage_diagnostics=NONE`. `NONE` means zero
 codes from the exceptional noncrediting-smoke diagnostic; it is not generic creditability or
 authority. The live result confirms the candidate cutoff. Full candidate-and-judge pre-metadata-GET,
 pre-ledger-replacement, pre-origin, and pre-capability coverage remains provider-free source/test
-evidence, and no bundle exists. Run 2 remains
+evidence, and no bundle existed at that historical boundary. Run 2 remains
 conservatively accounted because no exact authenticated actual cost is available through a sanctioned
 reconciliation path. Run 3 passed token validation and then failed at the successful-REAL benchmark
 boundary; the historical caller discarded its typed cause. Run 4 retained raw provider counters
@@ -640,6 +649,49 @@ disproves a universal response-level reasoning-within-completion assumption for 
 not prove that the route always reports additively or that completion and reasoning are same-domain
 components, so neither `completion+reasoning` nor `max(completion, reasoning)` is treated as observed
 usage.
+
+After checkpoint `48ea635`, both judge routes drifted and the operator re-froze them at r15. The
+metadata gate for index 14 then reported `VALID` nonauthorizingly, but the paid launch failed safely
+before provider transport with `provider transport receipt cannot seal owned request state`. The
+ledger remained thirteen entries / `$0.133173`, no provider charge or bundle occurred, and index 14
+was not consumed. This is live negative compatibility evidence for the production-constructed
+transport, not a strong-origin positive or provider-response-graph proof. The operator's suggestion
+that a wrapped/custom transport may explain the mismatch is analysis, not independently proven fact.
+
+Receipt-state-seal hotfix checkpoint `68126e0fe438f853fb9b75582023f807a208bdae` repairs that
+receipt-state-seal incompatibility provider-free. It validates and neutralizes structurally exact
+response-derived HTTPX cookie state, rejects Cookie-bearing request plans and outgoing requests,
+removes Set-Cookie from safe response projections, and seals the cookie store, lock, and policy by
+identity and exact state. Receipt use fails before grant, reservation, or transport unless the runtime
+is CPython 3.12/3.13 with the pinned private cookie shape. Non-REAL and REAL generic/RELEASE scopes
+return before this exact-smoke compatibility gate.
+
+The prior operator record supplies post-diagnostic live evidence. The receipt-seal error remained
+gone, the route gate was reported green, and paid index 16 failed later with
+`NONCREDITING_SMOKE identity binding lacks immutable receipt custody` and exact closed code
+`usage_diagnostics=STRUCTURED_OUTPUT_ROUTING:IDENTITY_REQUIRED_PROVIDER_PARAMETERS`. This positively
+traverses the repaired receipt-seal boundary and four earlier structured-output identity clauses, then
+negatively evidences the exact required-provider-parameters equality. It is not a genuine
+candidate/judge strong-origin positive, sealed bundle, runner result, or release evidence. The
+operator explicitly retracts its prior requested-mode hypothesis: `IDENTITY_MODE` passes. The
+operator's construction-asymmetry explanation
+and request to log both sets are nonauthorizing analysis, not independent source proof; the bounded
+provider-free continuation must preserve exact equality and closed value-free diagnostics without
+logging unbounded values.
+
+The current operator record reports that historical generation checkpoint `03d6e8a` cleared that join
+and index 19 completed candidate primary/replay and judge primary/replay as
+`COMPLETE / NONCREDITING / NONAUTHORIZING`. It reports a sealed 282,802-byte bundle at SHA-256
+`e7537a2fc5aed79d274101364442faf0e515dd5879cfd8f6670784fcc2595703`. Its 02:17 entry records the
+strict-datetime replay failure and diagnosis; the new 03:23 entry reports that current replay
+checkpoint `c627f2d` verifies the same bundle bytes offline as
+`VALID / NONCREDITING / NONAUTHORIZING`, without another provider run or new spend. This is
+operator-supplied verification, not independent private-artifact authentication by Codex. Index 17
+ended after an operator-side timeout with one `uncertain_accounted` judge entry, index 18 failed
+`SCHEMA_VALIDATION_FAILED`, and index 19 completed. The next unused index is not stated. Completed
+real audits remain zero. One case does not establish 24-case aggregation/scoring, audit quality,
+calibration, qualification, benchmark, AUTHSEAL, release, readiness, or runtime authority, and no
+current command or campaign authority exists.
 
 Source checkpoint `531a9d822e9989bf2eda94530e88cf55f2dd2e0d` keeps raw provider prompt,
 completion, total, reasoning, and cached counters raw. Request-plan v3 separates the wire-visible
@@ -669,19 +721,17 @@ those probes are nonauthorizing and do not prove the in-client fetch sequence. S
 identified that initial REAL completion binding built the generic generation-reconciliation
 expectation and applied generic bindability, which intentionally rejected the v3 unknown-token
 convention before the later special `NONCREDITING_SMOKE` seam. Historical source checkpoint
-`8058e7bff88594b44aa42b8695ce5c25442ae73c` selects the special structural policy only for the
-exact owned REAL v3 unknown-token smoke case while generic credit remains fail-closed. It also adds a
-closure-owned isolated raw GET/POST/error receipt state machine, tested for exact request,
-reservation, transport, lifecycle, one-shot, replay, cross-registry, mutation, and ledger custody.
-Production receipt preparation and dispatch remain deliberately dormant and unreachable: ordinary
-completion and metadata use their prior paths. The then-current historical operator record from that checkpoint
+`8058e7bff88594b44aa42b8695ce5c25442ae73c` selected the special structural policy only for the
+exact owned REAL v3 unknown-token smoke case while generic credit remained fail-closed. It also added
+a closure-owned isolated raw GET/POST/error receipt state machine. Production receipt preparation
+and dispatch were deliberately dormant at that historical boundary. The then-current operator record
 reports that candidate
 identity now reaches `CANONICAL_MODEL_AND_ENDPOINT_BOUND` / `generation_metadata_bound`, is persisted
 BOUND, traverses the high-level origin-marking path, and then the benchmark rejects the record at its
 intrinsic strict-usage predicate. The operator record cannot independently prove the opaque origin
 capability and does not identify the exact rejecting clause. The intended completion-receipt cutoff
-was therefore bypassed; judge verification remains before capability issuance awaiting an
-immutable metadata receipt. The scaffold is not provider, credit,
+was therefore bypassed; at that historical boundary judge verification remained before capability
+issuance awaiting an immutable metadata receipt. The scaffold is not provider, credit,
 certification, runner, or release authority. Direct-child hotfix
 `d2364f6b528f2e839fbef8b878552f95c4b92c9c` owns exactly seven paths and uses a closed exact
 candidate/judge smoke-scope classifier independent of strict validity. Exact smoke coordinates,
@@ -690,33 +740,100 @@ replacement, owned-REAL origin marking, or generation-verification capability is
 rejection exposes at most one code from a closed vocabulary; generic and RELEASE behavior stays in
 parity. Parent matrices passed 642 plus 57 tests; independent matrices passed 648 plus 125 tests, a
 3,488-case differential found zero mismatches, and review found no BLOCKER/HIGH. This is provider-free
-local evidence, not a live success or launch authority. The exact next provider-free slice is a
-transactional
-immutable completion-plus-metadata receipt composite and proof of the production transport's
-in-flight lifecycle. Production receipts must remain dormant until that boundary is regression-closed.
+local evidence, not a live success or launch authority.
+
+Current checkpoint `c627f2debfa18df7d9567cd7c3300d19a9e9f5ce` is the exact three-path replay
+repair and direct child of historical five-path join checkpoint
+`03d6e8a644dd4a807860bfcc4dfc9d004cff3cbc`, which is the exact child of historical
+clause-diagnostic checkpoint `3a1246daf19ffa4a772be7806bd903199634ab0b`.
+That diagnostic is the exact five-path child of receipt-state-seal hotfix
+`68126e0fe438f853fb9b75582023f807a208bdae`; that hotfix is the exact
+four-path child of historical receipt-composite checkpoint
+`48ea635ab5a2fa778d6b5ce5c9a1592f0f27b375`. The receipt-composite checkpoint activates receipt
+preparation, dispatch, all-or-none
+completion-plus-metadata composition, and consumption only for exact canonical candidate or judge v3
+`NONCREDITING_SMOKE` coordinates. Generic and RELEASE requests retain the historical path. The
+source path is designed to bind completion POST retry vectors and generation-metadata GET polling vectors to the
+same client, transport, task, thread, PID, and ledger, consumes the composite inside the corresponding
+usage-origin or generation-capability boundary, and scrubs raw prompt, header, and response objects
+after successful sealing. Public `StructuredCompletion` remains the two-field `value` / `usage_record`
+carrier. The hotfix fixes cookie/state sealing and response-cookie cleanup without widening that
+scope. Historical `3a1246d` refines the prior composite `STRUCTURED_OUTPUT_ROUTING` failure into
+the first matching member of a closed set of 35 ordered, unique, value-free clause codes. It preserves
+the previous boolean creditability truth and ordering, optional/missing/None/equality and unbound
+behavior, generic and RELEASE scope parity, and the production call-root set. Both the legacy bool
+helper and new diagnostic helper are captured and pristine/retarget checked. Historical `03d6e8a`
+captures the exact CANDIDATE/JUDGE v3 `NONCREDITING_SMOKE` reasoning-identity join. Disabled
+reasoning requires neither the evidence nor identity required-parameter set to contain `reasoning`; active reasoning requires
+evidence `reasoning` plus identity reasoning capability/support, while only exact candidate/judge v3
+smoke may omit `reasoning` from the identity required-parameter set. Generic/RELEASE exact equality
+and the production call-root set remain unchanged. Current `c627f2d` removes only the call-level
+strict override whose propagation into nested mapping-copy validators rejected canonical JSON
+datetimes. Model-level strict contracts, exact bundle type, the bounded bytes input, and exact
+canonical-byte equality remain mandatory. The HTTP stack remains
+exact-pinned to `h11==0.16.0`, `httpcore==1.0.9`, and `httpx==0.28.1`.
+
+Current `c627f2d` provider-free validation passed 95 smoke-runtime tests, 111 adjacent
+CLI/durable/inventory/release-schema tests, and the retained exact 789-test AUTHRUNNER matrix as three
+separate overlapping results. A genuine synthetic 265,244-byte sealed v1.2 bundle with two runs and
+four usages round-trips through the real seal/serializer/parser, while coercive string and whitespace
+variants reject canonically. Ruff format/check, strict mypy over the changed source, canonical umbrella
+release-schema/inventory generator verification, `pip check`, and diff integrity passed; independent
+exact-byte review found no blocker, HIGH, or MEDIUM. Historical `03d6e8a` retains 19
+request-cost-preview tests, 26 model-benchmark tests, and an overlapping 185-test usage-plus-preview
+run; 166 usage tests overlap its 789 matrix, so no combined unique total is inferred. Its independent
+guard review covered 47 roots and 1,073 reachable function states. A clean
+subprocess mutation loop replaced every unique function's code with an identity-distinct
+same-semantics `code.replace(co_name=...)`, observed the pristine guard fail, restored the code, and
+observed recovery for all 1,073 states. Ruff format/check, strict mypy over `usage.py`, canonical
+release-schema generator verification (including autonomy inventory), and diff integrity passed.
+Historical `68126e0` additionally retains 785 focused tests, one actual pinned-HTTPX HTTP/1.1 local
+numeric-loopback integration with two chunked responses, and `pip check`; the loopback used no
+provider, public network, or private artifact. The repository-wide
+`.venv/bin/pytest -q` result is `INCOMPLETE`, not a pass: it stopped after 1,492 passed and 25 skipped
+at the deterministic pre-existing
+`tests/unit/test_candidate_benchmark.py::test_authenticated_runner_candidate_consumes_exact_cost_preview_inventory`
+failure after 3,878.41 seconds. The failure message was `candidate benchmark request accounting is
+inconsistent`; benchmark cases reported `ReasoningPolicyError` with zero observed usage. The same
+exact test fails on untouched parent `4e035a9d58b98284e7cceecf1fb844bc84e0dbe6`, so it was not
+introduced by the receipt-composite lineage. No repository-wide pass is claimed for `c627f2d`.
+
+The current operator record supplies one operator-reported production candidate/judge smoke and
+offline replay, but it remains one-case, noncrediting, and nonauthorizing. The historical index-14
+live negative shows that checkpoint `48ea635` could not seal the
+owned request state. Historical child `68126e0` fixes that boundary provider-free; paid indices 14–16
+traverse receipt sealing plus part of the actual-provider response path, with historical index 16
+rejecting at exact `IDENTITY_REQUIRED_PROVIDER_PARAMETERS`; later index 19 traverses those exact
+routes end to end according to the operator record. That does not establish broad provider/private-
+graph compatibility beyond the exact reported routes. Two complete production publication
+rollback joins remain unexecuted; the rollback ordering and per-stage cleanup are source-reviewed and
+independently regressed. The bounded pure-Python guard covers persistent ordinary
+subordinate module/class/instance/function identity, code, defaults, keyword defaults, globals,
+closure-reference, and attribute drift plus reachable mutation or replacement of the guard's frozen
+state holder. It excludes deliberate introspective writes into closure-owned live authority-registry
+dicts or cells; coordinated mutation of the outermost checker together with its expected references;
+and tracing, profiling, native-memory, or equivalent runtime compromise.
 Index 8 independently failed `SCHEMA_VALIDATION_FAILED`; this is candidate reliability evidence, not
 route-disqualification authority.
 
 The `531a9d8` 906-test matrix and independent review were CLEAN. The identity successor's 340 focused
 tests, Ruff, format, strict mypy, generator write/verify, and independent no-HIGH review also passed.
-The dormant receipt scaffold's focused provider-free matrix passed 458 tests. The current `d2364f6`
+The dormant receipt scaffold's focused provider-free matrix passed 458 tests. Historical `3a1246d`
+retains its independent 564-test / 47-root / 1,072-state evidence. The current committed `c627f2d`
 inventory raw/self/discovery/universe hashes are
-`d27bd3a743c5926afe89e01d3ac4d69170f21b47a03494e6b07284cda5975c2e`,
-`186f89a396ba42f4bf2e74e7c9fd0caf711d69a69b2f6f2ec88d341a760a61d1`,
-`cc7f2d6ce15e210152549e526bf23ab8e8628bad2c5db29d87884f3880fb167f`, and
-`4e2f19d4e2f7b477cd07ecdbfd5c5d656a857235b8a294b23a942edd9a1b97c3`; counts are
-`3634/3637/3591/43/35/29/15`. The smoke schema raw SHA-256 is
+`6fd2608825a5dff950f8c0a0239a446857c82783603ec81a15b060391c3d4778`,
+`d92f5848dd854f9f3884221422f48e3e083f6d847e3efebc47e3769b5e69b432`,
+`bed305fc0f024b01742d29f1229665bde283361e41e7d64f278860b1601faaf8`, and
+`b169d98547d70f9398447eedab073989e49f38fe8d943ec8171bfb2fcce766ed`; counts are 3,649 sources /
+3,652 occurrences / 3,606 gate sources / 43 non-gating controls / 13 source kinds / 35 logical gates /
+29 unsatisfied / 15 current-manual. The smoke schema raw SHA-256 is
 `2163642df1d0b7adf463eb04887e2027e462acdd716ec83451d76c49d80db78d`.
 
-The operator also reports the immediate pre-run-10 gate and PRIMARY-r14 refreeze as VALID, but this
-is nonauthorizing historical evidence and sub-hour primary drift means it is not durable launch
-freshness. No AUTHRUNNER command is current. Index 14 is the next unused ledger namespace, not
-authorization. Only
-after the immutable completion-plus-metadata receipt composite and production in-flight proof are
-checkpointed may fresh discovery/refreeze and metadata-only step A be prepared
-adjacent enough to avoid route drift; paid
-step B remains separately authorized only after A returns an immediate complete exact-VALID result.
-`V3-PLANCONSTRAINTS-001` is queued after successful smoke and is mandatory before the 24-case
+The operator's r15 judge re-freezes and every later result remain nonauthorizing. No AUTHRUNNER
+command is current; the next unused index is not stated. The exact next safe action is to preserve
+`c627f2d`, the operator-owned bundle, and ledger state. No AUTHRUNNER action is authorized and no new
+index may be inferred. Begin only provider-free
+`V3-PLANCONSTRAINTS-001`, which is mandatory before the 24-case
 campaign. Its shared route-predicate profile must explicitly mark runtime token-detail convention
 `UNAVAILABLE` until authoritative evidence exists; r3/r4 cannot populate it. Proposal item 5 is
 `ADOPTED_NONAUTHORIZING / IMPLEMENTED` at `531a9d8`: bounded typed successful-usage diagnostics keep
