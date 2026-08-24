@@ -364,14 +364,36 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   while the ancestor closes as v1.2 `RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING`; neither closure
   creates promotion, coverage, specialist, or assurance credit. Exact shared request, token, USD,
   global-ordinal, and append-order custody; max-cap refusal; zero-transport resume; and unchanged
-  direct and specialist paths pass locally.
-- **Remaining limitation:** Full-tree live opaque capability and promotion are not implemented for
-  this exact one-level generic zero-retained tree. Deeper recursion, retained-surface recursion,
-  specialist-role recursion, and positive nonempty REAL-provider execution remain external or
-  unimplemented; synthetic and MOCK evidence are not provider evidence.
-- **Current action:** Add only full-tree live opaque capability and promotion for the exact
-  one-level generic zero-retained tree, preserving the nonauthorizing recursive closures until an
-  exact live promotion exists.
+  direct and specialist paths pass locally. Checkpoint
+  `e61b7d7d168488bea8f27f40b31c4db4a0bf8386`, direct child of
+  `ea85af3849db30c9832624c675594541a698ab06`, owns the exact 20-path source manifest recorded in
+  the worklog and adds a distinct PID-local opaque verifier plus journal-owned promotion
+  capability for the complete five-request tree. One v1.1 promotion and
+  v1.1 recovered output bind the root and nested families, both closures, the superseded bridge,
+  and three ordered successful leaves. Its four public v1.2 recovery requests expose exactly one
+  `SUPERSEDED_TRUNCATED_BRIDGE` and three `SUCCESSFUL_LEAF` dispositions. The bridge remains
+  accountable but receives no artifact, review, coverage, floor, specialist, or completion credit;
+  only the three leaves retain ordinary successful-artifact credit. Coverage and assurance require
+  every direct or recursive promoted composite to consume its exact parent-provisional and
+  child/leaf ordinary-artifact surface partitions; a zero-retained parent needs no invented
+  composite reference, and unrelated artifacts cannot substitute for either partition. Local
+  synthetic usage was re-attested only to exercise the REAL-only identity predicates; it is not
+  genuine provider execution. MOCK recursive recovery remains unpromoted and noncrediting and
+  resumes with byte-stable zero transport. Separate overlapping validation gates passed `108`
+  evidence/journal/promotion, `63` model-coverage, `244` assurance, `58` scheduler-model, `9`
+  scheduler/recovery runtime, `105` scheduler-journal, `2` exact direct/recursive live synthetic,
+  `1` MOCK recursive, `1` specialist direct compatibility, `4` PLAN selected-display regression,
+  and `57` final inventory/schema tests. Focused consumer and independent adversarial matrices also
+  passed without additive counting; Ruff/format, separate strict-mypy runs, canonical generation,
+  import smoke, diff integrity, and independent no-blocker/HIGH review passed.
+- **Remaining limitation:** Positive nonempty full-pipeline promotion backed by genuine provider
+  execution remains unavailable. Deeper recursion, retained surfaces on the recursive bridge, and
+  specialist-role recursion remain unimplemented; synthetic re-attestation and MOCK evidence are
+  not provider evidence. The ticket therefore remains `PARTIAL` and grants no provider, campaign,
+  completion, or release authority.
+- **Current action:** Require separately authorized genuine provider-backed positive promotion and
+  a terminal maximum-assurance result before completion. Do not infer a provider command or run
+  index; keep deeper, retained-bridge, and specialist recursion fail closed.
 
 ## V3-COVERAGE-001 — Risk-tiered feasible surface coverage
 

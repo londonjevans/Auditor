@@ -4,20 +4,20 @@ The objective source is `docs/remediation/v3/product_completion_goal.txt`, with 
 `e3b895de9c7f5c7836dd7b77c09ae2a31adefa9469d46588ee6f52b78caa0d15`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-HISTORICAL_ENTRY_SCOPE: Every timestamped entry below the newest `2026-08-24T16:44:35Z` entry is a
+HISTORICAL_ENTRY_SCOPE: Every timestamped entry below the newest `2026-08-24T19:00:38Z` entry is a
 boundary-local historical snapshot. Any `current`, `latest`, `next`, or command wording inside those
 older entries applies only at that recorded boundary and is not present authority or current action.
 
-AUTORUN_STATUS: V3_TRUNCATION_001_ONE_LEVEL_GENERIC_RECURSIVE_RECOVERY_CHECKPOINTED_PROVIDER_FREE_NONAUTHORIZING_FULL_TREE_LIVE_PROMOTION_NEXT
+AUTORUN_STATUS: V3_TRUNCATION_001_ONE_LEVEL_GENERIC_FULL_TREE_LIVE_PROMOTION_CHECKPOINTED_PARTIAL_PROVIDER_FREE_SYNTHETIC_REATTESTED_NONAUTHORIZING_ZERO_CURRENT_EXTERNAL_COMMANDS
 OPERATOR_RESULTS_CURRENT_WORKTREE_STATUS: USER_OWNED_DRIFT_DETECTED_NOT_OPENED_OR_RECONCILED_FOR_CURRENT_PROVIDER_FREE_SOURCE_TICKET
 LAST_RECONCILED_OPERATOR_RESULTS: `4616c5a143db158f3af12d0a4d58306e0da6ca9dd4bbb54e6c7484dfc2de0251` / 115171 bytes / 2111 lines; operator-reported, nonauthorizing, and not independently authenticated by Codex.
 CURRENT_MILESTONE: M1-DETERMINISTIC-PRODUCT (REACHED)
 CURRENT_TICKET: V3-TRUNCATION-001
-CURRENT_LOCAL_SLICE_STATUS: ONE_LEVEL_GENERIC_RECURSIVE_RECOVERY_COMPLETE_TICKET_PARTIAL_PROVIDER_FREE_NONAUTHORIZING
+CURRENT_LOCAL_SLICE_STATUS: ONE_LEVEL_GENERIC_FULL_TREE_LIVE_PROMOTION_COMPLETE_TICKET_PARTIAL_PROVIDER_FREE_SYNTHETIC_REATTESTED_NONAUTHORIZING
 LAST_COMPLETED_TICKET: V3-PLANCONSTRAINTS-001 (COMPLETE)
-NEXT_ACTION: Add only full-tree live opaque capability and promotion for the exact one-level generic zero-retained recovery tree. Keep deeper, retained-surface, specialist-role recursive, serialized-only, MOCK, ambiguous, over-depth, budget-exhausted, and unpromoted paths noncreditable. REAL provider execution remains external; no provider, operator, or inferred run-index action is authorized.
-LAST_COMMAND: Recursive checkpoint `dcd9ab2` passed `66` journal tests, `2` recursive integrations, `1` direct integration, `1` specialist integration, `158` adjacent scheduler runtime/journal tests, `26` promotion/evidence tests, `64` adjacent recovery tests, `58` scheduler-model tests, `32` inventory tests, and `1` schema test. A separate operator-free governance selection passed `19` product-documentation/objective tests. Ruff check/format, strict mypy, canonical generator write/verify, import, and diff-check passed. Independent latest-byte review found no blocker/HIGH. No provider, network, credential, private-ledger, operator-record, or run-index action occurred.
-LAST_RESULT: ONE_LEVEL_GENERIC_RECURSIVE_TRUNCATION_RECOVERY_CHECKPOINTED_PARTIAL_PROVIDER_FREE_NONAUTHORIZING — one exact zero-retained generic child may open one nested family. The nested family closes as v1.1 `COVERAGE_CLOSED`; its root ancestor closes as v1.2 `RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING`. Exact request/token/USD/global-ordinal/append-order custody, max-cap refusal, zero-transport resume, and direct/specialist compatibility pass. Recursive promotion, coverage, specialist, and assurance credit remain absent.
+NEXT_ACTION: Require separately authorized genuine provider-backed positive full-pipeline promotion and a terminal maximum-assurance result before completing V3-TRUNCATION-001. Deeper recursion, retained surfaces on the recursive bridge, and specialist-role recursion remain fail closed. No provider, operator, or inferred run-index action is authorized.
+LAST_COMMAND: Checkpoint `e61b7d7` passed separate overlapping gates of `108` truncation evidence/journal/promotion tests in 415.50s, `63` model-coverage tests in 218.47s, `244` assurance tests in 663.44s, `58` scheduler-model tests, `9` scheduler/recovery runtime tests, `105` scheduler-journal tests, `2` exact direct/recursive live synthetic promotion/replay nodes in 155.74s, `1` MOCK recursive integration in 251.93s, `1` specialist direct compatibility integration in 158.93s, `4` PLAN selected-display regressions in 0.21s, and a final `57` autonomy-inventory/release-schema tests in 46.04s (independent audit: 46.85s). Focused consumer and independent adversarial matrices also passed but are not added to those full-suite counts. Ruff check/format, separate strict-mypy runs over `9` and `10` source files, canonical generator write/verify, import smoke, diff-check, and `19` operator-free product-documentation/objective tests passed. Independent final frozen-byte review found no blocker/HIGH. No provider, network, credential, private-ledger, operator-record, or run-index action occurred.
+LAST_RESULT: ONE_LEVEL_GENERIC_FULL_TREE_LIVE_PROMOTION_CHECKPOINTED_PARTIAL_PROVIDER_FREE_SYNTHETIC_REATTESTED_NONAUTHORIZING — distinct opaque recursive verification and journal-promotion capabilities bind all five live usage/context identities. One v1.1 promotion and v1.1 recovered output produce four public v1.2 requests with one superseded truncated bridge and three ordered successful leaves. The bridge earns no review or completion credit; exact direct and recursive parent-plus-child/leaf partitions are universally consumed, including zero-retained parents without invented references. Synthetic REAL re-attestation is not genuine provider execution; MOCK remains unpromoted, noncrediting, and zero-transport on resume.
 REAL_MODEL_CALLS_ATTEMPTED: NOT_RECONCILED_FOR_CURRENT_USER_OWNED_FILE; LAST_RECONCILED_RECORD_NOT_STATED
 REAL_MODEL_CALLS_SUCCEEDED: NOT_RECONCILED_FOR_CURRENT_USER_OWNED_FILE; LAST_RECONCILED_RECORD_NOT_STATED
 REAL_MODEL_CALLS_REJECTED: NOT_RECONCILED_FOR_CURRENT_USER_OWNED_FILE; LAST_RECONCILED_RECORD_NOT_STATED
@@ -29,7 +29,75 @@ OPENROUTER_BUDGET_REMAINING_USD: NOT_STATED_IN_LAST_RECONCILED_25_ENTRY_LEDGER; 
 HISTORICAL_GOVERNED_LEDGER_USED_USD: 0.0034764325
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable. A private holdout and independently adjudicated professional comparison are not supplied, but those optional human/private tiers are objective-out-of-scope and are not current completion blockers.
-LAST_CHECKPOINT_COMMIT: dcd9ab2be15f4a0416372c110734b5079af1efe2, direct child of d738f2760da047d15d4e53f87d6e0aeaf13d442a, owns exactly 8 source, generated-inventory, fake-provider, unit-test, and local-integration paths; `git diff-tree --no-commit-id --name-only -r dcd9ab2be15f4a0416372c110734b5079af1efe2` is the exact path manifest. It excludes governance, operator results, `.gitignore`, provider execution, secrets, and private-ledger access. Current inventory raw/self/discovery/universe hashes are c9452fb8bb504a743312264ccaddfbd47d7a11997bd04c0861709960153c985a, 701ff7994152cc5a8fc0174341a3e8963573741f200e24f0ff3566720a069140, 4f1adb9e0bc8db7899fa4eb2928ee03f87d4d61d4113a0555fcdae750e260042, and 9fc20c8097d38f719169e360836806f8ffec0d175a1941aa942089163fed53e5; counts remain 3,657 sources / 3,660 occurrences / 3,614 gate sources / 43 non-gating controls / 13 source kinds / 35 logical gates / 29 unsatisfied / 15 current-manual. Prior specialist checkpoint: 721d17a; retained-parent checkpoint: 390e9b2; PLANCONSTRAINTS repair checkpoint: 425502c; historical PLANCONSTRAINTS base: 7ef4717; historical replay checkpoint: c627f2d; paused Phase-2 stash: 31b8d30f14a012c1c7fe1b7e2d5647c874fbbd50.
+LAST_CHECKPOINT_COMMIT: e61b7d7d168488bea8f27f40b31c4db4a0bf8386, direct child of ea85af3849db30c9832624c675594541a698ab06, owns exactly 20 source, generated-artifact, generator, and unit-test paths; `git diff-tree --no-commit-id --name-only -r e61b7d7d168488bea8f27f40b31c4db4a0bf8386` is the exact path manifest. It excludes governance, operator results, `.gitignore`, provider execution, secrets, and private-ledger access. Current inventory raw/self/discovery/universe hashes are 827b3fb3153366efdd4f59ac30b439612c26523675d134cf502d6d36b3094fec, 1cf5af44108c390eebd88f02b88cf0b8ae79c48a99c8a2f6b400400de3e14cda, 4af6458862d94af02d77db5f25ff9bdb24ced56c665d2a7402111af795138e99, and 6fdfd55652cb8776263ef969f168b34ffd5c557aece263cd70a4b7b545888913; counts are 3,667 sources / 3,670 occurrences / 3,624 gate sources / 43 non-gating controls / 13 source kinds / 35 logical gates / 29 unsatisfied / 15 current-manual. Prior recursive checkpoint: dcd9ab2; specialist checkpoint: 721d17a; retained-parent checkpoint: 390e9b2; PLANCONSTRAINTS repair checkpoint: 425502c; historical PLANCONSTRAINTS base: 7ef4717; historical replay checkpoint: c627f2d; paused Phase-2 stash: 31b8d30f14a012c1c7fe1b7e2d5647c874fbbd50.
+
+## 2026-08-24T19:00:38Z — one-level full-tree live promotion checkpointed
+
+- Current ticket: `V3-TRUNCATION-001` remains `PARTIAL`; the provider-free full-tree live
+  capability and promotion slice is complete and nonauthorizing at
+  `e61b7d7d168488bea8f27f40b31c4db4a0bf8386`, direct child of
+  `ea85af3849db30c9832624c675594541a698ab06`.
+- Completed changes: a distinct PID-local opaque verifier binds the original parent, truncated
+  bridge, three successful leaves, five exact live usage/context identities, both families, both
+  closures, and their surface partition. A journal-owned capability appends one v1.1 promotion with
+  a v1.1 recovered output. Four public v1.2 recovery requests expose one
+  `SUPERSEDED_TRUNCATED_BRIDGE` and three ordered `SUCCESSFUL_LEAF` dispositions. Only leaves keep
+  ordinary artifact credit. Assurance consumes exact parent and child/leaf partitions for every
+  direct and recursive promotion, admits zero-retained parents without invented references, and
+  rejects unrelated-artifact substitution. MOCK recovery remains unpromoted/noncrediting and
+  resumes with byte-stable zero transport.
+- Files changed: the exact 20-path source checkpoint contains the generated autonomy inventory and
+  scheduler schema, canonical generator, nine production modules, and eight unit-test files. This
+  separate reconciliation changes only the four queue/worklog files and two product-assertion tests.
+  User-owned `.gitignore` and `docs/remediation/v3/operator_results.md` remain excluded and unread.
+- Exact source manifest: `docs/remediation/v3/autonomy_gate_inventory.json`,
+  `schemas/scheduler_state.schema.json`, `scripts/generate_release_schemas.py`,
+  `src/mmaudit/models/scheduler.py`, `src/mmaudit/models/truncation_closure.py`,
+  `src/mmaudit/models/truncation_recovery_journal.py`,
+  `src/mmaudit/orchestration/assurance.py`,
+  `src/mmaudit/orchestration/autonomy_gate_inventory.py`,
+  `src/mmaudit/orchestration/model_coverage.py`, `src/mmaudit/orchestration/pipeline.py`,
+  `src/mmaudit/orchestration/scheduler.py`,
+  `src/mmaudit/orchestration/truncation_recovery_evidence.py`, `tests/unit/test_assurance.py`,
+  `tests/unit/test_autonomy_gate_inventory.py`, `tests/unit/test_model_coverage.py`,
+  `tests/unit/test_release_schemas.py`,
+  `tests/unit/test_scheduler_truncation_promotion_integration.py`,
+  `tests/unit/test_truncation_recovery_evidence.py`,
+  `tests/unit/test_truncation_recovery_journal.py`, and
+  `tests/unit/test_truncation_recovery_promotion_models.py`.
+- Commands run / results: separate overlapping gates passed `108` truncation
+  evidence/journal/promotion tests in 415.50s, `63` model-coverage tests in 218.47s, `244`
+  assurance tests in 663.44s, `58` scheduler-model tests, `9` scheduler/recovery runtime tests,
+  `105` scheduler-journal tests, `2` exact direct/recursive live synthetic promotion/replay nodes
+  in 155.74s, `1` MOCK recursive integration in 251.93s, `1` specialist direct compatibility
+  integration in 158.93s, `4` PLAN selected-display regressions in 0.21s, and a final `57`
+  autonomy-inventory/release-schema tests in 46.04s (independent audit: 46.85s). Focused consumer
+  and independent adversarial matrices passed but are not additive to these full-suite counts. The
+  operator-free governance selection passed `19` tests. Ruff check/format, separate strict-mypy
+  runs over `9` and `10` source files, canonical generator write/verify, import smoke, and
+  diff-check passed. Independent frozen-byte review found no blocker/HIGH.
+- Evidence boundary: the REAL-only predicates were exercised with local synthetic re-attested
+  usage. That is not genuine provider execution and grants no provider, campaign, completion,
+  benchmark, AUTHSEAL, audit, or release authority. No provider, network, credential,
+  private-ledger, operator-record, or run-index action occurred.
+- Remaining limitations / next safe action: genuine provider-backed positive full-pipeline
+  promotion and a terminal maximum-assurance result remain required. Deeper recursion, retained
+  surfaces on the recursive bridge, and specialist recursion remain unsupported. No current
+  provider command or run index exists or is inferred.
+
+## 2026-08-24T17:02:55Z — one-level full-tree live promotion opened
+
+- Current ticket: `V3-TRUNCATION-001` is `IN_PROGRESS` only for provider-free full-tree live
+  opaque capability and promotion of the already-supported one-level generic zero-retained tree.
+- Planned change: bind the exact root, truncated child, successful root sibling, nested family,
+  two successful grandchildren, both closures, live provider-attempt and usage identities,
+  contexts, surfaces, request/token/USD custody, append order, and durable journal promotion before
+  any recursive coverage or assurance credit. Preserve direct and specialist recovery behavior.
+- Fail-closed scope: deeper, retained-surface, specialist-role recursive, MOCK, serialized-only,
+  copied, ambiguous, swapped, incomplete, over-budget, and unpromoted trees remain noncreditable.
+  Structural closure bytes alone do not authorize promotion.
+- External effects: none authorized or required; no provider, network, credential, private-ledger,
+  operator-record, or run-index action.
 
 ## 2026-08-24T16:44:35Z — one-level generic recursive recovery checkpointed
 

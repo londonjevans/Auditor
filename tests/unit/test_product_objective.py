@@ -125,26 +125,35 @@ def test_current_completion_authority_has_no_legacy_human_gate() -> None:
     assert "not pushed or remote-resolved" in autonomy_evidence
     assert "owns exactly 18 Phase-1 paths" in autonomy_evidence
     assert "excludes operator_results" in autonomy_evidence
-    assert "c9452fb8bb504a743312264ccaddfbd47d7a11997bd04c0861709960153c985a" in (autonomy_evidence)
-    assert "701ff7994152cc5a8fc0174341a3e8963573741f200e24f0ff3566720a069140" in (autonomy_evidence)
-    assert "4f1adb9e0bc8db7899fa4eb2928ee03f87d4d61d4113a0555fcdae750e260042" in (autonomy_evidence)
-    assert "9fc20c8097d38f719169e360836806f8ffec0d175a1941aa942089163fed53e5" in (autonomy_evidence)
-    assert "3657 unique completion inputs / 3660 occurrences" in autonomy_evidence
-    assert "3614 gate sources" in autonomy_evidence
+    assert "827b3fb3153366efdd4f59ac30b439612c26523675d134cf502d6d36b3094fec" in (autonomy_evidence)
+    assert "1cf5af44108c390eebd88f02b88cf0b8ae79c48a99c8a2f6b400400de3e14cda" in (autonomy_evidence)
+    assert "4af6458862d94af02d77db5f25ff9bdb24ced56c665d2a7402111af795138e99" in (autonomy_evidence)
+    assert "6fdfd55652cb8776263ef969f168b34ffd5c557aece263cd70a4b7b545888913" in (autonomy_evidence)
+    assert "3667 unique completion inputs / 3670 occurrences" in autonomy_evidence
+    assert "3624 gate sources" in autonomy_evidence
+    assert "e61b7d7d168488bea8f27f40b31c4db4a0bf8386" in autonomy_evidence
+    assert "ea85af3849db30c9832624c675594541a698ab06" in autonomy_evidence
     assert "dcd9ab2be15f4a0416372c110734b5079af1efe2" in autonomy_evidence
     assert "d738f2760da047d15d4e53f87d6e0aeaf13d442a" in autonomy_evidence
     assert "721d17a4ff08cc52ccdf0aa92ed04258e4137807" in autonomy_evidence
     assert "425502c5cbc173578053423d946ef24843f26285" in autonomy_evidence
-    assert "66 full journal" in autonomy_evidence
-    assert "2 recursive integration" in autonomy_evidence
-    assert "1 direct compatibility" in autonomy_evidence
+    assert "108 evidence/journal/promotion" in autonomy_evidence
+    assert "63 model-coverage" in autonomy_evidence
+    assert "244 assurance" in autonomy_evidence
+    assert "105 scheduler-journal" in autonomy_evidence
+    assert "2 exact direct-and-recursive live synthetic" in autonomy_evidence
+    assert "1 provider-free MOCK recursive integration" in autonomy_evidence
     assert "1 specialist compatibility" in autonomy_evidence
-    assert "158 scheduler runtime/journal adjacent" in autonomy_evidence
-    assert "26 promotion/evidence" in autonomy_evidence
-    assert "64 recovery-adjacent" in autonomy_evidence
     assert "58 scheduler-model" in autonomy_evidence
-    assert "32 inventory" in autonomy_evidence
-    assert "1 schema tests" in autonomy_evidence
+    assert "9 scheduler-runtime" in autonomy_evidence
+    assert "57 schema/inventory" in autonomy_evidence
+    assert "4 focused original PLAN display-name regression" in autonomy_evidence
+    assert "full-tree live promotion custody" in autonomy_evidence
+    assert "all five live usage/context" in autonomy_evidence
+    assert "one bridge and three leaves" in autonomy_evidence
+    assert "universal direct and recursive parent plus child/leaf" in autonomy_evidence
+    assert "Synthetic REAL attestations" in autonomy_evidence
+    assert "not provider execution" in autonomy_evidence
     assert "independent no-blocker/HIGH review" in autonomy_evidence
     assert "repository-wide suite remains INCOMPLETE, not a pass" in autonomy_evidence
     assert "VALID / NONCREDITING / NONAUTHORIZING" in autonomy_evidence
@@ -157,9 +166,9 @@ def test_current_completion_authority_has_no_legacy_human_gate() -> None:
     assert "leaves 25 external roles unresolved" in autonomy_evidence
     assert "Phase 2" in requirements["U"]["remaining_proof"]
     assert "Checkpoint the completed" not in requirements["U"]["remaining_proof"]
-    assert runtime_status["candidate_commit"] == "dcd9ab2be15f4a0416372c110734b5079af1efe2"
+    assert runtime_status["candidate_commit"] == "e61b7d7d168488bea8f27f40b31c4db4a0bf8386"
     assert runtime_status["autonomy_phase_zero_inventory"]["current_reconciliation_commit"] == (
-        "dcd9ab2be15f4a0416372c110734b5079af1efe2"
+        "e61b7d7d168488bea8f27f40b31c4db4a0bf8386"
     )
     assert runtime_status["candidate_commit_pushed"] is False
     assert runtime_status["candidate_commit_remote_resolved"] is False

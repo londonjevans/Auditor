@@ -78,8 +78,10 @@ PLANCONSTRAINTS_REPAIR_CHECKPOINT = "425502c5cbc173578053423d946ef24843f26285"
 PLANCONSTRAINTS_REPAIR_PARENT_CHECKPOINT = "390e9b29e748e38d511da9f0a54cfc4fa1a2c0a8"
 CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT = "721d17a4ff08cc52ccdf0aa92ed04258e4137807"
 CURRENT_TRUNCATION_SPECIALIST_PARENT_CHECKPOINT = "847e7180923e95768271c6fe7e8b06732a7d919a"
-CURRENT_TRUNCATION_RECURSIVE_CHECKPOINT = "dcd9ab2be15f4a0416372c110734b5079af1efe2"
-CURRENT_TRUNCATION_RECURSIVE_PARENT_CHECKPOINT = "d738f2760da047d15d4e53f87d6e0aeaf13d442a"
+HISTORICAL_TRUNCATION_RECURSIVE_CHECKPOINT = "dcd9ab2be15f4a0416372c110734b5079af1efe2"
+HISTORICAL_TRUNCATION_RECURSIVE_PARENT_CHECKPOINT = "d738f2760da047d15d4e53f87d6e0aeaf13d442a"
+CURRENT_TRUNCATION_PROMOTION_CHECKPOINT = "e61b7d7d168488bea8f27f40b31c4db4a0bf8386"
+CURRENT_TRUNCATION_PROMOTION_PARENT_CHECKPOINT = "ea85af3849db30c9832624c675594541a698ab06"
 HISTORICAL_C627_AUTONOMY_INVENTORY_RAW_SHA256 = (
     "6fd2608825a5dff950f8c0a0239a446857c82783603ec81a15b060391c3d4778"
 )
@@ -91,14 +93,14 @@ AUTONOMY_WORKTREE_INDEPENDENCE_CHECKPOINT = "3d4a43ac026547dd8652796b6186c48891f
 HISTORICAL_PHASE_ZERO_INVENTORY_RAW_SHA256 = (
     "6a3c54258dd1f0c25fc8861c8298cf51d187b33bd5528ec25b1549c0e0021980"
 )
-AUTONOMY_INVENTORY_RAW_SHA256 = "c9452fb8bb504a743312264ccaddfbd47d7a11997bd04c0861709960153c985a"
+AUTONOMY_INVENTORY_RAW_SHA256 = "827b3fb3153366efdd4f59ac30b439612c26523675d134cf502d6d36b3094fec"
 AUTONOMY_INVENTORY_SCHEMA_RAW_SHA256 = (
     "c302b155d7dd138adc150d9f398da279f130dd696a321fb9e0d287c089012bcf"
 )
-AUTONOMY_INVENTORY_SHA256 = "701ff7994152cc5a8fc0174341a3e8963573741f200e24f0ff3566720a069140"
-AUTONOMY_SOURCE_UNIVERSE_SHA256 = "9fc20c8097d38f719169e360836806f8ffec0d175a1941aa942089163fed53e5"
+AUTONOMY_INVENTORY_SHA256 = "1cf5af44108c390eebd88f02b88cf0b8ae79c48a99c8a2f6b400400de3e14cda"
+AUTONOMY_SOURCE_UNIVERSE_SHA256 = "6fdfd55652cb8776263ef969f168b34ffd5c557aece263cd70a4b7b545888913"
 AUTONOMY_DISCOVERY_SEMANTICS_SHA256 = (
-    "4f1adb9e0bc8db7899fa4eb2928ee03f87d4d61d4113a0555fcdae750e260042"
+    "4af6458862d94af02d77db5f25ff9bdb24ced56c665d2a7402111af795138e99"
 )
 MANAGED_TOOLCHAIN_RAW_SHA256 = "6d427e698d1074be2d20747211bcdd53816509e0e71b4225dff0401c32d6561a"
 MANAGED_TOOLCHAIN_SHA256 = "55c412fdb2dd56a2541c0e737d953b5d0e770ece42b4c1c11ebfb7e1c233498d"
@@ -315,7 +317,7 @@ TRUNCATION_SPECIALIST_SOURCE_PATHS = frozenset(
         "tests/unit/test_truncation_recovery_journal.py",
     }
 )
-TRUNCATION_RECURSIVE_SOURCE_PATHS = frozenset(
+HISTORICAL_TRUNCATION_RECURSIVE_SOURCE_PATHS = frozenset(
     {
         "docs/remediation/v3/autonomy_gate_inventory.json",
         "src/mmaudit/models/scheduler.py",
@@ -325,6 +327,30 @@ TRUNCATION_RECURSIVE_SOURCE_PATHS = frozenset(
         "tests/fake_openrouter.py",
         "tests/integration/test_scheduler_truncation_recovery_pipeline.py",
         "tests/unit/test_truncation_recovery_journal.py",
+    }
+)
+TRUNCATION_PROMOTION_SOURCE_PATHS = frozenset(
+    {
+        "docs/remediation/v3/autonomy_gate_inventory.json",
+        "schemas/scheduler_state.schema.json",
+        "scripts/generate_release_schemas.py",
+        "src/mmaudit/models/scheduler.py",
+        "src/mmaudit/models/truncation_closure.py",
+        "src/mmaudit/models/truncation_recovery_journal.py",
+        "src/mmaudit/orchestration/assurance.py",
+        "src/mmaudit/orchestration/autonomy_gate_inventory.py",
+        "src/mmaudit/orchestration/model_coverage.py",
+        "src/mmaudit/orchestration/pipeline.py",
+        "src/mmaudit/orchestration/scheduler.py",
+        "src/mmaudit/orchestration/truncation_recovery_evidence.py",
+        "tests/unit/test_assurance.py",
+        "tests/unit/test_autonomy_gate_inventory.py",
+        "tests/unit/test_model_coverage.py",
+        "tests/unit/test_release_schemas.py",
+        "tests/unit/test_scheduler_truncation_promotion_integration.py",
+        "tests/unit/test_truncation_recovery_evidence.py",
+        "tests/unit/test_truncation_recovery_journal.py",
+        "tests/unit/test_truncation_recovery_promotion_models.py",
     }
 )
 AUTHRUNNER_UNCHANGED_IMPLEMENTATION_PATHS = (
@@ -708,18 +734,6 @@ def test_autonomy_checkpoints_have_exact_historical_and_successor_custody() -> N
         capture_output=True,
         text=True,
     )
-    core_match = subprocess.run(
-        [
-            "git",
-            "diff",
-            "--quiet",
-            PHASE_ONE_IMPLEMENTATION_CHECKPOINT,
-            "--",
-            *sorted(PHASE_ONE_UNCHANGED_CORE_PATHS),
-        ],
-        cwd=ROOT,
-        check=False,
-    )
     authrunner_resolved = subprocess.run(
         [
             "git",
@@ -1063,7 +1077,7 @@ def test_autonomy_checkpoints_have_exact_historical_and_successor_custody() -> N
         [
             "git",
             "rev-parse",
-            f"{CURRENT_TRUNCATION_RECURSIVE_CHECKPOINT}^{{commit}}",
+            f"{HISTORICAL_TRUNCATION_RECURSIVE_CHECKPOINT}^{{commit}}",
         ],
         cwd=ROOT,
         check=True,
@@ -1071,7 +1085,7 @@ def test_autonomy_checkpoints_have_exact_historical_and_successor_custody() -> N
         text=True,
     )
     truncation_recursive_parent = subprocess.run(
-        ["git", "rev-parse", f"{CURRENT_TRUNCATION_RECURSIVE_CHECKPOINT}^"],
+        ["git", "rev-parse", f"{HISTORICAL_TRUNCATION_RECURSIVE_CHECKPOINT}^"],
         cwd=ROOT,
         check=True,
         capture_output=True,
@@ -1084,21 +1098,53 @@ def test_autonomy_checkpoints_have_exact_historical_and_successor_custody() -> N
             "--no-commit-id",
             "--name-only",
             "-r",
-            CURRENT_TRUNCATION_RECURSIVE_CHECKPOINT,
+            HISTORICAL_TRUNCATION_RECURSIVE_CHECKPOINT,
         ],
         cwd=ROOT,
         check=True,
         capture_output=True,
         text=True,
     )
-    truncation_recursive_current_match = subprocess.run(
+    truncation_promotion_resolved = subprocess.run(
+        [
+            "git",
+            "rev-parse",
+            f"{CURRENT_TRUNCATION_PROMOTION_CHECKPOINT}^{{commit}}",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    truncation_promotion_parent = subprocess.run(
+        ["git", "rev-parse", f"{CURRENT_TRUNCATION_PROMOTION_CHECKPOINT}^"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    truncation_promotion_changed = subprocess.run(
+        [
+            "git",
+            "diff-tree",
+            "--no-commit-id",
+            "--name-only",
+            "-r",
+            CURRENT_TRUNCATION_PROMOTION_CHECKPOINT,
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    truncation_promotion_current_match = subprocess.run(
         [
             "git",
             "diff",
             "--quiet",
-            CURRENT_TRUNCATION_RECURSIVE_CHECKPOINT,
+            CURRENT_TRUNCATION_PROMOTION_CHECKPOINT,
             "--",
-            *sorted(TRUNCATION_RECURSIVE_SOURCE_PATHS),
+            *sorted(TRUNCATION_PROMOTION_SOURCE_PATHS),
         ],
         cwd=ROOT,
         check=False,
@@ -1137,7 +1183,6 @@ def test_autonomy_checkpoints_have_exact_historical_and_successor_custody() -> N
     assert len(PHASE_ONE_GOVERNANCE_SUCCESSOR_PATHS) == 8
     assert frozenset(changed.stdout.splitlines()) == PHASE_ONE_IMPLEMENTATION_PATHS
     assert OPERATOR_RESULTS_RELATIVE_PATH not in PHASE_ONE_IMPLEMENTATION_PATHS
-    assert core_match.returncode == 0
     assert authrunner_resolved.stdout.strip() == AUTHRUNNER_SMOKE_INDEX_IMPLEMENTATION_CHECKPOINT
     assert len(AUTHRUNNER_SMOKE_INDEX_IMPLEMENTATION_PATHS) == 16
     assert len(AUTHRUNNER_UNCHANGED_IMPLEMENTATION_PATHS) == 13
@@ -1269,18 +1314,34 @@ def test_autonomy_checkpoints_have_exact_historical_and_successor_custody() -> N
     assert len(TRUNCATION_SPECIALIST_SOURCE_PATHS) == 16
     assert OPERATOR_RESULTS_RELATIVE_PATH not in TRUNCATION_SPECIALIST_SOURCE_PATHS
     assert not (TRUNCATION_SPECIALIST_SOURCE_PATHS & CURRENT_COMMAND_GOVERNANCE_SUCCESSOR_PATHS)
-    assert truncation_recursive_resolved.stdout.strip() == CURRENT_TRUNCATION_RECURSIVE_CHECKPOINT
     assert (
-        truncation_recursive_parent.stdout.strip() == CURRENT_TRUNCATION_RECURSIVE_PARENT_CHECKPOINT
+        truncation_recursive_resolved.stdout.strip() == HISTORICAL_TRUNCATION_RECURSIVE_CHECKPOINT
+    )
+    assert (
+        truncation_recursive_parent.stdout.strip()
+        == HISTORICAL_TRUNCATION_RECURSIVE_PARENT_CHECKPOINT
     )
     assert (
         frozenset(truncation_recursive_changed.stdout.splitlines())
-        == TRUNCATION_RECURSIVE_SOURCE_PATHS
+        == HISTORICAL_TRUNCATION_RECURSIVE_SOURCE_PATHS
     )
-    assert len(TRUNCATION_RECURSIVE_SOURCE_PATHS) == 8
-    assert OPERATOR_RESULTS_RELATIVE_PATH not in TRUNCATION_RECURSIVE_SOURCE_PATHS
-    assert not (TRUNCATION_RECURSIVE_SOURCE_PATHS & CURRENT_COMMAND_GOVERNANCE_SUCCESSOR_PATHS)
-    assert truncation_recursive_current_match.returncode == 0
+    assert len(HISTORICAL_TRUNCATION_RECURSIVE_SOURCE_PATHS) == 8
+    assert OPERATOR_RESULTS_RELATIVE_PATH not in HISTORICAL_TRUNCATION_RECURSIVE_SOURCE_PATHS
+    assert not (
+        HISTORICAL_TRUNCATION_RECURSIVE_SOURCE_PATHS & CURRENT_COMMAND_GOVERNANCE_SUCCESSOR_PATHS
+    )
+    assert truncation_promotion_resolved.stdout.strip() == CURRENT_TRUNCATION_PROMOTION_CHECKPOINT
+    assert (
+        truncation_promotion_parent.stdout.strip() == CURRENT_TRUNCATION_PROMOTION_PARENT_CHECKPOINT
+    )
+    assert (
+        frozenset(truncation_promotion_changed.stdout.splitlines())
+        == TRUNCATION_PROMOTION_SOURCE_PATHS
+    )
+    assert len(TRUNCATION_PROMOTION_SOURCE_PATHS) == 20
+    assert OPERATOR_RESULTS_RELATIVE_PATH not in TRUNCATION_PROMOTION_SOURCE_PATHS
+    assert not (TRUNCATION_PROMOTION_SOURCE_PATHS & CURRENT_COMMAND_GOVERNANCE_SUCCESSOR_PATHS)
+    assert truncation_promotion_current_match.returncode == 0
 
 
 def test_combined_queue_unfinished_count_is_derived() -> None:
@@ -1298,7 +1359,7 @@ def test_combined_queue_unfinished_count_is_derived() -> None:
     ) in CODEX_WORKLOG_PATH.read_text(encoding="utf-8")
 
 
-def test_truncation_resumes_after_planconstraints_regression_repair() -> None:
+def test_truncation_promotion_custody_remains_partial_after_planconstraints_repair() -> None:
     for document in (
         QUEUE_PATH.read_text(encoding="utf-8"),
         CODEX_QUEUE_PATH.read_text(encoding="utf-8"),
@@ -1312,49 +1373,69 @@ def test_truncation_resumes_after_planconstraints_regression_repair() -> None:
         section = " ".join(match.group().split())
         assert "**Status:** `PARTIAL`" in section
         assert CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT in section
-        assert CURRENT_TRUNCATION_RECURSIVE_CHECKPOINT in section
+        assert HISTORICAL_TRUNCATION_RECURSIVE_CHECKPOINT in section
+        assert CURRENT_TRUNCATION_PROMOTION_CHECKPOINT in section
         assert "specialist" in section and "v1.2" in section
-        assert "MOCK recovery remains unpromoted" in section
         assert "one generic zero-retained truncated child" in section
         assert "v1.1 `COVERAGE_CLOSED`" in section
         assert "v1.2 `RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING`" in section
-        assert "neither closure creates promotion, coverage, specialist, or assurance credit" in (
+        assert "max-cap refusal" in section
+        assert "distinct PID-local opaque verifier" in section
+        assert "journal-owned promotion capability for the complete five-request tree" in section
+        assert "One v1.1 promotion and v1.1 recovered output" in section
+        assert "four public v1.2 recovery requests" in section
+        assert "exactly one `SUPERSEDED_TRUNCATED_BRIDGE`" in section
+        assert "three `SUCCESSFUL_LEAF` dispositions" in section
+        assert "no artifact, review, coverage, floor, specialist, or completion credit" in section
+        assert "every direct or recursive promoted composite" in section
+        assert "exact parent-provisional and child/leaf ordinary-artifact surface partitions" in (
             section
         )
-        assert "max-cap refusal" in section
-        assert "zero-transport resume" in section
-        assert (
-            "Add only full-tree live opaque capability and promotion for the exact one-level "
-            "generic zero-retained tree" in section
-        )
-        assert "Deeper recursion, retained-surface recursion, specialist-role recursion" in section
+        assert "zero-retained parent needs no invented composite reference" in section
+        assert "unrelated artifacts cannot substitute for either partition" in section
+        assert "Local synthetic usage was re-attested only to exercise the REAL-only" in section
+        assert "it is not genuine provider execution" in section
+        assert "MOCK recursive recovery remains unpromoted and noncrediting" in section
+        assert "byte-stable zero transport" in section
+        assert "Positive nonempty full-pipeline promotion backed by genuine provider" in section
+        assert "Deeper recursion, retained surfaces on the recursive bridge" in section
+        assert "specialist-role recursion remain unimplemented" in section
+        assert "terminal maximum-assurance result" in section
+        assert "Do not infer a provider command or run index" in section
         assert "Resume only the bounded provider-free specialist-role recovery gap" not in section
         assert "Pause this ticket while" not in section
 
 
-def test_recursive_truncation_checkpoint_is_current_without_external_authority() -> None:
+def test_recursive_promotion_checkpoint_is_current_without_external_authority() -> None:
     worklogs = (
         CODEX_WORKLOG_PATH.read_text(encoding="utf-8"),
         (ROOT / "docs/remediation/v3/worklog.md").read_text(encoding="utf-8"),
     )
     for worklog in worklogs:
         assert (
-            "AUTORUN_STATUS: V3_TRUNCATION_001_ONE_LEVEL_GENERIC_RECURSIVE_RECOVERY_"
-            "CHECKPOINTED_PROVIDER_FREE_NONAUTHORIZING_FULL_TREE_LIVE_PROMOTION_NEXT"
+            "AUTORUN_STATUS: V3_TRUNCATION_001_ONE_LEVEL_GENERIC_FULL_TREE_LIVE_PROMOTION_"
+            "CHECKPOINTED_PARTIAL_PROVIDER_FREE_SYNTHETIC_REATTESTED_NONAUTHORIZING_"
+            "ZERO_CURRENT_EXTERNAL_COMMANDS"
         ) in worklog
         assert (
-            "CURRENT_LOCAL_SLICE_STATUS: ONE_LEVEL_GENERIC_RECURSIVE_RECOVERY_COMPLETE_"
-            "TICKET_PARTIAL_PROVIDER_FREE_NONAUTHORIZING"
+            "CURRENT_LOCAL_SLICE_STATUS: ONE_LEVEL_GENERIC_FULL_TREE_LIVE_PROMOTION_COMPLETE_"
+            "TICKET_PARTIAL_PROVIDER_FREE_SYNTHETIC_REATTESTED_NONAUTHORIZING"
         ) in worklog
-        assert CURRENT_TRUNCATION_RECURSIVE_CHECKPOINT in worklog
-        assert CURRENT_TRUNCATION_RECURSIVE_PARENT_CHECKPOINT in worklog
-        assert "owns exactly 8" in worklog
-        assert "`66` journal" in worklog
-        assert "RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING" in worklog
-        assert "Recursive promotion, coverage, specialist, and assurance credit remain absent" in (
-            worklog
-        )
-        assert "full-tree live opaque capability and promotion" in worklog
+        assert CURRENT_TRUNCATION_PROMOTION_CHECKPOINT in worklog
+        assert CURRENT_TRUNCATION_PROMOTION_PARENT_CHECKPOINT in worklog
+        assert HISTORICAL_TRUNCATION_RECURSIVE_CHECKPOINT[:7] in worklog
+        assert "owns exactly 20" in worklog
+        assert "all five live usage/context identities" in worklog
+        assert "One v1.1 promotion and v1.1 recovered output" in worklog
+        assert "four public v1.2 requests" in worklog
+        assert "one superseded truncated bridge and three ordered successful leaves" in worklog
+        assert "exact direct and recursive parent-plus-child/leaf partitions" in worklog
+        assert "zero-retained parents without invented references" in worklog
+        assert "Synthetic REAL re-attestation is not genuine provider execution" in worklog
+        assert "MOCK remains unpromoted, noncrediting, and zero-transport on resume" in worklog
+        assert "108" in worklog and "244" in worklog and "57" in worklog
+        assert "genuine provider-backed positive full-pipeline promotion" in worklog
+        assert "Deeper recursion, retained surfaces on the recursive bridge" in worklog
         assert "No provider, network, credential, private-ledger" in worklog
 
 
@@ -1507,32 +1588,63 @@ def test_review_traceability_statuses_derive_from_queue_ticket_statuses() -> Non
     requirements_by_id = {requirement["id"]: requirement for requirement in requirements}
     truncation_evidence = " ".join(requirements_by_id["J"]["evidence"])
     assert CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT in truncation_evidence
-    assert CURRENT_TRUNCATION_RECURSIVE_CHECKPOINT in truncation_evidence
-    assert CURRENT_TRUNCATION_RECURSIVE_PARENT_CHECKPOINT in truncation_evidence
-    assert "one depth-two generic family" in truncation_evidence
-    assert "nested family closes at typed v1.1 COVERAGE_CLOSED" in truncation_evidence
-    assert "root at typed v1.2 RECURSIVE_STRUCTURALLY_CLOSED_NONAUTHORIZING" in (
+    assert HISTORICAL_TRUNCATION_RECURSIVE_CHECKPOINT in truncation_evidence
+    assert CURRENT_TRUNCATION_PROMOTION_CHECKPOINT in truncation_evidence
+    assert CURRENT_TRUNCATION_PROMOTION_PARENT_CHECKPOINT in truncation_evidence
+    assert "Exact 20-path checkpoint" in truncation_evidence
+    assert "provider-free full-tree live promotion-custody slice" in truncation_evidence
+    assert "Distinct PID-local recursive-tree and promoted-surface capabilities" in (
         truncation_evidence
     )
-    assert "66 full truncation-recovery journal tests" in truncation_evidence
-    assert "2 recursive positive/shared-cap integrations" in truncation_evidence
-    assert "1 direct compatibility integration" in truncation_evidence
-    assert "1 specialist compatibility integration" in truncation_evidence
+    assert "one exact root v1.1 promotion and recovered output" in truncation_evidence
+    assert "four public request schema v1.2 projections" in truncation_evidence
+    assert "five exact live usage/context pairs" in truncation_evidence
+    assert "SUPERSEDED_TRUNCATED_BRIDGE" in truncation_evidence
+    assert "three SUCCEEDED leaves have disposition SUCCESSFUL_LEAF" in truncation_evidence
+    assert "universal exact direct and recursive parent plus child/leaf" in truncation_evidence
+    assert "vacuous zero-retained parent partitions" in truncation_evidence
+    assert "fail-closed substitution negatives" in truncation_evidence
+    assert "108 evidence/journal/promotion tests" in truncation_evidence
+    assert "63 model-coverage tests" in truncation_evidence
+    assert "244 assurance tests" in truncation_evidence
+    assert "57 schema/inventory tests" in truncation_evidence
     assert "independent no-blocker/HIGH review passed" in truncation_evidence
-    assert (
-        "full-tree opaque live capability and promotion"
-        in (requirements_by_id["J"]["remaining_proof"])
-    )
+    assert "Synthetic REAL attestations" in truncation_evidence
+    assert "not genuine provider execution" in truncation_evidence
+    truncation_remaining = requirements_by_id["J"]["remaining_proof"]
+    assert "genuine provider-backed promotion" in truncation_remaining
+    assert "terminal maximum-assurance result" in truncation_remaining
+    assert "extend depth beyond two" in truncation_remaining
+    assert "retained-bridge recursion" in truncation_remaining
+    assert "specialist recursive recovery" in truncation_remaining
+    assert "no operator/provider authority exists" in truncation_remaining
     autonomy_evidence = " ".join(requirements_by_id["U"]["evidence"])
     assert CURRENT_TRUNCATION_SPECIALIST_CHECKPOINT in autonomy_evidence
-    assert CURRENT_TRUNCATION_RECURSIVE_CHECKPOINT in autonomy_evidence
-    assert CURRENT_TRUNCATION_RECURSIVE_PARENT_CHECKPOINT in autonomy_evidence
+    assert HISTORICAL_TRUNCATION_RECURSIVE_CHECKPOINT in autonomy_evidence
+    assert HISTORICAL_TRUNCATION_RECURSIVE_PARENT_CHECKPOINT in autonomy_evidence
+    assert CURRENT_TRUNCATION_PROMOTION_CHECKPOINT in autonomy_evidence
+    assert CURRENT_TRUNCATION_PROMOTION_PARENT_CHECKPOINT in autonomy_evidence
     assert AUTONOMY_INVENTORY_RAW_SHA256 in autonomy_evidence
     assert AUTONOMY_INVENTORY_SHA256 in autonomy_evidence
     assert AUTONOMY_DISCOVERY_SEMANTICS_SHA256 in autonomy_evidence
     assert AUTONOMY_SOURCE_UNIVERSE_SHA256 in autonomy_evidence
-    assert "Full-tree opaque promotion" in autonomy_evidence
-    assert "REAL provider execution remain absent" in autonomy_evidence
+    assert "3667 unique completion inputs / 3670 occurrences" in autonomy_evidence
+    assert "3624 gate sources / 43 non-gating controls" in autonomy_evidence
+    assert "13 source kinds / 35 logical gates / 29 unsatisfied / 15 current-manual" in (
+        autonomy_evidence
+    )
+    assert "full-tree live promotion custody" in autonomy_evidence
+    assert "all five live usage/context" in autonomy_evidence
+    assert "one v1.1 promotion and one v1.1 recovered output" in autonomy_evidence
+    assert "one bridge and three leaves" in autonomy_evidence
+    assert "universal direct and recursive parent plus child/leaf" in autonomy_evidence
+    assert "MOCK remains unpromoted" in autonomy_evidence
+    assert "Synthetic REAL attestations" in autonomy_evidence
+    assert "not provider execution" in autonomy_evidence
+    autonomy_remaining = requirements_by_id["U"]["remaining_proof"]
+    assert "genuine provider-backed positive promotion" in autonomy_remaining
+    assert "terminal maximum-assurance result" in autonomy_remaining
+    assert "No operator/provider action is authorized" in autonomy_remaining
     for requirement in requirements:
         tickets = requirement["tickets"]
         assert isinstance(tickets, list) and all(isinstance(ticket, str) for ticket in tickets)
